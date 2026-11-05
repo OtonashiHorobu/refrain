@@ -120,15 +120,29 @@ auto atomic_replace(std::string_view path, std::span<const std::byte> data)
         (void)::DeleteFileW(temp.c_str());
         return written;
     }
-    if (::MoveFileExW(temp.c_str(), target.c_str(),
-                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ==
-        0) {
-        const auto failure =
-            io_failure("failed to replace file", path, ::GetLastError());
-        (void)::DeleteFileW(temp.c_str());
-        return std::unexpected{failure};
+    // Indexers, scanners and concurrent replacers can hold the target open for
+    // a moment; MoveFileEx then reports a sharing violation. A short bounded
+    // retry keeps the atomic-replace contract without masking permanent errors.
+    for (int attempt{0}; attempt < 16; ++attempt) {
+        if (::MoveFileExW(temp.c_str(), target.c_str(),
+                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) !=
+            0) {
+            return status_ok();
+        }
+        const DWORD native_error{::GetLastError()};
+        if (native_error != ERROR_SHARING_VIOLATION &&
+            native_error != ERROR_ACCESS_DENIED) {
+            const auto failure{
+                io_failure("failed to replace file", path, native_error)};
+            (void)::DeleteFileW(temp.c_str());
+            return std::unexpected{failure};
+        }
+        ::SwitchToThread();
     }
-    return status_ok();
+    const auto failure{
+        io_failure("failed to replace file", path, ::GetLastError())};
+    (void)::DeleteFileW(temp.c_str());
+    return std::unexpected{failure};
 }
 
 auto temp_directory() -> std::string {
