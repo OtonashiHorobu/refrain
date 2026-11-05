@@ -10,7 +10,6 @@
 # which the Ubuntu runner does not package. The checkout stays on the runner so
 # the Node-based actions do not depend on the container image.
 #
-# Validated locally with the same container command before landing here.
 # An MSVC job is added once a local MSVC toolchain can validate it.
 
 name: windows-build
@@ -58,39 +57,42 @@ jobs:
               python3 -m pip install --break-system-packages "conan==2.31.2"
 
               conan profile detect --force
-              native_gcc="$(gcc -dumpversion)"
+              native_gcc="$(gcc -dumpversion | cut -d. -f1)"
               mkdir -p /root/.conan2/profiles
-              cat > /root/.conan2/profiles/gcc-release <<EOF
-              [settings]
-              os=Linux
-              arch=x86_64
-              compiler=gcc
-              compiler.version=${native_gcc}
-              compiler.cppstd=26
-              compiler.libcxx=libstdc++11
-              build_type=Release
-
-              [conf]
-              tools.cmake.cmaketoolchain:generator=Ninja
-              EOF
+              printf "%s\n" \
+                "[settings]" \
+                "os=Linux" \
+                "arch=x86_64" \
+                "compiler=gcc" \
+                "compiler.version=${native_gcc}" \
+                "compiler.cppstd=26" \
+                "compiler.libcxx=libstdc++11" \
+                "build_type=Release" \
+                "" \
+                "[conf]" \
+                "tools.cmake.cmaketoolchain:generator=Ninja" \
+                > /root/.conan2/profiles/gcc-release
               mingw_gcc="$(x86_64-w64-mingw32-g++ -dumpversion | cut -d. -f1)"
-              cat > /root/.conan2/profiles/mingw <<EOF
-              [settings]
-              os=Windows
-              arch=x86_64
-              compiler=gcc
-              compiler.version=${mingw_gcc}
-              compiler.cppstd=26
-              compiler.libcxx=libstdc++11
-              build_type=Release
+              printf "%s\n" \
+                "[settings]" \
+                "os=Windows" \
+                "arch=x86_64" \
+                "compiler=gcc" \
+                "compiler.version=${mingw_gcc}" \
+                "compiler.cppstd=26" \
+                "compiler.libcxx=libstdc++11" \
+                "build_type=Release" \
+                "" \
+                "[conf]" \
+                "tools.cmake.cmaketoolchain:generator=Ninja" \
+                "tools.build:compiler_executables={\"c\":\"x86_64-w64-mingw32-gcc\",\"cpp\":\"x86_64-w64-mingw32-g++\"}" \
+                > /root/.conan2/profiles/mingw
 
-              [conf]
-              tools.cmake.cmaketoolchain:generator=Ninja
-              tools.build:compiler_executables={"c":"x86_64-w64-mingw32-gcc","cpp":"x86_64-w64-mingw32-g++"}
-              EOF
+              python3 tools/vendor_export.py --profile gcc-release
 
               conan install . -pr gcc-release -of build/host --build=missing \
-                -o "&:with_crashpad=False" -o "&:with_wasm=False"
+                -o "&:with_crashpad=False" -o "&:with_wasm=False" \
+                -o "&:build_tests=False" -o "&:build_bench=False"
               cmake -S . -B build/host/build/Release -G Ninja \
                 -DCMAKE_TOOLCHAIN_FILE=build/host/build/Release/generators/conan_toolchain.cmake \
                 -DCMAKE_BUILD_TYPE=Release \
@@ -103,6 +105,7 @@ jobs:
 
               conan install . -pr mingw --build=missing \
                 -o "&:with_crashpad=False" -o "&:with_wasm=False" \
+                -o "&:build_tests=False" -o "&:build_bench=False" \
                 --lockfile=conan/locks/vendor.lock
               cmake -S . -B build/Release -G Ninja \
                 -DCMAKE_TOOLCHAIN_FILE=build/Release/generators/conan_toolchain.cmake \
