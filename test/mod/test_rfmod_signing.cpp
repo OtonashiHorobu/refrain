@@ -771,7 +771,9 @@ const suite rfmod_signing_pack_tests = [] {
             // '"' is legal in a Linux file name, but [files] keys are written
             // unescaped: packing such a tree would succeed and then be
             // unverifiable, so it must be rejected up front.
-            expect(work.write("mod/data/a\"b.json", "{}"));
+            if (!work.write("mod/data/a\"b.json", "{}")) {
+                return; // the host filesystem rejects '"' in a file name
+            }
             const auto output{work.path("out/mod.rfmod")};
             std::error_code error;
             fs::create_directories(output.parent_path(), error);

@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -26,6 +27,42 @@ using namespace boost::ut;
 
 namespace mod = refrain::mod;
 namespace fs = std::filesystem;
+
+/// Case-insensitive filesystems (Windows, default macOS) cannot hold two mod
+/// directories whose names differ only by case; the collision tests below only
+/// apply where the filesystem preserves case.
+[[nodiscard]] auto case_sensitive_root(const std::string &root) -> bool {
+    const fs::path probe{fs::path{root} / "case-probe-a"};
+    {
+        std::ofstream stream{probe};
+        if (!stream) {
+            return false;
+        }
+    }
+    std::error_code error;
+    const bool distinct{!fs::exists(fs::path{root} / "CASE-PROBE-A", error)};
+    fs::remove(probe, error);
+    return distinct;
+}
+
+/// Diagnostics may render a path with either separator; normalise before
+/// comparing so the tests do not depend on the host path syntax.
+[[nodiscard]] auto normalized_path(std::string_view path) -> std::string {
+    std::string text{path};
+    std::replace(text.begin(), text.end(), '\\', '/');
+    return text;
+}
+
+[[nodiscard]] auto same_path(std::string_view left, std::string_view right)
+    -> bool {
+    return normalized_path(left) == normalized_path(right);
+}
+
+[[nodiscard]] auto names_path(std::string_view message, std::string_view path)
+    -> bool {
+    return normalized_path(message).find(normalized_path(path)) !=
+           std::string::npos;
+}
 
 using refrain::data::blake3;
 using refrain::data::to_hex;
@@ -253,7 +290,7 @@ const suite discovery_tests = [] {
         expect(mod->version == "1.2.3");
         expect(mod->abi == 1U);
         expect(mod->origin == mod_origin::first_party);
-        expect(mod->path == manifest_path);
+        expect(same_path(mod->path, manifest_path));
         expect(to_hex(mod->manifest_hash) ==
                to_hex(manifest_hash_of(manifest_path)));
         expect(mod->shadowed.empty());
@@ -319,7 +356,7 @@ const suite discovery_tests = [] {
         }
         expect(winner->origin == mod_origin::user);
         expect(winner->version == "1.1.0");
-        expect(winner->path == user_manifest);
+        expect(same_path(winner->path, user_manifest));
         expect(winner->shadowed.size() == 2U);
         if (winner->shadowed.size() == 2U) {
             expect(winner->shadowed[0].origin == mod_origin::builtin);
@@ -336,7 +373,7 @@ const suite discovery_tests = [] {
             expect(same != nullptr);
             if (same != nullptr) {
                 expect(same->origin == mod_origin::user);
-                expect(same->path == user_manifest);
+                expect(same_path(same->path, user_manifest));
                 expect(same->shadowed.size() == 2U);
             }
         }
@@ -458,8 +495,7 @@ const suite discovery_tests = [] {
                    std::string::npos);
             expect(scanned.error().message.find("wrong-dir") !=
                    std::string::npos);
-            expect(scanned.error().message.find(manifest_path) !=
-                   std::string::npos);
+            expect(names_path(scanned.error().message, manifest_path));
         }
     };
 
@@ -473,8 +509,7 @@ const suite discovery_tests = [] {
             expect(!broken);
             if (!broken) {
                 expect(broken.error().code == refrain::error_code::parse_error);
-                expect(broken.error().message.find(broken_text) !=
-                       std::string::npos);
+                expect(names_path(broken.error().message, broken_text));
             }
             // Valid TOML but not a mod manifest (unknown root table).
             const auto wrong_root{create_root(scratch, "wrong-root")};
@@ -486,8 +521,7 @@ const suite discovery_tests = [] {
             expect(!wrong);
             if (!wrong) {
                 expect(wrong.error().code == refrain::error_code::parse_error);
-                expect(wrong.error().message.find(wrong_text) !=
-                       std::string::npos);
+                expect(names_path(wrong.error().message, wrong_text));
             }
         };
 
@@ -521,8 +555,7 @@ const suite discovery_tests = [] {
         if (!scanned) {
             expect(scanned.error().code ==
                    refrain::error_code::invalid_argument);
-            expect(scanned.error().message.find(manifest_path) !=
-                   std::string::npos);
+            expect(names_path(scanned.error().message, manifest_path));
         }
     };
 
@@ -547,8 +580,7 @@ const suite discovery_tests = [] {
         if (!scanned) {
             expect(scanned.error().code ==
                    refrain::error_code::permission_denied);
-            expect(scanned.error().message.find(manifest_path) !=
-                   std::string::npos);
+            expect(names_path(scanned.error().message, manifest_path));
         }
     };
 
@@ -556,6 +588,9 @@ const suite discovery_tests = [] {
         [] {
             temp_directory scratch{make_temp_directory()};
             const auto root{create_root(scratch, "root")};
+            if (!case_sensitive_root(root)) {
+                return;
+            }
             write_manifest(root, "CaseMod", "1.0.0");
             write_manifest(root, "casemod", "1.0.0");
             const auto scanned{scan_single(root, mod_origin::user)};
@@ -571,6 +606,9 @@ const suite discovery_tests = [] {
     "discovery/scan case-only duplicate across non-adjacent ids"_test = [] {
         temp_directory scratch{make_temp_directory()};
         const auto root{create_root(scratch, "root")};
+        if (!case_sensitive_root(root)) {
+            return;
+        }
         write_manifest(root, "CaseA", "1.0.0");
         write_manifest(root, "Between", "1.0.0");
         write_manifest(root, "casea", "1.0.0");
@@ -600,8 +638,8 @@ const suite discovery_tests = [] {
         const auto *mod{find_discovered(*scanned, "alpha")};
         expect(mod != nullptr);
         if (mod != nullptr) {
-            expect(mod->path == manifest_path);
-            expect(mod->path.find("//") == std::string::npos);
+            expect(same_path(mod->path, manifest_path));
+            expect(normalized_path(mod->path).find("//") == std::string::npos);
         }
     };
 
@@ -1534,6 +1572,9 @@ const suite discovery_tests = [] {
     "discovery/scan_mods_tree rejects a three-way case collision"_test = [] {
         temp_directory scratch{make_temp_directory()};
         const auto root{create_root(scratch, "root")};
+        if (!case_sensitive_root(root)) {
+            return;
+        }
         const auto mods_dir{path_join(root, "mods")};
         (void)core_io::create_directories(path_join(mods_dir, "alpha"));
         (void)core_io::write_text(
