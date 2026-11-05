@@ -210,6 +210,17 @@ using namespace boost::ut;
         while (deep.string().size() <= 1100) {
             deep /= component;
         }
+        // The marker-limit branch is only reachable when the database
+        // directory itself can be created. Hosts with a shorter path limit
+        // (Windows MAX_PATH without long-path opt-in) cannot represent the
+        // fixture, and crash_reporter rejects the path earlier.
+        std::error_code probe_error;
+        const bool creatable{
+            std::filesystem::create_directories(deep, probe_error)};
+        if (!creatable) {
+            return;
+        }
+        std::filesystem::remove_all(deep, probe_error);
 
         refrain::kernel::crash_config config{};
         config.database_path = deep.string();
