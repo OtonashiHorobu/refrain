@@ -1047,7 +1047,10 @@ const suite content_maintenance_tests = [] {
                        .has_value());
             const auto after_same{fs::last_write_time(path, error)};
             expect(!error);
-            expect(after_same == sentinel);
+            // Some filesystems store timestamps with second granularity.
+            const auto delta{after_same > sentinel ? after_same - sentinel
+                                                   : sentinel - after_same};
+            expect(delta < std::chrono::seconds{2});
 
             const std::vector<std::byte> changed{std::byte{9}};
             expect(refrain::data::publish_resolution_bytes(path, changed)
