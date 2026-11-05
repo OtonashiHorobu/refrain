@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# Built-in content mod: an internal/static mod with no [entry] section.
+# Its data/ tree lives in the built-in archive; the vanilla payload itself is
+# cooked from the user's local 26.3 jar and never committed.
+
+[mod]
+id = "refrain.content.vanilla"
+version = "1.0.0"
+abi = "1"
+side = "both"
+
+[meta]
+display_name = "Refrain vanilla content"
+description = "Built-in vanilla content declarations and data-driven defaults."
+license = "MIT"

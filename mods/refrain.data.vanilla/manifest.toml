@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# Built-in data-layer mod: an internal/static mod. The code is linked into the
+# host and registered through REFR_MOD_STATIC; this manifest is packed into the
+# built-in RFSI image and is the source of truth for the mod
+# identity/version/ABI advertised to the loader.
+
+[mod]
+id = "refrain.data.vanilla"
+version = "1.0.0"
+abi = "1"
+side = "server"
+
+[meta]
+display_name = "Vanilla data layer"
+description = "VFS pack stack, JSON/NBT codecs and cooked datapack content for the server."
+license = "MIT"
+
+[provides]
+services = ["refrain:data.packs"]
+
+[requires]
+"refrain.content.vanilla" = "^1.0.0"

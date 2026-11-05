@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# First-party bundled mod: statically linked, no [entry] section. The
+# manifest is packed into builtin.image so the composition and loader path are
+# exercised end to end by the test suite.
+
+[mod]
+id = "refrain.admin.vanilla"
+version = "1.0.0"
+abi = "1"
+side = "server"
+
+[meta]
+display_name = "refrain.admin.vanilla"
+description = "Server admin and console service."
+license = "MIT"
+
+[requires]
+"refrain.session.vanilla" = "^1.0.0"

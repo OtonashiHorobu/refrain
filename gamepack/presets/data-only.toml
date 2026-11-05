@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+# Data-only composition: vanilla content + data layer, no world/sim/net
+# providers. Used by tests and the CI smoke to load the built-in mods through
+# the mod host without requiring the game providers.
+#
+#   refrain-tools mods load -g gamepack/presets/data-only.toml \
+#       --image build/Release/generated/builtin.image
+
+[gamepack]
+id = "refrain.data-only"
+version = "0.1.0"
+side = "server"
+abi = "1"
+auto_scan = false
+
+[meta]
+display_name = "Refrain data-only composition"
+description = "Built-in content + data layer; mod-host/data-layer smoke."
+
+[mods]
+list = [
+    "refrain.content.vanilla@1.0.0",
+    "refrain.data.vanilla@1.0.0",
+]
+
+[mods."refrain.data.vanilla"]
+requires = ["refrain.content.vanilla@^1.0.0"]
+
+[providers]
+content = "refrain.content.vanilla@^1.0.0"
+data = "refrain.data.vanilla@^1.0.0"

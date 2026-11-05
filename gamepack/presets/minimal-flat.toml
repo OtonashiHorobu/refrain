@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+# Dual-provider smoke preset: flat worldgen + in-memory storage instead of
+# the default vanilla pack (vanilla-lite worldgen + RWF storage). It shows
+# that the composition root can swap providers purely through [providers];
+# the referenced providers are not part of this tree, so the preset exercises
+# resolution and the loading graph only.
+#
+#   refrain-tools gamepack check -f gamepack/presets/minimal-flat.toml
+#   refrain-server --gamepack gamepack/presets/minimal-flat.toml --dump-gamepack
+
+[gamepack]
+id = "refrain.minimal-flat"
+version = "0.1.0"
+side = "server"
+abi = "1"
+auto_scan = false
+
+[meta]
+display_name = "Refrain minimal flat"
+description = "Flat worldgen + in-memory storage + echo protocol."
+icon = "assets/refrain/icon-flat.png"
+
+[mods]
+list = [
+    "refrain.content.vanilla@1.0.0",
+    "refrain.data.vanilla@1.0.0",
+    "refrain.world.vanilla_lite@1.0.0",
+    "refrain.worldgen.flat@1.0.0",
+    "refrain.worldgen.vanilla_lite@1.0.0",
+    "refrain.sim.noop@1.0.0",
+    "refrain.storage.memory@1.0.0",
+    "refrain.proto.echo@1.0.0",
+    "refrain.session.null@1.0.0",
+    "refrain.admin.null@1.0.0",
+]
+
+[mods."refrain.data.vanilla"]
+requires = ["refrain.content.vanilla@^1.0.0"]
+
+[mods."refrain.world.vanilla_lite"]
+requires = ["refrain.content.vanilla@^1.0.0"]
+
+[mods."refrain.sim.noop"]
+requires = ["refrain.world.vanilla_lite@^1.0.0", "refrain.storage.memory@^1.0.0"]
+
+[mods."refrain.worldgen.flat"]
+requires = ["refrain.world.vanilla_lite@^1.0.0"]
+
+[mods."refrain.proto.echo"]
+requires = ["refrain.world.vanilla_lite@^1.0.0"]
+
+[providers]
+world = "refrain.world.vanilla_lite@^1.0.0"
+worldgen = ["refrain.worldgen.flat@^1.0.0", "refrain.worldgen.vanilla_lite@^1.0.0"]
+sim = "refrain.sim.noop@^1.0.0"
+storage = "refrain.storage.memory@^1.0.0"
+protocol = "refrain.proto.echo@^1.0.0"
+session = "refrain.session.null@^1.0.0"
+admin = "refrain.admin.null@^1.0.0"
+content = "refrain.content.vanilla@^1.0.0"
+data = "refrain.data.vanilla@^1.0.0"

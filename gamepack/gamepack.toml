@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+# Default gamepack: vanilla 26.3 first-party providers (server side).
+# Versions are SemVer 2.0.0; provider requirements are ranges.
+# auto_scan is off: mods are listed explicitly here instead of being
+# discovered from disk.
+
+[gamepack]
+id = "refrain.vanilla"
+version = "26.3.0"
+side = "server"
+abi = "1"
+auto_scan = false
+
+[meta]
+display_name = "Refrain vanilla (server)"
+description = "First-party vanilla 26.3 server composition."
+icon = "assets/refrain/icon.png"
+
+[mods]
+list = [
+    "refrain.content.vanilla@1.0.0",
+    "refrain.data.vanilla@1.0.0",
+    "refrain.world.vanilla@1.0.0",
+    "refrain.worldgen.vanilla@1.0.0",
+    "refrain.sim.vanilla@1.0.0",
+    "refrain.storage.rwf@1.0.0",
+    "refrain.proto.vanilla@1.0.0",
+    "refrain.session.vanilla@1.0.0",
+    "refrain.admin.vanilla@1.0.0",
+    "refrain.server.vanilla@1.0.0",
+]
+
+# Mod-level manifests (mods/<id>/manifest.toml) declare the authoritative
+# dependency graph; the gamepack mirrors the edges the composition root must
+# order.
+[mods."refrain.data.vanilla"]
+requires = ["refrain.content.vanilla@^1.0.0"]
+
+[providers]
+world = "refrain.world.vanilla@^1.0.0"
+worldgen = "refrain.worldgen.vanilla@^1.0.0"
+sim = "refrain.sim.vanilla@^1.0.0"
+storage = "refrain.storage.rwf@^1.0.0"
+protocol = "refrain.proto.vanilla@^1.0.0"
+runtime = "refrain.server.vanilla@^1.0.0"
+session = "refrain.session.vanilla@^1.0.0"
+admin = "refrain.admin.vanilla@^1.0.0"
+data = "refrain.data.vanilla@^1.0.0"
