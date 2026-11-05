@@ -241,23 +241,27 @@ void write_marker(const std::string &root, std::string_view phase,
             }
         }
 
-        auto store{world::world_store::open(root)};
-        expect(static_cast<bool>(store));
-        if (store) {
-            expect(store->palette().size() == report->entries_after);
-            auto chunk{store->read_chunk({0, 0})};
-            expect(static_cast<bool>(chunk));
-            if (chunk) {
-                expect(chunk->sections.size() == 1U);
-                if (!chunk->sections.empty()) {
-                    expect(chunk->sections[0].palette.size() == 1U);
-                    expect(chunk->sections[0].palette[0].key ==
-                           "minecraft:stone");
-                    expect(chunk->sections[0].block_count ==
-                           world::section_volume);
-                    expect(chunk->sections[0].biome_palette.size() == 1U);
-                    expect(chunk->sections[0].biome_palette[0] ==
-                           "minecraft:plains");
+        {
+            // The store keeps file handles; close it before rebuilding in
+            // place, which renames the live world to its backup.
+            auto store{world::world_store::open(root)};
+            expect(static_cast<bool>(store));
+            if (store) {
+                expect(store->palette().size() == report->entries_after);
+                auto chunk{store->read_chunk({0, 0})};
+                expect(static_cast<bool>(chunk));
+                if (chunk) {
+                    expect(chunk->sections.size() == 1U);
+                    if (!chunk->sections.empty()) {
+                        expect(chunk->sections[0].palette.size() == 1U);
+                        expect(chunk->sections[0].palette[0].key ==
+                               "minecraft:stone");
+                        expect(chunk->sections[0].block_count ==
+                               world::section_volume);
+                        expect(chunk->sections[0].biome_palette.size() == 1U);
+                        expect(chunk->sections[0].biome_palette[0] ==
+                               "minecraft:plains");
+                    }
                 }
             }
         }
