@@ -40,12 +40,14 @@ using namespace std::chrono_literals;
         expect(static_cast<bool>(second));
         expect(static_cast<bool>(third));
         if (first && second && third) {
-            expect(first->index == 0);
-            expect(second->index == 1);
-            expect(third->index == 2);
-            expect(third->missed == 0);
+            // A coarse scheduler clock may return late; the contract is a
+            // monotonic index that accounts for every skipped tick, not an
+            // exact +1 per call.
+            expect(first->index == first->missed);
+            expect(second->index == first->index + 1 + second->missed);
+            expect(third->index == second->index + 1 + third->missed);
+            expect(ticker.current_tick() == third->index);
         }
-        expect(ticker.current_tick() == 2);
         expect(elapsed >= 10'000'000); // at least two full 5 ms intervals
 
         ticker.stop();

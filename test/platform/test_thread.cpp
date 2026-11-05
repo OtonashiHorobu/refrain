@@ -77,12 +77,14 @@ using namespace boost::ut;
                 thread_priority::normal)) {
             return; // restricted runner
         }
-        // Lowering priority is normally allowed without privilege; restore
-        // normal afterwards so the rest of the suite is unaffected.
-        static_cast<void>(refrain::platform::set_current_thread_priority(
-            thread_priority::background));
-        expect(refrain::platform::set_current_thread_priority(
-            thread_priority::normal));
+        // Lowering priority is normally allowed without privilege, but raising
+        // it back requires CAP_SYS_NICE. Restoring an unprivileged thread is
+        // therefore best-effort and must not be asserted.
+        if (refrain::platform::set_current_thread_priority(
+                thread_priority::background)) {
+            static_cast<void>(refrain::platform::set_current_thread_priority(
+                thread_priority::normal));
+        }
     };
 };
 
