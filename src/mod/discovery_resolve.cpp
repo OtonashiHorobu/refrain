@@ -25,7 +25,6 @@
 
 namespace refrain::mod {
 
-namespace kernel = refrain::kernel;
 namespace data = refrain::data;
 
 namespace {
@@ -61,7 +60,7 @@ using detail::lower_id;
 [[nodiscard]] auto validate_requirements(const discovered_mod &mod) -> status {
     for (const auto *list : {&mod.required, &mod.optional}) {
         for (const auto &requirement : *list) {
-            if (!kernel::is_valid_mod_id(requirement.id)) {
+            if (!mod::is_valid_mod_id(requirement.id)) {
                 return std::unexpected{
                     fail(error_code::invalid_argument,
                          fmt::format("resolve: mod '{}' declares an invalid "
@@ -83,7 +82,7 @@ using detail::lower_id;
 }
 
 [[nodiscard]] auto check_requirement(const discovered_mod &owner,
-                                     const kernel::mod_requirement &requirement,
+                                     const mod::mod_requirement &requirement,
                                      const discovered_mod &target,
                                      bool optional) -> status {
     auto satisfied{core::satisfies(target.version, requirement.range)};
@@ -110,8 +109,7 @@ using detail::lower_id;
 /// id order for auto-scanned-only mods. This is the single dependency-graph
 /// implementation (`detect_cycle` was folded into it).
 [[nodiscard]] auto topological_order(
-    const kernel::gamepack_spec &spec,
-    std::span<const discovered_mod *> selected,
+    const mod::gamepack_spec &spec, std::span<const discovered_mod *> selected,
     const std::map<std::string, const discovered_mod *> &selected_by_id)
     -> result<std::vector<const discovered_mod *>> {
     std::map<std::string, std::size_t> rank;
@@ -180,13 +178,13 @@ using detail::lower_id;
 }
 
 [[nodiscard]] auto
-resolve_impl(const kernel::gamepack_spec &spec,
+resolve_impl(const mod::gamepack_spec &spec,
              std::span<const discovered_mod> discovered,
              const discover_options &options,
              std::span<const std::string_view> required_services, bool preview)
     -> result<composition> {
     // --- gamepack spec gates ------------------------------------------------
-    if (spec.id.empty() || !kernel::is_valid_mod_id(spec.id)) {
+    if (spec.id.empty() || !mod::is_valid_mod_id(spec.id)) {
         return std::unexpected{
             fail(error_code::invalid_argument,
                  fmt::format("resolve: invalid gamepack id '{}'", spec.id))};
@@ -258,7 +256,7 @@ resolve_impl(const kernel::gamepack_spec &spec,
     std::map<std::string, const discovered_mod *> by_id;
     std::map<std::string, std::string> by_lower_id;
     for (const auto *mod : sorted) {
-        if (mod->id.empty() || !kernel::is_valid_mod_id(mod->id)) {
+        if (mod->id.empty() || !mod::is_valid_mod_id(mod->id)) {
             return std::unexpected{fail(
                 error_code::invalid_argument,
                 fmt::format("resolve: discovered mod has an invalid id '{}'",
@@ -324,7 +322,7 @@ resolve_impl(const kernel::gamepack_spec &spec,
     };
     for (const auto &entry : spec.mods) {
         const auto &pin{entry.ref};
-        if (pin.id.empty() || !kernel::is_valid_mod_id(pin.id)) {
+        if (pin.id.empty() || !mod::is_valid_mod_id(pin.id)) {
             return std::unexpected{fail(
                 error_code::invalid_argument,
                 fmt::format("resolve: gamepack pins an invalid mod id '{}'",
@@ -495,17 +493,17 @@ resolve_impl(const kernel::gamepack_spec &spec,
         lock.load_order.push_back(*mod);
     }
 
-    // Provider selection: the single pure selector in kernel. It sees only
+    // Provider selection: the single pure selector in gamepack. It sees only
     // resolved identities, never the filesystem.
-    std::vector<kernel::resolved_mod_view> views;
+    std::vector<mod::resolved_mod_view> views;
     views.reserve(selected.size());
     for (const auto *mod : selected) {
-        views.push_back(kernel::resolved_mod_view{.id = mod->id,
-                                                  .version = mod->version,
-                                                  .abi = mod->abi,
-                                                  .provides = mod->provides});
+        views.push_back(mod::resolved_mod_view{.id = mod->id,
+                                               .version = mod->version,
+                                               .abi = mod->abi,
+                                               .provides = mod->provides});
     }
-    auto providers{kernel::select_providers(spec, views, required_services)};
+    auto providers{mod::select_providers(spec, views, required_services)};
     if (!providers) {
         return std::unexpected{std::move(providers.error())};
     }
@@ -521,7 +519,7 @@ resolve_impl(const kernel::gamepack_spec &spec,
 
 namespace detail {
 
-auto resolve_catalog(const kernel::gamepack_spec &spec,
+auto resolve_catalog(const mod::gamepack_spec &spec,
                      std::span<const discovered_mod> discovered,
                      const discover_options &options,
                      std::span<const std::string_view> required_services,

@@ -14,7 +14,7 @@
 #include <refrain/data/content_store.hpp>
 #include <refrain/data/path.hpp>
 #include <refrain/data/store_lock.hpp>
-#include <refrain/kernel/manifest.hpp>
+#include <refrain/mod/manifest.hpp>
 
 #include <fmt/format.h>
 
@@ -38,7 +38,6 @@ namespace {
 namespace config = core::config;
 namespace data = refrain::data;
 namespace io = core::io;
-namespace kernel = refrain::kernel;
 
 using log_sink = std::function<void(std::string_view)>;
 
@@ -145,7 +144,7 @@ struct package_identity {
     std::string id{};
     std::string version{};
     std::uint32_t abi{0};
-    kernel::manifest_side side{kernel::manifest_side::both};
+    mod::manifest_side side{mod::manifest_side::both};
 };
 
 /// Parse the package manifest without verifying the whole archive: the cheap
@@ -170,9 +169,8 @@ struct package_identity {
             annotate(std::move(document.error()),
                      fmt::format("startup-content: '{}'", path))};
     }
-    auto manifest{kernel::parse_mod_manifest(
-        *document,
-        kernel::manifest_parse_options{.allow_package_tables = true})};
+    auto manifest{mod::parse_mod_manifest(
+        *document, mod::manifest_parse_options{.allow_package_tables = true})};
     if (!manifest) {
         return std::unexpected{
             annotate(std::move(manifest.error()),
@@ -845,7 +843,7 @@ void emit_summary(const startup_content_report &report, const log_sink &log) {
 } // namespace
 
 auto merge_pinned_versions(const mod_lock *lock,
-                           std::span<const kernel::mod_ref> overrides)
+                           std::span<const mod::mod_ref> overrides)
     -> std::map<std::string, std::string> {
     std::map<std::string, std::string> pins;
     if (lock != nullptr) {

@@ -4,13 +4,13 @@
 
 #include <refrain/core/config.hpp>
 #include <refrain/core/io.hpp>
+#include <refrain/core/version.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/content_store.hpp>
 #include <refrain/data/json.hpp>
 #include <refrain/data/signature.hpp>
 #include <refrain/mod/rfmod.hpp>
 #include <refrain/platform/process.hpp>
-#include <refrain/version.hpp>
 
 #include <boost/ut.hpp>
 
@@ -35,6 +35,8 @@
 namespace {
 
 using namespace boost::ut;
+
+namespace mod = refrain::mod;
 
 namespace fs = std::filesystem;
 
@@ -514,6 +516,8 @@ rewrite_record_field(std::string manifest, std::string_view path,
 namespace {
 
 using namespace boost::ut;
+
+namespace mod = refrain::mod;
 
 // ---------------------------------------------------------------------------
 // packing

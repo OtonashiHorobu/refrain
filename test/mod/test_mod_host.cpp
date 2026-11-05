@@ -14,11 +14,11 @@
 #include <refrain/core/error.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/checksum.hpp>
-#include <refrain/kernel/gamepack.hpp>
-#include <refrain/kernel/manifest.hpp>
-#include <refrain/kernel/static_mod.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/mod/manifest.hpp>
+#include <refrain/mod/static_mod.hpp>
 
 #include <boost/ut.hpp>
 
@@ -36,7 +36,7 @@ using namespace boost::ut;
 
 namespace config = refrain::core::config;
 namespace data = refrain::data;
-namespace kernel = refrain::kernel;
+namespace mod = refrain::mod;
 using refrain::error_code;
 
 int g_factory_calls{0};
@@ -141,7 +141,7 @@ int g_provider_self{0};
     if (!doc) {
         return std::unexpected{doc.error()};
     }
-    auto spec{kernel::parse_gamepack(*doc, "server")};
+    auto spec{mod::parse_gamepack(*doc, "server")};
     if (!spec) {
         return std::unexpected{spec.error()};
     }
@@ -177,14 +177,14 @@ struct abi_case_result {
     std::size_t providers{0};
 };
 
-[[nodiscard]] auto run_abi_case(kernel::static_mod_factory factory)
+[[nodiscard]] auto run_abi_case(mod::static_mod_factory factory)
     -> abi_case_result {
-    kernel::static_mod_registry registry{};
+    mod::static_mod_registry registry{};
     static_cast<void>(
-        registry.add(kernel::static_mod_descriptor{.id = "refrain.test.abi",
-                                                   .version = "1.0.0",
-                                                   .abi = 1,
-                                                   .factory = factory}));
+        registry.add(mod::static_mod_descriptor{.id = "refrain.test.abi",
+                                                .version = "1.0.0",
+                                                .abi = 1,
+                                                .factory = factory}));
     auto plan{make_gamepack("\"refrain.test.abi@1.0.0\"",
                             "data = \"refrain.test.abi@^1.0.0\"\n")};
     if (!plan) {
@@ -202,12 +202,12 @@ struct abi_case_result {
 
 const suite mod_host_metadata_tests = [] {
     "mod_host/exposes manifest hash and requirements"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         expect(static_cast<bool>(registry.add(
-            kernel::static_mod_descriptor{.id = "refrain.test.meta.provider",
-                                          .version = "1.0.0",
-                                          .abi = 1,
-                                          .factory = &noop_factory})));
+            mod::static_mod_descriptor{.id = "refrain.test.meta.provider",
+                                       .version = "1.0.0",
+                                       .abi = 1,
+                                       .factory = &noop_factory})));
 
         auto plan{make_gamepack("\"refrain.test.meta.plain@1.0.0\", "
                                 "\"refrain.test.meta.provider@1.0.0\"")};
@@ -283,17 +283,17 @@ const suite mod_host_metadata_tests = [] {
 
 const suite mod_host_provider_activation_tests = [] {
     "mod_host/activates only the provider the plan selected"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         expect(static_cast<bool>(registry.add(
-            kernel::static_mod_descriptor{.id = "refrain.test.provider.a",
-                                          .version = "1.0.0",
-                                          .abi = 1,
-                                          .factory = &selected_factory})));
+            mod::static_mod_descriptor{.id = "refrain.test.provider.a",
+                                       .version = "1.0.0",
+                                       .abi = 1,
+                                       .factory = &selected_factory})));
         expect(static_cast<bool>(registry.add(
-            kernel::static_mod_descriptor{.id = "refrain.test.provider.b",
-                                          .version = "1.0.0",
-                                          .abi = 1,
-                                          .factory = &loser_factory})));
+            mod::static_mod_descriptor{.id = "refrain.test.provider.b",
+                                       .version = "1.0.0",
+                                       .abi = 1,
+                                       .factory = &loser_factory})));
         g_factory_calls = 0;
         g_loser_calls = 0;
 
@@ -339,7 +339,7 @@ const suite mod_host_provider_activation_tests = [] {
     };
 
     "mod_host/rejects a plan whose selected provider is not loaded"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         auto plan{make_gamepack("\"refrain.test.orphan@1.0.0\"",
                                 "data = \"refrain.test.orphan@^1.0.0\"\n")};
         expect(static_cast<bool>(plan));
@@ -371,12 +371,12 @@ const suite mod_host_provider_activation_tests = [] {
     };
 
     "mod_host/denies provider registration outside the plan"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         expect(static_cast<bool>(registry.add(
-            kernel::static_mod_descriptor{.id = "refrain.test.unplanned",
-                                          .version = "1.0.0",
-                                          .abi = 1,
-                                          .factory = &unplanned_factory})));
+            mod::static_mod_descriptor{.id = "refrain.test.unplanned",
+                                       .version = "1.0.0",
+                                       .abi = 1,
+                                       .factory = &unplanned_factory})));
         g_factory_calls = 0;
         g_register_error = error_code::success;
 
@@ -403,12 +403,12 @@ const suite mod_host_provider_activation_tests = [] {
     };
 
     "mod_host/failed load drops registrations and refuses reuse"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         expect(static_cast<bool>(registry.add(
-            kernel::static_mod_descriptor{.id = "refrain.test.provider.a",
-                                          .version = "1.0.0",
-                                          .abi = 1,
-                                          .factory = &selected_factory})));
+            mod::static_mod_descriptor{.id = "refrain.test.provider.a",
+                                       .version = "1.0.0",
+                                       .abi = 1,
+                                       .factory = &selected_factory})));
         g_factory_calls = 0;
 
         auto plan{make_gamepack(

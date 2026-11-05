@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/app/server_properties.hpp>
+#include <refrain/server/server_properties.hpp>
 
 #include <boost/ut.hpp>
 
@@ -13,7 +13,7 @@ using namespace boost::ut;
 
 [[maybe_unused]] const suite tests = [] {
     "server-properties/defaults for empty input"_test = [] {
-        const auto properties{refrain::app::parse_server_properties("")};
+        const auto properties{refrain::server::parse_server_properties("")};
         expect(properties.has_value());
         if (properties) {
             expect(properties->level_name == "world");
@@ -34,7 +34,7 @@ using namespace boost::ut;
                                         "allow-nether=false\r\n"
                                         "motd=Hello\\ World\\nSecond line\r\n"
                                         "unknown-key=ignored\r\n"};
-        const auto properties{refrain::app::parse_server_properties(text)};
+        const auto properties{refrain::server::parse_server_properties(text)};
         expect(properties.has_value()) << "parse failed";
         if (properties) {
             expect(properties->level_name == "my-world");
@@ -48,10 +48,10 @@ using namespace boost::ut;
     };
 
     "server-properties/rejects malformed assignments"_test = [] {
-        expect(!refrain::app::parse_server_properties("just-a-key"));
-        expect(!refrain::app::parse_server_properties("max-players=many"));
-        expect(!refrain::app::parse_server_properties("online-mode=maybe"));
-        expect(!refrain::app::parse_server_properties("=value"));
+        expect(!refrain::server::parse_server_properties("just-a-key"));
+        expect(!refrain::server::parse_server_properties("max-players=many"));
+        expect(!refrain::server::parse_server_properties("online-mode=maybe"));
+        expect(!refrain::server::parse_server_properties("=value"));
     };
 };
 

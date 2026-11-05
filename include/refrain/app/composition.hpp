@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <refrain/kernel/gamepack.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
 
 #include <cstddef>
@@ -44,7 +44,7 @@ struct server_mods {
 /// Resolve only (catalog + lock + providers). `refrain-server` uses this before
 /// `--dump-gamepack` because the dump path must not require every planned mod
 /// to exist in the built-in image.
-[[nodiscard]] auto resolve_server_mods(const kernel::gamepack_spec &spec,
+[[nodiscard]] auto resolve_server_mods(const mod::gamepack_spec &spec,
                                        const server_mods_options &options)
     -> result<mod::composition>;
 
@@ -56,7 +56,7 @@ struct server_mods {
     -> status;
 
 /// Resolve + activate (the `mods load` / test path).
-[[nodiscard]] auto load_server_mods(const kernel::gamepack_spec &spec,
+[[nodiscard]] auto load_server_mods(const mod::gamepack_spec &spec,
                                     const server_mods_options &options)
     -> result<std::unique_ptr<server_mods>>;
 

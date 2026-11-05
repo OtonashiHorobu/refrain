@@ -15,8 +15,8 @@
 #include <refrain/core/io.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/vfs.hpp>
-#include <refrain/kernel/static_mod.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/mod/static_mod.hpp>
 
 #include <cstddef>
 #include <cstdint>

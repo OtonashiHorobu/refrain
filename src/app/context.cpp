@@ -5,7 +5,7 @@
 #include <refrain/app/services.hpp>
 
 #include <refrain/core/log.hpp>
-#include <refrain/version.hpp>
+#include <refrain/core/version.hpp>
 
 #include <iostream>
 #include <string>

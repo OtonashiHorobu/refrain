@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/version.hpp>
+#include <refrain/core/version.hpp>
 
 #include <boost/ut.hpp>
 

@@ -23,6 +23,8 @@
 namespace {
 
 using namespace boost::ut;
+
+namespace mod = refrain::mod;
 namespace fs = std::filesystem;
 
 using refrain::data::blake3;
@@ -131,8 +133,8 @@ auto write_raw_manifest(const std::string &root, std::string_view dir_name,
 }
 
 [[nodiscard]] auto make_spec(bool auto_scan = true, std::uint32_t abi = 1)
-    -> refrain::kernel::gamepack_spec {
-    refrain::kernel::gamepack_spec spec{};
+    -> refrain::mod::gamepack_spec {
+    refrain::mod::gamepack_spec spec{};
     spec.id = "test.gamepack";
     spec.version = "1.0.0";
     spec.side = "server";
@@ -141,11 +143,11 @@ auto write_raw_manifest(const std::string &root, std::string_view dir_name,
     return spec;
 }
 
-void pin_mod(refrain::kernel::gamepack_spec &spec, std::string id,
+void pin_mod(refrain::mod::gamepack_spec &spec, std::string id,
              std::string version) {
-    spec.mods.push_back(refrain::kernel::mod_entry{
-        .ref = refrain::kernel::mod_ref{.id = std::move(id),
-                                        .version = std::move(version)}});
+    spec.mods.push_back(refrain::mod::mod_entry{
+        .ref = refrain::mod::mod_ref{.id = std::move(id),
+                                     .version = std::move(version)}});
 }
 
 [[nodiscard]] auto find_discovered(std::span<const discovered_mod> mods,
@@ -1000,8 +1002,8 @@ const suite discovery_tests = [] {
         self.abi = 1;
         self.origin = mod_origin::user;
         self.path = "mods/self-mod/manifest.toml";
-        self.required.push_back(refrain::kernel::mod_requirement{
-            .id = "self-mod", .range = "^1.0.0"});
+        self.required.push_back(
+            refrain::mod::mod_requirement{.id = "self-mod", .range = "^1.0.0"});
         const std::array<discovered_mod, 1> candidates{self};
         auto spec{make_spec(true)};
         const auto resolved{refrain::mod::resolve(spec, candidates)};
@@ -1513,7 +1515,7 @@ const suite discovery_tests = [] {
         const auto &mod{(*scanned)[0]};
         expect(mod.id == "rich");
         expect(mod.version == "1.2.3");
-        expect(mod.side == refrain::kernel::manifest_side::both);
+        expect(mod.side == refrain::mod::manifest_side::both);
         expect(mod.meta.display_name == "Rich mod");
         expect(mod.provides.size() == 1U);
         expect(mod.required.size() == 1U);
@@ -1521,11 +1523,11 @@ const suite discovery_tests = [] {
 
         // The audit text stays byte-identical to the manifest formatter, so
         // `mods check` output is unchanged by the unified scanner.
-        auto manifest{refrain::kernel::load_mod_manifest(mod.path)};
+        auto manifest{refrain::mod::load_mod_manifest(mod.path)};
         expect(static_cast<bool>(manifest));
         if (manifest) {
             expect(refrain::mod::format_candidate(mod) ==
-                   refrain::kernel::format_mod_manifest(*manifest));
+                   refrain::mod::format_mod_manifest(*manifest));
         }
     };
 

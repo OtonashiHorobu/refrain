@@ -4,9 +4,9 @@
 
 #include <refrain/core/config.hpp>
 #include <refrain/core/io.hpp>
-#include <refrain/kernel/gamepack.hpp>
-#include <refrain/kernel/manifest.hpp>
-#include <refrain/kernel/static_mod.hpp>
+#include <refrain/mod/gamepack.hpp>
+#include <refrain/mod/manifest.hpp>
+#include <refrain/mod/static_mod.hpp>
 
 #include <boost/ut.hpp>
 
@@ -24,7 +24,7 @@ using namespace boost::ut;
 
 namespace config = refrain::core::config;
 namespace io = refrain::core::io;
-namespace kernel = refrain::kernel;
+namespace mod = refrain::mod;
 using refrain::error_code;
 
 // Two statically linked mods registered through the public macro, proving the
@@ -37,12 +37,12 @@ REFR_MOD_STATIC("refrain.test.static_b", "2.3.4", 1, nullptr);
 } // namespace
 
 [[nodiscard]] auto parse_mod(std::string_view text)
-    -> refrain::result<kernel::mod_manifest> {
+    -> refrain::result<mod::mod_manifest> {
     auto doc{config::document::parse_text(text, "<test>")};
     if (!doc) {
         return std::unexpected{doc.error()};
     }
-    return kernel::parse_mod_manifest(*doc);
+    return mod::parse_mod_manifest(*doc);
 }
 
 [[nodiscard]] auto expect_mod_error(std::string_view text, error_code code) {
@@ -110,7 +110,7 @@ const suite manifest_tests = [] {
         }
         expect(manifest->common.id == "refrain.content.vanilla");
         expect(manifest->common.version == "1.0.0");
-        expect(manifest->common.side == kernel::manifest_side::both);
+        expect(manifest->common.side == mod::manifest_side::both);
         expect(manifest->common.abi == 1U);
         expect(!manifest->is_external());
         expect(manifest->common.meta.display_name == "Refrain vanilla content");
@@ -130,7 +130,7 @@ const suite manifest_tests = [] {
         if (!manifest) {
             return;
         }
-        expect(manifest->common.side == kernel::manifest_side::server);
+        expect(manifest->common.side == mod::manifest_side::server);
         expect(manifest->provides.size() == 2U);
         expect(manifest->provides[0] == "refrain:content");
         expect(manifest->provides[1] == "refrain:data.packs");
@@ -150,7 +150,7 @@ const suite manifest_tests = [] {
         expect(manifest->entry->symbol == "refr_mod_entry");
         expect(manifest->entry->wasm.empty());
         expect(manifest->common.version == "0.1.0+build.7");
-        expect(manifest->common.side == kernel::manifest_side::both);
+        expect(manifest->common.side == mod::manifest_side::both);
     };
 
     "manifest/mod: wasm entry point"_test = [] {
@@ -355,12 +355,12 @@ abi = "1"
             return;
         }
 
-        auto matching{kernel::parse_mod_manifest(
-            *doc, kernel::manifest_parse_options{.expected_abi = 1})};
+        auto matching{mod::parse_mod_manifest(
+            *doc, mod::manifest_parse_options{.expected_abi = 1})};
         expect(static_cast<bool>(matching));
 
-        auto mismatched{kernel::parse_mod_manifest(
-            *doc, kernel::manifest_parse_options{.expected_abi = 2})};
+        auto mismatched{mod::parse_mod_manifest(
+            *doc, mod::manifest_parse_options{.expected_abi = 2})};
         expect(!mismatched);
         if (!mismatched) {
             expect(mismatched.error().code == error_code::version_mismatch);
@@ -377,9 +377,9 @@ abi = "1"
         if (!unnamed) {
             return;
         }
-        auto missing_display{kernel::parse_mod_manifest(
+        auto missing_display{mod::parse_mod_manifest(
             *unnamed,
-            kernel::manifest_parse_options{.require_display_name = true})};
+            mod::manifest_parse_options{.require_display_name = true})};
         expect(!missing_display);
         if (!missing_display) {
             expect(missing_display.error().code == error_code::parse_error);
@@ -394,10 +394,10 @@ abi = "1"
         auto written{io::write_text(path.string(), k_internal_manifest)};
         expect(static_cast<bool>(written));
 
-        auto manifest{kernel::load_mod_manifest(path.string())};
+        auto manifest{mod::load_mod_manifest(path.string())};
         expect(static_cast<bool>(manifest));
 
-        auto missing{kernel::load_mod_manifest((dir / "nope.toml").string())};
+        auto missing{mod::load_mod_manifest((dir / "nope.toml").string())};
         expect(!missing);
         if (!missing) {
             expect(missing.error().message.find("nope.toml") !=
@@ -412,9 +412,9 @@ abi = "1"
         if (!manifest) {
             return;
         }
-        const auto text{kernel::format_manifest_common(manifest->common)};
+        const auto text{mod::format_manifest_common(manifest->common)};
         expect(text == "refrain.content.vanilla@1.0.0 (side=both, abi=1)");
-        const auto formatted{kernel::format_mod_manifest(*manifest)};
+        const auto formatted{mod::format_mod_manifest(*manifest)};
         expect(formatted.find("internal") != std::string::npos);
         expect(formatted.find("refrain.data.vanilla@^1.0.0") !=
                std::string::npos);
@@ -435,22 +435,21 @@ display_name = "Refrain vanilla"
         if (!doc) {
             return;
         }
-        auto common{kernel::parse_manifest_common(
+        auto common{mod::parse_manifest_common(
             *doc, "gamepack",
-            kernel::manifest_parse_options{.expected_abi = 1,
-                                           .require_side = true})};
+            mod::manifest_parse_options{.expected_abi = 1,
+                                        .require_side = true})};
         expect(static_cast<bool>(common));
         if (!common) {
             return;
         }
         expect(common->id == "refrain.vanilla");
-        expect(common->side == kernel::manifest_side::server);
-        expect(kernel::manifest_side_matches(common->side, "server"));
-        expect(!kernel::manifest_side_matches(common->side, "client"));
+        expect(common->side == mod::manifest_side::server);
+        expect(mod::manifest_side_matches(common->side, "server"));
+        expect(!mod::manifest_side_matches(common->side, "client"));
 
-        auto mismatch{kernel::parse_manifest_common(
-            *doc, "gamepack",
-            kernel::manifest_parse_options{.expected_abi = 2})};
+        auto mismatch{mod::parse_manifest_common(
+            *doc, "gamepack", mod::manifest_parse_options{.expected_abi = 2})};
         expect(!mismatch);
         if (!mismatch) {
             expect(mismatch.error().code == error_code::version_mismatch);
@@ -458,23 +457,23 @@ display_name = "Refrain vanilla"
     };
 
     "mod_ref: id and service id validation"_test = [] {
-        expect(kernel::is_valid_mod_id("refrain.world.vanilla"));
-        expect(kernel::is_valid_mod_id("com.example.rpg"));
-        expect(kernel::is_valid_mod_id("a"));
-        expect(!kernel::is_valid_mod_id(""));
-        expect(!kernel::is_valid_mod_id(".a"));
-        expect(!kernel::is_valid_mod_id("a b"));
-        expect(!kernel::is_valid_mod_id(std::string(129, 'a')));
-        expect(kernel::is_valid_service_id("refrain:data.packs"));
-        expect(!kernel::is_valid_service_id("refrain"));
-        expect(!kernel::is_valid_service_id(":data"));
-        expect(!kernel::is_valid_service_id("refrain:"));
-        expect(!kernel::is_valid_service_id("Refrain:data"));
-        expect(!kernel::is_valid_service_id("a:b:c"));
+        expect(mod::is_valid_mod_id("refrain.world.vanilla"));
+        expect(mod::is_valid_mod_id("com.example.rpg"));
+        expect(mod::is_valid_mod_id("a"));
+        expect(!mod::is_valid_mod_id(""));
+        expect(!mod::is_valid_mod_id(".a"));
+        expect(!mod::is_valid_mod_id("a b"));
+        expect(!mod::is_valid_mod_id(std::string(129, 'a')));
+        expect(mod::is_valid_service_id("refrain:data.packs"));
+        expect(!mod::is_valid_service_id("refrain"));
+        expect(!mod::is_valid_service_id(":data"));
+        expect(!mod::is_valid_service_id("refrain:"));
+        expect(!mod::is_valid_service_id("Refrain:data"));
+        expect(!mod::is_valid_service_id("a:b:c"));
     };
 
     "static_mod: macro registrations are visible"_test = [] {
-        auto &registry{kernel::static_mod_registry::global()};
+        auto &registry{mod::static_mod_registry::global()};
         const auto *a{registry.find("refrain.test.static_a")};
         expect(a != nullptr);
         if (a != nullptr) {
@@ -488,18 +487,18 @@ display_name = "Refrain vanilla"
     };
 
     "static_mod: duplicate and invalid registrations are deferred"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         auto added{
-            registry.add(kernel::static_mod_descriptor{.id = "refrain.test.dup",
-                                                       .version = "1.0.0",
-                                                       .abi = 1,
-                                                       .factory = nullptr})};
+            registry.add(mod::static_mod_descriptor{.id = "refrain.test.dup",
+                                                    .version = "1.0.0",
+                                                    .abi = 1,
+                                                    .factory = nullptr})};
         expect(static_cast<bool>(added));
         auto duplicate{
-            registry.add(kernel::static_mod_descriptor{.id = "refrain.test.dup",
-                                                       .version = "1.0.0",
-                                                       .abi = 1,
-                                                       .factory = nullptr})};
+            registry.add(mod::static_mod_descriptor{.id = "refrain.test.dup",
+                                                    .version = "1.0.0",
+                                                    .abi = 1,
+                                                    .factory = nullptr})};
         expect(!duplicate);
         if (!duplicate) {
             expect(duplicate.error().code == error_code::already_exists);
@@ -513,40 +512,40 @@ display_name = "Refrain vanilla"
                    std::string::npos);
         }
         // Frozen registries reject further registrations.
-        auto late{registry.add(
-            kernel::static_mod_descriptor{.id = "refrain.test.late",
-                                          .version = "1.0.0",
-                                          .abi = 1,
-                                          .factory = nullptr})};
+        auto late{
+            registry.add(mod::static_mod_descriptor{.id = "refrain.test.late",
+                                                    .version = "1.0.0",
+                                                    .abi = 1,
+                                                    .factory = nullptr})};
         expect(!late);
         if (!late) {
             expect(late.error().code == error_code::permission_denied);
         }
 
-        auto invalid_id{registry.add(kernel::static_mod_descriptor{
+        auto invalid_id{registry.add(mod::static_mod_descriptor{
             .id = "Bad Id", .version = "1.0.0", .abi = 1, .factory = nullptr})};
         expect(!invalid_id);
-        auto invalid_version{registry.add(
-            kernel::static_mod_descriptor{.id = "refrain.test.badver",
-                                          .version = "1.0",
-                                          .abi = 1,
-                                          .factory = nullptr})};
+        auto invalid_version{
+            registry.add(mod::static_mod_descriptor{.id = "refrain.test.badver",
+                                                    .version = "1.0",
+                                                    .abi = 1,
+                                                    .factory = nullptr})};
         expect(!invalid_version);
-        auto invalid_abi{registry.add(
-            kernel::static_mod_descriptor{.id = "refrain.test.badabi",
-                                          .version = "1.0.0",
-                                          .abi = 0,
-                                          .factory = nullptr})};
+        auto invalid_abi{
+            registry.add(mod::static_mod_descriptor{.id = "refrain.test.badabi",
+                                                    .version = "1.0.0",
+                                                    .abi = 0,
+                                                    .factory = nullptr})};
         expect(!invalid_abi);
     };
 
     "static_mod: matches manifests and reports drift"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         expect(static_cast<bool>(registry.add(
-            kernel::static_mod_descriptor{.id = "refrain.data.vanilla",
-                                          .version = "1.0.0",
-                                          .abi = 1,
-                                          .factory = nullptr})));
+            mod::static_mod_descriptor{.id = "refrain.data.vanilla",
+                                       .version = "1.0.0",
+                                       .abi = 1,
+                                       .factory = nullptr})));
 
         auto manifest{parse_mod(k_provider_manifest)};
         expect(static_cast<bool>(manifest));

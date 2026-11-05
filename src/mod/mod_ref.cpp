@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/kernel/mod_ref.hpp>
+#include <refrain/mod/mod_ref.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -10,7 +10,7 @@
 
 #include <fmt/format.h>
 
-namespace refrain::kernel {
+namespace refrain::mod {
 
 namespace {
 
@@ -175,4 +175,4 @@ auto is_valid_service_id(std::string_view id) noexcept -> bool {
            std::all_of(name_part.begin(), name_part.end(), is_name_char);
 }
 
-} // namespace refrain::kernel
+} // namespace refrain::mod

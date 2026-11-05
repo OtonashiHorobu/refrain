@@ -9,13 +9,14 @@
 // `--dump-gamepack` exposes the resolved composition for CI and the
 // dual-provider smoke test.
 
-#include <refrain/app/server.hpp>
+#include <refrain/app/composition.hpp>
 #include <refrain/app/services.hpp>
-#include <refrain/builtin.hpp>
+#include <refrain/builtin/image.hpp>
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/runtime.hpp>
 #include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
+#include <refrain/core/version.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/content_maintenance.hpp>
@@ -25,11 +26,10 @@
 #include <refrain/data/signature.hpp>
 #include <refrain/data/vfs.hpp>
 #include <refrain/kernel/crash.hpp>
-#include <refrain/kernel/gamepack.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/startup_content.hpp>
-#include <refrain/version.hpp>
 
 #include <CLI/CLI.hpp>
 #include <fmt/format.h>
@@ -466,7 +466,7 @@ int main(int argc, char **argv) {
     for (const auto &service : required_services) {
         services.push_back(service);
     }
-    auto gamepack_spec{refrain::kernel::load_gamepack_spec(gamepack, "server")};
+    auto gamepack_spec{refrain::mod::load_gamepack_spec(gamepack, "server")};
     if (!gamepack_spec) {
         // report_error() goes through log::error; the shutdown guard runs
         // afterwards, so the diagnostic that explains the non-zero exit code
@@ -524,7 +524,7 @@ int main(int argc, char **argv) {
         // id-sorted and its fingerprint is unchanged.
         content.base_priority = 1000;
         content.layer_order.reserve(gamepack_spec->mods.size());
-        std::vector<refrain::kernel::mod_ref> gamepack_pins{};
+        std::vector<refrain::mod::mod_ref> gamepack_pins{};
         gamepack_pins.reserve(gamepack_spec->mods.size());
         for (const auto &entry : gamepack_spec->mods) {
             content.layer_order.push_back(entry.ref.id);

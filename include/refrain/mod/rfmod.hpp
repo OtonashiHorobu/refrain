@@ -8,7 +8,7 @@
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/content_store.hpp>
 #include <refrain/data/signature.hpp>
-#include <refrain/kernel/manifest.hpp>
+#include <refrain/mod/manifest.hpp>
 #include <refrain/mod/origin.hpp>
 
 #include <array>
@@ -244,7 +244,7 @@ struct packed_rfmod {
 
 /// Package a `mods/<id>/` directory tree into `output_path` (atomic write).
 ///
-/// Included: `manifest.toml` (required, parsed with the kernel mod-manifest
+/// Included: `manifest.toml` (required, parsed with the mod manifest
 /// parser), `data/**`, `assets/**`, `scripts/**`, root `LICENSE`/`NOTICE`.
 /// Excluded: `src/**` (internal code never ships), dotfiles/dot
 /// directories, any other root entry (READMEs, build output, ...).
@@ -327,7 +327,7 @@ struct rfmod_verify_options {
 
 /// Result of a successful `verify_rfmod`.
 struct rfmod_verification {
-    kernel::mod_manifest manifest{};
+    mod::mod_manifest manifest{};
     std::vector<rfmod_file_record> files{}; ///< sorted by manifest key order
     std::optional<rfmod_signature_info> signature{};
     data::digest32 archive_digest{};  ///< BLAKE3 of the compressed bytes
@@ -343,7 +343,7 @@ struct rfmod_verification {
 /// Steps, in order (any failure returns an error, never a partial success):
 ///  1. read `manifest.toml` (`not_found` when absent) and split the raw bytes
 ///     at the `[signature]` header line (see "Canonical signed bytes");
-///  2. parse the whole manifest (kernel parser with package tables enabled)
+///  2. parse the whole manifest (manifest parser with package tables enabled)
 ///     and validate `[files]`, `[packaging]` and `[signature]` strictly;
 ///     `format_version` must equal `rfmod_format_version`
 ///     (`version_mismatch`);
@@ -395,7 +395,7 @@ struct installed_file {
 
 /// Result of installing an archive into the content store.
 struct rfmod_install_result {
-    kernel::mod_manifest manifest{};
+    mod::mod_manifest manifest{};
     data::digest32 archive_digest{};
     data::digest32 manifest_digest{};
     std::vector<installed_file> files{}; ///< in archive order

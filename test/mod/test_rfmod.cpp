@@ -33,6 +33,8 @@ namespace {
 
 using namespace boost::ut;
 
+namespace mod = refrain::mod;
+
 namespace fs = std::filesystem;
 using refrain::data::content_store;
 using refrain::mod::installed_file;

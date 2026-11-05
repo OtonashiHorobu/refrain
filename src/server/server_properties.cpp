@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/app/server_properties.hpp>
+#include <refrain/server/server_properties.hpp>
 
 #include <fmt/format.h>
 
@@ -13,7 +13,7 @@
 #include <string_view>
 #include <system_error>
 
-namespace refrain::app {
+namespace refrain::server {
 namespace {
 
 constexpr std::size_t max_lines = 4096;
@@ -190,4 +190,4 @@ auto parse_server_properties(std::string_view text)
     return properties;
 }
 
-} // namespace refrain::app
+} // namespace refrain::server

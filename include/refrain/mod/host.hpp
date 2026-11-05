@@ -5,11 +5,11 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
-#include <refrain/kernel/manifest.hpp>
 #include <refrain/kernel/service_registry.hpp>
-#include <refrain/kernel/static_mod.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/manifest.hpp>
 #include <refrain/mod/package.hpp>
+#include <refrain/mod/static_mod.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -75,7 +75,7 @@ struct provider_api {
 ///
 /// Besides the identity/gate results, this carries the manifest metadata the
 /// `auto_scan` runtime wiring needs to build a `mod::discovered_mod`
-/// for the builtin composition without the kernel header depending on the
+/// for the builtin composition without the mod headers depending on the
 /// data layer: the manifest bytes are hashed at load time and exposed as hex.
 struct loaded_mod {
     std::string id{};
@@ -91,9 +91,9 @@ struct loaded_mod {
     std::string manifest_hash_hex{};
     /// Manifest `[requires]` hard dependencies (actual composition inputs,
     /// not just diagnostics; copied by the `auto_scan` wiring).
-    std::vector<kernel::mod_requirement> required{};
+    std::vector<mod::mod_requirement> required{};
     /// Manifest `[optional_requires]` (version-checked when present).
-    std::vector<kernel::mod_requirement> optional{};
+    std::vector<mod::mod_requirement> optional{};
 };
 
 class host {
@@ -101,8 +101,8 @@ class host {
     /// `registry` is the static mod registry to load against; defaults to the
     /// process-wide registry populated by REFR_MOD_STATIC. Tests/embedders can
     /// inject an isolated registry to keep the global one intact.
-    explicit host(kernel::static_mod_registry &registry =
-                      kernel::static_mod_registry::global())
+    explicit host(
+        mod::static_mod_registry &registry = mod::static_mod_registry::global())
         : registry_{registry} {}
     host(host &&) noexcept = default;
     auto operator=(host &&) noexcept -> host & = default;
@@ -204,7 +204,7 @@ class host {
         -> const loaded_mod *;
 
     /// Lowercase hex BLAKE3 digest of the loaded built-in image (empty before
-    /// load). Kept as text so the kernel header does not depend on the
+    /// load). Kept as text so the mod headers do not depend on the
     /// data-layer digest type.
     [[nodiscard]] auto builtin_image_digest() const noexcept
         -> std::string_view {
@@ -245,7 +245,7 @@ class host {
     /// Not `noexcept`: it clears the service registry, which locks.
     void enter_failed_state();
 
-    kernel::static_mod_registry &registry_;
+    mod::static_mod_registry &registry_;
     std::vector<loaded_mod> mods_{};
     std::string builtin_image_digest_hex_{};
     std::vector<std::byte> builtin_image_bytes_{};

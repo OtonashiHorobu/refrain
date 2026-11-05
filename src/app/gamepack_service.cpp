@@ -26,6 +26,7 @@
 #include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/core/semver.hpp>
+#include <refrain/core/version.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/content_index.hpp>
@@ -40,14 +41,13 @@
 #include <refrain/data/store_lock.hpp>
 #include <refrain/data/vfs.hpp>
 #include <refrain/kernel/crash.hpp>
-#include <refrain/kernel/gamepack.hpp>
-#include <refrain/kernel/manifest.hpp>
-#include <refrain/kernel/mod_ref.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/mod/manifest.hpp>
+#include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
 #include <refrain/script/wasm.hpp>
-#include <refrain/version.hpp>
 #include <schema/schema.hpp>
 #include <set>
 #include <span>
@@ -64,7 +64,6 @@ namespace config = refrain::core::config;
 namespace core = refrain::core;
 namespace data = refrain::data;
 namespace io = refrain::core::io;
-namespace kernel = refrain::kernel;
 namespace log = refrain::log;
 namespace mod = refrain::mod;
 namespace schema = refrain::schema;
@@ -80,7 +79,7 @@ auto run_gamepack_dump(const std::string &path, std::string_view side) -> int {
     std::cout << "# origin: " << parsed->origin() << '\n';
     std::cout << parsed->dump() << '\n';
 
-    auto spec = kernel::load_gamepack_spec(path, side);
+    auto spec = mod::load_gamepack_spec(path, side);
     if (!spec) {
         return report_error(spec.error());
     }
@@ -100,7 +99,7 @@ auto run_gamepack_check(const std::string &path, std::string_view side,
         services.push_back(service);
     }
 
-    auto spec = kernel::load_gamepack_spec(path, side);
+    auto spec = mod::load_gamepack_spec(path, side);
     if (!spec) {
         return report_error(spec.error());
     }

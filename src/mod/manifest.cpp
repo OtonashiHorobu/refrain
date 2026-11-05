@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/kernel/manifest.hpp>
+#include <refrain/mod/manifest.hpp>
 
 #include <refrain/core/config.hpp>
 #include <refrain/core/semver.hpp>
@@ -21,7 +21,7 @@
 
 #include <fmt/format.h>
 
-namespace refrain::kernel {
+namespace refrain::mod {
 
 namespace {
 
@@ -767,4 +767,4 @@ auto format_mod_manifest(const mod_manifest &manifest) -> std::string {
     return out;
 }
 
-} // namespace refrain::kernel
+} // namespace refrain::mod

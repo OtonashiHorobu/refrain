@@ -2,11 +2,11 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/builtin.hpp>
+#include <refrain/builtin/image.hpp>
 #include <refrain/contracts/services/data_packs.hpp>
 #include <refrain/core/io.hpp>
-#include <refrain/kernel/gamepack.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
 
 #include <boost/ut.hpp>
@@ -31,7 +31,7 @@ using namespace boost::ut;
 
 namespace contracts = refrain::contracts;
 namespace data_packs = refrain::services::data_packs;
-namespace kernel = refrain::kernel;
+namespace mod = refrain::mod;
 
 [[nodiscard]] auto builtin_bytes() -> std::span<const std::byte> {
     return std::span<const std::byte>{refrain::builtin::image_data(),
@@ -40,9 +40,9 @@ namespace kernel = refrain::kernel;
 
 [[nodiscard]] auto load_data_only_plan()
     -> refrain::result<refrain::mod::composition> {
-    auto spec{kernel::load_gamepack_spec(std::string{REFRAIN_SOURCE_DIR} +
-                                             "/gamepack/presets/data-only.toml",
-                                         "server")};
+    auto spec{mod::load_gamepack_spec(std::string{REFRAIN_SOURCE_DIR} +
+                                          "/gamepack/presets/data-only.toml",
+                                      "server")};
     if (!spec) {
         return std::unexpected{spec.error()};
     }
@@ -53,7 +53,7 @@ namespace kernel = refrain::kernel;
 /// built-in image; the `data` service is bound to `refrain.data.vanilla`.
 [[nodiscard]] auto load_default_plan()
     -> refrain::result<refrain::mod::composition> {
-    auto spec{kernel::load_gamepack_spec(
+    auto spec{mod::load_gamepack_spec(
         std::string{REFRAIN_SOURCE_DIR} + "/gamepack/gamepack.toml", "server")};
     if (!spec) {
         return std::unexpected{spec.error()};
@@ -232,7 +232,7 @@ const suite data_packs_provider_tests = [] {
         // content mod), but its factory must not run, so no provider claims
         // `refrain:data.packs`.
         const auto erased{std::erase_if(
-            plan->providers, [](const kernel::resolved_provider &provider) {
+            plan->providers, [](const mod::resolved_provider &provider) {
                 return provider.service == "data";
             })};
         expect(erased == 1U);

@@ -2,8 +2,8 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/kernel/gamepack.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/gamepack.hpp>
 
 #include <refrain/core/config.hpp>
 
@@ -24,15 +24,17 @@
 namespace {
 
 using namespace boost::ut;
+
+namespace mod = refrain::mod;
 using refrain::core::config::document;
-using refrain::kernel::gamepack_spec;
-using refrain::kernel::mod_entry;
-using refrain::kernel::mod_ref;
-using refrain::kernel::mod_requirement;
-using refrain::kernel::parse_mod_ref;
-using refrain::kernel::parse_mod_requirement;
-using refrain::kernel::provider_mode;
 using refrain::mod::composition;
+using refrain::mod::gamepack_spec;
+using refrain::mod::mod_entry;
+using refrain::mod::mod_ref;
+using refrain::mod::mod_requirement;
+using refrain::mod::parse_mod_ref;
+using refrain::mod::parse_mod_requirement;
+using refrain::mod::provider_mode;
 
 constexpr std::string_view valid_manifest{R"([gamepack]
 id = "refrain.vanilla"
@@ -83,7 +85,7 @@ storage = { default = "rwf", instances = { rwf = "refrain.storage.rwf@^1.0.0", m
 [[nodiscard]] auto parse_spec(std::string_view text)
     -> refrain::result<gamepack_spec> {
     const auto doc{parse_doc(text)};
-    return refrain::kernel::parse_gamepack(doc, "server");
+    return refrain::mod::parse_gamepack(doc, "server");
 }
 
 [[nodiscard]] auto resolve_spec(std::string_view text)
@@ -112,6 +114,8 @@ void remove_quietly(const std::filesystem::path &path) noexcept {
 namespace {
 
 using namespace boost::ut;
+
+namespace mod = refrain::mod;
 
 const suite gamepack_tests = [] {
     "gamepack/parse valid manifest"_test = [] {
@@ -350,7 +354,7 @@ list = ["a.mod@1.0.0", "b.mod@1.0.0"]
         expect(!parse_spec(text));
 
         const auto doc{parse_doc(valid_manifest)};
-        const auto spec{refrain::kernel::parse_gamepack(doc, "client")};
+        const auto spec{refrain::mod::parse_gamepack(doc, "client")};
         expect(!spec);
         if (!spec) {
             expect(spec.error().code == refrain::error_code::version_mismatch);
@@ -687,7 +691,7 @@ list = []
             stream << valid_manifest;
         }
         const auto plan{
-            refrain::kernel::load_gamepack_spec(path.string(), "server")};
+            refrain::mod::load_gamepack_spec(path.string(), "server")};
         expect(static_cast<bool>(plan));
         remove_quietly(path);
 
@@ -696,7 +700,7 @@ list = []
             stream << "[gamepack]\nid = \"broken\"\n";
         }
         const auto broken{
-            refrain::kernel::load_gamepack_spec(path.string(), "server")};
+            refrain::mod::load_gamepack_spec(path.string(), "server")};
         expect(!broken);
         if (!broken) {
             expect(broken.error().message.find(path.string()) !=

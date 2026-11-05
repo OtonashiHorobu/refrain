@@ -26,6 +26,7 @@
 #include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/core/semver.hpp>
+#include <refrain/core/version.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/content_index.hpp>
@@ -41,14 +42,13 @@
 #include <refrain/data/store_lock.hpp>
 #include <refrain/data/vfs.hpp>
 #include <refrain/kernel/crash.hpp>
-#include <refrain/kernel/gamepack.hpp>
-#include <refrain/kernel/manifest.hpp>
-#include <refrain/kernel/mod_ref.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/mod/manifest.hpp>
+#include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
 #include <refrain/script/wasm.hpp>
-#include <refrain/version.hpp>
 #include <schema/schema.hpp>
 #include <set>
 #include <span>
@@ -65,7 +65,6 @@ namespace config = refrain::core::config;
 namespace core = refrain::core;
 namespace data = refrain::data;
 namespace io = refrain::core::io;
-namespace kernel = refrain::kernel;
 namespace log = refrain::log;
 namespace mod = refrain::mod;
 namespace schema = refrain::schema;
@@ -1163,7 +1162,7 @@ auto run_content_gc(const content_gc_options &options) -> int {
         out += fmt::format("[mods.\"{}\"]\n", mod.id);
         out += fmt::format("version = \"{}\"\n", mod.version);
         out += fmt::format("abi = {}\n", mod.abi);
-        out += fmt::format("side = \"{}\"\n", kernel::to_string(mod.side));
+        out += fmt::format("side = \"{}\"\n", mod::to_string(mod.side));
         if (mod.is_external()) {
             out += "entry = \"external\"\n";
         } else {
@@ -1190,7 +1189,7 @@ auto run_content_gc(const content_gc_options &options) -> int {
         "// Image BLAKE3: "}};
     out += digest_hex;
     out += "\n// Image size: " + std::to_string(bytes.size()) + " byte(s)\n\n";
-    out += "#include <refrain/builtin.hpp>\n"
+    out += "#include <refrain/builtin/image.hpp>\n"
            "\n"
            "#include <array>\n"
            "#include <cstddef>\n"

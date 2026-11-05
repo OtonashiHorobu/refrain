@@ -167,7 +167,7 @@ using detail::toml_string;
     if (!gamepack_id) {
         return std::unexpected{std::move(gamepack_id.error())};
     }
-    if (!kernel::is_valid_mod_id(*gamepack_id)) {
+    if (!mod::is_valid_mod_id(*gamepack_id)) {
         return std::unexpected{parse_error_context(
             path, "lock.gamepack_id is not a valid mod id")};
     }
@@ -202,7 +202,7 @@ using detail::toml_string;
                 parse_error_context(path, "[mods] must be a table")};
         }
         for (const auto &id : doc->keys("mods")) {
-            if (!kernel::is_valid_mod_id(id)) {
+            if (!mod::is_valid_mod_id(id)) {
                 return std::unexpected{parse_error_context(
                     path,
                     fmt::format("[mods] contains an invalid mod id '{}'", id))};

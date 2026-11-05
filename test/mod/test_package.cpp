@@ -14,6 +14,8 @@
 
 using namespace boost::ut;
 
+namespace mod = refrain::mod;
+
 namespace {
 
 namespace fs = std::filesystem;

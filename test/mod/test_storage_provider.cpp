@@ -2,11 +2,11 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/builtin.hpp>
+#include <refrain/builtin/image.hpp>
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/storage.hpp>
-#include <refrain/kernel/gamepack.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/world/chunk_codec.hpp>
 #include <refrain/world/model.hpp>
@@ -24,6 +24,8 @@
 namespace {
 using namespace boost::ut;
 
+namespace mod = refrain::mod;
+
 namespace storage = refrain::services::storage;
 namespace world = refrain::world;
 
@@ -33,7 +35,7 @@ namespace world = refrain::world;
 }
 
 [[nodiscard]] auto load_plan() -> refrain::result<refrain::mod::composition> {
-    auto spec{refrain::kernel::load_gamepack_spec(
+    auto spec{refrain::mod::load_gamepack_spec(
         std::string{REFRAIN_SOURCE_DIR} + "/gamepack/gamepack.toml", "server")};
     if (!spec) {
         return std::unexpected{spec.error()};

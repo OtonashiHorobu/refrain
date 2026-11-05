@@ -11,11 +11,11 @@
 // provider call uses an empty `world_path`, which is rejected before anything
 // touches the filesystem.
 
-#include <refrain/builtin.hpp>
+#include <refrain/builtin/image.hpp>
 #include <refrain/contracts/abi.h>
 #include <refrain/contracts/services/runtime.hpp>
-#include <refrain/kernel/gamepack.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
 
 #include <boost/ut.hpp>
@@ -31,7 +31,6 @@
 namespace {
 using namespace boost::ut;
 
-namespace kernel = refrain::kernel;
 namespace mod = refrain::mod;
 namespace runtime = refrain::services::runtime;
 
@@ -41,7 +40,7 @@ namespace runtime = refrain::services::runtime;
 }
 
 [[nodiscard]] auto load_plan() -> refrain::result<mod::composition> {
-    auto spec{kernel::load_gamepack_spec(
+    auto spec{mod::load_gamepack_spec(
         std::string{REFRAIN_SOURCE_DIR} + "/gamepack/gamepack.toml", "server")};
     if (!spec) {
         return std::unexpected{spec.error()};
@@ -112,7 +111,7 @@ refrain_status fake_run_exit(void *,
                 return;
             }
             const auto erased{std::erase_if(
-                plan->providers, [](const kernel::resolved_provider &provider) {
+                plan->providers, [](const mod::resolved_provider &provider) {
                     return provider.service == "runtime";
                 })};
             expect(erased == 1U);
@@ -137,15 +136,15 @@ refrain_status fake_run_exit(void *,
         };
 
     "runtime/missing provider is a clean required-service error"_test = [] {
-        auto spec{kernel::load_gamepack_spec(std::string{REFRAIN_SOURCE_DIR} +
-                                                 "/gamepack/gamepack.toml",
-                                             "server")};
+        auto spec{mod::load_gamepack_spec(std::string{REFRAIN_SOURCE_DIR} +
+                                              "/gamepack/gamepack.toml",
+                                          "server")};
         expect(static_cast<bool>(spec));
         if (!spec) {
             return;
         }
         const auto erased{std::erase_if(
-            spec->providers, [](const kernel::provider_binding &provider) {
+            spec->providers, [](const mod::provider_binding &provider) {
                 return provider.service == "runtime";
             })};
         expect(erased == 1U);

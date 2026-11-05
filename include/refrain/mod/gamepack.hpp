@@ -5,8 +5,8 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
-#include <refrain/kernel/manifest.hpp>
-#include <refrain/kernel/mod_ref.hpp>
+#include <refrain/mod/manifest.hpp>
+#include <refrain/mod/mod_ref.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -19,7 +19,7 @@ namespace refrain::core::config {
 class document;
 } // namespace refrain::core::config
 
-namespace refrain::kernel {
+namespace refrain::mod {
 
 // Gamepack manifests: the composition root reads a `gamepack.toml`, validates
 // it, resolves the mod dependency graph and selects providers per service.
@@ -32,8 +32,8 @@ namespace refrain::kernel {
 // SemVer 2.0.0 values.
 //
 // The common manifest layer (id/version/side/abi + `[meta]`, shared with mod
-// manifests) lives in `refrain/kernel/manifest.hpp`; `mod_ref` and
-// `mod_requirement` live in `refrain/kernel/mod_ref.hpp`.
+// manifests) lives in `refrain/mod/manifest.hpp`; `mod_ref` and
+// `mod_requirement` live in `refrain/mod/mod_ref.hpp`.
 
 /// One entry of `[mods].list` plus its optional settings/dependency table
 /// (`[mods."<id>"]`).
@@ -141,9 +141,9 @@ struct resolved_provider {
     -> result<gamepack_spec>;
 
 /// Read-only view of one already-resolved mod, used by the pure provider
-/// selector. The kernel never reads a package or the filesystem: the caller
+/// selector. This layer never reads a package or the filesystem: the caller
 /// (mod::resolve / mod::preview_composition) owns discovery and hands over the
-/// resolved identities (`kernel` does not build the dependency graph).
+/// resolved identities (`mod` does not build the dependency graph).
 struct resolved_mod_view {
     std::string_view id{};
     std::string_view version{};
@@ -178,4 +178,4 @@ select_providers(const gamepack_spec &spec,
                                       std::string_view host_side = {})
     -> result<gamepack_spec>;
 
-} // namespace refrain::kernel
+} // namespace refrain::mod

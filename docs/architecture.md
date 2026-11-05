@@ -9,13 +9,14 @@ definitions and gameplay modules can evolve independently.
 | Layer | Path | Responsibility |
 |---|---|---|
 | Platform | `include/refrain/platform`, `src/platform` | files, memory mapping, threads, processes, dynamic loading |
-| Kernel | `include/refrain/core`, `include/refrain/kernel`, `src/core`, `src/kernel` | errors, logging, time, memory, jobs, events, configuration, I/O, async, service registry, manifests, crash reporting |
+| Kernel | `include/refrain/core`, `include/refrain/kernel`, `src/core`, `src/kernel` | errors, logging, time, memory, jobs, events, configuration, I/O, async, service registry, crash reporting |
 | Contracts | `sdk/idl`, `sdk/generated` | RIDL service contracts, generated C ABI and C++ wrappers |
 | Data | `include/refrain/data`, `src/data` | datapacks, registries, resource store, content-addressed store, cook artifacts |
 | World | `include/refrain/world`, `src/world` | RWF world storage, chunk codec, Anvil import and export |
 | Simulation | `include/refrain/sim`, `src/sim` | runtime world, block registry, entities, inventory, tick loop, replay |
-| Mods | `include/refrain/mod`, `src/mod` | discovery, resolution, loading, provider registry, startup content |
-| Application | `include/refrain/app`, `src/app`, `src/main` | composition root, server runtime, CLI commands |
+| Mods | `include/refrain/mod`, `src/mod` | manifests, gamepack composition, discovery, resolution, loading, provider registry, static mod registry, startup content |
+| Server runtime | `include/refrain/server`, `src/server` | headless tick loop, console, watchdog, `server.properties` |
+| Application | `include/refrain/app`, `src/app`, `src/main` | composition root, service layer shared by the CLIs, CLI entry points |
 | Tools | `tools`, `src/main/tools.cpp` | schema compiler, world conversion, packaging, diagnostics |
 
 A module may include the public headers of the layers below it. The platform

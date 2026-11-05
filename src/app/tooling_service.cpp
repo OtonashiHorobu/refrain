@@ -26,6 +26,7 @@
 #include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/core/semver.hpp>
+#include <refrain/core/version.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/content_index.hpp>
@@ -40,14 +41,13 @@
 #include <refrain/data/store_lock.hpp>
 #include <refrain/data/vfs.hpp>
 #include <refrain/kernel/crash.hpp>
-#include <refrain/kernel/gamepack.hpp>
-#include <refrain/kernel/manifest.hpp>
-#include <refrain/kernel/mod_ref.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/mod/manifest.hpp>
+#include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
 #include <refrain/script/wasm.hpp>
-#include <refrain/version.hpp>
 #include <schema/schema.hpp>
 #include <set>
 #include <span>

@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/kernel/gamepack.hpp>
+#include <refrain/mod/gamepack.hpp>
 
 #include <refrain/contracts/abi.h>
 #include <refrain/core/config.hpp>
@@ -23,7 +23,7 @@
 
 #include <fmt/format.h>
 
-namespace refrain::kernel {
+namespace refrain::mod {
 
 namespace {
 
@@ -960,4 +960,4 @@ auto load_gamepack_spec(std::string_view path, std::string_view host_side)
     return spec;
 }
 
-} // namespace refrain::kernel
+} // namespace refrain::mod

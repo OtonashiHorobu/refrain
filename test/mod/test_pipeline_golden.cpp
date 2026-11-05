@@ -20,8 +20,8 @@
 //
 // and review the resulting diff.
 
-#include <refrain/kernel/gamepack.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/gamepack.hpp>
 
 #include <boost/ut.hpp>
 
@@ -39,7 +39,6 @@ namespace {
 using namespace boost::ut;
 
 namespace fs = std::filesystem;
-namespace kernel = refrain::kernel;
 namespace mod = refrain::mod;
 
 constexpr std::string_view source_root{REFRAIN_SOURCE_DIR};
@@ -91,7 +90,7 @@ constexpr std::string_view golden_root{REFRAIN_SOURCE_DIR
 }
 
 [[nodiscard]] auto load_plan() -> refrain::result<mod::composition> {
-    auto spec{kernel::load_gamepack_spec(
+    auto spec{mod::load_gamepack_spec(
         fmt::format("{}/gamepack/gamepack.toml", source_root), "server")};
     if (!spec) {
         return std::unexpected{spec.error()};

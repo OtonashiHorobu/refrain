@@ -2,13 +2,13 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/app/server.hpp>
+#include <refrain/app/composition.hpp>
 
 #include <utility>
 
 namespace refrain::app {
 
-auto resolve_server_mods(const kernel::gamepack_spec &spec,
+auto resolve_server_mods(const mod::gamepack_spec &spec,
                          const server_mods_options &options)
     -> result<mod::composition> {
     return mod::resolve_composition(
@@ -25,7 +25,7 @@ auto activate_server_mods(mod::host &host, const mod::composition &composition,
     return host.load(composition, image);
 }
 
-auto load_server_mods(const kernel::gamepack_spec &spec,
+auto load_server_mods(const mod::gamepack_spec &spec,
                       const server_mods_options &options)
     -> result<std::unique_ptr<server_mods>> {
     auto loaded{std::make_unique<server_mods>()};

@@ -2,12 +2,12 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/builtin.hpp>
+#include <refrain/builtin/image.hpp>
 #include <refrain/core/config.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/vfs.hpp>
-#include <refrain/kernel/manifest.hpp>
+#include <refrain/mod/manifest.hpp>
 
 #include <boost/ut.hpp>
 
@@ -21,7 +21,7 @@ using namespace boost::ut;
 
 namespace config = refrain::core::config;
 namespace data = refrain::data;
-namespace kernel = refrain::kernel;
+namespace mod = refrain::mod;
 
 constexpr std::string_view k_data_mod_id{"refrain.data.vanilla"};
 constexpr std::string_view k_data_manifest_path{
@@ -102,7 +102,7 @@ const suite builtin_image_tests = [] {
         if (!doc) {
             return;
         }
-        auto manifest{kernel::parse_mod_manifest(*doc)};
+        auto manifest{mod::parse_mod_manifest(*doc)};
         expect(static_cast<bool>(manifest));
         if (!manifest) {
             return;
@@ -110,7 +110,7 @@ const suite builtin_image_tests = [] {
         expect(manifest->common.id == k_data_mod_id);
         expect(manifest->common.version == "1.0.0");
         expect(manifest->common.abi == 1U);
-        expect(manifest->common.side == kernel::manifest_side::server);
+        expect(manifest->common.side == mod::manifest_side::server);
         expect(!manifest->is_external()); // internal/static mod
         expect(manifest->provides.size() == 1U);
         expect(manifest->provides.front() == "refrain:data.packs");
@@ -126,11 +126,11 @@ const suite builtin_image_tests = [] {
                 *content_text, "mods/refrain.content.vanilla/manifest.toml")};
             expect(static_cast<bool>(content_doc));
             if (content_doc) {
-                auto content{kernel::parse_mod_manifest(*content_doc)};
+                auto content{mod::parse_mod_manifest(*content_doc)};
                 expect(static_cast<bool>(content));
                 if (content) {
                     expect(!content->is_external());
-                    expect(content->common.side == kernel::manifest_side::both);
+                    expect(content->common.side == mod::manifest_side::both);
                 }
             }
         }

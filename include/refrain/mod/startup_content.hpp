@@ -5,7 +5,7 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
-#include <refrain/kernel/mod_ref.hpp>
+#include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
 
 #include <cstddef>
@@ -151,7 +151,7 @@ struct startup_content_options {
 /// parser already validates non-empty refs). The returned map is sorted by id.
 [[nodiscard]] auto
 merge_pinned_versions(const mod_lock *lock,
-                      std::span<const kernel::mod_ref> overrides)
+                      std::span<const mod::mod_ref> overrides)
     -> std::map<std::string, std::string>;
 
 /// Result of one `run_startup_content` call.

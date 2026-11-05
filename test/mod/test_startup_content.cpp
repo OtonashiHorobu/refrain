@@ -12,8 +12,8 @@
 #include <refrain/data/json.hpp>
 #include <refrain/data/path.hpp>
 #include <refrain/data/signature.hpp>
-#include <refrain/kernel/mod_ref.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
 #include <refrain/mod/startup_content.hpp>
 #include <refrain/platform/process.hpp>
@@ -39,6 +39,8 @@
 namespace {
 
 using namespace boost::ut;
+
+namespace mod = refrain::mod;
 
 namespace fs = std::filesystem;
 namespace io = refrain::core::io;
@@ -451,9 +453,9 @@ const suite startup_content_tests = [] {
                 refrain::mod::locked_mod{.id = "mod.a", .version = "1.0.0"},
                 refrain::mod::locked_mod{.id = "mod.b", .version = "2.0.0"},
             };
-            const std::vector<refrain::kernel::mod_ref> overrides{
-                refrain::kernel::mod_ref{.id = "mod.b", .version = "3.0.0"},
-                refrain::kernel::mod_ref{.id = "mod.c", .version = "1.0.0"},
+            const std::vector<refrain::mod::mod_ref> overrides{
+                refrain::mod::mod_ref{.id = "mod.b", .version = "3.0.0"},
+                refrain::mod::mod_ref{.id = "mod.c", .version = "1.0.0"},
             };
             const auto merged{
                 refrain::mod::merge_pinned_versions(&lock, overrides)};

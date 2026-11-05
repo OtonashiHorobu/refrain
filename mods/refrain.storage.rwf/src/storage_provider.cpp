@@ -13,8 +13,8 @@
 #include <refrain/contracts/services/storage_abi.h>
 
 #include <refrain/core/error.hpp>
-#include <refrain/kernel/static_mod.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/mod/static_mod.hpp>
 #include <refrain/world/chunk_codec.hpp>
 #include <refrain/world/store.hpp>
 

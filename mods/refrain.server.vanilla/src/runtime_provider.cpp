@@ -4,14 +4,15 @@
 
 // `refrain:runtime` provider for the internal `refrain.server.vanilla` mod.
 // This adapter converts the generated `runtime_config` ABI struct into
-// `app::server_run_options` and calls the in-process `app::run_server`. The
-// tick loop still uses the C++ app API directly; routing its internals through
-// `refrain:world`/`refrain:sim`/`refrain:storage` is not implemented here.
+// `server::server_run_options` and calls the in-process `server::run_server`.
+// The tick loop still uses the C++ app API directly; routing its internals
+// through `refrain:world`/`refrain:sim`/`refrain:storage` is not implemented
+// here.
 
-#include <refrain/app/server_runtime.hpp>
 #include <refrain/contracts/services/runtime_abi.h>
-#include <refrain/kernel/static_mod.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/mod/static_mod.hpp>
+#include <refrain/server/server_runtime.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -37,8 +38,8 @@ namespace {
 /// silently diverge between the contract and the runtime.
 [[nodiscard]] auto
 make_options(const refrain_services_runtime_runtime_config &config)
-    -> refrain::app::server_run_options {
-    refrain::app::server_run_options options{};
+    -> refrain::server::server_run_options {
+    refrain::server::server_run_options options{};
     options.world_path = string_of(config.world_path);
     options.server_properties_path = string_of(config.server_properties);
     options.ticks = config.ticks;
@@ -82,7 +83,7 @@ struct runtime_provider {
         // returns the process exit code; the contract forwards that code
         // unchanged (0 = clean stop), so the host never reinterprets it.
         *out_value =
-            static_cast<std::int32_t>(refrain::app::run_server(options));
+            static_cast<std::int32_t>(refrain::server::run_server(options));
         return REFRAIN_STATUS_OK;
     }
 };

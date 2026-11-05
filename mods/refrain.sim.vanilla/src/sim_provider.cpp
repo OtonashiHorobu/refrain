@@ -14,8 +14,8 @@
 
 #include <refrain/core/error.hpp>
 #include <refrain/data/checksum.hpp>
-#include <refrain/kernel/static_mod.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/mod/static_mod.hpp>
 #include <refrain/sim/world.hpp>
 
 #include <cstdint>

@@ -10,7 +10,7 @@
 #include <string>
 #include <string_view>
 
-namespace refrain::kernel {
+namespace refrain::mod {
 
 // Mod identity primitives shared by gamepack manifests, mod manifests and the
 // mod loader. All declared versions are SemVer 2.0.0 values.
@@ -64,4 +64,4 @@ inline constexpr std::size_t max_mod_id_length = 128;
 /// segments. These are the ids generated from RIDL (`service_id` constants).
 [[nodiscard]] auto is_valid_service_id(std::string_view id) noexcept -> bool;
 
-} // namespace refrain::kernel
+} // namespace refrain::mod

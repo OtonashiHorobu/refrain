@@ -5,11 +5,11 @@
 #include <refrain/core/config.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/checksum.hpp>
-#include <refrain/kernel/gamepack.hpp>
-#include <refrain/kernel/manifest.hpp>
-#include <refrain/kernel/static_mod.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/mod/manifest.hpp>
+#include <refrain/mod/static_mod.hpp>
 
 #include <boost/ut.hpp>
 
@@ -28,7 +28,7 @@ using namespace boost::ut;
 
 namespace config = refrain::core::config;
 namespace data = refrain::data;
-namespace kernel = refrain::kernel;
+namespace mod = refrain::mod;
 using refrain::error_code;
 
 int g_factory_calls{0};
@@ -95,7 +95,7 @@ make_manifest(std::string_view id, std::string_view version = "1.0.0",
     if (!doc) {
         return std::unexpected{doc.error()};
     }
-    auto spec{kernel::parse_gamepack(*doc, "server")};
+    auto spec{mod::parse_gamepack(*doc, "server")};
     if (!spec) {
         return std::unexpected{spec.error()};
     }
@@ -123,7 +123,7 @@ struct image_builder {
 
 const suite mod_host_tests = [] {
     "mod_host/loads internal data-only mods"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
 
         auto plan{make_gamepack(
             "\"refrain.test.content@1.0.0\", \"refrain.test.data@1.0.0\"")};
@@ -164,13 +164,13 @@ const suite mod_host_tests = [] {
     };
 
     "mod_host/calls the static factory for a registered mod"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         g_factory_calls = 0;
         expect(static_cast<bool>(registry.add(
-            kernel::static_mod_descriptor{.id = "refrain.test.provider",
-                                          .version = "1.0.0",
-                                          .abi = 1,
-                                          .factory = &counting_factory})));
+            mod::static_mod_descriptor{.id = "refrain.test.provider",
+                                       .version = "1.0.0",
+                                       .abi = 1,
+                                       .factory = &counting_factory})));
 
         auto plan{make_gamepack("\"refrain.test.provider@1.0.0\"",
                                 "data = \"refrain.test.provider@^1.0.0\"\n")};
@@ -202,7 +202,7 @@ const suite mod_host_tests = [] {
     };
 
     "mod_host/rejects a missing manifest"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         auto plan{make_gamepack(
             "\"refrain.test.present@1.0.0\", \"refrain.test.absent@1.0.0\"")};
         expect(static_cast<bool>(plan));
@@ -227,7 +227,7 @@ const suite mod_host_tests = [] {
     };
 
     "mod_host/rejects version, abi and side drift"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
 
         const auto run = [&registry](std::string manifest) {
             auto plan{make_gamepack("\"refrain.test.mod@1.0.0\"")};
@@ -265,7 +265,7 @@ const suite mod_host_tests = [] {
     };
 
     "mod_host/rejects external mods"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         auto plan{make_gamepack("\"refrain.test.external@1.0.0\"")};
         expect(static_cast<bool>(plan));
         if (!plan) {
@@ -286,7 +286,7 @@ const suite mod_host_tests = [] {
     };
 
     "mod_host/rejects provides without static code"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         // The provider must be selected by the plan for the missing factory to
         // be an error; an unselected one stays a data/content mod.
         auto plan{make_gamepack("\"refrain.test.ghost@1.0.0\"",
@@ -310,13 +310,13 @@ const suite mod_host_tests = [] {
     };
 
     "mod_host/keeps an unselected provider mod data-only"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         g_factory_calls = 0;
         expect(static_cast<bool>(registry.add(
-            kernel::static_mod_descriptor{.id = "refrain.test.unselected",
-                                          .version = "1.0.0",
-                                          .abi = 1,
-                                          .factory = &counting_factory})));
+            mod::static_mod_descriptor{.id = "refrain.test.unselected",
+                                       .version = "1.0.0",
+                                       .abi = 1,
+                                       .factory = &counting_factory})));
 
         // No `[providers]` entry: the mod declares `[provides]` but the plan
         // does not select it, so it loads as a data/content mod.
@@ -345,7 +345,7 @@ const suite mod_host_tests = [] {
     };
 
     "mod_host/rejects corrupt images and double loads"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         auto plan{make_gamepack("\"refrain.test.mod@1.0.0\"")};
         expect(static_cast<bool>(plan));
         if (!plan) {
@@ -381,13 +381,13 @@ const suite mod_host_tests = [] {
     };
 
     "mod_host/activates planned provider instances"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         g_factory_calls = 0;
         expect(static_cast<bool>(registry.add(
-            kernel::static_mod_descriptor{.id = "refrain.test.instanced",
-                                          .version = "1.0.0",
-                                          .abi = 1,
-                                          .factory = &instanced_factory})));
+            mod::static_mod_descriptor{.id = "refrain.test.instanced",
+                                       .version = "1.0.0",
+                                       .abi = 1,
+                                       .factory = &instanced_factory})));
         auto plan{make_gamepack("\"refrain.test.instanced@1.0.0\"",
                                 "data = { instances = { rw = "
                                 "\"refrain.test.instanced@^1.0.0\" } }\n")};
@@ -418,9 +418,9 @@ const suite mod_host_tests = [] {
     };
 
     "mod_host/denies an unplanned instance for an instanced binding"_test = [] {
-        kernel::static_mod_registry registry{};
+        mod::static_mod_registry registry{};
         g_factory_calls = 0;
-        expect(static_cast<bool>(registry.add(kernel::static_mod_descriptor{
+        expect(static_cast<bool>(registry.add(mod::static_mod_descriptor{
             .id = "refrain.test.instanced",
             .version = "1.0.0",
             .abi = 1,

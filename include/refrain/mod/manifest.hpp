@@ -5,7 +5,7 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
-#include <refrain/kernel/mod_ref.hpp>
+#include <refrain/mod/mod_ref.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -17,13 +17,13 @@ namespace refrain::core::config {
 class document;
 } // namespace refrain::core::config
 
-namespace refrain::kernel {
+namespace refrain::mod {
 
 // Shared manifest model: mod manifests, gamepack manifests and pack
 // manifests all carry the same common section (id / version / side / abi) and
 // the same `[meta]` display metadata. The gamepack-specific `[mods]`,
 // `[providers]` and `[policy]` sections are parsed by
-// `refrain/kernel/gamepack.hpp` on top of this common layer.
+// `refrain/mod/gamepack.hpp` on top of this common layer.
 //
 // Section names per document kind:
 //   * mod manifest:      [mod]      (file: mods/<id>/manifest.toml)
@@ -33,7 +33,7 @@ namespace refrain::kernel {
 // Every declared version is SemVer 2.0.0; `abi` is the integer ABI major the
 // code was built against. Internal/static mods omit an
 // `[entry]` section: their code is linked into the host and paired with the
-// manifest through the static mod registry (`kernel/static_mod.hpp`). External
+// manifest through the static mod registry (`mod/static_mod.hpp`). External
 // mods declare exactly one of `[entry].native` / `[entry].wasm`.
 
 /// Built-in / on-disk mod tree layout shared by every package source.
@@ -91,10 +91,10 @@ struct manifest_parse_options {
     /// Accept the `.rfmod` package tables a packed manifest carries:
     /// `[files]`, `[packaging]` and `[signature]`. Their *contents*
     /// are validated by the container layer (`refrain/mod/rfmod.hpp`) — the
-    /// kernel only knows the TOML shape, because kernel may not depend on
-    /// `data` (BLAKE3/Ed25519 live there). On-disk mod directories keep the
-    /// default (`false`), so an accidentally committed packed manifest is
-    /// rejected instead of silently treated as source.
+    /// manifest parser only knows the TOML shape, because this layer may not
+    /// depend on `data` (BLAKE3/Ed25519 live there). On-disk mod directories
+    /// keep the default (`false`), so an accidentally committed packed manifest
+    /// is rejected instead of silently treated as source.
     bool allow_package_tables{false};
 };
 
@@ -170,4 +170,4 @@ parse_mod_manifest(const core::config::document &doc,
 [[nodiscard]] auto format_mod_manifest(const mod_manifest &manifest)
     -> std::string;
 
-} // namespace refrain::kernel
+} // namespace refrain::mod

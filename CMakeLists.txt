@@ -175,10 +175,6 @@ refrain_add_library(
     src/core/io.cpp
     src/core/async.cpp
     src/kernel/service_registry.cpp
-    src/kernel/gamepack.cpp
-    src/kernel/manifest.cpp
-    src/kernel/mod_ref.cpp
-    src/kernel/static_mod.cpp
     src/kernel/crash.cpp
     "${CMAKE_BINARY_DIR}/generated/version.cpp")
 
@@ -342,7 +338,7 @@ refrain_add_library(refrain-mod-host ${REFRAIN_MOD_HOST_SOURCES})
 # stays in our own bounded streaming stage. PRIVATE keeps <archive.h> out of
 # the public headers.
 target_link_libraries(refrain-mod-host PUBLIC refrain-kernel
-                                             PRIVATE refrain-data
+                                             PRIVATE refrain-data refrain-contracts
                                                      zstd::libzstd_static
                                                      LibArchive::LibArchive)
 # MinGW's libarchive uses BCryptGenRandom (Windows CNG); MSVC's import library
@@ -373,7 +369,8 @@ target_link_libraries(refrain-first-party-mods PUBLIC refrain-kernel
                                                     refrain-contracts
                                                     refrain-mod-host
                                                     refrain-sim
-                                                    refrain-app)
+                                                    refrain-app
+                                                    refrain-server-runtime)
 refrain_apply_warnings(refrain-first-party-mods)
 add_library(Refrain::FirstPartyMods ALIAS refrain-first-party-mods)
 
@@ -404,6 +401,15 @@ target_link_libraries(refrain-app PUBLIC refrain-kernel refrain-data
                                              refrain-schema refrain-archive
                                              refrain-script-wasm)
 add_library(Refrain::App ALIAS refrain-app)
+
+# --- headless server runtime ------------------------------------------------
+# The tick loop, console and watchdog live above the shared app services: the
+# runtime consumes them, tools never link this target.
+file(GLOB REFRAIN_SERVER_RUNTIME_SOURCES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/server/*.cpp")
+refrain_add_library(refrain-server-runtime ${REFRAIN_SERVER_RUNTIME_SOURCES})
+target_link_libraries(refrain-server-runtime PUBLIC refrain-app)
+add_library(Refrain::ServerRuntime ALIAS refrain-server-runtime)
 
 # --- tools -----------------------------------------------------------------
 add_executable(refrain-tools src/main/tools.cpp)
@@ -462,6 +468,7 @@ if(REFRAIN_BUILD_SERVER)
     add_executable(refrain-server src/main/server.cpp)
     target_link_libraries(refrain-server PRIVATE refrain-app refrain-builtin
                                                refrain-first-party-mods
+                                               refrain-server-runtime
                                                CLI11::CLI11)
     refrain_apply_warnings(refrain-server)
 endif()

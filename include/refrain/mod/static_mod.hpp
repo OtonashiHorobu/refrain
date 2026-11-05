@@ -5,7 +5,7 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
-#include <refrain/kernel/manifest.hpp>
+#include <refrain/mod/manifest.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -17,7 +17,7 @@ namespace refrain::mod {
 class host;
 } // namespace refrain::mod
 
-namespace refrain::kernel {
+namespace refrain::mod {
 
 // Static (internal) mod registry.
 //
@@ -35,7 +35,7 @@ namespace refrain::kernel {
 // is still validated from the built-in archive.
 
 // Host-side mod loading context (implemented by `refrain::mod::host`). Only
-// forward-declared above: kernel does not depend on the mod layer.
+// forward-declared above: the registry never includes the host header.
 // Factories receive it to register providers/listeners during load.
 /// Entry point of a statically linked mod. Returning an error aborts startup
 /// with that error; factories run once, in resolved load order.
@@ -132,8 +132,8 @@ class static_mod_registry {
     struct REFR_MOD_STATIC_CONCAT(refr_static_mod_registrar_, __LINE__) {      \
         REFR_MOD_STATIC_CONCAT(refr_static_mod_registrar_, __LINE__)() {       \
             static_cast<void>(                                                 \
-                ::refrain::kernel::static_mod_registry::global().add(          \
-                    ::refrain::kernel::static_mod_descriptor{                  \
+                ::refrain::mod::static_mod_registry::global().add(             \
+                    ::refrain::mod::static_mod_descriptor{                     \
                         .id = (id_literal),                                    \
                         .version = (version_literal),                          \
                         .abi = static_cast<std::uint32_t>(abi_value),          \
@@ -142,4 +142,4 @@ class static_mod_registry {
     } REFR_MOD_STATIC_CONCAT(refr_static_mod_registrar_instance_, __LINE__);   \
     }
 
-} // namespace refrain::kernel
+} // namespace refrain::mod

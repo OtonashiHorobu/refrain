@@ -6,8 +6,8 @@
 
 #include <refrain/core/error.hpp>
 #include <refrain/data/checksum.hpp>
-#include <refrain/kernel/gamepack.hpp>
-#include <refrain/kernel/mod_ref.hpp>
+#include <refrain/mod/gamepack.hpp>
+#include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/origin.hpp>
 
 #include <cstdint>
@@ -21,7 +21,7 @@ namespace refrain::mod {
 
 // Mod auto-discovery + `mods.lock`, the disk half of the mod
 // subsystem. This layer is pure manifest bookkeeping on top of
-// `refrain/kernel` (gamepack/manifest primitives): it never loads code and
+// `refrain/mod` (gamepack/manifest primitives): it never loads code and
 // never writes outside the lock file itself.
 //
 // Flow (per server/instance start):
@@ -112,19 +112,19 @@ struct candidate {
     std::string version{};
     std::uint32_t abi{0};
     mod_origin origin{mod_origin::builtin};
-    kernel::manifest_side side{kernel::manifest_side::both};
-    kernel::manifest_meta meta{};
+    mod::manifest_side side{mod::manifest_side::both};
+    mod::manifest_meta meta{};
     /// Manifest `[provides]` contract ids (the declared provider roles).
     std::vector<std::string> provides{};
     std::string path{};
     data::digest32 manifest_hash{};
-    std::vector<kernel::mod_requirement> required{};
-    std::vector<kernel::mod_requirement> optional{};
+    std::vector<mod::mod_requirement> required{};
+    std::vector<mod::mod_requirement> optional{};
     /// Where the host reads the package from.
     package_kind kind{package_kind::directory};
     /// Present for external (loadable) mods, mirroring the manifest `[entry]`
     /// table. Internal/static mods have no entry.
-    std::optional<kernel::manifest_entry_point> entry{};
+    std::optional<mod::manifest_entry_point> entry{};
     /// Lower-priority candidates for the same id that lost during `scan()`.
     /// `resolve()` decides whether that shadowing is a failure or a warning
     /// (gamepack `[policy].conflict`).
@@ -161,7 +161,7 @@ using discovered_mod = candidate;
     -> result<std::vector<discovered_mod>>;
 
 /// Stable per-mod audit text for one candidate. Byte-identical to
-/// `kernel::format_mod_manifest()` for the same manifest, so `refrain-tools
+/// `mod::format_mod_manifest()` for the same manifest, so `refrain-tools
 /// mods check` (which goes through `scan()`) keeps its stable output
 /// without re-reading the manifest.
 [[nodiscard]] auto format_candidate(const candidate &mod) -> std::string;
@@ -281,26 +281,26 @@ struct mod_lock {
 /// and activate providers.
 struct composition : public mod_lock {
     /// Gamepack manifest the composition was resolved from.
-    kernel::gamepack_spec spec{};
+    mod::gamepack_spec spec{};
     /// Selected mods in deterministic topological order (dependencies first;
     /// gamepack `[mods].list` declaration order breaks ties for pinned mods,
     /// auto-scanned-only mods follow in id order).
     std::vector<candidate> load_order{};
-    /// Provider selection (`kernel::select_providers`) for every `[providers]`
+    /// Provider selection (`mod::select_providers`) for every `[providers]`
     /// key, sorted by service.
-    std::vector<kernel::resolved_provider> providers{};
+    std::vector<mod::resolved_provider> providers{};
     /// True for a manifest-level preview (no package/disk verification): the
     /// gamepack's declared list only, used by `gamepack check|dump` and
     /// `--dump-gamepack`. Never fed to the host.
     bool preview{false};
 
     [[nodiscard]] auto provider(std::string_view service) const noexcept
-        -> const kernel::resolved_provider *;
+        -> const mod::resolved_provider *;
     [[nodiscard]] auto find(std::string_view id) const noexcept
         -> const candidate *;
 
     /// Stable human-readable plan, byte-identical to
-    /// `kernel::startup_plan::format()`.
+    /// `mod::startup_plan::format()`.
     [[nodiscard]] auto format() const -> std::string;
 };
 
@@ -318,11 +318,10 @@ struct composition : public mod_lock {
 /// `not_found`, out-of-range -> `version_mismatch`) and must be acyclic
 /// (`mod_error`); `[optional_requires]` are version-checked when present and
 /// tolerated when absent. Providers are selected with
-/// `kernel::select_providers()`. The returned lock is id-sorted and ready for
+/// `mod::select_providers()`. The returned lock is id-sorted and ready for
 /// `write_mod_lock()`; `load_order` is dependency-ordered for the host.
 [[nodiscard]] auto
-resolve(const kernel::gamepack_spec &spec,
-        std::span<const candidate> discovered,
+resolve(const mod::gamepack_spec &spec, std::span<const candidate> discovered,
         const discover_options &options = {},
         std::span<const std::string_view> required_services = {})
     -> result<composition>;
@@ -334,7 +333,7 @@ resolve(const kernel::gamepack_spec &spec,
 /// built-in image. An empty `[mods].list` is rejected (`unsupported` when
 /// auto_scan is on, `invalid_argument` otherwise).
 [[nodiscard]] auto
-preview_composition(const kernel::gamepack_spec &spec,
+preview_composition(const mod::gamepack_spec &spec,
                     std::span<const std::string_view> required_services = {})
     -> result<composition>;
 
@@ -364,7 +363,7 @@ struct composition_load_options {
 /// `load_composition()` with an already-parsed gamepack spec (avoids a second
 /// parse when the caller needed `auto_scan` before deciding whether to scan).
 [[nodiscard]] auto resolve_composition(
-    const kernel::gamepack_spec &spec, std::span<const discovery_root> roots,
+    const mod::gamepack_spec &spec, std::span<const discovery_root> roots,
     const composition_load_options &options = {}) -> result<composition>;
 
 /// Enumerate the builtin image's mod manifests (`mods/<id>/manifest.toml`) as

@@ -11,7 +11,7 @@
 #include <refrain/core/semver.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/path.hpp>
-#include <refrain/kernel/manifest.hpp>
+#include <refrain/mod/manifest.hpp>
 
 #include <fmt/format.h>
 
@@ -33,7 +33,6 @@ namespace refrain::mod {
 namespace {
 
 namespace config = core::config;
-namespace kernel = refrain::kernel;
 namespace data = refrain::data;
 
 using data::digest32;
@@ -113,9 +112,9 @@ using detail::toml_string;
     if (!doc) {
         return std::unexpected{annotate(std::move(doc.error()), manifest_path)};
     }
-    auto manifest{kernel::parse_mod_manifest(*doc)};
+    auto manifest{mod::parse_mod_manifest(*doc)};
     if (!manifest) {
-        // The kernel parser distinguishes manifest-schema violations
+        // The manifest parser distinguishes manifest-schema violations
         // (invalid_argument/already_exists); a broken on-disk manifest is a
         // parse failure from the scanner's point of view, so normalize the
         // code and keep the detailed message.
@@ -160,14 +159,14 @@ using detail::toml_string;
             continue;
         }
         const auto manifest_path{
-            join_host_path(mod_dir, kernel::mod_manifest_filename)};
+            join_host_path(mod_dir, mod::mod_manifest_filename)};
         if (!core::io::exists(manifest_path)) {
             if (options.strict_entries ||
                 options.require_manifest_in_directories) {
                 return std::unexpected{
                     fail(error_code::invalid_argument,
                          fmt::format("auto_scan: mod directory '{}' has no {}",
-                                     mod_dir, kernel::mod_manifest_filename))};
+                                     mod_dir, mod::mod_manifest_filename))};
             }
             continue;
         }
@@ -396,7 +395,7 @@ collect_directory_files(const std::string &root, std::string_view relative,
         }
         // `manifest.toml` is handled by the caller (it is either included
         // explicitly or rebuilt by the `.rfmod` writer), never by the walker.
-        if (top_level && name == kernel::mod_manifest_filename) {
+        if (top_level && name == mod::mod_manifest_filename) {
             continue;
         }
         const auto child_relative{
@@ -524,12 +523,12 @@ auto collect_package_files(std::string_view mod_directory,
     std::vector<package_file> files;
     if (options.include_manifest) {
         const auto manifest_path{
-            data::join_path(root, std::string{kernel::mod_manifest_filename})};
+            data::join_path(root, std::string{mod::mod_manifest_filename})};
         if (!core::io::is_regular_file(manifest_path)) {
             return std::unexpected{
                 fail(error_code::not_found,
                      fmt::format("{}: '{}' has no {}", options.error_prefix,
-                                 root, kernel::mod_manifest_filename))};
+                                 root, mod::mod_manifest_filename))};
         }
         auto bytes{core::io::read_file(
             manifest_path,
@@ -538,10 +537,10 @@ auto collect_package_files(std::string_view mod_directory,
             return std::unexpected{
                 annotate(std::move(bytes.error()),
                          fmt::format("{}: {}", options.error_prefix,
-                                     kernel::mod_manifest_filename))};
+                                     mod::mod_manifest_filename))};
         }
         files.push_back(
-            package_file{.path = std::string{kernel::mod_manifest_filename},
+            package_file{.path = std::string{mod::mod_manifest_filename},
                          .data = std::move(*bytes)});
     }
     if (auto walked{collect_directory_files(root, {}, options, files)};
@@ -563,7 +562,7 @@ auto collect_package_files(std::string_view mod_directory,
 
 auto format_candidate(const candidate &mod) -> std::string {
     auto out{fmt::format("mod {}@{} (side={}, abi={}{})\n", mod.id, mod.version,
-                         kernel::to_string(mod.side), mod.abi,
+                         mod::to_string(mod.side), mod.abi,
                          mod.is_external() ? ", external" : ", internal")};
     if (!mod.meta.display_name.empty()) {
         out += fmt::format("display name: {}\n", mod.meta.display_name);
@@ -598,7 +597,7 @@ auto format_candidate(const candidate &mod) -> std::string {
     return out;
 }
 
-auto resolve(const kernel::gamepack_spec &spec,
+auto resolve(const mod::gamepack_spec &spec,
              std::span<const discovered_mod> discovered,
              const discover_options &options,
              std::span<const std::string_view> required_services)
@@ -607,7 +606,7 @@ auto resolve(const kernel::gamepack_spec &spec,
                                    false);
 }
 
-auto preview_composition(const kernel::gamepack_spec &spec,
+auto preview_composition(const mod::gamepack_spec &spec,
                          std::span<const std::string_view> required_services)
     -> result<composition> {
     if (spec.mods.empty()) {
@@ -633,7 +632,7 @@ auto preview_composition(const kernel::gamepack_spec &spec,
                                          .version = entry.ref.version,
                                          .abi = spec.abi,
                                          .origin = mod_origin::builtin,
-                                         .side = kernel::manifest_side::both,
+                                         .side = mod::manifest_side::both,
                                          .path = "<gamepack>",
                                          .required = entry.dependencies,
                                          .kind = package_kind::builtin});
@@ -682,7 +681,7 @@ auto scan_builtin_image(std::span<const std::byte> image)
         if (!doc) {
             return std::unexpected{std::move(doc.error())};
         }
-        auto manifest{kernel::parse_mod_manifest(*doc)};
+        auto manifest{mod::parse_mod_manifest(*doc)};
         if (!manifest) {
             auto failure{std::move(manifest.error())};
             failure.code = error_code::parse_error;
@@ -715,7 +714,7 @@ auto scan_builtin_image(std::span<const std::byte> image)
     return mods;
 }
 
-auto resolve_composition(const kernel::gamepack_spec &parsed,
+auto resolve_composition(const mod::gamepack_spec &parsed,
                          std::span<const discovery_root> roots,
                          const composition_load_options &options)
     -> result<composition> {
@@ -781,7 +780,7 @@ auto load_composition(std::string_view gamepack_path,
                       std::span<const discovery_root> roots,
                       const composition_load_options &options)
     -> result<composition> {
-    auto spec{kernel::load_gamepack_spec(gamepack_path, options.host_side)};
+    auto spec{mod::load_gamepack_spec(gamepack_path, options.host_side)};
     if (!spec) {
         return std::unexpected{std::move(spec.error())};
     }
@@ -789,10 +788,10 @@ auto load_composition(std::string_view gamepack_path,
 }
 
 auto composition::provider(std::string_view service) const noexcept
-    -> const kernel::resolved_provider * {
+    -> const mod::resolved_provider * {
     const auto match{
         std::find_if(providers.begin(), providers.end(),
-                     [service](const kernel::resolved_provider &entry) {
+                     [service](const mod::resolved_provider &entry) {
                          return entry.service == service;
                      })};
     return match == providers.end() ? nullptr : &*match;
@@ -838,7 +837,7 @@ auto composition::format() const -> std::string {
     }
     for (const auto &entry : providers) {
         switch (entry.mode) {
-        case kernel::provider_mode::exclusive:
+        case mod::provider_mode::exclusive:
             out += fmt::format("  {:<{}} -> {}\n", entry.service, width,
                                entry.provider);
             for (const auto &skipped : entry.skipped) {
@@ -846,7 +845,7 @@ auto composition::format() const -> std::string {
                                    skipped);
             }
             break;
-        case kernel::provider_mode::instanced:
+        case mod::provider_mode::instanced:
             for (const auto &instance : entry.instances) {
                 const auto marker{instance.name == entry.default_instance
                                       ? " (default)"
@@ -856,7 +855,7 @@ auto composition::format() const -> std::string {
                                    instance.provider);
             }
             break;
-        case kernel::provider_mode::chain:
+        case mod::provider_mode::chain:
             out += fmt::format("  {:<{}} [chain] base -> {}\n", entry.service,
                                width, entry.provider);
             for (const auto &wrapper : entry.wrappers) {

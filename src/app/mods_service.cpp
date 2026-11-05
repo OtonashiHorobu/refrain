@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/app/server.hpp>
+#include <refrain/app/composition.hpp>
 #include <refrain/app/services.hpp>
 
 #include <algorithm>
@@ -27,6 +27,7 @@
 #include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/core/semver.hpp>
+#include <refrain/core/version.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/content_index.hpp>
@@ -42,14 +43,13 @@
 #include <refrain/data/store_lock.hpp>
 #include <refrain/data/vfs.hpp>
 #include <refrain/kernel/crash.hpp>
-#include <refrain/kernel/gamepack.hpp>
-#include <refrain/kernel/manifest.hpp>
-#include <refrain/kernel/mod_ref.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/mod/manifest.hpp>
+#include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
 #include <refrain/script/wasm.hpp>
-#include <refrain/version.hpp>
 #include <schema/schema.hpp>
 #include <set>
 #include <span>
@@ -66,7 +66,6 @@ namespace config = refrain::core::config;
 namespace core = refrain::core;
 namespace data = refrain::data;
 namespace io = refrain::core::io;
-namespace kernel = refrain::kernel;
 namespace log = refrain::log;
 namespace mod = refrain::mod;
 namespace schema = refrain::schema;
@@ -121,7 +120,7 @@ auto run_mods_check(const mods_check_options &options) -> int {
         return 0;
     }
 
-    auto spec{kernel::load_gamepack_spec(options.gamepack, "server")};
+    auto spec{mod::load_gamepack_spec(options.gamepack, "server")};
     if (!spec) {
         return report_error(spec.error());
     }
@@ -144,7 +143,7 @@ auto run_mods_check(const mods_check_options &options) -> int {
         if (found->version != entry.ref.version) {
             std::cout << "  version mismatch: " << entry.ref.text()
                       << " but mods/" << found->id << "/"
-                      << kernel::mod_manifest_filename << " declares "
+                      << mod::mod_manifest_filename << " declares "
                       << found->version << '\n';
             ++mismatched;
         }
@@ -345,7 +344,7 @@ auto run_mods_load(const mods_load_options &options) -> int {
     if (!image) {
         return report_error(image.error());
     }
-    auto spec{kernel::load_gamepack_spec(options.gamepack, options.side)};
+    auto spec{mod::load_gamepack_spec(options.gamepack, options.side)};
     if (!spec) {
         return report_error(spec.error());
     }

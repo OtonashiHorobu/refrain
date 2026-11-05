@@ -2,9 +2,8 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/app/server_runtime.hpp>
+#include <refrain/server/server_runtime.hpp>
 
-#include <refrain/app/server_properties.hpp>
 #include <refrain/app/services.hpp>
 #include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
@@ -12,6 +11,7 @@
 #include <refrain/core/time.hpp>
 #include <refrain/data/content_maintenance.hpp>
 #include <refrain/mod/rfmod.hpp>
+#include <refrain/server/server_properties.hpp>
 #include <refrain/sim/replay.hpp>
 #include <refrain/sim/world.hpp>
 #include <refrain/world/store.hpp>
@@ -37,7 +37,9 @@
 #include <utility>
 #include <vector>
 
-namespace refrain::app {
+namespace refrain::server {
+
+using app::report_error;
 namespace {
 
 constexpr std::size_t max_console_commands = 1024;
@@ -1098,4 +1100,4 @@ auto run_server(const server_run_options &options) -> int {
     return 0;
 }
 
-} // namespace refrain::app
+} // namespace refrain::server

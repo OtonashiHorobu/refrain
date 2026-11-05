@@ -10,7 +10,7 @@
 #include <string>
 #include <string_view>
 
-namespace refrain::app {
+namespace refrain::server {
 
 /// The subset of vanilla `server.properties` the headless server consumes.
 ///
@@ -36,4 +36,4 @@ struct server_properties {
 [[nodiscard]] auto parse_server_properties(std::string_view text)
     -> result<server_properties>;
 
-} // namespace refrain::app
+} // namespace refrain::server

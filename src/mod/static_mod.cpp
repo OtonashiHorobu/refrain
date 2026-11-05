@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/kernel/static_mod.hpp>
+#include <refrain/mod/static_mod.hpp>
 
 #include <refrain/core/semver.hpp>
 
@@ -12,7 +12,7 @@
 
 #include <fmt/format.h>
 
-namespace refrain::kernel {
+namespace refrain::mod {
 
 namespace {
 
@@ -131,4 +131,4 @@ void static_mod_registry::clear() noexcept {
     frozen_ = false;
 }
 
-} // namespace refrain::kernel
+} // namespace refrain::mod

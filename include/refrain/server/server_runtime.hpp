@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string>
 
-namespace refrain::app {
+namespace refrain::server {
 
 // Headless server runtime: a fixed 20 Hz tick loop over an already open
 // world, a plain console command queue, and a watchdog. The protocol/sim
@@ -62,4 +62,4 @@ struct server_run_options {
 /// initialized; the function names the tick/console/watchdog threads.
 [[nodiscard]] auto run_server(const server_run_options &options) -> int;
 
-} // namespace refrain::app
+} // namespace refrain::server

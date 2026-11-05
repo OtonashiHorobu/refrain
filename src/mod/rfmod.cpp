@@ -7,12 +7,12 @@
 #include <refrain/core/config.hpp>
 #include <refrain/core/io.hpp>
 #include <refrain/core/semver.hpp>
+#include <refrain/core/version.hpp>
 #include <refrain/data/json.hpp>
 #include <refrain/data/path.hpp>
 #include <refrain/data/signature.hpp>
 #include <refrain/data/store_lock.hpp>
 #include <refrain/mod/discovery.hpp>
-#include <refrain/version.hpp>
 
 #include <archive.h>
 #include <archive_entry.h>
@@ -886,7 +886,7 @@ struct package_manifest {
     std::string text{};
     std::size_t signature_header_offset{0};
     bool has_signature{false};
-    kernel::mod_manifest manifest{};
+    mod::mod_manifest manifest{};
     std::vector<rfmod_file_record> files{};
     std::optional<rfmod_signature_info> signature{};
 
@@ -910,8 +910,8 @@ struct package_manifest {
     if (!doc) {
         return std::unexpected{std::move(doc.error())};
     }
-    auto manifest{kernel::parse_mod_manifest(
-        *doc, kernel::manifest_parse_options{.allow_package_tables = true})};
+    auto manifest{mod::parse_mod_manifest(
+        *doc, mod::manifest_parse_options{.allow_package_tables = true})};
     if (!manifest) {
         return std::unexpected{std::move(manifest.error())};
     }
@@ -1262,7 +1262,7 @@ auto pack_mod_directory(std::string_view mod_directory,
             "(refusing to pack an already signed manifest)")};
     }
     // Validate the source manifest with the kernel parser before packing.
-    auto manifest{kernel::parse_mod_manifest(*manifest_doc)};
+    auto manifest{mod::parse_mod_manifest(*manifest_doc)};
     if (!manifest) {
         return std::unexpected{
             annotate(std::move(manifest.error()), "rfmod pack: manifest.toml")};
@@ -1933,7 +1933,7 @@ namespace {
 /// `<store>/mods/<id>/<version>.json`, or `invalid_argument` when either
 /// component could escape its directory.
 [[nodiscard]] auto receipt_path_for(const data::content_store &store,
-                                    const kernel::mod_manifest &manifest)
+                                    const mod::mod_manifest &manifest)
     -> result<std::string> {
     const auto &common{manifest.common};
     if (!is_safe_receipt_segment(common.id) ||

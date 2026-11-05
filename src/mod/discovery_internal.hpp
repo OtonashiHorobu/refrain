@@ -20,14 +20,14 @@
 namespace refrain::mod::detail {
 
 [[nodiscard]] auto
-resolve_catalog(const kernel::gamepack_spec &spec,
+resolve_catalog(const mod::gamepack_spec &spec,
                 std::span<const discovered_mod> discovered,
                 const discover_options &options,
                 std::span<const std::string_view> required_services,
                 bool preview) -> result<composition>;
 
 [[nodiscard]] auto
-resolve_catalog(const kernel::gamepack_spec &spec,
+resolve_catalog(const mod::gamepack_spec &spec,
                 std::span<const discovered_mod> discovered,
                 const discover_options &options,
                 std::span<const std::string_view> required_services,

@@ -8,8 +8,8 @@
 #include <refrain/core/log.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/checksum.hpp>
-#include <refrain/kernel/static_mod.hpp>
 #include <refrain/mod/package.hpp>
+#include <refrain/mod/static_mod.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -36,13 +36,13 @@ namespace data = refrain::data;
 namespace log = refrain::log;
 
 using kernel::capability_bits;
-using kernel::manifest_side_matches;
-using kernel::mod_manifest;
-using kernel::parse_mod_manifest;
 using kernel::provider_info;
 using kernel::service_registry;
-using kernel::static_mod_descriptor;
-using kernel::static_mod_registry;
+using mod::manifest_side_matches;
+using mod::mod_manifest;
+using mod::parse_mod_manifest;
+using mod::static_mod_descriptor;
+using mod::static_mod_registry;
 
 [[nodiscard]] auto fail(error_code code, std::string message) -> error {
     return make_error(code, std::move(message));
