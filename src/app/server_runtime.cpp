@@ -1,0 +1,1101 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+#include <refrain/app/server_runtime.hpp>
+
+#include <refrain/app/server_properties.hpp>
+#include <refrain/app/services.hpp>
+#include <refrain/core/io.hpp>
+#include <refrain/core/log.hpp>
+#include <refrain/core/schedule.hpp>
+#include <refrain/core/time.hpp>
+#include <refrain/data/content_maintenance.hpp>
+#include <refrain/mod/rfmod.hpp>
+#include <refrain/sim/replay.hpp>
+#include <refrain/sim/world.hpp>
+#include <refrain/world/store.hpp>
+
+#include <fmt/format.h>
+
+#include <array>
+#include <atomic>
+#include <charconv>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <deque>
+#include <iostream>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
+
+namespace refrain::app {
+namespace {
+
+constexpr std::size_t max_console_commands = 1024;
+constexpr std::uint64_t max_console_file_bytes = 1ULL * 1024ULL * 1024ULL;
+
+/// Background writer for autosave snapshots. The sim thread only deep-copies
+/// dirty chunks (`snapshot_pending()`); TLV encoding, store writes and group
+/// commit run here through `sim::world::write_pending()`.
+class snapshot_writer {
+  public:
+    explicit snapshot_writer(refrain::sim::world &world)
+        : world_{world}, thread_{[this] { run(); }} {}
+
+    snapshot_writer(const snapshot_writer &) = delete;
+    auto operator=(const snapshot_writer &) -> snapshot_writer & = delete;
+
+    ~snapshot_writer() { stop(); }
+
+    [[nodiscard]] auto drain_completed()
+        -> std::vector<std::vector<refrain::sim::snapshot_entry>> {
+        const std::lock_guard lock{completed_mutex_};
+        std::vector<std::vector<refrain::sim::snapshot_entry>> completed{};
+        completed.swap(completed_);
+        return completed;
+    }
+
+    [[nodiscard]] auto submit(std::vector<refrain::sim::pending_snapshot> batch)
+        -> bool {
+        {
+            const std::lock_guard lock{mutex_};
+            if (pending_.size() >= 2) {
+                return false;
+            }
+            pending_.push_back(std::move(batch));
+        }
+        condition_.notify_one();
+        return true;
+    }
+
+    /// Wait until every submitted batch has been written and marked complete.
+    /// The console `save` path calls this before a synchronous `flush()`, so a
+    /// stale in-flight snapshot cannot overwrite the newer flushed state.
+    void drain() {
+        std::unique_lock lock{mutex_};
+        idle_condition_.wait(lock,
+                             [this] { return pending_.empty() && !writing_; });
+    }
+
+    void stop() noexcept {
+        {
+            const std::lock_guard lock{mutex_};
+            if (stopping_) {
+                return;
+            }
+            stopping_ = true;
+        }
+        condition_.notify_all();
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+  private:
+    void run() {
+        refrain::log::set_thread_name("io-writer");
+        for (;;) {
+            std::vector<refrain::sim::pending_snapshot> batch{};
+            {
+                std::unique_lock lock{mutex_};
+                condition_.wait(
+                    lock, [this] { return stopping_ || !pending_.empty(); });
+                if (pending_.empty()) {
+                    if (stopping_) {
+                        return;
+                    }
+                    continue;
+                }
+                batch = std::move(pending_.front());
+                pending_.pop_front();
+                writing_ = true;
+            }
+            if (auto written{world_.write_pending(batch)}; !written) {
+                refrain::log::error("autosave writer: {}",
+                                    written.error().message);
+            } else {
+                const std::lock_guard lock{completed_mutex_};
+                completed_.push_back(std::move(*written));
+            }
+            {
+                const std::lock_guard lock{mutex_};
+                writing_ = false;
+            }
+            idle_condition_.notify_all();
+        }
+    }
+
+    refrain::sim::world &world_;
+    std::mutex mutex_{};
+    std::condition_variable condition_{};
+    std::condition_variable idle_condition_{};
+    std::deque<std::vector<refrain::sim::pending_snapshot>> pending_{};
+    std::mutex completed_mutex_{};
+    std::vector<std::vector<refrain::sim::snapshot_entry>> completed_{};
+    bool stopping_{false};
+    bool writing_{false};
+    std::thread thread_;
+};
+
+struct runtime_state {
+    mutable std::mutex commands_mutex{};
+    std::vector<std::string> commands{};
+    std::atomic<bool> stop{false};
+    std::atomic<std::int64_t> heartbeat_ns{0};
+};
+
+void push_command(const std::shared_ptr<runtime_state> &state,
+                  std::string line) {
+    if (line.empty()) {
+        return;
+    }
+    const std::lock_guard lock{state->commands_mutex};
+    if (state->commands.size() < max_console_commands) {
+        state->commands.push_back(std::move(line));
+    }
+}
+
+[[nodiscard]] auto drain_commands(const std::shared_ptr<runtime_state> &state)
+    -> std::vector<std::string> {
+    std::vector<std::string> drained{};
+    const std::lock_guard lock{state->commands_mutex};
+    drained.swap(state->commands);
+    return drained;
+}
+
+void push_text_commands(const std::shared_ptr<runtime_state> &state,
+                        std::string_view text) {
+    std::size_t start{0};
+    while (start <= text.size()) {
+        const auto newline{text.find('\n', start)};
+        const auto end{newline == std::string_view::npos ? text.size()
+                                                         : newline};
+        auto line{std::string{text.substr(start, end - start)}};
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        push_command(state, std::move(line));
+        if (newline == std::string_view::npos) {
+            break;
+        }
+        start = newline + 1;
+    }
+}
+
+void start_console_thread(const std::shared_ptr<runtime_state> &state) {
+    std::thread console{[state] {
+        refrain::log::set_thread_name("console");
+        std::string line{};
+        try {
+            while (!state->stop.load(std::memory_order_acquire) &&
+                   std::getline(std::cin, line)) {
+                push_command(state, line);
+            }
+        } catch (...) {
+            // The console is diagnostics: a failed read must not terminate the
+            // server; the tick loop can still be stopped by `--ticks`/signal.
+        }
+    }};
+    // A blocking stdin read cannot be woken portably. The console thread only
+    // touches the shared state, so it is safe to detach at shutdown and let
+    // process exit reclaim it.
+    console.detach();
+}
+
+[[nodiscard]] auto load_properties(const std::string &path,
+                                   server_properties &out) -> status {
+    if (path.empty()) {
+        return status_ok();
+    }
+    if (!refrain::core::io::exists(path)) {
+        return status_ok();
+    }
+    auto text{refrain::core::io::read_text(
+        path, {.max_bytes = max_console_file_bytes, .allow_symlink = false})};
+    if (!text) {
+        return std::unexpected{std::move(text.error())};
+    }
+    auto parsed{parse_server_properties(*text)};
+    if (!parsed) {
+        return std::unexpected{std::move(parsed.error())};
+    }
+    out = std::move(*parsed);
+    return status_ok();
+}
+
+/// Delay between two bounded drain passes when the queue still holds
+/// retryable entries (failures below the retry limit or budget deferrals).
+/// Stuck entries (retry limit reached) are not retried until a new enqueue
+/// notifies the worker, so a permanently broken store does not spin.
+constexpr auto gc_delete_retry_delay{std::chrono::seconds{30}};
+
+/// Background owner of every content-GC unlink.
+///
+/// The tick thread only plans and enqueues; this worker drains
+/// `<store>/content/gc/pending.json` with a bounded per-pass budget. The two
+/// share `queue_mutex()`: the tick path uses `try_lock` and skips its interval
+/// when a pass is in flight, so a slow `remove` can never stall a tick. One
+/// `unlink` may still block (no per-unlink timeout by decision), which is why
+/// it is confined to this thread.
+class gc_delete_worker {
+  public:
+    gc_delete_worker(std::string store_root, std::uint64_t budget_ms)
+        : store_root_{std::move(store_root)}, budget_ms_{budget_ms},
+          thread_{[this] { run(); }} {}
+
+    gc_delete_worker(const gc_delete_worker &) = delete;
+    auto operator=(const gc_delete_worker &) -> gc_delete_worker & = delete;
+
+    ~gc_delete_worker() { stop(); }
+
+    [[nodiscard]] auto queue_mutex() -> std::mutex & { return mutex_; }
+
+    /// Wake the worker after an enqueue. Takes no lock, so it is safe while
+    /// the caller holds `queue_mutex()`.
+    void notify() noexcept {
+        wake_requested_.store(true, std::memory_order_release);
+        condition_.notify_one();
+    }
+
+    void stop() noexcept {
+        if (stopping_.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+        condition_.notify_all();
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+  private:
+    void run() {
+        refrain::log::set_thread_name("gc-delete");
+        std::unique_lock lock{mutex_};
+        for (;;) {
+            if (stopping_.load(std::memory_order_acquire)) {
+                return;
+            }
+            if (!wake_requested_.load(std::memory_order_acquire)) {
+                condition_.wait(lock, [this] {
+                    return stopping_.load(std::memory_order_acquire) ||
+                           wake_requested_.load(std::memory_order_acquire);
+                });
+            }
+            if (stopping_.load(std::memory_order_acquire)) {
+                return;
+            }
+            wake_requested_.store(false, std::memory_order_release);
+
+            // Hold `mutex_` for the whole pass: the planner's try_lock then
+            // fails instead of waiting for a blocking unlink.
+            auto report{refrain::data::drain_pending_deletes(
+                store_root_, budget_ms_, [](std::string_view line) {
+                    if (line.starts_with("warning:")) {
+                        refrain::log::warn("gc-delete: {}", line);
+                    } else {
+                        refrain::log::info("gc-delete: {}", line);
+                    }
+                })};
+            if (!report) {
+                refrain::log::error("gc-delete: {}", report.error().message);
+            } else if (report->deleted != 0U || report->deferred != 0U ||
+                       report->failed != 0U || report->failed_stuck != 0U ||
+                       report->skipped_referenced != 0U) {
+                refrain::log::info(
+                    "gc-delete: deleted {} file(s) ({} blob(s), {} "
+                    "segment(s)); deferred {}; failed {}; stuck {}; "
+                    "remaining {}",
+                    report->deleted, report->deleted_blobs,
+                    report->deleted_segments, report->deferred, report->failed,
+                    report->failed_stuck, report->remaining);
+            }
+
+            // A pass can end early on the budget or on a retryable failure.
+            // Other stuck entries are left for manual repair; only a new
+            // enqueue wakes the worker again.
+            const bool retryable{!report ||
+                                 report->remaining > report->failed_stuck};
+            if (retryable &&
+                condition_.wait_for(lock, gc_delete_retry_delay, [this] {
+                    return stopping_.load(std::memory_order_acquire) ||
+                           wake_requested_.load(std::memory_order_acquire);
+                })) {
+                // Woken by notify()/stop(); the loop re-checks both.
+            }
+        }
+    }
+
+    std::string store_root_;
+    std::uint64_t budget_ms_{0};
+    /// Serialises the tick planner (enqueue) and the worker (drain). Held for
+    /// the whole worker pass by design.
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    std::atomic<bool> wake_requested_{true};
+    std::atomic<bool> stopping_{false};
+    std::thread thread_;
+};
+
+auto run_content_gc(const server_run_options &options, gc_delete_worker *worker)
+    -> refrain::status {
+    // The pending-delete queue has exactly one writer at a time. Apply mode
+    // owns a worker: if it is in a drain pass, skip this interval instead of
+    // blocking the tick thread on a possibly blocking unlink. Dry-run has no
+    // worker and never touches the queue.
+    std::optional<std::unique_lock<std::mutex>> queue_lock{};
+    if (worker != nullptr) {
+        queue_lock.emplace(worker->queue_mutex(), std::try_to_lock);
+        if (!queue_lock->owns_lock()) {
+            refrain::log::debug(
+                "content-gc: gc-delete worker busy; skipping this interval");
+            return refrain::status_ok();
+        }
+    }
+    const auto index{
+        fmt::format("{}/content/blobs.idx", options.content_store)};
+    if (!refrain::core::io::exists(index)) {
+        refrain::log::debug("content-gc: skipped (no blobs.idx)");
+        return refrain::status_ok();
+    }
+    auto receipts{refrain::mod::list_receipt_paths(options.content_store)};
+    if (!receipts) {
+        refrain::log::error("content-gc: receipt scan failed: {}",
+                            receipts.error().message);
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::io_error,
+            fmt::format("content-gc: receipt scan failed: {}",
+                        receipts.error().message))};
+    }
+    refrain::data::gc_options gc{};
+    gc.apply = options.content_gc_apply;
+    gc.compact = false;
+    gc.keep_days = options.content_gc_keep_days;
+    gc.budget_ms = options.content_gc_budget_ms;
+    // apply: the planner only persists the plan and the `gc-delete` worker
+    // drains it; the tick thread never unlinks. dry-run: apply stays false, so
+    // nothing is enqueued or deleted (defer_deletes is irrelevant).
+    gc.defer_deletes = options.content_gc_apply;
+    for (const auto &path : *receipts) {
+        auto receipt{refrain::mod::read_receipt(path)};
+        if (!receipt) {
+            refrain::log::error("content-gc: {}: {}", path,
+                                receipt.error().message);
+            continue;
+        }
+        for (const auto &file : receipt->files) {
+            gc.extra_roots.push_back(file.blake3);
+        }
+    }
+    auto report{refrain::data::collect_garbage(
+        options.content_store, gc, [](std::string_view line) {
+            refrain::log::info("content-gc: {}", line);
+        })};
+    if (!report) {
+        refrain::log::error("content-gc: {}", report.error().message);
+        return std::unexpected{refrain::make_error(
+            report.error().code,
+            fmt::format("content-gc: {}", report.error().message))};
+    }
+    if (worker != nullptr) {
+        // The enqueue is complete; let the worker pick it up even when this
+        // run planned nothing new (an earlier queue may still be pending).
+        worker->notify();
+        refrain::log::info(
+            "content-gc: roots {} (index {} + receipts {}); queued {} blob(s) "
+            "/ {} segment(s) for the gc-delete worker",
+            report->root_blobs, report->root_index_references,
+            report->root_extra, report->queued_blobs, report->queued_segments);
+    } else {
+        refrain::log::info(
+            "content-gc: roots {} (index {} + receipts {}); dry run, nothing "
+            "queued or deleted",
+            report->root_blobs, report->root_index_references,
+            report->root_extra);
+    }
+    return refrain::status_ok();
+}
+
+// --- periodic maintenance through the scheduler ----------------------------
+//
+// Each maintenance action is a schedule task instead of an inline
+// `ticks_run % interval` block, so ordering, coalescing and failure accounting
+// live in one place (`core::schedule`). The log lines are part of the CLI/log
+// contract.
+struct maintenance_context {
+    refrain::sim::world *world{nullptr};
+    snapshot_writer *writer{nullptr};
+    const server_run_options *options{nullptr};
+    std::optional<gc_delete_worker> *gc_worker{nullptr};
+};
+
+[[nodiscard]] auto maintenance_exception(std::string_view task,
+                                         const char *what) noexcept
+    -> refrain::status {
+    return std::unexpected{refrain::make_error(
+        refrain::error_code::unknown,
+        fmt::format("{}: unexpected exception ({})", task, what))};
+}
+
+auto maintenance_autosave(void *self, const void *, std::int64_t) noexcept
+    -> refrain::status {
+    auto &context{*static_cast<maintenance_context *>(self)};
+    try {
+        auto snapshot{context.world->snapshot_pending()};
+        if (snapshot.empty()) {
+            return refrain::status_ok();
+        }
+        const auto batch_size{snapshot.size()};
+        if (context.writer->submit(std::move(snapshot))) {
+            refrain::log::debug(
+                "autosave: queued {} dirty chunk(s), {} tick(s)", batch_size,
+                context.world->ticks());
+        } else {
+            refrain::log::warn(
+                "autosave: writer busy, snapshot skipped this interval");
+            return std::unexpected{
+                refrain::make_error(refrain::error_code::io_error,
+                                    "autosave: writer busy, snapshot skipped")};
+        }
+        return refrain::status_ok();
+    } catch (...) {
+        return maintenance_exception("autosave", "snapshot/submit");
+    }
+}
+
+auto maintenance_content_gc(void *self, const void *, std::int64_t) noexcept
+    -> refrain::status {
+    auto &context{*static_cast<maintenance_context *>(self)};
+    try {
+        const auto worker{context.gc_worker != nullptr &&
+                                  context.gc_worker->has_value()
+                              ? &**context.gc_worker
+                              : nullptr};
+        return run_content_gc(*context.options, worker);
+    } catch (...) {
+        return maintenance_exception("content-gc", "collect_garbage");
+    }
+}
+
+auto maintenance_store_compact(void *self, const void *, std::int64_t) noexcept
+    -> refrain::status {
+    auto &context{*static_cast<maintenance_context *>(self)};
+    try {
+        auto compacted{context.world->compact_stores()};
+        if (!compacted) {
+            refrain::log::error("store compaction failed: {}",
+                                compacted.error().message);
+            return std::unexpected{compacted.error()};
+        }
+        refrain::log::info(
+            "store compaction: objects {} segment(s) / {} garbage byte(s); "
+            "blobs {} segment(s) / {} garbage byte(s)",
+            compacted->objects.segments, compacted->objects.garbage_bytes,
+            compacted->blobs.segments, compacted->blobs.garbage_bytes);
+        return refrain::status_ok();
+    } catch (...) {
+        return maintenance_exception("store-compact", "compact_stores");
+    }
+}
+
+auto maintenance_region_compact(void *self, const void *, std::int64_t) noexcept
+    -> refrain::status {
+    auto &context{*static_cast<maintenance_context *>(self)};
+    try {
+        auto compacted{context.world->compact_regions(
+            context.options->compact_min_bytes,
+            context.options->compact_garbage_percent)};
+        if (!compacted) {
+            refrain::log::error("runtime compaction failed: {}",
+                                compacted.error().message);
+            return std::unexpected{compacted.error()};
+        }
+        if (*compacted != 0) {
+            refrain::log::info("runtime compaction: {} region(s)", *compacted);
+        }
+        return refrain::status_ok();
+    } catch (...) {
+        return maintenance_exception("region-compact", "compact_regions");
+    }
+}
+
+void print_console_help() {
+    refrain::log::info(
+        "console: commands: stop, save, tps, hash, pos, move <dx> <dy> <dz>, "
+        "walk <dx> <dz>, jump, dig <x> <y> <z>, place <x> <y> <z> <block>, "
+        "give <item> <count>, inv, spawn <type> <x> <y> <z>, entities, "
+        "kill <entity-id>, palette-gc, schedules");
+}
+
+[[nodiscard]] auto split_console_line(std::string_view line)
+    -> std::vector<std::string_view> {
+    std::vector<std::string_view> tokens{};
+    std::size_t position{0};
+    while (position < line.size()) {
+        while (position < line.size() && line[position] == ' ') {
+            ++position;
+        }
+        if (position == line.size()) {
+            break;
+        }
+        const auto start{position};
+        while (position < line.size() && line[position] != ' ') {
+            ++position;
+        }
+        tokens.push_back(line.substr(start, position - start));
+    }
+    return tokens;
+}
+
+template <typename T>
+[[nodiscard]] auto parse_number(std::string_view text, T &out) -> bool {
+    const auto parsed{
+        std::from_chars(text.data(), text.data() + text.size(), out)};
+    return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+}
+
+void execute_console_command(const std::string &line,
+                             const std::shared_ptr<runtime_state> &state,
+                             refrain::sim::world &store,
+                             snapshot_writer &writer,
+                             const refrain::core::tick_info &tick,
+                             refrain::core::schedule::scheduler *scheduler) {
+    if (line == "stop") {
+        refrain::log::info("console: stopping server");
+        state->stop.store(true, std::memory_order_release);
+        return;
+    }
+    if (line == "palette-gc") {
+        // Quiesced maintenance: this runs on the sim thread, so no tick or
+        // console command overlaps it. Drain the writer first; the rebuild
+        // closes/reopens the store and reloads the previously loaded chunks.
+        writer.drain();
+        auto rebuilt{
+            store.rebuild_palette_in_place(1, store.store().zstd_level())};
+        if (!rebuilt) {
+            refrain::log::error("console: palette-gc failed: {}",
+                                rebuilt.error().message);
+            // A failed reopen leaves the store invalid; continuing to tick
+            // would operate on a closed world.
+            if (!store.store().valid()) {
+                state->stop.store(true, std::memory_order_release);
+            }
+            return;
+        }
+        refrain::log::info(
+            "console: palette-gc entries {} -> {}, chunks {}, regions {}, "
+            "bytes {} -> {}",
+            rebuilt->entries_before, rebuilt->entries_after, rebuilt->chunks,
+            rebuilt->regions, rebuilt->bytes_before, rebuilt->bytes_after);
+        return;
+    }
+    if (line == "save") {
+        // Drain the background writer first: a snapshot taken before this
+        // command could otherwise be written after flush() and resurrect an
+        // older chunk revision.
+        writer.drain();
+        auto committed{store.flush()};
+        if (!committed) {
+            refrain::log::error("console: save failed: {}",
+                                committed.error().message);
+        } else {
+            refrain::log::info("console: world saved");
+        }
+        return;
+    }
+    if (line == "tps") {
+        refrain::log::info(
+            "console: tick {} ({} ms, missed {})", tick.index,
+            std::chrono::duration_cast<std::chrono::milliseconds>(tick.actual)
+                .count(),
+            tick.missed);
+        return;
+    }
+    if (line == "hash") {
+        refrain::log::info("console: state hash {}",
+                           refrain::data::to_hex(store.state_hash()));
+        return;
+    }
+    if (line == "inv") {
+        if (store.player().inventory.empty()) {
+            refrain::log::info("console: inventory is empty");
+        } else {
+            for (const auto &stack : store.player().inventory) {
+                refrain::log::info("console: {} x{}", stack.item, stack.count);
+            }
+        }
+        return;
+    }
+    if (line == "pos") {
+        const auto &player{store.player()};
+        refrain::log::info("console: player at ({:.3f}, {:.3f}, {:.3f})",
+                           player.x, player.y, player.z);
+        return;
+    }
+    if (line == "entities") {
+        if (store.entities().empty()) {
+            refrain::log::info("console: no entities");
+        } else {
+            for (const auto &[id, value] : store.entities()) {
+                refrain::log::info(
+                    "console: entity {} {} at ({:.3f}, {:.3f}, {:.3f}) "
+                    "velocity ({:.3f}, {:.3f}, {:.3f}){}",
+                    id, value.type, value.x, value.y, value.z, value.vx,
+                    value.vy, value.vz, value.on_ground ? " grounded" : "");
+            }
+        }
+        return;
+    }
+    const auto tokens{split_console_line(line)};
+    if (line == "jump") {
+        store.jump();
+        refrain::log::info("console: jump (on_ground={})",
+                           store.player().on_ground);
+        return;
+    }
+    if (tokens.size() == 3 && tokens[0] == "give") {
+        std::uint32_t count{0};
+        if (!parse_number(tokens[2], count) || count == 0) {
+            refrain::log::warn("console: give expects a positive count");
+            return;
+        }
+        auto added{store.add_item(tokens[1], count)};
+        if (!added) {
+            refrain::log::warn("console: give failed: {}",
+                               added.error().message);
+            return;
+        }
+        refrain::log::info("console: gave {} x{}", tokens[1], count);
+        return;
+    }
+    if (tokens.size() == 5 && tokens[0] == "spawn") {
+        double x{0.0};
+        double y{0.0};
+        double z{0.0};
+        if (!parse_number(tokens[2], x) || !parse_number(tokens[3], y) ||
+            !parse_number(tokens[4], z)) {
+            refrain::log::warn("console: spawn expects numeric coordinates");
+            return;
+        }
+        auto spawned{store.spawn_entity(tokens[1], x, y, z)};
+        if (!spawned) {
+            refrain::log::warn("console: spawn failed: {}",
+                               spawned.error().message);
+            return;
+        }
+        refrain::log::info("console: spawned {} entity {}", tokens[1],
+                           *spawned);
+        return;
+    }
+    if (tokens.size() == 2 && tokens[0] == "kill") {
+        refrain::sim::entity_id id{0};
+        if (!parse_number(tokens[1], id)) {
+            refrain::log::warn("console: kill expects an entity id");
+            return;
+        }
+        if (!store.remove_entity(id)) {
+            refrain::log::warn("console: no entity {}", id);
+            return;
+        }
+        refrain::log::info("console: removed entity {}", id);
+        return;
+    }
+    if (tokens.size() == 3 && tokens[0] == "walk") {
+        double dx{0.0};
+        double dz{0.0};
+        if (!parse_number(tokens[1], dx) || !parse_number(tokens[2], dz)) {
+            refrain::log::warn("console: walk expects two numbers");
+            return;
+        }
+        const auto moved{store.move_player(dx, 0.0, dz)};
+        refrain::log::info("console: walk -> ({:.3f}, {:.3f}, {:.3f}) {}",
+                           store.player().x, store.player().y, store.player().z,
+                           moved ? "moved" : "blocked");
+        return;
+    }
+    if (tokens.size() == 4 && tokens[0] == "move") {
+        double dx{0.0};
+        double dy{0.0};
+        double dz{0.0};
+        if (!parse_number(tokens[1], dx) || !parse_number(tokens[2], dy) ||
+            !parse_number(tokens[3], dz)) {
+            refrain::log::warn("console: move expects three numbers");
+            return;
+        }
+        auto &player{store.player()};
+        store.set_player_position(player.x + dx, player.y + dy, player.z + dz);
+        refrain::log::info("console: moved player to ({:.3f}, {:.3f}, {:.3f})",
+                           player.x, player.y, player.z);
+        return;
+    }
+    if ((tokens.size() == 4 && tokens[0] == "dig") ||
+        (tokens.size() == 5 && tokens[0] == "place")) {
+        std::int32_t x{0};
+        std::int32_t y{0};
+        std::int32_t z{0};
+        if (!parse_number(tokens[1], x) || !parse_number(tokens[2], y) ||
+            !parse_number(tokens[3], z)) {
+            refrain::log::warn("console: {} expects integer coordinates",
+                               tokens[0]);
+            return;
+        }
+        if (y < std::numeric_limits<std::int16_t>::min() ||
+            y > std::numeric_limits<std::int16_t>::max()) {
+            refrain::log::warn("console: block y={} is out of range", y);
+            return;
+        }
+        auto value{refrain::sim::air_block};
+        std::optional<std::string> gained{};
+        if (tokens[0] == "dig") {
+            const auto existing{store.block_at(
+                refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z})};
+            if (existing != refrain::sim::air_block) {
+                gained = std::string{store.registry().key(existing)};
+            }
+        } else if (tokens[0] == "place") {
+            value = store.registry().intern(std::string{tokens[4]});
+        }
+        auto applied{store.set_block(
+            refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z},
+            value)};
+        if (!applied) {
+            refrain::log::warn("console: {} failed: {}", tokens[0],
+                               applied.error().message);
+            return;
+        }
+        if (gained) {
+            (void)store.add_item(*gained, 1);
+        }
+        if (tokens[0] == "place") {
+            // The server remains creative-permissive: consume when available,
+            // but do not reject a scripted placement without a prior `give`.
+            (void)store.remove_item(tokens[4], 1);
+        }
+        refrain::log::info("console: {} ({}, {}, {}) -> {}", tokens[0], x, y, z,
+                           tokens[0] == "place" ? tokens[4] : "air");
+        return;
+    }
+    if (line == "help") {
+        print_console_help();
+        return;
+    }
+    if (line == "schedules") {
+        if (scheduler == nullptr) {
+            refrain::log::info("schedules: scheduler unavailable");
+            return;
+        }
+        const auto tasks{scheduler->tasks()};
+        if (tasks.empty()) {
+            refrain::log::info("schedules: no periodic task registered");
+            return;
+        }
+        for (const auto &task : tasks) {
+            refrain::log::info(
+                "schedule: {}.{} phase={} interval={} enabled={} runs={} "
+                "failures={} coalesced={} last_tick={}",
+                task.service, task.method,
+                refrain::core::schedule::phase_name(task.phase_of),
+                task.interval_ticks, task.enabled ? "yes" : "no",
+                task.stats.runs, task.stats.failures, task.stats.coalesced,
+                task.stats.last_tick);
+            if (!task.stats.last_error.empty()) {
+                refrain::log::info("schedule: {}.{} last_error={}",
+                                   task.service, task.method,
+                                   task.stats.last_error);
+            }
+        }
+        return;
+    }
+    refrain::log::warn("console: unknown command '{}' (try 'help')", line);
+}
+
+} // namespace
+
+auto run_server(const server_run_options &options) -> int {
+    if (options.world_path.empty()) {
+        return report_error(refrain::make_error(
+            refrain::error_code::invalid_argument,
+            "refrain-server: --world is required to start the tick loop"));
+    }
+
+    server_properties properties{};
+    if (auto loaded{
+            load_properties(options.server_properties_path, properties)};
+        !loaded) {
+        return report_error(loaded.error());
+    }
+    refrain::log::info("server.properties: level-name='{}', view-distance={}, "
+                       "simulation-distance={}, max-players={}{}",
+                       properties.level_name, properties.view_distance,
+                       properties.simulation_distance, properties.max_players,
+                       properties.online_mode ? "" : ", offline-mode");
+
+    auto store{refrain::sim::world::open(options.world_path)};
+    if (!store) {
+        return report_error(store.error());
+    }
+    if (auto configured{
+            store->store().set_zstd_level(options.world_zstd_level)};
+        !configured) {
+        return report_error(configured.error());
+    }
+    if (auto configured{store->set_zstd_policy(
+            refrain::sim::zstd_policy{.near_level = options.zstd_near_level,
+                                      .mid_level = options.zstd_mid_level,
+                                      .far_level = options.zstd_far_level,
+                                      .near_radius = options.zstd_near_radius,
+                                      .mid_radius = options.zstd_mid_radius})};
+        !configured) {
+        return report_error(configured.error());
+    }
+    auto level{store->store().level()};
+    if (!level) {
+        return report_error(level.error());
+    }
+    refrain::log::info("world: '{}' (DataVersion {}, seed {})",
+                       options.world_path, level->data_version, level->seed);
+    store->seed(static_cast<std::uint64_t>(level->seed));
+    store->set_player_position(static_cast<double>(level->spawn_x) + 0.5,
+                               static_cast<double>(level->spawn_y),
+                               static_cast<double>(level->spawn_z) + 0.5);
+
+    // Ticket seeding: the spawn column plus its 3x3 neighbourhood. The
+    // tick loop keeps them loaded; a missing chunk in a sparse imported world
+    // is a warning, not a fatal startup error.
+    const auto spawn_chunk{refrain::sim::chunk_pos{
+        level->spawn_x >= 0 ? level->spawn_x / 16 : (level->spawn_x - 15) / 16,
+        level->spawn_z >= 0 ? level->spawn_z / 16
+                            : (level->spawn_z - 15) / 16}};
+    for (std::int32_t dx{-1}; dx <= 1; ++dx) {
+        for (std::int32_t dz{-1}; dz <= 1; ++dz) {
+            const refrain::sim::chunk_pos pos{spawn_chunk.x + dx,
+                                              spawn_chunk.z + dz};
+            auto ticketed{
+                store->add_ticket(pos, refrain::sim::ticket_kind::spawn)};
+            if (!ticketed) {
+                refrain::log::warn("spawn ticket: chunk ({}, {}) skipped: {}",
+                                   pos.x, pos.z, ticketed.error().message);
+            }
+        }
+    }
+    refrain::log::info("spawn chunks: {} loaded, {} ticket(s)",
+                       store->loaded_chunks(),
+                       store->ticket_count(spawn_chunk));
+
+    snapshot_writer writer{*store};
+    // One background deleter, only for an applying GC policy. `--content-gc
+    // off|dry-run` must never delete: no worker is started and a queue left by
+    // an earlier apply run is left untouched (clearing it requires an explicit
+    // maintenance action, not an implicit startup sweep).
+    std::optional<gc_delete_worker> gc_worker{};
+    if (!options.content_store.empty() && options.content_gc_apply) {
+        gc_worker.emplace(options.content_store, options.content_gc_budget_ms);
+    }
+    const auto state{std::make_shared<runtime_state>()};
+    state->heartbeat_ns.store(refrain::core::now_ns(),
+                              std::memory_order_relaxed);
+
+    // Periodic maintenance is scheduler-driven: the host owns the
+    // tasks, the tick loop only calls `run()` at the two tick boundaries.
+    // Registration order is fixed: autosave, content-gc, store-compact,
+    // region-compact.
+    refrain::core::schedule::scheduler scheduler{};
+    maintenance_context maintenance{.world = &*store,
+                                    .writer = &writer,
+                                    .options = &options,
+                                    .gc_worker = &gc_worker};
+    std::array<refrain::core::schedule::task_descriptor, 4> tasks{};
+    std::size_t task_count{0};
+    const auto clamp_interval = [](std::uint64_t value) {
+        const auto limit{static_cast<std::uint64_t>(
+            refrain::core::schedule::max_interval_ticks)};
+        return value > limit ? limit : value;
+    };
+    const auto add_task = [&](std::string_view method, std::uint64_t interval,
+                              refrain::core::schedule::invoker invoke) {
+        const auto clamped{clamp_interval(interval)};
+        if (clamped != interval) {
+            refrain::log::warn("schedule: {} interval {} clamped to {}", method,
+                               interval, clamped);
+        }
+        tasks[task_count++] = refrain::core::schedule::task_descriptor{
+            .service = "runtime",
+            .method = method,
+            .interval_ticks = static_cast<std::int64_t>(clamped),
+            .phase_of = refrain::core::schedule::phase::post_tick,
+            .invoke = invoke,
+        };
+    };
+    if (options.autosave_interval_ticks > 0) {
+        add_task("autosave", options.autosave_interval_ticks,
+                 &maintenance_autosave);
+    }
+    if (options.content_gc_interval_ticks > 0 &&
+        !options.content_store.empty()) {
+        add_task("content-gc", options.content_gc_interval_ticks,
+                 &maintenance_content_gc);
+    }
+    if (options.store_compact_interval_ticks > 0) {
+        add_task("store-compact", options.store_compact_interval_ticks,
+                 &maintenance_store_compact);
+    }
+    if (options.compact_interval_ticks > 0) {
+        add_task("region-compact", options.compact_interval_ticks,
+                 &maintenance_region_compact);
+    }
+    if (task_count > 0) {
+        if (auto added{scheduler.add(std::span{tasks.data(), task_count},
+                                     &maintenance, nullptr)};
+            !added) {
+            return report_error(added.error());
+        }
+    }
+
+    if (!options.command_file.empty() && !options.script_file.empty()) {
+        return report_error(refrain::make_error(
+            refrain::error_code::invalid_argument,
+            "refrain-server: --cmd-file and --script are mutually exclusive"));
+    }
+    std::vector<refrain::sim::replay_step> replay{};
+    std::size_t replay_index{0};
+    if (!options.script_file.empty()) {
+        auto text{refrain::core::io::read_text(
+            options.script_file,
+            {.max_bytes = max_console_file_bytes, .allow_symlink = false})};
+        if (!text) {
+            return report_error(text.error());
+        }
+        auto parsed{refrain::sim::parse_replay_script(*text)};
+        if (!parsed) {
+            return report_error(parsed.error());
+        }
+        replay = std::move(*parsed);
+    }
+    if (!options.command_file.empty()) {
+        auto text{refrain::core::io::read_text(
+            options.command_file,
+            {.max_bytes = max_console_file_bytes, .allow_symlink = false})};
+        if (!text) {
+            return report_error(text.error());
+        }
+        push_text_commands(state, *text);
+    } else if (options.script_file.empty()) {
+        start_console_thread(state);
+    }
+
+    std::thread watchdog{};
+    if (options.watchdog_timeout_ms > 0) {
+        watchdog = std::thread{[state, timeout = options.watchdog_timeout_ms] {
+            refrain::log::set_thread_name("watchdog");
+            const auto timeout_ns{static_cast<std::int64_t>(timeout) *
+                                  1'000'000LL};
+            bool warned{false};
+            while (!state->stop.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{250});
+                const auto heartbeat{
+                    state->heartbeat_ns.load(std::memory_order_relaxed)};
+                const auto stalled{heartbeat != 0 &&
+                                   refrain::core::now_ns() - heartbeat >
+                                       timeout_ns};
+                if (stalled && !warned) {
+                    refrain::log::warn(
+                        "watchdog: tick has not advanced for {} ms", timeout);
+                    warned = true;
+                } else if (!stalled && warned) {
+                    refrain::log::info("watchdog: tick is advancing again");
+                    warned = false;
+                }
+            }
+        }};
+    }
+
+    refrain::core::tick_clock clock{};
+    clock.start();
+    std::int64_t ticks_run{0};
+    refrain::log::info("tick loop started ({} tps)",
+                       refrain::core::ticks_per_second);
+
+    while (!state->stop.load(std::memory_order_acquire)) {
+        auto tick{clock.wait_next()};
+        if (!tick) {
+            refrain::log::error("tick loop: {}", tick.error().message);
+            break;
+        }
+        state->heartbeat_ns.store(refrain::core::now_ns(),
+                                  std::memory_order_relaxed);
+        for (const auto &batch : writer.drain_completed()) {
+            store->mark_clean(batch);
+        }
+        for (const auto &line : drain_commands(state)) {
+            execute_console_command(line, state, *store, writer, *tick,
+                                    &scheduler);
+        }
+        while (replay_index < replay.size() &&
+               replay[replay_index].tick == ticks_run) {
+            execute_console_command(replay[replay_index].command, state, *store,
+                                    writer, *tick, &scheduler);
+            if (state->stop.load(std::memory_order_acquire)) {
+                break;
+            }
+            ++replay_index;
+        }
+        scheduler.run(refrain::core::schedule::phase::pre_tick, ticks_run);
+        store->tick();
+        ++ticks_run;
+        scheduler.run(refrain::core::schedule::phase::post_tick, ticks_run);
+        if (options.hash_every > 0 &&
+            (ticks_run % static_cast<std::int64_t>(options.hash_every)) == 0) {
+            refrain::log::info("replay: tick {} hash {}", ticks_run,
+                               refrain::data::to_hex(store->state_hash()));
+        }
+        if (options.ticks > 0 && ticks_run >= options.ticks) {
+            refrain::log::info("tick limit reached ({}), stopping", ticks_run);
+            state->stop.store(true, std::memory_order_release);
+            break;
+        }
+        if ((ticks_run % 20) == 0) {
+            refrain::log::debug(
+                "tps: tick {} ({} ms, missed {})", tick->index,
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    tick->actual)
+                    .count(),
+                tick->missed);
+        }
+    }
+
+    state->stop.store(true, std::memory_order_release);
+    if (watchdog.joinable()) {
+        watchdog.join();
+    }
+    // Tasks borrow the store/writer/GC worker; drop them before teardown.
+    scheduler.clear();
+    writer.stop();
+    for (const auto &batch : writer.drain_completed()) {
+        store->mark_clean(batch);
+    }
+    // Shutdown order: the world writer first, then the content queue worker
+    // (so no unlink overlaps store teardown), and only then the final flush.
+    if (gc_worker) {
+        gc_worker->stop();
+    }
+    refrain::log::info("replay: final tick {} hash {}", store->ticks(),
+                       refrain::data::to_hex(store->state_hash()));
+    auto committed{store->flush()};
+    if (!committed) {
+        refrain::log::error("shutdown: world commit failed: {}",
+                            committed.error().message);
+        return 1;
+    }
+    refrain::log::info("server stopped after {} tick(s)", ticks_run);
+    return 0;
+}
+
+} // namespace refrain::app
