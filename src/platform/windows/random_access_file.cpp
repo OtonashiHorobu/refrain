@@ -94,13 +94,17 @@ auto random_access_file::open(std::string_view path, open_mode mode,
                 fmt::format("refusing to follow symlink '{}'", path))};
         }
     }
+    // CREATE_ALWAYS covers the POSIX `O_CREAT | O_TRUNC` combination by
+    // creating a missing file and truncating an existing one. TRUNCATE_EXISTING
+    // alone would fail with ERROR_FILE_NOT_FOUND when the caller removed the
+    // old file first, which is exactly what atomic writers do.
     DWORD disposition{OPEN_EXISTING};
     if (options.exclusive) {
         disposition = CREATE_NEW;
+    } else if (options.create) {
+        disposition = options.truncate ? CREATE_ALWAYS : OPEN_ALWAYS;
     } else if (options.truncate) {
         disposition = TRUNCATE_EXISTING;
-    } else if (options.create) {
-        disposition = OPEN_ALWAYS;
     }
     // Match POSIX sharing semantics: the same file may be opened again while
     // a handle is alive (world reopening, fsck over a live store, atomic
