@@ -1,0 +1,121 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# Full Windows build. The `windows-syntax` workflow stays as a fast,
+# dependency-free Win32 API gate; this workflow compiles the real server and
+# tools with MinGW and runs them under Wine.
+#
+# The build runs in an Arch container because the project needs MinGW GCC 16,
+# which the Ubuntu runner does not package. The checkout stays on the runner so
+# the Node-based actions do not depend on the container image.
+#
+# Validated locally with the same container command before landing here.
+# An MSVC job is added once a local MSVC toolchain can validate it.
+
+name: windows-build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mingw:
+    name: mingw cross build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Restore Conan cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .conan-cache
+          key: conan-mingw-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
+          restore-keys: |
+            conan-mingw-
+
+      - name: Cross build in Arch container
+        run: |
+          mkdir -p .conan-cache
+          docker run --rm \
+            -v "$PWD:/src" \
+            -v "$PWD/.conan-cache:/root/.conan2" \
+            -w /src archlinux:latest bash -lc '
+              set -euo pipefail
+              pacman -Syu --noconfirm --needed base-devel git python python-pip \
+                cmake ninja mingw-w64-gcc wine xorg-server-xvfb
+              python3 -m pip install --break-system-packages "conan==2.31.2"
+
+              conan profile detect --force
+              native_gcc="$(gcc -dumpversion)"
+              mkdir -p /root/.conan2/profiles
+              cat > /root/.conan2/profiles/gcc-release <<EOF
+              [settings]
+              os=Linux
+              arch=x86_64
+              compiler=gcc
+              compiler.version=${native_gcc}
+              compiler.cppstd=26
+              compiler.libcxx=libstdc++11
+              build_type=Release
+
+              [conf]
+              tools.cmake.cmaketoolchain:generator=Ninja
+              EOF
+              mingw_gcc="$(x86_64-w64-mingw32-g++ -dumpversion | cut -d. -f1)"
+              cat > /root/.conan2/profiles/mingw <<EOF
+              [settings]
+              os=Windows
+              arch=x86_64
+              compiler=gcc
+              compiler.version=${mingw_gcc}
+              compiler.cppstd=26
+              compiler.libcxx=libstdc++11
+              build_type=Release
+
+              [conf]
+              tools.cmake.cmaketoolchain:generator=Ninja
+              tools.build:compiler_executables={"c":"x86_64-w64-mingw32-gcc","cpp":"x86_64-w64-mingw32-g++"}
+              EOF
+
+              conan install . -pr gcc-release -of build/host --build=missing \
+                -o "&:with_crashpad=False" -o "&:with_wasm=False"
+              cmake -S . -B build/host/build/Release -G Ninja \
+                -DCMAKE_TOOLCHAIN_FILE=build/host/build/Release/generators/conan_toolchain.cmake \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DREFRAIN_BUILD_SERVER=OFF \
+                -DREFRAIN_BUILD_TESTS=OFF \
+                -DREFRAIN_BUILD_BENCH=OFF \
+                -DREFRAIN_WITH_CRASHPAD=OFF \
+                -DREFRAIN_WITH_WASM=OFF
+              cmake --build build/host/build/Release -j "$(nproc)" --target refrain-tools
+
+              conan install . -pr mingw --build=missing \
+                -o "&:with_crashpad=False" -o "&:with_wasm=False" \
+                --lockfile=conan/locks/vendor.lock
+              cmake -S . -B build/Release -G Ninja \
+                -DCMAKE_TOOLCHAIN_FILE=build/Release/generators/conan_toolchain.cmake \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DREFRAIN_BUILD_TESTS=OFF \
+                -DREFRAIN_BUILD_BENCH=OFF \
+                -DREFRAIN_WITH_CRASHPAD=OFF \
+                -DREFRAIN_WITH_WASM=OFF \
+                -DREFRAIN_HOST_TOOLS="/src/build/host/build/Release/bin/refrain-tools" \
+                -DCMAKE_EXE_LINKER_FLAGS=-static
+              cmake --build build/Release -j "$(nproc)" \
+                --target refrain-server refrain-tools
+
+              xvfb-run -a wine build/Release/bin/refrain-tools.exe version
+              xvfb-run -a wine build/Release/bin/refrain-server.exe --help
+            '
