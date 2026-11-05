@@ -10,6 +10,11 @@ include(cmake/refrain_options.cmake)
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+if(MSVC)
+    # CMake 4.4's MSVC module stops at C++23; MSVC maps 23 to /std:c++latest,
+    # which enables the C++26 preview features the toolset implements.
+    set(CMAKE_CXX_STANDARD 23)
+endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(BUILD_SHARED_LIBS OFF)
@@ -22,6 +27,9 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 # Sanitizer instrumentation for every first-party target (the CI matrix uses
 # dedicated ASan/UBSan and TSan builds; Release timings stay unaffected).
 if(REFRAIN_SANITIZE)
+    if(MSVC)
+        message(FATAL_ERROR "REFRAIN_SANITIZE requires GCC or Clang")
+    endif()
     message(STATUS "[Refrain] sanitizers: ${REFRAIN_SANITIZE}")
     add_compile_options(-fsanitize=${REFRAIN_SANITIZE} -fno-omit-frame-pointer
                         -g)

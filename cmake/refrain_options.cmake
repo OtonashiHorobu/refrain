@@ -57,6 +57,12 @@ endif()
 
 # --- shared compile options -----------------------------------------------
 function(refrain_apply_warnings target)
+    if(MSVC)
+        # /GR- mirrors -fno-rtti; /utf-8 is required by fmt's Unicode checks.
+        target_compile_options(${target} PRIVATE /W4 /WX /permissive- /utf-8
+                                               /GR- /Zc:__cplusplus)
+        return()
+    endif()
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wshadow
                                             -Wnon-virtual-dtor -Wunused
                                             -Woverloaded-virtual -Wformat=2 -Werror
@@ -73,6 +79,9 @@ endfunction()
 # Debug builds get the usual stack protector coverage; ASan/UBSan/TSan are
 # opt-in through CMake presets (CI matrix) so release timings stay honest.
 function(refrain_apply_debug_options target)
+    if(MSVC)
+        return() # /GS is the MSVC default
+    endif()
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_options(${target} PRIVATE -fstack-protector-strong)
         target_compile_definitions(${target} PRIVATE REFRAIN_DEBUG=1)
