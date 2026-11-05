@@ -43,10 +43,12 @@ struct semver {
         auto out{std::to_string(major) + '.' + std::to_string(minor) + '.' +
                  std::to_string(patch)};
         if (!prerelease.empty()) {
-            out += '-' + prerelease;
+            out.push_back('-');
+            out += prerelease;
         }
         if (!build.empty()) {
-            out += '+' + build;
+            out.push_back('+');
+            out += build;
         }
         return out;
     }
