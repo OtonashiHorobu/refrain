@@ -53,12 +53,16 @@ jobs:
         shell: pwsh
         run: |
           conan profile detect --force
+          # Follow the installed toolset (VS 2022 reports 194, VS 2026 195);
+          # a hard-coded version makes Conan look for the wrong vcvars.
+          $detected = conan profile show -pr default --format=json | ConvertFrom-Json
+          $version = $detected.settings.compiler.version
           $profile = @"
           [settings]
           os=Windows
           arch=x86_64
           compiler=msvc
-          compiler.version=194
+          compiler.version=$version
           compiler.cppstd=23
           compiler.runtime=dynamic
           compiler.runtime_type=Release
