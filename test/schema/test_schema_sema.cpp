@@ -460,9 +460,10 @@ event bad { mode value; }
 )",
                            "references enum 'mode'"},
         };
-        for (const auto &test : cases) {
-            const auto result{compile_ridl(ridl_module(test.declarations))};
-            expect_rejected(result, test.marker);
+        for (const auto &rejection : cases) {
+            const auto result{
+                compile_ridl(ridl_module(rejection.declarations))};
+            expect_rejected(result, rejection.marker);
         }
     };
 
@@ -602,14 +603,15 @@ event bad { mode value; }
                            "result<void, sched_error>;",
                            ""},
         };
-        for (const auto &test : cases) {
-            const auto result{compile_ridl(ridl_service(test.declaration))};
-            if (test.marker.empty()) {
+        for (const auto &rejection : cases) {
+            const auto result{
+                compile_ridl(ridl_service(rejection.declaration))};
+            if (rejection.marker.empty()) {
                 expect(result.program.has_value())
-                    << "expected acceptance: " << test.declaration;
+                    << "expected acceptance: " << rejection.declaration;
                 continue;
             }
-            expect_rejected(result, test.marker);
+            expect_rejected(result, rejection.marker);
         }
     };
 

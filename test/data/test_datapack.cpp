@@ -667,14 +667,14 @@ const suite datapack_tag_tests = [] {
         if (!loaded) {
             return;
         }
-        const auto *tag{find_tag(*loaded, "block", "refrain_test:metal")};
-        expect(tag != nullptr);
-        if (tag != nullptr) {
-            expect(tag->values.size() == 2U);
-            expect(tag->sources == 2U);
-            expect(tag->values.at(0).id.to_string() ==
+        const auto *metal_tag{find_tag(*loaded, "block", "refrain_test:metal")};
+        expect(metal_tag != nullptr);
+        if (metal_tag != nullptr) {
+            expect(metal_tag->values.size() == 2U);
+            expect(metal_tag->sources == 2U);
+            expect(metal_tag->values.at(0).id.to_string() ==
                    "refrain_test:iron_block");
-            expect(tag->values.at(1).id.to_string() ==
+            expect(metal_tag->values.at(1).id.to_string() ==
                    "refrain_test:gold_block");
         }
         const auto &stats = loaded->stats();
@@ -699,13 +699,14 @@ const suite datapack_tag_tests = [] {
         if (!loaded) {
             return;
         }
-        const auto *tag{find_tag(*loaded, "block", "refrain_test:metal")};
-        expect(tag != nullptr);
-        if (tag != nullptr) {
-            expect(tag->values.size() == 1U);
-            expect(tag->values.front().id.to_string() ==
+        const auto *merged_metal_tag{
+            find_tag(*loaded, "block", "refrain_test:metal")};
+        expect(merged_metal_tag != nullptr);
+        if (merged_metal_tag != nullptr) {
+            expect(merged_metal_tag->values.size() == 1U);
+            expect(merged_metal_tag->values.front().id.to_string() ==
                    "refrain_test:copper_block");
-            expect(tag->sources == 2U);
+            expect(merged_metal_tag->sources == 2U);
         }
         expect(loaded->stats().merged_tag_count == 1U);
     };
@@ -721,12 +722,12 @@ const suite datapack_tag_tests = [] {
         if (!loaded) {
             return;
         }
-        const auto *tag{find_tag(*loaded, "block", "refrain_test:fuel")};
-        expect(tag != nullptr);
-        if (tag != nullptr) {
-            expect(tag->values.size() == 2U);
-            expect(!tag->values.at(1).tag_reference);
-            expect(!tag->values.at(1).required);
+        const auto *fuel_tag{find_tag(*loaded, "block", "refrain_test:fuel")};
+        expect(fuel_tag != nullptr);
+        if (fuel_tag != nullptr) {
+            expect(fuel_tag->values.size() == 2U);
+            expect(!fuel_tag->values.at(1).tag_reference);
+            expect(!fuel_tag->values.at(1).required);
         }
     };
 
@@ -743,12 +744,13 @@ const suite datapack_tag_tests = [] {
         if (!loaded) {
             return;
         }
-        const auto *tag{find_tag(*loaded, "block", "refrain_test:valuable")};
-        expect(tag != nullptr);
-        if (tag != nullptr) {
-            expect(tag->values.size() == 2U);
-            expect(tag->values.at(0).tag_reference);
-            expect(tag->values.at(1).tag_reference == false);
+        const auto *valuable_tag{
+            find_tag(*loaded, "block", "refrain_test:valuable")};
+        expect(valuable_tag != nullptr);
+        if (valuable_tag != nullptr) {
+            expect(valuable_tag->values.size() == 2U);
+            expect(valuable_tag->values.at(0).tag_reference);
+            expect(valuable_tag->values.at(1).tag_reference == false);
         }
         const auto report = loaded->validate();
         expect(report.errors.empty());
@@ -827,10 +829,11 @@ const suite datapack_tag_tests = [] {
         const auto loaded = load_stack(layers);
         expect(static_cast<bool>(loaded));
         if (loaded) {
-            const auto *tag{find_tag(*loaded, "block", "refrain_test:dup")};
-            expect(tag != nullptr);
-            if (tag != nullptr) {
-                expect(tag->values.size() == 2U);
+            const auto *duplicate_tag{
+                find_tag(*loaded, "block", "refrain_test:dup")};
+            expect(duplicate_tag != nullptr);
+            if (duplicate_tag != nullptr) {
+                expect(duplicate_tag->values.size() == 2U);
             }
         }
     };
@@ -1444,15 +1447,16 @@ const suite datapack_integration_tests = [] {
         }
         // The lower-priority tag file is hidden in the merged view but must
         // still participate in the merge through vfs::packs().
-        const auto *tag{find_tag(*loaded, "block", "refrain_test:metal")};
-        expect(tag != nullptr);
-        if (tag != nullptr) {
-            expect(tag->values.size() == 2U);
-            expect(tag->values.at(0).id.to_string() ==
+        const auto *visible_metal_tag{
+            find_tag(*loaded, "block", "refrain_test:metal")};
+        expect(visible_metal_tag != nullptr);
+        if (visible_metal_tag != nullptr) {
+            expect(visible_metal_tag->values.size() == 2U);
+            expect(visible_metal_tag->values.at(0).id.to_string() ==
                    "refrain_test:iron_block");
-            expect(tag->values.at(1).id.to_string() ==
+            expect(visible_metal_tag->values.at(1).id.to_string() ==
                    "refrain_test:gold_block");
-            expect(tag->sources == 2U);
+            expect(visible_metal_tag->sources == 2U);
         }
         expect(loaded->stats().merged_tag_count == 1U);
         const auto report = loaded->validate();

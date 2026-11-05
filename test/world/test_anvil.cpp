@@ -229,8 +229,9 @@ palette_entry(std::string name,
     set(root, "InhabitedTime", make_long(2000));
     set(root, "isLightOn", nbt::make_byte(1));
     value sections{new_list(tag_type::compound)};
-    push(sections, section_single(section_base, "minecraft:bedrock"));
-    push(sections, section_palette(section_base + 4));
+    push(sections, section_single(static_cast<std::int8_t>(section_base),
+                                  "minecraft:bedrock"));
+    push(sections, section_palette(static_cast<std::int8_t>(section_base + 4)));
     set(root, "sections", std::move(sections));
 
     value heightmaps{make_compound()};

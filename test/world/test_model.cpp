@@ -6,6 +6,8 @@
 
 #include <boost/ut.hpp>
 
+#include <array>
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -192,8 +194,8 @@ suite world_model = [] {
     };
 
     "palette_roundtrip_all_widths"_test = [] {
-        for (const std::uint8_t bits :
-             {1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 16, 32}) {
+        for (const std::uint8_t bits : std::array<std::uint8_t, 12>{
+                 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 16, 32}) {
             const auto palette_size{std::size_t{1} << (bits == 32 ? 12 : bits)};
             std::vector<std::uint32_t> indices(world::section_volume);
             for (std::size_t index{0}; index < indices.size(); ++index) {

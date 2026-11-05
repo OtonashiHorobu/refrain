@@ -143,11 +143,10 @@ const suite store_lock_tests = [] {
         std::atomic<int> acquired_count{0};
         std::vector<std::thread> workers;
         constexpr int worker_count{6};
-        constexpr int attempts{20};
         workers.reserve(worker_count);
         for (int worker{0}; worker < worker_count; ++worker) {
             workers.emplace_back([&] {
-                for (int attempt{0}; attempt < attempts; ++attempt) {
+                for (int attempt{0}; attempt < 20; ++attempt) {
                     auto lock{store_lock::acquire(scratch.path(), 200, {})};
                     if (!lock) {
                         continue;
