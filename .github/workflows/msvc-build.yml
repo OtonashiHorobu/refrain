@@ -6,12 +6,12 @@
 # same CMake targets as the other platforms; the toolset produces the debug
 # symbols and runtime the Windows package ships with.
 #
-# The workflow is dispatch-only until the MSVC port has a first green run,
-# then the push/pull_request triggers are enabled.
-
 name: msvc-build
 
 on:
+  push:
+    branches: [main, master]
+  pull_request:
   workflow_dispatch:
 
 permissions:
