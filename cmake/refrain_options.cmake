@@ -59,8 +59,13 @@ endif()
 function(refrain_apply_warnings target)
     if(MSVC)
         # /GR- mirrors -fno-rtti; /utf-8 is required by fmt's Unicode checks.
+        # C4702 fires inside fmt's constexpr-heavy headers at /O2; the
+        # diagnostic is attributed to the instantiation, so /external:W0 does
+        # not suppress it. C4324 flags the deliberate alignas() padding used by
+        # the allocator tests.
         target_compile_options(${target} PRIVATE /W4 /WX /permissive- /utf-8
-                                               /GR- /Zc:__cplusplus)
+                                               /GR- /Zc:__cplusplus /wd4702
+                                               /wd4324)
         return()
     endif()
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wshadow

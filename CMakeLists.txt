@@ -23,6 +23,16 @@ set(BUILD_SHARED_LIBS OFF)
 # -fmodules-ts/-fmodule-mapper/-fdeps-format into every translation unit
 # (slower builds, unparsable by clangd/clang tools). Turn it off.
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+# windows.h defines min/max macros that collide with std::min/std::max and
+# std::numeric_limits<T>::max(). The engine never wants those macros.
+if(WIN32)
+    add_compile_definitions(NOMINMAX)
+endif()
+if(MSVC)
+    # getenv/sprintf-style APIs are used deliberately; the secure-CRT
+    # deprecation warnings do not describe a defect here.
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+endif()
 
 # Sanitizer instrumentation for every first-party target (the CI matrix uses
 # dedicated ASan/UBSan and TSan builds; Release timings stay unaffected).
