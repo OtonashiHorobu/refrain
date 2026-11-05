@@ -17,7 +17,7 @@
 #   * sanitizer (ASan+UBSan, TSan) and clang-format gates mirror the local
 #     scripts/ci.sh steps.
 
-name: CI
+name: linux-build
 
 on:
   push:
@@ -56,29 +56,29 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Python syntax check for vendor tooling
+      - name: Check tool scripts
         run: |
           python3 -m py_compile tools/vendor_check.py tools/vendor_export.py \
             tools/platform_check.py tools/check_action_pins.py
 
-      - name: G1-G7 vendoring policy checks
+      - name: Vendor policy
         run: python3 tools/vendor_check.py --verbose
 
-      - name: Platform abstraction policy check
+      - name: Platform policy
         run: python3 tools/platform_check.py --verbose
 
-      - name: GitHub Actions are pinned to full commits
+      - name: Action pin check
         run: python3 tools/check_action_pins.py
 
-      - name: Third-party NOTICE summary exists
+      - name: NOTICE check
         run: test -s NOTICE.md
 
-      - name: Print and archive dependency pin manifest
+      - name: Dependency pins
         run: |
           python3 tools/vendor_export.py --check | tee conan-pins.txt
           test -s conan-pins.txt
 
-      - name: Check every in-repo recipe is self-documented
+      - name: Recipe docs
         run: |
           set -euo pipefail
           for d in conan/recipes/*/; do
@@ -97,7 +97,7 @@ jobs:
   # Generated SDK headers are excluded via .clang-format-ignore.
   # ---------------------------------------------------------------------------
   format:
-    name: clang-format
+    name: format
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -107,10 +107,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install clang-format 23
+      - name: Install clang-format
         run: python3 -m pip install "clang-format==23.1.4"
 
-      - name: Check first-party C/C++ formatting
+      - name: Check formatting
         run: |
           set -euo pipefail
           mapfile -t files < <(git ls-files --cached --others --exclude-standard '*.cpp' '*.hpp' '*.h' | grep -v '^sdk/generated/' || true)
@@ -124,8 +124,8 @@ jobs:
   #     (fallback: run in the gcc:16 container image, same apt steps);
   #   * CMake >= 4.2 is required by cmake_minimum_required, installed from pip.
   # ---------------------------------------------------------------------------
-  build-gcc:
-    name: build (gcc 16, release)
+  build:
+    name: build
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     needs: vendor-guard
@@ -136,7 +136,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install GCC 16, CMake 4.4.4, Ninja, Conan 2.31.2
+      - name: Install toolchain
         run: |
           set -euo pipefail
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
@@ -155,7 +155,7 @@ jobs:
       # Cache the full Conan home: recipe cache, package binaries and the
       # sha256-keyed source download cache. Key changes whenever a recipe,
       # the top-level conanfile or the lockfile changes.
-      - name: Restore Conan cache (~/.conan2)
+      - name: Restore Conan cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.conan2
@@ -163,13 +163,13 @@ jobs:
           restore-keys: |
             conan-${{ runner.os }}-
 
-      - name: Create gcc-release Conan profile
+      - name: Create Conan profile
         run: bash scripts/bootstrap.sh --profile-only
 
-      - name: Export + build in-repo vendor recipes
+      - name: Build vendor recipes
         run: python3 tools/vendor_export.py --build --profile "${REFRAIN_CONAN_PROFILE}"
 
-      - name: Conan install (lockfile mandatory)
+      - name: Install dependencies
         run: |
           set -euo pipefail
           test -f conan/locks/vendor.lock || {
@@ -179,26 +179,26 @@ jobs:
           conan install . -pr "${REFRAIN_CONAN_PROFILE}" --build=missing \
             --lockfile=conan/locks/vendor.lock
 
-      - name: CMake configure
+      - name: Configure
         run: cmake --preset conan-release
 
       - name: Build
         run: cmake --build --preset conan-release -j "$(nproc)"
 
-      - name: Unit tests
+      - name: Test
         run: |
           set -euo pipefail
           source build/Release/generators/conanrun.sh
           ctest --test-dir build/Release --output-on-failure
           ./build/Release/bin/refrain-tests
 
-      - name: Schema codegen drift check
+      - name: Schema drift
         run: |
           set -euo pipefail
           source build/Release/generators/conanrun.sh
           ./build/Release/bin/refrain-tools schema gen --check
 
-      - name: Generated C ABI headers compile as C11
+      - name: C ABI check
         run: |
           set -euo pipefail
           cat > /tmp/refrain_abi_check.c <<'ABI_EOF'
@@ -208,7 +208,7 @@ jobs:
           cc -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -Isdk/generated/c \
              -fsyntax-only /tmp/refrain_abi_check.c
 
-      - name: Tools smoke test (gamepack resolution + WASM)
+      - name: Tools smoke test
         run: |
           set -euo pipefail
           source build/Release/generators/conanrun.sh
@@ -239,7 +239,7 @@ jobs:
           python3 tools/cli_contract_check.py --root . --bin-dir build/Release/bin
           echo "provider swap: default=RWF/vanilla, preset=memory/flat"
 
-      - name: Install SDK and compile a consumer
+      - name: SDK install + consumer
         run: |
           set -euo pipefail
           source build/Release/generators/conanrun.sh
@@ -272,7 +272,7 @@ jobs:
           "$work/build/consumer"
           echo "installed SDK consumer OK"
 
-      - name: Extract smoke test (synthetic jar; no Mojang assets in CI)
+      - name: Extract smoke test
         run: |
           set -euo pipefail
           source build/Release/generators/conanrun.sh
@@ -298,7 +298,7 @@ jobs:
           ./build/Release/bin/refrain-tools extract --jar "$work/synthetic.jar" --out "$work/cooked" --filter data --extract
           test -f "$work/cooked/data/minecraft/recipe/stone.json"
 
-      - name: Crashpad minidump smoke
+      - name: Crashpad smoke
         run: |
           set -euo pipefail
           source build/Release/generators/conanrun.sh
@@ -321,7 +321,7 @@ jobs:
           head -c 4 "$dump" | grep -q MDMP
           echo "minidump: $dump"
 
-      - name: Upload crash test binaries on failure
+      - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -336,11 +336,11 @@ jobs:
   # ASan+UBSan build. The stack is reduced to the portable kernel bits so
   # the job is fast and independent of Crashpad/wasmtime binaries.
   # ---------------------------------------------------------------------------
-  build-sanitizers:
-    name: build (gcc 16, ASan+UBSan)
+  asan-ubsan:
+    name: asan+ubsan
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    needs: build-gcc
+    needs: build
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -348,7 +348,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install GCC 16, CMake 4.4.4, Ninja, Conan 2.31.2
+      - name: Install toolchain
         run: |
           set -euo pipefail
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
@@ -359,7 +359,7 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
 
-      - name: Restore Conan cache (~/.conan2)
+      - name: Restore Conan cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.conan2
@@ -367,16 +367,16 @@ jobs:
           restore-keys: |
             conan-${{ runner.os }}-
 
-      - name: Create gcc-release Conan profile
+      - name: Create Conan profile
         run: bash scripts/bootstrap.sh --profile-only
 
-      - name: Conan install into a dedicated dependency folder
+      - name: Install dependencies
         run: |
           set -euo pipefail
           conan install . -pr "${REFRAIN_CONAN_PROFILE}" --build=missing \
             --lockfile=conan/locks/vendor.lock -of build/sanitizer-deps
 
-      - name: Configure (ASan+UBSan)
+      - name: Configure
         run: |
           set -euo pipefail
           toolchain="$(find build/sanitizer-deps -name conan_toolchain.cmake -print -quit)"
@@ -391,7 +391,7 @@ jobs:
       - name: Build
         run: cmake --build build/sanitizers -j "$(nproc)"
 
-      - name: Tests under ASan+UBSan
+      - name: Test
         run: |
           set -euo pipefail
           run_env="$(find build/sanitizer-deps -name conanrun.sh -print -quit)"
@@ -403,11 +403,11 @@ jobs:
   # ---------------------------------------------------------------------------
   # TSan build: thread-safety of jobs/event/service_registry/file.
   # ---------------------------------------------------------------------------
-  build-tsan:
-    name: build (gcc 16, TSan)
+  tsan:
+    name: tsan
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    needs: build-gcc
+    needs: build
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -415,7 +415,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install GCC 16, CMake 4.4.4, Ninja, Conan 2.31.2
+      - name: Install toolchain
         run: |
           set -euo pipefail
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
@@ -426,7 +426,7 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
 
-      - name: Restore Conan cache (~/.conan2)
+      - name: Restore Conan cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.conan2
@@ -434,16 +434,16 @@ jobs:
           restore-keys: |
             conan-${{ runner.os }}-
 
-      - name: Create gcc-release Conan profile
+      - name: Create Conan profile
         run: bash scripts/bootstrap.sh --profile-only
 
-      - name: Conan install into a dedicated dependency folder
+      - name: Install dependencies
         run: |
           set -euo pipefail
           conan install . -pr "${REFRAIN_CONAN_PROFILE}" --build=missing \
             --lockfile=conan/locks/vendor.lock -of build/tsan-deps
 
-      - name: Configure (TSan)
+      - name: Configure
         run: |
           set -euo pipefail
           toolchain="$(find build/tsan-deps -name conan_toolchain.cmake -print -quit)"
@@ -458,7 +458,7 @@ jobs:
       - name: Build
         run: cmake --build build/tsan -j "$(nproc)"
 
-      - name: Tests under TSan
+      - name: Test
         run: |
           set -euo pipefail
           run_env="$(find build/tsan-deps -name conanrun.sh -print -quit)"
@@ -471,7 +471,7 @@ jobs:
   # ConanCenter and upstream GitHub releases. Informational only.
   # ---------------------------------------------------------------------------
   dep-audit:
-    name: dependency freshness audit (optional)
+    name: dependency audit (optional)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -483,10 +483,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Conan (only for CCI version listing)
+      - name: Install Conan
         run: python3 -m pip install "conan==${CONAN_VERSION}"
 
-      - name: Audit pins vs ConanCenter + upstream
+      - name: Audit pins
         run: |
           set -euo pipefail
           python3 tools/dep_audit.py --json dep-audit.json | tee dep-audit.txt
