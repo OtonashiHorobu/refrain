@@ -352,6 +352,13 @@ auto file_size(std::string_view path) -> result<std::uint64_t> {
         return std::unexpected{empty_path_error()};
     }
 
+    std::error_code type_error;
+    if (fs::is_directory(target, type_error)) {
+        return std::unexpected{make_error(
+            error_code::io_error,
+            fmt::format("failed to query file size '{}': is a directory",
+                        from_path(target)))};
+    }
     std::error_code size_error;
     const auto size = fs::file_size(target, size_error);
     if (size_error) {
