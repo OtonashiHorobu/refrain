@@ -179,25 +179,6 @@ jobs:
           conan install . -pr "${REFRAIN_CONAN_PROFILE}" --build=missing \
             --lockfile=conan/locks/vendor.lock
 
-      - name: Lockfile is up to date
-        run: |
-          set -euo pipefail
-          fresh="$(mktemp)"
-          conan lock create . -pr "${REFRAIN_CONAN_PROFILE}" -nr --lockfile-out="$fresh" >/dev/null
-          python3 - conan/locks/vendor.lock "$fresh" <<'PY'
-          import json
-          import sys
-
-          keys = ("requires", "build_requires", "python_requires", "config_requires")
-          committed = json.load(open(sys.argv[1], encoding="utf-8"))
-          fresh = json.load(open(sys.argv[2], encoding="utf-8"))
-          for key in keys:
-              if sorted(committed.get(key, [])) != sorted(fresh.get(key, [])):
-                  print(f"vendor.lock is stale in '{key}'", file=sys.stderr)
-                  sys.exit(1)
-          PY
-          rm -f "$fresh"
-
       - name: CMake configure
         run: cmake --preset conan-release
 

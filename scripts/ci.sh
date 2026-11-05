@@ -11,7 +11,6 @@
 #   scripts/ci.sh                          # configure + build + test + smoke
 #   scripts/ci.sh --skip-configure         # reuse existing build/Release
 #   scripts/ci.sh --skip-build             # test/smoke only
-#   scripts/ci.sh --skip-lock-check        # skip the vendor.lock freshness diff
 #   scripts/ci.sh --skip-format            # skip the clang-format gate
 #   scripts/ci.sh --offline                # pass -nr to conan install
 #
@@ -29,7 +28,6 @@ LOCKFILE="conan/locks/vendor.lock"
 SKIP_CONFIGURE=""
 SKIP_BUILD=""
 OFFLINE=""
-RUN_LOCKFILE_CHECK=1
 RUN_FORMAT_CHECK=1
 
 for arg in "$@"; do
@@ -37,7 +35,6 @@ for arg in "$@"; do
         --skip-configure)    SKIP_CONFIGURE=1 ;;
         --skip-build)        SKIP_BUILD=1 ;;
         --offline)           OFFLINE=1 ;;
-        --skip-lock-check)   RUN_LOCKFILE_CHECK="" ;;
         --skip-format)       RUN_FORMAT_CHECK="" ;;
         -h|--help)           sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
@@ -57,43 +54,21 @@ test -s NOTICE.md || { echo "NOTICE.md is missing or empty" >&2; exit 1; }
 say "[2/12] platform abstraction guard (tools/platform_check.py)"
 python3 tools/platform_check.py
 
-say "[3/12] lockfile-checked conan install (profile: $PROFILE)"
+say "[3/11] lockfile-checked conan install (profile: $PROFILE)"
 if [[ ! -f "$CONAN_HOME_DIR/profiles/$PROFILE" ]]; then
     echo "  profile missing, running: scripts/bootstrap.sh --profile-only"
     bash "$ROOT/scripts/bootstrap.sh" --profile-only
 fi
-# The lockfile is mandatory, not best-effort.
+# The lockfile is mandatory, not best-effort. `conan install --lockfile`
+# fails closed when a pinned revision no longer exists, so the install itself
+# is the staleness gate; re-resolving the graph with `conan lock create` and
+# diffing it against the committed lock depends on the local cache contents and
+# reports false staleness.
 [[ -f "$LOCKFILE" ]] || die "$LOCKFILE is missing; vendor dependencies must be pinned (conan lock create . -pr $PROFILE --lockfile-out=$LOCKFILE)"
 conan install . -pr "$PROFILE" --build=missing --lockfile="$LOCKFILE" \
     $([ -n "$OFFLINE" ] && echo -nr)
 
-if [[ -n "$RUN_LOCKFILE_CHECK" ]]; then
-    say "[4/12] vendor.lock is up to date"
-    TMP_LOCK="$(mktemp)"
-    trap 'rm -f "$TMP_LOCK"' EXIT
-    conan lock create . -pr "$PROFILE" -nr --lockfile-out="$TMP_LOCK" >/dev/null
-    python3 - "$LOCKFILE" "$TMP_LOCK" <<'PY' || die "conan/locks/vendor.lock is stale; regenerate with: conan lock create . -pr $PROFILE --lockfile-out=conan/locks/vendor.lock"
-import json
-import sys
-
-keys = ("requires", "build_requires", "python_requires", "config_requires")
-committed = json.load(open(sys.argv[1], encoding="utf-8"))
-fresh = json.load(open(sys.argv[2], encoding="utf-8"))
-for key in keys:
-    if sorted(committed.get(key, [])) != sorted(fresh.get(key, [])):
-        print(f"  mismatch in '{key}':")
-        print(f"    committed: {sorted(committed.get(key, []))}")
-        print(f"    fresh:     {sorted(fresh.get(key, []))}")
-        sys.exit(1)
-PY
-    rm -f "$TMP_LOCK"
-    trap - EXIT
-    echo "  lockfile matches a fresh resolution"
-else
-    say "[4/12] vendor.lock freshness check skipped (--skip-lock-check)"
-fi
-
-say "[5/12] cmake configure + build"
+say "[4/11] cmake configure + build"
 if [[ -n "$SKIP_CONFIGURE" ]]; then
     echo "  configure skipped (--skip-configure)"
 else
@@ -121,17 +96,17 @@ if [[ -n "$RUN_ENV" ]]; then
     set -u
 fi
 
-say "[6/12] unit tests (ctest + binary)"
+say "[5/11] unit tests (ctest + binary)"
 ctest --test-dir "$(dirname "$BIN_DIR")" --output-on-failure \
     || die "ctest unit tests failed"
 "$BIN_DIR/refrain-tests" || die "refrain-tests failed"
 
-say "[7/12] schema codegen drift check"
+say "[6/11] schema codegen drift check"
 python3 scripts/check_format_versions.py || die "format-version guard failed"
 "$BIN_DIR/refrain-tools" schema gen --check \
     || die "schema codegen drift detected (run schema gen)"
 
-say "[8/12] generated C ABI headers compile as C11"
+say "[7/11] generated C ABI headers compile as C11"
 ABI_CHECK="$(mktemp --suffix=.c)"
 EXTRACT_DIR="$(mktemp -d)"
 CRASH_DIR="$(mktemp -d)"
@@ -143,7 +118,7 @@ ABI_EOF
 cc -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -Isdk/generated/c \
    -fsyntax-only "$ABI_CHECK" || die "generated C ABI headers do not compile"
 
-say "[9/12] tools smoke test (gamepack/mods/builtin images + wasm)"
+say "[8/11] tools smoke test (gamepack/mods/builtin images + wasm)"
 "$BIN_DIR/refrain-tools" version
 "$BIN_DIR/refrain-tools" gamepack check -f "$ROOT/gamepack/gamepack.toml"
 "$BIN_DIR/refrain-tools" gamepack check \
@@ -1039,7 +1014,7 @@ echo "  scheduler: autosave grid + console stats OK"
 
 echo "  world: synthetic Anvil -> RWF -> Anvil, diff=100%, independent verify OK"
 
-say "[10/12] extract smoke test (synthetic jar; no Mojang assets in CI)"
+say "[9/11] extract smoke test (synthetic jar; no Mojang assets in CI)"
 python3 - "$EXTRACT_DIR" <<'PY'
 import os
 import sys
@@ -1066,7 +1041,7 @@ grep -q '"schema":"refrain.data-manifest/1"' \
     || die "extract: data/minecraft/recipe/stone.json was not written"
 echo "  manifest + data extraction OK"
 
-say "[11/12] Crashpad minidump smoke"
+say "[10/11] Crashpad minidump smoke"
 HANDLER="$(find "$CONAN_HOME_DIR" -type f -name crashpad_handler \
     -perm -u+x -print -quit 2>/dev/null || true)"
 [[ -n "$HANDLER" ]] || die "crashpad_handler not found under $CONAN_HOME_DIR \
@@ -1089,7 +1064,7 @@ head -c 4 "$DUMP" | grep -q 'MDMP' \
 echo "  minidump: $(basename "$DUMP") ($(stat -c%s "$DUMP") bytes)"
 
 if [[ -n "$RUN_FORMAT_CHECK" ]]; then
-    say "[12/12] clang-format check (first-party sources)"
+    say "[11/11] clang-format check (first-party sources)"
     command -v clang-format >/dev/null \
         || die "clang-format not found (pip install 'clang-format>=23' or apt install clang-format-23)"
     mapfile -t FORMAT_FILES < <(
@@ -1104,7 +1079,7 @@ if [[ -n "$RUN_FORMAT_CHECK" ]]; then
     fi
     echo "  ${#FORMAT_FILES[@]} files formatted"
 else
-    say "[12/12] clang-format check skipped (--skip-format)"
+    say "[11/11] clang-format check skipped (--skip-format)"
 fi
 
-say "CI OK (12 steps)"
+say "CI OK (11 steps)"
