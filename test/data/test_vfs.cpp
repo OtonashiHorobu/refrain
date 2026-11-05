@@ -100,16 +100,34 @@ struct temp_directory {
     }
 };
 
+/// MSVC's `fs::path{std::string}` decodes the native narrow charset, not
+/// UTF-8; round-trip through u8string so non-ASCII fixture names survive.
+[[nodiscard]] auto path_from_utf8(std::string_view text) -> fs::path {
+    std::u8string utf8;
+    utf8.reserve(text.size());
+    for (const char character : text) {
+        utf8.push_back(
+            static_cast<char8_t>(static_cast<unsigned char>(character)));
+    }
+    return fs::path{utf8};
+}
+
+[[nodiscard]] auto utf8_path(const fs::path &path) -> std::string {
+    const auto utf8{path.u8string()};
+    return std::string{utf8.begin(), utf8.end()};
+}
+
 [[nodiscard]] auto write_scratch_file(const fs::path &root,
                                       std::string_view relative,
                                       std::string_view content) -> bool {
-    const auto target{root / fs::path{std::string{relative}}};
+    const auto target{root / path_from_utf8(relative)};
     std::error_code error;
     fs::create_directories(target.parent_path(), error);
     if (error) {
         return false;
     }
-    return refrain::core::io::write_text(target.string(), content).has_value();
+    return refrain::core::io::write_text(utf8_path(target), content)
+        .has_value();
 }
 
 struct archive_file {
@@ -662,7 +680,7 @@ const suite vfs_tests = [] {
         expect(write_scratch_file(root, "data/unicode-\u00e4\u00f6\u00fc.json",
                                   "unicode"));
 
-        auto opened{open_dir_pack(root.string())};
+        auto opened{open_dir_pack(utf8_path(root))};
         expect(static_cast<bool>(opened));
         if (!opened) {
             return;
@@ -696,7 +714,7 @@ const suite vfs_tests = [] {
         fs::create_directory_symlink(root / "data", root / "data/link-dir",
                                      dir_link_error);
 
-        auto opened{open_dir_pack(root.string())};
+        auto opened{open_dir_pack(utf8_path(root))};
         expect(static_cast<bool>(opened));
         if (!opened) {
             return;

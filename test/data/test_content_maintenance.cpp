@@ -533,9 +533,13 @@ const suite content_maintenance_tests = [] {
     "collect_garbage keeps extra roots and deletes other blobs"_test = [] {
         temp_directory scratch{make_temp_directory()};
         const auto root{store_root(scratch)};
-        const std::vector<std::vector<std::byte>> payloads{
-            repeated_blob(70U * 1024U, std::byte{0x11}),
-            repeated_blob(70U * 1024U, std::byte{0x22})};
+        // Build the nested vectors without an initializer_list: GCC 16 under
+        // TSan reports a false maybe-uninitialized warning for the temporary
+        // backing array.
+        std::vector<std::vector<std::byte>> payloads;
+        payloads.reserve(2);
+        payloads.push_back(repeated_blob(70U * 1024U, std::byte{0x11}));
+        payloads.push_back(repeated_blob(70U * 1024U, std::byte{0x22}));
         const auto blobs{stage(root, payloads)};
         expect(blobs.size() == 2U);
         if (blobs.size() != 2U) {
@@ -579,9 +583,10 @@ const suite content_maintenance_tests = [] {
     "rows"_test = [] {
         temp_directory scratch{make_temp_directory()};
         const auto root{store_root(scratch)};
-        const std::vector<std::vector<std::byte>> payloads{
-            repeated_blob(70U * 1024U, std::byte{0x33}),
-            repeated_blob(70U * 1024U, std::byte{0x44})};
+        std::vector<std::vector<std::byte>> payloads;
+        payloads.reserve(2);
+        payloads.push_back(repeated_blob(70U * 1024U, std::byte{0x33}));
+        payloads.push_back(repeated_blob(70U * 1024U, std::byte{0x44}));
         const auto blobs{stage(root, payloads)};
         expect(blobs.size() == 2U);
         if (blobs.size() != 2U) {

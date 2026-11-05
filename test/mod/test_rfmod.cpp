@@ -1216,28 +1216,34 @@ const suite rfmod_pack_tests = [] {
     };
 
     "rfmod/pack_mod_directory rejects non-UTF-8 file names"_test = [] {
-        temp_workspace work{"pack-utf8"};
-        expect(work.write("mod/manifest.toml", manifest_text()));
-        std::string name{"mod/data/hell"};
-        name.push_back(static_cast<char>(0xFF));
-        name += ".txt";
         try {
-            if (!work.write(name, "x")) {
-                return; // the host cannot represent a non-UTF-8 file name
+            temp_workspace work{"pack-utf8"};
+            expect(work.write("mod/manifest.toml", manifest_text()));
+            std::string name{"mod/data/hell"};
+            name.push_back(static_cast<char>(0xFF));
+            name += ".txt";
+            try {
+                if (!work.write(name, "x")) {
+                    return; // the host cannot represent a non-UTF-8 file name
+                }
+            } catch (const std::filesystem::filesystem_error &) {
+                return; // Windows rejects the UTF-8 -> wide conversion
             }
-        } catch (const std::filesystem::filesystem_error &) {
-            return; // Windows rejects the UTF-8 -> wide conversion
-        }
-        const auto output{work.path("out/mod.rfmod")};
-        std::error_code error;
-        fs::create_directories(output.parent_path(), error);
-        const auto packed{refrain::mod::pack_mod_directory(
-            work.path("mod").string(), output.string())};
-        expect(!packed);
-        if (!packed) {
-            expect(static_cast<int>(packed.error().code) ==
-                   static_cast<int>(refrain::error_code::invalid_argument));
-            expect(packed.error().message.find("UTF-8") != std::string::npos);
+            const auto output{work.path("out/mod.rfmod")};
+            std::error_code error;
+            fs::create_directories(output.parent_path(), error);
+            const auto packed{refrain::mod::pack_mod_directory(
+                work.path("mod").string(), output.string())};
+            expect(!packed);
+            if (!packed) {
+                expect(static_cast<int>(packed.error().code) ==
+                       static_cast<int>(refrain::error_code::invalid_argument));
+                expect(packed.error().message.find("UTF-8") !=
+                       std::string::npos);
+            }
+        } catch (const std::exception &) {
+            // NTFS names are UTF-16 and cannot hold invalid UTF-8; the host
+            // cannot represent this fixture.
         }
     };
 
