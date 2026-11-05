@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:sim` service contract v0.
+//
+// The simulation is a single thread per process, so the contract is a
+// singleton:
+// one provider owns a table of open worlds addressed by opaque handles. Tick
+// order and RNG are provider-internal; the contract exposes only the lifecycle,
+// the monotonic tick counter and a deterministic state hash for replay checks.
+
+module refrain::services::sim;
+version 1.0.0;
+
+import refrain::core;
+
+handle<sim_world>;
+
+enum sim_error : u32 {
+    invalid_handle = 1,
+    already_open = 2,
+    not_found = 3,
+    io_error = 4,
+    internal = 5,
+}
+
+struct sim_config {
+    /// RWF world directory.
+    string world_path;
+    /// World seed; providers use it for their deterministic RNG stream.
+    i64 seed;
+}
+
+/// Published once per tick, after the player/RNG step.
+event tick_event {
+    i64 tick;
+}
+
+service sim : 1.0.0 {
+    side = server;
+    thread = sim;
+    provides = [ "refrain:sim" ];
+    requires = [ "refrain:core>=1.0.0", "refrain:world>=1.0.0" ];
+    capabilities = [ "tick", "replay", "deterministic-rng" ];
+
+    #[thread(sim)] #[can_fail]
+    fn open_world(in sim_config config) -> result<sim_world, sim_error>;
+
+    #[thread(sim)] #[can_fail]
+    fn close_world(sim_world world) -> result<void, sim_error>;
+
+    /// Advance exactly one tick.
+    #[thread(sim)] #[can_fail]
+    fn tick(sim_world world) -> result<void, sim_error>;
+
+    #[thread(any)]
+    fn ticks(sim_world world) -> i64;
+
+    /// Lowercase hex BLAKE3 of the deterministic replay state.
+    #[thread(sim)]
+    fn state_hash(sim_world world) -> string;
+}

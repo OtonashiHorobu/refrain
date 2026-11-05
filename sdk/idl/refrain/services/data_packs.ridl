@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:data.packs` service contract v0.
+// Resource pack / data pack discovery and resource resolution. Providers are
+// loaded during pack discovery; reads are borrow-style for the returned bytes.
+
+module refrain::services::data_packs;
+version 1.0.0;
+
+/// Opaque handle for one mounted pack.
+handle<pack>;
+
+enum pack_kind : u32 {
+    data = 0,
+    resource = 1,
+    mixed = 2,
+}
+
+/// Pack errors. Zero is success, so entries start at 1.
+enum pack_error : u32 {
+    not_found = 1,
+    invalid_format = 2,
+    version_mismatch = 3,
+    io_error = 4,
+    already_mounted = 5,
+}
+
+/// Where a pack comes from; `path` is a UTF-8 filesystem path or virtual
+/// location understood by the provider.
+struct pack_source {
+    string path;
+    pack_kind kind;
+    u32 pack_format;
+}
+
+struct pack_info {
+    handle<pack> pack;
+    string id;
+    string version;
+    u32 pack_format;
+    u64 file_count;
+}
+
+service data_packs : 1.0.0 {
+    side = both;
+    thread = main;
+    provides = [ "refrain:data.packs" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "jar", "datapack", "resourcepack" ];
+
+    /// Mount a pack and return its metadata. Only callable while the registry
+    /// is still open (on_load phase).
+    #[thread(main)] #[on_load_only] #[can_fail]
+    fn mount(in pack_source source) -> result<pack_info, pack_error>;
+
+    #[thread(main)] #[on_load_only] #[can_fail]
+    fn unmount(pack handle) -> result<void, pack_error>;
+
+    /// Number of mounted packs.
+    #[thread(any)]
+    fn mounted_count() -> u32;
+
+    /// Borrowed resource bytes; valid until the next registry mutation.
+    #[thread(worker)] #[borrow] #[can_fail]
+    fn read_resource(pack handle, in string name) -> result<bytes, pack_error>;
+
+}

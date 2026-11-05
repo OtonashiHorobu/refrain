@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:runtime` service contract v1.
+//
+// The contract is the narrow seam between the `refrain-server` composition
+// root and the first-party server runtime mod. The host stays a thin
+// bootstrap (CLI, logging, crash setup, builtin image, gamepack/mod loading,
+// service registry, process lifecycle); the runtime provider owns the tick
+// loop and the console for its whole lifetime. The provider implementation
+// runs on the in-process `app` API; moving its internals behind the service
+// contracts is future work.
+
+module refrain::services::runtime;
+version 1.0.0;
+
+import refrain::core;
+
+enum runtime_error : u32 {
+    invalid_config = 1,
+    io_error = 2,
+    internal = 3,
+}
+
+/// Process-wide runtime configuration assembled by the host from the parsed
+/// CLI. Strings are borrowed for the duration of `run`; the provider copies
+/// any value it needs to keep.
+struct runtime_config {
+    /// RWF world directory (`--world`); required by `run`.
+    string world_path;
+    /// Optional Java `server.properties`; a missing file keeps defaults.
+    string server_properties;
+    /// Run exactly this many ticks, then stop. 0 = until `stop`/EOF.
+    i64 ticks;
+    /// Optional batch command file (one console command per line, tick 0).
+    string command_file;
+    /// Optional tick-indexed replay script (`<tick> <command>` per line).
+    string script_file;
+    /// Log the state hash every N ticks; 0 disables.
+    u64 hash_every;
+    /// Default zstd level for regions opened by the runtime (1..19).
+    i32 world_zstd_level;
+    /// Adaptive zstd policy (levels 1..19, radii in chunks, near <= mid).
+    i32 zstd_near_level;
+    i32 zstd_mid_level;
+    i32 zstd_far_level;
+    i32 zstd_near_radius;
+    i32 zstd_mid_radius;
+    /// 0 disables the tick watchdog.
+    u32 watchdog_timeout_ms;
+    /// Flush dirty chunks every N ticks; 0 disables periodic autosave.
+    u64 autosave_interval_ticks;
+    /// Try runtime region compaction every N ticks; 0 disables.
+    u64 compact_interval_ticks;
+    /// Minimum region bytes before compaction is considered.
+    u64 compact_min_bytes;
+    u32 compact_garbage_percent;
+    /// Compact aux object/blob stores every N ticks; 0 disables.
+    u64 store_compact_interval_ticks;
+    /// Optional content store for periodic mark-sweep GC.
+    string content_store;
+    bool content_gc_apply;
+    i32 content_gc_keep_days;
+    u64 content_gc_budget_ms;
+    u64 content_gc_interval_ticks;
+}
+
+service runtime : 1.0.0 {
+    side = server;
+    thread = main;
+    provides = [ "refrain:runtime" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "tick", "console" ];
+
+    /// Start the headless server runtime and block until it stops (console
+    /// `stop`, the tick limit, EOF, or a fatal runtime error). Returns the
+    /// process exit code: 0 for a clean stop, non-zero for a failed startup or
+    /// an unclean shutdown. `runtime_error` is reserved for calls the provider
+    /// rejects before the tick loop starts (for example an invalid config);
+    /// once the loop owns the process, the exit code is the authoritative
+    /// result.
+    #[thread(main)] #[can_fail]
+    fn run(in runtime_config config) -> result<i32, runtime_error>;
+}

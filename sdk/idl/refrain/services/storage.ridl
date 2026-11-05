@@ -1,0 +1,73 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:storage` service contract v0. The
+// default provider is RWF (refrain world format); Anvil import/export is a
+// second first-party provider behind the same contract.
+
+module refrain::services::storage;
+version 1.0.0;
+
+import refrain::core;
+
+enum storage_error : u32 {
+    open_failed = 1,
+    not_found = 2,
+    corrupt_data = 3,
+    io_error = 4,
+    version_mismatch = 5,
+    read_only = 6,
+}
+
+struct world_open_config {
+    string world_path;
+    string gamepack_id;
+    u32 flags;
+}
+
+struct chunk_key {
+    chunk_pos pos;
+    u32 format_version;
+}
+
+struct chunk_read_result {
+    u32 bytes_read;
+    u32 format_version;
+    u64 record_version;
+}
+
+service storage : 1.0.0 {
+    side = server;
+    thread = io;
+    provides = [ "refrain:storage" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "transactions", "compaction", "anvil-import", "anvil-export" ];
+
+    /// Open (or create) a world store. The returned handle is owned by the
+    /// caller and released with close_world.
+    #[thread(main)] #[can_fail]
+    fn open_world(in world_open_config config) -> result<storage_world, storage_error>;
+
+    #[thread(main)] #[can_fail]
+    fn close_world(storage_world world) -> result<void, storage_error>;
+
+    /// Read one chunk record into a caller provided buffer. The buffer's
+    /// word_count is updated to the actual size.
+    #[thread(worker)] #[can_fail]
+    fn read_chunk(storage_world world, in chunk_key key, out chunk_buffer buffer)
+        -> result<chunk_read_result, storage_error>;
+
+    /// Write one chunk record; the payload is borrowed for the duration of
+    /// the call (the provider copies before returning).
+    #[thread(worker)] #[can_fail]
+    fn write_chunk(storage_world world, in chunk_key key, in bytes payload)
+        -> result<void, storage_error>;
+
+    /// Flush pending writes (group commit). Called at tick boundaries.
+    #[thread(worker)] #[can_fail]
+    fn sync(storage_world world) -> result<void, storage_error>;
+
+    #[thread(any)]
+    fn is_open(storage_world world) -> bool;
+}

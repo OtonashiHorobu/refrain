@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:world` service contract v0 (hot path).
+// Exposes the versioned Chunk ABI from sdk/idl/refrain/core.ridl and batched
+// block mutation; per-block cross-plugin calls are intentionally absent.
+
+module refrain::services::world;
+version 1.0.0;
+
+import refrain::core;
+
+enum world_error : u32 {
+    chunk_not_loaded = 1,
+    out_of_bounds = 2,
+    not_implemented = 3,
+    internal = 4,
+    already_open = 5,
+    open_failed = 6,
+}
+
+struct world_config {
+    /// RWF world directory.
+    string world_path;
+    /// Deterministic seed for the provider's RNG stream.
+    i64 seed;
+}
+
+service world : 1.0.0 {
+    side = server;
+    thread = sim;
+    provides = [ "refrain:world" ];
+    requires = [ "refrain:core>=1.0.0", "refrain:data.packs>=1.0.0" ];
+    capabilities = [ "lighting", "heightmaps", "block_entities" ];
+
+    /// Open the singleton world. The provider owns it until
+    /// `close_world`; the server hosts exactly one world.
+    #[thread(sim)] #[can_fail]
+    fn open_world(in world_config config) -> result<void, world_error>;
+
+    #[thread(sim)] #[can_fail]
+    fn close_world() -> result<void, world_error>;
+
+    /// Borrowed view of a loaded chunk; invalid after the chunk unloads.
+    #[thread(sim)] #[borrow] #[can_fail]
+    fn chunk_at(in chunk_pos pos) -> result<chunk_view, world_error>;
+
+    /// Block state id at `pos`; 0 is the provider's air id.
+    #[thread(sim)]
+    fn block_at(in block_pos pos) -> u32;
+
+    /// Maximum motion-blocking height at the column, in world Y coordinates.
+    #[thread(sim)]
+    fn height_at(in block_pos pos) -> i32;
+
+    /// True once the chunk reached the provider's "full" status.
+    #[thread(any)]
+    fn is_chunk_loaded(in chunk_pos pos) -> bool;
+
+    /// Batched block mutation; returns the number of applied changes. Changes
+    /// are committed at the next tick boundary, not immediately.
+    #[thread(sim)] #[can_fail]
+    fn apply_block_changes(in slice<block_change> changes) -> result<u32, world_error>;
+
+    /// World tick counter (monotonic, survives save/load).
+    #[thread(sim)]
+    fn world_tick() -> i64;
+}

@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// Shared contract primitives for every Refrain service: handles, error codes
+// and the small POD structs that appear in more than one service signature.
+//
+// Contract structs are ABI structs: they start with `uint32_t struct_size`,
+// contain explicit padding and are generated into C/C++ headers by
+// `refrain-tools schema gen`.
+
+module refrain::core;
+version 1.0.0;
+
+/// Opaque host-side handles. The tag is the C++ handle type.
+handle<player>;
+handle<connection>;
+handle<gen_ctx>;
+handle<storage_world>;
+
+/// Error codes shared by all services. Zero is reserved for success
+/// (REFRAIN_STATUS_OK), so this enum starts at 1.
+enum core_error : u32 {
+    invalid_argument = 1,
+    not_found = 2,
+    already_exists = 3,
+    permission_denied = 4,
+    io_error = 5,
+    out_of_memory = 6,
+    unsupported = 7,
+    version_mismatch = 8,
+}
+
+enum chunk_status : u32 {
+    empty = 0,
+    structure_starts = 1,
+    structure_references = 2,
+    biomes = 3,
+    noise = 4,
+    surface = 5,
+    carvers = 6,
+    features = 7,
+    light = 8,
+    spawn = 9,
+    full = 10,
+}
+
+enum block_face : u8 {
+    north = 0,
+    east = 1,
+    south = 2,
+    west = 3,
+    up = 4,
+    down = 5,
+}
+
+/// Chunk column coordinate on the horizontal plane.
+struct chunk_pos {
+    i32 x;
+    i32 z;
+}
+
+/// Block coordinate inside a chunk column.
+struct block_pos {
+    i32 x;
+    i32 y;
+    i32 z;
+}
+
+/// One section of the Chunk ABI: the versioned in-memory layout shared by
+/// `refrain:world`, `refrain:worldgen` and `refrain:sim`.
+struct chunk_section_view {
+    i32 section_y;
+    u16 block_count;
+    u8 bits_per_entry;
+    u8 flags;
+    slice<block_pos> block_entities;
+}
+
+/// Borrowed view of a loaded chunk. The slice lifetime is the contract call
+/// during which it was produced.
+struct chunk_view {
+    chunk_pos pos;
+    chunk_status status;
+    u32 section_count;
+    slice<chunk_section_view> sections;
+}
+
+/// One block-state change, batched by the world/sim contracts.
+struct block_change {
+    block_pos pos;
+    u32 old_state;
+    u32 new_state;
+}
+
+/// Caller-provided chunk serialization buffer (out parameters use this).
+struct chunk_buffer {
+    chunk_pos pos;
+    u32 generation;
+    u32 word_count;
+    /// Borrowed serialized payload. The provider owns the bytes; the view is
+    /// valid until the next call on the same world/gen context. Empty means
+    /// "no payload" (for example a rejected generation).
+    bytes data;
+}

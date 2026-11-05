@@ -1,0 +1,72 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:net.protocol` service contract v0. Framing, compression and
+// encryption stay in net.session; this
+// contract is the versioned packet codec for protocol 777.
+
+module refrain::services::net_protocol;
+version 1.0.0;
+
+import refrain::core;
+
+enum protocol_error : u32 {
+    frame_too_large = 1,
+    malformed_packet = 2,
+    unknown_packet = 3,
+    unsupported_version = 4,
+    compression_failed = 5,
+}
+
+enum connection_state : u32 {
+    handshake = 0,
+    status = 1,
+    login = 2,
+    configuration = 3,
+    play = 4,
+}
+
+struct protocol_version {
+    u32 protocol;
+    string name;
+}
+
+struct frame_header {
+    u32 length;
+    u32 uncompressed_length;
+}
+
+/// Borrowed packet payload; valid for the duration of the contract call.
+struct packet_view {
+    u32 packet_id;
+    bytes payload;
+}
+
+service net_protocol : 1.0.0 {
+    side = server;
+    thread = net;
+    provides = [ "refrain:net.protocol" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "frame-compression", "registry-sync" ];
+
+    /// Protocol number implemented by this provider (777 for vanilla 26.3).
+    #[thread(any)]
+    fn protocol_id() -> u32;
+
+    #[thread(any)]
+    fn accepts_version(u32 protocol) -> bool;
+
+    /// Decode one packet from a connection's inbound buffer.
+    #[thread(worker)] #[can_fail]
+    fn next_packet(connection conn, out packet_view packet)
+        -> result<frame_header, protocol_error>;
+
+    /// Encode and enqueue one packet on the connection.
+    #[thread(sim)] #[can_fail]
+    fn send_packet(connection conn, in packet_view packet)
+        -> result<void, protocol_error>;
+
+    #[thread(sim)]
+    fn state_of(connection conn) -> connection_state;
+}

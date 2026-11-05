@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:worldgen` service contract v0 (hot path, worker threads).
+// Generation writes into caller
+// provided chunk buffers; the world provider owns chunk allocation.
+
+module refrain::services::worldgen;
+version 1.0.0;
+
+import refrain::core;
+
+enum worldgen_error : u32 {
+    invalid_config = 1,
+    cancelled = 2,
+    provider_unavailable = 3,
+    internal = 4,
+}
+
+/// Generator stages, mirroring the vanilla chunk status pipeline.
+enum gen_stage : u32 {
+    empty = 0,
+    biomes = 1,
+    noise = 2,
+    surface = 3,
+    features = 4,
+    full = 5,
+}
+
+struct worldgen_config {
+    u64 seed;
+    i32 view_distance;
+    u32 flags;
+    string preset;
+}
+
+struct generate_outcome {
+    gen_stage stage;
+    u32 generated_blocks;
+    u64 elapsed_us;
+}
+
+service worldgen : 1.0.0 {
+    side = server;
+    thread = worker;
+    provides = [ "refrain:worldgen" ];
+    requires = [ "refrain:core>=1.0.0", "refrain:world>=1.0.0", "refrain:data.packs>=1.0.0" ];
+    capabilities = [ "structures", "biomes", "carvers", "noise" ];
+
+    /// World-level setup; called once before any generation job is submitted.
+    #[thread(main)] #[on_load_only] #[can_fail]
+    fn configure(in worldgen_config config) -> result<void, worldgen_error>;
+
+    /// Generate all stages up to `full` for one chunk column.
+    #[thread(worker)] #[can_fail]
+    fn generate_chunk(gen_ctx ctx, in chunk_pos pos, out chunk_buffer buffer)
+        -> result<generate_outcome, worldgen_error>;
+
+    /// Advance one chunk to a specific stage (status-driven parallel pipeline).
+    #[thread(worker)] #[can_fail]
+    fn generate_stage(gen_ctx ctx, in chunk_pos pos, gen_stage target,
+                      out chunk_buffer buffer) -> result<generate_outcome, worldgen_error>;
+
+    /// Structure placement query used by the session/chunk-streaming layer.
+    #[thread(worker)] #[can_fail]
+    fn locate_structure(gen_ctx ctx, in chunk_pos origin, u32 structure_id)
+        -> result<block_pos, worldgen_error>;
+}
