@@ -41,8 +41,10 @@ if(REFRAIN_SANITIZE)
         message(FATAL_ERROR "REFRAIN_SANITIZE requires GCC or Clang")
     endif()
     message(STATUS "[Refrain] sanitizers: ${REFRAIN_SANITIZE}")
+    # GCC 16's -Wmaybe-uninitialized reports false positives at -O3 once the
+    # sanitizer instrumentation is inlined; keep the warning out of the gate.
     add_compile_options(-fsanitize=${REFRAIN_SANITIZE} -fno-omit-frame-pointer
-                        -g)
+                        -g -Wno-maybe-uninitialized)
     add_link_options(-fsanitize=${REFRAIN_SANITIZE})
     # Test code uses this to skip the deliberate-fault child-process test: the
     # ASan/UBSan/TSan runtimes intercept intentionally undefined behaviour
