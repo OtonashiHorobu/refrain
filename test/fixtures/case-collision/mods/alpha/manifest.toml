@@ -1,0 +1,8 @@
+[mod]
+id = "alpha"
+version = "1.0.0"
+abi = "1"
+side = "server"
+
+[meta]
+display_name = "Case collision fixture (alpha)"

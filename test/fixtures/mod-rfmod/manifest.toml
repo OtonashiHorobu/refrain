@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# Synthetic `.rfmod` fixture for the CI smoke test. Every payload in this tree
+# is invented for testing; no Mojang assets are included.
+
+[mod]
+id = "refrain.test.rfmod"
+version = "1.0.0"
+abi = "1"
+side = "both"
+
+[meta]
+display_name = "RFMOD smoke mod"
+description = "Synthetic package for CI smoke tests."

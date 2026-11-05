@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# Synthetic gamepack used by CI to exercise the mod host end-to-end
+# (builtin.image fixture + `refrain-tools mods load --image`). No providers: the
+# fixture mods are data-only.
+
+[gamepack]
+id = "refrain.test.data_only"
+version = "1.0.0"
+side = "server"
+abi = "1"
+auto_scan = false
+
+[meta]
+display_name = "Test data-only gamepack"
+description = "Mod-host CI fixture (no Mojang content)."
+
+[mods]
+list = [
+    "refrain.test.content@1.0.0",
+    "refrain.test.data@1.0.0",
+]
+
+[mods."refrain.test.data"]
+requires = ["refrain.test.content@^1.0.0"]

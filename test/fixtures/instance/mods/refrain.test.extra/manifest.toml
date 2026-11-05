@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# Synthetic directory mod installed under an instance root
+# (`test/fixtures/instance/mods/<id>/manifest.toml`) for the auto_scan and
+# `mods.lock` smoke test (`refrain-server --mods ...`). Data-only,
+# server side, no [requires]/[provides]: it only exercises disk discovery and
+# lock fingerprinting.
+
+[mod]
+id = "refrain.test.extra"
+version = "1.0.0"
+abi = "1"
+side = "server"
+
+[meta]
+display_name = "Auto-scan fixture mod"
+description = "Synthetic directory mod for the auto_scan smoke test."

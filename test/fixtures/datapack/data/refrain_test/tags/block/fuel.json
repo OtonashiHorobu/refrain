@@ -1,0 +1,9 @@
+{
+  "values": [
+    "#refrain_test:metal",
+    {
+      "id": "refrain_test:coal_block",
+      "required": false
+    }
+  ]
+}

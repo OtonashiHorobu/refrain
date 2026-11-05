@@ -1,0 +1,8 @@
+[mod]
+id = "abi99.extra"
+version = "1.0.0"
+abi = "99"
+side = "server"
+
+[meta]
+display_name = "ABI 99 fixture"

@@ -1,0 +1,23 @@
+mods.lock: gamepack refrain.vanilla@26.3.0, 11 mod(s), fingerprint 554f611b7fa4a905e2c26b78bd716732cb22709b448f224081bf383812028fba
+  refrain.admin.vanilla@1.0.0 (abi 1, origin=builtin, hash=93931ce7f459acf4dc72ef0186ee1b773ce47e3c5de9400e7b66227dd4916dda)
+    path: <root>/mods/refrain.admin.vanilla/manifest.toml
+  refrain.content.vanilla@1.0.0 (abi 1, origin=builtin, hash=0663cd0f746dba480ab86b1cce47d8c820b28d0dc551a7fb6696a38577b42ac1)
+    path: <root>/mods/refrain.content.vanilla/manifest.toml
+  refrain.data.vanilla@1.0.0 (abi 1, origin=builtin, hash=5fe4839f9b6aa0eec9b6a32abeead28c9dc415fef720f1b80b66d28c83b15d7c)
+    path: <root>/mods/refrain.data.vanilla/manifest.toml
+  refrain.proto.vanilla@1.0.0 (abi 1, origin=builtin, hash=e349a4d3c5281502cb01225a4a5c77379a6367723226ee84cb7fcb64cbf7c268)
+    path: <root>/mods/refrain.proto.vanilla/manifest.toml
+  refrain.server.vanilla@1.0.0 (abi 1, origin=builtin, hash=e09ec8049385c51f06c2dadaaf90da0e842378fe8f0898406371151a9e58b743)
+    path: <root>/mods/refrain.server.vanilla/manifest.toml
+  refrain.session.vanilla@1.0.0 (abi 1, origin=builtin, hash=d038a7098cb62c39c0fbcaf0960dcdaefce4532cd81c9cdd56be1d6c629a227f)
+    path: <root>/mods/refrain.session.vanilla/manifest.toml
+  refrain.sim.vanilla@1.0.0 (abi 1, origin=builtin, hash=24e1f533a2b81df923a755d4f46634ca7448fdb3f95ad26f1f4b707e90cba0f7)
+    path: <root>/mods/refrain.sim.vanilla/manifest.toml
+  refrain.storage.rwf@1.0.0 (abi 1, origin=builtin, hash=161d12903a52be681884188438d373c1a81d173eeac4685c7242fa04a84a5bc5)
+    path: <root>/mods/refrain.storage.rwf/manifest.toml
+  refrain.test.extra@1.0.0 (abi 1, origin=user, hash=48d14932ae252e611681a3f27aa86e6fd7ddfa49164bf48cf14efdbee5e4d526)
+    path: <root>/test/fixtures/instance/mods/refrain.test.extra/manifest.toml
+  refrain.world.vanilla@1.0.0 (abi 1, origin=builtin, hash=6e7bcb061250a6003d8dd4784360f0cb1c6b420f91ebfaf695251d0f8b932967)
+    path: <root>/mods/refrain.world.vanilla/manifest.toml
+  refrain.worldgen.vanilla@1.0.0 (abi 1, origin=builtin, hash=43229e2c9f195f348164211fd8fe40405892badd1bdfc8c91d61cbfe216beb21)
+    path: <root>/mods/refrain.worldgen.vanilla/manifest.toml

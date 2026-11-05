@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:overworld",
+  "has_precipitation": false,
+  "temperature": 0.8,
+  "effects": {
+    "sky_color": 7907327
+  },
+  "spawners": {},
+  "spawn_costs": {},
+  "carvers": {},
+  "features": []
+}

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# Synthetic internal mod used by `refrain-tools mods load` CI smoke tests.
+
+[mod]
+id = "refrain.test.data"
+version = "1.0.0"
+abi = "1"
+side = "server"
+
+[meta]
+display_name = "Test data mod"
+description = "Synthetic data mod for CI (no Mojang content)."
+
+[requires]
+"refrain.test.content" = "^1.0.0"

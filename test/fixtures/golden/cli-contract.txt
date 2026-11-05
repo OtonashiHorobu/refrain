@@ -1,0 +1,37 @@
+# Refrain CLI/output contract.
+#
+# These are the machine-readable strings that scripts/ci.sh, the GitHub workflow
+# and external scripts grep. `tools/cli_contract_check.py` runs each command and
+# asserts the stream/exit contract, so an unintended output change fails fast
+# instead of silently breaking a downstream grep.
+#
+# Columns (pipe-separated, one entry per line):
+#   id | stream | exit | expectation | command
+#
+#   stream       stdout | stderr | any
+#   exit         0 | nonzero
+#   expectation  substring, or `!substring` for "must NOT contain"
+#   command      argv split shell-style; placeholders: {root} {bin} {build}
+#
+# Add/change entries deliberately; the file itself is the golden. Paths must
+# stay quote-free (use the placeholders).
+
+version-metadata        | stdout | 0       | release: | refrain-tools version
+version-build           | stdout | 0       | build: | refrain-tools version
+gamepack-check          | stdout | 0       | gamepack refrain.vanilla@26.3.0 | refrain-tools gamepack check -f {root}/gamepack/gamepack.toml
+gamepack-check-provider | stdout | 0       | worldgen -> refrain.worldgen.vanilla@1.0.0 | refrain-tools gamepack check -f {root}/gamepack/gamepack.toml
+gamepack-dump-plan      | stdout | 0       | # resolved plan | refrain-tools gamepack dump -f {root}/gamepack/gamepack.toml
+gamepack-dump-providers | stdout | 0       | providers: 9 | refrain-tools gamepack dump -f {root}/gamepack/gamepack.toml
+mods-check-content      | stdout | 0       | refrain.content.vanilla@1.0.0 | refrain-tools mods check --mods {root}/mods --gamepack {root}/gamepack/gamepack.toml
+mods-check-data         | stdout | 0       | refrain.data.vanilla@1.0.0 | refrain-tools mods check --mods {root}/mods --gamepack {root}/gamepack/gamepack.toml
+mods-list-candidate     | stdout | 0       | mods: 1 candidate(s) | refrain-tools mods list --mods {root}/test/fixtures/instance
+mods-load-host          | stdout | 0       | mod host: 10 mod(s) loaded | refrain-tools mods load -g {root}/gamepack/gamepack.toml --image {build}/generated/builtin.image
+data-check-validate     | stdout | 0       | validate: OK | refrain-tools data check --pack {root}/test/fixtures/datapack
+data-registry-recipe    | stdout | 0       | registry recipe: 1 entry(s) fingerprint= | refrain-tools data registry --pack {root}/test/fixtures/datapack
+server-plan-stdout      | stdout | 0       | worldgen -> refrain.worldgen.vanilla@1.0.0 | refrain-server --gamepack {root}/gamepack/gamepack.toml --dump-gamepack
+server-log-stderr       | stderr | 0       | [main/info] | refrain-server --gamepack {root}/gamepack/gamepack.toml --dump-gamepack
+server-stdout-clean     | stdout | 0       | ![main/info] | refrain-server --gamepack {root}/gamepack/gamepack.toml --dump-gamepack
+error-path-exit         | stderr | nonzero | io_error | refrain-tools gamepack check -f {root}/test/fixtures/does-not-exist.toml
+world-info-help        | stdout | 0       | Print world metadata and storage statistics | refrain-tools world info --help
+world-fsck-missing     | stderr | nonzero | is not a directory | refrain-tools world fsck {root}/test/fixtures/does-not-exist-world
+worldgen-harness-help  | stdout | 0       | Compare a candidate world against an oracle world | refrain-tools worldgen harness --help

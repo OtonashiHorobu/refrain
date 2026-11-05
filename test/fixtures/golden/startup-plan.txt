@@ -1,0 +1,24 @@
+gamepack refrain.vanilla@26.3.0 (side=server, abi=1, auto_scan=false)
+display name: Refrain vanilla (server)
+mods: 10 (load order)
+   1. refrain.content.vanilla@1.0.0
+   2. refrain.data.vanilla@1.0.0 requires [refrain.content.vanilla@^1.0.0]
+   3. refrain.world.vanilla@1.0.0
+   4. refrain.worldgen.vanilla@1.0.0
+   5. refrain.sim.vanilla@1.0.0
+   6. refrain.storage.rwf@1.0.0
+   7. refrain.proto.vanilla@1.0.0
+   8. refrain.session.vanilla@1.0.0
+   9. refrain.admin.vanilla@1.0.0
+  10. refrain.server.vanilla@1.0.0
+providers: 9
+  admin    -> refrain.admin.vanilla@1.0.0
+  data     -> refrain.data.vanilla@1.0.0
+  protocol -> refrain.proto.vanilla@1.0.0
+  runtime  -> refrain.server.vanilla@1.0.0
+  session  -> refrain.session.vanilla@1.0.0
+  sim      -> refrain.sim.vanilla@1.0.0
+  storage  -> refrain.storage.rwf@1.0.0
+  world    -> refrain.world.vanilla@1.0.0
+  worldgen -> refrain.worldgen.vanilla@1.0.0
+mods_dir: mods
