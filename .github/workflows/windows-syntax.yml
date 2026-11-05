@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# Compile-only Windows platform gate. A real Windows runner/Conan package set
+# is not yet part of CI; this job catches Win32 header/API/namespace breakage
+# in src/platform/windows with MinGW.
+name: windows-syntax
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-syntax-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  platform:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install MinGW and fmt headers
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++-mingw-w64-x86-64 libfmt-dev
+          x86_64-w64-mingw32-g++ --version | head -1
+      - name: Syntax-check Windows platform
+        env:
+          WINDOWS_CXX_STD: c++23
+        run: scripts/check_windows_platform.sh
