@@ -102,7 +102,13 @@ auto random_access_file::open(std::string_view path, open_mode mode,
     } else if (options.create) {
         disposition = OPEN_ALWAYS;
     }
-    const HANDLE handle{::CreateFileW(native.c_str(), access, FILE_SHARE_READ,
+    // Match POSIX sharing semantics: the same file may be opened again while
+    // a handle is alive (world reopening, fsck over a live store, atomic
+    // replace). A narrower share mode turns those paths into a sharing
+    // violation on Windows only.
+    constexpr DWORD share_mode{FILE_SHARE_READ | FILE_SHARE_WRITE |
+                               FILE_SHARE_DELETE};
+    const HANDLE handle{::CreateFileW(native.c_str(), access, share_mode,
                                       nullptr, disposition,
                                       FILE_ATTRIBUTE_NORMAL, nullptr)};
     if (handle == INVALID_HANDLE_VALUE) {

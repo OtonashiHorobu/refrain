@@ -126,6 +126,9 @@ suite rwf_containers = [] {
 
         auto reopened{region_file::load(path, {.x = 0, .z = 0})};
         expect(static_cast<bool>(reopened));
+        if (!reopened) {
+            return;
+        }
         auto stored{reopened->read(pos)};
         expect(static_cast<bool>(stored));
         expect(static_cast<bool>(*stored == payload));
@@ -174,6 +177,9 @@ suite rwf_containers = [] {
         expect(static_cast<bool>(region->commit()));
         auto reopened{region_file::load(path, {.x = 0, .z = 0})};
         expect(static_cast<bool>(reopened));
+        if (!reopened) {
+            return;
+        }
         const auto stored{reopened->read(pos)};
         expect(static_cast<bool>(stored));
         expect(*stored == to_bytes("payload 3"));
