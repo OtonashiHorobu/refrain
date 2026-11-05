@@ -102,4 +102,9 @@ class ZlibConan(ConanFile):
         self.cpp_info.set_property("cmake_file_name", "ZLIB")
         self.cpp_info.set_property("cmake_target_name", "ZLIB::ZLIB")
         self.cpp_info.set_property("pkg_config_name", "zlib")
-        self.cpp_info.libs = ["z"]
+        # zlib-ng names the MSVC static library `zlibstatic`; MinGW and the
+        # POSIX toolchains keep the traditional `z`.
+        if self.settings.compiler == "msvc":
+            self.cpp_info.libs = ["zlibstatic"]
+        else:
+            self.cpp_info.libs = ["z"]
