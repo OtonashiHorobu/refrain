@@ -87,6 +87,13 @@ tools.cmake.cmaketoolchain:generator=Ninja
 EOF
     echo "  created: $PROFILE_FILE"
 fi
+# Conan still resolves a default build profile for `conan create`/`install`
+# when only the host profile is passed. Generate it once so CI and fresh
+# machines start without a manual step.
+if [[ ! -f "$CONAN_HOME_DIR/profiles/default" ]]; then
+    conan profile detect --force
+    echo "  created: $CONAN_HOME_DIR/profiles/default"
+fi
 if [[ -n "$PROFILE_ONLY" ]]; then
     exit 0
 fi

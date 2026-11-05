@@ -128,7 +128,7 @@ def main():
     for path, meta in selected:
         if args.build:
             cmd = ["conan", "create", path, "-pr", args.profile,
-                   "--build=missing", "--update"] + extra
+                   "-pr:b", args.profile, "--build=missing", "--update"] + extra
         else:
             cmd = ["conan", "export", path] + extra
         if run(cmd) != 0:
