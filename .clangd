@@ -1,0 +1,18 @@
+# clangd configuration for the Refrain source tree.
+#
+# The CMake/Conan build exports the compilation database into a per-preset
+# binary dir (build/Release), while clangd only searches the ancestors of a
+# source file for compile_commands.json. Point clangd at the build directory
+# explicitly; the path below is resolved relative to this file.
+#
+# If you build with a different preset/binary dir (for example build/Debug),
+# update CompilationDatabase accordingly.
+CompileFlags:
+  CompilationDatabase: build/Release
+  # CMake's C++ module dependency scanner injects GCC-only flags that
+  # clang/clangd cannot parse. First-party sources do not use C++ modules yet,
+  # so drop them from the analysis command lines.
+  Remove: [-fmodules-ts, -fmodule-mapper=*, -fdeps-format=*]
+  # Fallback command (e.g. headers with no owning translation unit) still needs
+  # the project language standard.
+  Add: [-std=c++26]

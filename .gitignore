@@ -1,0 +1,25 @@
+/build
+/build-*
+/install
+/install-*
+/.cache
+/.vscode
+/.idea
+/.reasonix
+# Local DSH harness state (skills/caches); not part of the engine or its build.
+/.dsh
+/CMakeUserPresets.json
+/conan.lock
+
+# Python bytecode caches (tools/*.py)
+__pycache__/
+*.pyc
+
+# Game files and local run directories (never committed)
+*.jar
+*.mca
+*.mcr
+*.dat
+*.nbt
+*.log
+/run/

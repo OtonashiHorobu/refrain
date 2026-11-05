@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+# Normalize text files to LF in the repository (Windows checkouts may convert).
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.png binary
+*.jpg binary
+*.zip binary
+*.jar binary
+*.dmp binary

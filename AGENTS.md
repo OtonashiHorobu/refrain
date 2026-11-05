@@ -1,0 +1,110 @@
+# Agent and contributor guide
+
+Refrain is a clean-room C++26 implementation of a Minecraft Java Edition 26.3
+server. The repository ships code, contracts, tests and user documentation; it
+does not ship game code, assets or data.
+
+## Ground rules
+
+Read the surrounding code, tests and documentation before changing behavior.
+Prefer the smallest change that solves the problem, and keep unrelated
+refactors out of the same commit.
+
+Do not copy code, assets or data from Minecraft or from any decompiled source.
+Behavior may be studied through public documentation, the wire format and a
+locally owned game installation. Fixtures in this repository are synthetic and
+must stay that way.
+
+## Repository map
+
+| Path | Contents |
+|---|---|
+| `include/refrain/` | public headers, grouped by module |
+| `src/` | module implementations |
+| `sdk/idl/`, `sdk/generated/` | RIDL contracts and generated C/C++ headers |
+| `schema/` | RSC data schemas |
+| `test/` | Boost.UT suites and synthetic fixtures |
+| `bench/` | Google Benchmark suites |
+| `tools/` | schema compiler, vendor tooling and repository checks |
+| `cmake/`, `conan/` | build modules, in-repo recipes and the dependency lock |
+| `mods/`, `gamepack/` | bundled mod manifests and the default composition |
+| `docs/` | architecture, build, run, test, schema and modding guides |
+
+## Build and test
+
+```bash
+scripts/bootstrap.sh
+```
+
+The script installs dependencies, configures the `conan-release` preset and
+runs the test suite. For the manual sequence and options, read
+[docs/building.md](docs/building.md).
+
+```bash
+cmake --build --preset conan-release
+./build/Release/bin/refrain-tests
+ctest --preset conan-release --output-on-failure
+scripts/ci.sh --offline
+```
+
+`scripts/ci.sh` runs the vendor checks, schema drift check, C ABI compile
+check, unit tests, CLI contract, runtime smoke, extraction smoke, crash
+reporter smoke and the formatting gate.
+
+## Code rules
+
+- C++26, GCC 16 on Linux x86_64. The build uses `-fno-rtti` and treats warnings
+  as errors.
+- Errors are values: return `refrain::result` or `refrain::status`. Exceptions
+  must not cross a public API or a contract boundary.
+- Use `fmt` for formatting. Do not mix `std::format`, `iostream` formatting or
+  `sprintf` into the same path.
+- Operating-system calls belong in `src/platform/{posix,windows}`. Other layers
+  use `refrain::platform` or `refrain::core::io`.
+- Dependencies are declared in `conanfile.py` and pinned in
+  `conan/locks/vendor.lock`. Do not add bundled copies or download sources at
+  configure time.
+- Run `clang-format` on changed C++ files. Generated headers under
+  `sdk/generated/` are never reformatted or edited by hand.
+
+## Documentation and commits
+
+Public prose and code comments are English and self-contained. State the
+invariant, the failure mode or the reason; do not cite planning documents,
+ticket numbers, milestone labels, dated review notes or local paths. A reader
+of the repository should not need any material outside it.
+
+Commit messages follow Conventional Commits and use English:
+
+```text
+type(scope): imperative summary
+```
+
+Accepted types are `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `build`,
+`ci` and `chore`. Keep the subject under 72 characters. Add a body only when the
+behavior change needs context; never describe process, schedules or review
+history.
+
+## Generated files
+
+`sdk/generated/` is produced by the schema compiler:
+
+```bash
+build/Release/bin/refrain-tools schema gen
+build/Release/bin/refrain-tools schema gen --check
+```
+
+Change the sources under `sdk/idl/`, `schema/` or the emitter in `tools/schema/`,
+then regenerate. A drift check runs in CI.
+
+## Tests and fixtures
+
+New behavior needs a test, and negative cases matter more than a second happy
+path. Test names describe the behavior, not the change that introduced it.
+Golden files under `test/fixtures/golden/` freeze output; update them only for
+an intentional contract change and review the diff.
+
+## Security
+
+Report vulnerabilities through the private channel described in
+[SECURITY.md](SECURITY.md). Do not open a public issue for a security problem.
