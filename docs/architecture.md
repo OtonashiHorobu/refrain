@@ -1,0 +1,97 @@
+# Architecture
+
+Refrain is a server-first implementation of the Minecraft Java Edition 26.3
+protocol and world model. The code is layered so that platform code, contract
+definitions and gameplay modules can evolve independently.
+
+## Layers
+
+| Layer | Path | Responsibility |
+|---|---|---|
+| Platform | `include/refrain/platform`, `src/platform` | files, memory mapping, threads, processes, dynamic loading |
+| Kernel | `include/refrain/core`, `include/refrain/kernel`, `src/core`, `src/kernel` | errors, logging, time, memory, jobs, events, configuration, I/O, async, service registry, manifests, crash reporting |
+| Contracts | `sdk/idl`, `sdk/generated` | RIDL service contracts, generated C ABI and C++ wrappers |
+| Data | `include/refrain/data`, `src/data` | datapacks, registries, resource store, content-addressed store, cook artifacts |
+| World | `include/refrain/world`, `src/world` | RWF world storage, chunk codec, Anvil import and export |
+| Simulation | `include/refrain/sim`, `src/sim` | runtime world, block registry, entities, inventory, tick loop, replay |
+| Mods | `include/refrain/mod`, `src/mod` | discovery, resolution, loading, provider registry, startup content |
+| Application | `include/refrain/app`, `src/app`, `src/main` | composition root, server runtime, CLI commands |
+| Tools | `tools`, `src/main/tools.cpp` | schema compiler, world conversion, packaging, diagnostics |
+
+A module may include the public headers of the layers below it. The platform
+layer has no dependency on the kernel; the kernel has no dependency on data,
+world or simulation code.
+
+## Contracts
+
+Services are declared in RIDL under `sdk/idl/`. The schema compiler emits a C
+ABI header, a C++ wrapper header and reflection metadata into `sdk/generated/`.
+Every service carries a version, side, thread affinity, composition mode and a
+set of provided service keys.
+
+A provider implements the C vtable and registers the service key. Consumers
+receive a type-safe C++ wrapper that checks the ABI version and copies struct
+sizes at the boundary. Structs crossing the boundary start with a `struct_size`
+field; slices are borrowed views valid for the duration of a call.
+
+Calls return `refrain::status` or `refrain::result`; error codes are part of the
+contract. Exceptions never cross a contract boundary.
+
+The composition mode of a service decides how many providers may be active:
+`exclusive` (one), `instanced` (one per instance name), `chain` (wrappers that
+forward selectively) and `registry` (contributions merged into a registry).
+
+## Composition
+
+A gamepack selects one provider per service and lists the mods to load. Each
+mod carries a `manifest.toml` with its identity, dependencies and provided
+services. The loader resolves the dependency graph, orders providers, checks
+versions and ABI compatibility, then activates the composition.
+
+First-party mods are linked into the server binary and register through the
+static mod registry. Their data, assets and scripts travel in a deterministic
+RFSI image embedded in the binary. External packages use the same manifest
+model and are installed into the content store.
+
+## World storage
+
+RWF v1 is the native world format. A world directory holds a header, world
+metadata, a world-level block palette, dimension dictionaries, region files and
+auxiliary object stores.
+
+Region files use a 4 KiB header, two 36 KiB index pages written alternately, and
+an append-only data area of compressed records. A record holds the chunk
+sections, block entities, biomes and light. The world palette maps canonical
+block-state keys to compact identifiers; it is append-only and compacted only
+by an offline rebuild.
+
+Anvil import and export convert between RWF and the vanilla region layout,
+including zstd and LZ4 compressed regions, block palette keys, block entities,
+biomes and light. The conversion is lossless for the fields the format carries.
+
+## Simulation
+
+The simulation owns the loaded chunks, tickets, block registry, entity table and
+inventory state. A tick advances player movement, entities, RNG and timers in a
+fixed order. The tick loop runs at 20 Hz and derives a state hash from the
+world contents and simulation state.
+
+Determinism is a contract: the same world and the same command sequence produce
+the same hash at the same tick. Timers are ordered by due tick and insertion
+id. The event bus is single-threaded and preserves subscription order.
+
+## Threading
+
+The server uses a small fixed set of threads: the main thread owns startup and
+the console, the simulation thread owns the tick loop and the world, and I/O
+threads perform encoding, writes and content deletion. Jobs are dispatched
+through the kernel job system. Ownership of a world or content store is never
+shared between the simulation thread and an I/O thread without an explicit
+handoff.
+
+## Error handling
+
+Functions return `refrain::result<T>` or `refrain::status`. Errors carry a code,
+a message and the source location of the failing check. Allocation failures and
+library exceptions are caught at the boundary where a library is called and
+converted to error values.
