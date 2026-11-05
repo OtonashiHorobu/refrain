@@ -27,6 +27,23 @@ namespace {
 
 namespace fs = std::filesystem;
 
+/// MSVC decodes `fs::path{std::string}` with the native narrow charset, not
+/// UTF-8; go through u8string so non-ASCII pack paths resolve everywhere.
+[[nodiscard]] auto path_from_utf8(std::string_view text) -> fs::path {
+    std::u8string utf8;
+    utf8.reserve(text.size());
+    for (const char character : text) {
+        utf8.push_back(
+            static_cast<char8_t>(static_cast<unsigned char>(character)));
+    }
+    return fs::path{utf8};
+}
+
+[[nodiscard]] auto utf8_string(const fs::path &path) -> std::string {
+    const auto utf8{path.u8string()};
+    return std::string{utf8.begin(), utf8.end()};
+}
+
 [[nodiscard]] auto fail(error_code code, std::string message) -> error {
     return make_error(code, message);
 }
@@ -256,7 +273,7 @@ auto open_dir_pack(std::string_view root, std::string_view label)
                      std::string{root} + "'")};
     }
 
-    const fs::path root_path{std::string{root}};
+    const fs::path root_path{path_from_utf8(root)};
     std::error_code iterate_error;
     // The recursive walk is std::filesystem (portable, no OS calls of our own);
     // the actual file bytes are read through core::io in dir_pack::read().
@@ -278,7 +295,7 @@ auto open_dir_pack(std::string_view root, std::string_view label)
         if (status_error) {
             return std::unexpected{fail(
                 error_code::io_error, "failed to stat directory pack entry '" +
-                                          iterator->path().string() +
+                                          utf8_string(iterator->path()) +
                                           "': " + status_error.message())};
         }
         if (fs::is_symlink(status)) {
@@ -292,13 +309,14 @@ auto open_dir_pack(std::string_view root, std::string_view label)
                 return std::unexpected{
                     fail(error_code::io_error,
                          "failed to stat directory pack file '" +
-                             iterator->path().string() +
+                             utf8_string(iterator->path()) +
                              "': " + size_error.message())};
             }
             const auto relative{iterator->path().lexically_relative(root_path)};
-            candidates.push_back(
-                pack_file_info{.path = relative.generic_string(),
-                               .size = static_cast<std::uint64_t>(size)});
+            const auto relative_utf8{relative.generic_u8string()};
+            candidates.push_back(pack_file_info{
+                .path = std::string{relative_utf8.begin(), relative_utf8.end()},
+                .size = static_cast<std::uint64_t>(size)});
             if (candidates.size() > vfs_max_files) {
                 return std::unexpected{fail(error_code::parse_error,
                                             "directory pack has more than " +
