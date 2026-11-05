@@ -56,8 +56,7 @@ auto rng::next_bounded(std::uint32_t bound) noexcept -> std::uint32_t {
         return 0;
     }
     // Lemire-style rejection with a 32-bit threshold removes modulo bias.
-    const auto threshold{
-        static_cast<std::uint32_t>(-static_cast<std::uint32_t>(bound)) % bound};
+    const auto threshold{static_cast<std::uint32_t>(0U - bound) % bound};
     for (;;) {
         const auto value{next_u32()};
         if (value >= threshold) {
