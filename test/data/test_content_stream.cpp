@@ -429,8 +429,10 @@ const suite content_stream_tests = [] {
                         received = std::move(outcome);
                         callback_thread = thread;
                         finished = true;
+                        // Notify under the lock: the waiter may destroy the
+                        // condition variable as soon as it observes `finished`.
+                        cv.notify_one();
                     }
-                    cv.notify_one();
                 }));
             expect(cv.wait_for(lock, kWaitTimeout, [&] { return finished; }));
         }
