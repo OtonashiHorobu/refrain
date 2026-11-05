@@ -1529,6 +1529,14 @@ auto rfmod_reader::impl::parse(std::span<const std::byte> tar,
             // the same path rules as regular members before being skipped.
             const char *raw_directory_name{archive_entry_pathname(entry)};
             const char *directory_name{archive_entry_pathname_utf8(entry)};
+            // rfmod paths are UTF-8 by contract. Prefer header bytes that are
+            // already valid UTF-8 instead of libarchive's conversion from the
+            // ambient locale, which mangles them on non-UTF-8 hosts.
+            if (raw_directory_name != nullptr &&
+                raw_directory_name[0] != '\0' &&
+                data::is_valid_utf8(raw_directory_name)) {
+                directory_name = raw_directory_name;
+            }
             if (directory_name == nullptr || directory_name[0] == '\0') {
                 directory_name = raw_directory_name;
             }
@@ -1604,6 +1612,11 @@ auto rfmod_reader::impl::parse(std::span<const std::byte> tar,
         // for archives without an explicit charset.
         const char *raw_name{archive_entry_pathname(entry)};
         const char *name{archive_entry_pathname_utf8(entry)};
+        // See the directory branch: keep valid UTF-8 header bytes verbatim.
+        if (raw_name != nullptr && raw_name[0] != '\0' &&
+            data::is_valid_utf8(raw_name)) {
+            name = raw_name;
+        }
         if (name == nullptr || name[0] == '\0') {
             name = raw_name;
         }
