@@ -297,6 +297,16 @@ const suite vfs_tests = [] {
         }
     };
 
+    "vfs/dir pack rejects invalid UTF-8 roots"_test = [] {
+        const std::string root{"data/\xFF"};
+        auto opened{open_dir_pack(root)};
+        expect(!opened);
+        if (!opened) {
+            expect(opened.error().code ==
+                   refrain::error_code::invalid_argument);
+        }
+    };
+
     "vfs/dir + zip + memory packs merge with last-mounted priority"_test = [] {
         temp_directory scratch{make_temp_directory()};
         const auto dir_root{scratch.path / "datapack"};

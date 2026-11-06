@@ -261,6 +261,13 @@ auto open_dir_pack(std::string_view root, std::string_view label)
         return std::unexpected{fail(error_code::invalid_argument,
                                     "directory pack root must not be empty")};
     }
+    // Pack paths are UTF-8 by contract; validating before any filesystem call
+    // also avoids a throwing path conversion on Windows hosts, where an
+    // invalid UTF-8 name cannot be represented at all.
+    if (!is_valid_utf8(root)) {
+        return std::unexpected{fail(error_code::invalid_argument,
+                                    "directory pack root is not valid UTF-8")};
+    }
     if (!core::io::exists(root)) {
         return std::unexpected{fail(error_code::not_found,
                                     "directory pack root does not exist: '" +
