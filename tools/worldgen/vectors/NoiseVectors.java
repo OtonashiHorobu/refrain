@@ -1,4 +1,6 @@
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.levelgen.densityfunction.DensityBuffer;
+import net.minecraft.world.level.levelgen.densityfunction.DensityVolume;
 import net.minecraft.world.level.levelgen.LegacyRandomSource;
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 import net.minecraft.world.level.levelgen.WorldgenRandom;
@@ -64,6 +66,16 @@ public class NoiseVectors {
         NormalNoise temperature = temperatureBuilder.build();
         samples("temperature", temperature.create(noiseRandom));
         fhex("temperature.nn_range", temperature.range().min());
+
+        // Bulk path: NoiseFunction.Sampler.sampleVolume fills with 0 and then
+        // calls addToVolume, whose XZ/Y split differs from get().
+        DensityVolume volume = new DensityVolume(4, 3, 2, -1, 60, 2);
+        DensityBuffer buffer = DensityBuffer.createUnpooled(volume.size());
+        buffer.fill(0.0F);
+        temperature.create(factory.fromHashOf("minecraft:temperature")).addToVolume(buffer, volume, 1.0, 0.5F, 1.0F);
+        for (int i = 0; i < buffer.size(); i++) {
+            fhex("temperature.volume." + i, buffer.get(i));
+        }
 
         // A small three-octave noise from a different hash-derived stream.
         RandomSource simpleRandom = factory.fromHashOf("refrain:noise_test");

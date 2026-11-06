@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <refrain/worldgen/density_buffer.hpp>
 #include <refrain/worldgen/java_compat.hpp>
 #include <refrain/worldgen/rng.hpp>
 
@@ -36,6 +37,12 @@ class perlin_noise {
 
     [[nodiscard]] auto get(double x, double y) const -> float;
     [[nodiscard]] auto get(double x, double y, double z) const -> float;
+
+    /// Bulk sampling into a `volume`. The arithmetic differs from `get` (it
+    /// accumulates the XZ and Y terms separately), so this is the path terrain
+    /// generation observes and it must stay bit-identical to Java's.
+    void add_to_volume(buffer &output, const volume &volume, double xz_scale,
+                       double y_scale, float amplitude) const;
 
     [[nodiscard]] auto offset_x() const noexcept -> double { return offset_x_; }
     [[nodiscard]] auto offset_y() const noexcept -> double { return offset_y_; }
@@ -73,6 +80,9 @@ class noise_stack {
 
     [[nodiscard]] auto get(double x, double y, double z) const -> float;
     [[nodiscard]] auto get(double x, double y) const -> float;
+
+    void add_to_volume(buffer &output, const volume &volume, double xz_scale,
+                       double y_scale, float amplitude) const;
 
     [[nodiscard]] auto layers() const noexcept -> const std::vector<layer> & {
         return layers_;

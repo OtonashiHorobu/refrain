@@ -141,6 +141,149 @@ auto perlin_noise::sample_and_lerp(jint x, jint y, jint z, float relative_x,
                       d101, d011, d111);
 }
 
+void perlin_noise::add_to_volume(buffer &output, const volume &volume,
+                                 double xz_scale, double y_scale,
+                                 float amplitude) const {
+    float d000xz = 0.0F;
+    float d100xz = 0.0F;
+    float d010xz = 0.0F;
+    float d110xz = 0.0F;
+    float d001xz = 0.0F;
+    float d101xz = 0.0F;
+    float d011xz = 0.0F;
+    float d111xz = 0.0F;
+    float g000y = 0.0F;
+    float g100y = 0.0F;
+    float g010y = 0.0F;
+    float g110y = 0.0F;
+    float g001y = 0.0F;
+    float g101y = 0.0F;
+    float g011y = 0.0F;
+    float g111y = 0.0F;
+    std::size_t index = 0;
+
+    for (jint index_z = 0; index_z < volume.size_z(); ++index_z) {
+        const double z = wrap(volume.block_z(index_z) * xz_scale) + offset_z_;
+        const jint floor_z = mth::floor(z);
+        const float relative_z = static_cast<float>(z - floor_z);
+        const float alpha_z = mth::smoothstep(relative_z);
+
+        for (jint index_x = 0; index_x < volume.size_x(); ++index_x) {
+            const double x =
+                wrap(volume.block_x(index_x) * xz_scale) + offset_x_;
+            const jint floor_x = mth::floor(x);
+            const float relative_x = static_cast<float>(x - floor_x);
+            const jint x0 = permute(perms_, floor_x);
+            const jint x1 = permute(perms_, floor_x + 1);
+            const float alpha_x = mth::smoothstep(relative_x);
+            jint last_floor_y = std::numeric_limits<jint>::min();
+
+            for (jint index_y = 0; index_y < volume.size_y(); ++index_y) {
+                const double y =
+                    wrap(volume.block_y(index_y) * y_scale) + offset_y_;
+                const jint floor_y = mth::floor(y);
+                const float relative_y = static_cast<float>(y - floor_y);
+                const float alpha_y = mth::smoothstep(relative_y);
+                if (last_floor_y != floor_y) {
+                    const jint xy00 = permute(perms_, x0 + floor_y);
+                    const jint xy01 = permute(perms_, x0 + floor_y + 1);
+                    const jint xy10 = permute(perms_, x1 + floor_y);
+                    const jint xy11 = permute(perms_, x1 + floor_y + 1);
+
+                    const auto &g000 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy00 + floor_z)) &
+                                  15U];
+                    d000xz = static_cast<float>(g000.x) * relative_x +
+                             static_cast<float>(g000.z) * relative_z;
+                    g000y = static_cast<float>(g000.y);
+
+                    const auto &g100 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy10 + floor_z)) &
+                                  15U];
+                    d100xz = static_cast<float>(g100.x) * (relative_x - 1.0F) +
+                             static_cast<float>(g100.z) * relative_z;
+                    g100y = static_cast<float>(g100.y);
+
+                    const auto &g010 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy01 + floor_z)) &
+                                  15U];
+                    d010xz = static_cast<float>(g010.x) * relative_x +
+                             static_cast<float>(g010.z) * relative_z;
+                    g010y = static_cast<float>(g010.y);
+
+                    const auto &g110 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy11 + floor_z)) &
+                                  15U];
+                    d110xz = static_cast<float>(g110.x) * (relative_x - 1.0F) +
+                             static_cast<float>(g110.z) * relative_z;
+                    g110y = static_cast<float>(g110.y);
+
+                    const auto &g001 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy00 + floor_z + 1)) &
+                                  15U];
+                    d001xz = static_cast<float>(g001.x) * relative_x +
+                             static_cast<float>(g001.z) * (relative_z - 1.0F);
+                    g001y = static_cast<float>(g001.y);
+
+                    const auto &g101 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy10 + floor_z + 1)) &
+                                  15U];
+                    d101xz = static_cast<float>(g101.x) * (relative_x - 1.0F) +
+                             static_cast<float>(g101.z) * (relative_z - 1.0F);
+                    g101y = static_cast<float>(g101.y);
+
+                    const auto &g011 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy01 + floor_z + 1)) &
+                                  15U];
+                    d011xz = static_cast<float>(g011.x) * relative_x +
+                             static_cast<float>(g011.z) * (relative_z - 1.0F);
+                    g011y = static_cast<float>(g011.y);
+
+                    const auto &g111 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy11 + floor_z + 1)) &
+                                  15U];
+                    d111xz = static_cast<float>(g111.x) * (relative_x - 1.0F) +
+                             static_cast<float>(g111.z) * (relative_z - 1.0F);
+                    g111y = static_cast<float>(g111.y);
+                    last_floor_y = floor_y;
+                }
+
+                output.add_to(
+                    index,
+                    amplitude *
+                        mth::lerp3(alpha_x, alpha_y, alpha_z,
+                                   d000xz + g000y * relative_y,
+                                   d100xz + g100y * relative_y,
+                                   d010xz + g010y * (relative_y - 1.0F),
+                                   d110xz + g110y * (relative_y - 1.0F),
+                                   d001xz + g001y * relative_y,
+                                   d101xz + g101y * relative_y,
+                                   d011xz + g011y * (relative_y - 1.0F),
+                                   d111xz + g111y * (relative_y - 1.0F)));
+                ++index;
+            }
+        }
+    }
+}
+
+auto noise_stack::add_to_volume(buffer &output, const volume &volume,
+                                double xz_scale, double y_scale,
+                                float amplitude) const -> void {
+    for (const auto &l : layers_) {
+        const double frequency = l.frequency;
+        l.noise.add_to_volume(output, volume, xz_scale * frequency,
+                              y_scale * frequency, amplitude * l.amplitude);
+    }
+}
+
 auto noise_stack::get(double x, double y, double z) const -> float {
     float value = 0.0F;
     for (const auto &l : layers_) {
