@@ -66,6 +66,25 @@ public class DensityVectors {
         }
     }
 
+    static void samples2d(String name, DensityFunction function) {
+        DensitySampler sampler = function.compileSampler(CONTEXT);
+        for (int i = 0; i < POINTS.length; i++) {
+            int[] p = POINTS[i];
+            System.out.printf("%s.scalar.%d %08x%n", name, i,
+                Float.floatToRawIntBits(
+                    sampler.sampleValue(SamplerContext.EMPTY_UNCACHED, p[0], p[1], p[2])));
+        }
+        DensityVolume volume = new DensityVolume(3, 1, 2, -1, 0, 2);
+        DensityBuffer buffer = DensityBuffer.createUnpooled(volume.size());
+        buffer.fill(0.0F);
+        sampler.sampleVolume(SamplerContext.EMPTY_UNCACHED, buffer, volume);
+        for (int i = 0; i < buffer.size(); i++) {
+            System.out.printf("%s.volume.%d %08x%n", name, i,
+                Float.floatToRawIntBits(buffer.get(i)));
+        }
+        range(name, function);
+    }
+
     static void range(String name, DensityFunction function) {
         Interval range = function.range();
         System.out.printf("%s.range %08x %08x%n", name,
@@ -204,6 +223,9 @@ public class DensityVectors {
         DensityFunction oldBlended = new BlendedNoise(0.25, 0.125, 80.0, 160.0, 8.0);
         samples("old_blended_fn", oldBlended, noiseContext);
         range("old_blended_fn", oldBlended);
+
+        samples2d("find_top_fn", DensityFunctions.findTopSurface(
+            gy, DensityFunctions.yClampedGradient(-64, 320, 16.0F, 80.0F), -32, 8));
 
         // Interpolated volume branches: block-step, cell-aligned and block-aligned.
         DensitySampler interpSampler =

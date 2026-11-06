@@ -1329,6 +1329,110 @@ class blend_density_sampler final : public sampler {
     sampler_ptr input_;
 };
 
+class slice_y_sampler final : public sampler {
+  public:
+    slice_y_sampler(sampler_ptr input, jint y)
+        : input_{std::move(input)}, y_{y} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint /*y*/, jint z) const
+        -> float override {
+        return input_->sample_value(context, x, y_, z);
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        if (vol.size_y() == 1 && vol.min_block_y() == y_) {
+            input_->sample_volume(context, output, vol);
+            return;
+        }
+        const volume input_volume{vol.size_x(),
+                                  1,
+                                  vol.size_z(),
+                                  vol.min_block_x(),
+                                  y_,
+                                  vol.min_block_z(),
+                                  vol.step_block_x(),
+                                  vol.step_block_y(),
+                                  vol.step_block_z()};
+        auto input_buffer = context.acquire(input_volume.size());
+        input_->sample_volume(context, input_buffer, input_volume);
+        for (jint z = 0; z < vol.size_z(); ++z) {
+            for (jint x = 0; x < vol.size_x(); ++x) {
+                const float value =
+                    input_buffer.get(input_volume.index_unchecked(x, 0, z));
+                output.set_range(vol.index_unchecked(x, 0, z), vol.size_y(),
+                                 value);
+            }
+        }
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return input_->range();
+    }
+
+  private:
+    sampler_ptr input_;
+    jint y_;
+};
+
+class find_top_surface_sampler final : public sampler {
+  public:
+    find_top_surface_sampler(sampler_ptr density, sampler_ptr upper_bound,
+                             jint lower_bound, jint cell_height)
+        : density_{std::move(density)}, upper_bound_{std::move(upper_bound)},
+          lower_bound_{lower_bound}, cell_height_{cell_height} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint y, jint z) const -> float override {
+        const float upper = upper_bound_->sample_value(context, x, y, z);
+        return static_cast<float>(find_surface_from(context, x, z, upper));
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        if (vol.size_y() != 1) {
+            throw std::invalid_argument(
+                "find_top_surface volume must have sizeY=1");
+        }
+        upper_bound_->sample_volume(context, output, vol);
+        std::size_t index = 0;
+        for (jint z = 0; z < vol.size_z(); ++z) {
+            for (jint x = 0; x < vol.size_x(); ++x) {
+                const float upper = output.get(index);
+                output.set(index, static_cast<float>(find_surface_from(
+                                      context, vol.block_x(x), vol.block_z(z),
+                                      upper)));
+                ++index;
+            }
+        }
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return interval::of(static_cast<float>(lower_bound_),
+                            std::max(static_cast<float>(lower_bound_),
+                                     upper_bound_->range().max()));
+    }
+
+  private:
+    [[nodiscard]] auto find_surface_from(const sampler_context &context, jint x,
+                                         jint z, float upper) const -> jint {
+        const jint top_y =
+            mth::floor(upper / static_cast<float>(cell_height_)) * cell_height_;
+        if (top_y <= lower_bound_) {
+            return lower_bound_;
+        }
+        for (jint probe_y = top_y; probe_y >= lower_bound_;
+             probe_y -= cell_height_) {
+            if (density_->sample_value(context, x, probe_y, z) > 0.0F) {
+                return probe_y;
+            }
+        }
+        return lower_bound_;
+    }
+
+    sampler_ptr density_;
+    sampler_ptr upper_bound_;
+    jint lower_bound_;
+    jint cell_height_;
+};
+
 } // namespace
 
 auto constant(float value) -> sampler_ptr {
@@ -1631,6 +1735,18 @@ auto compute_fbm_range(jint first_octave, double smear_scale_y,
 }
 
 } // namespace
+
+auto slice_y(sampler_ptr input, jint y) -> sampler_ptr {
+    return std::make_unique<slice_y_sampler>(std::move(input), y);
+}
+
+auto find_top_surface(sampler_ptr density, sampler_ptr upper_bound,
+                      jint lower_bound, jint cell_height) -> sampler_ptr {
+    return slice_y(std::make_unique<find_top_surface_sampler>(
+                       std::move(density), std::move(upper_bound), lower_bound,
+                       cell_height),
+                   0);
+}
 
 auto blended_noise(const blended_noise_parameters &parameters,
                    random_source &random) -> sampler_ptr {
