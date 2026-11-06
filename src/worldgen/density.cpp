@@ -1261,6 +1261,74 @@ class spline_sampler_impl final : public sampler {
     std::unordered_map<const sampler *, std::size_t> coordinate_index_;
 };
 
+class context_bound_sampler final : public sampler {
+  public:
+    context_bound_sampler(context_key key, sampler_ptr fallback, interval range)
+        : key_{key}, fallback_{std::move(fallback)}, range_{range} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint y, jint z) const -> float override {
+        return resolve(context).sample_value(context, x, y, z);
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        resolve(context).sample_volume(context, output, vol);
+    }
+    [[nodiscard]] auto range() const -> interval override { return range_; }
+
+  private:
+    [[nodiscard]] auto resolve(const sampler_context &context) const
+        -> const sampler & {
+        const sampler *bound = context.get_field(key_);
+        return bound != nullptr ? *bound : *fallback_;
+    }
+
+    context_key key_;
+    sampler_ptr fallback_;
+    interval range_;
+};
+
+class range_override_sampler final : public sampler {
+  public:
+    range_override_sampler(sampler_ptr input, interval range)
+        : input_{std::move(input)}, range_{range} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint y, jint z) const -> float override {
+        return input_->sample_value(context, x, y, z);
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        input_->sample_volume(context, output, vol);
+    }
+    [[nodiscard]] auto range() const -> interval override { return range_; }
+
+  private:
+    sampler_ptr input_;
+    interval range_;
+};
+
+class blend_density_sampler final : public sampler {
+  public:
+    explicit blend_density_sampler(sampler_ptr input)
+        : input_{std::move(input)} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint y, jint z) const -> float override {
+        return input_->sample_value(context, x, y, z);
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        input_->sample_volume(context, output, vol);
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return input_->range();
+    }
+
+  private:
+    sampler_ptr input_;
+};
+
 } // namespace
 
 auto constant(float value) -> sampler_ptr {
@@ -1503,6 +1571,95 @@ auto lerp(sampler_ptr alpha, sampler_ptr first, sampler_ptr second)
 }
 
 auto cache(sampler_ptr input) -> sampler_ptr { return input; }
+
+auto blend_alpha() -> sampler_ptr {
+    return std::make_unique<context_bound_sampler>(
+        context_key::blend_alpha, constant(1.0F), interval::of(0.0F, 1.0F));
+}
+
+auto blend_offset() -> sampler_ptr {
+    return std::make_unique<context_bound_sampler>(
+        context_key::blend_offset, constant(0.0F), interval::infinite());
+}
+
+auto beardifier() -> sampler_ptr {
+    return std::make_unique<context_bound_sampler>(
+        context_key::beardifier, constant(0.0F), interval::infinite());
+}
+
+auto blend_density(sampler_ptr input) -> sampler_ptr {
+    return std::make_unique<blend_density_sampler>(std::move(input));
+}
+
+namespace {
+
+auto create_fbm(random_source &random, jint first_octave, double smear_scale_y,
+                double value_factor) -> std::vector<noise_stack::layer> {
+    const jint octaves = -first_octave + 1;
+    double factor = 1.0;
+    value_factor /= std::pow(2.0, static_cast<double>(octaves)) - 1.0;
+    std::vector<noise_stack::layer> layers;
+    layers.reserve(static_cast<std::size_t>(octaves));
+    for (jint i = octaves - 1; i >= 0; --i) {
+        layers.push_back(noise_stack::layer{
+            .source = std::make_unique<smeared_perlin_noise>(
+                random, smear_scale_y * factor),
+            .frequency = factor,
+            .amplitude = static_cast<float>(value_factor),
+        });
+        factor /= 2.0;
+        value_factor *= 2.0;
+    }
+    return layers;
+}
+
+auto compute_fbm_range(jint first_octave, double smear_scale_y,
+                       double value_factor) -> interval {
+    const jint octaves = -first_octave + 1;
+    double factor = 1.0;
+    value_factor /= std::pow(2.0, static_cast<double>(octaves)) - 1.0;
+    interval range = interval::of_exact(0.0F);
+    for (jint i = octaves - 1; i >= 0; --i) {
+        range = interval::add(
+            range, interval::mul(
+                       smeared_perlin_noise::range_for(smear_scale_y * factor),
+                       interval::of_exact(static_cast<float>(value_factor))));
+        factor /= 2.0;
+        value_factor *= 2.0;
+    }
+    return range;
+}
+
+} // namespace
+
+auto blended_noise(const blended_noise_parameters &parameters,
+                   random_source &random) -> sampler_ptr {
+    const double xz_multiplier = 684.412 * parameters.xz_scale;
+    const double y_multiplier = 684.412 * parameters.y_scale;
+    const double limit_smear_scale_y =
+        y_multiplier * parameters.smear_scale_multiplier;
+    const double main_smear_scale_y = limit_smear_scale_y / parameters.y_factor;
+
+    auto min_limit_noise = std::make_shared<noise_stack>(
+        create_fbm(random, -15, limit_smear_scale_y, 0.99998474F));
+    auto max_limit_noise = std::make_shared<noise_stack>(
+        create_fbm(random, -15, limit_smear_scale_y, 0.99998474F));
+    auto main_noise = std::make_shared<noise_stack>(
+        create_fbm(random, -7, main_smear_scale_y, 12.75));
+
+    sampler_ptr min_sampler =
+        noise(min_limit_noise, xz_multiplier, y_multiplier);
+    sampler_ptr max_sampler =
+        noise(max_limit_noise, xz_multiplier, y_multiplier);
+    sampler_ptr main_sampler =
+        noise(main_noise, xz_multiplier / parameters.xz_factor,
+              y_multiplier / parameters.y_factor);
+    sampler_ptr choice =
+        clamp(add(std::move(main_sampler), constant(0.5F)), 0.0F, 1.0F);
+    return std::make_unique<range_override_sampler>(
+        lerp(std::move(choice), std::move(min_sampler), std::move(max_sampler)),
+        compute_fbm_range(-15, limit_smear_scale_y, 0.99998474F));
+}
 auto spline::constant(float value) -> std::shared_ptr<const spline> {
     auto result = std::shared_ptr<spline>(new spline{});
     result->constant_ = true;

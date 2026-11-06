@@ -23,10 +23,23 @@
 #include <refrain/worldgen/java_compat.hpp>
 #include <refrain/worldgen/noise.hpp>
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 
 namespace refrain::worldgen::density {
+
+class sampler;
+
+/// Context fields the reference binds through `SamplerContext` keys. Terrain
+/// generation without blending/beardifier leaves them unset, which makes the
+/// corresponding samplers use their fallbacks.
+enum class context_key : std::uint8_t {
+    blend_alpha,
+    blend_offset,
+    beardifier,
+};
 
 class sampler_context {
   public:
@@ -37,6 +50,16 @@ class sampler_context {
     [[nodiscard]] auto acquire(std::size_t size) const -> buffer {
         return buffer{size};
     }
+
+    [[nodiscard]] auto get_field(context_key key) const -> const sampler * {
+        return fields_[static_cast<std::size_t>(key)];
+    }
+    void set_field(context_key key, const sampler *value) {
+        fields_[static_cast<std::size_t>(key)] = value;
+    }
+
+  private:
+    std::array<const sampler *, 3> fields_{};
 };
 
 class sampler {
@@ -155,6 +178,31 @@ struct spline {
 /// 0/1 alpha short circuits and constant specialisations.
 [[nodiscard]] auto lerp(sampler_ptr alpha, sampler_ptr first,
                         sampler_ptr second) -> sampler_ptr;
+
+/// `minecraft:blend_alpha`, `blend_offset` and `beardifier`: context-bound
+/// values with the reference fallbacks (1.0, 0.0, 0.0).
+[[nodiscard]] auto blend_alpha() -> sampler_ptr;
+[[nodiscard]] auto blend_offset() -> sampler_ptr;
+[[nodiscard]] auto beardifier() -> sampler_ptr;
+
+/// `minecraft:blend_density`: applies the blender from the context when one is
+/// bound; without a blender it is the identity.
+[[nodiscard]] auto blend_density(sampler_ptr input) -> sampler_ptr;
+
+/// `minecraft:old_blended_noise` parameters.
+struct blended_noise_parameters {
+    double xz_scale{0.25};
+    double y_scale{0.125};
+    double xz_factor{80.0};
+    double y_factor{160.0};
+    double smear_scale_multiplier{8.0};
+};
+
+/// `minecraft:old_blended_noise`: three smeared-Perlin FBM stacks combined by
+/// a clamped lerp. `random` is the stream derived from
+/// `factory.fromHashOf("minecraft:terrain")`.
+[[nodiscard]] auto blended_noise(const blended_noise_parameters &parameters,
+                                 random_source &random) -> sampler_ptr;
 
 /// `minecraft:cache`: the 26.3 compiler deduplicates caches by input and
 /// stores results per `SamplerContext`. Values on the bulk path are identical
