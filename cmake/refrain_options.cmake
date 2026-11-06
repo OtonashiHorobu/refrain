@@ -54,7 +54,7 @@ set(REFRAIN_SANITIZE "" CACHE STRING "Comma-separated -fsanitize list")
 # visibility, fortified libc calls and RELRO/BIND_NOW. Enabled by default;
 # `REFRAIN_HARDEN_MAX` adds zero-initialized stack objects and caller-saved
 # register clearing at a measurable runtime cost.
-option(REFRAIN_HARDEN "Enable the baseline security hardening flags" ON)
+option(REFRAIN_HARDEN "Enable the baseline security hardening flags" OFF)
 option(REFRAIN_HARDEN_MAX
        "Also zero stack storage and clear caller-saved registers on return"
        OFF)
@@ -62,7 +62,7 @@ option(REFRAIN_HARDEN_MAX
 # (instrumentation and LTO interact poorly and build time doubles) and for the
 # MSVC toolchain (LTCG build time is not worth it for the CI budget); both can
 # be overridden explicitly.
-option(REFRAIN_LTO "Enable link-time optimization for optimized builds" ON)
+option(REFRAIN_LTO "Enable link-time optimization for optimized builds" OFF)
 
 if(NOT REFRAIN_WITH_MIMALLOC)
     set(REFRAIN_MIMALLOC_OVERRIDE_NEW OFF)

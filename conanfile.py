@@ -26,7 +26,7 @@ class RefrainConan(ConanFile):
         "build_bench": [True, False],
     }
     default_options = {
-        "lto": True,
+        "lto": False,
         "client": False,
         "with_crashpad": True,
         "with_wasm": True,

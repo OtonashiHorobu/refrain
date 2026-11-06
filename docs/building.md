@@ -70,17 +70,33 @@ targets and stays off unless those sources are present.
 
 ## Hardening and optimization
 
-Optimized builds use `-O3 -DNDEBUG` and enable two hardening layers by default:
+Optimized builds use `-O3 -DNDEBUG`. Both hardening layers and LTO are
+opt-in: the regular CI build and local development builds stay fast and
+unhardened, while release archives use the hardened profile described below.
 
 | Option | Default | Effect |
 |---|---|---|
-| `REFRAIN_HARDEN` | ON | Stack protector and stack-clash protection, CET (`-fcf-protection=full`) on x86, hidden symbol visibility, `_FORTIFY_SOURCE=3`, and ELF `RELRO`/`BIND_NOW`/non-executable stack. MSVC uses `/guard:cf`; MinGW adds `--dynamicbase --nxcompat --high-entropy-va`. |
+| `REFRAIN_HARDEN` | OFF | Stack protector and stack-clash protection, CET (`-fcf-protection=full`) on x86, hidden symbol visibility, `_FORTIFY_SOURCE=3`, and ELF `RELRO`/`BIND_NOW`/non-executable stack. MSVC uses `/guard:cf`; MinGW adds `--dynamicbase --nxcompat --high-entropy-va`. |
 | `REFRAIN_HARDEN_MAX` | OFF | Adds `-ftrivial-auto-var-init=zero` and `-fzero-call-used-regs=used-gpr` on top of the baseline. |
-| `REFRAIN_LTO` | ON | Link-time optimization for optimized GCC/Clang builds (the Conan `lto` option feeds it). Sanitizer builds and MSVC skip LTO automatically. |
+| `REFRAIN_LTO` | OFF | Link-time optimization for optimized GCC/Clang builds (the Conan `lto` option feeds it). Sanitizer builds and MSVC skip LTO automatically. |
 
 Only first-party targets are rebuilt with these flags; third-party libraries
 come prebuilt from Conan. The flags apply to `Release`, `RelWithDebInfo` and
 `MinSizeRel`; `Debug` keeps the stack protector but skips FORTIFY and LTO.
+
+`scripts/dist.sh` is the release path: it rebuilds every Conan dependency from
+source with the same hardening flags (plus `-ffat-lto-objects -flto=auto`) in an
+isolated Conan home, then builds the server and tools with
+`REFRAIN_HARDEN=ON REFRAIN_HARDEN_MAX=ON REFRAIN_LTO=ON`. The isolated home is
+required because Conan build flags are not part of a package id.
+
+One limitation: zstd and blake3 contain hand-written x86 assembly for their
+SIMD kernels, and assembly objects carry no CET property notes. The final
+executable therefore still lacks `IBT`/`SHSTK` even when every C/C++ object is
+built with `-fcf-protection=full`; the property is an AND over all inputs.
+Stack protector, FORTIFY and RELRO apply to the dependency code normally. A
+CET-complete build needs those kernels disabled (a measurable compression and
+hashing cost) or an explicit, carefully tested linker override.
 
 The `refrain-bench` suite (median of three pinned runs, CPU-bound benchmarks,
 the disk-heavy full-store case excluded) measures the following relative to a
@@ -91,6 +107,7 @@ plain `-O3` build:
 | `REFRAIN_HARDEN=ON`, LTO off | +1.6% |
 | `REFRAIN_HARDEN=ON`, LTO on | -5.8% |
 | `REFRAIN_HARDEN_MAX=ON`, LTO on | -5.2% |
+| All dependencies hardened + LTO (`scripts/dist.sh`) | -8% to -13% |
 
 The baseline hardening is therefore close to free once LTO is enabled; the
 maximum layer costs roughly one percent more. Small-allocation microbenchmarks
