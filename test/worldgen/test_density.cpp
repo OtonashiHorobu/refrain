@@ -414,6 +414,24 @@ suite<"worldgen/density-samplers"> density_sampler_tests = [] {
                             0xbe000000U, 0xbd000000U, 0xbe000000U,
                             0xbd000000U});
         }
+        {
+            auto value =
+                find_top_surface(gradient_y(-64, 320, 0.0F, 1.0F),
+                                 gradient_y(-64, 320, 16.0F, 80.0F), -32, 8);
+            check_volume("find_top_fn", *value, volume{3, 1, 2, -1, 0, 2},
+                         std::array<std::uint32_t, 6>{
+                             0x41c00000U, 0x41c00000U, 0x41c00000U, 0x41c00000U,
+                             0x41c00000U, 0x41c00000U});
+            const sampler_context context;
+            expect(bits(value->sample_value(context, 0, -64, 0)) ==
+                   0x41c00000U);
+            expect(bits(value->sample_value(context, 5, 0, -3)) == 0x41c00000U);
+            expect(bits(value->sample_value(context, -7, 63, 11)) ==
+                   0x41c00000U);
+            expect(bits(value->sample_value(context, 100, 319, -100)) ==
+                   0x41c00000U);
+            check_range("find_top_fn", *value, 0xc2000000U, 0x42a00000U);
+        }
     };
 
     "interpolated covers all three volume branches"_test = [] {

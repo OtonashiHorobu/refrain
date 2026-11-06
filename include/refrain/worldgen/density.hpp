@@ -204,6 +204,15 @@ struct blended_noise_parameters {
 [[nodiscard]] auto blended_noise(const blended_noise_parameters &parameters,
                                  random_source &random) -> sampler_ptr;
 
+/// `minecraft:slice`: evaluate `input` at a fixed Y and broadcast the result.
+[[nodiscard]] auto slice_y(sampler_ptr input, jint y) -> sampler_ptr;
+
+/// `minecraft:find_top_surface`: probe the density along Y in `cell_height`
+/// steps and return the first cell above zero (or `lower_bound`).
+[[nodiscard]] auto find_top_surface(sampler_ptr density,
+                                    sampler_ptr upper_bound, jint lower_bound,
+                                    jint cell_height) -> sampler_ptr;
+
 /// `minecraft:cache`: the 26.3 compiler deduplicates caches by input and
 /// stores results per `SamplerContext`. Values on the bulk path are identical
 /// to the input; this implementation returns the input unchanged. The scalar
