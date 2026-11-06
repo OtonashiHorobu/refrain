@@ -21,6 +21,7 @@
 #include <refrain/worldgen/density_buffer.hpp>
 #include <refrain/worldgen/interval.hpp>
 #include <refrain/worldgen/java_compat.hpp>
+#include <refrain/worldgen/noise.hpp>
 
 #include <cstddef>
 #include <memory>
@@ -92,5 +93,29 @@ using sampler_ptr = std::unique_ptr<sampler>;
 /// needed for the overworld router; the other axes follow the same formula.
 [[nodiscard]] auto gradient_y(jint from_coordinate, jint to_coordinate,
                               float from_value, float to_value) -> sampler_ptr;
+
+/// `minecraft:noise`: `noise.get(x * xz, y * y, z * xz)`.
+[[nodiscard]] auto noise(std::shared_ptr<const noise_stack> stack,
+                         double xz_scale, double y_scale) -> sampler_ptr;
+
+/// `minecraft:noise` with shift functions; `y_scale` is used for the Y
+/// coordinate and the X/Z shifts are evaluated per sample.
+[[nodiscard]] auto shifted_noise_xz(sampler_ptr shift_x, sampler_ptr shift_z,
+                                    double xz_scale, double y_scale,
+                                    std::shared_ptr<const noise_stack> stack)
+    -> sampler_ptr;
+[[nodiscard]] auto shifted_noise_xyz(sampler_ptr shift_x, sampler_ptr shift_y,
+                                     sampler_ptr shift_z, double xz_scale,
+                                     double y_scale,
+                                     std::shared_ptr<const noise_stack> stack)
+    -> sampler_ptr;
+
+/// `minecraft:shift`: the 3D noise at a quarter scale, times four.
+[[nodiscard]] auto shift(std::shared_ptr<const noise_stack> stack)
+    -> sampler_ptr;
+[[nodiscard]] auto shift_a(std::shared_ptr<const noise_stack> stack)
+    -> sampler_ptr;
+[[nodiscard]] auto shift_b(std::shared_ptr<const noise_stack> stack)
+    -> sampler_ptr;
 
 } // namespace refrain::worldgen::density

@@ -284,6 +284,15 @@ auto noise_stack::add_to_volume(buffer &output, const volume &volume,
     }
 }
 
+noise_stack::noise_stack(std::vector<layer> layers)
+    : layers_{std::move(layers)} {
+    for (const auto &l : layers_) {
+        range_ = interval::add(range_,
+                               interval::mul(interval::of_symmetric(2.0F),
+                                             interval::of_exact(l.amplitude)));
+    }
+}
+
 auto noise_stack::get(double x, double y, double z) const -> float {
     float value = 0.0F;
     for (const auto &l : layers_) {

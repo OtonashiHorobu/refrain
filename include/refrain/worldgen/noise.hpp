@@ -16,6 +16,7 @@
 #pragma once
 
 #include <refrain/worldgen/density_buffer.hpp>
+#include <refrain/worldgen/interval.hpp>
 #include <refrain/worldgen/java_compat.hpp>
 #include <refrain/worldgen/rng.hpp>
 
@@ -75,8 +76,7 @@ class noise_stack {
     };
 
     noise_stack() = default;
-    explicit noise_stack(std::vector<layer> layers)
-        : layers_{std::move(layers)} {}
+    explicit noise_stack(std::vector<layer> layers);
 
     [[nodiscard]] auto get(double x, double y, double z) const -> float;
     [[nodiscard]] auto get(double x, double y) const -> float;
@@ -88,8 +88,14 @@ class noise_stack {
         return layers_;
     }
 
+    /// Bounds of the summed layers, as Java's `NoiseStack` computes them.
+    [[nodiscard]] auto range() const noexcept -> const interval & {
+        return range_;
+    }
+
   private:
     std::vector<layer> layers_{};
+    interval range_{interval::of_exact(0.0F)};
 };
 
 /// Decoded `minecraft:noise` document.

@@ -7,12 +7,15 @@
 
 #include <refrain/worldgen/density.hpp>
 #include <refrain/worldgen/density_buffer.hpp>
+#include <refrain/worldgen/noise.hpp>
+#include <refrain/worldgen/rng.hpp>
 
 #include <boost/ut.hpp>
 
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 
 namespace {
 
@@ -24,6 +27,30 @@ auto bits(float value) -> std::uint32_t {
     std::uint32_t out = 0;
     std::memcpy(&out, &value, sizeof(out));
     return out;
+}
+
+auto make_factory(jlong seed) -> std::unique_ptr<positional_random_factory> {
+    return new_positional_factory(algorithm::xoroshiro, seed);
+}
+
+auto temperature_stack() -> std::shared_ptr<noise_stack> {
+    normal_noise_parameters parameters;
+    parameters.base_amplitude = 1.2453007926713473;
+    parameters.base_octave = -10;
+    parameters.octave_count = 6;
+    parameters.amplitude_modifiers = {1.5, 0.0, 1.0, 0.0, 0.0, 0.0};
+    const normal_noise normal{parameters};
+    auto source = make_factory(12345)->from_hash_of("minecraft:temperature");
+    return std::make_shared<noise_stack>(normal.create(*source));
+}
+
+auto simple_stack() -> std::shared_ptr<noise_stack> {
+    normal_noise_parameters parameters;
+    parameters.base_octave = 0;
+    parameters.octave_count = 3;
+    const normal_noise normal{parameters};
+    auto source = make_factory(12345)->from_hash_of("refrain:noise_test");
+    return std::make_shared<noise_stack>(normal.create(*source));
 }
 
 constexpr std::array<std::array<jint, 3>, 4> points{{
@@ -156,6 +183,76 @@ suite<"worldgen/density-samplers"> density_sampler_tests = [] {
                             0x3f8bef7bU, 0x3f8efefeU, 0x3f8bef7bU, 0x3f8efefeU,
                             0x3f8bef7bU, 0x3f8efefeU, 0x3f8bef7bU,
                             0x3f8efefeU});
+        }
+        {
+            auto value = noise(temperature_stack(), 0.25, 0.5);
+            check_graph("noise_fn", *value,
+                        std::array<std::uint32_t, 4>{0xbd2c9b52U, 0xbcd6ab64U,
+                                                     0xbc6cc63aU, 0xbe234e3eU},
+                        std::array<std::uint32_t, 12>{
+                            0xbc84b07cU, 0xbc83f2beU, 0xbc8981c7U, 0xbc88beffU,
+                            0xbc8e594aU, 0xbc8d9141U, 0xbc84c109U, 0xbc8400cbU,
+                            0xbc899189U, 0xbc88cc09U, 0xbc8e6849U,
+                            0xbc8d9d8cU});
+        }
+        {
+            auto value = shift(temperature_stack());
+            check_graph("shift_fn", *value,
+                        std::array<std::uint32_t, 4>{0xbe06259fU, 0xbdd6ab64U,
+                                                     0xbd8cce41U, 0xbe9cc544U},
+                        std::array<std::uint32_t, 12>{
+                            0xbd9baa56U, 0xbd99ef07U, 0xbda0b30aU, 0xbd9ef51bU,
+                            0xbda5c0caU, 0xbda40011U, 0xbd9bdd28U, 0xbd9a1fdeU,
+                            0xbda0e55fU, 0xbd9f2559U, 0xbda5f28aU,
+                            0xbda42fc7U});
+        }
+        {
+            auto value = shift_a(temperature_stack());
+            check_graph("shift_a_fn", *value,
+                        std::array<std::uint32_t, 4>{0xbdca9ff2U, 0xbdd6ab64U,
+                                                     0xbdbc953eU, 0xbe690f68U},
+                        std::array<std::uint32_t, 12>{
+                            0xbdc8c4f0U, 0xbdc8c4f0U, 0xbdce0698U, 0xbdce0698U,
+                            0xbdd34c3eU, 0xbdd34c3eU, 0xbdc927baU, 0xbdc927baU,
+                            0xbdce692fU, 0xbdce692fU, 0xbdd3aeaaU,
+                            0xbdd3aeaaU});
+        }
+        {
+            auto value = shift_b(temperature_stack());
+            check_graph("shift_b_fn", *value,
+                        std::array<std::uint32_t, 4>{0xbdca9ff2U, 0xbdbe59c2U,
+                                                     0xbdee54aaU, 0x3d27b4c8U},
+                        std::array<std::uint32_t, 12>{
+                            0xbdd0cba7U, 0xbdd0cba7U, 0xbdcefd82U, 0xbdcefd82U,
+                            0xbdcd3439U, 0xbdcd3439U, 0xbdd36f7aU, 0xbdd36f7aU,
+                            0xbdd1a081U, 0xbdd1a081U, 0xbdcfd62eU,
+                            0xbdcfd62eU});
+        }
+        {
+            auto value = shifted_noise_xz(shift(temperature_stack()),
+                                          shift(temperature_stack()), 0.25, 0.0,
+                                          simple_stack());
+            check_graph("shifted_xz_fn", *value,
+                        std::array<std::uint32_t, 4>{0xbe5ee3baU, 0xbe68ec09U,
+                                                     0xbe2051a4U, 0xbe0f19caU},
+                        std::array<std::uint32_t, 12>{
+                            0xbcf4b2a0U, 0xbcf5cf79U, 0x3e122af0U, 0x3e129b25U,
+                            0x3f3c0d11U, 0x3f3c8724U, 0xbe489823U, 0xbe4a200aU,
+                            0x3e94538dU, 0x3e94d78eU, 0x3f783084U,
+                            0x3f77f01dU});
+        }
+        {
+            auto value = shifted_noise_xyz(
+                shift(temperature_stack()), shift(temperature_stack()),
+                shift(temperature_stack()), 0.25, 0.5, simple_stack());
+            check_graph("shifted_xyz_fn", *value,
+                        std::array<std::uint32_t, 4>{0xbe96dfdeU, 0xbd466976U,
+                                                     0xbecf3261U, 0xbedbe6b3U},
+                        std::array<std::uint32_t, 12>{
+                            0x3dc95237U, 0x3af29bc0U, 0x3d818a1dU, 0x3f2776cfU,
+                            0x3ea07d80U, 0x3e0cec68U, 0x3ee8d244U, 0xbeb7a26cU,
+                            0xbdf475a5U, 0x3ef0a350U, 0x3e697cfcU,
+                            0x3cccbe44U});
         }
     };
 };

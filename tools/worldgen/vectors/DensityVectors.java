@@ -9,6 +9,9 @@ import net.minecraft.world.level.levelgen.densityfunction.DensityFunctions;
 import net.minecraft.world.level.levelgen.densityfunction.DensitySampler;
 import net.minecraft.world.level.levelgen.densityfunction.DensityVolume;
 import net.minecraft.world.level.levelgen.densityfunction.SamplerContext;
+import net.minecraft.world.level.levelgen.PositionalRandomFactory;
+import net.minecraft.world.level.levelgen.WorldgenRandom;
+import net.minecraft.world.level.levelgen.densityfunction.generator.NoiseFunction;
 import net.minecraft.world.level.levelgen.synth.NormalNoise;
 import net.minecraft.world.level.levelgen.synth.Noise;
 
@@ -36,7 +39,12 @@ public class DensityVectors {
     };
 
     static void samples(String name, DensityFunction function) {
-        DensitySampler sampler = function.compileSampler(CONTEXT);
+        samples(name, function, CONTEXT);
+    }
+
+    static void samples(String name, DensityFunction function,
+                        DensityFunction.CompileContext context) {
+        DensitySampler sampler = function.compileSampler(context);
         for (int i = 0; i < POINTS.length; i++) {
             int[] p = POINTS[i];
             System.out.printf("%s.scalar.%d %08x%n", name, i,
@@ -79,5 +87,50 @@ public class DensityVectors {
         samples("cube_sqrt", DensityFunctions.add(
             DensityFunctions.cube(DensityFunctions.constant(0.5F)),
             DensityFunctions.sqrt(DensityFunctions.abs(gy3))));
+
+        NormalNoise.Builder temperatureBuilder = NormalNoise.builder()
+            .setBaseAmplitude(1.2453007926713473)
+            .setBaseOctave(-10)
+            .setOctaveCount(6);
+        double[] modifiers = {1.5, 0.0, 1.0, 0.0, 0.0, 0.0};
+        for (int i = 0; i < modifiers.length; i++) {
+            temperatureBuilder.setAmplitudeModifier(i, modifiers[i]);
+        }
+        NormalNoise temperature = temperatureBuilder.build();
+        NormalNoise simpleParams = NormalNoise.builder()
+            .setBaseOctave(0).setOctaveCount(3).build();
+        Holder<NormalNoise> temperatureHolder = Holder.direct(temperature);
+        Holder<NormalNoise> simpleHolder = Holder.direct(simpleParams);
+
+        RandomSource base = WorldgenRandom.Algorithm.XOROSHIRO.newInstance(12345L);
+        PositionalRandomFactory factory = base.forkPositional();
+        Noise temperatureNoise = temperature.create(factory.fromHashOf("minecraft:temperature"));
+        Noise simpleNoise = simpleParams.create(factory.fromHashOf("refrain:noise_test"));
+        DensityFunction.CompileContext noiseContext = new DensityFunction.CompileContext() {
+            @Override
+            public Noise createNoiseSampler(Holder<NormalNoise> parameters) {
+                return parameters.value() == temperature ? temperatureNoise : simpleNoise;
+            }
+
+            @Override
+            public RandomSource createRandom(Identifier seed) {
+                throw new UnsupportedOperationException("no random in these graphs");
+            }
+
+            @Override
+            public RandomSource createEndIslandRandom() {
+                throw new UnsupportedOperationException("no end islands here");
+            }
+        };
+
+        samples("noise_fn", DensityFunctions.noise(temperatureHolder, 0.25, 0.5), noiseContext);
+        samples("shift_fn", DensityFunctions.shift(temperatureHolder), noiseContext);
+        samples("shift_a_fn", DensityFunctions.shiftA(temperatureHolder), noiseContext);
+        samples("shift_b_fn", DensityFunctions.shiftB(temperatureHolder), noiseContext);
+        DensityFunction shiftFn = DensityFunctions.shift(temperatureHolder);
+        samples("shifted_xz_fn",
+            DensityFunctions.shiftedNoise2d(shiftFn, shiftFn, 0.25, simpleHolder), noiseContext);
+        samples("shifted_xyz_fn",
+            new NoiseFunction(simpleHolder, 0.25, 0.5, shiftFn, shiftFn, shiftFn), noiseContext);
     }
 }
