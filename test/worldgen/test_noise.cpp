@@ -5,6 +5,7 @@
 // Gradient-noise vectors generated from the real 26.3 classes with
 // `tools/worldgen/vectors/run.sh <server.jar> NoiseVectors`.
 
+#include <refrain/worldgen/density_buffer.hpp>
 #include <refrain/worldgen/noise.hpp>
 #include <refrain/worldgen/rng.hpp>
 
@@ -83,12 +84,11 @@ suite<"worldgen/noise"> noise_tests = [] {
         expect(noise.perm(0) == 70U);
         expect(noise.perm(255) == 27U);
 
-        constexpr std::array<std::uint32_t, 6> expected3d =
+        constexpr auto expected3d =
             std::array<std::uint32_t, 6>{0x3d900f9cU, 0x3d380b50U, 0x3e1fecc3U,
                                          0x3efc53d4U, 0x3d900f9cU, 0xbe00e2f4U};
-        constexpr std::array<std::uint32_t, 4> expected2d =
-            std::array<std::uint32_t, 4>{0x3d900f9cU, 0x3e932468U, 0xbe19c4e4U,
-                                         0x3d900f9cU};
+        constexpr auto expected2d = std::array<std::uint32_t, 4>{
+            0x3d900f9cU, 0x3e932468U, 0xbe19c4e4U, 0x3d900f9cU};
         auto actual3d = std::array<std::uint32_t, 6>{};
         auto actual2d = std::array<std::uint32_t, 4>{};
         for (std::size_t i = 0; i < points_3d.size(); ++i) {
@@ -113,12 +113,11 @@ suite<"worldgen/noise"> noise_tests = [] {
         expect(bits(-normal.range()) == 0xc00db004U);
 
         const auto stack = normal.create(*source);
-        constexpr std::array<std::uint32_t, 6> expected3d =
+        constexpr auto expected3d =
             std::array<std::uint32_t, 6>{0xbcca9ff2U, 0xbce91fa7U, 0xbe0bc24aU,
                                          0xbd9d5df8U, 0xbe6789a1U, 0xbdb4a985U};
-        constexpr std::array<std::uint32_t, 4> expected2d =
-            std::array<std::uint32_t, 4>{0xbcca9ff2U, 0xbcd7081bU, 0xbdbe607aU,
-                                         0x3f13774dU};
+        constexpr auto expected2d = std::array<std::uint32_t, 4>{
+            0xbcca9ff2U, 0xbcd7081bU, 0xbdbe607aU, 0x3f13774dU};
         const auto actual3d = sample_3d(stack);
         const auto actual2d = sample_2d(stack);
         for (std::size_t i = 0; i < expected3d.size(); ++i) {
@@ -139,12 +138,11 @@ suite<"worldgen/noise"> noise_tests = [] {
         expect(bits(-normal.range()) == 0xc0000000U);
 
         const auto stack = normal.create(*source);
-        constexpr std::array<std::uint32_t, 6> expected3d =
+        constexpr auto expected3d =
             std::array<std::uint32_t, 6>{0x3dad0033U, 0x3f16dc9fU, 0x3e1f0169U,
                                          0xbe3234faU, 0xbce820f8U, 0x3ebd00a4U};
-        constexpr std::array<std::uint32_t, 4> expected2d =
-            std::array<std::uint32_t, 4>{0x3dad0033U, 0x3f48d4b8U, 0xbf70eb0fU,
-                                         0xbcf120f3U};
+        constexpr auto expected2d = std::array<std::uint32_t, 4>{
+            0x3dad0033U, 0x3f48d4b8U, 0xbf70eb0fU, 0xbcf120f3U};
         const auto actual3d = sample_3d(stack);
         const auto actual2d = sample_2d(stack);
         for (std::size_t i = 0; i < expected3d.size(); ++i) {
@@ -164,12 +162,11 @@ suite<"worldgen/noise"> noise_tests = [] {
         expect(bits(-normal.range()) == 0xc00db004U);
 
         const auto stack = normal.create(*source);
-        constexpr std::array<std::uint32_t, 6> expected3d =
+        constexpr auto expected3d =
             std::array<std::uint32_t, 6>{0xbf52a35dU, 0xbf5022faU, 0xbebfc70eU,
                                          0x3eb3d711U, 0x3e87d416U, 0xbe7942baU};
-        constexpr std::array<std::uint32_t, 4> expected2d =
-            std::array<std::uint32_t, 4>{0xbf52a35dU, 0xbf535e30U, 0xbeba4532U,
-                                         0x3d95c86dU};
+        constexpr auto expected2d = std::array<std::uint32_t, 4>{
+            0xbf52a35dU, 0xbf535e30U, 0xbeba4532U, 0x3d95c86dU};
         const auto actual3d = sample_3d(stack);
         const auto actual2d = sample_2d(stack);
         for (std::size_t i = 0; i < expected3d.size(); ++i) {
@@ -190,5 +187,27 @@ suite<"worldgen/noise"> noise_tests = [] {
         const auto a = normal.create(*first);
         const auto b = normal.create(*second);
         expect(sample_3d(a) == sample_3d(b));
+    };
+
+    "bulk volume sampling matches the reference path"_test = [] {
+        auto factory = make_factory(12345);
+        auto source = factory->from_hash_of("minecraft:temperature");
+        const normal_noise normal{temperature_parameters()};
+        const auto stack = normal.create(*source);
+
+        const volume volume{4, 3, 2, -1, 60, 2};
+        buffer output{volume.size()};
+        output.fill(0.0F);
+        stack.add_to_volume(output, volume, 1.0, 0.5F, 1.0F);
+
+        constexpr std::array<std::uint32_t, 24> expected{
+            0xbc7bef72U, 0xbc7b5a68U, 0xbc7ad762U, 0xbc878546U, 0xbc873711U,
+            0xbc86f1e7U, 0xbc912a9aU, 0xbc90d8cdU, 0xbc90900cU, 0xbc9ae821U,
+            0xbc9a92d2U, 0xbc9a46b1U, 0xbc7cad52U, 0xbc7c11deU, 0xbc7b88b0U,
+            0xbc87de6cU, 0xbc878cd1U, 0xbc874493U, 0xbc917d91U, 0xbc91286bU,
+            0xbc90dc70U, 0xbc9b34b8U, 0xbc9adc21U, 0xbc9a8c9bU};
+        for (std::size_t i = 0; i < expected.size(); ++i) {
+            expect(bits(output.get(i)) == expected[i]) << "sample " << i;
+        }
     };
 };
