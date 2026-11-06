@@ -38,6 +38,14 @@ struct fluid_status {
     [[nodiscard]] auto at(jint block_y) const -> std::uint16_t {
         return block_y < fluid_level ? fluid_type : std::uint16_t{0};
     }
+    [[nodiscard]] auto at(jint block_y, std::uint16_t air_type) const
+        -> std::uint16_t {
+        return block_y < fluid_level ? fluid_type : air_type;
+    }
+    [[nodiscard]] auto operator==(const fluid_status &other) const -> bool {
+        return fluid_level == other.fluid_level &&
+               fluid_type == other.fluid_type;
+    }
 };
 
 struct fluid_picker {
@@ -68,8 +76,7 @@ class aquifer {
     virtual ~aquifer() = default;
 
     [[nodiscard]] virtual auto compute_substance(jint block_x, jint block_y,
-                                                 jint block_z,
-                                                 double density) const
+                                                 jint block_z, double density)
         -> std::optional<std::uint16_t> = 0;
     [[nodiscard]] virtual auto should_schedule_fluid_update() const -> bool = 0;
 };
@@ -81,7 +88,7 @@ class disabled_aquifer final : public aquifer {
     explicit disabled_aquifer(fluid_picker picker) : picker_{picker} {}
 
     [[nodiscard]] auto compute_substance(jint block_x, jint block_y,
-                                         jint block_z, double density) const
+                                         jint block_z, double density)
         -> std::optional<std::uint16_t> override {
         if (density > 0.0) {
             return std::nullopt;

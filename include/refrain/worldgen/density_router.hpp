@@ -8,6 +8,7 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
+#include <refrain/worldgen/aquifer.hpp>
 #include <refrain/worldgen/density.hpp>
 #include <refrain/worldgen/density_json.hpp>
 #include <refrain/worldgen/rng.hpp>
@@ -16,6 +17,8 @@
 #include <string_view>
 
 namespace refrain::worldgen::density {
+
+using aquifer_config = terrain::aquifer_config;
 
 /// The samplers `NoiseRouter` exposes. `final_density` drives terrain fill.
 struct noise_router {
@@ -36,6 +39,7 @@ struct noise_settings {
     std::string default_fluid{}; ///< `minecraft:water`
     jint sea_level{63};
     bool aquifers{false};
+    aquifer_config aquifer{}; ///< set when `aquifers` is present
 };
 
 /// Loads every density-function and noise document under the datapack's

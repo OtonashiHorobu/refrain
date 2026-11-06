@@ -7,12 +7,18 @@
 
 #pragma once
 
+#include <refrain/worldgen/density.hpp>
 #include <refrain/worldgen/java_compat.hpp>
 #include <refrain/worldgen/mth.hpp>
 #include <refrain/worldgen/rng.hpp>
+#include <refrain/worldgen/terrain.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <optional>
+#include <unordered_map>
+#include <vector>
 
 namespace refrain::worldgen::terrain {
 
@@ -64,6 +70,77 @@ class aquifer_grid {
     [[nodiscard]] static auto center(positional_random_factory &factory,
                                      jint grid_x, jint grid_y, jint grid_z)
         -> cell_center;
+};
+
+/// The six density functions of the `noise_settings.aquifers` object.
+struct aquifer_config {
+    density::sampler_ptr barrier{};
+    density::sampler_ptr fluid_level_floodedness{};
+    density::sampler_ptr fluid_level_spread{};
+    density::sampler_ptr lava{};
+    density::sampler_ptr exclusion{};
+    density::sampler_ptr surface_level{};
+};
+
+/// `Aquifer.NoiseBasedAquifer`: the overworld aquifer. Cell cache and surface
+/// level cache follow the reference; sampler caching is omitted because it does
+/// not change values.
+class noise_aquifer final : public aquifer {
+  public:
+    noise_aquifer(aquifer_config config, positional_random_factory &factory,
+                  const volume &volume, fluid_picker picker, block_ids blocks,
+                  const density::sampler_context &context);
+
+    [[nodiscard]] auto compute_substance(jint block_x, jint block_y,
+                                         jint block_z, double density)
+        -> std::optional<std::uint16_t> override;
+    [[nodiscard]] auto should_schedule_fluid_update() const -> bool override {
+        return should_schedule_fluid_update_;
+    }
+
+  private:
+    [[nodiscard]] auto surface_level(jint block_x, jint block_z) -> jint;
+    [[nodiscard]] auto max_surface_level(jint min_block_x, jint min_block_z,
+                                         jint max_block_x, jint max_block_z)
+        -> jint;
+    [[nodiscard]] auto get_index(jint grid_x, jint grid_y, jint grid_z) const
+        -> std::size_t;
+    [[nodiscard]] auto get_aquifer_status(std::size_t index) -> fluid_status;
+    [[nodiscard]] auto compute_fluid(jint x, jint y, jint z) -> fluid_status;
+    [[nodiscard]] auto compute_surface_level(jint x, jint y, jint z,
+                                             const fluid_status &global_fluid,
+                                             jint lowest_surface_level,
+                                             bool surface_at_center_under_fluid)
+        -> jint;
+    [[nodiscard]] auto
+    compute_randomized_fluid_surface_level(jint x, jint y, jint z,
+                                           jint lowest_surface_level) -> jint;
+    [[nodiscard]] auto compute_fluid_type(jint x, jint y, jint z,
+                                          const fluid_status &global_fluid,
+                                          jint fluid_surface_level)
+        -> std::uint16_t;
+    [[nodiscard]] auto
+    calculate_pressure(jint x, jint y, jint z, bool &noise_sampled,
+                       double &noise_value, const fluid_status &closest1,
+                       const fluid_status &closest2) -> double;
+
+    aquifer_config config_;
+    positional_random_factory *factory_;
+    fluid_picker picker_;
+    block_ids blocks_;
+    density::sampler_context context_;
+    jint min_grid_x_{0};
+    jint min_grid_y_{0};
+    jint min_grid_z_{0};
+    jint grid_size_x_{0};
+    jint grid_size_y_{0};
+    jint grid_size_z_{0};
+    jint skip_sampling_above_y_{0};
+    std::vector<std::optional<fluid_status>> status_cache_;
+    std::vector<cell_center> centers_;
+    std::vector<bool> center_ready_;
+    std::unordered_map<std::int64_t, jint> surface_level_cache_;
+    bool should_schedule_fluid_update_{false};
 };
 
 /// `DimensionType.WAY_BELOW_MIN_Y` (MIN_Y << 4).
