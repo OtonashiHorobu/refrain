@@ -2,9 +2,14 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// Opt-in chunk oracle: compares one generated chunk against a chunk written by
-// the reference server with surface rules, carvers and features disabled, so
-// the block array is exactly the output of the fill stage.
+// Opt-in chunk oracle: compares generated chunks against chunks written by the
+// reference server with surface rules, carvers, features and structures
+// disabled, so the block array is exactly the output of the fill stage.
+//
+// `REFRAIN_VANILLA_WORLDGEN` points at the datapack `data` root,
+// `REFRAIN_VANILLA_REGION` at the overworld region file whose chunks (0,0) to
+// (2,2) were force-loaded, and `REFRAIN_VANILLA_ORACLE_SEED` at the world seed
+// (default 12345). `tools/worldgen/oracle/generate.py` writes such a world.
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
@@ -165,7 +170,7 @@ auto unpack_heightmap(std::span<const std::int64_t> packed)
 
 /// Decodes the parts of a chunk document the oracle compares: status, block
 /// array and the two client heightmaps.
-auto decode_chunk(const data::nbt::value &root)
+auto decode_chunk(const data::nbt::value &root, jint chunk_x, jint chunk_z)
     -> std::optional<vanilla_chunk> {
     const auto *status = root.get("Status");
     const auto *x_pos = root.get("xPos");
@@ -180,9 +185,8 @@ auto decode_chunk(const data::nbt::value &root)
     const auto z = z_pos->as_int();
     const auto data_version = version->as_int();
     if (!status_name.has_value() || *status_name != "minecraft:full" ||
-        !x.has_value() || *x != oracle_chunk_x || !z.has_value() ||
-        *z != oracle_chunk_z || !data_version.has_value() ||
-        *data_version != 5023) {
+        !x.has_value() || *x != chunk_x || !z.has_value() || *z != chunk_z ||
+        !data_version.has_value() || *data_version != 5023) {
         return std::nullopt;
     }
 
@@ -306,39 +310,25 @@ auto decode_chunk(const data::nbt::value &root)
 } // namespace
 
 suite<"worldgen/chunk-oracle"> chunk_oracle_tests = [] {
-    "a reference chunk matches the fill stage block for block"_test = [] {
+    "reference chunks match the fill stage block for block"_test = [] {
         const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
         const char *region_path = std::getenv("REFRAIN_VANILLA_REGION");
         if (data_root == nullptr || region_path == nullptr) {
             return;
         }
 
+        jlong seed = oracle_seed;
+        if (const char *raw = std::getenv("REFRAIN_VANILLA_ORACLE_SEED");
+            raw != nullptr) {
+            seed = std::strtoll(raw, nullptr, 10);
+        }
         const auto region = core::io::read_file(region_path);
         expect(region.has_value()) << region.error().message;
         if (!region) {
             return;
         }
-        const auto payload =
-            chunk_payload(*region, oracle_chunk_x, oracle_chunk_z);
-        expect(payload.has_value()) << "chunk is missing from the region file";
-        if (!payload) {
-            return;
-        }
-        const auto document =
-            data::nbt::read(*payload, data::nbt::compression::zlib);
-        expect(document.has_value()) << document.error().message;
-        if (!document) {
-            return;
-        }
-        const auto vanilla = decode_chunk(*document);
-        expect(vanilla.has_value()) << "unexpected chunk document";
-        if (!vanilla) {
-            return;
-        }
-
-        auto settings =
-            density::load_noise_settings(data_root, "minecraft/overworld",
-                                         algorithm::xoroshiro, oracle_seed);
+        auto settings = density::load_noise_settings(
+            data_root, "minecraft/overworld", algorithm::xoroshiro, seed);
         expect(settings.has_value()) << settings.error().message;
         if (!settings) {
             return;
@@ -352,71 +342,94 @@ suite<"worldgen/chunk-oracle"> chunk_oracle_tests = [] {
                                            .default_fluid = id_water,
                                            .lava = id_lava,
                                            .air = id_air};
-        const volume chunk_volume{16,           oracle_height,
-                                  16,           oracle_chunk_x * 16,
-                                  oracle_min_y, oracle_chunk_z * 16};
-        auto random = new_positional_factory(algorithm::xoroshiro, oracle_seed);
-        auto aquifer_random = random->from_hash_of("minecraft:aquifer");
-        auto factory = aquifer_random->fork_positional();
-        const density::sampler_context context;
-        terrain::noise_aquifer aquifer{std::move(settings->aquifer),
-                                       *factory,
-                                       chunk_volume,
-                                       picker,
-                                       blocks,
-                                       context};
         const terrain::fill_options options{.min_y = oracle_min_y,
                                             .height = oracle_height,
                                             .sea_level = settings->sea_level,
                                             .blocks = blocks};
-        const auto chunk = terrain::fill_chunk(
-            options, *settings->router.final_density, context, oracle_chunk_x,
-            oracle_chunk_z, aquifer);
+        auto random = new_positional_factory(algorithm::xoroshiro, seed);
+        auto aquifer_random = random->from_hash_of("minecraft:aquifer");
+        auto factory = aquifer_random->fork_positional();
+        const density::sampler_context context;
 
-        std::size_t mismatches = 0;
-        for (jint y = oracle_min_y; y < oracle_min_y + oracle_height; ++y) {
-            for (jint z = 0; z < 16; ++z) {
-                for (jint x = 0; x < 16; ++x) {
-                    const auto got = chunk.at(x, y, z);
-                    const auto want = vanilla->at(x, y, z);
-                    if (got == want) {
-                        continue;
+        constexpr std::array<std::array<jint, 2>, 5> chunks{{
+            {0, 0},
+            {1, 0},
+            {0, 1},
+            {1, 1},
+            {2, 2},
+        }};
+        for (const auto &coordinates : chunks) {
+            const jint chunk_x = coordinates[0];
+            const jint chunk_z = coordinates[1];
+            const auto payload = chunk_payload(*region, chunk_x, chunk_z);
+            expect(payload.has_value())
+                << "chunk is missing from the region file";
+            if (!payload) {
+                continue;
+            }
+            const auto document =
+                data::nbt::read(*payload, data::nbt::compression::zlib);
+            expect(document.has_value()) << document.error().message;
+            if (!document) {
+                continue;
+            }
+            const auto vanilla = decode_chunk(*document, chunk_x, chunk_z);
+            expect(vanilla.has_value()) << "unexpected chunk document";
+            if (!vanilla) {
+                continue;
+            }
+
+            const volume chunk_volume{16,           oracle_height,
+                                      16,           chunk_x * 16,
+                                      oracle_min_y, chunk_z * 16};
+            terrain::noise_aquifer aquifer{settings->aquifer,
+                                           *factory,
+                                           chunk_volume,
+                                           picker,
+                                           blocks,
+                                           context};
+            const auto chunk =
+                terrain::fill_chunk(options, *settings->router.final_density,
+                                    context, chunk_x, chunk_z, aquifer);
+
+            std::size_t mismatches = 0;
+            for (jint y = oracle_min_y; y < oracle_min_y + oracle_height; ++y) {
+                for (jint z = 0; z < 16; ++z) {
+                    for (jint x = 0; x < 16; ++x) {
+                        if (chunk.at(x, y, z) == vanilla->at(x, y, z)) {
+                            continue;
+                        }
+                        if (mismatches < 8) {
+                            std::fprintf(
+                                stderr,
+                                "chunk (%d, %d) block mismatch at (%d, %d, "
+                                "%d): "
+                                "got %u, want %u\n",
+                                static_cast<int>(chunk_x),
+                                static_cast<int>(chunk_z), static_cast<int>(x),
+                                static_cast<int>(y), static_cast<int>(z),
+                                static_cast<unsigned>(chunk.at(x, y, z)),
+                                static_cast<unsigned>(vanilla->at(x, y, z)));
+                        }
+                        ++mismatches;
                     }
-                    if (mismatches < 8) {
-                        std::fprintf(stderr,
-                                     "block mismatch at (%d, %d, %d): got %u, "
-                                     "want %u\n",
-                                     static_cast<int>(x), static_cast<int>(y),
-                                     static_cast<int>(z),
-                                     static_cast<unsigned>(got),
-                                     static_cast<unsigned>(want));
-                    }
-                    ++mismatches;
                 }
             }
-        }
-        expect(mismatches == 0) << "block mismatches: " << mismatches;
+            expect(mismatches == 0) << "chunk (" << chunk_x << ", " << chunk_z
+                                    << ") block mismatches: " << mismatches;
 
-        std::size_t heightmap_mismatches = 0;
-        for (std::size_t i = 0; i < 256U; ++i) {
-            const auto expected_surface = chunk.world_surface[i] + 1;
-            const auto expected_floor = chunk.ocean_floor[i] + 1;
-            if (vanilla->world_surface[i] != expected_surface ||
-                vanilla->ocean_floor[i] != expected_floor) {
-                if (heightmap_mismatches < 8) {
-                    std::fprintf(
-                        stderr,
-                        "heightmap mismatch at column %zu: surface got %d want "
-                        "%d; floor got %d want %d\n",
-                        i, static_cast<int>(vanilla->world_surface[i]),
-                        static_cast<int>(expected_surface),
-                        static_cast<int>(vanilla->ocean_floor[i]),
-                        static_cast<int>(expected_floor));
+            std::size_t heightmap_mismatches = 0;
+            for (std::size_t i = 0; i < 256U; ++i) {
+                const auto expected_surface = chunk.world_surface[i] + 1;
+                const auto expected_floor = chunk.ocean_floor[i] + 1;
+                if (vanilla->world_surface[i] != expected_surface ||
+                    vanilla->ocean_floor[i] != expected_floor) {
+                    ++heightmap_mismatches;
                 }
-                ++heightmap_mismatches;
             }
+            expect(heightmap_mismatches == 0)
+                << "chunk (" << chunk_x << ", " << chunk_z
+                << ") heightmap mismatches: " << heightmap_mismatches;
         }
-        expect(heightmap_mismatches == 0)
-            << "heightmap mismatches: " << heightmap_mismatches;
     };
 };
