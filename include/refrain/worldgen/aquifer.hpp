@@ -8,7 +8,11 @@
 #pragma once
 
 #include <refrain/worldgen/java_compat.hpp>
+#include <refrain/worldgen/mth.hpp>
 #include <refrain/worldgen/rng.hpp>
+
+#include <algorithm>
+#include <cmath>
 
 namespace refrain::worldgen::terrain {
 
@@ -61,5 +65,30 @@ class aquifer_grid {
                                      jint grid_x, jint grid_y, jint grid_z)
         -> cell_center;
 };
+
+/// `DimensionType.WAY_BELOW_MIN_Y` (MIN_Y << 4).
+inline constexpr jint way_below_min_y = -1024;
+
+/// `computeRandomizedFluidSurfaceLevel`: `middleY` is `floorDiv(y, 40) * 40 +
+/// 20`; the spread noise is sampled at `(floorDiv(x,16), floorDiv(y,40),
+/// floorDiv(z,16))` and multiplied by the float constant 10.0F.
+[[nodiscard]] inline auto randomized_fluid_surface_level(jint middle_y,
+                                                         float spread_noise,
+                                                         jint lowest_surface)
+    -> jint {
+    const double spread = static_cast<double>(spread_noise * 10.0F);
+    return std::min(lowest_surface, middle_y + mth::quantize(spread, 3));
+}
+
+/// `computeFluidType`: lava when the surface is at most -10, is not
+/// `WAY_BELOW_MIN_Y`, the global fluid is not already lava, and the lava noise
+/// magnitude exceeds 0.3.
+[[nodiscard]] inline auto fluid_type_is_lava(jint fluid_surface_level,
+                                             bool global_is_lava,
+                                             double lava_noise) -> bool {
+    return fluid_surface_level <= -10 &&
+           fluid_surface_level != way_below_min_y && !global_is_lava &&
+           std::abs(lava_noise) > 0.3;
+}
 
 } // namespace refrain::worldgen::terrain
