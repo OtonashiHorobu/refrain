@@ -12,6 +12,7 @@ import net.minecraft.world.level.levelgen.densityfunction.SamplerContext;
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 import net.minecraft.world.level.levelgen.WorldgenRandom;
 import net.minecraft.world.level.levelgen.densityfunction.generator.NoiseFunction;
+import net.minecraft.world.level.levelgen.densityfunction.op.LerpFunction;
 import net.minecraft.world.level.levelgen.synth.NormalNoise;
 import net.minecraft.world.level.levelgen.synth.Noise;
 
@@ -57,6 +58,17 @@ public class DensityVectors {
         sampler.sampleVolume(SamplerContext.EMPTY_UNCACHED, buffer, volume);
         for (int i = 0; i < buffer.size(); i++) {
             System.out.printf("%s.volume.%d %08x%n", name, i,
+                Float.floatToRawIntBits(buffer.get(i)));
+        }
+    }
+
+    static void volumeSamples(String name, DensitySampler sampler,
+                              DensityVolume volume) {
+        DensityBuffer buffer = DensityBuffer.createUnpooled(volume.size());
+        buffer.fill(0.0F);
+        sampler.sampleVolume(SamplerContext.EMPTY_UNCACHED, buffer, volume);
+        for (int i = 0; i < buffer.size(); i++) {
+            System.out.printf("%s.%d %08x%n", name, i,
                 Float.floatToRawIntBits(buffer.get(i)));
         }
     }
@@ -122,6 +134,29 @@ public class DensityVectors {
                 throw new UnsupportedOperationException("no end islands here");
             }
         };
+
+        DensityFunction alphaGy = DensityFunctions.yClampedGradient(-64, 63, 0.0F, 1.0F);
+        DensityFunction interpInput = DensityFunctions.add(gy, gy3);
+        samples("interp_fn", DensityFunctions.interpolated(interpInput, 4, 8));
+        samples("range_const_fn",
+            DensityFunctions.rangeChoice(gy, 0.25F, 0.75F,
+                DensityFunctions.constant(1.0F), DensityFunctions.constant(2.0F)));
+        samples("range_dyn_fn",
+            DensityFunctions.rangeChoice(gy, 0.25F, 0.75F, gy2, gy3));
+        samples("lerp_const_first_fn", DensityFunctions.lerp(alphaGy, 0.5F, gy2));
+        samples("lerp_const_second_fn",
+            new LerpFunction(alphaGy, gy2, DensityFunctions.constant(-0.5F)));
+        samples("lerp_dyn_fn", DensityFunctions.lerp(alphaGy, gy2, gy3));
+
+        // Interpolated volume branches: block-step, cell-aligned and block-aligned.
+        DensitySampler interpSampler =
+            DensityFunctions.interpolated(interpInput, 4, 8).compileSampler(CONTEXT);
+        volumeSamples("interp_fn.aligned",
+            interpSampler, new DensityVolume(3, 2, 2, -4, 56, 0, 4, 8, 4));
+        volumeSamples("interp_fn.block_step",
+            interpSampler, new DensityVolume(5, 9, 3, -4, 56, 0));
+        volumeSamples("interp_fn.step12",
+            interpSampler, new DensityVolume(3, 2, 2, -2, 52, 1, 3, 5, 2));
 
         samples("noise_fn", DensityFunctions.noise(temperatureHolder, 0.25, 0.5), noiseContext);
         samples("shift_fn", DensityFunctions.shift(temperatureHolder), noiseContext);

@@ -110,6 +110,27 @@ using sampler_ptr = std::unique_ptr<sampler>;
                                      std::shared_ptr<const noise_stack> stack)
     -> sampler_ptr;
 
+/// `minecraft:interpolated`: sample the input on a coarse cell grid and
+/// trilinearly interpolate the block values.
+[[nodiscard]] auto interpolated(sampler_ptr input, jint cell_size_xz,
+                                jint cell_size_y) -> sampler_ptr;
+
+/// `minecraft:range_choice`: `input` selects which branch to evaluate.
+[[nodiscard]] auto range_choice(sampler_ptr input, float min_inclusive,
+                                float max_exclusive, sampler_ptr when_in_range,
+                                sampler_ptr when_out_of_range) -> sampler_ptr;
+
+/// `minecraft:lerp`: `Mth.lerp(alpha, first, second)` with the reference's
+/// 0/1 alpha short circuits and constant specialisations.
+[[nodiscard]] auto lerp(sampler_ptr alpha, sampler_ptr first,
+                        sampler_ptr second) -> sampler_ptr;
+
+/// `minecraft:cache`: the 26.3 compiler deduplicates caches by input and
+/// stores results per `SamplerContext`. Values on the bulk path are identical
+/// to the input; this implementation returns the input unchanged. The scalar
+/// cross-path behaviour is documented as a deviation.
+[[nodiscard]] auto cache(sampler_ptr input) -> sampler_ptr;
+
 /// `minecraft:shift`: the 3D noise at a quarter scale, times four.
 [[nodiscard]] auto shift(std::shared_ptr<const noise_stack> stack)
     -> sampler_ptr;
