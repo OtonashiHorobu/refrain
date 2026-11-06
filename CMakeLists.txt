@@ -347,6 +347,16 @@ target_link_libraries(refrain-world PUBLIC refrain-kernel refrain-contracts
                                                Crc32c::crc32c ZLIB::ZLIB)
 add_library(Refrain::World ALIAS refrain-world)
 
+# --- world generation: random sources, registries, pipelines ---------------
+# Grows in phases; phase 1 covers the Java-semantics shim, MD5-derived seeds and
+# the random sources. New src/worldgen/*.cpp files are picked up without
+# editing this file.
+file(GLOB_RECURSE REFRAIN_WORLDGEN_SOURCES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/worldgen/*.cpp")
+refrain_add_library(refrain-worldgen ${REFRAIN_WORLDGEN_SOURCES})
+target_link_libraries(refrain-worldgen PUBLIC refrain-kernel)
+add_library(Refrain::WorldGen ALIAS refrain-worldgen)
+
 # --- simulation runtime: block registry, loaded chunks, tickets -------------
 # New src/sim files are picked up without editing this file.
 file(GLOB_RECURSE REFRAIN_SIM_SOURCES CONFIGURE_DEPENDS
@@ -517,7 +527,8 @@ if(REFRAIN_BUILD_TESTS)
                                               refrain-schema refrain-contracts
                                               refrain-archive refrain-data
                                               refrain-world refrain-sim
-                                              refrain-builtin refrain-mod-host
+                                              refrain-worldgen refrain-builtin
+                                              refrain-mod-host
                                               refrain-first-party-mods
                                               refrain-script-wasm libzip::zip
                                               LZ4::lz4_static
