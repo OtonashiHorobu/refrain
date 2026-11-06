@@ -108,7 +108,9 @@ inline constexpr jint chunk_width = 16;
 inline constexpr jint chunk_depth = 16;
 
 /// One chunk's blocks laid out as `(y - min_y) * 256 + z * 16 + x`, plus the
-/// two write-time heightmaps.
+/// two write-time heightmaps. A heightmap entry holds the highest `y` whose
+/// written state matched the heightmap predicate, mirroring Java
+/// `Heightmap.getHighestTaken`; an empty column reads `min_y - 1`.
 struct chunk_blocks {
     jint min_y{0};
     jint height{0};
@@ -137,7 +139,9 @@ struct fill_options {
 
 /// `NoiseBasedChunkGenerator.doFill` for one chunk: sample the final-density
 /// volume, walk y from the top down and write the aquifer/default block result.
-/// Air is skipped and the two write-time heightmaps are updated.
+/// Air is skipped. `world_surface` records every written state, while
+/// `ocean_floor` only records states in `minecraft:blocks_motion_in_heightmap`;
+/// the fill writes stone and fluids, and no fluid belongs to that tag.
 [[nodiscard]] auto fill_chunk(const fill_options &options,
                               const density::sampler &final_density,
                               const density::sampler_context &context,

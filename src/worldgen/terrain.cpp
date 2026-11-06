@@ -5,7 +5,6 @@
 #include <refrain/worldgen/terrain.hpp>
 
 #include <algorithm>
-#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -20,8 +19,11 @@ auto fill_chunk(const fill_options &options,
     chunk.height = options.height;
     chunk.states.assign(static_cast<std::size_t>(options.height) * 256U,
                         options.blocks.air);
-    chunk.ocean_floor.fill(std::numeric_limits<jint>::min());
-    chunk.world_surface.fill(std::numeric_limits<jint>::min());
+    // An untouched heightmap reads `min_y` as its first available slot, so the
+    // highest taken block of an empty column is one below the bottom.
+    const jint empty_height = options.min_y - 1;
+    chunk.ocean_floor.fill(empty_height);
+    chunk.world_surface.fill(empty_height);
 
     const volume vol{chunk_width,  options.height, chunk_depth,
                      chunk_x * 16, options.min_y,  chunk_z * 16};
@@ -46,8 +48,11 @@ auto fill_chunk(const fill_options &options,
                 }
                 chunk.set(x, block_y, z, *state);
                 const auto column = static_cast<std::size_t>(z * 16 + x);
-                chunk.ocean_floor[column] =
-                    std::max(chunk.ocean_floor[column], block_y);
+                if (*state != options.blocks.default_fluid &&
+                    *state != options.blocks.lava) {
+                    chunk.ocean_floor[column] =
+                        std::max(chunk.ocean_floor[column], block_y);
+                }
                 chunk.world_surface[column] =
                     std::max(chunk.world_surface[column], block_y);
             }
