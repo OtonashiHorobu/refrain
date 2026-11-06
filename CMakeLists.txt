@@ -7,6 +7,19 @@ project(Refrain VERSION 0.1.0 LANGUAGES C CXX)
 
 include(cmake/refrain_options.cmake)
 
+# LTO support probe: check_ipo_supported links a small program with the
+# toolchain (no run), so it also works for the MinGW cross build. The
+# sanitizer builds and MSVC opt out through REFRAIN_LTO/refrain_apply_lto.
+if(REFRAIN_LTO AND NOT REFRAIN_SANITIZE AND NOT MSVC)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT REFRAIN_IPO_SUPPORTED LANGUAGES C CXX)
+    if(NOT REFRAIN_IPO_SUPPORTED)
+        message(STATUS "[Refrain] LTO requested but unsupported; disabling it")
+    endif()
+else()
+    set(REFRAIN_IPO_SUPPORTED OFF)
+endif()
+
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

@@ -26,7 +26,7 @@ class RefrainConan(ConanFile):
         "build_bench": [True, False],
     }
     default_options = {
-        "lto": False,
+        "lto": True,
         "client": False,
         "with_crashpad": True,
         "with_wasm": True,
@@ -203,9 +203,7 @@ class RefrainConan(ConanFile):
 
     def generate(self):
         tc = CMakeToolchain(self)
-        tc.variables["CMAKE_INTERPROCEDURAL_OPTIMIZATION"] = (
-            "ON" if self.options.lto else "OFF"
-        )
+        tc.variables["REFRAIN_LTO"] = "ON" if self.options.lto else "OFF"
         tc.variables["REFRAIN_BUILD_CLIENT"] = "ON" if self.options.client else "OFF"
         tc.variables["REFRAIN_WITH_CRASHPAD"] = (
             "ON" if self.options.with_crashpad else "OFF"

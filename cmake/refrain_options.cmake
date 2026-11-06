@@ -50,6 +50,19 @@ option(REFRAIN_MONOLITHIC "Link first-party mods statically (not wired)" ON)
 # Comma-separated sanitizer list ("address,undefined" or "thread"); empty =
 # disabled. CI has dedicated ASan/UBSan and TSan jobs.
 set(REFRAIN_SANITIZE "" CACHE STRING "Comma-separated -fsanitize list")
+# Baseline hardening: stack protector/clash protection, CET, hidden
+# visibility, fortified libc calls and RELRO/BIND_NOW. Enabled by default;
+# `REFRAIN_HARDEN_MAX` adds zero-initialized stack objects and caller-saved
+# register clearing at a measurable runtime cost.
+option(REFRAIN_HARDEN "Enable the baseline security hardening flags" ON)
+option(REFRAIN_HARDEN_MAX
+       "Also zero stack storage and clear caller-saved registers on return"
+       OFF)
+# Link-time optimization for optimized builds. Disabled for sanitizer builds
+# (instrumentation and LTO interact poorly and build time doubles) and for the
+# MSVC toolchain (LTCG build time is not worth it for the CI budget); both can
+# be overridden explicitly.
+option(REFRAIN_LTO "Enable link-time optimization for optimized builds" ON)
 
 if(NOT REFRAIN_WITH_MIMALLOC)
     set(REFRAIN_MIMALLOC_OVERRIDE_NEW OFF)
@@ -66,6 +79,9 @@ function(refrain_apply_warnings target)
         target_compile_options(${target} PRIVATE /W4 /WX /permissive- /utf-8
                                                /GR- /Zc:__cplusplus /wd4702
                                                /wd4324)
+        refrain_apply_hardening(${target})
+        refrain_apply_lto(${target})
+        refrain_apply_link_hardening(${target})
         return()
     endif()
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wshadow
@@ -79,16 +95,85 @@ function(refrain_apply_warnings target)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         target_compile_options(${target} PRIVATE -Wno-deprecated-declarations)
     endif()
+    # Every first-party target opts into the same hardening/LTO policy. Calling
+    # these here keeps plain add_executable() call sites from silently missing
+    # the flags.
+    refrain_apply_hardening(${target})
+    refrain_apply_lto(${target})
+    refrain_apply_link_hardening(${target})
 endfunction()
 
-# Debug builds get the usual stack protector coverage; ASan/UBSan/TSan are
-# opt-in through CMake presets (CI matrix) so release timings stay honest.
+# Debug builds carry REFRAIN_DEBUG for asserts that should not run in
+# optimized builds; ASan/UBSan/TSan stay opt-in through CMake presets.
 function(refrain_apply_debug_options target)
-    if(MSVC)
-        return() # /GS is the MSVC default
-    endif()
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        target_compile_options(${target} PRIVATE -fstack-protector-strong)
         target_compile_definitions(${target} PRIVATE REFRAIN_DEBUG=1)
     endif()
+endfunction()
+
+# Security hardening applied to every first-party target. The flags are the
+# Linux distro baseline (Ubuntu/Debian hardening build flags) plus CET and
+# hidden visibility, which also removes unnecessary PLT indirection.
+function(refrain_apply_hardening target)
+    # Sanitizer builds are analysis configurations, not release artifacts;
+    # keep the instrumentation readable and the build fast.
+    if(NOT REFRAIN_HARDEN OR REFRAIN_SANITIZE)
+        return()
+    endif()
+    if(MSVC)
+        # /GS (buffer security check) is on by default; Control Flow Guard is
+        # the remaining low-cost mitigation and needs the matching link flag.
+        target_compile_options(${target} PRIVATE /guard:cf)
+        return()
+    endif()
+    target_compile_options(${target} PRIVATE -fstack-protector-strong
+                                            -fstack-clash-protection
+                                            -fvisibility=hidden)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
+        target_compile_options(${target} PRIVATE -fcf-protection=full)
+    endif()
+    if(NOT WIN32 AND
+       CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+        # glibc 2.34+ implements level 3; older headers fall back to level 2
+        # semantics through the same macro on supported distributions.
+        target_compile_definitions(${target} PRIVATE _FORTIFY_SOURCE=3)
+    endif()
+    if(REFRAIN_HARDEN_MAX)
+        target_compile_options(${target} PRIVATE -ftrivial-auto-var-init=zero
+                                                -fzero-call-used-regs=used-gpr)
+    endif()
+endfunction()
+
+# Executable-only link hardening (static libraries have no link step).
+function(refrain_apply_link_hardening target)
+    if(NOT REFRAIN_HARDEN)
+        return()
+    endif()
+    if(MSVC)
+        target_link_options(${target} PRIVATE /guard:cf)
+    elseif(WIN32)
+        target_link_options(${target} PRIVATE -Wl,--dynamicbase -Wl,--nxcompat
+                                               -Wl,--high-entropy-va)
+    elseif(UNIX AND NOT APPLE)
+        target_link_options(${target} PRIVATE -Wl,-z,relro -Wl,-z,now
+                                               -Wl,-z,noexecstack
+                                               -Wl,--as-needed)
+    endif()
+endfunction()
+
+# LTO is only meaningful for optimized builds; it is skipped for sanitizer
+# instrumentation (the sanitizer runtime and LTO interact badly and build time
+# doubles). CMake's IPO property adds the right -flto/-fno-fat-lto-objects pair
+# for GCC/Clang and /GL + /LTCG for MSVC.
+function(refrain_apply_lto target)
+    if(NOT REFRAIN_LTO OR REFRAIN_SANITIZE OR MSVC)
+        return()
+    endif()
+    if(NOT CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+        return()
+    endif()
+    if(NOT REFRAIN_IPO_SUPPORTED)
+        return()
+    endif()
+    set_target_properties(${target} PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
 endfunction()
