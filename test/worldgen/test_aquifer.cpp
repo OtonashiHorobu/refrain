@@ -69,6 +69,23 @@ suite<"worldgen/aquifer-grid"> aquifer_grid_tests = [] {
         }
     };
 
+    "randomized fluid surface level quantizes and clamps"_test = [] {
+        expect(randomized_fluid_surface_level(20, 1.0F, 100) == 20 + 9);
+        expect(randomized_fluid_surface_level(20, -1.0F, 100) == 20 - 12);
+        expect(randomized_fluid_surface_level(20, 0.0F, 100) == 20);
+        expect(randomized_fluid_surface_level(20, 0.0F, 15) == 15);
+        expect(randomized_fluid_surface_level(-20, 1.0F, 100) == -20 + 9);
+    };
+
+    "lava selection follows the threshold rules"_test = [] {
+        expect(fluid_type_is_lava(-10, false, 0.31));
+        expect(fluid_type_is_lava(-11, false, -0.31));
+        expect(!fluid_type_is_lava(-9, false, 0.9));
+        expect(!fluid_type_is_lava(-10, true, 0.9));
+        expect(!fluid_type_is_lava(-10, false, 0.3));
+        expect(!fluid_type_is_lava(way_below_min_y, false, 0.9));
+    };
+
     "similarity matches the reference formula"_test = [] {
         constexpr std::array<std::array<jint, 2>, 4> inputs{{
             {{3, 4}},
