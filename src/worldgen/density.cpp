@@ -1433,6 +1433,58 @@ class find_top_surface_sampler final : public sampler {
     jint cell_height_;
 };
 
+class interval_select_sampler final : public sampler {
+  public:
+    interval_select_sampler(sampler_ptr input, std::vector<float> thresholds,
+                            std::vector<sampler_ptr> functions)
+        : input_{std::move(input)}, thresholds_{std::move(thresholds)},
+          functions_{std::move(functions)} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint y, jint z) const -> float override {
+        const float input = input_->sample_value(context, x, y, z);
+        return functions_[static_cast<std::size_t>(select(input))]
+            ->sample_value(context, x, y, z);
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        input_->sample_volume(context, output, vol);
+        std::vector<buffer> buffers;
+        buffers.reserve(functions_.size());
+        for (const auto &function : functions_) {
+            buffers.emplace_back(vol.size());
+            function->sample_volume(context, buffers.back(), vol);
+        }
+        for (std::size_t i = 0; i < output.size(); ++i) {
+            const auto selected =
+                static_cast<std::size_t>(select(output.get(i)));
+            output.set(i, buffers[selected].get(i));
+        }
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        std::vector<interval> ranges;
+        ranges.reserve(functions_.size());
+        for (const auto &function : functions_) {
+            ranges.push_back(function->range());
+        }
+        return interval::encapsulating(std::span<const interval>{ranges});
+    }
+
+  private:
+    [[nodiscard]] auto select(float input) const -> jint {
+        for (std::size_t i = 0; i < thresholds_.size(); ++i) {
+            if (input < thresholds_[i]) {
+                return static_cast<jint>(i);
+            }
+        }
+        return static_cast<jint>(functions_.size()) - 1;
+    }
+
+    sampler_ptr input_;
+    std::vector<float> thresholds_;
+    std::vector<sampler_ptr> functions_;
+};
+
 } // namespace
 
 auto constant(float value) -> sampler_ptr {
@@ -1658,6 +1710,12 @@ auto range_choice(sampler_ptr input, float min_inclusive, float max_exclusive,
     return std::make_unique<range_choice_sampler>(
         std::move(input), min_inclusive, max_exclusive,
         std::move(when_in_range), std::move(when_out_of_range));
+}
+
+auto interval_select(sampler_ptr input, std::vector<float> thresholds,
+                     std::vector<sampler_ptr> functions) -> sampler_ptr {
+    return std::make_unique<interval_select_sampler>(
+        std::move(input), std::move(thresholds), std::move(functions));
 }
 
 auto lerp(sampler_ptr alpha, sampler_ptr first, sampler_ptr second)

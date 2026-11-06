@@ -130,6 +130,9 @@ class decoder {
         if (kind == "minecraft:range_choice") {
             return decode_range_choice(node);
         }
+        if (kind == "minecraft:interval_select") {
+            return decode_interval_select(node);
+        }
         if (kind == "minecraft:interpolated") {
             return decode_interpolated(node);
         }
@@ -164,7 +167,8 @@ class decoder {
         if (kind == "minecraft:find_top_surface") {
             return decode_find_top_surface(node);
         }
-        return std::unexpected{fail("unsupported density function type")};
+        return std::unexpected{
+            fail("unsupported density function type: " + std::string{kind})};
     }
 
     auto decode_reference(std::string_view id) -> result<sampler_ptr> {
@@ -441,6 +445,40 @@ class decoder {
         return range_choice(std::move(*input), static_cast<float>(*min_value),
                             static_cast<float>(*max_value), std::move(*when_in),
                             std::move(*when_out));
+    }
+
+    auto decode_interval_select(const json &node) -> result<sampler_ptr> {
+        auto input = child(node, "input");
+        if (!input) {
+            return input;
+        }
+        const json *thresholds = node.find("thresholds");
+        const json *functions = node.find("functions");
+        if (thresholds == nullptr || !thresholds->is_array() ||
+            functions == nullptr || !functions->is_array()) {
+            return std::unexpected{fail("interval_select is incomplete")};
+        }
+        std::vector<float> decoded_thresholds;
+        for (const auto &entry : *thresholds->as_array()) {
+            const auto value = entry.as_double();
+            if (!value) {
+                return std::unexpected{fail("threshold is not a number")};
+            }
+            decoded_thresholds.push_back(static_cast<float>(*value));
+        }
+        std::vector<sampler_ptr> decoded_functions;
+        for (const auto &entry : *functions->as_array()) {
+            auto decoded = decode_value(entry);
+            if (!decoded) {
+                return decoded;
+            }
+            decoded_functions.push_back(std::move(*decoded));
+        }
+        if (decoded_functions.size() != decoded_thresholds.size() + 1) {
+            return std::unexpected{fail("interval_select size mismatch")};
+        }
+        return interval_select(std::move(*input), std::move(decoded_thresholds),
+                               std::move(decoded_functions));
     }
 
     auto decode_interpolated(const json &node) -> result<sampler_ptr> {
