@@ -14,8 +14,8 @@
 
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-    echo "usage: $0 /path/to/server.jar" >&2
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+    echo "usage: $0 /path/to/server.jar [class]" >&2
     exit 2
 fi
 
@@ -43,4 +43,4 @@ mv "$work"/META-INF/versions "$work"/versions
 classpath=$(tr ';' ':' < "$work/META-INF/classpath-joined")
 
 cd "$work"
-java -cp "$classpath" "$script_dir/Vectors.java"
+java -cp "$classpath" "$script_dir/${2:-Vectors}.java"

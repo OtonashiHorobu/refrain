@@ -86,6 +86,13 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${REFRAIN_OUTPUT_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
+# Java never contracts a multiply and an add into one FMA, and world
+# generation must reproduce Java's float/double results bit for bit. Keep
+# contraction off for every first-party target; -ffast-math is forbidden.
+if(NOT MSVC)
+    add_compile_options(-ffp-contract=off)
+endif()
+
 include(cmake/refrain_target.cmake)
 
 # --- third-party (Conan / CMakeDeps) --------------------------------------

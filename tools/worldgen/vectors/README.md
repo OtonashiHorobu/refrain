@@ -1,12 +1,18 @@
-# Random-source vectors
+# World-generation vectors
 
-`Vectors.java` runs the game's own random-number classes and prints the draws
-that the world generator depends on. Its output is the source of truth for the
-constants frozen in `test/worldgen/test_rng.cpp`.
+The probes run the game's own classes and print values the generator depends
+on. Their output is the source of truth for the constants frozen in the tests:
+
+| Probe | Test | Covers |
+|---|---|---|
+| `Vectors.java` | `test/worldgen/test_rng.cpp` | random sources, seed mixing, positional factories, `Mth.getSeed` |
+| `NoiseVectors.java` | `test/worldgen/test_noise.cpp` | `PerlinNoise`, `NormalNoise` (builder and parity), `NoiseStack` |
 
 ```bash
-tools/worldgen/vectors/run.sh /path/to/server.jar
+tools/worldgen/vectors/run.sh /path/to/server.jar [class]
 ```
+
+The class defaults to `Vectors`; pass `NoiseVectors` for the noise probe.
 
 The script unpacks the 26.3 bundler jar into a temporary directory, builds the
 classpath from `META-INF/classpath-joined`, and runs the probe in source-file
@@ -23,6 +29,12 @@ mode. It needs a JDK (26.3 requires Java 25 or newer) and a locally owned
 | `getseed` | `Mth.getSeed` positional hash |
 | `*.at.*`, `*.hash.*` | positional factories, coordinate and name streams |
 | `decoration`, `feature`, `large`, `salt` | `WorldgenRandom` seed formulas on both delegates |
+
+`NoiseVectors` covers a plain `PerlinNoise` (legacy source, 42), the overworld
+`minecraft:temperature` noise built through
+`xorshiro(seed).forkPositional().fromHashOf("minecraft:temperature")`, a small
+three-octave noise, and the legacy-normalised `createParity` path. It prints
+the raw float bits of six 3D and four 2D samples plus `NormalNoise.range()`.
 
 `nextDouble` is checked by raw bit pattern because the reference implementation
 multiplies a 53-bit integer by a `double` constant; the decompiled text shows a
