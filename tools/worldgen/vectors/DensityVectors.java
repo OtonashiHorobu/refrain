@@ -2,7 +2,10 @@ import net.minecraft.SharedConstants;
 import net.minecraft.core.Holder;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.resources.Identifier;
+import net.minecraft.util.CubicSpline;
+import net.minecraft.util.Interval;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.levelgen.densityfunction.op.SplineFunction;
 import net.minecraft.world.level.levelgen.densityfunction.DensityBuffer;
 import net.minecraft.world.level.levelgen.densityfunction.DensityFunction;
 import net.minecraft.world.level.levelgen.densityfunction.DensityFunctions;
@@ -60,6 +63,13 @@ public class DensityVectors {
             System.out.printf("%s.volume.%d %08x%n", name, i,
                 Float.floatToRawIntBits(buffer.get(i)));
         }
+    }
+
+    static void range(String name, DensityFunction function) {
+        Interval range = function.range();
+        System.out.printf("%s.range %08x %08x%n", name,
+            Float.floatToRawIntBits(range.min()),
+            Float.floatToRawIntBits(range.max()));
     }
 
     static void volumeSamples(String name, DensitySampler sampler,
@@ -147,6 +157,37 @@ public class DensityVectors {
         samples("lerp_const_second_fn",
             new LerpFunction(alphaGy, gy2, DensityFunctions.constant(-0.5F)));
         samples("lerp_dyn_fn", DensityFunctions.lerp(alphaGy, gy2, gy3));
+
+        CubicSpline<SplineFunction.Coordinate> basicSpline =
+            CubicSpline.builder(new SplineFunction.Coordinate(gy))
+                .addPoint(-0.5F, 1.0F, 0.0F)
+                .addPoint(0.0F, 0.0F, 2.0F)
+                .addPoint(0.5F, 2.0F, -1.0F)
+                .build();
+        DensityFunction basicFn = new SplineFunction(basicSpline);
+        samples("spline_basic_fn", basicFn);
+        range("spline_basic_fn", basicFn);
+
+        CubicSpline<SplineFunction.Coordinate> nestedInner =
+            CubicSpline.builder(new SplineFunction.Coordinate(gy3))
+                .addPoint(-1.0F, 0.25F, 0.5F)
+                .addPoint(1.0F, -0.25F, 0.0F)
+                .build();
+        CubicSpline<SplineFunction.Coordinate> nestedSpline =
+            CubicSpline.builder(new SplineFunction.Coordinate(gy))
+                .addPoint(-0.25F, 0.5F, 0.0F)
+                .addPoint(0.25F, nestedInner)
+                .addPoint(0.75F, nestedInner)
+                .addPoint(1.25F, 1.5F, 1.0F)
+                .build();
+        DensityFunction nestedFn = new SplineFunction(nestedSpline);
+        samples("spline_nested_fn", nestedFn);
+        range("spline_nested_fn", nestedFn);
+
+        DensityFunction constantFn = DensityFunctions.spline(
+            CubicSpline.<SplineFunction.Coordinate>constant(0.75F));
+        samples("spline_constant_fn", constantFn);
+        range("spline_constant_fn", constantFn);
 
         // Interpolated volume branches: block-step, cell-aligned and block-aligned.
         DensitySampler interpSampler =

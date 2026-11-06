@@ -110,6 +110,37 @@ using sampler_ptr = std::unique_ptr<sampler>;
                                      std::shared_ptr<const noise_stack> stack)
     -> sampler_ptr;
 
+class spline;
+struct spline_point {
+    float location{0.0F};
+    float derivative{0.0F};
+    std::shared_ptr<const spline> value{};
+};
+
+/// `net.minecraft.util.CubicSpline`: a constant or a multipoint Hermite
+/// spline. Coordinates are density samplers; identical samplers are sampled
+/// once per point/volume.
+struct spline {
+    [[nodiscard]] static auto constant(float value)
+        -> std::shared_ptr<const spline>;
+    [[nodiscard]] static auto multipoint(std::shared_ptr<sampler> coordinate,
+                                         std::vector<spline_point> points)
+        -> std::shared_ptr<const spline>;
+
+    [[nodiscard]] auto range() const -> interval;
+
+    bool constant_{false};
+    float constant_value_{0.0F};
+    std::shared_ptr<sampler> coordinate_;
+    std::vector<float> locations_;
+    std::vector<float> derivatives_;
+    std::vector<std::shared_ptr<const spline>> values_;
+};
+
+/// `minecraft:spline`.
+[[nodiscard]] auto spline_value(std::shared_ptr<const spline> value)
+    -> sampler_ptr;
+
 /// `minecraft:interpolated`: sample the input on a coarse cell grid and
 /// trilinearly interpolate the block values.
 [[nodiscard]] auto interpolated(sampler_ptr input, jint cell_size_xz,
