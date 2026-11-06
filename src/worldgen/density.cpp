@@ -675,6 +675,434 @@ class shift_b_sampler final : public sampler {
     std::shared_ptr<const noise_stack> stack_;
 };
 
+class interpolated_sampler final : public sampler {
+  public:
+    interpolated_sampler(sampler_ptr input, jint cell_size_xz, jint cell_size_y)
+        : input_{std::move(input)}, cell_size_xz_{cell_size_xz},
+          cell_size_y_{cell_size_y},
+          cell_size_xz_inv_{1.0F / static_cast<float>(cell_size_xz)},
+          cell_size_y_inv_{1.0F / static_cast<float>(cell_size_y)} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context,
+                                    jint block_x, jint block_y,
+                                    jint block_z) const -> float override {
+        const jint x_in_cell = floor_mod(block_x, cell_size_xz_);
+        const jint y_in_cell = floor_mod(block_y, cell_size_y_);
+        const jint z_in_cell = floor_mod(block_z, cell_size_xz_);
+        if (x_in_cell == 0 && y_in_cell == 0 && z_in_cell == 0) {
+            return input_->sample_value(context, block_x, block_y, block_z);
+        }
+        const volume vol{2,
+                         2,
+                         2,
+                         block_x - x_in_cell,
+                         block_y - y_in_cell,
+                         block_z - z_in_cell,
+                         cell_size_xz_,
+                         cell_size_y_,
+                         cell_size_xz_};
+        auto input_buffer = context.acquire(vol.size());
+        input_->sample_volume(context, input_buffer, vol);
+        return mth::lerp3(
+            static_cast<float>(x_in_cell) / static_cast<float>(cell_size_xz_),
+            static_cast<float>(y_in_cell) / static_cast<float>(cell_size_y_),
+            static_cast<float>(z_in_cell) / static_cast<float>(cell_size_xz_),
+            input_buffer.get(vol.index_unchecked(0, 0, 0)),
+            input_buffer.get(vol.index_unchecked(1, 0, 0)),
+            input_buffer.get(vol.index_unchecked(0, 1, 0)),
+            input_buffer.get(vol.index_unchecked(1, 1, 0)),
+            input_buffer.get(vol.index_unchecked(0, 0, 1)),
+            input_buffer.get(vol.index_unchecked(1, 0, 1)),
+            input_buffer.get(vol.index_unchecked(0, 1, 1)),
+            input_buffer.get(vol.index_unchecked(1, 1, 1)));
+    }
+
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        if ((vol.step_block_x() == cell_size_xz_ || vol.size_x() == 1) &&
+            (vol.step_block_y() == cell_size_y_ || vol.size_y() == 1) &&
+            (vol.step_block_z() == cell_size_xz_ || vol.size_z() == 1) &&
+            floor_mod(vol.min_block_x(), cell_size_xz_) == 0 &&
+            floor_mod(vol.min_block_y(), cell_size_y_) == 0 &&
+            floor_mod(vol.min_block_z(), cell_size_xz_) == 0) {
+            input_->sample_volume(context, output, vol);
+        } else if (vol.step_block_x() == 1 && vol.step_block_y() == 1 &&
+                   vol.step_block_z() == 1) {
+            sample_with_block_step(context, output, vol);
+        } else {
+            sample_with_non_block_step(context, output, vol);
+        }
+    }
+
+    [[nodiscard]] auto range() const -> interval override {
+        return input_->range();
+    }
+
+  private:
+    void sample_with_non_block_step(const sampler_context &context,
+                                    buffer &output, const volume &vol) const {
+        const volume block_volume{vol.size_x() * vol.step_block_x(),
+                                  vol.size_y() * vol.step_block_y(),
+                                  vol.size_z() * vol.step_block_z(),
+                                  vol.min_block_x(),
+                                  vol.min_block_y(),
+                                  vol.min_block_z()};
+        auto block_buffer = context.acquire(block_volume.size());
+        sample_with_block_step(context, block_buffer, block_volume);
+        for (jint z = 0; z < vol.size_z(); ++z) {
+            for (jint x = 0; x < vol.size_x(); ++x) {
+                for (jint y = 0; y < vol.size_y(); ++y) {
+                    const float value =
+                        block_buffer.get(block_volume.index_unchecked(
+                            x * vol.step_block_x(), y * vol.step_block_y(),
+                            z * vol.step_block_z()));
+                    output.set(vol.index_unchecked(x, y, z), value);
+                }
+            }
+        }
+    }
+
+    void sample_with_block_step(const sampler_context &context, buffer &output,
+                                const volume &vol) const {
+        const jint min_cell_x = floor_div(vol.min_block_x(), cell_size_xz_);
+        const jint min_cell_y = floor_div(vol.min_block_y(), cell_size_y_);
+        const jint min_cell_z = floor_div(vol.min_block_z(), cell_size_xz_);
+        const jint max_cell_x = floor_div(vol.max_block_x(), cell_size_xz_);
+        const jint max_cell_y = floor_div(vol.max_block_y(), cell_size_y_);
+        const jint max_cell_z = floor_div(vol.max_block_z(), cell_size_xz_);
+        const jint cell_count_x = max_cell_x - min_cell_x + 1;
+        const jint cell_count_y = max_cell_y - min_cell_y + 1;
+        const jint cell_count_z = max_cell_z - min_cell_z + 1;
+        const volume cell_volume{
+            floor_mod(vol.max_block_x(), cell_size_xz_) == 0 ? cell_count_x
+                                                             : cell_count_x + 1,
+            floor_mod(vol.max_block_y(), cell_size_y_) == 0 ? cell_count_y
+                                                            : cell_count_y + 1,
+            floor_mod(vol.max_block_z(), cell_size_xz_) == 0 ? cell_count_z
+                                                             : cell_count_z + 1,
+            min_cell_x * cell_size_xz_,
+            min_cell_y * cell_size_y_,
+            min_cell_z * cell_size_xz_,
+            cell_size_xz_,
+            cell_size_y_,
+            cell_size_xz_};
+        auto cell_buffer = context.acquire(cell_volume.size());
+        input_->sample_volume(context, cell_buffer, cell_volume);
+
+        for (jint cell_z = 0; cell_z < cell_count_z; ++cell_z) {
+            const jint next_cell_z =
+                std::min(cell_z + 1, cell_volume.size_z() - 1);
+            for (jint cell_x = 0; cell_x < cell_count_x; ++cell_x) {
+                const jint next_cell_x =
+                    std::min(cell_x + 1, cell_volume.size_x() - 1);
+                float v000 = cell_buffer.get(
+                    cell_volume.index_unchecked(cell_x, 0, cell_z));
+                float v100 = cell_buffer.get(
+                    cell_volume.index_unchecked(next_cell_x, 0, cell_z));
+                float v001 = cell_buffer.get(
+                    cell_volume.index_unchecked(cell_x, 0, next_cell_z));
+                float v101 = cell_buffer.get(
+                    cell_volume.index_unchecked(next_cell_x, 0, next_cell_z));
+                for (jint cell_y = 0; cell_y < cell_count_y; ++cell_y) {
+                    const jint next_cell_y =
+                        std::min(cell_y + 1, cell_volume.size_y() - 1);
+                    const float v010 =
+                        cell_buffer.get(cell_volume.index_unchecked(
+                            cell_x, next_cell_y, cell_z));
+                    const float v110 =
+                        cell_buffer.get(cell_volume.index_unchecked(
+                            next_cell_x, next_cell_y, cell_z));
+                    const float v011 =
+                        cell_buffer.get(cell_volume.index_unchecked(
+                            cell_x, next_cell_y, next_cell_z));
+                    const float v111 =
+                        cell_buffer.get(cell_volume.index_unchecked(
+                            next_cell_x, next_cell_y, next_cell_z));
+                    fill_cell(output, vol, cell_volume, cell_x, cell_y, cell_z,
+                              v000, v100, v010, v110, v001, v101, v011, v111);
+                    v000 = v010;
+                    v100 = v110;
+                    v001 = v011;
+                    v101 = v111;
+                }
+            }
+        }
+    }
+
+    void fill_cell(buffer &output, const volume &output_volume,
+                   const volume &cell_volume, jint cell_x, jint cell_y,
+                   jint cell_z, float v000, float v100, float v010, float v110,
+                   float v001, float v101, float v011, float v111) const {
+        const jint cell_output_x =
+            cell_volume.block_x(cell_x) - output_volume.min_block_x();
+        const jint cell_output_y =
+            cell_volume.block_y(cell_y) - output_volume.min_block_y();
+        const jint cell_output_z =
+            cell_volume.block_z(cell_z) - output_volume.min_block_z();
+        const jint x0 = std::max(0, -cell_output_x);
+        const jint y0 = std::max(0, -cell_output_y);
+        const jint z0 = std::max(0, -cell_output_z);
+        const jint x1 =
+            std::min(cell_size_xz_, output_volume.size_x() - cell_output_x) - 1;
+        const jint y1 =
+            std::min(cell_size_y_, output_volume.size_y() - cell_output_y) - 1;
+        const jint z1 =
+            std::min(cell_size_xz_, output_volume.size_z() - cell_output_z) - 1;
+
+        for (jint z = z0; z <= z1; ++z) {
+            const jint output_z = cell_output_z + z;
+            const float alpha_z = static_cast<float>(z) * cell_size_xz_inv_;
+            const float v00 = mth::lerp(alpha_z, v000, v001);
+            const float v01 = mth::lerp(alpha_z, v010, v011);
+            const float v10 = mth::lerp(alpha_z, v100, v101);
+            const float v11 = mth::lerp(alpha_z, v110, v111);
+            for (jint x = x0; x <= x1; ++x) {
+                const jint output_x = cell_output_x + x;
+                const float alpha_x = static_cast<float>(x) * cell_size_xz_inv_;
+                const float v_0 = mth::lerp(alpha_x, v00, v10);
+                const float v_1 = mth::lerp(alpha_x, v01, v11);
+                const float value_step = (v_1 - v_0) * cell_size_y_inv_;
+                float value = v_0 + value_step * static_cast<float>(y0);
+                std::size_t output_index = output_volume.index_unchecked(
+                    output_x, cell_output_y + y0, output_z);
+                for (jint y = y0; y <= y1; ++y) {
+                    output.set(output_index, value);
+                    ++output_index;
+                    value += value_step;
+                }
+            }
+        }
+    }
+
+    sampler_ptr input_;
+    jint cell_size_xz_;
+    jint cell_size_y_;
+    float cell_size_xz_inv_;
+    float cell_size_y_inv_;
+};
+
+class range_choice_sampler final : public sampler {
+  public:
+    range_choice_sampler(sampler_ptr input, float min_inclusive,
+                         float max_exclusive, sampler_ptr when_in_range,
+                         sampler_ptr when_out_of_range)
+        : input_{std::move(input)}, min_inclusive_{min_inclusive},
+          max_exclusive_{max_exclusive},
+          when_in_range_{std::move(when_in_range)},
+          when_out_of_range_{std::move(when_out_of_range)} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint y, jint z) const -> float override {
+        const float input = input_->sample_value(context, x, y, z);
+        return input >= min_inclusive_ && input < max_exclusive_
+                   ? when_in_range_->sample_value(context, x, y, z)
+                   : when_out_of_range_->sample_value(context, x, y, z);
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        when_in_range_->sample_volume(context, output, vol);
+        auto input_buffer = context.acquire(vol.size());
+        input_->sample_volume(context, input_buffer, vol);
+        auto out_buffer = context.acquire(vol.size());
+        when_out_of_range_->sample_volume(context, out_buffer, vol);
+        for (std::size_t i = 0; i < output.size(); ++i) {
+            const float input = input_buffer.get(i);
+            if (!(input >= min_inclusive_) || !(input < max_exclusive_)) {
+                output.set(i, out_buffer.get(i));
+            }
+        }
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return interval::encapsulating(when_in_range_->range(),
+                                       when_out_of_range_->range());
+    }
+
+  private:
+    sampler_ptr input_;
+    float min_inclusive_;
+    float max_exclusive_;
+    sampler_ptr when_in_range_;
+    sampler_ptr when_out_of_range_;
+};
+
+class const_range_choice_sampler final : public sampler {
+  public:
+    const_range_choice_sampler(sampler_ptr input, float min_inclusive,
+                               float max_exclusive, float when_in_range,
+                               float when_out_of_range)
+        : input_{std::move(input)}, min_inclusive_{min_inclusive},
+          max_exclusive_{max_exclusive}, when_in_range_{when_in_range},
+          when_out_of_range_{when_out_of_range} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint y, jint z) const -> float override {
+        return choose(input_->sample_value(context, x, y, z));
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        input_->sample_volume(context, output, vol);
+        for (std::size_t i = 0; i < output.size(); ++i) {
+            output.set(i, choose(output.get(i)));
+        }
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return interval::encapsulating(when_in_range_, when_out_of_range_);
+    }
+
+  private:
+    [[nodiscard]] auto choose(float input) const -> float {
+        return input >= min_inclusive_ && input < max_exclusive_
+                   ? when_in_range_
+                   : when_out_of_range_;
+    }
+
+    sampler_ptr input_;
+    float min_inclusive_;
+    float max_exclusive_;
+    float when_in_range_;
+    float when_out_of_range_;
+};
+
+class lerp_sampler final : public sampler {
+  public:
+    lerp_sampler(sampler_ptr alpha, sampler_ptr first, sampler_ptr second)
+        : alpha_{std::move(alpha)}, first_{std::move(first)},
+          second_{std::move(second)} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint y, jint z) const -> float override {
+        const float alpha = alpha_->sample_value(context, x, y, z);
+        if (alpha == 0.0F) {
+            return first_->sample_value(context, x, y, z);
+        }
+        if (alpha == 1.0F) {
+            return second_->sample_value(context, x, y, z);
+        }
+        return mth::lerp(alpha, first_->sample_value(context, x, y, z),
+                         second_->sample_value(context, x, y, z));
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        alpha_->sample_volume(context, output, vol);
+        auto first_buffer = context.acquire(vol.size());
+        first_->sample_volume(context, first_buffer, vol);
+        auto second_buffer = context.acquire(vol.size());
+        second_->sample_volume(context, second_buffer, vol);
+        for (std::size_t i = 0; i < output.size(); ++i) {
+            const float alpha = output.get(i);
+            const float first = first_buffer.get(i);
+            const float second = second_buffer.get(i);
+            if (alpha == 0.0F) {
+                output.set(i, first);
+            } else if (alpha == 1.0F) {
+                output.set(i, second);
+            } else {
+                output.set(i, mth::lerp(alpha, first, second));
+            }
+        }
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return interval::lerp(alpha_->range(), first_->range(),
+                              second_->range());
+    }
+
+  private:
+    sampler_ptr alpha_;
+    sampler_ptr first_;
+    sampler_ptr second_;
+};
+
+class const_first_lerp_sampler final : public sampler {
+  public:
+    const_first_lerp_sampler(sampler_ptr alpha, float first, sampler_ptr second)
+        : alpha_{std::move(alpha)}, first_{first}, second_{std::move(second)} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint y, jint z) const -> float override {
+        const float alpha = alpha_->sample_value(context, x, y, z);
+        if (alpha == 0.0F) {
+            return first_;
+        }
+        if (alpha == 1.0F) {
+            return second_->sample_value(context, x, y, z);
+        }
+        return mth::lerp(alpha, first_,
+                         second_->sample_value(context, x, y, z));
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        alpha_->sample_volume(context, output, vol);
+        auto second_buffer = context.acquire(vol.size());
+        second_->sample_volume(context, second_buffer, vol);
+        for (std::size_t i = 0; i < output.size(); ++i) {
+            const float alpha = output.get(i);
+            const float second = second_buffer.get(i);
+            if (alpha == 0.0F) {
+                output.set(i, first_);
+            } else if (alpha == 1.0F) {
+                output.set(i, second);
+            } else {
+                output.set(i, mth::lerp(alpha, first_, second));
+            }
+        }
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return interval::lerp(alpha_->range(), interval::of_exact(first_),
+                              second_->range());
+    }
+
+  private:
+    sampler_ptr alpha_;
+    float first_;
+    sampler_ptr second_;
+};
+
+class const_second_lerp_sampler final : public sampler {
+  public:
+    const_second_lerp_sampler(sampler_ptr alpha, sampler_ptr first,
+                              float second)
+        : alpha_{std::move(alpha)}, first_{std::move(first)}, second_{second} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint y, jint z) const -> float override {
+        const float alpha = alpha_->sample_value(context, x, y, z);
+        if (alpha == 0.0F) {
+            return first_->sample_value(context, x, y, z);
+        }
+        if (alpha == 1.0F) {
+            return second_;
+        }
+        return mth::lerp(alpha, first_->sample_value(context, x, y, z),
+                         second_);
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        alpha_->sample_volume(context, output, vol);
+        auto first_buffer = context.acquire(vol.size());
+        first_->sample_volume(context, first_buffer, vol);
+        for (std::size_t i = 0; i < output.size(); ++i) {
+            const float alpha = output.get(i);
+            const float first = first_buffer.get(i);
+            if (alpha == 0.0F) {
+                output.set(i, first);
+            } else if (alpha == 1.0F) {
+                output.set(i, second_);
+            } else {
+                output.set(i, mth::lerp(alpha, first, second_));
+            }
+        }
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return interval::lerp(alpha_->range(), first_->range(),
+                              interval::of_exact(second_));
+    }
+
+  private:
+    sampler_ptr alpha_;
+    sampler_ptr first_;
+    float second_;
+};
+
 } // namespace
 
 auto constant(float value) -> sampler_ptr {
@@ -880,5 +1308,42 @@ auto shift_a(std::shared_ptr<const noise_stack> stack) -> sampler_ptr {
 auto shift_b(std::shared_ptr<const noise_stack> stack) -> sampler_ptr {
     return std::make_unique<shift_b_sampler>(std::move(stack));
 }
+
+auto interpolated(sampler_ptr input, jint cell_size_xz, jint cell_size_y)
+    -> sampler_ptr {
+    return std::make_unique<interpolated_sampler>(std::move(input),
+                                                  cell_size_xz, cell_size_y);
+}
+
+auto range_choice(sampler_ptr input, float min_inclusive, float max_exclusive,
+                  sampler_ptr when_in_range, sampler_ptr when_out_of_range)
+    -> sampler_ptr {
+    const float *in_value = when_in_range->constant_value();
+    const float *out_value = when_out_of_range->constant_value();
+    if (in_value != nullptr && out_value != nullptr) {
+        return std::make_unique<const_range_choice_sampler>(
+            std::move(input), min_inclusive, max_exclusive, *in_value,
+            *out_value);
+    }
+    return std::make_unique<range_choice_sampler>(
+        std::move(input), min_inclusive, max_exclusive,
+        std::move(when_in_range), std::move(when_out_of_range));
+}
+
+auto lerp(sampler_ptr alpha, sampler_ptr first, sampler_ptr second)
+    -> sampler_ptr {
+    if (const auto *value = first->constant_value(); value != nullptr) {
+        return std::make_unique<const_first_lerp_sampler>(
+            std::move(alpha), *value, std::move(second));
+    }
+    if (const auto *value = second->constant_value(); value != nullptr) {
+        return std::make_unique<const_second_lerp_sampler>(
+            std::move(alpha), std::move(first), *value);
+    }
+    return std::make_unique<lerp_sampler>(std::move(alpha), std::move(first),
+                                          std::move(second));
+}
+
+auto cache(sampler_ptr input) -> sampler_ptr { return input; }
 
 } // namespace refrain::worldgen::density

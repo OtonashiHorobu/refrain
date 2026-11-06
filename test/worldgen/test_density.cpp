@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <span>
 
 namespace {
 
@@ -75,6 +76,16 @@ void check_graph(const char *name, const sampler &value,
     value.sample_volume(context, output, vol);
     for (std::size_t i = 0; i < bulk.size(); ++i) {
         expect(bits(output.get(i)) == bulk[i]) << name << " volume " << i;
+    }
+}
+
+void check_volume(const char *name, const sampler &value, const volume &vol,
+                  std::span<const std::uint32_t> expected) {
+    const sampler_context context;
+    buffer output{vol.size()};
+    value.sample_volume(context, output, vol);
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        expect(bits(output.get(i)) == expected[i]) << name << " sample " << i;
     }
 }
 
@@ -185,6 +196,84 @@ suite<"worldgen/density-samplers"> density_sampler_tests = [] {
                             0x3f8efefeU});
         }
         {
+            auto value = interpolated(add(gradient_y(-64, 320, 0.0F, 1.0F),
+                                          gradient_y(-64, 64, 1.0F, -1.0F)),
+                                      4, 8);
+            check_graph("interp_fn", *value,
+                        std::array<std::uint32_t, 4>{0x3f800000U, 0x3e2aaaabU,
+                                                     0xbf275555U, 0xbb2aaaa0U},
+                        std::array<std::uint32_t, 12>{
+                            0xbf1d5555U, 0xbf275554U, 0xbf1d5555U, 0xbf275554U,
+                            0xbf1d5555U, 0xbf275554U, 0xbf1d5555U, 0xbf275554U,
+                            0xbf1d5555U, 0xbf275554U, 0xbf1d5555U,
+                            0xbf275554U});
+        }
+        {
+            auto value =
+                range_choice(gradient_y(-64, 320, 0.0F, 1.0F), 0.25F, 0.75F,
+                             density::constant(1.0F), density::constant(2.0F));
+            check_graph("range_const_fn", *value,
+                        std::array<std::uint32_t, 4>{0x40000000U, 0x40000000U,
+                                                     0x3f800000U, 0x40000000U},
+                        std::array<std::uint32_t, 12>{
+                            0x3f800000U, 0x3f800000U, 0x3f800000U, 0x3f800000U,
+                            0x3f800000U, 0x3f800000U, 0x3f800000U, 0x3f800000U,
+                            0x3f800000U, 0x3f800000U, 0x3f800000U,
+                            0x3f800000U});
+        }
+        {
+            auto value = range_choice(gradient_y(-64, 320, 0.0F, 1.0F), 0.25F,
+                                      0.75F, gradient_y(0, 128, -2.0F, 2.0F),
+                                      gradient_y(-64, 64, 1.0F, -1.0F));
+            check_graph("range_dyn_fn", *value,
+                        std::array<std::uint32_t, 4>{0x3f800000U, 0x00000000U,
+                                                     0xbd000000U, 0xbf800000U},
+                        std::array<std::uint32_t, 12>{
+                            0xbe000000U, 0xbd000000U, 0xbe000000U, 0xbd000000U,
+                            0xbe000000U, 0xbd000000U, 0xbe000000U, 0xbd000000U,
+                            0xbe000000U, 0xbd000000U, 0xbe000000U,
+                            0xbd000000U});
+        }
+        {
+            auto value =
+                lerp(gradient_y(-64, 63, 0.0F, 1.0F), density::constant(0.5F),
+                     gradient_y(0, 128, -2.0F, 2.0F));
+            check_graph("lerp_const_first_fn", *value,
+                        std::array<std::uint32_t, 4>{0x3f000000U, 0xbf42850aU,
+                                                     0xbd000000U, 0x40000000U},
+                        std::array<std::uint32_t, 12>{
+                            0xbde1c388U, 0xbd000000U, 0xbde1c388U, 0xbd000000U,
+                            0xbde1c388U, 0xbd000000U, 0xbde1c388U, 0xbd000000U,
+                            0xbde1c388U, 0xbd000000U, 0xbde1c388U,
+                            0xbd000000U});
+        }
+        {
+            auto value =
+                lerp(gradient_y(-64, 63, 0.0F, 1.0F),
+                     gradient_y(0, 128, -2.0F, 2.0F), density::constant(-0.5F));
+            check_graph("lerp_const_second_fn", *value,
+                        std::array<std::uint32_t, 4>{0xc0000000U, 0xbf9f3e7dU,
+                                                     0xbf000000U, 0xbf000000U},
+                        std::array<std::uint32_t, 12>{
+                            0xbefb76eeU, 0xbf000000U, 0xbefb76eeU, 0xbf000000U,
+                            0xbefb76eeU, 0xbf000000U, 0xbefb76eeU, 0xbf000000U,
+                            0xbefb76eeU, 0xbf000000U, 0xbefb76eeU,
+                            0xbf000000U});
+        }
+        {
+            auto value = lerp(gradient_y(-64, 63, 0.0F, 1.0F),
+                              gradient_y(0, 128, -2.0F, 2.0F),
+                              gradient_y(-64, 64, 1.0F, -1.0F));
+            check_graph("lerp_dyn_fn", *value,
+                        std::array<std::uint32_t, 4>{0xc0000000U, 0xbf7dfbf8U,
+                                                     0xbf7c0000U, 0xbf800000U},
+                        std::array<std::uint32_t, 12>{
+                            0xbf6b162cU, 0xbf7c0000U, 0xbf6b162cU, 0xbf7c0000U,
+                            0xbf6b162cU, 0xbf7c0000U, 0xbf6b162cU, 0xbf7c0000U,
+                            0xbf6b162cU, 0xbf7c0000U, 0xbf6b162cU,
+                            0xbf7c0000U});
+        }
+        {
             auto value = noise(temperature_stack(), 0.25, 0.5);
             check_graph("noise_fn", *value,
                         std::array<std::uint32_t, 4>{0xbd2c9b52U, 0xbcd6ab64U,
@@ -253,6 +342,75 @@ suite<"worldgen/density-samplers"> density_sampler_tests = [] {
                             0x3ea07d80U, 0x3e0cec68U, 0x3ee8d244U, 0xbeb7a26cU,
                             0xbdf475a5U, 0x3ef0a350U, 0x3e697cfcU,
                             0x3cccbe44U});
+        }
+    };
+
+    "interpolated covers all three volume branches"_test = [] {
+        {
+            auto sampler = interpolated(add(gradient_y(-64, 320, 0.0F, 1.0F),
+                                            gradient_y(-64, 64, 1.0F, -1.0F)),
+                                        4, 8);
+            check_volume("interp_fn.aligned", *sampler,
+                         volume{3, 2, 2, -4, 56, 0, 4, 8, 4},
+                         std::array<std::uint32_t, 12>{
+                             0xbf100000U, 0xbf2aaaaaU, 0xbf100000U, 0xbf2aaaaaU,
+                             0xbf100000U, 0xbf2aaaaaU, 0xbf100000U, 0xbf2aaaaaU,
+                             0xbf100000U, 0xbf2aaaaaU, 0xbf100000U,
+                             0xbf2aaaaaU});
+        }
+        {
+            auto sampler = interpolated(add(gradient_y(-64, 320, 0.0F, 1.0F),
+                                            gradient_y(-64, 64, 1.0F, -1.0F)),
+                                        4, 8);
+            check_volume("interp_fn.block_step", *sampler,
+                         volume{5, 9, 3, -4, 56, 0},
+                         std::array<std::uint32_t, 135>{
+                             0xbf100000U, 0xbf135555U, 0xbf16aaaaU, 0xbf19ffffU,
+                             0xbf1d5554U, 0xbf20aaa9U, 0xbf23fffeU, 0xbf275553U,
+                             0xbf2aaaaaU, 0xbf100000U, 0xbf135555U, 0xbf16aaaaU,
+                             0xbf19ffffU, 0xbf1d5554U, 0xbf20aaa9U, 0xbf23fffeU,
+                             0xbf275553U, 0xbf2aaaaaU, 0xbf100000U, 0xbf135555U,
+                             0xbf16aaaaU, 0xbf19ffffU, 0xbf1d5554U, 0xbf20aaa9U,
+                             0xbf23fffeU, 0xbf275553U, 0xbf2aaaaaU, 0xbf100000U,
+                             0xbf135555U, 0xbf16aaaaU, 0xbf19ffffU, 0xbf1d5554U,
+                             0xbf20aaa9U, 0xbf23fffeU, 0xbf275553U, 0xbf2aaaaaU,
+                             0xbf100000U, 0xbf135555U, 0xbf16aaaaU, 0xbf19ffffU,
+                             0xbf1d5554U, 0xbf20aaa9U, 0xbf23fffeU, 0xbf275553U,
+                             0xbf2aaaaaU, 0xbf100000U, 0xbf135555U, 0xbf16aaaaU,
+                             0xbf19ffffU, 0xbf1d5554U, 0xbf20aaa9U, 0xbf23fffeU,
+                             0xbf275553U, 0xbf2aaaaaU, 0xbf100000U, 0xbf135555U,
+                             0xbf16aaaaU, 0xbf19ffffU, 0xbf1d5554U, 0xbf20aaa9U,
+                             0xbf23fffeU, 0xbf275553U, 0xbf2aaaaaU, 0xbf100000U,
+                             0xbf135555U, 0xbf16aaaaU, 0xbf19ffffU, 0xbf1d5554U,
+                             0xbf20aaa9U, 0xbf23fffeU, 0xbf275553U, 0xbf2aaaaaU,
+                             0xbf100000U, 0xbf135555U, 0xbf16aaaaU, 0xbf19ffffU,
+                             0xbf1d5554U, 0xbf20aaa9U, 0xbf23fffeU, 0xbf275553U,
+                             0xbf2aaaaaU, 0xbf100000U, 0xbf135555U, 0xbf16aaaaU,
+                             0xbf19ffffU, 0xbf1d5554U, 0xbf20aaa9U, 0xbf23fffeU,
+                             0xbf275553U, 0xbf2aaaaaU, 0xbf100000U, 0xbf135555U,
+                             0xbf16aaaaU, 0xbf19ffffU, 0xbf1d5554U, 0xbf20aaa9U,
+                             0xbf23fffeU, 0xbf275553U, 0xbf2aaaaaU, 0xbf100000U,
+                             0xbf135555U, 0xbf16aaaaU, 0xbf19ffffU, 0xbf1d5554U,
+                             0xbf20aaa9U, 0xbf23fffeU, 0xbf275553U, 0xbf2aaaaaU,
+                             0xbf100000U, 0xbf135555U, 0xbf16aaaaU, 0xbf19ffffU,
+                             0xbf1d5554U, 0xbf20aaa9U, 0xbf23fffeU, 0xbf275553U,
+                             0xbf2aaaaaU, 0xbf100000U, 0xbf135555U, 0xbf16aaaaU,
+                             0xbf19ffffU, 0xbf1d5554U, 0xbf20aaa9U, 0xbf23fffeU,
+                             0xbf275553U, 0xbf2aaaaaU, 0xbf100000U, 0xbf135555U,
+                             0xbf16aaaaU, 0xbf19ffffU, 0xbf1d5554U, 0xbf20aaa9U,
+                             0xbf23fffeU, 0xbf275553U, 0xbf2aaaaaU});
+        }
+        {
+            auto sampler = interpolated(add(gradient_y(-64, 320, 0.0F, 1.0F),
+                                            gradient_y(-64, 64, 1.0F, -1.0F)),
+                                        4, 8);
+            check_volume("interp_fn.step12", *sampler,
+                         volume{3, 2, 2, -2, 52, 1, 3, 5, 2},
+                         std::array<std::uint32_t, 12>{
+                             0xbf02aaaaU, 0xbf135555U, 0xbf02aaaaU, 0xbf135555U,
+                             0xbf02aaaaU, 0xbf135555U, 0xbf02aaaaU, 0xbf135555U,
+                             0xbf02aaaaU, 0xbf135555U, 0xbf02aaaaU,
+                             0xbf135555U});
         }
     };
 };
