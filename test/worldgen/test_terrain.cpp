@@ -72,7 +72,39 @@ suite<"worldgen/terrain-fill"> terrain_fill_tests = [] {
         expect(chunk.at(0, 62, 0) == 20);
         expect(chunk.at(0, 63, 0) == 0);
         expect(chunk.world_surface[0] == 62);
-        expect(chunk.ocean_floor[0] == 62);
+        expect(chunk.ocean_floor[0] == -65);
+    };
+
+    "the ocean-floor heightmap stops at the highest motion-blocking block"_test =
+        [] {
+            const fill_settings settings;
+            const sampler_context context;
+            disabled_aquifer aquifer{
+                fluid_picker{.sea_level = settings.sea_level,
+                             .default_fluid = 20,
+                             .lava = 30,
+                             .air = 0}};
+            auto value = gradient_y(-64, 64, 1.0F, -1.0F);
+            const auto chunk =
+                fill_chunk(settings, *value, context, 0, 0, aquifer);
+            expect(chunk.at(0, -1, 0) == 10);
+            expect(chunk.at(0, 0, 0) == 20);
+            expect(chunk.at(0, 62, 0) == 20);
+            expect(chunk.at(0, 63, 0) == 0);
+            expect(chunk.ocean_floor[0] == -1);
+            expect(chunk.world_surface[0] == 62);
+        };
+
+    "an empty column reports the bottom of the world minus one"_test = [] {
+        const fill_settings settings;
+        const sampler_context context;
+        disabled_aquifer aquifer{fluid_picker{
+            .sea_level = -100, .default_fluid = 20, .lava = 30, .air = 0}};
+        auto value = density::constant(-1.0F);
+        const auto chunk = fill_chunk(settings, *value, context, 0, 0, aquifer);
+        expect(count(chunk, 0) == chunk.states.size());
+        expect(chunk.ocean_floor[0] == -65);
+        expect(chunk.world_surface[0] == -65);
     };
 
     "the density zero crossing splits stone from air"_test = [] {
