@@ -5,6 +5,14 @@ summarizes the third-party components that Refrain links against or ships.
 The exact license texts are distributed with each Conan package under its
 `licenses/` directory and accompany every binary distribution.
 
+## Minecraft-derived data
+
+Data derived from Minecraft (block state tables, biome parameters, registry
+listings, data pack snapshots) lives only under `content/vanilla/`. That
+directory is not covered by the MIT license; see `content/vanilla/NOTICE.md`
+for its copyright and usage terms. No such data ships in source files or in
+the libraries below.
+
 ## Runtime and content libraries
 
 | Component | Version | License | Used for |
