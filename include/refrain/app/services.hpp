@@ -30,6 +30,18 @@ struct extract_options {
     bool extract{false};
 };
 
+struct vanilla_import_options {
+    std::string reports{};
+    std::string out{};
+    std::string game_version{"26.3"};
+    std::int32_t data_version{5023};
+    bool force{false};
+};
+
+struct vanilla_info_options {
+    std::string tables{};
+};
+
 struct mods_check_options {
     std::string mods_dir{"mods"};
     std::string gamepack{};
@@ -139,6 +151,9 @@ struct builtin_image_options {
                                       const std::vector<std::string> &required)
     -> int;
 [[nodiscard]] auto run_extract(const extract_options &options) -> int;
+[[nodiscard]] auto run_vanilla_import(const vanilla_import_options &options)
+    -> int;
+[[nodiscard]] auto run_vanilla_info(const vanilla_info_options &options) -> int;
 [[nodiscard]] auto run_schema_gen(const std::string &output_root,
                                   const std::vector<std::string> &roots,
                                   bool check) -> int;

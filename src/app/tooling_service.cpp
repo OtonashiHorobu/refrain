@@ -39,6 +39,7 @@
 #include <refrain/data/path.hpp>
 #include <refrain/data/registry.hpp>
 #include <refrain/data/store_lock.hpp>
+#include <refrain/data/vanilla.hpp>
 #include <refrain/data/vfs.hpp>
 #include <refrain/kernel/crash.hpp>
 #include <refrain/mod/discovery.hpp>
@@ -69,6 +70,52 @@ namespace log = refrain::log;
 namespace mod = refrain::mod;
 namespace schema = refrain::schema;
 namespace script = refrain::script;
+
+// --- vanilla ---------------------------------------------------------------
+
+auto run_vanilla_import(const vanilla_import_options &options) -> int {
+    data::vanilla_import_options request;
+    request.reports = options.reports;
+    request.out = options.out;
+    request.game_version = options.game_version;
+    request.data_version = options.data_version;
+    request.force = options.force;
+
+    auto result = data::import_vanilla_reports(request);
+    if (!result) {
+        return report_error(result.error());
+    }
+    std::cout << "vanilla: " << result->blocks << " block(s), "
+              << result->states << " state(s), " << result->presets
+              << " biome preset(s), " << result->registries
+              << " registr(ies) -> " << result->tables_path << " ("
+              << result->tables_bytes << " bytes, blake3 "
+              << result->tables_digest << ")\n";
+    std::cout << "  manifest: " << result->manifest_path << '\n';
+    return 0;
+}
+
+auto run_vanilla_info(const vanilla_info_options &options) -> int {
+    auto bytes = io::read_file(options.tables);
+    if (!bytes) {
+        return report_error(bytes.error());
+    }
+    auto tables = data::vanilla_tables::open(*bytes);
+    if (!tables) {
+        return report_error(tables.error());
+    }
+    const auto &info = tables->info();
+    std::cout << options.tables << ": RVTB v" << info.version
+              << " kind=" << info.kind << " data_version=" << info.data_version
+              << '\n';
+    std::cout << "  strings: " << info.strings << '\n';
+    std::cout << "  blocks: " << info.blocks << '\n';
+    std::cout << "  states: " << info.states << '\n';
+    std::cout << "  properties: " << info.properties << '\n';
+    std::cout << "  biome presets: " << info.presets << '\n';
+    std::cout << "  registries: " << info.registries << '\n';
+    return 0;
+}
 
 // --- extract ---------------------------------------------------------------
 
