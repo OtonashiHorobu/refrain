@@ -59,8 +59,7 @@ suite<"worldgen/aquifer-oracle"> aquifer_oracle_tests = [] {
         const block_ids blocks{
             .air = 0, .default_block = 10, .default_fluid = 2, .lava = 3};
         const sampler_context context;
-        noise_aquifer aquifer{
-            std::move(config), *factory, vol, picker, blocks, context};
+        noise_aquifer aquifer{config, *factory, vol, picker, blocks, context};
 
         constexpr std::array<int, 3> xs{0, 8, 15};
         constexpr std::array<int, 3> zs{0, 8, 15};

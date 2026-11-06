@@ -185,12 +185,9 @@ suite<"worldgen/density-router"> density_router_tests = [] {
                                                 .default_fluid = 2,
                                                 .lava = 3};
                 const sampler_context fill_context;
-                terrain::noise_aquifer aquifer{std::move(settings->aquifer),
-                                               *factory,
-                                               chunk_vol,
-                                               picker,
-                                               blocks,
-                                               fill_context};
+                terrain::noise_aquifer aquifer{
+                    settings->aquifer, *factory, chunk_vol, picker, blocks,
+                    fill_context};
                 const terrain::fill_options options{.min_y = -64,
                                                     .height = 384,
                                                     .sea_level = 63,

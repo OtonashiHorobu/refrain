@@ -52,13 +52,13 @@ auto pack_column(jint x, jint z) -> std::int64_t {
 
 } // namespace
 
-noise_aquifer::noise_aquifer(aquifer_config config,
+noise_aquifer::noise_aquifer(const aquifer_config &config,
                              positional_random_factory &factory,
                              const volume &vol, fluid_picker picker,
                              block_ids blocks,
                              const density::sampler_context &context)
-    : config_{std::move(config)}, factory_{&factory}, picker_{picker},
-      blocks_{blocks}, context_{context} {
+    : config_{config}, factory_{&factory}, picker_{picker}, blocks_{blocks},
+      context_{context} {
     min_grid_x_ = aquifer_grid::grid_x(vol.min_block_x() - 5);
     min_grid_y_ = aquifer_grid::grid_y(vol.min_block_y() + 1) - 1;
     min_grid_z_ = aquifer_grid::grid_z(vol.min_block_z() - 5);
