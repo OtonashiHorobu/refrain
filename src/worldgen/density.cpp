@@ -6,6 +6,8 @@
 
 #include <refrain/worldgen/mth.hpp>
 
+#include <memory>
+
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -488,6 +490,191 @@ class gradient_sampler final : public sampler {
     float coordinate_factor_;
 };
 
+class noise_sampler final : public sampler {
+  public:
+    noise_sampler(std::shared_ptr<const noise_stack> stack, double xz_scale,
+                  double y_scale)
+        : stack_{std::move(stack)}, xz_scale_{xz_scale}, y_scale_{y_scale} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &, jint block_x,
+                                    jint block_y, jint block_z) const
+        -> float override {
+        return stack_->get(static_cast<double>(block_x) * xz_scale_,
+                           static_cast<double>(block_y) * y_scale_,
+                           static_cast<double>(block_z) * xz_scale_);
+    }
+    void sample_volume(const sampler_context &, buffer &output,
+                       const volume &vol) const override {
+        output.fill(0.0F);
+        stack_->add_to_volume(output, vol, xz_scale_, y_scale_, 1.0F);
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return stack_->range();
+    }
+
+  private:
+    std::shared_ptr<const noise_stack> stack_;
+    double xz_scale_;
+    double y_scale_;
+};
+
+class shifted_noise_xz_sampler final : public sampler {
+  public:
+    shifted_noise_xz_sampler(sampler_ptr shift_x, sampler_ptr shift_z,
+                             double xz_scale, double y_scale,
+                             std::shared_ptr<const noise_stack> stack)
+        : shift_x_{std::move(shift_x)}, shift_z_{std::move(shift_z)},
+          xz_scale_{xz_scale}, y_scale_{y_scale}, stack_{std::move(stack)} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context,
+                                    jint block_x, jint block_y,
+                                    jint block_z) const -> float override {
+        const double x =
+            static_cast<double>(block_x) * xz_scale_ +
+            shift_x_->sample_value(context, block_x, block_y, block_z);
+        const double y = static_cast<double>(block_y) * y_scale_;
+        const double z =
+            static_cast<double>(block_z) * xz_scale_ +
+            shift_z_->sample_value(context, block_x, block_y, block_z);
+        return stack_->get(x, y, z);
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        shift_x_->sample_volume(context, output, vol);
+        auto shift_z_buffer = context.acquire(vol.size());
+        shift_z_->sample_volume(context, shift_z_buffer, vol);
+        std::size_t index = 0;
+        for (jint z = 0; z < vol.size_z(); ++z) {
+            const double base_noise_z =
+                static_cast<double>(vol.block_z(z)) * xz_scale_;
+            for (jint x = 0; x < vol.size_x(); ++x) {
+                const double base_noise_x =
+                    static_cast<double>(vol.block_x(x)) * xz_scale_;
+                for (jint y = 0; y < vol.size_y(); ++y) {
+                    const double noise_x = base_noise_x + output.get(index);
+                    const double noise_y =
+                        static_cast<double>(vol.block_y(y)) * y_scale_;
+                    const double noise_z =
+                        base_noise_z + shift_z_buffer.get(index);
+                    output.set(index, stack_->get(noise_x, noise_y, noise_z));
+                    ++index;
+                }
+            }
+        }
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return stack_->range();
+    }
+
+  private:
+    sampler_ptr shift_x_;
+    sampler_ptr shift_z_;
+    double xz_scale_;
+    double y_scale_;
+    std::shared_ptr<const noise_stack> stack_;
+};
+
+class shifted_noise_xyz_sampler final : public sampler {
+  public:
+    shifted_noise_xyz_sampler(sampler_ptr shift_x, sampler_ptr shift_y,
+                              sampler_ptr shift_z, double xz_scale,
+                              double y_scale,
+                              std::shared_ptr<const noise_stack> stack)
+        : shift_x_{std::move(shift_x)}, shift_y_{std::move(shift_y)},
+          shift_z_{std::move(shift_z)}, xz_scale_{xz_scale}, y_scale_{y_scale},
+          stack_{std::move(stack)} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context,
+                                    jint block_x, jint block_y,
+                                    jint block_z) const -> float override {
+        const double x =
+            static_cast<double>(block_x) * xz_scale_ +
+            shift_x_->sample_value(context, block_x, block_y, block_z);
+        const double y =
+            static_cast<double>(block_y) * y_scale_ +
+            shift_y_->sample_value(context, block_x, block_y, block_z);
+        const double z =
+            static_cast<double>(block_z) * xz_scale_ +
+            shift_z_->sample_value(context, block_x, block_y, block_z);
+        return stack_->get(x, y, z);
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        shift_x_->sample_volume(context, output, vol);
+        auto shift_y_buffer = context.acquire(vol.size());
+        shift_y_->sample_volume(context, shift_y_buffer, vol);
+        auto shift_z_buffer = context.acquire(vol.size());
+        shift_z_->sample_volume(context, shift_z_buffer, vol);
+        std::size_t index = 0;
+        for (jint z = 0; z < vol.size_z(); ++z) {
+            const double base_noise_z =
+                static_cast<double>(vol.block_z(z)) * xz_scale_;
+            for (jint x = 0; x < vol.size_x(); ++x) {
+                const double base_noise_x =
+                    static_cast<double>(vol.block_x(x)) * xz_scale_;
+                for (jint y = 0; y < vol.size_y(); ++y) {
+                    const double noise_x = base_noise_x + output.get(index);
+                    const double noise_y =
+                        static_cast<double>(vol.block_y(y)) * y_scale_ +
+                        shift_y_buffer.get(index);
+                    const double noise_z =
+                        base_noise_z + shift_z_buffer.get(index);
+                    output.set(index, stack_->get(noise_x, noise_y, noise_z));
+                    ++index;
+                }
+            }
+        }
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return stack_->range();
+    }
+
+  private:
+    sampler_ptr shift_x_;
+    sampler_ptr shift_y_;
+    sampler_ptr shift_z_;
+    double xz_scale_;
+    double y_scale_;
+    std::shared_ptr<const noise_stack> stack_;
+};
+
+class shift_b_sampler final : public sampler {
+  public:
+    explicit shift_b_sampler(std::shared_ptr<const noise_stack> stack)
+        : stack_{std::move(stack)} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &, jint block_x,
+                                    jint /*block_y*/, jint block_z) const
+        -> float override {
+        return stack_->get(static_cast<double>(block_z) * 0.25,
+                           static_cast<double>(block_x) * 0.25, 0.0) *
+               4.0F;
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        const volume transposed{vol.size_z(),       vol.size_x(),       1,
+                                vol.min_block_z(),  vol.min_block_x(),  0,
+                                vol.step_block_z(), vol.step_block_x(), 1};
+        auto transposed_buffer = context.acquire(transposed.size());
+        transposed_buffer.fill(0.0F);
+        stack_->add_to_volume(transposed_buffer, transposed, 0.25, 0.25, 4.0F);
+        for (jint z = 0; z < vol.size_z(); ++z) {
+            for (jint x = 0; x < vol.size_x(); ++x) {
+                const float value =
+                    transposed_buffer.get(transposed.index_unchecked(z, x, 0));
+                output.set_range(vol.index_unchecked(x, 0, z), vol.size_y(),
+                                 value);
+            }
+        }
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return interval::mul(stack_->range(), interval::of_exact(4.0F));
+    }
+
+  private:
+    std::shared_ptr<const noise_stack> stack_;
+};
+
 } // namespace
 
 auto constant(float value) -> sampler_ptr {
@@ -658,6 +845,40 @@ auto gradient_y(jint from_coordinate, jint to_coordinate, float from_value,
                 float to_value) -> sampler_ptr {
     return std::make_unique<gradient_sampler>(from_coordinate, to_coordinate,
                                               from_value, to_value);
+}
+
+auto noise(std::shared_ptr<const noise_stack> stack, double xz_scale,
+           double y_scale) -> sampler_ptr {
+    return std::make_unique<noise_sampler>(std::move(stack), xz_scale, y_scale);
+}
+
+auto shifted_noise_xz(sampler_ptr shift_x, sampler_ptr shift_z, double xz_scale,
+                      double y_scale, std::shared_ptr<const noise_stack> stack)
+    -> sampler_ptr {
+    return std::make_unique<shifted_noise_xz_sampler>(
+        std::move(shift_x), std::move(shift_z), xz_scale, y_scale,
+        std::move(stack));
+}
+
+auto shifted_noise_xyz(sampler_ptr shift_x, sampler_ptr shift_y,
+                       sampler_ptr shift_z, double xz_scale, double y_scale,
+                       std::shared_ptr<const noise_stack> stack)
+    -> sampler_ptr {
+    return std::make_unique<shifted_noise_xyz_sampler>(
+        std::move(shift_x), std::move(shift_y), std::move(shift_z), xz_scale,
+        y_scale, std::move(stack));
+}
+
+auto shift(std::shared_ptr<const noise_stack> stack) -> sampler_ptr {
+    return mul(noise(stack, 0.25, 0.25), constant(4.0F));
+}
+
+auto shift_a(std::shared_ptr<const noise_stack> stack) -> sampler_ptr {
+    return mul(noise(std::move(stack), 0.25, 0.0), constant(4.0F));
+}
+
+auto shift_b(std::shared_ptr<const noise_stack> stack) -> sampler_ptr {
+    return std::make_unique<shift_b_sampler>(std::move(stack));
 }
 
 } // namespace refrain::worldgen::density
