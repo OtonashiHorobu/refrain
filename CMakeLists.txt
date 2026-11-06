@@ -465,9 +465,7 @@ set(REFRAIN_BUILTIN_CPP "${CMAKE_BINARY_DIR}/generated/builtin_image.cpp")
 # host-independent data, so a host tool may generate it; the target executable
 # still embeds the same deterministic bytes.
 if(NOT DEFINED REFRAIN_HOST_TOOLS)
-    set(REFRAIN_HOST_TOOLS "" CACHE FILEPATH
-        "Host refrain-tools executable used to generate the builtin image "
-        "when cross-compiling (required for CMAKE_CROSSCOMPILING)")
+    set(REFRAIN_HOST_TOOLS "")
 endif()
 if(CMAKE_CROSSCOMPILING)
     if(NOT REFRAIN_HOST_TOOLS)
