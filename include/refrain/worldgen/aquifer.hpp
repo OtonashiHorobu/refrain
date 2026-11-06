@@ -87,8 +87,12 @@ struct aquifer_config {
 /// not change values.
 class noise_aquifer final : public aquifer {
   public:
-    noise_aquifer(aquifer_config config, positional_random_factory &factory,
-                  const volume &volume, fluid_picker picker, block_ids blocks,
+    /// The configuration is borrowed: the `noise_settings` that owns the
+    /// samplers must outlive the aquifer, and one document serves every chunk
+    /// of a world.
+    noise_aquifer(const aquifer_config &config,
+                  positional_random_factory &factory, const volume &volume,
+                  fluid_picker picker, block_ids blocks,
                   const density::sampler_context &context);
 
     [[nodiscard]] auto compute_substance(jint block_x, jint block_y,
@@ -124,7 +128,7 @@ class noise_aquifer final : public aquifer {
                        double &noise_value, const fluid_status &closest1,
                        const fluid_status &closest2) -> double;
 
-    aquifer_config config_;
+    const aquifer_config &config_;
     positional_random_factory *factory_;
     fluid_picker picker_;
     block_ids blocks_;
