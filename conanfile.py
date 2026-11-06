@@ -40,12 +40,14 @@ class RefrainConan(ConanFile):
 
     def requirements(self):
         # --- kernel / tools dependencies --------------------------------------
-        # spdlog built against the C++ standard library formatter
-        # (`use_std_fmt=True`): the project itself depends on fmt/12.2.0, while
-        # spdlog 1.17's CCI recipe otherwise hard-pins fmt 12.1.0 through
-        # `fmt_version_mapping`, which would force a downgrade. With the std
-        # formatter spdlog has no fmt dependency at all.
-        self.requires("spdlog/1.17.0", options={"use_std_fmt": True})
+        # spdlog is compiled header-only: a single translation unit includes
+        # it, and keeping a separate static library under LTO makes GCC see the
+        # same sink vtables through the source and package include paths and
+        # report ODR conflicts. The standard-library formatter
+        # (`use_std_fmt=True`) avoids the CCI recipe's hard pin on fmt 12.1.0,
+        # which would otherwise force a downgrade of the project's fmt.
+        self.requires("spdlog/1.17.0",
+                      options={"use_std_fmt": True, "header_only": True})
         self.requires("fmt/12.2.0")
         self.requires("cli11/2.7.2")
         # TOML 1.1: generic map-root DOM for gamepack/mod manifests and config

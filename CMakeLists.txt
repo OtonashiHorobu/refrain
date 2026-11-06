@@ -219,7 +219,8 @@ target_include_directories(refrain-kernel PUBLIC
 # src/core/config.cpp; on a static library CMake still propagates them to the
 # link line as $<LINK_ONLY:...>, so consumers link without seeing their headers.
 target_link_libraries(refrain-kernel PUBLIC fmt::fmt)
-target_link_libraries(refrain-kernel PRIVATE spdlog::spdlog glaze::glaze)
+target_link_libraries(refrain-kernel PRIVATE spdlog::spdlog_header_only
+                                             glaze::glaze)
 target_compile_definitions(
     refrain-kernel
     PUBLIC REFRAIN_WITH_CRASHPAD=$<BOOL:${REFRAIN_WITH_CRASHPAD}>
