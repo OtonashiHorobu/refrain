@@ -35,3 +35,5 @@ error-path-exit         | stderr | nonzero | io_error | refrain-tools gamepack c
 world-info-help        | stdout | 0       | Print world metadata and storage statistics | refrain-tools world info --help
 world-fsck-missing     | stderr | nonzero | is not a directory | refrain-tools world fsck {root}/test/fixtures/does-not-exist-world
 worldgen-harness-help  | stdout | 0       | Compare a candidate world against an oracle world | refrain-tools worldgen harness --help
+vanilla-help            | stdout | 0       | Vanilla report import and inspection | refrain-tools vanilla --help
+vanilla-import-help     | stdout | 0       | Convert datagen reports into an RVTB table container | refrain-tools vanilla import --help

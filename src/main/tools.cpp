@@ -154,6 +154,36 @@ int main(int argc, char **argv) {
     extract_cmd->add_flag("--extract", extract.extract,
                           "Also extract the selected entries under --out");
 
+    vanilla_import_options vanilla_import{};
+    auto *vanilla_cmd =
+        app.add_subcommand("vanilla", "Vanilla report import and inspection");
+    auto *vanilla_import_cmd = vanilla_cmd->add_subcommand(
+        "import", "Convert datagen reports into an RVTB table container");
+    vanilla_import_cmd
+        ->add_option("-r,--reports", vanilla_import.reports,
+                     "Datagen --reports output directory")
+        ->required();
+    vanilla_import_cmd
+        ->add_option("-o,--out", vanilla_import.out,
+                     "Output directory (content/vanilla/<version>)")
+        ->required();
+    vanilla_import_cmd->add_option("--game-version",
+                                   vanilla_import.game_version,
+                                   "Game version recorded in the manifest");
+    vanilla_import_cmd->add_option("--data-version",
+                                   vanilla_import.data_version,
+                                   "Data version recorded in the header");
+    vanilla_import_cmd->add_flag(
+        "--force", vanilla_import.force,
+        "Overwrite existing tables.rvtb and MANIFEST.json");
+
+    vanilla_info_options vanilla_info{};
+    auto *vanilla_info_cmd =
+        vanilla_cmd->add_subcommand("info", "Inspect an RVTB container");
+    vanilla_info_cmd
+        ->add_option("tables", vanilla_info.tables, "tables.rvtb path")
+        ->required();
+
     mods_check_options mods_check{};
     auto *mods_cmd = app.add_subcommand("mods", "Mod manifest tooling");
     auto *mods_check_cmd = mods_cmd->add_subcommand(
@@ -554,6 +584,12 @@ int main(int argc, char **argv) {
     }
     if (extract_cmd->parsed()) {
         return app_services::run_extract(extract);
+    }
+    if (vanilla_import_cmd->parsed()) {
+        return app_services::run_vanilla_import(vanilla_import);
+    }
+    if (vanilla_info_cmd->parsed()) {
+        return app_services::run_vanilla_info(vanilla_info);
     }
     if (mods_check_cmd->parsed()) {
         return app_services::run_mods_check(mods_check);
