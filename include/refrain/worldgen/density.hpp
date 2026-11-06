@@ -27,6 +27,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace refrain::worldgen::density {
 
@@ -173,6 +174,12 @@ struct spline {
 [[nodiscard]] auto range_choice(sampler_ptr input, float min_inclusive,
                                 float max_exclusive, sampler_ptr when_in_range,
                                 sampler_ptr when_out_of_range) -> sampler_ptr;
+
+/// `minecraft:interval_select`: threshold table selecting one of N functions.
+[[nodiscard]] auto interval_select(sampler_ptr input,
+                                   std::vector<float> thresholds,
+                                   std::vector<sampler_ptr> functions)
+    -> sampler_ptr;
 
 /// `minecraft:lerp`: `Mth.lerp(alpha, first, second)` with the reference's
 /// 0/1 alpha short circuits and constant specialisations.
