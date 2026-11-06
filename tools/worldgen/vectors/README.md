@@ -9,6 +9,8 @@ on. Their output is the source of truth for the constants frozen in the tests:
 | `NoiseVectors.java` | `test/worldgen/test_noise.cpp` | `PerlinNoise`, `NormalNoise` (builder and parity), `NoiseStack`, bulk `addToVolume` |
 | `IntervalVectors.java` | `test/worldgen/test_interval.cpp` | `net.minecraft.util.Interval` operations |
 | `DensityVectors.java` | `test/worldgen/test_density.cpp` | density sampler graphs, scalar and bulk paths |
+| `MthVectors.java` | `test/worldgen/test_mth.cpp` | `Mth.map`/`clampedMap`/`lerp`/`quantize` |
+| `AquiferVectors.java` | `test/worldgen/test_aquifer.cpp` | aquifer grid conversions, cell centers, similarity |
 
 ```bash
 tools/worldgen/vectors/run.sh /path/to/server.jar [class]

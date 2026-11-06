@@ -54,6 +54,45 @@ namespace refrain::worldgen::mth {
     return 30.0F * x * x * (x - 1.0F) * (x - 1.0F);
 }
 
+/// `Mth.lerp(double, double, double)`.
+[[nodiscard]] inline auto lerp(double alpha, double p0, double p1) -> double {
+    return p0 + alpha * (p1 - p0);
+}
+
+/// `Mth.inverseLerp`: `(value - min) / (max - min)`.
+[[nodiscard]] inline auto inverse_lerp(double value, double min, double max)
+    -> double {
+    return (value - min) / (max - min);
+}
+
+/// `Mth.clampedLerp`: clamps the factor to `[0, 1]` before interpolating.
+[[nodiscard]] inline auto clamped_lerp(double factor, double min, double max)
+    -> double {
+    if (factor < 0.0) {
+        return min;
+    }
+    return factor > 1.0 ? max : lerp(factor, min, max);
+}
+
+/// `Mth.map`: linear remap without clamping.
+[[nodiscard]] inline auto map(double value, double from_min, double from_max,
+                              double to_min, double to_max) -> double {
+    return lerp(inverse_lerp(value, from_min, from_max), to_min, to_max);
+}
+
+/// `Mth.clampedMap`: linear remap with the factor clamped to `[0, 1]`.
+[[nodiscard]] inline auto clamped_map(double value, double from_min,
+                                      double from_max, double to_min,
+                                      double to_max) -> double {
+    return clamped_lerp(inverse_lerp(value, from_min, from_max), to_min,
+                        to_max);
+}
+
+/// `Mth.quantize`: `floor(value / resolution) * resolution` as an int.
+[[nodiscard]] inline auto quantize(double value, jint resolution) -> jint {
+    return floor(value / static_cast<double>(resolution)) * resolution;
+}
+
 [[nodiscard]] inline auto square(double value) -> double {
     return value * value;
 }
