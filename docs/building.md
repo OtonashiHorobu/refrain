@@ -89,10 +89,10 @@ FORTIFY and LTO.
 
 `scripts/dist.sh` is the release path. It rebuilds every Conan dependency from
 source with the hardening flags in an isolated Conan home, builds the server and
-tools with hardening and LTO enabled, strips the binaries, collects the
-third-party license texts, and writes a `.sha256` checksum next to the archive.
-The isolated home is required because Conan build flags are not part of a
-package id.
+tools with hardening enabled (and LTO on Linux), strips the binaries, collects
+the third-party license texts, and writes a `.sha256` checksum next to the
+archive. The isolated home is required because Conan build flags are not part
+of a package id.
 
 | Command | Host requirements | Archive |
 |---|---|---|
@@ -100,8 +100,11 @@ package id.
 | `scripts/dist.sh mingw` | `x86_64-w64-mingw32-g++`; Wine for the smoke check | `refrain-<version>-windows-mingw-x86_64.zip` |
 | `scripts/dist.sh msvc` | a Visual Studio developer prompt, or msvc-wine | `refrain-<version>-windows-msvc-x86_64.zip` |
 
-The Windows archives are self-contained: the MinGW build is static and the MSVC
-archive carries the app-local Visual C++ runtime DLLs. Archives are written to
+The MinGW archive uses hardening without LTO: GCC 16's MinGW LTO miscompiles
+exception handling across the static runtime, so a throwing worker task can
+terminate the process instead of being contained. Linux keeps LTO. The Windows
+archives are self-contained: the MinGW build is static and the MSVC archive
+carries the app-local Visual C++ runtime DLLs. Archives are written to
 `dist/` by default; `REFRAIN_DIST_OUT` selects another directory. Cross builds
 need a native `refrain-tools` for the schema compiler; the MinGW target and the
 msvc-wine path build it automatically.
@@ -120,15 +123,13 @@ plain `-O3` build:
 
 | Configuration | Relative time |
 |---|---|
-| `REFRAIN_HARDEN=ON`, LTO off | +1.6% |
-| `REFRAIN_HARDEN=ON`, LTO on | -5.8% |
-| `REFRAIN_HARDEN_MAX=ON`, LTO on | -5.2% |
-| All dependencies hardened + LTO (`scripts/dist.sh`) | -8% to -13% |
+| Plain `-O3` (reference) | — |
+| Linux release build (`scripts/dist.sh linux`) | -4.6% |
 
-The baseline hardening is therefore close to free once LTO is enabled; the
-maximum layer costs roughly one percent more. Small-allocation microbenchmarks
-show a wider spread (up to +8% for the baseline layer, recovered by LTO), so
-disable hardening when profiling allocator internals:
+The gain is concentrated in small allocations (-20% at 512 B) and the job pool
+(-9%); the encode paths stay within one percent. The disk-heavy full-store case
+is excluded because file I/O dominates its variance. Disable hardening when
+profiling allocator internals:
 
 ```bash
 cmake --preset conan-release -DREFRAIN_HARDEN=OFF -DREFRAIN_LTO=OFF

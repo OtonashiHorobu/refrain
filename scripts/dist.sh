@@ -8,7 +8,8 @@
 # The normal build and CI stay unhardened and without LTO. This script is the
 # release path: it rebuilds every Conan dependency from source with the
 # hardening flags in an isolated Conan home, then links the server and tools
-# with hardening and LTO enabled, strips the binaries, collects third-party
+# with hardening enabled (and LTO where the toolchain supports it), strips the
+# binaries, collects third-party
 # license texts, and writes a checksum next to the archive.
 #
 # The isolated Conan home is required because Conan build flags are not part of
@@ -76,6 +77,29 @@ COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)"
 mkdir -p "$WORK" "$CONAN_HOME" "$OUT"
 export CONAN_HOME
 export CONAN_NON_INTERACTIVE=1
+
+# Conan appends every install output to the source-tree CMakeUserPresets.json.
+# Packaging must not leave those includes behind, so keep the caller's file
+# (if any) and restore it on exit.
+PRESETS="$ROOT/CMakeUserPresets.json"
+PRESETS_BACKUP=""
+STAGE=""
+cleanup() {
+    if [[ -n "$STAGE" ]]; then
+        rm -rf "$STAGE"
+    fi
+    if [[ -n "$PRESETS_BACKUP" ]]; then
+        cp "$PRESETS_BACKUP" "$PRESETS"
+        rm -f "$PRESETS_BACKUP"
+    else
+        rm -f "$PRESETS"
+    fi
+}
+trap cleanup EXIT
+if [[ -f "$PRESETS" ]]; then
+    PRESETS_BACKUP="$(mktemp)"
+    cp "$PRESETS" "$PRESETS_BACKUP"
+fi
 
 if command -v nproc >/dev/null 2>&1; then
     JOBS="$(nproc)"
@@ -147,8 +171,11 @@ PROFILE
         command -v x86_64-w64-mingw32-g++ >/dev/null 2>&1 ||
             fail "x86_64-w64-mingw32-g++ is required for the mingw target"
         MINGW_MAJOR="$(x86_64-w64-mingw32-g++ -dumpversion | cut -d. -f1)"
-        MINGW_CFLAGS='["-O3","-DNDEBUG","-fstack-protector-strong","-fstack-clash-protection","-fcf-protection=full","-ffat-lto-objects","-flto=auto"]'
-        MINGW_LINKFLAGS='["-static","-flto=auto"]'
+        # GCC 16's MinGW LTO miscompiles exception handling across the
+        # static runtime (a deliberately throwing task terminates instead of
+        # being contained), so the MinGW archive uses hardening without LTO.
+        MINGW_CFLAGS='["-O3","-DNDEBUG","-fstack-protector-strong","-fstack-clash-protection","-fcf-protection=full"]'
+        MINGW_LINKFLAGS='["-static"]'
         PROFILE=dist-mingw
         write_profile "$PROFILE" <<PROFILE
 [settings]
@@ -248,8 +275,8 @@ fi
 log "resolving $TARGET dependencies"
 conan_args=("${common_install[@]}")
 case "$TARGET" in
-    linux|mingw) conan_args+=(-o "&:lto=True") ;;
-    msvc) ;;
+    linux) conan_args+=(-o "&:lto=True") ;;
+    mingw|msvc) ;;
 esac
 if ! "${conan_args[@]}" --format=json >"$WORK/install.json" 2>"$WORK/install.log"; then
     tail -n 60 "$WORK/install.log" >&2 || true
@@ -284,7 +311,7 @@ case "$TARGET" in
         cmake_flags+=(-DREFRAIN_HARDEN=ON -DREFRAIN_HARDEN_MAX=ON -DREFRAIN_LTO=ON)
         ;;
     mingw)
-        cmake_flags+=(-DREFRAIN_HARDEN=ON -DREFRAIN_HARDEN_MAX=ON -DREFRAIN_LTO=ON
+        cmake_flags+=(-DREFRAIN_HARDEN=ON -DREFRAIN_HARDEN_MAX=ON -DREFRAIN_LTO=OFF
                       -DCMAKE_EXE_LINKER_FLAGS=-static)
         ;;
     msvc)
@@ -325,42 +352,41 @@ case "$TARGET" in
     mingw) name="refrain-${VERSION}-windows-mingw-${DIST_ARCH}" ;;
     msvc) name="refrain-${VERSION}-windows-msvc-${DIST_ARCH}" ;;
 esac
-stage="$(mktemp -d)"
-trap 'rm -rf "$stage"' EXIT
-mkdir -p "$stage/$name/bin" "$stage/$name/gamepack" "$stage/$name/licenses"
+STAGE="$(mktemp -d)"
+mkdir -p "$STAGE/$name/bin" "$STAGE/$name/gamepack" "$STAGE/$name/licenses"
 
 exe_suffix=""
 [[ "$TARGET" == linux ]] || exe_suffix=".exe"
-cp "$BUILD/bin/refrain-server$exe_suffix" "$stage/$name/bin/"
-cp "$BUILD/bin/refrain-tools$exe_suffix" "$stage/$name/bin/"
-cp gamepack/gamepack.toml "$stage/$name/gamepack/"
-cp -r gamepack/presets "$stage/$name/gamepack/"
-cp LICENSE NOTICE.md README.md "$stage/$name/"
+cp "$BUILD/bin/refrain-server$exe_suffix" "$STAGE/$name/bin/"
+cp "$BUILD/bin/refrain-tools$exe_suffix" "$STAGE/$name/bin/"
+cp gamepack/gamepack.toml "$STAGE/$name/gamepack/"
+cp -r gamepack/presets "$STAGE/$name/gamepack/"
+cp LICENSE NOTICE.md README.md "$STAGE/$name/"
 
 case "$TARGET" in
     linux)
-        strip --strip-all "$stage/$name/bin/refrain-server" \
-            "$stage/$name/bin/refrain-tools"
-        cat > "$stage/$name/run-server.sh" <<'RUN'
+        strip --strip-all "$STAGE/$name/bin/refrain-server" \
+            "$STAGE/$name/bin/refrain-tools"
+        cat > "$STAGE/$name/run-server.sh" <<'RUN'
 #!/bin/sh
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 exec "$here/bin/refrain-server" --gamepack "$here/gamepack/gamepack.toml" "$@"
 RUN
-        chmod +x "$stage/$name/run-server.sh"
+        chmod +x "$STAGE/$name/run-server.sh"
         ;;
     mingw)
         x86_64-w64-mingw32-strip --strip-all \
-            "$stage/$name/bin/refrain-server.exe" \
-            "$stage/$name/bin/refrain-tools.exe"
-        cat > "$stage/$name/run-server.cmd" <<'RUN'
+            "$STAGE/$name/bin/refrain-server.exe" \
+            "$STAGE/$name/bin/refrain-tools.exe"
+        cat > "$STAGE/$name/run-server.cmd" <<'RUN'
 @echo off
 "%~dp0bin\refrain-server.exe" --gamepack "%~dp0gamepack\gamepack.toml" %*
 RUN
         cp -r "$ROOT/licenses/GCC-Runtime" "$ROOT/licenses/MinGW-w64" \
-            "$stage/$name/licenses/"
+            "$STAGE/$name/licenses/"
         ;;
     msvc)
-        cat > "$stage/$name/run-server.cmd" <<'RUN'
+        cat > "$STAGE/$name/run-server.cmd" <<'RUN'
 @echo off
 "%~dp0bin\refrain-server.exe" --gamepack "%~dp0gamepack\gamepack.toml" %*
 RUN
@@ -379,13 +405,13 @@ RUN
         [[ -n "$crt_dir" ]] || fail "could not locate the MSVC x64 runtime DLLs"
         for dll in msvcp140.dll msvcp140_atomic_wait.dll vcruntime140.dll \
                    vcruntime140_1.dll; do
-            cp "$crt_dir/$dll" "$stage/$name/bin/"
+            cp "$crt_dir/$dll" "$STAGE/$name/bin/"
         done
-        cp -r "$ROOT/licenses/MSVC-Runtime" "$stage/$name/licenses/"
+        cp -r "$ROOT/licenses/MSVC-Runtime" "$STAGE/$name/licenses/"
         ;;
 esac
 
-python3 - "$WORK/install.json" "$stage/$name/licenses" <<'PY'
+python3 - "$WORK/install.json" "$STAGE/$name/licenses" <<'PY'
 import json
 import os
 import shutil
@@ -417,7 +443,7 @@ if [[ "$TARGET" != linux ]]; then
     archive="$OUT/$name.zip"
 fi
 (
-    cd "$stage"
+    cd "$STAGE"
     if [[ "$TARGET" == linux ]]; then
         cmake -E tar czf "$archive" -- "$name"
     else
