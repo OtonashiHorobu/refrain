@@ -51,17 +51,17 @@ option(REFRAIN_MONOLITHIC "Link first-party mods statically (not wired)" ON)
 # disabled. CI has dedicated ASan/UBSan and TSan jobs.
 set(REFRAIN_SANITIZE "" CACHE STRING "Comma-separated -fsanitize list")
 # Baseline hardening: stack protector/clash protection, CET, hidden
-# visibility, fortified libc calls and RELRO/BIND_NOW. Enabled by default;
-# `REFRAIN_HARDEN_MAX` adds zero-initialized stack objects and caller-saved
-# register clearing at a measurable runtime cost.
+# visibility, fortified libc calls and RELRO/BIND_NOW. Release builds are
+# produced by scripts/dist.sh; `REFRAIN_HARDEN_MAX` adds zero-initialized stack
+# objects and caller-saved register clearing at a measurable runtime cost.
 option(REFRAIN_HARDEN "Enable the baseline security hardening flags" OFF)
 option(REFRAIN_HARDEN_MAX
        "Also zero stack storage and clear caller-saved registers on return"
        OFF)
-# Link-time optimization for optimized builds. Disabled for sanitizer builds
-# (instrumentation and LTO interact poorly and build time doubles) and for the
-# MSVC toolchain (LTCG build time is not worth it for the CI budget); both can
-# be overridden explicitly.
+# Link-time optimization for optimized builds. Off by default so regular
+# builds stay fast; release builds enable it through scripts/dist.sh. It is
+# skipped for sanitizer builds (instrumentation and LTO interact poorly) and
+# for the MSVC toolchain (LTCG build time is not worth the CI budget).
 option(REFRAIN_LTO "Enable link-time optimization for optimized builds" OFF)
 
 if(NOT REFRAIN_WITH_MIMALLOC)
@@ -70,6 +70,18 @@ endif()
 
 # --- shared compile options -----------------------------------------------
 function(refrain_apply_warnings target)
+    # Keep the builder's checkout path out of the object files. __FILE__ and
+    # std::source_location strings would otherwise embed an absolute path from
+    # the machine that compiled the binary into diagnostics and release
+    # artifacts.
+    if(MSVC)
+        target_compile_options(${target}
+                               PRIVATE /experimental:deterministic
+                                       "/pathmap:${CMAKE_SOURCE_DIR}/=")
+    else()
+        target_compile_options(
+            ${target} PRIVATE "-ffile-prefix-map=${CMAKE_SOURCE_DIR}/=")
+    endif()
     if(MSVC)
         # /GR- mirrors -fno-rtti; /utf-8 is required by fmt's Unicode checks.
         # C4702 fires inside fmt's constexpr-heavy headers at /O2; the
@@ -155,8 +167,11 @@ function(refrain_apply_link_hardening target)
         target_link_options(${target} PRIVATE -Wl,--dynamicbase -Wl,--nxcompat
                                                -Wl,--high-entropy-va)
     elseif(UNIX AND NOT APPLE)
+        # The stack is non-executable by default for every object the
+        # toolchain produces (including the dependency assembly, which carries
+        # .note.GNU-stack). Passing -z noexecstack through the driver makes the
+        # LTO wrapper drop all assembler options, so it is left to the default.
         target_link_options(${target} PRIVATE -Wl,-z,relro -Wl,-z,now
-                                               -Wl,-z,noexecstack
                                                -Wl,--as-needed)
     endif()
 endfunction()
