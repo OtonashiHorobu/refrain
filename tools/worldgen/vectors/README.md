@@ -6,13 +6,18 @@ on. Their output is the source of truth for the constants frozen in the tests:
 | Probe | Test | Covers |
 |---|---|---|
 | `Vectors.java` | `test/worldgen/test_rng.cpp` | random sources, seed mixing, positional factories, `Mth.getSeed` |
-| `NoiseVectors.java` | `test/worldgen/test_noise.cpp` | `PerlinNoise`, `NormalNoise` (builder and parity), `NoiseStack` |
+| `NoiseVectors.java` | `test/worldgen/test_noise.cpp` | `PerlinNoise`, `NormalNoise` (builder and parity), `NoiseStack`, bulk `addToVolume` |
+| `IntervalVectors.java` | `test/worldgen/test_interval.cpp` | `net.minecraft.util.Interval` operations |
+| `DensityVectors.java` | `test/worldgen/test_density.cpp` | density sampler graphs, scalar and bulk paths |
 
 ```bash
 tools/worldgen/vectors/run.sh /path/to/server.jar [class]
 ```
 
-The class defaults to `Vectors`; pass `NoiseVectors` for the noise probe.
+The class defaults to `Vectors`; pass `NoiseVectors`, `IntervalVectors` or
+`DensityVectors` for the other probes. `DensityVectors` calls
+`SharedConstants.tryDetectVersion()` and `Bootstrap.bootStrap()` before using
+the density-function registry.
 
 The script unpacks the 26.3 bundler jar into a temporary directory, builds the
 classpath from `META-INF/classpath-joined`, and runs the probe in source-file

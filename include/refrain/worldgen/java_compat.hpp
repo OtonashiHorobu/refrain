@@ -14,10 +14,35 @@
 #pragma once
 
 #include <bit>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <string_view>
 
 namespace refrain::worldgen {
+
+/// Java `Math.min(float, float)`: NaN wins and negative zero sorts below
+/// positive zero.
+[[nodiscard]] inline auto java_min(float left, float right) -> float {
+    if (std::isnan(left) || std::isnan(right)) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+    if (left == 0.0F && right == 0.0F) {
+        return std::signbit(left) ? left : right;
+    }
+    return left < right ? left : right;
+}
+
+/// Java `Math.max(float, float)`.
+[[nodiscard]] inline auto java_max(float left, float right) -> float {
+    if (std::isnan(left) || std::isnan(right)) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+    if (left == 0.0F && right == 0.0F) {
+        return std::signbit(left) ? right : left;
+    }
+    return left > right ? left : right;
+}
 
 using jint = std::int32_t;
 using jlong = std::int64_t;
