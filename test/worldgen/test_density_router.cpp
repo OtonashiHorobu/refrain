@@ -65,7 +65,7 @@ auto make_settings_json(std::string_view final_density) -> std::string {
                        "\"default_block\":\"minecraft:stone\","
                        "\"default_fluid\":\"minecraft:water\","
                        "\"sea_level\":63,"
-                       "\"aquifers\":{},"
+
                        "\"noise_router\":{"
                        "\"temperature\":\"testns:temperature\","
                        "\"vegetation\":\"testns:temperature\","
@@ -113,7 +113,7 @@ suite<"worldgen/density-router"> density_router_tests = [] {
         expect(settings->default_block == "minecraft:stone");
         expect(settings->default_fluid == "minecraft:water");
         expect(settings->sea_level == 63);
-        expect(settings->aquifers);
+        expect(!settings->aquifers);
 
         const sampler_context context;
         expect(bits(settings->router.temperature->sample_value(context, 0, 64,
@@ -172,6 +172,41 @@ suite<"worldgen/density-router"> density_router_tests = [] {
             settings->router.final_density->sample_volume(context, values, vol);
             for (std::size_t i = 0; i < values.size(); ++i) {
                 expect(std::isfinite(values.get(i)));
+            }
+
+            if (settings->aquifers) {
+                auto factory =
+                    new_positional_factory(algorithm::xoroshiro, 12345);
+                const volume chunk_vol{16, 384, 16, 0, -64, 0};
+                const terrain::fluid_picker picker{
+                    .sea_level = 63, .default_fluid = 2, .lava = 3, .air = 0};
+                const terrain::block_ids blocks{.air = 0,
+                                                .default_block = 1,
+                                                .default_fluid = 2,
+                                                .lava = 3};
+                const sampler_context fill_context;
+                terrain::noise_aquifer aquifer{std::move(settings->aquifer),
+                                               *factory,
+                                               chunk_vol,
+                                               picker,
+                                               blocks,
+                                               fill_context};
+                const terrain::fill_options options{.min_y = -64,
+                                                    .height = 384,
+                                                    .sea_level = 63,
+                                                    .blocks = blocks};
+                const auto chunk = terrain::fill_chunk(
+                    options, *settings->router.final_density, fill_context, 0,
+                    0, aquifer);
+                std::size_t stone = 0;
+                std::size_t air = 0;
+                for (const auto state : chunk.states) {
+                    stone += state == 1 ? 1U : 0U;
+                    air += state == 0 ? 1U : 0U;
+                }
+                expect(stone > 1000U);
+                expect(air > 1000U);
+                expect(stone + air <= chunk.states.size());
             }
         };
 

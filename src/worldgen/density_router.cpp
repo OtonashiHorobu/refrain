@@ -161,7 +161,34 @@ auto load_noise_settings(std::string_view worldgen_root,
         sea != nullptr && sea->is_number()) {
         settings.sea_level = static_cast<jint>(*sea->as_double());
     }
-    settings.aquifers = parsed_settings->find("aquifers") != nullptr;
+    if (const json *aquifers = parsed_settings->find("aquifers");
+        aquifers != nullptr && aquifers->is_object()) {
+        settings.aquifers = true;
+        struct field {
+            const char *id;
+            sampler_ptr aquifer_config::*member;
+        };
+        const std::array<field, 6> aquifer_fields{{
+            {"barrier", &aquifer_config::barrier},
+            {"fluid_level_floodedness",
+             &aquifer_config::fluid_level_floodedness},
+            {"fluid_level_spread", &aquifer_config::fluid_level_spread},
+            {"lava", &aquifer_config::lava},
+            {"exclusion", &aquifer_config::exclusion},
+            {"surface_level", &aquifer_config::surface_level},
+        }};
+        for (const auto &entry : aquifer_fields) {
+            const json *value = aquifers->find(entry.id);
+            if (value == nullptr) {
+                return std::unexpected{fail("aquifer config is incomplete")};
+            }
+            auto decoded = decode_density(value->dump(), documents);
+            if (!decoded) {
+                return std::unexpected{decoded.error()};
+            }
+            settings.aquifer.*entry.member = std::move(*decoded);
+        }
+    }
     return settings;
 }
 
