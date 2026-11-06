@@ -6,6 +6,7 @@ import net.minecraft.util.CubicSpline;
 import net.minecraft.util.Interval;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.levelgen.densityfunction.op.SplineFunction;
+import net.minecraft.world.level.levelgen.synth.BlendedNoise;
 import net.minecraft.world.level.levelgen.densityfunction.DensityBuffer;
 import net.minecraft.world.level.levelgen.densityfunction.DensityFunction;
 import net.minecraft.world.level.levelgen.densityfunction.DensityFunctions;
@@ -136,7 +137,7 @@ public class DensityVectors {
 
             @Override
             public RandomSource createRandom(Identifier seed) {
-                throw new UnsupportedOperationException("no random in these graphs");
+                return factory.fromHashOf(seed.toString());
             }
 
             @Override
@@ -188,6 +189,21 @@ public class DensityVectors {
             CubicSpline.<SplineFunction.Coordinate>constant(0.75F));
         samples("spline_constant_fn", constantFn);
         range("spline_constant_fn", constantFn);
+
+        DensityFunction blendAlphaFn = DensityFunctions.blendAlpha();
+        DensityFunction blendOffsetFn = DensityFunctions.blendOffset();
+        DensityFunction beardifierFn = DensityFunctions.beardifier();
+        samples("blend_alpha_fn", blendAlphaFn);
+        range("blend_alpha_fn", blendAlphaFn);
+        samples("blend_offset_fn", blendOffsetFn);
+        range("blend_offset_fn", blendOffsetFn);
+        samples("beardifier_fn", beardifierFn);
+        range("beardifier_fn", beardifierFn);
+        samples("blend_density_fn", DensityFunctions.blendDensity(gy2));
+
+        DensityFunction oldBlended = new BlendedNoise(0.25, 0.125, 80.0, 160.0, 8.0);
+        samples("old_blended_fn", oldBlended, noiseContext);
+        range("old_blended_fn", oldBlended);
 
         // Interpolated volume branches: block-step, cell-aligned and block-aligned.
         DensitySampler interpSampler =

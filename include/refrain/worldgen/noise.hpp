@@ -2,13 +2,13 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// 26.3 gradient noise: `PerlinNoise`, `NoiseStack` and `NormalNoise`.
+// 26.3 gradient noise: `PerlinNoise`, `SmearedPerlinNoise`, `NoiseStack` and
+// `NormalNoise`.
 //
 // The 26.3 noise hierarchy differs from older versions: `NormalNoise` owns the
 // octave layout and normalization, and `create` builds two `PerlinNoise`
 // instances per octave (the second at a slightly different frequency) into a
-// `NoiseStack`. `create_parity` keeps the legacy-normalised construction used
-// by the nether noises.
+// `NoiseStack`. `BlendedNoise` builds stacks of `SmearedPerlinNoise` instead.
 //
 // Every draw and every float expression follows the reference implementation;
 // the vectors in `test/worldgen/test_noise.cpp` come from the real classes.
@@ -23,27 +23,54 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <vector>
 
 namespace refrain::worldgen {
 
+/// Java `Noise`: the common surface of the Perlin variants and the stacks.
+class noise {
+  public:
+    noise() = default;
+    noise(const noise &) = delete;
+    auto operator=(const noise &) -> noise & = delete;
+    noise(noise &&) = default;
+    auto operator=(noise &&) -> noise & = default;
+    virtual ~noise() = default;
+
+    [[nodiscard]] virtual auto get(double x, double y) const -> float = 0;
+    [[nodiscard]] virtual auto get(double x, double y, double z) const
+        -> float = 0;
+
+    /// Bulk sampling. The arithmetic differs from `get` (it accumulates the XZ
+    /// and Y terms separately), so this is the path terrain generation
+    /// observes and it must stay bit-identical to Java's.
+    virtual void add_to_volume(buffer &output, const volume &volume,
+                               double xz_scale, double y_scale,
+                               float amplitude) const = 0;
+
+    [[nodiscard]] virtual auto range() const -> interval = 0;
+};
+
 /// Java `PerlinNoise`: a 256-entry permutation, three world offsets and the
 /// 16-entry gradient table, sampled with smoothstep interpolation.
-class perlin_noise {
+class perlin_noise : public noise {
   public:
     /// Consumes three `nextDouble` draws and then 256 `nextInt(256 - i)`
     /// draws, in that order.
     explicit perlin_noise(random_source &random);
 
-    [[nodiscard]] auto get(double x, double y) const -> float;
-    [[nodiscard]] auto get(double x, double y, double z) const -> float;
+    [[nodiscard]] auto get(double x, double y) const -> float override;
+    [[nodiscard]] auto get(double x, double y, double z) const
+        -> float override;
 
-    /// Bulk sampling into a `volume`. The arithmetic differs from `get` (it
-    /// accumulates the XZ and Y terms separately), so this is the path terrain
-    /// generation observes and it must stay bit-identical to Java's.
     void add_to_volume(buffer &output, const volume &volume, double xz_scale,
-                       double y_scale, float amplitude) const;
+                       double y_scale, float amplitude) const override;
+
+    [[nodiscard]] auto range() const -> interval override {
+        return interval::of_symmetric(2.0F);
+    }
 
     [[nodiscard]] auto offset_x() const noexcept -> double { return offset_x_; }
     [[nodiscard]] auto offset_y() const noexcept -> double { return offset_y_; }
@@ -52,7 +79,7 @@ class perlin_noise {
         return perms_[index];
     }
 
-  private:
+  protected:
     [[nodiscard]] auto sample_and_lerp(jint x, jint y, jint z, float relative_x,
                                        float relative_y, float relative_z,
                                        float original_relative_y) const
@@ -64,33 +91,55 @@ class perlin_noise {
     double offset_z_{0.0};
 };
 
-/// Java `NoiseStack`: a sum of Perlin layers at fixed frequencies. 26.3
-/// specialises the all-Perlin case, which is the only one `NormalNoise`
-/// produces; `SmearedPerlinNoise` layers are not modelled yet.
-class noise_stack {
+/// Java `SmearedPerlinNoise`: a Perlin variant whose Y coordinate is snapped to
+/// a smear grid before interpolation. Used by `BlendedNoise`.
+class smeared_perlin_noise final : public perlin_noise {
+  public:
+    smeared_perlin_noise(random_source &random, double fudge_y_scale);
+
+    [[nodiscard]] auto get(double x, double y, double z) const
+        -> float override;
+    using perlin_noise::get;
+
+    void add_to_volume(buffer &output, const volume &volume, double xz_scale,
+                       double y_scale, float amplitude) const override;
+
+    [[nodiscard]] auto range() const -> interval override;
+
+    [[nodiscard]] static auto range_for(double fudge_y_scale) -> interval;
+
+  private:
+    [[nodiscard]] auto compute_fudge_y(double original_y,
+                                       double relative_y) const -> double;
+
+    double fudge_y_scale_{0.0};
+};
+
+/// Java `NoiseStack`: a sum of layers at fixed frequencies.
+class noise_stack final : public noise {
   public:
     struct layer {
-        perlin_noise noise;
+        std::unique_ptr<noise> source;
         double frequency{0.0};
         float amplitude{0.0F};
     };
 
     noise_stack() = default;
+    noise_stack(noise_stack &&) = default;
+    auto operator=(noise_stack &&) -> noise_stack & = default;
     explicit noise_stack(std::vector<layer> layers);
 
-    [[nodiscard]] auto get(double x, double y, double z) const -> float;
-    [[nodiscard]] auto get(double x, double y) const -> float;
+    [[nodiscard]] auto get(double x, double y, double z) const
+        -> float override;
+    [[nodiscard]] auto get(double x, double y) const -> float override;
 
     void add_to_volume(buffer &output, const volume &volume, double xz_scale,
-                       double y_scale, float amplitude) const;
+                       double y_scale, float amplitude) const override;
+
+    [[nodiscard]] auto range() const -> interval override { return range_; }
 
     [[nodiscard]] auto layers() const noexcept -> const std::vector<layer> & {
         return layers_;
-    }
-
-    /// Bounds of the summed layers, as Java's `NoiseStack` computes them.
-    [[nodiscard]] auto range() const noexcept -> const interval & {
-        return range_;
     }
 
   private:

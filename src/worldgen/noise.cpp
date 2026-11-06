@@ -279,8 +279,8 @@ auto noise_stack::add_to_volume(buffer &output, const volume &volume,
                                 float amplitude) const -> void {
     for (const auto &l : layers_) {
         const double frequency = l.frequency;
-        l.noise.add_to_volume(output, volume, xz_scale * frequency,
-                              y_scale * frequency, amplitude * l.amplitude);
+        l.source->add_to_volume(output, volume, xz_scale * frequency,
+                                y_scale * frequency, amplitude * l.amplitude);
     }
 }
 
@@ -298,7 +298,7 @@ auto noise_stack::get(double x, double y, double z) const -> float {
     for (const auto &l : layers_) {
         const double frequency = l.frequency;
         value += l.amplitude *
-                 l.noise.get(x * frequency, y * frequency, z * frequency);
+                 l.source->get(x * frequency, y * frequency, z * frequency);
     }
     return value;
 }
@@ -307,9 +307,175 @@ auto noise_stack::get(double x, double y) const -> float {
     float value = 0.0F;
     for (const auto &l : layers_) {
         const double frequency = l.frequency;
-        value += l.amplitude * l.noise.get(x * frequency, y * frequency);
+        value += l.amplitude * l.source->get(x * frequency, y * frequency);
     }
     return value;
+}
+
+smeared_perlin_noise::smeared_perlin_noise(random_source &random,
+                                           double fudge_y_scale)
+    : perlin_noise{random}, fudge_y_scale_{fudge_y_scale} {}
+
+auto smeared_perlin_noise::range_for(double fudge_y_scale) -> interval {
+    return interval::of_symmetric(
+        static_cast<float>(std::abs(fudge_y_scale) + 2.0));
+}
+
+auto smeared_perlin_noise::range() const -> interval {
+    return range_for(fudge_y_scale_);
+}
+
+auto smeared_perlin_noise::compute_fudge_y(double original_y,
+                                           double relative_y) const -> double {
+    const double fudge_limit = (original_y >= 0.0 && original_y < relative_y)
+                                   ? original_y
+                                   : relative_y;
+    return std::floor(fudge_limit / fudge_y_scale_ + 1.0E-7) * fudge_y_scale_;
+}
+
+auto smeared_perlin_noise::get(double x, double y, double z) const -> float {
+    const double wrapped_x = wrap(x) + offset_x_;
+    const double wrapped_y = wrap(y) + offset_y_;
+    const double wrapped_z = wrap(z) + offset_z_;
+    const jint floor_x = mth::floor(wrapped_x);
+    const jint floor_y = mth::floor(wrapped_y);
+    const jint floor_z = mth::floor(wrapped_z);
+    const float relative_x = static_cast<float>(wrapped_x - floor_x);
+    const double relative_y = wrapped_y - floor_y;
+    const float relative_z = static_cast<float>(wrapped_z - floor_z);
+    const float fudged_relative_y =
+        static_cast<float>(relative_y - compute_fudge_y(y, relative_y));
+    return sample_and_lerp(floor_x, floor_y, floor_z, relative_x,
+                           fudged_relative_y, relative_z,
+                           static_cast<float>(relative_y));
+}
+
+auto smeared_perlin_noise::add_to_volume(buffer &output, const volume &vol,
+                                         double xz_scale, double y_scale,
+                                         float amplitude) const -> void {
+    float d000xz = 0.0F;
+    float d100xz = 0.0F;
+    float d010xz = 0.0F;
+    float d110xz = 0.0F;
+    float d001xz = 0.0F;
+    float d101xz = 0.0F;
+    float d011xz = 0.0F;
+    float d111xz = 0.0F;
+    float g000y = 0.0F;
+    float g100y = 0.0F;
+    float g010y = 0.0F;
+    float g110y = 0.0F;
+    float g001y = 0.0F;
+    float g101y = 0.0F;
+    float g011y = 0.0F;
+    float g111y = 0.0F;
+    std::size_t index = 0;
+
+    for (jint index_z = 0; index_z < vol.size_z(); ++index_z) {
+        const double z = wrap(vol.block_z(index_z) * xz_scale) + offset_z_;
+        const jint floor_z = mth::floor(z);
+        const float relative_z = static_cast<float>(z - floor_z);
+        const float alpha_z = mth::smoothstep(relative_z);
+
+        for (jint index_x = 0; index_x < vol.size_x(); ++index_x) {
+            const double x = wrap(vol.block_x(index_x) * xz_scale) + offset_x_;
+            const jint floor_x = mth::floor(x);
+            const float relative_x = static_cast<float>(x - floor_x);
+            const jint x0 = permute(perms_, floor_x);
+            const jint x1 = permute(perms_, floor_x + 1);
+            const float alpha_x = mth::smoothstep(relative_x);
+            jint last_floor_y = std::numeric_limits<jint>::min();
+
+            for (jint index_y = 0; index_y < vol.size_y(); ++index_y) {
+                const double original_y = vol.block_y(index_y) * y_scale;
+                const double y = wrap(original_y) + offset_y_;
+                const jint floor_y = mth::floor(y);
+                const double relative_y = y - floor_y;
+                const float alpha_y =
+                    mth::smoothstep(static_cast<float>(relative_y));
+                if (last_floor_y != floor_y) {
+                    const jint xy00 = permute(perms_, x0 + floor_y);
+                    const jint xy01 = permute(perms_, x0 + floor_y + 1);
+                    const jint xy10 = permute(perms_, x1 + floor_y);
+                    const jint xy11 = permute(perms_, x1 + floor_y + 1);
+                    const auto &g000 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy00 + floor_z)) &
+                                  15U];
+                    d000xz = static_cast<float>(g000.x) * relative_x +
+                             static_cast<float>(g000.z) * relative_z;
+                    g000y = static_cast<float>(g000.y);
+                    const auto &g100 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy10 + floor_z)) &
+                                  15U];
+                    d100xz = static_cast<float>(g100.x) * (relative_x - 1.0F) +
+                             static_cast<float>(g100.z) * relative_z;
+                    g100y = static_cast<float>(g100.y);
+                    const auto &g010 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy01 + floor_z)) &
+                                  15U];
+                    d010xz = static_cast<float>(g010.x) * relative_x +
+                             static_cast<float>(g010.z) * relative_z;
+                    g010y = static_cast<float>(g010.y);
+                    const auto &g110 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy11 + floor_z)) &
+                                  15U];
+                    d110xz = static_cast<float>(g110.x) * (relative_x - 1.0F) +
+                             static_cast<float>(g110.z) * relative_z;
+                    g110y = static_cast<float>(g110.y);
+                    const auto &g001 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy00 + floor_z + 1)) &
+                                  15U];
+                    d001xz = static_cast<float>(g001.x) * relative_x +
+                             static_cast<float>(g001.z) * (relative_z - 1.0F);
+                    g001y = static_cast<float>(g001.y);
+                    const auto &g101 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy10 + floor_z + 1)) &
+                                  15U];
+                    d101xz = static_cast<float>(g101.x) * (relative_x - 1.0F) +
+                             static_cast<float>(g101.z) * (relative_z - 1.0F);
+                    g101y = static_cast<float>(g101.y);
+                    const auto &g011 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy01 + floor_z + 1)) &
+                                  15U];
+                    d011xz = static_cast<float>(g011.x) * relative_x +
+                             static_cast<float>(g011.z) * (relative_z - 1.0F);
+                    g011y = static_cast<float>(g011.y);
+                    const auto &g111 =
+                        gradients[static_cast<std::size_t>(
+                                      permute(perms_, xy11 + floor_z + 1)) &
+                                  15U];
+                    d111xz = static_cast<float>(g111.x) * (relative_x - 1.0F) +
+                             static_cast<float>(g111.z) * (relative_z - 1.0F);
+                    g111y = static_cast<float>(g111.y);
+                    last_floor_y = floor_y;
+                }
+
+                const float fudged_relative_y = static_cast<float>(
+                    relative_y - compute_fudge_y(original_y, relative_y));
+                output.add_to(
+                    index,
+                    amplitude *
+                        mth::lerp3(alpha_x, alpha_y, alpha_z,
+                                   d000xz + g000y * fudged_relative_y,
+                                   d100xz + g100y * fudged_relative_y,
+                                   d010xz + g010y * (fudged_relative_y - 1.0F),
+                                   d110xz + g110y * (fudged_relative_y - 1.0F),
+                                   d001xz + g001y * fudged_relative_y,
+                                   d101xz + g101y * fudged_relative_y,
+                                   d011xz + g011y * (fudged_relative_y - 1.0F),
+                                   d111xz +
+                                       g111y * (fudged_relative_y - 1.0F)));
+                ++index;
+            }
+        }
+    }
 }
 
 normal_noise::normal_noise(normal_noise_parameters parameters)
@@ -355,12 +521,12 @@ auto normal_noise::create(random_source &random) const -> noise_stack {
             static_cast<float>(normalization_factor_ * octave.amplitude);
 
         layers.push_back(noise_stack::layer{
-            .noise = perlin_noise{*first_source},
+            .source = std::make_unique<perlin_noise>(*first_source),
             .frequency = octave.frequency,
             .amplitude = value_factor,
         });
         layers.push_back(noise_stack::layer{
-            .noise = perlin_noise{*second_source},
+            .source = std::make_unique<perlin_noise>(*second_source),
             .frequency = octave.frequency * 1.0181268882175227,
             .amplitude = value_factor,
         });

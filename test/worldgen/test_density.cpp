@@ -281,7 +281,7 @@ suite<"worldgen/density-samplers"> density_sampler_tests = [] {
                             0xbf7c0000U});
         }
         {
-            auto value = noise(temperature_stack(), 0.25, 0.5);
+            auto value = density::noise(temperature_stack(), 0.25, 0.5);
             check_graph("noise_fn", *value,
                         std::array<std::uint32_t, 4>{0xbd2c9b52U, 0xbcd6ab64U,
                                                      0xbc6cc63aU, 0xbe234e3eU},
@@ -402,6 +402,17 @@ suite<"worldgen/density-samplers"> density_sampler_tests = [] {
                             0x3f400000U, 0x3f400000U, 0x3f400000U,
                             0x3f400000U});
             check_range("spline_constant_fn", *value, 0x3f400000U, 0x3f400000U);
+        }
+        {
+            auto value = blend_density(gradient_y(0, 128, -2.0F, 2.0F));
+            check_graph("blend_density_fn", *value,
+                        std::array<std::uint32_t, 4>{0xc0000000U, 0xc0000000U,
+                                                     0xbd000000U, 0x40000000U},
+                        std::array<std::uint32_t, 12>{
+                            0xbe000000U, 0xbd000000U, 0xbe000000U, 0xbd000000U,
+                            0xbe000000U, 0xbd000000U, 0xbe000000U, 0xbd000000U,
+                            0xbe000000U, 0xbd000000U, 0xbe000000U,
+                            0xbd000000U});
         }
     };
 
