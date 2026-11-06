@@ -12,9 +12,38 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <unordered_map>
 #include <utility>
 
 namespace refrain::worldgen::density {
+
+namespace {
+
+auto binary_search(jint from, jint to,
+                   const std::function<bool(jint)> &condition) -> jint {
+    jint length = to - from;
+    while (length > 0) {
+        const jint half = length / 2;
+        const jint middle = from + half;
+        if (condition(middle)) {
+            length = half;
+        } else {
+            from = middle + 1;
+            length -= half + 1;
+        }
+    }
+    return from;
+}
+
+auto linear_extend(float input, const std::vector<float> &locations,
+                   float value, const std::vector<float> &derivatives,
+                   std::size_t index) -> float {
+    const float derivative = derivatives[index];
+    return derivative == 0.0F ? value
+                              : value + derivative * (input - locations[index]);
+}
+
+} // namespace
 
 namespace {
 
@@ -1103,6 +1132,135 @@ class const_second_lerp_sampler final : public sampler {
     float second_;
 };
 
+class spline_sampler_impl final : public sampler {
+  public:
+    explicit spline_sampler_impl(std::shared_ptr<const spline> value)
+        : value_{std::move(value)} {
+        collect(*value_);
+    }
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint y, jint z) const -> float override {
+        std::vector<float> caches(coordinate_index_.size(),
+                                  std::numeric_limits<float>::quiet_NaN());
+        point_input input{context, x, y, z, caches, coordinate_index_};
+        return evaluate(*value_, input);
+    }
+
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        std::vector<buffer> buffers;
+        buffers.reserve(coordinate_index_.size());
+        for (std::size_t i = 0; i < coordinate_index_.size(); ++i) {
+            buffers.emplace_back(vol.size());
+        }
+        std::vector<bool> sampled(coordinate_index_.size(), false);
+        volume_input input{context, vol, buffers,
+                           sampled, 0,   coordinate_index_};
+        for (std::size_t i = 0; i < output.size(); ++i) {
+            input.index = i;
+            output.set(i, evaluate(*value_, input));
+        }
+    }
+
+    [[nodiscard]] auto range() const -> interval override {
+        return value_->range();
+    }
+
+  private:
+    struct point_input {
+        const sampler_context &context;
+        jint x;
+        jint y;
+        jint z;
+        std::vector<float> &caches;
+        const std::unordered_map<const sampler *, std::size_t> &indices;
+
+        auto coordinate(const sampler &which) -> float {
+            const std::size_t index = indices.at(&which);
+            float &cached = caches[index];
+            if (!std::isnan(cached)) {
+                return cached;
+            }
+            cached = which.sample_value(context, x, y, z);
+            return cached;
+        }
+    };
+
+    struct volume_input {
+        const sampler_context &context;
+        const volume &vol;
+        std::vector<buffer> &buffers;
+        std::vector<bool> &sampled;
+        std::size_t index;
+        const std::unordered_map<const sampler *, std::size_t> &indices;
+
+        auto coordinate(const sampler &which) -> float {
+            const std::size_t coordinate_index = indices.at(&which);
+            if (!sampled[coordinate_index]) {
+                which.sample_volume(context, buffers[coordinate_index], vol);
+                sampled[coordinate_index] = true;
+            }
+            return buffers[coordinate_index].get(index);
+        }
+    };
+
+    template <typename Input>
+    static auto evaluate(const spline &value, Input &input) -> float {
+        if (value.constant_) {
+            return value.constant_value_;
+        }
+        const float input_value = input.coordinate(*value.coordinate_);
+        const jint last_index = static_cast<jint>(value.locations_.size()) - 1;
+        const jint start =
+            binary_search(
+                0, static_cast<jint>(value.locations_.size()),
+                [&](jint i) {
+                    return input_value <
+                           value.locations_[static_cast<std::size_t>(i)];
+                }) -
+            1;
+        if (start < 0) {
+            return linear_extend(input_value, value.locations_,
+                                 evaluate(*value.values_[0], input),
+                                 value.derivatives_, 0);
+        }
+        if (start == last_index) {
+            const auto index = static_cast<std::size_t>(last_index);
+            return linear_extend(input_value, value.locations_,
+                                 evaluate(*value.values_[index], input),
+                                 value.derivatives_, index);
+        }
+        const auto start_index = static_cast<std::size_t>(start);
+        const float x1 = value.locations_[start_index];
+        const float x2 = value.locations_[start_index + 1];
+        const float t = (input_value - x1) / (x2 - x1);
+        const float y1 = evaluate(*value.values_[start_index], input);
+        const float y2 = evaluate(*value.values_[start_index + 1], input);
+        const float d1 = value.derivatives_[start_index];
+        const float d2 = value.derivatives_[start_index + 1];
+        const float a = d1 * (x2 - x1) - (y2 - y1);
+        const float b = -d2 * (x2 - x1) + (y2 - y1);
+        return mth::lerp(t, y1, y2) + t * (1.0F - t) * mth::lerp(t, a, b);
+    }
+
+    void collect(const spline &value) {
+        if (value.constant_) {
+            return;
+        }
+        if (!coordinate_index_.contains(value.coordinate_.get())) {
+            const auto index = coordinate_index_.size();
+            coordinate_index_.emplace(value.coordinate_.get(), index);
+        }
+        for (const auto &child : value.values_) {
+            collect(*child);
+        }
+    }
+
+    std::shared_ptr<const spline> value_;
+    std::unordered_map<const sampler *, std::size_t> coordinate_index_;
+};
+
 } // namespace
 
 auto constant(float value) -> sampler_ptr {
@@ -1345,5 +1503,104 @@ auto lerp(sampler_ptr alpha, sampler_ptr first, sampler_ptr second)
 }
 
 auto cache(sampler_ptr input) -> sampler_ptr { return input; }
+auto spline::constant(float value) -> std::shared_ptr<const spline> {
+    auto result = std::shared_ptr<spline>(new spline{});
+    result->constant_ = true;
+    result->constant_value_ = value;
+    return result;
+}
+
+auto spline::multipoint(std::shared_ptr<sampler> coordinate,
+                        std::vector<spline_point> points)
+    -> std::shared_ptr<const spline> {
+    if (points.empty()) {
+        throw std::invalid_argument("spline needs at least one point");
+    }
+    auto result = std::shared_ptr<spline>(new spline{});
+    result->coordinate_ = std::move(coordinate);
+    result->locations_.reserve(points.size());
+    result->derivatives_.reserve(points.size());
+    result->values_.reserve(points.size());
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        if (i > 0 && points[i].location <= points[i - 1].location) {
+            throw std::invalid_argument(
+                "spline points must be in ascending order");
+        }
+        result->locations_.push_back(points[i].location);
+        result->derivatives_.push_back(points[i].derivative);
+        result->values_.push_back(std::move(points[i].value));
+    }
+    return result;
+}
+
+auto spline::range() const -> interval {
+    if (constant_) {
+        return interval::of_exact(constant_value_);
+    }
+    const std::size_t last_index = locations_.size() - 1;
+    float min_value = std::numeric_limits<float>::infinity();
+    float max_value = -std::numeric_limits<float>::infinity();
+    const interval input_range = coordinate_->range();
+    if (input_range.is_na_i()) {
+        return input_range;
+    }
+    if (input_range.min() < locations_[0]) {
+        const interval first_range = values_[0]->range();
+        const float edge1 = linear_extend(input_range.min(), locations_,
+                                          first_range.min(), derivatives_, 0);
+        const float edge2 = linear_extend(input_range.min(), locations_,
+                                          first_range.max(), derivatives_, 0);
+        min_value = java_min(min_value, java_min(edge1, edge2));
+        max_value = java_max(max_value, java_max(edge1, edge2));
+    }
+    if (input_range.max() > locations_[last_index]) {
+        const interval last_range = values_[last_index]->range();
+        const float edge1 =
+            linear_extend(input_range.max(), locations_, last_range.min(),
+                          derivatives_, last_index);
+        const float edge2 =
+            linear_extend(input_range.max(), locations_, last_range.max(),
+                          derivatives_, last_index);
+        min_value = java_min(min_value, java_min(edge1, edge2));
+        max_value = java_max(max_value, java_max(edge1, edge2));
+    }
+    for (const auto &value : values_) {
+        const interval value_range = value->range();
+        min_value = java_min(min_value, value_range.min());
+        max_value = java_max(max_value, value_range.max());
+    }
+    for (std::size_t i = 0; i < last_index; ++i) {
+        const float x1 = locations_[i];
+        const float x2 = locations_[i + 1];
+        const float x_diff = x2 - x1;
+        const interval range1 = values_[i]->range();
+        const interval range2 = values_[i + 1]->range();
+        const float min1 = range1.min();
+        const float max1 = range1.max();
+        const float min2 = range2.min();
+        const float max2 = range2.max();
+        const float d1 = derivatives_[i];
+        const float d2 = derivatives_[i + 1];
+        if (d1 != 0.0F || d2 != 0.0F) {
+            const float p1 = d1 * x_diff;
+            const float p2 = d2 * x_diff;
+            const float min_lerp1 = java_min(min1, min2);
+            const float max_lerp1 = java_max(max1, max2);
+            const float min_a = p1 - max2 + min1;
+            const float max_a = p1 - min2 + max1;
+            const float min_b = -p2 + min2 - max1;
+            const float max_b = -p2 + max2 - min1;
+            const float min_lerp2 = java_min(min_a, min_b);
+            const float max_lerp2 = java_max(max_a, max_b);
+            min_value = java_min(min_value, min_lerp1 + 0.25F * min_lerp2);
+            max_value = java_max(max_value, max_lerp1 + 0.25F * max_lerp2);
+        }
+    }
+    return interval::of(min_value, max_value);
+}
+
+auto spline_value(std::shared_ptr<const spline> value) -> sampler_ptr {
+    return std::make_unique<spline_sampler_impl>(std::move(value));
+}
 
 } // namespace refrain::worldgen::density

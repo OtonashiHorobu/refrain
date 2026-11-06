@@ -79,6 +79,13 @@ void check_graph(const char *name, const sampler &value,
     }
 }
 
+void check_range(const char *name, const sampler &value, std::uint32_t min_bits,
+                 std::uint32_t max_bits) {
+    const auto range = value.range();
+    expect(bits(range.min()) == min_bits) << name << " range min";
+    expect(bits(range.max()) == max_bits) << name << " range max";
+}
+
 void check_volume(const char *name, const sampler &value, const volume &vol,
                   std::span<const std::uint32_t> expected) {
     const sampler_context context;
@@ -342,6 +349,59 @@ suite<"worldgen/density-samplers"> density_sampler_tests = [] {
                             0x3ea07d80U, 0x3e0cec68U, 0x3ee8d244U, 0xbeb7a26cU,
                             0xbdf475a5U, 0x3ef0a350U, 0x3e697cfcU,
                             0x3cccbe44U});
+        }
+        const auto make_basic_spline = [] {
+            return spline::multipoint(gradient_y(-64, 320, 0.0F, 1.0F),
+                                      {{-0.5F, 0.0F, spline::constant(1.0F)},
+                                       {0.0F, 2.0F, spline::constant(0.0F)},
+                                       {0.5F, -1.0F, spline::constant(2.0F)}});
+        };
+        const auto make_nested_spline = [] {
+            const auto inner =
+                spline::multipoint(gradient_y(-64, 64, 1.0F, -1.0F),
+                                   {{-1.0F, 0.5F, spline::constant(0.25F)},
+                                    {1.0F, 0.0F, spline::constant(-0.25F)}});
+            return spline::multipoint(gradient_y(-64, 320, 0.0F, 1.0F),
+                                      {{-0.25F, 0.0F, spline::constant(0.5F)},
+                                       {0.25F, 0.0F, inner},
+                                       {0.75F, 0.0F, inner},
+                                       {1.25F, 1.0F, spline::constant(1.5F)}});
+        };
+        {
+            auto value = spline_value(make_basic_spline());
+            check_graph("spline_basic_fn", *value,
+                        std::array<std::uint32_t, 4>{0x00000000U, 0x3f3425eeU,
+                                                     0x3fcf0747U, 0x3fc05555U},
+                        std::array<std::uint32_t, 12>{
+                            0x3fca3c4cU, 0x3fcf0747U, 0x3fca3c4cU, 0x3fcf0747U,
+                            0x3fca3c4cU, 0x3fcf0747U, 0x3fca3c4cU, 0x3fcf0747U,
+                            0x3fca3c4cU, 0x3fcf0747U, 0x3fca3c4cU,
+                            0x3fcf0747U});
+            check_range("spline_basic_fn", *value, 0xbf000000U, 0x40280000U);
+        }
+        {
+            auto value = spline_value(make_nested_spline());
+            check_graph("spline_nested_fn", *value,
+                        std::array<std::uint32_t, 4>{0x3e000000U, 0x3e1c71c8U,
+                                                     0x3e83e420U, 0x3f4dab24U},
+                        std::array<std::uint32_t, 12>{
+                            0x3e8e4800U, 0x3e83e420U, 0x3e8e4800U, 0x3e83e420U,
+                            0x3e8e4800U, 0x3e83e420U, 0x3e8e4800U, 0x3e83e420U,
+                            0x3e8e4800U, 0x3e83e420U, 0x3e8e4800U,
+                            0x3e83e420U});
+            check_range("spline_nested_fn", *value, 0xbf580000U, 0x3fec0000U);
+        }
+        {
+            auto value = spline_value(spline::constant(0.75F));
+            check_graph("spline_constant_fn", *value,
+                        std::array<std::uint32_t, 4>{0x3f400000U, 0x3f400000U,
+                                                     0x3f400000U, 0x3f400000U},
+                        std::array<std::uint32_t, 12>{
+                            0x3f400000U, 0x3f400000U, 0x3f400000U, 0x3f400000U,
+                            0x3f400000U, 0x3f400000U, 0x3f400000U, 0x3f400000U,
+                            0x3f400000U, 0x3f400000U, 0x3f400000U,
+                            0x3f400000U});
+            check_range("spline_constant_fn", *value, 0x3f400000U, 0x3f400000U);
         }
     };
 
