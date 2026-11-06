@@ -44,6 +44,10 @@ The exact license texts are distributed with each Conan package under its
 
 - Minecraft code, assets and data are not part of this repository or its
   distributions. Local game files are used only as an interoperability oracle.
+- Release archives carry the license text of every runtime dependency under
+  `licenses/`. MinGW archives also carry the GCC runtime license and exception
+  because libstdc++ and libgcc are linked statically; MSVC archives carry a note
+  about the app-local Visual C++ runtime DLLs.
 - Some Conan build requirements (CMake, Ninja, pkg-config, autoconf, libtool)
   are build-time tools and are not shipped.
 - When a dependency changes its license, update this table together with

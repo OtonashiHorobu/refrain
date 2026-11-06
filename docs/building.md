@@ -11,8 +11,10 @@
 | Ninja | any recent version | generator used by the presets |
 | Python | 3.11 or newer | tooling and Conan |
 
-Windows and macOS builds are not supported. A MinGW cross build of the
-libraries, tools and server is possible but untested at runtime.
+Linux x86_64 is the supported development platform. MinGW-w64 cross builds and
+native MSVC builds are compiled and tested in CI and produce the Windows
+archives, but they are not the primary development environment. macOS is not
+supported.
 
 ## Bootstrap
 
@@ -80,15 +82,29 @@ unhardened, while release archives use the hardened profile described below.
 | `REFRAIN_HARDEN_MAX` | OFF | Adds `-ftrivial-auto-var-init=zero` and `-fzero-call-used-regs=used-gpr` on top of the baseline. |
 | `REFRAIN_LTO` | OFF | Link-time optimization for optimized GCC/Clang builds (the Conan `lto` option feeds it). Sanitizer builds and MSVC skip LTO automatically. |
 
-Only first-party targets are rebuilt with these flags; third-party libraries
-come prebuilt from Conan. The flags apply to `Release`, `RelWithDebInfo` and
-`MinSizeRel`; `Debug` keeps the stack protector but skips FORTIFY and LTO.
+In a regular build only first-party targets get these flags; third-party
+libraries come prebuilt from Conan. The flags apply to `Release`,
+`RelWithDebInfo` and `MinSizeRel`; `Debug` keeps the stack protector but skips
+FORTIFY and LTO.
 
-`scripts/dist.sh` is the release path: it rebuilds every Conan dependency from
-source with the same hardening flags (plus `-ffat-lto-objects -flto=auto`) in an
-isolated Conan home, then builds the server and tools with
-`REFRAIN_HARDEN=ON REFRAIN_HARDEN_MAX=ON REFRAIN_LTO=ON`. The isolated home is
-required because Conan build flags are not part of a package id.
+`scripts/dist.sh` is the release path. It rebuilds every Conan dependency from
+source with the hardening flags in an isolated Conan home, builds the server and
+tools with hardening and LTO enabled, strips the binaries, collects the
+third-party license texts, and writes a `.sha256` checksum next to the archive.
+The isolated home is required because Conan build flags are not part of a
+package id.
+
+| Command | Host requirements | Archive |
+|---|---|---|
+| `scripts/dist.sh linux` | GCC 16 and the native toolchain | `refrain-<version>-linux-x86_64.tar.gz` |
+| `scripts/dist.sh mingw` | `x86_64-w64-mingw32-g++`; Wine for the smoke check | `refrain-<version>-windows-mingw-x86_64.zip` |
+| `scripts/dist.sh msvc` | a Visual Studio developer prompt, or msvc-wine | `refrain-<version>-windows-msvc-x86_64.zip` |
+
+The Windows archives are self-contained: the MinGW build is static and the MSVC
+archive carries the app-local Visual C++ runtime DLLs. Archives are written to
+`dist/` by default; `REFRAIN_DIST_OUT` selects another directory. Cross builds
+need a native `refrain-tools` for the schema compiler; the MinGW target and the
+msvc-wine path build it automatically.
 
 One limitation: zstd and blake3 contain hand-written x86 assembly for their
 SIMD kernels, and assembly objects carry no CET property notes. The final
