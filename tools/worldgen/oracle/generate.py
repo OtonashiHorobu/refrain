@@ -258,7 +258,11 @@ def main() -> int:
         )
         biome["carvers"] = []
         biome["features"] = [[] for _ in range(11)]
-        biome["features"][9] = ["oracle:stone_patch", "oracle:sand_disk"]
+        biome["features"][9] = [
+            "oracle:stone_patch",
+            "oracle:sand_disk",
+            "oracle:coal_ore",
+        ]
         biome_dir = pack / "data/oracle/worldgen/biome"
         biome_dir.mkdir(parents=True)
         (biome_dir / "feature.json").write_text(
@@ -312,6 +316,25 @@ def main() -> int:
             )
             + "\n"
         )
+        (feature_dir / "coal_ore.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:ore",
+                    "size": 4,
+                    "discard_chance_on_air_exposure": 0.0,
+                    "targets": [
+                        {
+                            "state": "minecraft:coal_ore",
+                            "target": {
+                                "predicate_type": "minecraft:always_true"
+                            },
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
         (placed_dir / "sand_disk.json").write_text(
             json.dumps(
                 {
@@ -323,6 +346,21 @@ def main() -> int:
                             "type": "minecraft:heightmap",
                             "heightmap": "WORLD_SURFACE_WG",
                         },
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "coal_ore.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:coal_ore",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 40, 8]],
+                        }
                     ],
                 },
                 indent=2,

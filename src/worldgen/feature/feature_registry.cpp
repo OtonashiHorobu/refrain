@@ -4,6 +4,8 @@
 
 #include <refrain/worldgen/feature/feature_registry.hpp>
 
+#include <refrain/worldgen/feature/rule_test.hpp>
+
 #include <string>
 #include <string_view>
 #include <utility>
@@ -120,6 +122,68 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       *state, std::move(*predicate),
                                       std::move(*radius_provider),
                                       static_cast<jint>(*half)));
+            continue;
+        }
+        if (*type == "minecraft:ore") {
+            const auto *targets = document.document.find("targets");
+            const auto *size = document.document.find("size");
+            if (targets == nullptr || !targets->is_array() || size == nullptr) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "ore feature is incomplete")};
+            }
+            const auto size_value = size->as_int64();
+            if (!size_value) {
+                return std::unexpected{size_value.error()};
+            }
+            float discard = 0.0F;
+            if (const auto *field =
+                    document.document.find("discard_chance_on_air_exposure");
+                field != nullptr) {
+                const auto value = field->as_double();
+                if (!value) {
+                    return std::unexpected{value.error()};
+                }
+                discard = static_cast<float>(*value);
+            }
+            std::vector<block_replacement> replacements;
+            for (const auto &entry : *targets->as_array()) {
+                const auto *state = entry.find("state");
+                const auto *target = entry.find("target");
+                if (state == nullptr || target == nullptr) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error, "ore target is incomplete")};
+                }
+                std::string name;
+                if (const auto text = state->as_string(); text.has_value()) {
+                    name = std::string{*text};
+                } else if (const auto *id_field = state->find("id");
+                           id_field != nullptr) {
+                    const auto id_text = id_field->as_string();
+                    if (!id_text) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "ore state id is invalid")};
+                    }
+                    name = std::string{*id_text};
+                } else {
+                    return std::unexpected{make_error(error_code::parse_error,
+                                                      "ore state is invalid")};
+                }
+                const auto state_id = states_->find(name);
+                if (!state_id) {
+                    return std::unexpected{make_error(error_code::not_found,
+                                                      "ore state is unknown")};
+                }
+                auto rule = decode_rule_test(*target, *states_);
+                if (!rule) {
+                    return std::unexpected{rule.error()};
+                }
+                replacements.push_back(block_replacement{
+                    .target = std::move(*rule), .state = *state_id});
+            }
+            features_.emplace(id, std::make_unique<ore_feature>(
+                                      std::move(replacements),
+                                      static_cast<jint>(*size_value), discard));
             continue;
         }
         return std::unexpected{
