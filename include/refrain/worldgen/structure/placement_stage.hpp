@@ -10,6 +10,7 @@
 #include <refrain/worldgen/chunk/chunk_region.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/core/rng.hpp>
+#include <refrain/worldgen/structure/template.hpp>
 
 #include <functional>
 #include <string_view>
@@ -22,6 +23,10 @@ struct structure_place_context {
     const block_state_table *states{nullptr};
     /// Resolves a canonical state key through the generation registry.
     std::function<block_state_id(std::string_view)> state{};
+    /// Template source and state registry for template pieces; both must be
+    /// present for `minecraft:igl` to place anything.
+    const structure_template_manager *templates{nullptr};
+    block_state_registry *registry{nullptr};
 };
 
 /// Places every referenced start of `chunk` whose `step` matches, clipping

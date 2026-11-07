@@ -2,6 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/core/io.hpp>
 #include <refrain/data/json.hpp>
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
@@ -12,6 +13,8 @@
 #include <refrain/worldgen/structure/start.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/structure_set.hpp>
+
+#include <filesystem>
 
 #include <boost/ut.hpp>
 
@@ -557,4 +560,179 @@ suite<"worldgen/structure-stage"> structure_stage_tests = [] {
         expect(chunk.structure_references().size() == result.references.size());
         expect(chunk.structure_references().front().count >= 1);
     };
+};
+
+suite<"worldgen/igloo-piece"> igloo_piece_tests = [] {
+    "an igloo piece shifts to the entrance height and fills the chest"_test =
+        [] {
+            using namespace refrain;
+            using namespace refrain::worldgen;
+            block_state_registry registry;
+            auto stone = registry.intern("minecraft:stone",
+                                         {.air = false,
+                                          .blocks_motion = true,
+                                          .blocks_motion_no_leaves = true});
+            auto chest = registry.intern(
+                "minecraft:chest[facing=north,type=single,waterlogged=false]",
+                {.air = false,
+                 .blocks_motion = true,
+                 .blocks_motion_no_leaves = true});
+            auto marker =
+                registry.intern("minecraft:structure_block[mode=data]",
+                                {.air = false,
+                                 .blocks_motion = true,
+                                 .blocks_motion_no_leaves = true});
+            expect(stone && chest && marker);
+            if (!stone || !chest || !marker) {
+                return;
+            }
+            const auto directory =
+                std::filesystem::path{core::io::temp_directory()} /
+                "refrain-igloo-piece";
+            std::filesystem::remove_all(directory);
+            std::filesystem::create_directories(directory / "minecraft" /
+                                                "structure" / "igloo");
+
+            data::nbt::compound root;
+            auto size = data::nbt::make_list(data::nbt::tag_type::int_);
+            for (const jint value : {3, 3, 3}) {
+                (void)size.push(data::nbt::value{value});
+            }
+            root["size"] = std::move(size);
+            auto palette = data::nbt::make_list(data::nbt::tag_type::compound);
+            data::nbt::compound stone_entry;
+            stone_entry["id"] =
+                data::nbt::value{std::string{"minecraft:stone"}};
+            (void)palette.push(data::nbt::value{stone_entry});
+            data::nbt::compound chest_entry;
+            chest_entry["id"] =
+                data::nbt::value{std::string{"minecraft:chest"}};
+            data::nbt::compound chest_properties;
+            chest_properties["facing"] = data::nbt::value{std::string{"north"}};
+            chest_properties["type"] = data::nbt::value{std::string{"single"}};
+            chest_properties["waterlogged"] =
+                data::nbt::value{std::string{"false"}};
+            chest_entry["properties"] = data::nbt::value{chest_properties};
+            (void)palette.push(data::nbt::value{chest_entry});
+            data::nbt::compound marker_entry;
+            marker_entry["id"] =
+                data::nbt::value{std::string{"minecraft:structure_block"}};
+            data::nbt::compound marker_properties;
+            marker_properties["mode"] = data::nbt::value{std::string{"data"}};
+            marker_entry["properties"] = data::nbt::value{marker_properties};
+            (void)palette.push(data::nbt::value{marker_entry});
+            root["palette"] = std::move(palette);
+
+            auto blocks = data::nbt::make_list(data::nbt::tag_type::compound);
+            const auto make_block = [&](std::initializer_list<jint> pos,
+                                        jint state, data::nbt::compound nbt) {
+                data::nbt::compound entry;
+                auto pos_list = data::nbt::make_list(data::nbt::tag_type::int_);
+                for (const jint value : pos) {
+                    (void)pos_list.push(data::nbt::value{value});
+                }
+                entry["pos"] = std::move(pos_list);
+                entry["state"] = data::nbt::value{state};
+                if (!nbt.empty()) {
+                    entry["nbt"] = data::nbt::value{std::move(nbt)};
+                }
+                return entry;
+            };
+            (void)blocks.push(data::nbt::value{make_block({0, 0, 0}, 0, {})});
+            data::nbt::compound chest_nbt;
+            chest_nbt["id"] = data::nbt::value{std::string{"minecraft:chest"}};
+            (void)blocks.push(
+                data::nbt::value{make_block({1, 0, 1}, 1, chest_nbt)});
+            data::nbt::compound marker_nbt;
+            marker_nbt["mode"] = data::nbt::value{std::string{"data"}};
+            marker_nbt["metadata"] = data::nbt::value{std::string{"chest"}};
+            (void)blocks.push(
+                data::nbt::value{make_block({1, 1, 1}, 2, marker_nbt)});
+            root["blocks"] = std::move(blocks);
+
+            const auto written = data::nbt::write_file(
+                (directory / "minecraft" / "structure" / "igloo" / "bottom.nbt")
+                    .string(),
+                data::nbt::value{root}, "", data::nbt::compression::gzip);
+            expect(written.has_value());
+
+            structure::structure_template_manager manager{directory.string(),
+                                                          registry};
+            proto_chunk chunk{registry, 0, 0, 0, 384};
+            chunk.heightmap_at(heightmap_kind::world_surface_wg)
+                .set_first_available(3, 2, 68);
+            worldgen::structure_start start{
+                .structure = "minecraft:igloo",
+                .step = "surface_structures",
+                .chunk_x = 0,
+                .chunk_z = 0,
+                .min_x = 0,
+                .min_y = 0,
+                .min_z = 0,
+                .max_x = 15,
+                .max_y = 383,
+                .max_z = 15,
+            };
+            start.pieces.push_back(structure_piece_record{
+                .type = "minecraft:igl",
+                .min_x = 0,
+                .min_y = 0,
+                .min_z = 0,
+                .max_x = 15,
+                .max_y = 383,
+                .max_z = 15,
+                .template_id = "minecraft:igloo/bottom",
+                .template_x = 0,
+                .template_y = 90,
+                .template_z = 0,
+                .template_rotation = 0,
+                .template_pivot_x = 3,
+                .template_pivot_y = 6,
+                .template_pivot_z = 7,
+            });
+            chunk.add_structure_start(start);
+            chunk.add_structure_reference("minecraft:igloo", 0, 0);
+            chunk_region region{chunk, 0};
+            const auto resolve = [&](std::string_view key) {
+                if (const auto found = registry.find(key); found.has_value()) {
+                    return *found;
+                }
+                const auto block = state_block_name(key);
+                const bool air = is_air_block_name(block);
+                const auto inserted =
+                    registry.intern(key, {.air = air, .blocks_motion = !air});
+                return inserted.value_or(no_block_state);
+            };
+            const structure::structure_place_context context{
+                .region = &region,
+                .chunk = &chunk,
+                .states = &registry,
+                .state = resolve,
+                .templates = &manager,
+                .registry = &registry,
+            };
+            auto random =
+                worldgen_random{std::make_unique<legacy_random_source>(7)};
+            structure::place_structures(chunk, context, "surface_structures",
+                                        random);
+
+            // The entrance at (3, 2) reports height 68, so the y=90 template
+            // shifts to y=67.
+            expect(chunk.state_at(0, 67, 0) == *stone);
+            expect(chunk.state_at(1, 67, 1) == *chest);
+            expect(chunk.state_at(1, 68, 1) == registry.air());
+            const auto *entity =
+                chunk.block_entity_at(block_pos{.x = 1, .y = 67, .z = 1});
+            expect(entity != nullptr);
+            if (entity != nullptr) {
+                const auto loot = entity->find("LootTable");
+                expect(loot != entity->end());
+                if (loot != entity->end()) {
+                    expect(loot->second.as_string() ==
+                           "minecraft:chests/igloo");
+                }
+                expect(entity->contains("LootTableSeed"));
+            }
+            std::filesystem::remove_all(directory);
+        };
 };
