@@ -352,6 +352,7 @@ def main() -> int:
             "oracle:coal_ore",
             "oracle:moss_blob",
             "oracle:stone_column",
+            "oracle:moss_pile",
         ]
         biome_dir = pack / "data/oracle/worldgen/biome"
         biome_dir.mkdir(parents=True)
@@ -520,6 +521,16 @@ def main() -> int:
             )
             + "\n"
         )
+        (feature_dir / "moss_pile.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:block_pile",
+                    "state_provider": {"id": "minecraft:mossy_cobblestone"},
+                },
+                indent=2,
+            )
+            + "\n"
+        )
         (placed_dir / "stone_column.json").write_text(
             json.dumps(
                 {
@@ -528,6 +539,21 @@ def main() -> int:
                         {
                             "type": "minecraft:fixed_placement",
                             "positions": [[8, 80, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "moss_pile.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:moss_pile",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 83, 8]],
                         }
                     ],
                 },

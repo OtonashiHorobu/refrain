@@ -261,4 +261,23 @@ class boolean_selector_feature final : public feature {
     std::string feature_false_{};
 };
 
+/// `BlockPileFeature`.
+class block_pile_feature final : public feature {
+  public:
+    explicit block_pile_feature(std::unique_ptr<state_provider> provider)
+        : provider_{std::move(provider)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    [[nodiscard]] auto may_place_on(feature_context &context,
+                                    const block_pos &pos,
+                                    worldgen_random &random) const -> bool;
+    void try_place(feature_context &context, const block_pos &pos,
+                   worldgen_random &random) const;
+
+    std::unique_ptr<state_provider> provider_{};
+};
+
 } // namespace refrain::worldgen::feature
