@@ -52,6 +52,7 @@ using refrain::worldgen::feature::lake_feature;
 using refrain::worldgen::feature::large_dripstone_feature;
 using refrain::worldgen::feature::leave_vine_decorator;
 using refrain::worldgen::feature::monster_room_feature;
+using refrain::worldgen::feature::multiface_growth_feature;
 using refrain::worldgen::feature::place_on_ground_decorator;
 using refrain::worldgen::feature::placed_feature_document;
 using refrain::worldgen::feature::placed_feature_runtime;
@@ -1260,6 +1261,70 @@ suite<"worldgen/speleothem"> speleothem_tests = [] {
         }
         expect(pointed_count > 0);
         expect(base_count > 0);
+    };
+};
+
+suite<"worldgen/multiface"> multiface_tests = [] {
+    "glow lichen attaches to the face of a support block"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(stone.has_value());
+        if (!stone) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 16};
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                chunk.set_state(x, 0, z, *stone);
+            }
+        }
+        chunk_region region{chunk, 0};
+        const auto resolve = [&](std::string_view key) -> block_state_id {
+            if (const auto found = registry.find(key); found.has_value()) {
+                return *found;
+            }
+            const auto block = state_block_name(key);
+            const bool air = is_air_block_name(block);
+            const auto inserted =
+                registry.intern(key, {.air = air, .blocks_motion = !air});
+            return inserted.has_value() ? *inserted : no_block_state;
+        };
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .resolve_state = resolve,
+                                }};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        multiface_growth_feature feature{
+            "minecraft:glow_lichen", 10, true, true, true, 0.5F,
+            {"minecraft:stone"}};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 1, .z = 8}));
+        const auto name = registry.name(chunk.state_at(8, 1, 8));
+        expect(name.starts_with("minecraft:glow_lichen["));
+        expect(name.find("down=true") != std::string_view::npos);
+        jint count = 0;
+        for (jint y = 1; y < 4; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    if (registry.name(chunk.state_at(x, y, z))
+                            .starts_with("minecraft:glow_lichen")) {
+                        ++count;
+                    }
+                }
+            }
+        }
+        expect(count >= 1);
+
+        auto second =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(7)};
+        expect(
+            !feature.place(context, second, block_pos{.x = 8, .y = 6, .z = 8}));
     };
 };
 

@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cmath>
+#include <numeric>
 #include <tuple>
 
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
@@ -1518,6 +1519,322 @@ struct speleothem_column {
 };
 
 } // namespace
+
+namespace {
+
+constexpr std::array<std::string_view, 6> multiface_names{
+    "down", "up", "north", "south", "west", "east"};
+constexpr std::array<std::pair<jint, jint>, 6> multiface_offsets{
+    {{0, -1}, {0, 1}, {0, -1}, {0, 1}, {-1, 0}, {1, 0}}};
+// Offsets are (dx,dz) for horizontal faces and dy for vertical ones; the
+// helper below maps a face index to a full offset.
+
+auto face_offset(std::size_t face) -> block_pos {
+    switch (face) {
+    case 0:
+        return {.x = 0, .y = -1, .z = 0};
+    case 1:
+        return {.x = 0, .y = 1, .z = 0};
+    case 2:
+        return {.x = 0, .y = 0, .z = -1};
+    case 3:
+        return {.x = 0, .y = 0, .z = 1};
+    case 4:
+        return {.x = -1, .y = 0, .z = 0};
+    default:
+        return {.x = 1, .y = 0, .z = 0};
+    }
+}
+
+auto opposite_face(std::size_t face) -> std::size_t {
+    switch (face) {
+    case 0:
+        return 1;
+    case 1:
+        return 0;
+    case 2:
+        return 3;
+    case 3:
+        return 2;
+    case 4:
+        return 5;
+    default:
+        return 4;
+    }
+}
+
+auto axis_of(std::size_t face) -> int {
+    return face <= 1 ? 0 : (face <= 3 ? 2 : 1);
+}
+
+auto shuffled(std::size_t count, worldgen_random &random)
+    -> std::vector<std::size_t> {
+    std::vector<std::size_t> order(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        order[i] = i;
+    }
+    for (std::size_t i = count; i > 1; --i) {
+        const auto swap_to =
+            static_cast<std::size_t>(random.next_int(static_cast<jint>(i)));
+        std::swap(order[i - 1], order[swap_to]);
+    }
+    return order;
+}
+
+auto multiface_faces(const block_state_table &states, block_state_id state,
+                     std::string_view block_name) -> std::array<bool, 6> {
+    std::array<bool, 6> faces{};
+    const auto key = states.name(state);
+    if (!key.starts_with(block_name)) {
+        return faces;
+    }
+    const auto open = key.find('[');
+    if (open == std::string_view::npos) {
+        return faces;
+    }
+    const auto body = key.substr(open + 1, key.rfind(']') - open - 1);
+    std::size_t start = 0;
+    while (start < body.size()) {
+        const auto comma = body.find(',', start);
+        const auto entry = body.substr(start, comma == std::string_view::npos
+                                                  ? std::string_view::npos
+                                                  : comma - start);
+        const auto equals = entry.find('=');
+        if (equals != std::string_view::npos) {
+            const auto name = entry.substr(0, equals);
+            for (std::size_t i = 0; i < multiface_names.size(); ++i) {
+                if (name == multiface_names[i] &&
+                    entry.substr(equals + 1) == "true") {
+                    faces[i] = true;
+                }
+            }
+        }
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+    return faces;
+}
+
+auto multiface_key(std::string_view block_name,
+                   const std::array<bool, 6> &faces, bool waterlogged)
+    -> std::string {
+    std::string key{block_name};
+    key.push_back('[');
+    for (std::size_t i = 0; i < multiface_names.size(); ++i) {
+        if (i != 0) {
+            key.push_back(',');
+        }
+        key.append(multiface_names[i]);
+        key.append(faces[i] ? "=true" : "=false");
+    }
+    key.append(waterlogged ? ",waterlogged=true]" : ",waterlogged=false]");
+    return key;
+}
+
+} // namespace
+
+auto multiface_growth_feature::place(feature_context &context,
+                                     worldgen_random &random,
+                                     const block_pos &origin) const -> bool {
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
+    const auto resolve = [&](std::string_view key) -> block_state_id {
+        return context.placement.resolve_state
+                   ? context.placement.resolve_state(key)
+                   : no_block_state;
+    };
+    const auto block_name_at = [&](const block_pos &pos) {
+        return state_block_name(
+            states.name(region.state_at(pos.x, pos.y, pos.z)));
+    };
+    const auto is_air = [&](block_state_id state) {
+        return states.traits(state).air;
+    };
+    const auto is_water = [&](block_state_id state) {
+        const auto traits = states.traits(state);
+        return traits.water && !traits.air;
+    };
+    const auto state_is_self = [&](block_state_id state) {
+        return state_block_name(states.name(state)) == block_name_;
+    };
+    const auto in_place_set = [&](std::string_view name) {
+        return std::find(can_be_placed_on_.begin(), can_be_placed_on_.end(),
+                         name) != can_be_placed_on_.end();
+    };
+    const auto can_attach = [&](const block_pos &pos, std::size_t face) {
+        const auto offset = face_offset(face);
+        const auto neighbour = block_pos{.x = pos.x + offset.x,
+                                         .y = pos.y + offset.y,
+                                         .z = pos.z + offset.z};
+        return states
+            .traits(region.state_at(neighbour.x, neighbour.y, neighbour.z))
+            .blocks_motion;
+    };
+    const auto make_state =
+        [&](block_state_id old_state, const block_pos &pos,
+            std::size_t face) -> std::optional<block_state_id> {
+        std::array<bool, 6> faces{};
+        bool waterlogged = false;
+        if (state_is_self(old_state)) {
+            faces = multiface_faces(states, old_state, block_name_);
+            const auto key = states.name(old_state);
+            waterlogged =
+                key.find("waterlogged=true") != std::string_view::npos;
+        } else if (is_water(old_state)) {
+            waterlogged = true;
+        }
+        if (!can_attach(pos, face)) {
+            return std::nullopt;
+        }
+        if (state_is_self(old_state) && faces[face]) {
+            return std::nullopt;
+        }
+        faces[face] = true;
+        const auto state =
+            resolve(multiface_key(block_name_, faces, waterlogged));
+        if (state == no_block_state) {
+            return std::nullopt;
+        }
+        return state;
+    };
+    const auto has_face = [&](block_state_id state, std::size_t face) {
+        return multiface_faces(states, state, block_name_)[face];
+    };
+    const auto can_replace = [&](block_state_id state) {
+        return is_air(state) || state_is_self(state) || is_water(state);
+    };
+    const auto spread_into = [&](const block_pos &source,
+                                 const block_pos &target,
+                                 std::size_t face) -> bool {
+        (void)source;
+        const auto existing = region.state_at(target.x, target.y, target.z);
+        if (!can_replace(existing)) {
+            return false;
+        }
+        return make_state(existing, target, face).has_value();
+    };
+    const auto spread = [&](block_state_id state, const block_pos &pos,
+                            std::size_t starting_face) {
+        const auto order = shuffled(6, random);
+        for (const auto spread_face : order) {
+            if (axis_of(spread_face) == axis_of(starting_face)) {
+                continue;
+            }
+            if (!has_face(state, starting_face) ||
+                has_face(state, spread_face)) {
+                continue;
+            }
+            const auto spread_offset = face_offset(spread_face);
+            const auto start_offset = face_offset(starting_face);
+            const std::array<block_pos, 3> targets{{
+                pos,
+                block_pos{.x = pos.x + spread_offset.x,
+                          .y = pos.y + spread_offset.y,
+                          .z = pos.z + spread_offset.z},
+                block_pos{.x = pos.x + spread_offset.x + start_offset.x,
+                          .y = pos.y + spread_offset.y + start_offset.y,
+                          .z = pos.z + spread_offset.z + start_offset.z},
+            }};
+            const std::array<std::size_t, 3> faces{spread_face, starting_face,
+                                                   opposite_face(spread_face)};
+            for (std::size_t type = 0; type < 3; ++type) {
+                if (!spread_into(pos, targets[type], faces[type])) {
+                    continue;
+                }
+                const auto existing = region.state_at(
+                    targets[type].x, targets[type].y, targets[type].z);
+                const auto placed =
+                    make_state(existing, targets[type], faces[type]);
+                if (placed.has_value()) {
+                    (void)region.set_block_state(targets[type].x,
+                                                 targets[type].y,
+                                                 targets[type].z, *placed);
+                    (void)region.mark_post_processing(
+                        targets[type].x, targets[type].y, targets[type].z);
+                }
+                return;
+            }
+        }
+    };
+    std::vector<std::size_t> valid;
+    if (ceiling_) {
+        valid.push_back(1);
+    }
+    if (floor_) {
+        valid.push_back(0);
+    }
+    if (wall_) {
+        valid.push_back(2);
+        valid.push_back(3);
+        valid.push_back(4);
+        valid.push_back(5);
+    }
+    const auto try_place =
+        [&](const block_pos &pos, block_state_id state,
+            const std::vector<std::size_t> &directions) -> bool {
+        for (const auto face : directions) {
+            const auto offset = face_offset(face);
+            const auto neighbour = block_pos{.x = pos.x + offset.x,
+                                             .y = pos.y + offset.y,
+                                             .z = pos.z + offset.z};
+            if (!in_place_set(block_name_at(neighbour))) {
+                continue;
+            }
+            const auto placed = make_state(state, pos, face);
+            if (!placed) {
+                return false;
+            }
+            (void)region.set_block_state(pos.x, pos.y, pos.z, *placed);
+            (void)region.mark_post_processing(pos.x, pos.y, pos.z);
+            if (random.next_float() < chance_) {
+                spread(*placed, pos, face);
+            }
+            return true;
+        }
+        return false;
+    };
+    const auto origin_state = region.state_at(origin.x, origin.y, origin.z);
+    if (!is_air(origin_state) && !is_water(origin_state)) {
+        return false;
+    }
+    auto directions = shuffled(valid.size(), random);
+    std::vector<std::size_t> shuffled_valid(valid.size());
+    for (std::size_t i = 0; i < valid.size(); ++i) {
+        shuffled_valid[i] = valid[directions[i]];
+    }
+    if (try_place(origin, origin_state, shuffled_valid)) {
+        return true;
+    }
+    for (const auto search_face : shuffled_valid) {
+        std::vector<std::size_t> placement;
+        for (const auto face : valid) {
+            if (face != opposite_face(search_face)) {
+                placement.push_back(face);
+            }
+        }
+        auto placement_order = shuffled(placement.size(), random);
+        std::vector<std::size_t> placement_dirs(placement.size());
+        for (std::size_t i = 0; i < placement.size(); ++i) {
+            placement_dirs[i] = placement[placement_order[i]];
+        }
+        const auto offset = face_offset(search_face);
+        for (jint i = 0; i < search_range_; ++i) {
+            const auto pos = block_pos{.x = origin.x + offset.x,
+                                       .y = origin.y + offset.y,
+                                       .z = origin.z + offset.z};
+            const auto state = region.state_at(pos.x, pos.y, pos.z);
+            if (!(is_air(state) || is_water(state) || state_is_self(state))) {
+                break;
+            }
+            if (try_place(pos, state, placement_dirs)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
 auto void_start_platform_feature::place(feature_context &context,
                                         worldgen_random &random,

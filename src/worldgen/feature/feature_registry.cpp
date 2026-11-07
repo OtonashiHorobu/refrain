@@ -763,6 +763,68 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                                     std::move(*rim_provider)));
             continue;
         }
+        if (*type == "minecraft:multiface_growth") {
+            const auto *block = document.document.find("block");
+            const auto *search = document.document.find("search_range");
+            const auto *floor = document.document.find("can_place_on_floor");
+            const auto *ceiling =
+                document.document.find("can_place_on_ceiling");
+            const auto *wall = document.document.find("can_place_on_wall");
+            const auto *chance = document.document.find("chance_of_spreading");
+            const auto *place_on = document.document.find("can_be_placed_on");
+            const auto string_of = [](const data::json::value *value)
+                -> std::optional<std::string> {
+                if (value == nullptr) {
+                    return std::nullopt;
+                }
+                const auto text = value->as_string();
+                if (!text) {
+                    return std::nullopt;
+                }
+                return std::string{*text};
+            };
+            const auto array_of = [](const data::json::value *value)
+                -> std::optional<std::span<const data::json::value>> {
+                if (value == nullptr) {
+                    return std::nullopt;
+                }
+                const auto array = value->as_array();
+                if (!array) {
+                    return std::nullopt;
+                }
+                return *array;
+            };
+            const auto block_text = string_of(block);
+            const auto place_array = array_of(place_on);
+            if (!block_text || !place_array) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "multiface growth is invalid")};
+            }
+            std::vector<std::string> place_on_ids;
+            for (const auto &item : *place_array) {
+                const auto item_text = item.as_string();
+                if (!item_text) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error, "multiface block is invalid")};
+                }
+                place_on_ids.emplace_back(*item_text);
+            }
+            const jint search_value =
+                search == nullptr ? 10 : search->as_int64().value_or(10);
+            const bool floor_value =
+                floor != nullptr && floor->as_bool().value_or(false);
+            const bool ceiling_value =
+                ceiling != nullptr && ceiling->as_bool().value_or(false);
+            const bool wall_value =
+                wall != nullptr && wall->as_bool().value_or(false);
+            const float chance_value = static_cast<float>(
+                chance == nullptr ? 0.5 : chance->as_double().value_or(0.5));
+            features_.emplace(id, std::make_unique<multiface_growth_feature>(
+                                      std::string{*block_text}, search_value,
+                                      floor_value, ceiling_value, wall_value,
+                                      chance_value, std::move(place_on_ids)));
+            continue;
+        }
         if (*type == "minecraft:void_start_platform") {
             features_.emplace(id,
                               std::make_unique<void_start_platform_feature>());

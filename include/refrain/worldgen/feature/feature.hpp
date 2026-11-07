@@ -476,6 +476,30 @@ class freeze_top_layer_feature final : public feature {
     block_state_id snow_{no_block_state};
 };
 
+/// `MultifaceGrowthFeature`: glow-lichen style growth on block faces with the
+/// reference spreader.
+class multiface_growth_feature final : public feature {
+  public:
+    multiface_growth_feature(std::string block, jint search_range, bool floor,
+                             bool ceiling, bool wall, float chance,
+                             std::vector<std::string> can_be_placed_on)
+        : block_name_{std::move(block)}, search_range_{search_range},
+          floor_{floor}, ceiling_{ceiling}, wall_{wall}, chance_{chance},
+          can_be_placed_on_{std::move(can_be_placed_on)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::string block_name_{};
+    jint search_range_{10};
+    bool floor_{false};
+    bool ceiling_{false};
+    bool wall_{false};
+    float chance_{0.5F};
+    std::vector<std::string> can_be_placed_on_{};
+};
+
 /// `VoidStartPlatformFeature`: a stone platform around (8, 3, 8) in the
 /// origin chunk and its neighbours.
 class void_start_platform_feature final : public feature {
