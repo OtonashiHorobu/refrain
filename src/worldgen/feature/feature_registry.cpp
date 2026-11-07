@@ -620,6 +620,18 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 id, std::make_unique<geode_feature>(std::move(parameters)));
             continue;
         }
+        if (*type == "minecraft:freeze_top_layer") {
+            const auto ice = resolve_state(*states_, "minecraft:ice");
+            const auto snow =
+                resolve_state(*states_, "minecraft:snow[layers=1]");
+            if (!ice || !snow) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "freeze states are invalid")};
+            }
+            features_.emplace(
+                id, std::make_unique<freeze_top_layer_feature>(*ice, *snow));
+            continue;
+        }
         if (*type == "minecraft:iceberg") {
             const auto *state = document.document.find("state");
             if (state == nullptr) {

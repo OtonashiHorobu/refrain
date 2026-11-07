@@ -40,6 +40,10 @@ struct placement_context {
     /// Resolves a canonical state key when a feature has to synthesise a
     /// property variant (for example mushroom cap faces).
     std::function<block_state_id(std::string_view)> resolve_state{};
+    /// Biome weather probes used by snow/freeze features. The caller owns the
+    /// climate and block-survival rules.
+    std::function<bool(const block_pos &)> should_freeze{};
+    std::function<bool(const block_pos &)> should_snow{};
 };
 
 class placement_modifier {

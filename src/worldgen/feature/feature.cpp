@@ -1409,6 +1409,59 @@ auto geode_feature::place(feature_context &context, worldgen_random &random,
     return true;
 }
 
+auto freeze_top_layer_feature::place(feature_context &context,
+                                     worldgen_random &random,
+                                     const block_pos &origin) const -> bool {
+    (void)random;
+    for (jint dx = 0; dx < 16; ++dx) {
+        for (jint dz = 0; dz < 16; ++dz) {
+            const jint x = origin.x + dx;
+            const jint z = origin.z + dz;
+            jint y = 0;
+            if (context.placement.height) {
+                y = context.placement.height(heightmap_kind::motion_blocking, x,
+                                             z);
+            } else {
+                const auto *chunk = context.placement.chunk;
+                const jint local_x = x - chunk->chunk_x() * 16;
+                const jint local_z = z - chunk->chunk_z() * 16;
+                if (local_x < 0 || local_x > 15 || local_z < 0 ||
+                    local_z > 15) {
+                    continue;
+                }
+                y = chunk->first_available(heightmap_kind::motion_blocking,
+                                           local_x, local_z);
+            }
+            const block_pos top{.x = x, .y = y, .z = z};
+            const block_pos below{.x = x, .y = y - 1, .z = z};
+            if (context.placement.should_freeze &&
+                context.placement.should_freeze(below)) {
+                (void)context.placement.region->set_block_state(
+                    below.x, below.y, below.z, ice_);
+            }
+            if (!context.placement.should_snow ||
+                !context.placement.should_snow(top)) {
+                continue;
+            }
+            (void)context.placement.region->set_block_state(top.x, top.y, top.z,
+                                                            snow_);
+            const auto below_state =
+                context.placement.region->state_at(below.x, below.y, below.z);
+            auto key = context.placement.states->name(below_state);
+            if (state_property(key, "snowy").has_value() &&
+                context.placement.resolve_state) {
+                const auto variant = with_state_property(key, "snowy", "true");
+                const auto resolved = context.placement.resolve_state(variant);
+                if (resolved != no_block_state) {
+                    (void)context.placement.region->set_block_state(
+                        below.x, below.y, below.z, resolved);
+                }
+            }
+        }
+    }
+    return true;
+}
+
 auto sequence_feature::place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool {
     for (const auto &id : features_) {

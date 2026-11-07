@@ -449,6 +449,21 @@ class geode_feature final : public feature {
     geode_parameters parameters_{};
 };
 
+/// `SnowAndFreezeFeature`: freezes the block below the motion-blocking top and
+/// covers the top with snow where the biome weather probes say so.
+class freeze_top_layer_feature final : public feature {
+  public:
+    freeze_top_layer_feature(block_state_id ice, block_state_id snow)
+        : ice_{ice}, snow_{snow} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    block_state_id ice_{no_block_state};
+    block_state_id snow_{no_block_state};
+};
+
 /// `SpringFeature`: a fluid source surrounded by a fixed rock/hole pattern.
 class spring_feature final : public feature {
   public:

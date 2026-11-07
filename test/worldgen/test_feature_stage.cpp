@@ -40,6 +40,7 @@ using refrain::worldgen::feature::feature_data_set;
 using refrain::worldgen::feature::feature_registry;
 using refrain::worldgen::feature::feature_sorter;
 using refrain::worldgen::feature::foliage_kind;
+using refrain::worldgen::feature::freeze_top_layer_feature;
 using refrain::worldgen::feature::geode_feature;
 using refrain::worldgen::feature::geode_parameters;
 using refrain::worldgen::feature::huge_fungus_feature;
@@ -700,6 +701,49 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
             }
         }
         expect(changed > 0);
+    };
+
+    "freeze top layer ices the floor and snows the top"_test = [] {
+        block_state_registry registry;
+        auto grass = registry.intern("minecraft:grass_block[snowy=false]",
+                                     {.air = false, .blocks_motion = true});
+        auto ice = registry.intern("minecraft:ice",
+                                   {.air = false, .blocks_motion = true});
+        auto snow = registry.intern("minecraft:snow[layers=1]", {.air = false});
+        expect(grass.has_value() && ice.has_value() && snow.has_value());
+        if (!grass || !ice || !snow) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::biomes);
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                expect(chunk.set_state(x, 4, z, *grass));
+            }
+        }
+        chunk_region region{chunk, 0};
+        placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &registry,
+            .generation =
+                generation_context{.min_y = 0, .height = 32, .sea_level = 8},
+            .height = [](heightmap_kind, jint, jint) { return jint{5}; },
+            .resolve_state =
+                [&registry](std::string_view key) {
+                    return registry.find(key).value_or(no_block_state);
+                },
+            .should_freeze = [](const block_pos &) { return true; },
+            .should_snow = [](const block_pos &) { return true; },
+        };
+        feature_context context{.placement = placement};
+        const freeze_top_layer_feature feature{*ice, *snow};
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(1)};
+        expect(
+            feature.place(context, random, block_pos{.x = 0, .y = 0, .z = 0}));
+        expect(chunk.state_at(0, 4, 0) == *ice);
+        expect(chunk.state_at(0, 5, 0) == *snow);
     };
 };
 
