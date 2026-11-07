@@ -2,6 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/structure/template.hpp>
@@ -9,6 +10,8 @@
 #include <boost/ut.hpp>
 
 #include <cstdint>
+#include <cstdlib>
+#include <span>
 #include <string>
 
 namespace {
@@ -376,5 +379,44 @@ suite<"worldgen/template"> template_tests = [] {
         for (const auto &block : loaded->palettes.front()) {
             expect(block.state == registry.air());
         }
+    };
+
+    "a jar template loads with its size and block entities"_test = [] {
+        const char *path = std::getenv("REFRAIN_VANILLA_TEMPLATE");
+        if (path == nullptr) {
+            return;
+        }
+        const auto bytes = core::io::read_file(path);
+        expect(bytes.has_value()) << bytes.error().message;
+        if (!bytes) {
+            return;
+        }
+        const auto document = data::nbt::read(
+            std::span<const std::byte>{bytes->data(), bytes->size()},
+            data::nbt::compression::gzip);
+        expect(document.has_value()) << document.error().message;
+        if (!document) {
+            return;
+        }
+        block_state_registry registry;
+        const auto loaded = load_structure_template(registry, *document);
+        expect(loaded.has_value());
+        if (!loaded) {
+            return;
+        }
+        expect(loaded->size_x == 7);
+        expect(loaded->size_y == 5);
+        expect(loaded->size_z == 8);
+        expect(loaded->palettes.size() == 1U);
+        if (loaded->palettes.empty()) {
+            return;
+        }
+        expect(loaded->palettes.front().size() == 152U);
+        std::size_t block_entities = 0;
+        for (const auto &block : loaded->palettes.front()) {
+            block_entities += block.nbt != nullptr ? 1U : 0U;
+        }
+        expect(block_entities == 1U);
+        expect(loaded->entities.empty());
     };
 };
