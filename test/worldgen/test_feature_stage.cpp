@@ -35,6 +35,7 @@ using refrain::worldgen::feature::feature_data_set;
 using refrain::worldgen::feature::feature_registry;
 using refrain::worldgen::feature::feature_sorter;
 using refrain::worldgen::feature::foliage_kind;
+using refrain::worldgen::feature::leave_vine_decorator;
 using refrain::worldgen::feature::placed_feature_document;
 using refrain::worldgen::feature::placed_feature_runtime;
 using refrain::worldgen::feature::placement_context;

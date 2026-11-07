@@ -47,6 +47,16 @@ class trunk_vine_decorator final : public tree_decorator {
   public:
     void place(const tree_decorator_context &context) const override;
 };
+
+class leave_vine_decorator final : public tree_decorator {
+  public:
+    explicit leave_vine_decorator(float probability)
+        : probability_{probability} {}
+    void place(const tree_decorator_context &context) const override;
+
+  private:
+    float probability_{0.0F};
+};
 enum class foliage_kind : std::uint8_t {
     blob,
     acacia,
