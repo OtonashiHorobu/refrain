@@ -86,6 +86,10 @@ using gamepack_meta = manifest_meta;
 /// Auto-discovery policy. Origin tiers come from the host-observed
 /// install location, never from a mod manifest.
 struct discovery_policy {
+    /// Tier order written from lowest to highest priority: the last entry wins,
+    /// so the default is `user > first_party > builtin`. Origins are attached
+    /// during discovery; resolution accepts only this canonical order, so the
+    /// list documents the policy instead of re-ranking discovery roots.
     std::vector<std::string> origin_priority{"builtin", "first_party", "user"};
     bool allow_custom_override{true};
     std::string conflict{"fail"}; ///< "fail" | "explicit"

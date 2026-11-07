@@ -206,9 +206,9 @@ resolve_impl(const mod::gamepack_spec &spec,
                         "or explicit)",
                         spec.policy.conflict))};
     }
-    // The canonical tier order is fixed for scan(); a custom
-    // policy.origin_priority must be applied when assigning root origins by the
-    // host, so a non-canonical order here cannot be honoured retroactively.
+    // Origins are attached by the host while building the discovery roots, so
+    // resolution can only enforce the canonical order. A custom order is
+    // rejected instead of being silently ignored.
     if (!spec.policy.origin_priority.empty()) {
         std::vector<mod_origin> order;
         order.reserve(spec.policy.origin_priority.size());
@@ -236,9 +236,10 @@ resolve_impl(const mod::gamepack_spec &spec,
                         canonical.end())) {
             return std::unexpected{fail(
                 error_code::unsupported,
-                "resolve: custom policy.origin_priority is applied by the "
-                "host when assigning discovery roots; resolve enforces the "
-                "canonical builtin < first_party < user tiers")};
+                "resolve: custom policy.origin_priority is not supported; "
+                "origins are assigned during discovery, and resolution "
+                "enforces the canonical builtin < first_party < user tiers "
+                "(user wins)")};
         }
     }
 
