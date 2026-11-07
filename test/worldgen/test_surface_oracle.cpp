@@ -18,6 +18,8 @@
 #include <refrain/worldgen/biome/biome_manager.hpp>
 #include <refrain/worldgen/biome/biome_source.hpp>
 #include <refrain/worldgen/biome/overworld_biome_builder.hpp>
+#include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
 #include <refrain/worldgen/terrain/surface.hpp>
 #include <refrain/worldgen/terrain/terrain.hpp>
@@ -317,17 +319,33 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 continue;
             }
 
-            block_states states;
-            expect(states.intern("minecraft:air") == id_air);
             auto settings = density::load_noise_settings(
                 data_root, "minecraft/overworld", algorithm::xoroshiro, seed);
             expect(settings.has_value()) << settings.error().message;
             if (!settings) {
                 return;
             }
-            expect(states.intern(settings->default_block) == id_stone);
-            expect(states.intern("minecraft:water") == id_water);
-            expect(states.intern("minecraft:lava") == id_lava);
+
+            block_state_registry block_registry;
+            auto air_state =
+                block_registry.intern("minecraft:air", {.air = true});
+            auto stone_state = block_registry.intern(
+                settings->default_block, {.air = false,
+                                          .blocks_motion = true,
+                                          .blocks_motion_no_leaves = true});
+            auto water_state = block_registry.intern(
+                "minecraft:water",
+                {.air = false, .fluid = true, .water = true});
+            auto lava_state = block_registry.intern(
+                "minecraft:lava", {.air = false, .fluid = true});
+            expect(air_state.has_value());
+            expect(stone_state.has_value());
+            expect(water_state.has_value());
+            expect(lava_state.has_value());
+            if (!air_state || !stone_state || !water_state || !lava_state) {
+                return;
+            }
+            block_states states{block_registry};
 
             const auto expected = decode_expected(*document, states);
             expect(expected.has_value()) << "cannot decode reference blocks";
@@ -335,14 +353,14 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 continue;
             }
 
-            const terrain::block_ids blocks{.air = id_air,
-                                            .default_block = id_stone,
-                                            .default_fluid = id_water,
-                                            .lava = id_lava};
+            const terrain::block_ids blocks{.air = *air_state,
+                                            .default_block = *stone_state,
+                                            .default_fluid = *water_state,
+                                            .lava = *lava_state};
             const terrain::fluid_picker picker{.sea_level = settings->sea_level,
-                                               .default_fluid = id_water,
-                                               .lava = id_lava,
-                                               .air = id_air};
+                                               .default_fluid = *water_state,
+                                               .lava = *lava_state,
+                                               .air = *air_state};
             const volume chunk_volume{16,           oracle_height,
                                       16,           chunk_x * 16,
                                       oracle_min_y, chunk_z * 16};
@@ -358,20 +376,34 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                                            picker,
                                            blocks,
                                            context};
-            const terrain::fill_options options{.min_y = oracle_min_y,
-                                                .height = oracle_height,
-                                                .sea_level =
-                                                    settings->sea_level,
-                                                .blocks = blocks};
-            auto chunk =
-                terrain::fill_chunk(options, *settings->router.final_density,
-                                    context, chunk_x, chunk_z, aquifer);
+            proto_chunk chunk{block_registry, chunk_x, chunk_z, oracle_min_y,
+                              oracle_height};
+            chunk.set_status(chunk_status::biomes);
+            const terrain::proto_fill_options fill_options{
+                .air = *air_state,
+                .default_block = *stone_state,
+                .default_fluid = *water_state,
+                .lava = *lava_state,
+            };
+            terrain::fill_proto_chunk(chunk, fill_options,
+                                      *settings->router.final_density, context,
+                                      aquifer);
 
             jint max_block_y = oracle_min_y - 1;
-            for (std::size_t i = chunk.states.size(); i > 0; --i) {
-                if (chunk.states[i - 1] != id_air) {
-                    const auto y = static_cast<jint>(i - 1) / 256;
-                    max_block_y = oracle_min_y + (y / 16) * 16 + 15;
+            for (jint y = oracle_min_y + oracle_height - 1; y >= oracle_min_y;
+                 --y) {
+                bool found = false;
+                for (jint z = 0; z < 16 && !found; ++z) {
+                    for (jint x = 0; x < 16; ++x) {
+                        if (chunk.state_at(x, y, z) != *air_state) {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if (found) {
+                    const jint local = y - oracle_min_y;
+                    max_block_y = oracle_min_y + (local / 16) * 16 + 15;
                     break;
                 }
             }
@@ -384,8 +416,12 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 .chunk_min_x = chunk_x * 16,
                 .chunk_min_z = chunk_z * 16,
             };
-            surface_system system{states,        bounds,   registry,
-                                  *root_factory, id_stone, id_air};
+            surface_system system{states,
+                                  bounds,
+                                  registry,
+                                  *root_factory,
+                                  static_cast<state_id>(*stone_state),
+                                  static_cast<state_id>(*air_state)};
             factory_provider factories{*root_factory};
             const climate_sampler sampler{*settings->router.temperature,
                                           *settings->router.vegetation,
@@ -465,25 +501,9 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 continue;
             }
 
-            const jint max_y = oracle_min_y + oracle_height - 1;
-            auto get = [&chunk, chunk_x, chunk_z, max_y](jint x, jint y,
-                                                         jint z) -> state_id {
-                if (y < oracle_min_y || y > max_y) {
-                    return id_air;
-                }
-                return chunk.at(x - chunk_x * 16, y, z - chunk_z * 16);
-            };
-            auto set = [&chunk, chunk_x, chunk_z](jint x, jint y, jint z,
-                                                  state_id state) {
-                chunk.set(x - chunk_x * 16, y, z - chunk_z * 16, state);
-            };
-            auto world_surface = [&chunk](jint x, jint z) {
-                return chunk.world_surface[static_cast<std::size_t>(z) * 16U +
-                                           static_cast<std::size_t>(x)];
-            };
-            const auto built = system.build_surface(
-                rule_context, *compiled, climates, temperatures,
-                providers.biome, get, set, world_surface);
+            const auto built =
+                system.build_surface(chunk, rule_context, *compiled, climates,
+                                     temperatures, providers.biome);
             if (!built) {
                 std::fprintf(
                     stderr, "surface (%d,%d): %s\n", static_cast<int>(chunk_x),
@@ -494,25 +514,31 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 continue;
             }
 
-            for (std::size_t i = 0; i < chunk.states.size(); ++i) {
-                ++compared;
-                if (chunk.states[i] == (*expected)[i]) {
-                    continue;
+            for (jint y = oracle_min_y; y < oracle_min_y + oracle_height; ++y) {
+                for (jint z = 0; z < 16; ++z) {
+                    for (jint x = 0; x < 16; ++x) {
+                        const auto index = static_cast<std::size_t>(
+                            (y - oracle_min_y) * 256 + z * 16 + x);
+                        ++compared;
+                        const auto actual = chunk.state_at(x, y, z);
+                        if (actual == (*expected)[index]) {
+                            continue;
+                        }
+                        if (mismatches < 8) {
+                            std::fprintf(
+                                stderr,
+                                "chunk (%d,%d) block (%d,%d,%d): got %s want "
+                                "%s\n",
+                                static_cast<int>(chunk_x),
+                                static_cast<int>(chunk_z), static_cast<int>(x),
+                                static_cast<int>(y), static_cast<int>(z),
+                                std::string{states.name(actual)}.c_str(),
+                                std::string{states.name((*expected)[index])}
+                                    .c_str());
+                        }
+                        ++mismatches;
+                    }
                 }
-                if (mismatches < 8) {
-                    const auto y = static_cast<jint>(i / 256) + oracle_min_y;
-                    const auto local_z = static_cast<jint>((i % 256) / 16);
-                    const auto local_x = static_cast<jint>(i % 16);
-                    std::fprintf(
-                        stderr,
-                        "chunk (%d,%d) block (%d,%d,%d): got %s want %s\n",
-                        static_cast<int>(chunk_x), static_cast<int>(chunk_z),
-                        static_cast<int>(local_x), static_cast<int>(y),
-                        static_cast<int>(local_z),
-                        std::string{states.name(chunk.states[i])}.c_str(),
-                        std::string{states.name((*expected)[i])}.c_str());
-                }
-                ++mismatches;
             }
         }
         expect(compared == 5U * 384U * 256U);
