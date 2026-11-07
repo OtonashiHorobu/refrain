@@ -42,6 +42,20 @@ inline auto sin_table() -> const std::array<float, 65536> & {
     return detail::sin_table()[index];
 }
 
+/// `Mth.sin(float)`: float arithmetic before the table index.
+[[nodiscard]] inline auto sin(float value) -> float {
+    const auto index = static_cast<std::size_t>(
+        static_cast<jlong>(value * 10430.378F) & 65535LL);
+    return detail::sin_table()[index];
+}
+
+/// `Mth.cos(float)`: float arithmetic before the table index.
+[[nodiscard]] inline auto cos(float value) -> float {
+    const auto index = static_cast<std::size_t>(
+        static_cast<jlong>(value * 10430.378F + 16384.0F) & 65535LL);
+    return detail::sin_table()[index];
+}
+
 /// `Mth.cos`: the sine table shifted by a quarter turn.
 [[nodiscard]] inline auto cos(double value) -> float {
     const auto index = static_cast<std::size_t>(

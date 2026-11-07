@@ -177,6 +177,27 @@ suite<"worldgen/noise"> noise_tests = [] {
         }
     };
 
+    "parity noise with the geode seed matches the reference"_test = [] {
+        legacy_random_source source{12345};
+        const auto normal =
+            normal_noise::create_parity(-4, std::array<double, 1>{1.0});
+        const auto stack = normal.create(source);
+        constexpr std::array<float, 5> expected{
+            0.20844352F, 0.17344257F, -0.08443418F, -0.01070188F, 0.1391482F};
+        const std::array<std::array<double, 3>, 5> points{{
+            {24.0, 104.0, 8.0},
+            {25.0, 104.0, 8.0},
+            {26.0, 106.0, 10.0},
+            {28.0, 104.0, 7.0},
+            {24.5, 104.5, 8.5},
+        }};
+        for (std::size_t i = 0; i < expected.size(); ++i) {
+            expect(bits(stack.get(points[i][0], points[i][1], points[i][2])) ==
+                   bits(expected[i]))
+                << "sample " << i;
+        }
+    };
+
     "stack construction is deterministic for one source"_test = [] {
         auto first = make_factory(12345)->from_hash_of("refrain:noise_test");
         auto second = make_factory(12345)->from_hash_of("refrain:noise_test");
