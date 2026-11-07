@@ -483,6 +483,369 @@ void place_buried_treasure(const structure_place_context &context,
 
 } // namespace
 
+namespace {
+
+auto place_pyramid_chest(const structure_place_context &context, jint x, jint y,
+                         jint z, worldgen_random &random) -> bool {
+    if (block_name(context, context.region->state_at(x, y, z)) ==
+        "minecraft:chest") {
+        return false;
+    }
+    const auto facing = chest_facing(context, x, y, z);
+    const std::string key =
+        "minecraft:chest[facing=" + std::string{facing} + "]";
+    const auto chest = context.state(key);
+    if (chest == no_block_state ||
+        !context.region->set_block_state(x, y, z, chest)) {
+        return false;
+    }
+    data::nbt::compound entity;
+    entity["id"] = data::nbt::value{std::string{"minecraft:chest"}};
+    entity["x"] = data::nbt::value{x};
+    entity["y"] = data::nbt::value{y};
+    entity["z"] = data::nbt::value{z};
+    entity["LootTable"] =
+        data::nbt::value{std::string{"minecraft:chests/desert_pyramid"}};
+    entity["LootTableSeed"] = data::nbt::value{random.next_long()};
+    (void)context.region->set_block_entity(x, y, z, std::move(entity));
+    return true;
+}
+
+} // namespace
+
+void place_desert_pyramid(const structure_place_context &context,
+                          const structure_piece_record &piece,
+                          worldgen_random &random) {
+    auto &region = *context.region;
+    const auto resolve = [&](std::string_view key) {
+        return context.state ? context.state(key) : no_block_state;
+    };
+    structure::template_mirror mirror = structure::template_mirror::none;
+    structure::template_rotation rotation = structure::template_rotation::none;
+    switch (piece.orientation) {
+    case 0:
+        mirror = structure::template_mirror::left_right;
+        break;
+    case 1:
+        mirror = structure::template_mirror::left_right;
+        rotation = structure::template_rotation::clockwise_90;
+        break;
+    case 3:
+        rotation = structure::template_rotation::clockwise_90;
+        break;
+    default:
+        break;
+    }
+    const auto orient_state = [&](block_state_id state) {
+        if (context.registry == nullptr) {
+            return state;
+        }
+        return structure::transform_state(
+            *context.registry, state,
+            structure::template_transform{
+                .mirror = mirror, .rotation = rotation, .pivot = block_pos{}});
+    };
+    jint base_y = piece.height_position + piece.height_offset;
+    const auto local = [&](jint x, jint y, jint z) {
+        return piece_local_to_world(piece, base_y, x, y, z);
+    };
+    const auto place = [&](std::string_view key, jint x, jint y, jint z) {
+        auto state = resolve(key);
+        if (state == no_block_state) {
+            return;
+        }
+        state = orient_state(state);
+        const auto pos = local(x, y, z);
+        (void)region.set_block_state(pos.x, pos.y, pos.z, state);
+    };
+    const auto box = [&](jint x0, jint y0, jint z0, jint x1, jint y1, jint z1,
+                         std::string_view edge, std::string_view fill,
+                         bool skip_air) {
+        for (jint y = y0; y <= y1; ++y) {
+            for (jint x = x0; x <= x1; ++x) {
+                for (jint z = z0; z <= z1; ++z) {
+                    const auto pos = local(x, y, z);
+                    if (skip_air &&
+                        context.states
+                            ->traits(region.state_at(pos.x, pos.y, pos.z))
+                            .air) {
+                        continue;
+                    }
+                    const bool on_edge = x == x0 || x == x1 || y == y0 ||
+                                         y == y1 || z == z0 || z == z1;
+                    place(on_edge ? edge : fill, x, y, z);
+                }
+            }
+        }
+    };
+    const auto column_down = [&](std::string_view key, jint x, jint y, jint z) {
+        jint current_y = y;
+        const auto replaceable = [&](const block_pos &pos) {
+            const auto name =
+                block_name(context, region.state_at(pos.x, pos.y, pos.z));
+            return name == "minecraft:air" || name == "minecraft:cave_air" ||
+                   name == "minecraft:void_air" || name == "minecraft:water" ||
+                   name == "minecraft:lava" ||
+                   name == "minecraft:glow_lichen" ||
+                   name == "minecraft:seagrass" ||
+                   name == "minecraft:tall_seagrass";
+        };
+        auto pos = local(x, current_y, z);
+        while (pos.y > context.chunk->min_y() + 1 && replaceable(pos)) {
+            place(key, x, current_y, z);
+            --current_y;
+            pos = local(x, current_y, z);
+        }
+    };
+    constexpr std::string_view sand = "minecraft:sand";
+    constexpr std::string_view sandstone = "minecraft:sandstone";
+    constexpr std::string_view cut = "minecraft:cut_sandstone";
+    constexpr std::string_view chiseled = "minecraft:chiseled_sandstone";
+    constexpr std::string_view air = "minecraft:air";
+    constexpr std::string_view orange = "minecraft:orange_terracotta";
+    constexpr std::string_view blue = "minecraft:blue_terracotta";
+    constexpr std::string_view tnt = "minecraft:tnt";
+    const std::string north_stairs =
+        "minecraft:sandstone_stairs[facing=north,half=bottom,shape=straight,"
+        "waterlogged=false]";
+    const std::string south_stairs =
+        "minecraft:sandstone_stairs[facing=south,half=bottom,shape=straight,"
+        "waterlogged=false]";
+    const std::string east_stairs =
+        "minecraft:sandstone_stairs[facing=east,half=bottom,shape=straight,"
+        "waterlogged=false]";
+    const std::string west_stairs =
+        "minecraft:sandstone_stairs[facing=west,half=bottom,shape=straight,"
+        "waterlogged=false]";
+    const std::string cellar_stairs =
+        "minecraft:sandstone_stairs[facing=west,half=bottom,shape=straight,"
+        "waterlogged=false]";
+    constexpr std::string_view slab = "minecraft:sandstone_slab";
+    constexpr std::string_view pressure = "minecraft:stone_pressure_plate";
+
+    box(0, -4, 0, 20, 0, 20, sandstone, sandstone, false);
+    for (jint pos = 1; pos <= 9; ++pos) {
+        box(pos, pos, pos, 20 - pos, pos, 20 - pos, sandstone, sandstone,
+            false);
+        box(pos + 1, pos, pos + 1, 19 - pos, pos, 19 - pos, air, air, false);
+    }
+    for (jint x = 0; x <= 20; ++x) {
+        for (jint z = 0; z <= 20; ++z) {
+            column_down(sandstone, x, -5, z);
+        }
+    }
+    box(0, 0, 0, 4, 9, 4, sandstone, air, false);
+    box(1, 10, 1, 3, 10, 3, sandstone, sandstone, false);
+    place(north_stairs, 2, 10, 0);
+    place(south_stairs, 2, 10, 4);
+    place(east_stairs, 0, 10, 2);
+    place(west_stairs, 4, 10, 2);
+    box(16, 0, 0, 20, 9, 4, sandstone, air, false);
+    box(17, 10, 1, 19, 10, 3, sandstone, sandstone, false);
+    place(north_stairs, 18, 10, 0);
+    place(south_stairs, 18, 10, 4);
+    place(east_stairs, 16, 10, 2);
+    place(west_stairs, 20, 10, 2);
+    box(8, 0, 0, 12, 4, 4, sandstone, air, false);
+    box(9, 1, 0, 11, 3, 4, air, air, false);
+    place(cut, 9, 1, 1);
+    place(cut, 9, 2, 1);
+    place(cut, 9, 3, 1);
+    place(cut, 10, 3, 1);
+    place(cut, 11, 3, 1);
+    place(cut, 11, 2, 1);
+    place(cut, 11, 1, 1);
+    box(4, 1, 1, 8, 3, 3, sandstone, air, false);
+    box(4, 1, 2, 8, 2, 2, air, air, false);
+    box(12, 1, 1, 16, 3, 3, sandstone, air, false);
+    box(12, 1, 2, 16, 2, 2, air, air, false);
+    box(5, 4, 5, 15, 4, 15, sandstone, sandstone, false);
+    box(9, 4, 9, 11, 4, 11, air, air, false);
+    box(8, 1, 8, 8, 3, 8, cut, cut, false);
+    box(12, 1, 8, 12, 3, 8, cut, cut, false);
+    box(8, 1, 12, 8, 3, 12, cut, cut, false);
+    box(12, 1, 12, 12, 3, 12, cut, cut, false);
+    box(1, 1, 5, 4, 4, 11, sandstone, sandstone, false);
+    box(16, 1, 5, 19, 4, 11, sandstone, sandstone, false);
+    box(6, 7, 9, 6, 7, 11, sandstone, sandstone, false);
+    box(14, 7, 9, 14, 7, 11, sandstone, sandstone, false);
+    box(5, 5, 9, 5, 7, 11, cut, cut, false);
+    box(15, 5, 9, 15, 7, 11, cut, cut, false);
+    place(air, 5, 5, 10);
+    place(air, 5, 6, 10);
+    place(air, 6, 6, 10);
+    place(air, 15, 5, 10);
+    place(air, 15, 6, 10);
+    place(air, 14, 6, 10);
+    box(2, 4, 4, 2, 6, 4, air, air, false);
+    box(18, 4, 4, 18, 6, 4, air, air, false);
+    place(north_stairs, 2, 4, 5);
+    place(north_stairs, 2, 3, 4);
+    place(north_stairs, 18, 4, 5);
+    place(north_stairs, 18, 3, 4);
+    box(1, 1, 3, 2, 2, 3, sandstone, sandstone, false);
+    box(18, 1, 3, 19, 2, 3, sandstone, sandstone, false);
+    place(sandstone, 1, 1, 2);
+    place(sandstone, 19, 1, 2);
+    place(slab, 1, 2, 2);
+    place(slab, 19, 2, 2);
+    place(west_stairs, 2, 1, 2);
+    place(east_stairs, 18, 1, 2);
+    box(4, 3, 5, 4, 3, 17, sandstone, sandstone, false);
+    box(16, 3, 5, 16, 3, 17, sandstone, sandstone, false);
+    box(3, 1, 5, 4, 2, 16, air, air, false);
+    box(15, 1, 5, 16, 2, 16, air, air, false);
+    for (jint z = 5; z <= 17; z += 2) {
+        place(cut, 4, 1, z);
+        place(chiseled, 4, 2, z);
+        place(cut, 16, 1, z);
+        place(chiseled, 16, 2, z);
+    }
+    place(orange, 10, 0, 7);
+    place(orange, 10, 0, 8);
+    place(orange, 9, 0, 9);
+    place(orange, 11, 0, 9);
+    place(orange, 8, 0, 10);
+    place(orange, 12, 0, 10);
+    place(orange, 7, 0, 10);
+    place(orange, 13, 0, 10);
+    place(orange, 9, 0, 11);
+    place(orange, 11, 0, 11);
+    place(orange, 10, 0, 12);
+    place(orange, 10, 0, 13);
+    place(blue, 10, 0, 10);
+    for (jint x = 0; x <= 20; x += 20) {
+        place(cut, x, 2, 1);
+        place(orange, x, 2, 2);
+        place(cut, x, 2, 3);
+        place(cut, x, 3, 1);
+        place(orange, x, 3, 2);
+        place(cut, x, 3, 3);
+        place(orange, x, 4, 1);
+        place(chiseled, x, 4, 2);
+        place(orange, x, 4, 3);
+        place(cut, x, 5, 1);
+        place(orange, x, 5, 2);
+        place(cut, x, 5, 3);
+        place(orange, x, 6, 1);
+        place(chiseled, x, 6, 2);
+        place(orange, x, 6, 3);
+        place(orange, x, 7, 1);
+        place(orange, x, 7, 2);
+        place(orange, x, 7, 3);
+        place(cut, x, 8, 1);
+        place(cut, x, 8, 2);
+        place(cut, x, 8, 3);
+    }
+    for (jint x = 2; x <= 18; x += 15) {
+        place(cut, x - 1, 2, 0);
+        place(orange, x, 2, 0);
+        place(cut, x + 1, 2, 0);
+        place(cut, x - 1, 3, 0);
+        place(orange, x, 3, 0);
+        place(cut, x + 1, 3, 0);
+        place(orange, x - 1, 4, 0);
+        place(chiseled, x, 4, 0);
+        place(orange, x + 1, 4, 0);
+        place(cut, x - 1, 5, 0);
+        place(orange, x, 5, 0);
+        place(cut, x + 1, 5, 0);
+        place(orange, x - 1, 6, 0);
+        place(chiseled, x, 6, 0);
+        place(orange, x + 1, 6, 0);
+        place(orange, x - 1, 7, 0);
+        place(orange, x, 7, 0);
+        place(orange, x + 1, 7, 0);
+        place(cut, x - 1, 8, 0);
+        place(cut, x, 8, 0);
+        place(cut, x + 1, 8, 0);
+    }
+    box(8, 4, 0, 12, 6, 0, cut, cut, false);
+    place(air, 8, 6, 0);
+    place(air, 12, 6, 0);
+    place(orange, 9, 5, 0);
+    place(chiseled, 10, 5, 0);
+    place(orange, 11, 5, 0);
+    box(8, -14, 8, 12, -11, 12, cut, cut, false);
+    box(8, -10, 8, 12, -10, 12, chiseled, chiseled, false);
+    box(8, -9, 8, 12, -9, 12, cut, cut, false);
+    box(8, -8, 8, 12, -1, 12, sandstone, sandstone, false);
+    box(9, -11, 9, 11, -1, 11, air, air, false);
+    place(pressure, 10, -11, 10);
+    box(9, -13, 9, 11, -13, 11, tnt, air, false);
+    place(air, 8, -11, 10);
+    place(air, 8, -10, 10);
+    place(chiseled, 7, -10, 10);
+    place(cut, 7, -11, 10);
+    place(air, 12, -11, 10);
+    place(air, 12, -10, 10);
+    place(chiseled, 13, -10, 10);
+    place(cut, 13, -11, 10);
+    place(air, 10, -11, 8);
+    place(air, 10, -10, 8);
+    place(chiseled, 10, -10, 7);
+    place(cut, 10, -11, 7);
+    place(air, 10, -11, 12);
+    place(air, 10, -10, 12);
+    place(chiseled, 10, -10, 13);
+    place(cut, 10, -11, 13);
+    const std::array<std::pair<jint, jint>, 4> chests{
+        {{10, 8}, {12, 10}, {10, 12}, {8, 10}}};
+    for (const auto &[x, z] : chests) {
+        const auto pos = local(x, -11, z);
+        (void)place_pyramid_chest(context, pos.x, pos.y, pos.z, random);
+    }
+    // Cellar stairs and room.
+    place(cellar_stairs, 13, -1, 17);
+    place(cellar_stairs, 14, -2, 17);
+    place(cellar_stairs, 15, -3, 17);
+    place(sand, 12, 0, 17);
+    place(sand, 13, 0, 17);
+    place(sand, 14, 0, 17);
+    place(sand, 15, 0, 17);
+    place(sand, 16, 0, 17);
+    place(sand, 14, -1, 17);
+    place(sand, 15, -1, 17);
+    place(sandstone, 16, -1, 17);
+    place(sand, 15, -2, 17);
+    place(sandstone, 16, -2, 17);
+    place(sand, 16, -3, 17);
+    box(13, -3, 10, 13, -3, 15, cut, cut, true);
+    box(19, -3, 10, 19, -3, 15, cut, cut, true);
+    box(13, -3, 10, 19, -3, 11, cut, cut, true);
+    box(13, -3, 16, 19, -3, 16, cut, cut, true);
+    box(13, -2, 10, 13, -2, 15, chiseled, chiseled, true);
+    box(19, -2, 10, 19, -2, 15, chiseled, chiseled, true);
+    box(13, -2, 10, 19, -2, 11, chiseled, chiseled, true);
+    box(13, -2, 16, 19, -2, 16, chiseled, chiseled, true);
+    box(13, -1, 10, 13, -1, 15, cut, cut, true);
+    box(19, -1, 10, 19, -1, 15, cut, cut, true);
+    box(13, -1, 10, 19, -1, 11, cut, cut, true);
+    box(13, -1, 16, 19, -1, 16, cut, cut, true);
+    place(blue, 16, -4, 13);
+    place(orange, 17, -4, 12);
+    place(orange, 17, -4, 14);
+    place(orange, 15, -4, 12);
+    place(orange, 15, -4, 14);
+    place(orange, 18, -4, 13);
+    place(orange, 14, -4, 13);
+    place(orange, 16, -4, 15);
+    place(orange, 16, -4, 11);
+    place(orange, 19, -4, 13);
+    place(orange, 13, -4, 13);
+    place(orange, 16, -4, 16);
+    place(orange, 16, -4, 10);
+    place(cut, 20, -3, 13);
+    place(chiseled, 20, -2, 13);
+    place(cut, 12, -3, 13);
+    place(chiseled, 12, -2, 13);
+    place(cut, 16, -3, 17);
+    place(chiseled, 16, -2, 17);
+    place(cut, 16, -3, 9);
+    place(chiseled, 16, -2, 9);
+    (void)base_y;
+}
+
 auto piece_local_to_world(const structure_piece_record &piece, jint base_y,
                           jint local_x, jint local_y, jint local_z)
     -> block_pos {
@@ -506,6 +869,8 @@ void place_structures(proto_chunk &chunk,
                     place_igloo_piece(context, piece, random);
                 } else if (piece.type == "minecraft:tesh") {
                     place_swamp_hut(context, piece);
+                } else if (piece.type == "minecraft:tedp") {
+                    place_desert_pyramid(context, piece, random);
                 }
             }
         };
