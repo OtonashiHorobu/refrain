@@ -5,6 +5,7 @@
 #include <refrain/data/json.hpp>
 #include <refrain/worldgen/structure/generation.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
+#include <refrain/worldgen/structure/stage.hpp>
 #include <refrain/worldgen/structure/start.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/structure_set.hpp>
@@ -193,5 +194,26 @@ suite<"worldgen/buried-treasure"> buried_treasure_tests = [] {
         expect(start.bounds.min_z == -39);
         expect(start.bounds.min_y == 90);
         expect(start.max_references == 1);
+    };
+};
+
+suite<"worldgen/structure-stage"> structure_stage_tests = [] {
+    "buried starts are assembled around the target chunk"_test = [] {
+        const std::vector<structure::selected_structure> structures{{
+            .id = "oracle:buried",
+            .placement = {.spacing = 1,
+                          .separation = 0,
+                          .salt = 0,
+                          .spread = structure::spread_type::linear,
+                          .frequency = 1.0F},
+        }};
+        const auto result = structure::generate_buried_starts(
+            12345, chunk_pos{.x = 6, .z = -2}, structures, 8);
+        expect(result.starts.size() == 289U);
+        expect(!result.starts.empty());
+        expect(result.starts.front().structure == "oracle:buried");
+        expect(!result.references.empty());
+        expect(result.references.front().structure == "oracle:buried");
+        expect(result.references.front().count >= 1);
     };
 };
