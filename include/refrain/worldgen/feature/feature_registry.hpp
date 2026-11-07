@@ -21,7 +21,7 @@ namespace refrain::worldgen::feature {
 
 class feature_registry {
   public:
-    explicit feature_registry(const block_state_registry &states)
+    explicit feature_registry(block_state_registry &states)
         : states_{&states} {}
 
     [[nodiscard]] auto load(const feature_data_set &data) -> status;
@@ -32,7 +32,7 @@ class feature_registry {
     }
 
   private:
-    const block_state_registry *states_{nullptr};
+    block_state_registry *states_{nullptr};
     std::unordered_map<std::string, std::unique_ptr<feature>> features_{};
     std::unordered_map<std::string, placed_feature_runtime> placed_{};
 };

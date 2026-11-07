@@ -27,7 +27,7 @@ using refrain::worldgen::feature::feature_sorter;
 using refrain::worldgen::feature::placed_feature_runtime;
 using refrain::worldgen::feature::placement_context;
 using refrain::worldgen::feature::simple_block_feature;
-using refrain::worldgen::feature::step_features;
+using refrain::worldgen::feature::spring_feature;
 using refrain::worldgen::provider::generation_context;
 
 auto parse(std::string_view text) -> refrain::data::json::value {
@@ -116,4 +116,54 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
             }
             expect(placed_count == 2U);
         };
+};
+
+suite<"worldgen/spring"> spring_tests = [] {
+    "a spring fills its matching rock and hole pattern"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto water =
+            registry.intern("minecraft:water[falling=true]",
+                            {.air = false, .fluid = true, .water = true});
+        expect(stone.has_value());
+        expect(water.has_value());
+        if (!stone || !water) {
+            return;
+        }
+
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::biomes);
+        for (jint x = 0; x < 16; ++x) {
+            for (jint z = 0; z < 16; ++z) {
+                expect(chunk.set_state(x, 9, z, *stone));
+            }
+        }
+        expect(chunk.set_state(7, 10, 8, *stone));
+        expect(chunk.set_state(9, 10, 8, *stone));
+        expect(chunk.set_state(8, 10, 7, *stone));
+        expect(chunk.set_state(8, 10, 9, *stone));
+        expect(chunk.set_state(8, 11, 8, *stone));
+
+        chunk_region region{chunk, 1};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 32,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        spring_feature spring{*water, true, 5, 0, {"minecraft:stone"}};
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(12345)};
+        expect(
+            spring.place(context, random, block_pos{.x = 8, .y = 10, .z = 8}));
+        expect(chunk.state_at(8, 10, 8) == *water);
+    };
 };

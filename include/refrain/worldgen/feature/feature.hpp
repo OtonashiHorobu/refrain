@@ -104,4 +104,28 @@ class ore_feature final : public feature {
     float discard_chance_on_air_exposure_{0.0F};
 };
 
+/// `SpringFeature`: a fluid source surrounded by a fixed rock/hole pattern.
+class spring_feature final : public feature {
+  public:
+    spring_feature(block_state_id state, bool requires_block_below,
+                   jint rock_count, jint hole_count,
+                   std::vector<std::string> valid_blocks)
+        : state_{state}, requires_block_below_{requires_block_below},
+          rock_count_{rock_count}, hole_count_{hole_count},
+          valid_blocks_{std::move(valid_blocks)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    [[nodiscard]] auto valid(feature_context &context,
+                             const block_pos &pos) const -> bool;
+
+    block_state_id state_{no_block_state};
+    bool requires_block_below_{true};
+    jint rock_count_{4};
+    jint hole_count_{1};
+    std::vector<std::string> valid_blocks_{};
+};
+
 } // namespace refrain::worldgen::feature
