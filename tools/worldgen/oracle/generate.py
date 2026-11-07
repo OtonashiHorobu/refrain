@@ -107,6 +107,13 @@ def write_pack(preset: dict, biome: dict, pack: pathlib.Path,
         )
 
 
+def clear_regions(root: pathlib.Path) -> None:
+    for region in root.glob("world/**/region"):
+        if region.is_dir():
+            shutil.rmtree(region, ignore_errors=True)
+            region.mkdir(parents=True, exist_ok=True)
+
+
 def write_server_files(root: pathlib.Path, seed: int, port: int,
                        generate_structures: bool = False) -> None:
     (root / "server.properties").write_text(
@@ -130,7 +137,8 @@ server-port={port}
     (root / "eula.txt").write_text("eula=true\n")
 
 
-def run_server(root: pathlib.Path, server_jar: pathlib.Path, settle: float) -> None:
+def run_server(root: pathlib.Path, server_jar: pathlib.Path, settle: float,
+               force_load: bool = True) -> None:
     process = subprocess.Popen(
         ["java", "-Xms512M", "-Xmx2G", "-jar", str(server_jar), "nogui"],
         cwd=root,
@@ -162,11 +170,12 @@ def run_server(root: pathlib.Path, server_jar: pathlib.Path, settle: float) -> N
         raise SystemExit("the reference server did not start in time")
 
     assert process.stdin is not None
-    process.stdin.write("gamerule randomTickSpeed 0\n")
+    process.stdin.write("gamerule random_tick_speed 0\n")
     process.stdin.flush()
-    span = REGION_CHUNKS * 16 - 1
-    process.stdin.write(f"forceload add 0 0 {span} {span}\n")
-    process.stdin.flush()
+    if force_load:
+        span = REGION_CHUNKS * 16 - 1
+        process.stdin.write(f"forceload add 0 0 {span} {span}\n")
+        process.stdin.flush()
     time.sleep(settle)
     process.stdin.write("save-all flush\n")
     process.stdin.flush()
@@ -1341,6 +1350,12 @@ def main() -> int:
                    fixed_biome=args.fixed_biome, biome_override=override)
     write_server_files(root, args.seed, args.port,
                        generate_structures=args.structures)
+    # Spawn chunks generated before the world's game rules take effect would
+    # freeze standing water and make the reference depend on tick timing. A
+    # short first run persists `random_tick_speed 0`; dropping its regions makes
+    # the real run regenerate every chunk with the rule already in force.
+    run_server(root, args.server_jar, 1.0, force_load=False)
+    clear_regions(root)
     run_server(root, args.server_jar, args.settle)
 
     region = root / "world/dimensions/minecraft/overworld/region/r.0.0.mca"
