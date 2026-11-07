@@ -5,6 +5,7 @@
 #include <refrain/worldgen/terrain/surface.hpp>
 
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/chunk/proto_chunk.hpp>
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/json.hpp>
@@ -963,6 +964,29 @@ void surface_system::eroded_badlands_extension(
             }
         }
     }
+}
+
+auto surface_system::build_surface(
+    proto_chunk &chunk, material_context &context, const rule_evaluator &rule,
+    const biome_climates &climates, const biome_temperatures &temperatures,
+    const std::function<std::string_view(jint, jint, jint)> &biome) -> status {
+    const jint chunk_min_x = chunk.chunk_x() * 16;
+    const jint chunk_min_z = chunk.chunk_z() * 16;
+    auto get = [&chunk, chunk_min_x, chunk_min_z](jint x, jint y, jint z) {
+        return static_cast<state_id>(
+            chunk.state_at(x - chunk_min_x, y, z - chunk_min_z));
+    };
+    auto set = [&chunk, chunk_min_x, chunk_min_z](jint x, jint y, jint z,
+                                                  state_id state) {
+        chunk.set_state(x - chunk_min_x, y, z - chunk_min_z,
+                        static_cast<block_state_id>(state));
+    };
+    auto world_surface = [&chunk](jint x, jint z) {
+        return chunk.first_available(heightmap_kind::world_surface_wg, x, z) -
+               1;
+    };
+    return build_surface(context, rule, climates, temperatures, biome, get, set,
+                         world_surface);
 }
 
 auto surface_system::build_surface(
