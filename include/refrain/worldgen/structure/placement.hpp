@@ -18,11 +18,21 @@ namespace refrain::worldgen::structure {
 
 enum class spread_type : std::uint8_t { linear, triangular };
 
+enum class frequency_reduction_method : std::uint8_t {
+    default_method,
+    legacy_type_1,
+    legacy_type_2,
+    legacy_type_3,
+};
+
 struct random_spread_placement {
     jint spacing{0};
     jint separation{0};
     jint salt{0};
     spread_type spread{spread_type::linear};
+    frequency_reduction_method frequency_method{
+        frequency_reduction_method::default_method};
+    float frequency{1.0F};
 
     /// `RandomSpreadStructurePlacement.getPotentialStructureChunk`.
     [[nodiscard]] auto potential_chunk(jlong seed, jint chunk_x,
@@ -32,6 +42,10 @@ struct random_spread_placement {
     /// the default frequency reduction.
     [[nodiscard]] auto is_structure_chunk(jlong seed, jint chunk_x,
                                           jint chunk_z) const -> bool;
+
+    /// `AbstractSpreadingStructurePlacement.applyAdditionalChunkRestrictions`.
+    [[nodiscard]] auto passes_frequency(jlong seed, jint chunk_x,
+                                        jint chunk_z) const -> bool;
 };
 
 [[nodiscard]] auto decode_random_spread(const data::json::value &document)

@@ -9,6 +9,7 @@
 
 namespace {
 
+using refrain::worldgen::structure::frequency_reduction_method;
 using refrain::worldgen::structure::random_spread_placement;
 using refrain::worldgen::structure::spread_type;
 
@@ -46,6 +47,22 @@ suite<"worldgen/structure-placement"> structure_placement_tests = [] {
         const auto chunk = triangular.potential_chunk(12345, 7, -9);
         expect(chunk.x == 12);
         expect(chunk.z == -14);
+    };
+
+    "frequency reduction methods match the reference vectors"_test = [] {
+        const auto check = [](frequency_reduction_method method,
+                              bool expected) {
+            random_spread_placement placement{.spacing = 32,
+                                              .separation = 8,
+                                              .salt = 987,
+                                              .frequency_method = method,
+                                              .frequency = 0.5F};
+            expect(placement.passes_frequency(12345, 5, -7) == expected);
+        };
+        check(frequency_reduction_method::default_method, true);
+        check(frequency_reduction_method::legacy_type_1, false);
+        check(frequency_reduction_method::legacy_type_2, true);
+        check(frequency_reduction_method::legacy_type_3, false);
     };
 
     "structure chunks are exactly the potential chunk centers"_test = [] {
