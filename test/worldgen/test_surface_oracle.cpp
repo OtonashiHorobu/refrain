@@ -23,6 +23,9 @@
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
+#include <refrain/worldgen/feature/feature_data.hpp>
+#include <refrain/worldgen/feature/feature_registry.hpp>
+#include <refrain/worldgen/feature/feature_stage.hpp>
 #include <refrain/worldgen/terrain/surface.hpp>
 #include <refrain/worldgen/terrain/terrain.hpp>
 
@@ -245,10 +248,15 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
         const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
         const char *carver_region =
             std::getenv("REFRAIN_VANILLA_CARVER_REGION");
+        const char *feature_region =
+            std::getenv("REFRAIN_VANILLA_FEATURE_REGION");
         const bool carver_mode = carver_region != nullptr;
+        const bool feature_mode = feature_region != nullptr;
         const char *region_path =
-            carver_mode ? carver_region
-                        : std::getenv("REFRAIN_VANILLA_SURFACE_REGION");
+            feature_mode
+                ? feature_region
+                : (carver_mode ? carver_region
+                               : std::getenv("REFRAIN_VANILLA_SURFACE_REGION"));
         if (data_root == nullptr || region_path == nullptr) {
             return;
         }
@@ -294,6 +302,20 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             std::getenv("REFRAIN_VANILLA_SURFACE_FIXED_BIOME");
         const std::string fixed_biome =
             fixed_biome_raw == nullptr ? "oracle:terrain" : fixed_biome_raw;
+        std::optional<feature::feature_data_set> feature_data;
+        if (feature_mode) {
+            const char *feature_root =
+                std::getenv("REFRAIN_VANILLA_FEATURE_DATA");
+            if (feature_root == nullptr) {
+                return;
+            }
+            auto loaded = feature::load_feature_data(feature_root);
+            expect(loaded.has_value()) << loaded.error().message;
+            if (!loaded) {
+                return;
+            }
+            feature_data = std::move(*loaded);
+        }
         std::optional<carver::loaded_carvers> carvers;
         if (carver_mode) {
             auto loaded = carver::load_carvers(data_root);
@@ -570,6 +592,42 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                         });
                 };
                 carver::apply_carving_mask(chunk, mask, apply);
+            }
+
+            chunk.set_status(chunk_status::terrain);
+            if (feature_mode) {
+                feature::feature_registry feature_registry{block_registry};
+                const auto loaded = feature_registry.load(*feature_data);
+                expect(loaded.has_value()) << loaded.error().message;
+                if (!loaded) {
+                    continue;
+                }
+                const auto plan = feature::feature_sorter::build(
+                    {fixed_biome}, feature_data->biomes);
+                expect(plan.has_value()) << "cannot order features";
+                if (!plan) {
+                    continue;
+                }
+                feature::placement_context feature_placement{
+                    .region = nullptr,
+                    .chunk = &chunk,
+                    .states = &block_registry,
+                    .generation =
+                        provider::generation_context{
+                            .min_y = oracle_min_y,
+                            .height = oracle_height,
+                            .sea_level = settings->sea_level,
+                        },
+                };
+                feature_placement.region = nullptr;
+                feature::feature_context feature_ctx{.placement =
+                                                         feature_placement};
+                // Writes must go through a region so the write radius is
+                // enforced even though this oracle only has one chunk.
+                chunk_region feature_region_handle{chunk, 1};
+                feature_ctx.placement.region = &feature_region_handle;
+                feature::decorate(feature_ctx, *plan, feature_registry.placed(),
+                                  {fixed_biome}, feature_data->biomes, seed);
             }
 
             for (jint y = oracle_min_y; y < oracle_min_y + oracle_height; ++y) {
