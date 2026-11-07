@@ -11,7 +11,9 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 
 namespace refrain::worldgen::structure {
@@ -916,6 +918,22 @@ auto place_template(chunk_region &region, block_state_registry &states,
             entity["z"] = data::nbt::value{world.z};
             (void)region.set_block_entity(world.x, world.y, world.z,
                                           std::move(entity));
+        }
+    }
+    std::set<std::tuple<jint, jint, jint>> placed_set;
+    for (const auto &pos : placed_positions) {
+        placed_set.emplace(pos.x, pos.y, pos.z);
+    }
+    for (const auto &pos : placed_positions) {
+        for (const auto *direction :
+             {"north", "east", "south", "west", "up", "down"}) {
+            const auto target = neighbour_pos(pos, direction);
+            if (placed_set.contains(std::tuple<jint, jint, jint>{
+                    target.x, target.y, target.z})) {
+                continue;
+            }
+            (void)update_template_block(states, region, pos);
+            (void)update_template_block(states, region, target);
         }
     }
     for (const auto &pos : placed_positions) {

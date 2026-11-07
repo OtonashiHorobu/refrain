@@ -33,6 +33,12 @@ struct structure_place_context {
     worldgen_random *level_random{nullptr};
 };
 
+/// Places one already generated piece into `context.chunk`. Template and
+/// procedural piece types share the same clipping and state resolution.
+void place_structure_piece(const structure_place_context &context,
+                           const structure_piece_record &piece,
+                           worldgen_random &random);
+
 /// Maps a procedural piece's local coordinates to world coordinates using
 /// the piece orientation and `base_y` as the shifted bounding box floor.
 [[nodiscard]] auto piece_local_to_world(const structure_piece_record &piece,
