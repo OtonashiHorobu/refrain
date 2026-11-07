@@ -1074,7 +1074,7 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
             .max_y = piece.bounds.max_y,
             .max_z = piece.bounds.max_z,
         };
-        record.pieces.push_back(structure_piece_record{
+        const structure_piece_record piece_record{
             .type = "minecraft:shipwreck",
             .min_x = piece.bounds.min_x,
             .min_y = piece.bounds.min_y,
@@ -1092,7 +1092,8 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
             .template_pivot_x = piece.template_pivot.x,
             .template_pivot_y = piece.template_pivot.y,
             .template_pivot_z = piece.template_pivot.z,
-        });
+        };
+        record.pieces.push_back(piece_record);
         proto_chunk chunk{decoded.registry, chunk_x, chunk_z, -64, 384};
         for (jint y = -64; y < 320; ++y) {
             for (jint z = 0; z < 16; ++z) {
@@ -1129,6 +1130,79 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
         }
         chunk.add_structure_start(std::move(record));
         chunk_region region_view{chunk, 1};
+        std::vector<std::unique_ptr<decoded_chunk>> neighbour_decoded;
+        std::vector<std::unique_ptr<proto_chunk>> neighbour_chunks;
+        const auto wreck_bounds = structure::template_bounding_box(
+            manager.get_or_create(piece.template_id),
+            structure::template_transform{
+                .mirror = structure::template_mirror::none,
+                .rotation = static_cast<structure::template_rotation>(
+                    piece.template_rotation),
+                .pivot = piece.template_pivot,
+            },
+            piece.template_origin);
+        const auto water_id = decoded.registry.find("minecraft:water");
+        const auto air_id = decoded.registry.find("minecraft:air");
+        for (jint cx = wreck_bounds.min_x >> 4; cx <= wreck_bounds.max_x >> 4;
+             ++cx) {
+            for (jint cz = wreck_bounds.min_z >> 4;
+                 cz <= wreck_bounds.max_z >> 4; ++cz) {
+                if (cx == chunk_x && cz == chunk_z) {
+                    continue;
+                }
+                const auto raw = read_chunk(region, cx, cz);
+                if (!raw) {
+                    continue;
+                }
+                auto loaded = std::make_unique<decoded_chunk>();
+                if (!decode_chunk(*raw, *loaded)) {
+                    continue;
+                }
+                auto neighbour = std::make_unique<proto_chunk>(
+                    decoded.registry, cx, cz, -64, 384);
+                jint remap_misses = 0;
+                for (std::size_t index = 0; index < loaded->blocks.size();
+                     ++index) {
+                    const auto source = loaded->blocks[index];
+                    const auto name = loaded->registry.name(source);
+                    auto mapped = decoded.registry.find(name);
+                    if (!mapped) {
+                        const auto inserted = decoded.registry.intern(
+                            name, loaded->registry.traits(source));
+                        if (!inserted) {
+                            ++remap_misses;
+                            continue;
+                        }
+                        mapped = *inserted;
+                    }
+                    const auto y = static_cast<jint>(index / 256U) - 64;
+                    const auto x = static_cast<jint>(index % 16U);
+                    const auto z = static_cast<jint>((index / 16U) % 16U);
+                    neighbour->set_state(x, y, z, *mapped);
+                }
+                (void)remap_misses;
+                if (water_id && air_id) {
+                    for (jint y = std::max(wreck_bounds.min_y, 55);
+                         y <= std::min(wreck_bounds.max_y, 70); ++y) {
+                        for (jint z = std::max(wreck_bounds.min_z, cz * 16);
+                             z <= std::min(wreck_bounds.max_z, cz * 16 + 15);
+                             ++z) {
+                            for (jint x = std::max(wreck_bounds.min_x, cx * 16);
+                                 x <=
+                                 std::min(wreck_bounds.max_x, cx * 16 + 15);
+                                 ++x) {
+                                neighbour->set_state(x & 15, y, z & 15,
+                                                     y <= 62 ? *water_id
+                                                             : *air_id);
+                            }
+                        }
+                    }
+                }
+                region_view.attach(*neighbour);
+                neighbour_decoded.push_back(std::move(loaded));
+                neighbour_chunks.push_back(std::move(neighbour));
+            }
+        }
         const auto resolve = [&](std::string_view key) -> block_state_id {
             if (const auto value = decoded.registry.find(key);
                 value.has_value()) {
@@ -1203,6 +1277,20 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
             std::make_unique<legacy_random_source>(palette_seed)};
         structure::place_structures(chunk, context, "surface_structures",
                                     random);
+        for (const auto &neighbour : neighbour_chunks) {
+            const structure::structure_place_context neighbour_context{
+                .region = &region_view,
+                .chunk = neighbour.get(),
+                .states = &decoded.registry,
+                .state = resolve,
+                .templates = &manager,
+                .registry = &decoded.registry,
+            };
+            auto neighbour_random = worldgen_random{
+                std::make_unique<legacy_random_source>(palette_seed)};
+            structure::place_structure_piece(neighbour_context, piece_record,
+                                             neighbour_random);
+        }
         const auto canonical = [](std::string name) -> std::string {
             const auto open = name.find('[');
             if (open == std::string::npos) {
@@ -1254,22 +1342,6 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
             }
             return rebuilt;
         };
-        const auto without_shape = [](std::string name) {
-            const auto shape = name.find("shape=");
-            if (shape == std::string::npos) {
-                return name;
-            }
-            const auto end = name.find(',', shape);
-            name.erase(shape, end == std::string::npos ? std::string::npos
-                                                       : end - shape + 1);
-            if (!name.empty() && name.back() == ',') {
-                name.pop_back();
-            }
-            if (!name.empty() && name.back() == '[') {
-                name.pop_back();
-            }
-            return name;
-        };
         jint mismatches = 0;
         for (jint y = -64; y < 320; ++y) {
             for (jint z = chunk_z * 16; z < chunk_z * 16 + 16; ++z) {
@@ -1281,14 +1353,6 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
                         decoded.registry.name(decoded.blocks[index])});
                     auto actual = canonical(std::string{decoded.registry.name(
                         chunk.state_at(x & 15, y, z & 15))});
-                    const bool boundary =
-                        x == chunk_x * 16 || x == chunk_x * 16 + 15 ||
-                        z == chunk_z * 16 || z == chunk_z * 16 + 15;
-                    if (boundary &&
-                        expected.find("_stairs[") != std::string::npos) {
-                        expected = without_shape(expected);
-                        actual = without_shape(actual);
-                    }
                     if (expected != actual) {
                         if (mismatches < 8) {
                             std::fprintf(
