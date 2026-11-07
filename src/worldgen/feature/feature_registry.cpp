@@ -440,6 +440,186 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       static_cast<jint>(*size_value), discard));
             continue;
         }
+        if (*type == "minecraft:geode") {
+            const auto *blocks = document.document.find("blocks");
+            const auto *layers = document.document.find("layers");
+            const auto *crack = document.document.find("crack");
+            if (blocks == nullptr) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "geode blocks are missing")};
+            }
+            geode_parameters parameters;
+            const auto decode_provider_field =
+                [&](std::string_view name) -> std::unique_ptr<state_provider> {
+                const auto *field = blocks->find(name);
+                if (field == nullptr) {
+                    return nullptr;
+                }
+                auto provider = decode_provider(*field);
+                if (!provider) {
+                    return nullptr;
+                }
+                return std::move(*provider);
+            };
+            parameters.filling = decode_provider_field("filling_provider");
+            parameters.inner = decode_provider_field("inner_layer_provider");
+            parameters.alternate_inner =
+                decode_provider_field("alternate_inner_layer_provider");
+            parameters.middle = decode_provider_field("middle_layer_provider");
+            parameters.outer = decode_provider_field("outer_layer_provider");
+            const auto *cannot = blocks->find("cannot_replace");
+            const auto *invalid = blocks->find("invalid_blocks");
+            if (!parameters.filling || !parameters.inner ||
+                !parameters.alternate_inner || !parameters.middle ||
+                !parameters.outer || cannot == nullptr || invalid == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "geode block settings are invalid")};
+            }
+            const auto cannot_name = cannot->as_string();
+            const auto invalid_name = invalid->as_string();
+            if (!cannot_name || !invalid_name) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "geode tags are not strings")};
+            }
+            parameters.cannot_replace_tag = std::string{
+                cannot_name->starts_with('#') ? cannot_name->substr(1)
+                                              : *cannot_name};
+            parameters.invalid_blocks_tag = std::string{
+                invalid_name->starts_with('#') ? invalid_name->substr(1)
+                                               : *invalid_name};
+            if (const auto *placements = blocks->find("inner_placements");
+                placements != nullptr && placements->is_array()) {
+                for (const auto &entry : *placements->as_array()) {
+                    const auto key = decode_state_key(entry);
+                    if (!key) {
+                        return std::unexpected{key.error()};
+                    }
+                    const auto state = resolve_state(*states_, *key);
+                    if (!state) {
+                        return std::unexpected{state.error()};
+                    }
+                    parameters.inner_placements.push_back(*state);
+                }
+            }
+            if (layers != nullptr) {
+                const auto read_double = [&](std::string_view name,
+                                             double fallback) {
+                    const auto *field = layers->find(name);
+                    if (field == nullptr) {
+                        return fallback;
+                    }
+                    const auto value = field->as_double();
+                    return value ? *value : fallback;
+                };
+                parameters.filling_threshold =
+                    read_double("filling", parameters.filling_threshold);
+                parameters.inner_threshold =
+                    read_double("inner_layer", parameters.inner_threshold);
+                parameters.middle_threshold =
+                    read_double("middle_layer", parameters.middle_threshold);
+                parameters.outer_threshold =
+                    read_double("outer_layer", parameters.outer_threshold);
+            }
+            if (crack != nullptr) {
+                const auto read_double = [&](std::string_view name,
+                                             double fallback) {
+                    const auto *field = crack->find(name);
+                    if (field == nullptr) {
+                        return fallback;
+                    }
+                    const auto value = field->as_double();
+                    return value ? *value : fallback;
+                };
+                parameters.crack_chance = read_double("generate_crack_chance",
+                                                      parameters.crack_chance);
+                parameters.base_crack_size =
+                    read_double("base_crack_size", parameters.base_crack_size);
+                if (const auto *field = crack->find("crack_point_offset");
+                    field != nullptr) {
+                    const auto value = field->as_int64();
+                    if (value) {
+                        parameters.crack_point_offset =
+                            static_cast<jint>(*value);
+                    }
+                }
+            }
+            const auto read_optional_double = [&](std::string_view name,
+                                                  double fallback) {
+                const auto *field = document.document.find(name);
+                if (field == nullptr) {
+                    return fallback;
+                }
+                const auto value = field->as_double();
+                return value ? *value : fallback;
+            };
+            parameters.use_potential_placements_chance = read_optional_double(
+                "use_potential_placements_chance",
+                parameters.use_potential_placements_chance);
+            parameters.use_alternate_layer0_chance =
+                read_optional_double("use_alternate_layer0_chance",
+                                     parameters.use_alternate_layer0_chance);
+            if (const auto *field = document.document.find(
+                    "placements_require_layer0_alternate");
+                field != nullptr) {
+                const auto value = field->as_bool();
+                if (value) {
+                    parameters.placements_require_layer0_alternate = *value;
+                }
+            }
+            const auto read_int = [&](std::string_view name, jint fallback) {
+                const auto *field = document.document.find(name);
+                if (field == nullptr) {
+                    return fallback;
+                }
+                const auto value = field->as_int64();
+                return value ? static_cast<jint>(*value) : fallback;
+            };
+            parameters.min_gen_offset =
+                read_int("min_gen_offset", parameters.min_gen_offset);
+            parameters.max_gen_offset =
+                read_int("max_gen_offset", parameters.max_gen_offset);
+            parameters.noise_multiplier = read_optional_double(
+                "noise_multiplier", parameters.noise_multiplier);
+            parameters.invalid_blocks_threshold =
+                read_int("invalid_blocks_threshold",
+                         parameters.invalid_blocks_threshold);
+            const auto read_bounds = [&](std::string_view name, jint &min,
+                                         jint &max) {
+                const auto *field = document.document.find(name);
+                if (field == nullptr) {
+                    return;
+                }
+                if (const auto *value = field->find("value");
+                    value != nullptr) {
+                    if (const auto parsed = value->as_int64(); parsed) {
+                        min = max = static_cast<jint>(*parsed);
+                    }
+                    return;
+                }
+                if (const auto *value = field->find("min_inclusive");
+                    value != nullptr) {
+                    if (const auto parsed = value->as_int64(); parsed) {
+                        min = static_cast<jint>(*parsed);
+                    }
+                }
+                if (const auto *value = field->find("max_inclusive");
+                    value != nullptr) {
+                    if (const auto parsed = value->as_int64(); parsed) {
+                        max = static_cast<jint>(*parsed);
+                    }
+                }
+            };
+            read_bounds("outer_wall_distance", parameters.outer_wall_min,
+                        parameters.outer_wall_max);
+            read_bounds("distribution_points", parameters.distribution_min,
+                        parameters.distribution_max);
+            read_bounds("point_offset", parameters.point_offset_min,
+                        parameters.point_offset_max);
+            features_.emplace(
+                id, std::make_unique<geode_feature>(std::move(parameters)));
+            continue;
+        }
         if (*type == "minecraft:iceberg") {
             const auto *state = document.document.find("state");
             if (state == nullptr) {

@@ -40,6 +40,8 @@ using refrain::worldgen::feature::feature_data_set;
 using refrain::worldgen::feature::feature_registry;
 using refrain::worldgen::feature::feature_sorter;
 using refrain::worldgen::feature::foliage_kind;
+using refrain::worldgen::feature::geode_feature;
+using refrain::worldgen::feature::geode_parameters;
 using refrain::worldgen::feature::huge_fungus_feature;
 using refrain::worldgen::feature::huge_mushroom_feature;
 using refrain::worldgen::feature::iceberg_feature;
@@ -620,6 +622,84 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
             }
         }
         expect(ice_count > 0);
+    };
+
+    "a geode writes its layered shell into stone"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false, .blocks_motion = true});
+        auto air = registry.intern("minecraft:air", {.air = true});
+        auto amethyst = registry.intern("minecraft:amethyst_block",
+                                        {.air = false, .blocks_motion = true});
+        auto budding = registry.intern("minecraft:budding_amethyst",
+                                       {.air = false, .blocks_motion = true});
+        auto calcite = registry.intern("minecraft:calcite",
+                                       {.air = false, .blocks_motion = true});
+        auto basalt = registry.intern("minecraft:smooth_basalt",
+                                      {.air = false, .blocks_motion = true});
+        expect(stone.has_value() && air.has_value() && amethyst.has_value() &&
+               budding.has_value() && calcite.has_value() &&
+               basalt.has_value());
+        if (!stone || !air || !amethyst || !budding || !calcite || !basalt) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::biomes);
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint y = 0; y < 32; ++y) {
+                    expect(chunk.set_state(x, y, z, *stone));
+                }
+            }
+        }
+        chunk_region region{chunk, 0};
+        placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &registry,
+            .generation =
+                generation_context{
+                    .min_y = 0, .height = 32, .sea_level = 8, .world_seed = 1},
+            .resolve_state =
+                [&registry](std::string_view key) {
+                    return registry.find(key).value_or(no_block_state);
+                },
+        };
+        feature_context context{.placement = placement};
+        geode_parameters parameters{
+            .filling = simple_state(*air),
+            .inner = simple_state(*amethyst),
+            .alternate_inner = simple_state(*budding),
+            .middle = simple_state(*calcite),
+            .outer = simple_state(*basalt),
+            .cannot_replace_tag = "",
+            .invalid_blocks_tag = "",
+            .crack_chance = 0.0,
+            .outer_wall_min = 2,
+            .outer_wall_max = 3,
+            .distribution_min = 2,
+            .distribution_max = 3,
+            .point_offset_min = 1,
+            .point_offset_max = 1,
+            .min_gen_offset = -8,
+            .max_gen_offset = 8,
+        };
+        const geode_feature feature{std::move(parameters)};
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(17)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 16, .z = 8}));
+        jint changed = 0;
+        for (jint y = 0; y < 32; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    if (chunk.state_at(x, y, z) != *stone) {
+                        ++changed;
+                    }
+                }
+            }
+        }
+        expect(changed > 0);
     };
 };
 

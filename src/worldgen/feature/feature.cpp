@@ -6,6 +6,7 @@
 
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/core/mth.hpp>
+#include <refrain/worldgen/noise/noise.hpp>
 
 namespace refrain::worldgen::feature {
 
@@ -1167,6 +1168,243 @@ auto iceberg_feature::place(feature_context &context, worldgen_random &random,
     if (cutout) {
         generate_cutout(context, random, width, over_water, origin, ellipse,
                         ellipse_a, angle, ellipse_c);
+    }
+    return true;
+}
+
+auto geode_feature::can_replace(feature_context &context,
+                                const block_pos &pos) const -> bool {
+    if (parameters_.cannot_replace_tag.empty()) {
+        return true;
+    }
+    return !context.placement.states->in_tag(
+        context.placement.region->state_at(pos.x, pos.y, pos.z),
+        parameters_.cannot_replace_tag);
+}
+
+void geode_feature::safe_set(feature_context &context, const block_pos &pos,
+                             block_state_id state) const {
+    if (can_replace(context, pos)) {
+        (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                        state);
+    }
+}
+
+auto geode_feature::place(feature_context &context, worldgen_random &random,
+                          const block_pos &origin) const -> bool {
+    std::vector<std::pair<block_pos, jint>> points;
+    const jint num_points = parameters_.distribution_min +
+                            random.next_int(parameters_.distribution_max -
+                                            parameters_.distribution_min + 1);
+    normal_noise noise_parameters =
+        normal_noise::create_parity(-4, std::array<double, 1>{1.0});
+    legacy_random_source noise_random{context.placement.generation.world_seed};
+    const auto noise = noise_parameters.create(noise_random);
+    std::vector<block_pos> crack_points;
+    const double crack_adjustment =
+        static_cast<double>(num_points) /
+        static_cast<double>(parameters_.outer_wall_max);
+    const double inner_air = 1.0 / std::sqrt(parameters_.filling_threshold);
+    const double innermost_layer =
+        1.0 / std::sqrt(parameters_.inner_threshold + crack_adjustment);
+    const double inner_crust =
+        1.0 / std::sqrt(parameters_.middle_threshold + crack_adjustment);
+    const double outer_crust =
+        1.0 / std::sqrt(parameters_.outer_threshold + crack_adjustment);
+    const double crack_size =
+        1.0 /
+        std::sqrt(parameters_.base_crack_size + random.next_double() / 2.0 +
+                  (num_points > 3 ? crack_adjustment : 0.0));
+    const bool should_crack =
+        random.next_float() < static_cast<float>(parameters_.crack_chance);
+    jint invalid = 0;
+    const auto air = context.placement.states->air();
+    for (jint i = 0; i < num_points; ++i) {
+        const jint x = parameters_.outer_wall_min +
+                       random.next_int(parameters_.outer_wall_max -
+                                       parameters_.outer_wall_min + 1);
+        const jint y = parameters_.outer_wall_min +
+                       random.next_int(parameters_.outer_wall_max -
+                                       parameters_.outer_wall_min + 1);
+        const jint z = parameters_.outer_wall_min +
+                       random.next_int(parameters_.outer_wall_max -
+                                       parameters_.outer_wall_min + 1);
+        const block_pos pos{
+            .x = origin.x + x, .y = origin.y + y, .z = origin.z + z};
+        const auto state =
+            context.placement.region->state_at(pos.x, pos.y, pos.z);
+        if (state == air || context.placement.states->in_tag(
+                                state, parameters_.invalid_blocks_tag)) {
+            if (++invalid > parameters_.invalid_blocks_threshold) {
+                return false;
+            }
+        }
+        points.emplace_back(
+            pos, parameters_.point_offset_min +
+                     random.next_int(parameters_.point_offset_max -
+                                     parameters_.point_offset_min + 1));
+    }
+    if (should_crack) {
+        const jint index = random.next_int(4);
+        const jint offset = num_points * 2 + 1;
+        if (index == 0) {
+            crack_points.push_back({origin.x + offset, origin.y + 7, origin.z});
+            crack_points.push_back({origin.x + offset, origin.y + 5, origin.z});
+            crack_points.push_back({origin.x + offset, origin.y + 1, origin.z});
+        } else if (index == 1) {
+            crack_points.push_back({origin.x, origin.y + 7, origin.z + offset});
+            crack_points.push_back({origin.x, origin.y + 5, origin.z + offset});
+            crack_points.push_back({origin.x, origin.y + 1, origin.z + offset});
+        } else if (index == 2) {
+            crack_points.push_back(
+                {origin.x + offset, origin.y + 7, origin.z + offset});
+            crack_points.push_back(
+                {origin.x + offset, origin.y + 5, origin.z + offset});
+            crack_points.push_back(
+                {origin.x + offset, origin.y + 1, origin.z + offset});
+        } else {
+            crack_points.push_back({origin.x, origin.y + 7, origin.z});
+            crack_points.push_back({origin.x, origin.y + 5, origin.z});
+            crack_points.push_back({origin.x, origin.y + 1, origin.z});
+        }
+    }
+    std::vector<block_pos> potential;
+    const auto distance_sqr = [](const block_pos &a, const block_pos &b) {
+        const double dx = static_cast<double>(a.x - b.x);
+        const double dy = static_cast<double>(a.y - b.y);
+        const double dz = static_cast<double>(a.z - b.z);
+        return dx * dx + dy * dy + dz * dz;
+    };
+    for (jint z = origin.z + parameters_.min_gen_offset;
+         z <= origin.z + parameters_.max_gen_offset; ++z) {
+        for (jint y = origin.y + parameters_.min_gen_offset;
+             y <= origin.y + parameters_.max_gen_offset; ++y) {
+            for (jint x = origin.x + parameters_.min_gen_offset;
+                 x <= origin.x + parameters_.max_gen_offset; ++x) {
+                const block_pos pos{.x = x, .y = y, .z = z};
+                const double noise_offset =
+                    static_cast<double>(noise.get(static_cast<double>(x),
+                                                  static_cast<double>(y),
+                                                  static_cast<double>(z))) *
+                    parameters_.noise_multiplier;
+                double shell = 0.0;
+                for (const auto &[point, offset] : points) {
+                    shell += 1.0 / std::sqrt(distance_sqr(pos, point) +
+                                             static_cast<double>(offset)) +
+                             noise_offset;
+                }
+                if (shell < outer_crust) {
+                    continue;
+                }
+                if (shell >= inner_air) {
+                    const auto state = parameters_.filling->get(
+                        context.placement, random, pos);
+                    safe_set(context, pos, state);
+                    continue;
+                }
+                double crack = 0.0;
+                for (const auto &point : crack_points) {
+                    crack +=
+                        1.0 / std::sqrt(distance_sqr(pos, point) +
+                                        static_cast<double>(
+                                            parameters_.crack_point_offset)) +
+                        noise_offset;
+                }
+                if (should_crack && crack >= crack_size) {
+                    safe_set(context, pos, air);
+                    for (const auto &direction : all_directions) {
+                        const auto neighbor =
+                            context.placement.region->state_at(
+                                pos.x + direction.dx, pos.y + direction.dy,
+                                pos.z + direction.dz);
+                        (void)neighbor;
+                    }
+                    continue;
+                }
+                if (shell >= innermost_layer) {
+                    const bool alternate =
+                        random.next_float() <
+                        static_cast<float>(
+                            parameters_.use_alternate_layer0_chance);
+                    const auto state =
+                        alternate ? parameters_.alternate_inner->get(
+                                        context.placement, random, pos)
+                                  : parameters_.inner->get(context.placement,
+                                                           random, pos);
+                    safe_set(context, pos, state);
+                    if ((!parameters_.placements_require_layer0_alternate ||
+                         alternate) &&
+                        random.next_float() <
+                            static_cast<float>(
+                                parameters_.use_potential_placements_chance)) {
+                        potential.push_back(pos);
+                    }
+                } else if (shell >= inner_crust) {
+                    safe_set(context, pos,
+                             parameters_.middle->get(context.placement, random,
+                                                     pos));
+                } else if (shell >= outer_crust) {
+                    safe_set(
+                        context, pos,
+                        parameters_.outer->get(context.placement, random, pos));
+                }
+            }
+        }
+    }
+    for (const auto &crystal : potential) {
+        if (parameters_.inner_placements.empty()) {
+            continue;
+        }
+        const auto base =
+            parameters_
+                .inner_placements[static_cast<std::size_t>(random.next_int(
+                    static_cast<jint>(parameters_.inner_placements.size())))];
+        auto state = base;
+        bool placed = false;
+        for (const auto &direction : all_directions) {
+            auto key = context.placement.states->name(state);
+            if (state_property(key, "facing").has_value()) {
+                std::string_view name = "north";
+                if (direction.dy < 0) {
+                    name = "down";
+                } else if (direction.dy > 0) {
+                    name = "up";
+                } else if (direction.dz < 0) {
+                    name = "north";
+                } else if (direction.dz > 0) {
+                    name = "south";
+                } else if (direction.dx < 0) {
+                    name = "west";
+                } else {
+                    name = "east";
+                }
+                key = with_state_property(key, "facing", name);
+            }
+            if (state_property(key, "waterlogged").has_value()) {
+                const auto below = context.placement.region->state_at(
+                    crystal.x + direction.dx, crystal.y + direction.dy,
+                    crystal.z + direction.dz);
+                key = with_state_property(
+                    key, "waterlogged",
+                    context.placement.states->traits(below).water ? "true"
+                                                                  : "false");
+            }
+            if (context.placement.resolve_state) {
+                state = context.placement.resolve_state(key);
+            }
+            const auto place = block_pos{.x = crystal.x + direction.dx,
+                                         .y = crystal.y + direction.dy,
+                                         .z = crystal.z + direction.dz};
+            const auto place_state =
+                context.placement.region->state_at(place.x, place.y, place.z);
+            if (context.placement.states->traits(place_state).air ||
+                context.placement.states->traits(place_state).water) {
+                safe_set(context, place, state);
+                placed = true;
+                break;
+            }
+        }
+        (void)placed;
     }
     return true;
 }

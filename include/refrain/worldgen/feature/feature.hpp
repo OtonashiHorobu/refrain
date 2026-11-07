@@ -400,6 +400,55 @@ class iceberg_feature final : public feature {
     block_state_id water_{no_block_state};
 };
 
+struct geode_parameters {
+    std::unique_ptr<state_provider> filling{};
+    std::unique_ptr<state_provider> inner{};
+    std::unique_ptr<state_provider> alternate_inner{};
+    std::unique_ptr<state_provider> middle{};
+    std::unique_ptr<state_provider> outer{};
+    std::vector<block_state_id> inner_placements{};
+    std::string cannot_replace_tag{};
+    std::string invalid_blocks_tag{};
+    double filling_threshold{1.7};
+    double inner_threshold{2.2};
+    double middle_threshold{3.2};
+    double outer_threshold{4.2};
+    double crack_chance{1.0};
+    double base_crack_size{2.0};
+    jint crack_point_offset{2};
+    double use_potential_placements_chance{0.35};
+    double use_alternate_layer0_chance{0.0};
+    bool placements_require_layer0_alternate{true};
+    jint outer_wall_min{4};
+    jint outer_wall_max{5};
+    jint distribution_min{3};
+    jint distribution_max{4};
+    jint point_offset_min{1};
+    jint point_offset_max{2};
+    jint min_gen_offset{-16};
+    jint max_gen_offset{16};
+    double noise_multiplier{0.05};
+    jint invalid_blocks_threshold{1};
+};
+
+/// `GeodeFeature`: layered amethyst geode with an optional crack.
+class geode_feature final : public feature {
+  public:
+    explicit geode_feature(geode_parameters parameters)
+        : parameters_{std::move(parameters)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    [[nodiscard]] auto can_replace(feature_context &context,
+                                   const block_pos &pos) const -> bool;
+    void safe_set(feature_context &context, const block_pos &pos,
+                  block_state_id state) const;
+
+    geode_parameters parameters_{};
+};
+
 /// `SpringFeature`: a fluid source surrounded by a fixed rock/hole pattern.
 class spring_feature final : public feature {
   public:
