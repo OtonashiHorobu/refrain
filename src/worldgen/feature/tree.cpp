@@ -142,11 +142,13 @@ void tree_feature::place_leaves_row(feature_context &context,
 void tree_feature::place_foliage(feature_context &context,
                                  worldgen_random &random,
                                  const block_pos &attachment, jint leaf_radius,
+                                 jint radius_offset,
                                  std::vector<block_pos> &leaves,
                                  bool &placed) const {
     const jint offset = foliage_offset_->sample(random);
     for (jint yo = offset; yo >= offset - foliage_height_; --yo) {
-        const jint current = std::max(leaf_radius - 1 - yo / 2, 0);
+        const jint current =
+            std::max(leaf_radius + radius_offset - 1 - yo / 2, 0);
         place_leaves_row(context, random, attachment, current, yo, leaves,
                          placed);
     }
@@ -305,23 +307,99 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
         (void)context.placement.region->set_block_state(below.x, below.y,
                                                         below.z, state);
     }
-    for (jint y = 0; y < clipped; ++y) {
-        const block_pos pos{.x = origin.x, .y = origin.y + y, .z = origin.z};
+    const auto place_log = [&](jint x, jint y, jint z) {
+        const block_pos pos{.x = x, .y = y, .z = z};
         if (!valid_tree_pos(context, pos)) {
-            continue;
+            return false;
         }
         const auto state = trunk_provider_->get(context.placement, random, pos);
-        if (context.placement.region->set_block_state(pos.x, pos.y, pos.z,
-                                                      state)) {
-            logs.push_back(pos);
+        if (!context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                       state)) {
+            return false;
+        }
+        logs.push_back(pos);
+        return true;
+    };
+    const auto horizontal = [&]() {
+        switch (random.next_int(4)) {
+        case 0:
+            return std::pair<jint, jint>{0, -1};
+        case 1:
+            return std::pair<jint, jint>{1, 0};
+        case 2:
+            return std::pair<jint, jint>{0, 1};
+        default:
+            return std::pair<jint, jint>{-1, 0};
+        }
+    };
+
+    std::vector<std::pair<block_pos, jint>> attachments;
+    if (kind_ == trunk_kind::straight) {
+        for (jint y = 0; y < clipped; ++y) {
+            (void)place_log(origin.x, origin.y + y, origin.z);
+        }
+        attachments.emplace_back(
+            block_pos{.x = origin.x, .y = origin.y + clipped, .z = origin.z},
+            0);
+    } else {
+        const auto [lean_dx, lean_dz] = horizontal();
+        const jint lean_height = clipped - random.next_int(4) - 1;
+        jint lean_steps = 3 - random.next_int(3);
+        jint tx = origin.x;
+        jint tz = origin.z;
+        bool has_lean = false;
+        jint lean_top = 0;
+        for (jint yo = 0; yo < clipped; ++yo) {
+            const jint yy = origin.y + yo;
+            if (yo >= lean_height && lean_steps > 0) {
+                tx += lean_dx;
+                tz += lean_dz;
+                --lean_steps;
+            }
+            if (place_log(tx, yy, tz)) {
+                has_lean = true;
+                lean_top = yy + 1;
+            }
+        }
+        if (has_lean) {
+            attachments.emplace_back(block_pos{.x = tx, .y = lean_top, .z = tz},
+                                     1);
+        }
+
+        tx = origin.x;
+        tz = origin.z;
+        const auto [branch_dx, branch_dz] = horizontal();
+        if (branch_dx != lean_dx || branch_dz != lean_dz) {
+            const jint branch_pos = lean_height - random.next_int(2) - 1;
+            jint branch_steps = 1 + random.next_int(3);
+            bool has_branch = false;
+            jint branch_top = 0;
+            for (jint yo = branch_pos; yo < clipped && branch_steps > 0;
+                 --branch_steps) {
+                if (yo >= 1) {
+                    tx += branch_dx;
+                    tz += branch_dz;
+                    const jint yy = origin.y + yo;
+                    if (place_log(tx, yy, tz)) {
+                        has_branch = true;
+                        branch_top = yy + 1;
+                    }
+                }
+                ++yo;
+            }
+            if (has_branch) {
+                attachments.emplace_back(
+                    block_pos{.x = tx, .y = branch_top, .z = tz}, 0);
+            }
         }
     }
 
     std::vector<block_pos> leaves;
     bool placed = false;
-    const block_pos attachment{
-        .x = origin.x, .y = origin.y + clipped, .z = origin.z};
-    place_foliage(context, random, attachment, leaf_radius, leaves, placed);
+    for (const auto &[attachment, radius_offset] : attachments) {
+        place_foliage(context, random, attachment, leaf_radius, radius_offset,
+                      leaves, placed);
+    }
     if (logs.empty() || leaves.empty()) {
         return false;
     }
