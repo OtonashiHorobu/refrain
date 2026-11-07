@@ -499,12 +499,12 @@ struct item_holder_set {
     data::resource_location tag{};
     std::vector<std::uint32_t> ids{};
 
-    friend auto operator==(const item_holder_set &,
-                           const item_holder_set &) -> bool = default;
+    friend auto operator==(const item_holder_set &, const item_holder_set &)
+        -> bool = default;
 };
 
-[[nodiscard]] auto encode_holder_set(writer &out,
-                                     const item_holder_set &value) -> status;
+[[nodiscard]] auto encode_holder_set(writer &out, const item_holder_set &value)
+    -> status;
 [[nodiscard]] auto decode_holder_set(reader &in, item_holder_set &value)
     -> status;
 
@@ -522,8 +522,8 @@ struct slot_display {
         -> bool = default;
 };
 
-[[nodiscard]] auto encode_slot_display(writer &out,
-                                       const slot_display &value) -> status;
+[[nodiscard]] auto encode_slot_display(writer &out, const slot_display &value)
+    -> status;
 [[nodiscard]] auto decode_slot_display(reader &in, slot_display &value)
     -> status;
 
@@ -544,8 +544,7 @@ struct recipe_display {
 };
 
 [[nodiscard]] auto encode_recipe_display(writer &out,
-                                         const recipe_display &value)
-    -> status;
+                                         const recipe_display &value) -> status;
 [[nodiscard]] auto decode_recipe_display(reader &in, recipe_display &value)
     -> status;
 
@@ -562,8 +561,8 @@ struct recipe_display_entry {
                            const recipe_display_entry &) -> bool = default;
 };
 
-[[nodiscard]] auto encode_recipe_display_entry(writer &out,
-                                               const recipe_display_entry &value)
+[[nodiscard]] auto
+encode_recipe_display_entry(writer &out, const recipe_display_entry &value)
     -> status;
 [[nodiscard]] auto decode_recipe_display_entry(reader &in,
                                                recipe_display_entry &value)
@@ -589,8 +588,42 @@ struct single_input_set {
 [[nodiscard]] auto encode_single_input_set(writer &out,
                                            const single_input_set &value)
     -> status;
-[[nodiscard]] auto decode_single_input_set(reader &in,
-                                           single_input_set &value) -> status;
+[[nodiscard]] auto decode_single_input_set(reader &in, single_input_set &value)
+    -> status;
+
+/// A particle definition. The type selects the payload fields.
+struct particle_options {
+    std::uint32_t type{0};
+    std::uint32_t block_state{0};
+    std::int32_t color{0};
+    std::int32_t from_color{0};
+    std::int32_t to_color{0};
+    std::int32_t water_blocks{0};
+    std::int32_t duration{0};
+    std::int32_t delay{0};
+    std::int32_t arrival_ticks{0};
+    std::int32_t entity_id{0};
+    float scale{0.0F};
+    float power{0.0F};
+    float roll{0.0F};
+    float burst_impulse{0.0F};
+    float y_offset{0.0F};
+    bool entity_source{false};
+    std::int64_t source_pos{0};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    item_stack_template stack{};
+
+    friend auto operator==(const particle_options &, const particle_options &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_particle_options(writer &out,
+                                           const particle_options &value)
+    -> status;
+[[nodiscard]] auto decode_particle_options(reader &in, particle_options &value)
+    -> status;
 
 /// One entity metadata entry. The active representation is selected by the
 /// serializer id; unused fields keep their defaults.

@@ -70,6 +70,87 @@ const suite tests = [] {
         }
     };
 
+    "particle options round trip simple and parameterized types"_test = [] {
+        net::particle_options simple{};
+        simple.type = 0U;
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_particle_options(out, simple)));
+        expect(bytes.size() == 1U);
+        net::reader in{bytes};
+        net::particle_options decoded{};
+        expect(static_cast<bool>(net::decode_particle_options(in, decoded)));
+        expect(decoded.type == 0U);
+        expect(in.empty());
+
+        net::particle_options dust{};
+        dust.type = 21U;
+        dust.color = 0x112233;
+        dust.scale = 1.5F;
+        bytes.clear();
+        net::writer dust_out{bytes};
+        expect(static_cast<bool>(net::encode_particle_options(dust_out, dust)));
+        net::reader dust_in{bytes};
+        net::particle_options dust_decoded{};
+        expect(static_cast<bool>(
+            net::decode_particle_options(dust_in, dust_decoded)));
+        expect(dust_decoded.type == 21U);
+        expect(dust_decoded.color == 0x112233);
+        expect(dust_decoded.scale == 1.5F);
+        expect(dust_in.empty());
+
+        net::particle_options block{};
+        block.type = 1U;
+        block.block_state = 42U;
+        bytes.clear();
+        net::writer block_out{bytes};
+        expect(
+            static_cast<bool>(net::encode_particle_options(block_out, block)));
+        net::reader block_in{bytes};
+        net::particle_options block_decoded{};
+        expect(static_cast<bool>(
+            net::decode_particle_options(block_in, block_decoded)));
+        expect(block_decoded.block_state == 42U);
+
+        net::particle_options item{};
+        item.type = 57U;
+        item.stack = {.item_id = 5U, .count = 2U};
+        bytes.clear();
+        net::writer item_out{bytes};
+        expect(static_cast<bool>(net::encode_particle_options(item_out, item)));
+        net::reader item_in{bytes};
+        net::particle_options item_decoded{};
+        expect(static_cast<bool>(
+            net::decode_particle_options(item_in, item_decoded)));
+        expect(item_decoded.stack.item_id == 5U);
+
+        net::particle_options vibration{};
+        vibration.type = 58U;
+        vibration.entity_source = true;
+        vibration.entity_id = 12;
+        vibration.y_offset = 0.5F;
+        vibration.arrival_ticks = 20;
+        bytes.clear();
+        net::writer vibration_out{bytes};
+        expect(static_cast<bool>(
+            net::encode_particle_options(vibration_out, vibration)));
+        net::reader vibration_in{bytes};
+        net::particle_options vibration_decoded{};
+        expect(static_cast<bool>(
+            net::decode_particle_options(vibration_in, vibration_decoded)));
+        expect(vibration_decoded.entity_source);
+        expect(vibration_decoded.entity_id == 12);
+        expect(vibration_decoded.arrival_ticks == 20);
+
+        net::particle_options unknown{};
+        unknown.type = 200U;
+        bytes.clear();
+        net::writer unknown_out{bytes};
+        const auto status{net::encode_particle_options(unknown_out, unknown)};
+        expect(!status);
+        expect(status.error().code == refrain::error_code::invalid_argument);
+    };
+
     "recipe slots and displays round trip"_test = [] {
         const auto tag{
             refrain::data::resource_location::parse("minecraft:planks")};

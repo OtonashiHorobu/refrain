@@ -302,7 +302,14 @@ packet entity_position_sync = 35 {
 }
 
 packet explode = 36 {
-    #[rest] payload: bytes;
+    center: wire_vec3;
+    radius: f32;
+    #[fixed] block_count: i32;
+    player_knockback: optional<wire_vec3>;
+    explosion_particle: particle_options;
+    explosion_sound: holder<wire_sound_event>;
+    block_particles: array<wire_weighted_entry>;
+    play_sound: bool;
 }
 
 packet add_transient_block = 37 {
@@ -349,7 +356,20 @@ packet level_event = 47 {
 }
 
 packet level_particles = 48 {
-    #[rest] payload: bytes;
+    particle: particle_options;
+    override_limiter: bool;
+    always_show: bool;
+    x: f64;
+    y: f64;
+    z: f64;
+    x_dist: f32;
+    y_dist: f32;
+    z_dist: f32;
+    x_max_speed: f32;
+    y_max_speed: f32;
+    z_max_speed: f32;
+    #[varint] count: i32;
+    randomization_type: varint_id;
 }
 
 packet light_update = 49 {

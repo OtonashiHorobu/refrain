@@ -123,6 +123,8 @@ namespace {
             return "::refrain::net::recipe_display_entry";
         case primitive_kind::single_input_set:
             return "::refrain::net::single_input_set";
+        case primitive_kind::particle_options:
+            return "::refrain::net::particle_options";
         case primitive_kind::void_type:
             return "void";
         }
@@ -867,6 +869,16 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::particle_options:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_particle_options("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -1427,6 +1439,17 @@ void emit_decode_value(code_writer &writer, const model &program,
         case primitive_kind::single_input_set:
             writer.line(
                 "if (auto decoded = ::refrain::net::decode_single_input_set("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::particle_options:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_particle_options("
                 "in, {}); !decoded) {{",
                 target);
             writer.indent();

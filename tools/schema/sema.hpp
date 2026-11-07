@@ -99,6 +99,8 @@ enum class primitive_kind : std::uint8_t {
     recipe_display_entry,
     /// Hand-written wire payload: single_input_set.
     single_input_set,
+    /// Hand-written wire payload: particle_options.
+    particle_options,
     void_type,
 };
 

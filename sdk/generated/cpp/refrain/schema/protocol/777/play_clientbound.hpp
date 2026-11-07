@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: cb9f94f5f5f38b0c
+// Schema hash: 3e46c08897b5a857
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -515,8 +515,15 @@ struct explode {
     static constexpr std::uint16_t packet_id = 0x24;
     static constexpr std::string_view packet_name = "explode";
 
-    // attributes: #[rest]
-    std::vector<std::byte> payload;
+    ::refrain::protocol::v777::wire::wire_vec3 center;
+    float radius;
+    // attributes: #[fixed]
+    std::int32_t block_count;
+    std::optional<::refrain::protocol::v777::wire::wire_vec3> player_knockback;
+    ::refrain::net::particle_options explosion_particle;
+    std::variant<std::uint32_t, ::refrain::protocol::v777::wire::wire_sound_event> explosion_sound;
+    std::vector<::refrain::protocol::v777::wire::wire_weighted_entry> block_particles;
+    bool play_sound;
 };
 
 struct add_transient_block {
@@ -598,8 +605,21 @@ struct level_particles {
     static constexpr std::uint16_t packet_id = 0x30;
     static constexpr std::string_view packet_name = "level_particles";
 
-    // attributes: #[rest]
-    std::vector<std::byte> payload;
+    ::refrain::net::particle_options particle;
+    bool override_limiter;
+    bool always_show;
+    double x;
+    double y;
+    double z;
+    float x_dist;
+    float y_dist;
+    float z_dist;
+    float x_max_speed;
+    float y_max_speed;
+    float z_max_speed;
+    // attributes: #[varint]
+    std::int32_t count;
+    std::uint32_t randomization_type;
 };
 
 struct light_update {
@@ -3253,7 +3273,49 @@ struct show_dialog {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_bytes(value.payload);
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_vec3(out, value.center); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_f32(value.radius);
+  }
+  {
+    out.write_i32(static_cast<std::int32_t>(value.block_count));
+  }
+  {
+    out.write_bool(value.player_knockback.has_value());
+    if (value.player_knockback.has_value()) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_vec3(out, value.player_knockback.value()); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    if (auto written = ::refrain::net::encode_particle_options(out, value.explosion_particle); !written) {
+      return written;
+    }
+  }
+  {
+    if (std::holds_alternative<std::uint32_t>(value.explosion_sound)) {
+      out.write_varint(std::get<0>(value.explosion_sound));
+    } else {
+      out.write_varint(0);
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_sound_event(out, std::get<1>(value.explosion_sound)); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.block_particles.size()));
+    for (const auto &item_0 : value.block_particles) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_weighted_entry(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    out.write_bool(value.play_sound);
   }
   return ::refrain::status_ok();
 }
@@ -3262,9 +3324,67 @@ struct show_dialog {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto value_0 = in.read_bytes(in.remaining());
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_vec3(in, value.center); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto value_0 = in.read_f32();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
+    value.radius = *value_0;
+  }
+  {
+    auto value_0 = in.read_i32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.block_count = static_cast<decltype(value.block_count)>(*value_0);
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::protocol::v777::wire::wire_vec3 value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_vec3(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.player_knockback = std::move(value_0);
+    } else {
+      value.player_knockback.reset();
+    }
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_particle_options(in, value.explosion_particle); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto holder_0 = in.read_varint();
+    if (!holder_0) return std::unexpected{std::move(holder_0.error())};
+    if (*holder_0 != 0) {
+      value.explosion_sound.template emplace<0>(*holder_0);
+    } else {
+      ::refrain::protocol::v777::wire::wire_sound_event value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_sound_event(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.explosion_sound.template emplace<1>(std::move(value_0));
+    }
+  }
+  {
+    value.block_particles.clear();
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::protocol::v777::wire::wire_weighted_entry value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_weighted_entry(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.block_particles.push_back(std::move(value_0));
+    }
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.play_sound = *value_0;
   }
   return ::refrain::status_ok();
 }
@@ -3544,7 +3664,48 @@ struct show_dialog {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_bytes(value.payload);
+    if (auto written = ::refrain::net::encode_particle_options(out, value.particle); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.override_limiter);
+  }
+  {
+    out.write_bool(value.always_show);
+  }
+  {
+    out.write_f64(value.x);
+  }
+  {
+    out.write_f64(value.y);
+  }
+  {
+    out.write_f64(value.z);
+  }
+  {
+    out.write_f32(value.x_dist);
+  }
+  {
+    out.write_f32(value.y_dist);
+  }
+  {
+    out.write_f32(value.z_dist);
+  }
+  {
+    out.write_f32(value.x_max_speed);
+  }
+  {
+    out.write_f32(value.y_max_speed);
+  }
+  {
+    out.write_f32(value.z_max_speed);
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.count));
+  }
+  {
+    out.write_varint(value.randomization_type);
   }
   return ::refrain::status_ok();
 }
@@ -3553,9 +3714,74 @@ struct show_dialog {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto value_0 = in.read_bytes(in.remaining());
+    if (auto decoded = ::refrain::net::decode_particle_options(in, value.particle); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto value_0 = in.read_bool();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
+    value.override_limiter = *value_0;
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.always_show = *value_0;
+  }
+  {
+    auto value_0 = in.read_f64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.x = *value_0;
+  }
+  {
+    auto value_0 = in.read_f64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.y = *value_0;
+  }
+  {
+    auto value_0 = in.read_f64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.z = *value_0;
+  }
+  {
+    auto value_0 = in.read_f32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.x_dist = *value_0;
+  }
+  {
+    auto value_0 = in.read_f32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.y_dist = *value_0;
+  }
+  {
+    auto value_0 = in.read_f32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.z_dist = *value_0;
+  }
+  {
+    auto value_0 = in.read_f32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.x_max_speed = *value_0;
+  }
+  {
+    auto value_0 = in.read_f32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.y_max_speed = *value_0;
+  }
+  {
+    auto value_0 = in.read_f32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.z_max_speed = *value_0;
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.count = static_cast<decltype(value.count)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.randomization_type = *value_0;
   }
   return ::refrain::status_ok();
 }

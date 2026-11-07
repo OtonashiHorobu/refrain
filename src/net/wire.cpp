@@ -1296,14 +1296,13 @@ constexpr std::uint32_t recipe_max_depth{64};
 [[nodiscard]] auto decode_slot_display_at(reader &in, slot_display &value,
                                           std::uint32_t depth) -> status;
 
-[[nodiscard]] auto encode_slot_children(writer &out,
-                                        const std::vector<slot_display> &children,
-                                        std::uint32_t expected,
-                                        std::uint32_t depth) -> status {
+[[nodiscard]] auto
+encode_slot_children(writer &out, const std::vector<slot_display> &children,
+                     std::uint32_t expected, std::uint32_t depth) -> status {
     if (children.size() != expected) {
-        return std::unexpected{make_error(
-            error_code::invalid_argument,
-            "slot_display: unexpected child count")};
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "slot_display: unexpected child count")};
     }
     for (const auto &child : children) {
         if (auto status{encode_slot_display_at(out, child, depth + 1)};
@@ -1318,13 +1317,13 @@ constexpr std::uint32_t recipe_max_depth{64};
                                           const slot_display &value,
                                           std::uint32_t depth) -> status {
     if (depth > recipe_max_depth) {
-        return std::unexpected{make_error(
-            error_code::invalid_argument, "slot_display: nesting is too deep")};
+        return std::unexpected{make_error(error_code::invalid_argument,
+                                          "slot_display: nesting is too deep")};
     }
     if (value.type > 10U) {
-        return std::unexpected{make_error(
-            error_code::invalid_argument,
-            "slot_display: type is out of range")};
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "slot_display: type is out of range")};
     }
     out.write_varint(value.type);
     switch (value.type) {
@@ -1367,8 +1366,9 @@ constexpr std::uint32_t recipe_max_depth{64};
         }
         return status_ok();
     default:
-        return std::unexpected{make_error(error_code::invalid_argument,
-                                          "slot_display: type is out of range")};
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "slot_display: type is out of range")};
     }
 }
 
@@ -1392,8 +1392,8 @@ constexpr std::uint32_t recipe_max_depth{64};
 [[nodiscard]] auto decode_slot_display_at(reader &in, slot_display &value,
                                           std::uint32_t depth) -> status {
     if (depth > recipe_max_depth) {
-        return std::unexpected{make_error(
-            error_code::parse_error, "slot_display: nesting is too deep")};
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "slot_display: nesting is too deep")};
     }
     value = slot_display{};
     auto type{in.read_varint()};
@@ -1456,9 +1456,9 @@ constexpr std::uint32_t recipe_max_depth{64};
             return std::unexpected{std::move(count.error())};
         }
         if (*count > in.remaining()) {
-            return std::unexpected{make_error(
-                error_code::parse_error,
-                "slot_display: composite list exceeds the payload")};
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "slot_display: composite list exceeds the payload")};
         }
         return decode_slot_children(in, value.children, *count, depth);
     }
@@ -1472,9 +1472,9 @@ constexpr std::uint32_t recipe_max_depth{64};
                                        std::uint32_t expected,
                                        std::uint32_t depth) -> status {
     if (slots.size() != expected) {
-        return std::unexpected{make_error(
-            error_code::invalid_argument,
-            "recipe_display: unexpected slot count")};
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "recipe_display: unexpected slot count")};
     }
     for (const auto &slot : slots) {
         if (auto status{encode_slot_display_at(out, slot, depth + 1)};
@@ -1487,14 +1487,13 @@ constexpr std::uint32_t recipe_max_depth{64};
 
 [[nodiscard]] auto decode_recipe_slots(reader &in,
                                        std::vector<slot_display> &slots,
-                                       std::uint32_t count,
-                                       std::uint32_t depth) -> status {
+                                       std::uint32_t count, std::uint32_t depth)
+    -> status {
     slots.clear();
     slots.reserve(count);
     for (std::uint32_t index{0}; index < count; ++index) {
         slot_display slot{};
-        if (auto status{decode_slot_display_at(in, slot, depth + 1)};
-            !status) {
+        if (auto status{decode_slot_display_at(in, slot, depth + 1)}; !status) {
             return status;
         }
         slots.push_back(std::move(slot));
@@ -1533,9 +1532,9 @@ auto decode_holder_set(reader &in, item_holder_set &value) -> status {
     }
     const auto count{*header - 1U};
     if (count > in.remaining()) {
-        return std::unexpected{make_error(
-            error_code::parse_error,
-            "holder_set: id list exceeds the payload")};
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "holder_set: id list exceeds the payload")};
     }
     value.ids.reserve(count);
     for (std::uint32_t index{0}; index < count; ++index) {
@@ -1556,12 +1555,11 @@ auto decode_slot_display(reader &in, slot_display &value) -> status {
     return decode_slot_display_at(in, value, 0);
 }
 
-auto encode_recipe_display(writer &out, const recipe_display &value)
-    -> status {
+auto encode_recipe_display(writer &out, const recipe_display &value) -> status {
     if (value.type > 4U) {
-        return std::unexpected{make_error(
-            error_code::invalid_argument,
-            "recipe_display: type is out of range")};
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "recipe_display: type is out of range")};
     }
     out.write_varint(value.type);
     switch (value.type) {
@@ -1586,22 +1584,19 @@ auto encode_recipe_display(writer &out, const recipe_display &value)
         break;
     }
     case 2: {
-        if (auto status{encode_recipe_slots(out, value.slots, 2, 1)};
-            !status) {
+        if (auto status{encode_recipe_slots(out, value.slots, 2, 1)}; !status) {
             return status;
         }
         break;
     }
     case 3: {
-        if (auto status{encode_recipe_slots(out, value.slots, 1, 1)};
-            !status) {
+        if (auto status{encode_recipe_slots(out, value.slots, 1, 1)}; !status) {
             return status;
         }
         break;
     }
     case 4: {
-        if (auto status{encode_recipe_slots(out, value.slots, 3, 1)};
-            !status) {
+        if (auto status{encode_recipe_slots(out, value.slots, 3, 1)}; !status) {
             return status;
         }
         break;
@@ -1699,9 +1694,9 @@ auto decode_recipe_display(reader &in, recipe_display &value) -> status {
         auto duration{in.read_varint()};
         auto experience{in.read_f32()};
         if (!duration || !experience) {
-            return std::unexpected{make_error(
-                error_code::parse_error,
-                "recipe_display: truncated furnace fields")};
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "recipe_display: truncated furnace fields")};
         }
         value.duration = *duration;
         value.experience = *experience;
@@ -1709,8 +1704,8 @@ auto decode_recipe_display(reader &in, recipe_display &value) -> status {
     return status_ok();
 }
 
-auto encode_recipe_display_entry(writer &out,
-                                 const recipe_display_entry &value) -> status {
+auto encode_recipe_display_entry(writer &out, const recipe_display_entry &value)
+    -> status {
     out.write_varint(value.id);
     if (auto status{encode_recipe_display(out, value.display)}; !status) {
         return status;
@@ -1719,8 +1714,7 @@ auto encode_recipe_display_entry(writer &out,
     out.write_varint(value.category);
     out.write_bool(value.has_requirements);
     if (value.has_requirements) {
-        out.write_varint(
-            static_cast<std::uint32_t>(value.requirements.size()));
+        out.write_varint(static_cast<std::uint32_t>(value.requirements.size()));
         for (const auto &requirement : value.requirements) {
             if (auto status{encode_holder_set(out, requirement)}; !status) {
                 return status;
@@ -1801,9 +1795,9 @@ auto decode_single_input_set(reader &in, single_input_set &value) -> status {
         return std::unexpected{std::move(count.error())};
     }
     if (*count > in.remaining()) {
-        return std::unexpected{make_error(
-            error_code::parse_error,
-            "single_input_set: entry list exceeds the payload")};
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "single_input_set: entry list exceeds the payload")};
     }
     value.entries.clear();
     value.entries.reserve(*count);
@@ -1816,6 +1810,308 @@ auto decode_single_input_set(reader &in, single_input_set &value) -> status {
             return status;
         }
         value.entries.push_back(std::move(entry));
+    }
+    return status_ok();
+}
+
+namespace {
+
+enum class particle_kind : std::uint8_t {
+    simple,
+    block,
+    geyser,
+    geyser_base,
+    power,
+    dust,
+    dust_transition,
+    spell,
+    color,
+    sculk_charge,
+    item,
+    vibration,
+    trail,
+    shriek,
+};
+
+// Payload kind per particle type id, following the protocol's particle
+// registry order. Types not listed here are simple particles.
+constexpr auto particle_kinds = [] {
+    std::array<particle_kind, 128> kinds{};
+    for (auto &kind : kinds) {
+        kind = particle_kind::simple;
+    }
+    for (const auto id : {1, 2, 36, 121, 125}) {
+        kinds[static_cast<std::size_t>(id)] = particle_kind::block;
+    }
+    for (const auto id : {7, 10}) {
+        kinds[static_cast<std::size_t>(id)] = particle_kind::geyser;
+    }
+    for (const auto id : {8, 9}) {
+        kinds[static_cast<std::size_t>(id)] = particle_kind::geyser_base;
+    }
+    kinds[15] = particle_kind::power;
+    kinds[21] = particle_kind::dust;
+    kinds[22] = particle_kind::dust_transition;
+    for (const auto id : {23, 56}) {
+        kinds[static_cast<std::size_t>(id)] = particle_kind::spell;
+    }
+    for (const auto id : {28, 46, 52}) {
+        kinds[static_cast<std::size_t>(id)] = particle_kind::color;
+    }
+    kinds[48] = particle_kind::sculk_charge;
+    kinds[57] = particle_kind::item;
+    kinds[58] = particle_kind::vibration;
+    kinds[59] = particle_kind::trail;
+    kinds[115] = particle_kind::shriek;
+    return kinds;
+}();
+
+[[nodiscard]] auto particle_kind_of(std::uint32_t type, bool &known)
+    -> particle_kind {
+    if (type >= particle_kinds.size()) {
+        known = false;
+        return particle_kind::simple;
+    }
+    known = true;
+    return particle_kinds[type];
+}
+
+} // namespace
+
+auto encode_particle_options(writer &out, const particle_options &value)
+    -> status {
+    bool known{false};
+    const auto kind{particle_kind_of(value.type, known)};
+    if (!known) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "particle_options: unknown particle type")};
+    }
+    out.write_varint(value.type);
+    switch (kind) {
+    case particle_kind::simple:
+        break;
+    case particle_kind::block:
+        out.write_varint(value.block_state);
+        break;
+    case particle_kind::geyser:
+        out.write_i32(value.water_blocks);
+        break;
+    case particle_kind::geyser_base:
+        out.write_i32(value.water_blocks);
+        out.write_f32(value.burst_impulse);
+        break;
+    case particle_kind::power:
+        out.write_f32(value.power);
+        break;
+    case particle_kind::dust:
+        out.write_i32(value.color);
+        out.write_f32(value.scale);
+        break;
+    case particle_kind::dust_transition:
+        out.write_i32(value.from_color);
+        out.write_i32(value.to_color);
+        out.write_f32(value.scale);
+        break;
+    case particle_kind::spell:
+        out.write_i32(value.color);
+        out.write_f32(value.power);
+        break;
+    case particle_kind::color:
+        out.write_i32(value.color);
+        break;
+    case particle_kind::sculk_charge:
+        out.write_f32(value.roll);
+        break;
+    case particle_kind::item:
+        return encode_item_stack_template(out, value.stack);
+    case particle_kind::vibration:
+        out.write_varint(value.entity_source ? 1U : 0U);
+        if (value.entity_source) {
+            out.write_varint(static_cast<std::uint32_t>(value.entity_id));
+            out.write_f32(value.y_offset);
+        } else {
+            out.write_i64(value.source_pos);
+        }
+        out.write_varint(static_cast<std::uint32_t>(value.arrival_ticks));
+        break;
+    case particle_kind::trail:
+        out.write_f64(value.x);
+        out.write_f64(value.y);
+        out.write_f64(value.z);
+        out.write_i32(value.color);
+        out.write_varint(static_cast<std::uint32_t>(value.duration));
+        break;
+    case particle_kind::shriek:
+        out.write_varint(static_cast<std::uint32_t>(value.delay));
+        break;
+    }
+    return status_ok();
+}
+
+auto decode_particle_options(reader &in, particle_options &value) -> status {
+    auto type{in.read_varint()};
+    if (!type) {
+        return std::unexpected{std::move(type.error())};
+    }
+    bool known{false};
+    const auto kind{particle_kind_of(*type, known)};
+    if (!known) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "particle_options: unknown particle type")};
+    }
+    value = particle_options{};
+    value.type = *type;
+    switch (kind) {
+    case particle_kind::simple:
+        return status_ok();
+    case particle_kind::block: {
+        auto state{in.read_varint()};
+        if (!state) {
+            return std::unexpected{std::move(state.error())};
+        }
+        value.block_state = *state;
+        return status_ok();
+    }
+    case particle_kind::geyser: {
+        auto blocks{in.read_i32()};
+        if (!blocks) {
+            return std::unexpected{std::move(blocks.error())};
+        }
+        value.water_blocks = *blocks;
+        return status_ok();
+    }
+    case particle_kind::geyser_base: {
+        auto blocks{in.read_i32()};
+        auto impulse{in.read_f32()};
+        if (!blocks || !impulse) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "particle_options: truncated geyser")};
+        }
+        value.water_blocks = *blocks;
+        value.burst_impulse = *impulse;
+        return status_ok();
+    }
+    case particle_kind::power: {
+        auto power{in.read_f32()};
+        if (!power) {
+            return std::unexpected{std::move(power.error())};
+        }
+        value.power = *power;
+        return status_ok();
+    }
+    case particle_kind::dust: {
+        auto color{in.read_i32()};
+        auto scale{in.read_f32()};
+        if (!color || !scale) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "particle_options: truncated dust")};
+        }
+        value.color = *color;
+        value.scale = *scale;
+        return status_ok();
+    }
+    case particle_kind::dust_transition: {
+        auto from{in.read_i32()};
+        auto to{in.read_i32()};
+        auto scale{in.read_f32()};
+        if (!from || !to || !scale) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "particle_options: truncated dust transition")};
+        }
+        value.from_color = *from;
+        value.to_color = *to;
+        value.scale = *scale;
+        return status_ok();
+    }
+    case particle_kind::spell: {
+        auto color{in.read_i32()};
+        auto power{in.read_f32()};
+        if (!color || !power) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "particle_options: truncated spell")};
+        }
+        value.color = *color;
+        value.power = *power;
+        return status_ok();
+    }
+    case particle_kind::color: {
+        auto color{in.read_i32()};
+        if (!color) {
+            return std::unexpected{std::move(color.error())};
+        }
+        value.color = *color;
+        return status_ok();
+    }
+    case particle_kind::sculk_charge: {
+        auto roll{in.read_f32()};
+        if (!roll) {
+            return std::unexpected{std::move(roll.error())};
+        }
+        value.roll = *roll;
+        return status_ok();
+    }
+    case particle_kind::item:
+        return decode_item_stack_template(in, value.stack);
+    case particle_kind::vibration: {
+        auto source{in.read_varint()};
+        if (!source || *source > 1U) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "particle_options: invalid vibration source")};
+        }
+        value.entity_source = *source == 1U;
+        if (value.entity_source) {
+            auto id{in.read_varint()};
+            auto offset{in.read_f32()};
+            if (!id || !offset) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "particle_options: truncated vibration")};
+            }
+            value.entity_id = static_cast<std::int32_t>(*id);
+            value.y_offset = *offset;
+        } else {
+            auto pos{in.read_i64()};
+            if (!pos) {
+                return std::unexpected{std::move(pos.error())};
+            }
+            value.source_pos = *pos;
+        }
+        auto ticks{in.read_varint()};
+        if (!ticks) {
+            return std::unexpected{std::move(ticks.error())};
+        }
+        value.arrival_ticks = static_cast<std::int32_t>(*ticks);
+        return status_ok();
+    }
+    case particle_kind::trail: {
+        auto x{in.read_f64()};
+        auto y{in.read_f64()};
+        auto z{in.read_f64()};
+        auto color{in.read_i32()};
+        auto duration{in.read_varint()};
+        if (!x || !y || !z || !color || !duration) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "particle_options: truncated trail")};
+        }
+        value.x = *x;
+        value.y = *y;
+        value.z = *z;
+        value.color = *color;
+        value.duration = static_cast<std::int32_t>(*duration);
+        return status_ok();
+    }
+    case particle_kind::shriek: {
+        auto delay{in.read_varint()};
+        if (!delay) {
+            return std::unexpected{std::move(delay.error())};
+        }
+        value.delay = static_cast<std::int32_t>(*delay);
+        return status_ok();
+    }
     }
     return status_ok();
 }
