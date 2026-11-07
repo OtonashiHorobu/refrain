@@ -155,4 +155,25 @@ void proto_chunk::prime_heightmaps(std::array<heightmap_kind, 4> kinds) {
     }
 }
 
+void proto_chunk::add_structure_start(structure_start start) {
+    structure_starts_.push_back(std::move(start));
+}
+
+void proto_chunk::add_structure_reference(std::string_view structure,
+                                          jint chunk_x, jint chunk_z,
+                                          jint count) {
+    for (auto &reference : structure_references_) {
+        if (reference.structure == structure && reference.chunk_x == chunk_x &&
+            reference.chunk_z == chunk_z) {
+            reference.count += count;
+            return;
+        }
+    }
+    structure_references_.push_back(
+        structure_reference{.structure = std::string{structure},
+                            .chunk_x = chunk_x,
+                            .chunk_z = chunk_z,
+                            .count = count});
+}
+
 } // namespace refrain::worldgen
