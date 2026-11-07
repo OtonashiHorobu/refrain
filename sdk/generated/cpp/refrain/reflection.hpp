@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 7bd695fd36f1623c
+// Schema hash: d4cf695ff961cab1
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -1085,6 +1085,13 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::p
         refrain::reflect::custom_field{"profile_ids", &::refrain::protocol::v777::play::clientbound::player_info_remove::profile_ids});
 };
 
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::player_info_update'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::player_info_update> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::player_info_update";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"payload", &::refrain::protocol::v777::play::clientbound::player_info_update::payload});
+};
+
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::player_look_at'.
 template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::player_look_at> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::player_look_at";
@@ -1562,6 +1569,13 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::s
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::server_links";
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"links", &::refrain::protocol::v777::play::clientbound::server_links::links});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::waypoint'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::waypoint> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::waypoint";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"payload", &::refrain::protocol::v777::play::clientbound::waypoint::payload});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::clear_dialog'.
@@ -2275,12 +2289,12 @@ template <> struct custom_traits<::refrain::protocol::v777::wire::wire_data> {
         refrain::reflect::custom_field{"key_signature", &::refrain::protocol::v777::wire::wire_data::key_signature});
 };
 
-/// Generated RSC struct 'refrain::protocol::v777::wire::wire_type_85'.
-template <> struct custom_traits<::refrain::protocol::v777::wire::wire_type_85> {
-    static constexpr std::string_view type_name = "refrain::protocol::v777::wire::wire_type_85";
+/// Generated RSC struct 'refrain::protocol::v777::wire::wire_type_84'.
+template <> struct custom_traits<::refrain::protocol::v777::wire::wire_type_84> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::wire::wire_type_84";
     static constexpr auto fields = std::make_tuple(
-        refrain::reflect::custom_field{"added_components", &::refrain::protocol::v777::wire::wire_type_85::added_components},
-        refrain::reflect::custom_field{"removed_components", &::refrain::protocol::v777::wire::wire_type_85::removed_components});
+        refrain::reflect::custom_field{"added_components", &::refrain::protocol::v777::wire::wire_type_84::added_components},
+        refrain::reflect::custom_field{"removed_components", &::refrain::protocol::v777::wire::wire_type_84::removed_components});
 };
 
 /// Generated RSC struct 'refrain::protocol::v777::wire::wire_actual_item'.

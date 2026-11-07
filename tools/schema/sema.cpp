@@ -88,6 +88,10 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "objective_update";
     case primitive_kind::team_update:
         return "team_update";
+    case primitive_kind::player_info_update:
+        return "player_info_update";
+    case primitive_kind::tracked_waypoint:
+        return "tracked_waypoint";
     case primitive_kind::void_type:
         return "void";
     }
@@ -128,6 +132,8 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"sound_selector", primitive_kind::sound_selector},
         std::pair{"objective_update", primitive_kind::objective_update},
         std::pair{"team_update", primitive_kind::team_update},
+        std::pair{"player_info_update", primitive_kind::player_info_update},
+        std::pair{"tracked_waypoint", primitive_kind::tracked_waypoint},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -290,6 +296,8 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::sound_selector:
     case primitive_kind::objective_update:
     case primitive_kind::team_update:
+    case primitive_kind::player_info_update:
+    case primitive_kind::tracked_waypoint:
     case primitive_kind::void_type:
         return false;
     }
@@ -330,6 +338,8 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::sound_selector:
     case primitive_kind::objective_update:
     case primitive_kind::team_update:
+    case primitive_kind::player_info_update:
+    case primitive_kind::tracked_waypoint:
     case primitive_kind::void_type:
         return false;
     }
@@ -2263,6 +2273,8 @@ class analyzer {
             case primitive_kind::sound_selector:
             case primitive_kind::objective_update:
             case primitive_kind::team_update:
+            case primitive_kind::player_info_update:
+            case primitive_kind::tracked_waypoint:
                 // Rejected for RIDL in resolve_type(); a wire-only primitive
                 // has no in-process ABI layout.
                 return std::nullopt;

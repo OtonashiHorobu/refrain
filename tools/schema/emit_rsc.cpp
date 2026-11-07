@@ -93,6 +93,10 @@ namespace {
             return "::refrain::net::objective_update";
         case primitive_kind::team_update:
             return "::refrain::net::team_update";
+        case primitive_kind::player_info_update:
+            return "::refrain::net::player_info_update";
+        case primitive_kind::tracked_waypoint:
+            return "::refrain::net::tracked_waypoint";
         case primitive_kind::void_type:
             return "void";
         }
@@ -690,6 +694,26 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::player_info_update:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_player_info_update("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::tracked_waypoint:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_tracked_waypoint("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -1089,6 +1113,28 @@ void emit_decode_value(code_writer &writer, const model &program,
             writer.line("if (auto decoded = ::refrain::net::decode_team_update("
                         "in, {}); !decoded) {{",
                         target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::player_info_update:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_player_info_update("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::tracked_waypoint:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_tracked_waypoint("
+                "in, {}); !decoded) {{",
+                target);
             writer.indent();
             writer.line(
                 "return std::unexpected{{std::move(decoded.error())}};");

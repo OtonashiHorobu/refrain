@@ -69,6 +69,10 @@ enum class primitive_kind : std::uint8_t {
     objective_update,
     /// Scoreboard team add/change/join/leave payload.
     team_update,
+    /// Player list entries with per-action optional fields.
+    player_info_update,
+    /// Tracked waypoint add/update/remove payload.
+    tracked_waypoint,
     void_type,
 };
 

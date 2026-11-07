@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 7bd695fd36f1623c
+// Schema hash: d4cf695ff961cab1
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -714,6 +714,13 @@ struct player_info_remove {
     std::vector<::refrain::net::uuid> profile_ids;
 };
 
+struct player_info_update {
+    static constexpr std::uint16_t packet_id = 0x47;
+    static constexpr std::string_view packet_name = "player_info_update";
+
+    ::refrain::net::player_info_update payload;
+};
+
 struct player_look_at {
     static constexpr std::uint16_t packet_id = 0x48;
     static constexpr std::string_view packet_name = "player_look_at";
@@ -1238,6 +1245,13 @@ struct server_links {
     static constexpr std::string_view packet_name = "server_links";
 
     std::vector<::refrain::protocol::v777::wire::wire_untrusted_entry> links;
+};
+
+struct waypoint {
+    static constexpr std::uint16_t packet_id = 0x8D;
+    static constexpr std::string_view packet_name = "waypoint";
+
+    ::refrain::net::tracked_waypoint payload;
 };
 
 struct clear_dialog {
@@ -3967,6 +3981,28 @@ struct show_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_player_info_update(::refrain::net::writer &out, const player_info_update &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_player_info_update(out, value.payload); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_player_info_update(::refrain::net::reader &in, player_info_update &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_player_info_update(in, value.payload); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_player_look_at(::refrain::net::writer &out, const player_look_at &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -6011,6 +6047,28 @@ struct show_dialog {
         return std::unexpected{std::move(decoded.error())};
       }
       value.links.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_waypoint(::refrain::net::writer &out, const waypoint &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_tracked_waypoint(out, value.payload); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_waypoint(::refrain::net::reader &in, waypoint &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_tracked_waypoint(in, value.payload); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
     }
   }
   return ::refrain::status_ok();

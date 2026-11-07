@@ -424,6 +424,10 @@ packet player_info_remove = 70 {
     profile_ids: array<uuid>;
 }
 
+packet player_info_update = 71 {
+    payload: player_info_update;
+}
+
 packet player_look_at = 72 {
     from_anchor: varint_id;
     x: f64;
@@ -724,6 +728,10 @@ packet custom_report_details = 139 {
 
 packet server_links = 140 {
     links: array<wire_untrusted_entry>;
+}
+
+packet waypoint = 141 {
+    payload: tracked_waypoint;
 }
 
 packet clear_dialog = 142 {

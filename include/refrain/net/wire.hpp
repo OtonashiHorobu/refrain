@@ -258,6 +258,87 @@ struct team_update {
     -> status;
 [[nodiscard]] auto decode_team_update(reader &in, team_update &value) -> status;
 
+/// One entry of a game profile's property list.
+struct profile_property {
+    std::string name{};
+    std::string value{};
+    std::optional<std::string> signature{};
+
+    friend auto operator==(const profile_property &, const profile_property &)
+        -> bool = default;
+};
+
+/// A remote chat session attached to a player-list entry.
+struct chat_session_data {
+    bool present{false};
+    uuid session_id{};
+    std::int64_t expires_at{0};
+    std::vector<std::byte> key{};
+    std::vector<std::byte> key_signature{};
+
+    friend auto operator==(const chat_session_data &, const chat_session_data &)
+        -> bool = default;
+};
+
+/// One player-list entry; fields are present according to the action bits.
+struct player_info_entry {
+    uuid id{};
+    std::string name{};
+    std::vector<profile_property> properties{};
+    chat_session_data chat{};
+    std::optional<std::uint32_t> game_mode{};
+    std::optional<bool> listed{};
+    std::optional<std::uint32_t> latency{};
+    bool has_display_name{false};
+    text_component display_name{};
+    std::optional<std::uint32_t> list_order{};
+    std::optional<bool> show_hat{};
+
+    friend auto operator==(const player_info_entry &, const player_info_entry &)
+        -> bool = default;
+};
+
+/// A player-info update: an action bit set followed by the entries.
+struct player_info_update {
+    std::uint8_t actions{0};
+    std::vector<player_info_entry> entries{};
+
+    friend auto operator==(const player_info_update &,
+                           const player_info_update &) -> bool = default;
+};
+
+[[nodiscard]] auto encode_player_info_update(writer &out,
+                                             const player_info_update &value)
+    -> status;
+[[nodiscard]] auto decode_player_info_update(reader &in,
+                                             player_info_update &value)
+    -> status;
+
+/// A tracked waypoint with its operation. Type 0 is empty, 1 a block position,
+/// 2 a chunk, 3 an azimuth.
+struct tracked_waypoint {
+    std::uint32_t operation{0};
+    bool has_uuid{true};
+    uuid id{};
+    std::string name{};
+    data::resource_location style{};
+    std::optional<std::uint32_t> color{};
+    std::uint32_t type{0};
+    std::int32_t x{0};
+    std::int32_t y{0};
+    std::int32_t z{0};
+    float angle{0.0F};
+
+    friend auto operator==(const tracked_waypoint &, const tracked_waypoint &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_tracked_waypoint(writer &out,
+                                           const tracked_waypoint &value)
+    -> status;
+[[nodiscard]] auto decode_tracked_waypoint(reader &in, tracked_waypoint &value)
+    -> status;
+
 /// An item stack on the wire. Only the empty stack is implemented: the codec
 /// writes and accepts a zero item count and reports `error_code::unsupported`
 /// for any item payload, which requires the data-component graph.

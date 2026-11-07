@@ -380,6 +380,422 @@ auto decode_message_signature_packed(reader &in,
     return status_ok();
 }
 
+namespace {
+
+[[nodiscard]] auto write_byte_array(writer &out,
+                                    const std::vector<std::byte> &bytes)
+    -> status {
+    out.write_varint(static_cast<std::uint32_t>(bytes.size()));
+    out.write_bytes(bytes);
+    return status_ok();
+}
+
+[[nodiscard]] auto read_byte_array(reader &in, std::vector<std::byte> &out,
+                                   std::uint32_t limit) -> status {
+    auto length{in.read_varint()};
+    if (!length) {
+        return std::unexpected{std::move(length.error())};
+    }
+    if (*length > limit) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "wire: byte array exceeds its declared maximum")};
+    }
+    auto bytes{in.read_bytes(*length)};
+    if (!bytes) {
+        return std::unexpected{std::move(bytes.error())};
+    }
+    out.assign(bytes->begin(), bytes->end());
+    return status_ok();
+}
+
+[[nodiscard]] auto read_optional_string(reader &in,
+                                        std::optional<std::string> &out,
+                                        std::size_t limit) -> status {
+    auto present{in.read_bool()};
+    if (!present) {
+        return std::unexpected{std::move(present.error())};
+    }
+    out.reset();
+    if (!*present) {
+        return status_ok();
+    }
+    auto text{in.read_string(limit)};
+    if (!text) {
+        return std::unexpected{std::move(text.error())};
+    }
+    out = std::move(*text);
+    return status_ok();
+}
+
+} // namespace
+
+auto encode_player_info_update(writer &out, const player_info_update &value)
+    -> status {
+    out.write_u8(value.actions);
+    out.write_varint(static_cast<std::uint32_t>(value.entries.size()));
+    for (const auto &entry : value.entries) {
+        if (auto written{out.write_uuid(entry.id)}; !written) {
+            return written;
+        }
+        if ((value.actions & 1U) != 0U) {
+            if (auto written{out.write_string(entry.name, 16)}; !written) {
+                return written;
+            }
+            out.write_varint(
+                static_cast<std::uint32_t>(entry.properties.size()));
+            for (const auto &property : entry.properties) {
+                if (auto written{out.write_string(property.name, 64)};
+                    !written) {
+                    return written;
+                }
+                if (auto written{out.write_string(property.value)}; !written) {
+                    return written;
+                }
+                out.write_bool(property.signature.has_value());
+                if (property.signature.has_value()) {
+                    if (auto written{
+                            out.write_string(*property.signature, 1024)};
+                        !written) {
+                        return written;
+                    }
+                }
+            }
+        }
+        if ((value.actions & 2U) != 0U) {
+            out.write_bool(entry.chat.present);
+            if (entry.chat.present) {
+                if (auto written{out.write_uuid(entry.chat.session_id)};
+                    !written) {
+                    return written;
+                }
+                out.write_i64(entry.chat.expires_at);
+                if (auto written{write_byte_array(out, entry.chat.key)};
+                    !written) {
+                    return written;
+                }
+                if (auto written{
+                        write_byte_array(out, entry.chat.key_signature)};
+                    !written) {
+                    return written;
+                }
+            }
+        }
+        if ((value.actions & 4U) != 0U) {
+            out.write_varint(entry.game_mode.value_or(0));
+        }
+        if ((value.actions & 8U) != 0U) {
+            out.write_bool(entry.listed.value_or(false));
+        }
+        if ((value.actions & 16U) != 0U) {
+            out.write_varint(entry.latency.value_or(0));
+        }
+        if ((value.actions & 32U) != 0U) {
+            out.write_bool(entry.has_display_name);
+            if (entry.has_display_name) {
+                if (auto written{
+                        encode_text_component(out, entry.display_name)};
+                    !written) {
+                    return written;
+                }
+            }
+        }
+        if ((value.actions & 64U) != 0U) {
+            out.write_varint(entry.list_order.value_or(0));
+        }
+        if ((value.actions & 128U) != 0U) {
+            out.write_bool(entry.show_hat.value_or(false));
+        }
+    }
+    return status_ok();
+}
+
+auto decode_player_info_update(reader &in, player_info_update &value)
+    -> status {
+    auto actions{in.read_u8()};
+    if (!actions) {
+        return std::unexpected{std::move(actions.error())};
+    }
+    value.actions = *actions;
+    auto count{in.read_varint()};
+    if (!count) {
+        return std::unexpected{std::move(count.error())};
+    }
+    if (static_cast<std::size_t>(*count) * 16U > in.remaining()) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "player_info_update: entry list exceeds the payload")};
+    }
+    value.entries.clear();
+    value.entries.reserve(*count);
+    for (std::uint32_t index{0}; index < *count; ++index) {
+        player_info_entry entry{};
+        auto id{in.read_uuid()};
+        if (!id) {
+            return std::unexpected{std::move(id.error())};
+        }
+        entry.id = *id;
+        if ((value.actions & 1U) != 0U) {
+            auto name{in.read_string(16)};
+            if (!name) {
+                return std::unexpected{std::move(name.error())};
+            }
+            entry.name = std::move(*name);
+            auto property_count{in.read_varint()};
+            if (!property_count) {
+                return std::unexpected{std::move(property_count.error())};
+            }
+            if (*property_count > in.remaining()) {
+                return std::unexpected{make_error(
+                    error_code::parse_error,
+                    "player_info_update: property list exceeds the payload")};
+            }
+            entry.properties.reserve(*property_count);
+            for (std::uint32_t property_index{0};
+                 property_index < *property_count; ++property_index) {
+                profile_property property{};
+                auto property_name{in.read_string(64)};
+                auto property_value{in.read_string()};
+                if (!property_name || !property_value) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "player_info_update: truncated property")};
+                }
+                property.name = std::move(*property_name);
+                property.value = std::move(*property_value);
+                if (auto status{
+                        read_optional_string(in, property.signature, 1024)};
+                    !status) {
+                    return status;
+                }
+                entry.properties.push_back(std::move(property));
+            }
+        }
+        if ((value.actions & 2U) != 0U) {
+            auto present{in.read_bool()};
+            if (!present) {
+                return std::unexpected{std::move(present.error())};
+            }
+            entry.chat.present = *present;
+            if (*present) {
+                auto session{in.read_uuid()};
+                auto expires{in.read_i64()};
+                if (!session || !expires) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error,
+                        "player_info_update: truncated chat session")};
+                }
+                entry.chat.session_id = *session;
+                entry.chat.expires_at = *expires;
+                if (auto status{read_byte_array(in, entry.chat.key, 512)};
+                    !status) {
+                    return status;
+                }
+                if (auto status{
+                        read_byte_array(in, entry.chat.key_signature, 4096)};
+                    !status) {
+                    return status;
+                }
+            }
+        }
+        if ((value.actions & 4U) != 0U) {
+            auto mode{in.read_varint()};
+            if (!mode) {
+                return std::unexpected{std::move(mode.error())};
+            }
+            entry.game_mode = *mode;
+        }
+        if ((value.actions & 8U) != 0U) {
+            auto listed{in.read_bool()};
+            if (!listed) {
+                return std::unexpected{std::move(listed.error())};
+            }
+            entry.listed = *listed;
+        }
+        if ((value.actions & 16U) != 0U) {
+            auto latency{in.read_varint()};
+            if (!latency) {
+                return std::unexpected{std::move(latency.error())};
+            }
+            entry.latency = *latency;
+        }
+        if ((value.actions & 32U) != 0U) {
+            auto has_name{in.read_bool()};
+            if (!has_name) {
+                return std::unexpected{std::move(has_name.error())};
+            }
+            entry.has_display_name = *has_name;
+            if (*has_name) {
+                if (auto status{decode_text_component(in, entry.display_name)};
+                    !status) {
+                    return status;
+                }
+            }
+        }
+        if ((value.actions & 64U) != 0U) {
+            auto order{in.read_varint()};
+            if (!order) {
+                return std::unexpected{std::move(order.error())};
+            }
+            entry.list_order = *order;
+        }
+        if ((value.actions & 128U) != 0U) {
+            auto hat{in.read_bool()};
+            if (!hat) {
+                return std::unexpected{std::move(hat.error())};
+            }
+            entry.show_hat = *hat;
+        }
+        value.entries.push_back(std::move(entry));
+    }
+    return status_ok();
+}
+
+auto encode_tracked_waypoint(writer &out, const tracked_waypoint &value)
+    -> status {
+    if (value.operation > 2U || value.type > 3U) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "tracked_waypoint: enum value is out of range")};
+    }
+    out.write_varint(value.operation);
+    out.write_bool(value.has_uuid);
+    if (value.has_uuid) {
+        if (auto written{out.write_uuid(value.id)}; !written) {
+            return written;
+        }
+    } else if (auto written{out.write_string(value.name)}; !written) {
+        return written;
+    }
+    if (auto written{out.write_identifier(value.style)}; !written) {
+        return written;
+    }
+    out.write_bool(value.color.has_value());
+    if (value.color.has_value()) {
+        out.write_u8(static_cast<std::uint8_t>((*value.color >> 16U) & 0xFFU));
+        out.write_u8(static_cast<std::uint8_t>((*value.color >> 8U) & 0xFFU));
+        out.write_u8(static_cast<std::uint8_t>(*value.color & 0xFFU));
+    }
+    out.write_varint(value.type);
+    switch (value.type) {
+    case 0:
+        break;
+    case 1:
+        out.write_varint(static_cast<std::uint32_t>(value.x));
+        out.write_varint(static_cast<std::uint32_t>(value.y));
+        out.write_varint(static_cast<std::uint32_t>(value.z));
+        break;
+    case 2:
+        out.write_varint(static_cast<std::uint32_t>(value.x));
+        out.write_varint(static_cast<std::uint32_t>(value.z));
+        break;
+    case 3:
+        out.write_f32(value.angle);
+        break;
+    default:
+        break;
+    }
+    return status_ok();
+}
+
+auto decode_tracked_waypoint(reader &in, tracked_waypoint &value) -> status {
+    auto operation{in.read_varint()};
+    if (!operation) {
+        return std::unexpected{std::move(operation.error())};
+    }
+    if (*operation > 2U) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "tracked_waypoint: operation is out of range")};
+    }
+    value.operation = *operation;
+    auto has_uuid{in.read_bool()};
+    if (!has_uuid) {
+        return std::unexpected{std::move(has_uuid.error())};
+    }
+    value.has_uuid = *has_uuid;
+    if (*has_uuid) {
+        auto id{in.read_uuid()};
+        if (!id) {
+            return std::unexpected{std::move(id.error())};
+        }
+        value.id = *id;
+    } else {
+        auto name{in.read_string()};
+        if (!name) {
+            return std::unexpected{std::move(name.error())};
+        }
+        value.name = std::move(*name);
+    }
+    auto style{in.read_identifier()};
+    if (!style) {
+        return std::unexpected{std::move(style.error())};
+    }
+    value.style = std::move(*style);
+    value.color.reset();
+    auto has_color{in.read_bool()};
+    if (!has_color) {
+        return std::unexpected{std::move(has_color.error())};
+    }
+    if (*has_color) {
+        auto red{in.read_u8()};
+        auto green{in.read_u8()};
+        auto blue{in.read_u8()};
+        if (!red || !green || !blue) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "tracked_waypoint: truncated colour")};
+        }
+        value.color = (static_cast<std::uint32_t>(*red) << 16U) |
+                      (static_cast<std::uint32_t>(*green) << 8U) |
+                      static_cast<std::uint32_t>(*blue);
+    }
+    auto type{in.read_varint()};
+    if (!type) {
+        return std::unexpected{std::move(type.error())};
+    }
+    if (*type > 3U) {
+        return std::unexpected{make_error(
+            error_code::parse_error, "tracked_waypoint: type is out of range")};
+    }
+    value.type = *type;
+    switch (*type) {
+    case 0:
+        break;
+    case 1: {
+        for (auto *axis : {&value.x, &value.y, &value.z}) {
+            auto number{in.read_varint()};
+            if (!number) {
+                return std::unexpected{std::move(number.error())};
+            }
+            *axis = static_cast<std::int32_t>(*number);
+        }
+        break;
+    }
+    case 2: {
+        auto x{in.read_varint()};
+        auto z{in.read_varint()};
+        if (!x || !z) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "tracked_waypoint: truncated chunk")};
+        }
+        value.x = static_cast<std::int32_t>(*x);
+        value.z = static_cast<std::int32_t>(*z);
+        break;
+    }
+    case 3: {
+        auto angle{in.read_f32()};
+        if (!angle) {
+            return std::unexpected{std::move(angle.error())};
+        }
+        value.angle = *angle;
+        break;
+    }
+    default:
+        break;
+    }
+    return status_ok();
+}
+
 auto encode_sound_selector(writer &out, const sound_selector &value) -> status {
     if (value.flags > 3U) {
         return std::unexpected{

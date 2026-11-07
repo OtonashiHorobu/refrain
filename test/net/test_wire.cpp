@@ -70,6 +70,112 @@ const suite tests = [] {
         }
     };
 
+    "player info update round trips action-gated fields"_test = [] {
+        net::player_info_update value{};
+        value.actions =
+            static_cast<std::uint8_t>(1U | 4U | 8U | 16U | 32U | 64U | 128U);
+        net::player_info_entry entry{};
+        const auto id{net::uuid::parse("01234567-89ab-cdef-0123-456789abcdef")};
+        expect(id.has_value());
+        if (!id) {
+            return;
+        }
+        entry.id = *id;
+        entry.name = "TestPlayer";
+        entry.properties.push_back(
+            net::profile_property{.name = "textures",
+                                  .value = "dGVzdA==",
+                                  .signature = std::string{"c2ln"}});
+        entry.game_mode = 1U;
+        entry.listed = true;
+        entry.latency = 42U;
+        entry.has_display_name = true;
+        entry.display_name.text = "Test";
+        entry.list_order = 3U;
+        entry.show_hat = true;
+        value.entries.push_back(entry);
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_player_info_update(out, value)));
+        net::reader in{bytes};
+        net::player_info_update decoded{};
+        expect(static_cast<bool>(net::decode_player_info_update(in, decoded)));
+        expect(decoded.actions == value.actions);
+        expect(decoded.entries.size() == 1U);
+        if (decoded.entries.size() == 1U) {
+            const auto &actual{decoded.entries.front()};
+            expect(actual.name == "TestPlayer");
+            expect(actual.properties.size() == 1U);
+            if (actual.properties.size() == 1U) {
+                expect(actual.properties.front().name == "textures");
+                expect(actual.properties.front().signature.has_value());
+            }
+            expect(actual.game_mode == 1U);
+            expect(actual.listed == true);
+            expect(actual.latency == 42U);
+            expect(actual.has_display_name);
+            expect(actual.display_name.text == "Test");
+            expect(actual.list_order == 3U);
+            expect(actual.show_hat == true);
+        }
+        expect(in.empty());
+    };
+
+    "tracked waypoint round trips block position and empty forms"_test = [] {
+        const auto style{
+            refrain::data::resource_location::parse("minecraft:default")};
+        expect(style.has_value());
+        if (!style) {
+            return;
+        }
+        net::tracked_waypoint point{};
+        point.operation = 0U;
+        point.has_uuid = true;
+        const auto id{net::uuid::parse("01234567-89ab-cdef-0123-456789abcdef")};
+        expect(id.has_value());
+        if (!id) {
+            return;
+        }
+        point.id = *id;
+        point.style = *style;
+        point.color = 0x112233U;
+        point.type = 1U;
+        point.x = 10;
+        point.y = 64;
+        point.z = -20;
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_tracked_waypoint(out, point)));
+        net::reader in{bytes};
+        net::tracked_waypoint decoded{};
+        expect(static_cast<bool>(net::decode_tracked_waypoint(in, decoded)));
+        expect(decoded.operation == 0U);
+        expect(decoded.type == 1U);
+        expect(decoded.x == 10 && decoded.y == 64 && decoded.z == -20);
+        expect(decoded.color == 0x112233U);
+        expect(decoded.style.to_string() == style->to_string());
+        expect(in.empty());
+
+        net::tracked_waypoint empty{};
+        empty.operation = 1U;
+        empty.has_uuid = false;
+        empty.name = "marker";
+        empty.style = *style;
+        empty.type = 0U;
+        bytes.clear();
+        net::writer empty_out{bytes};
+        expect(
+            static_cast<bool>(net::encode_tracked_waypoint(empty_out, empty)));
+        net::reader empty_in{bytes};
+        net::tracked_waypoint empty_decoded{};
+        expect(static_cast<bool>(
+            net::decode_tracked_waypoint(empty_in, empty_decoded)));
+        expect(empty_decoded.has_uuid == false);
+        expect(empty_decoded.name == "marker");
+        expect(empty_decoded.type == 0U);
+        expect(empty_in.empty());
+    };
+
     "sound selector round trips flags, source and name"_test = [] {
         const auto name{refrain::data::resource_location::parse(
             "minecraft:block.note_block")};
