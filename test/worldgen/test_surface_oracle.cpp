@@ -13,6 +13,7 @@
 // the world seed (default 12345).
 
 #include <refrain/core/io.hpp>
+#include <refrain/data/json.hpp>
 #include <refrain/data/nbt.hpp>
 #include <refrain/worldgen/biome/biome_climate.hpp>
 #include <refrain/worldgen/biome/biome_manager.hpp>
@@ -28,6 +29,7 @@
 #include <refrain/worldgen/feature/feature_data.hpp>
 #include <refrain/worldgen/feature/feature_registry.hpp>
 #include <refrain/worldgen/feature/feature_stage.hpp>
+#include <refrain/worldgen/structure/template.hpp>
 #include <refrain/worldgen/terrain/surface.hpp>
 #include <refrain/worldgen/terrain/terrain.hpp>
 
@@ -137,6 +139,9 @@ auto canonical_state_name(std::string_view name) -> std::string {
             base.ends_with("_wood")) {
             return std::string{base};
         }
+    }
+    if (name == "minecraft:bone_block[axis=y]") {
+        return "minecraft:bone_block";
     }
     if (name == "minecraft:snow[layers=1]") {
         return "minecraft:snow";
@@ -948,6 +953,56 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 };
                 feature::feature_context feature_ctx{.placement =
                                                          feature_placement};
+                std::optional<structure::structure_template_manager> templates;
+                std::map<std::string,
+                         std::shared_ptr<structure::structure_processor_list>,
+                         std::less<>>
+                    processor_lists;
+                if (const char *templates_root =
+                        std::getenv("REFRAIN_VANILLA_STRUCTURES");
+                    templates_root != nullptr) {
+                    templates.emplace(templates_root, block_registry);
+                    feature_ctx.templates = &*templates;
+                    feature_ctx.registry = &block_registry;
+                    feature_ctx.processor_list = [&](std::string_view id)
+                        -> const structure::structure_processor_list * {
+                        const std::string key{id};
+                        if (const auto found = processor_lists.find(key);
+                            found != processor_lists.end()) {
+                            return found->second.get();
+                        }
+                        const auto separator = key.find(':');
+                        if (separator == std::string::npos) {
+                            return nullptr;
+                        }
+                        const std::string path = std::string{data_root} + "/" +
+                                                 key.substr(0, separator) +
+                                                 "/worldgen/processor_list/" +
+                                                 key.substr(separator + 1) +
+                                                 ".json";
+                        const auto text = core::io::read_text(path);
+                        if (!text) {
+                            processor_lists.emplace(key, nullptr);
+                            return nullptr;
+                        }
+                        const auto processor_document =
+                            data::json::value::parse(*text);
+                        if (!processor_document) {
+                            processor_lists.emplace(key, nullptr);
+                            return nullptr;
+                        }
+                        auto processor_decoded =
+                            structure::decode_processor_list(
+                                block_registry, *processor_document);
+                        if (!processor_decoded) {
+                            processor_lists.emplace(key, nullptr);
+                            return nullptr;
+                        }
+                        auto &slot = processor_lists[key];
+                        slot = std::move(*processor_decoded);
+                        return slot.get();
+                    };
+                }
                 // Writes must go through a region so the write radius is
                 // enforced even though this oracle only has one chunk.
                 chunk_region feature_region_handle{chunk, 1};

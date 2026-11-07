@@ -448,6 +448,7 @@ def main() -> int:
                 "oracle:freeze",
                 "oracle:ice_spike",
                 "oracle:dripstone_cluster",
+                "oracle:fossil",
             ]
         )
         (biome_dir / "feature.json").write_text(
@@ -595,6 +596,35 @@ def main() -> int:
                         {
                             "type": "minecraft:fixed_placement",
                             "positions": [[8, 63, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (feature_dir / "fossil.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:fossil",
+                    "fossil_structures": ["minecraft:fossil/spine_1"],
+                    "overlay_structures": ["minecraft:fossil/spine_1_coal"],
+                    "fossil_processors": "minecraft:fossil_rot",
+                    "overlay_processors": "minecraft:fossil_coal",
+                    "max_empty_corners_allowed": 7,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "fossil.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:fossil",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, -30, 8]],
                         }
                     ],
                 },
