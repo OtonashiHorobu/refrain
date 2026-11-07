@@ -203,6 +203,12 @@ def main() -> int:
         "features from every biome but keep the normal overworld preset",
     )
     parser.add_argument(
+        "--carvers",
+        action="store_true",
+        help="carver oracle: keep real multi-noise biomes and their carvers, "
+        "but strip every biome's features",
+    )
+    parser.add_argument(
         "--fixed-biome",
         default="oracle:terrain",
         help="biome of the fixed source used by --surface (default "
@@ -212,7 +218,7 @@ def main() -> int:
 
     root = args.output.resolve()
     shutil.rmtree(root, ignore_errors=True)
-    if args.biomes:
+    if args.biomes or args.carvers:
         pack = root / "world/datapacks/t2oracle"
         write_meta(pack)
         biome_dir = pack / "data/minecraft/worldgen/biome"
@@ -220,7 +226,8 @@ def main() -> int:
         for name, document in read_pack_entries(
             args.server_jar, "data/minecraft/worldgen/biome/"
         ).items():
-            document["carvers"] = []
+            if not args.carvers:
+                document["carvers"] = []
             document["features"] = []
             (biome_dir / name.rsplit("/", 1)[-1]).write_text(
                 json.dumps(document, indent=2) + "\n"

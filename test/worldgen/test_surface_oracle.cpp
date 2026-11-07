@@ -18,6 +18,8 @@
 #include <refrain/worldgen/biome/biome_manager.hpp>
 #include <refrain/worldgen/biome/biome_source.hpp>
 #include <refrain/worldgen/biome/overworld_biome_builder.hpp>
+#include <refrain/worldgen/carver/carver_data.hpp>
+#include <refrain/worldgen/carver/carver_stage.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
@@ -241,7 +243,12 @@ using namespace boost::ut;
 suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
     "generated chunks match the reference surface blocks"_test = [] {
         const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
-        const char *region_path = std::getenv("REFRAIN_VANILLA_SURFACE_REGION");
+        const char *carver_region =
+            std::getenv("REFRAIN_VANILLA_CARVER_REGION");
+        const bool carver_mode = carver_region != nullptr;
+        const char *region_path =
+            carver_mode ? carver_region
+                        : std::getenv("REFRAIN_VANILLA_SURFACE_REGION");
         if (data_root == nullptr || region_path == nullptr) {
             return;
         }
@@ -281,11 +288,21 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
         auto root_factory = new_positional_factory(algorithm::xoroshiro, seed);
         multi_noise_biome_source source{overworld_parameters()};
         const bool real_biomes =
-            std::getenv("REFRAIN_VANILLA_SURFACE_BIOMES") != nullptr;
+            std::getenv("REFRAIN_VANILLA_SURFACE_BIOMES") != nullptr ||
+            carver_mode;
         const char *fixed_biome_raw =
             std::getenv("REFRAIN_VANILLA_SURFACE_FIXED_BIOME");
         const std::string fixed_biome =
             fixed_biome_raw == nullptr ? "oracle:terrain" : fixed_biome_raw;
+        std::optional<carver::loaded_carvers> carvers;
+        if (carver_mode) {
+            auto loaded = carver::load_carvers(data_root);
+            expect(loaded.has_value()) << loaded.error().message;
+            if (!loaded) {
+                return;
+            }
+            carvers = std::move(*loaded);
+        }
         std::set<std::string> possible_biomes;
         if (real_biomes) {
             for (const auto &parameter : overworld_parameters()) {
@@ -338,13 +355,21 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 {.air = false, .fluid = true, .water = true});
             auto lava_state = block_registry.intern(
                 "minecraft:lava", {.air = false, .fluid = true});
+            auto bedrock_state = block_registry.intern(
+                "minecraft:bedrock", {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
             expect(air_state.has_value());
             expect(stone_state.has_value());
             expect(water_state.has_value());
             expect(lava_state.has_value());
-            if (!air_state || !stone_state || !water_state || !lava_state) {
+            expect(bedrock_state.has_value());
+            if (!air_state || !stone_state || !water_state || !lava_state ||
+                !bedrock_state) {
                 return;
             }
+            const std::array<block_state_id, 1> uncarvable{*bedrock_state};
+            block_registry.add_tag("minecraft:uncarvable", uncarvable);
             block_states states{block_registry};
 
             const auto expected = decode_expected(*document, states);
@@ -512,6 +537,27 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             expect(built.has_value());
             if (!built) {
                 continue;
+            }
+
+            if (carver_mode) {
+                carver::carver_generator generator{
+                    [&source, &sampler](jint quart_x,
+                                        jint quart_z) -> std::string_view {
+                        return source.biome(
+                            source.noise_biome(sampler, quart_x, 0, quart_z));
+                    },
+                    carvers->biomes, seed,
+                    provider::generation_context{.min_y = oracle_min_y,
+                                                 .height = oracle_height,
+                                                 .sea_level =
+                                                     settings->sea_level}};
+                const auto mask =
+                    generator.generate(chunk_pos{.x = chunk_x, .z = chunk_z});
+                carver::carve_apply_context apply{
+                    .aquifer = &aquifer,
+                    .states = &block_registry,
+                };
+                carver::apply_carving_mask(chunk, mask, apply);
             }
 
             for (jint y = oracle_min_y; y < oracle_min_y + oracle_height; ++y) {
