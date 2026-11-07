@@ -4,6 +4,8 @@
 
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/chunk/chunk_region.hpp>
+#include <refrain/worldgen/feature/feature.hpp>
+#include <refrain/worldgen/feature/placement.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
 #include <refrain/worldgen/structure/stage.hpp>
 #include <refrain/worldgen/structure/start.hpp>
@@ -95,7 +97,56 @@ void template_place(benchmark::State &state) {
     }
 }
 
+void feature_freeze(benchmark::State &state) {
+    block_state_registry registry;
+    (void)registry.intern("minecraft:air", {.air = true});
+    const auto ice =
+        registry.intern("minecraft:ice", {.air = false, .blocks_motion = true});
+    const auto snow =
+        registry.intern("minecraft:snow[layers=1]", {.air = false});
+    const auto stone = registry.intern(
+        "minecraft:stone",
+        {.air = false, .blocks_motion = true, .blocks_motion_no_leaves = true});
+    if (!ice || !snow || !stone) {
+        return;
+    }
+    proto_chunk chunk{registry, 0, 0, 0, 32};
+    for (jint z = 0; z < 16; ++z) {
+        for (jint x = 0; x < 16; ++x) {
+            for (jint y = 0; y < 5; ++y) {
+                chunk.set_state(x, y, z, *stone);
+            }
+        }
+    }
+    chunk_region region{chunk, 0};
+    feature::placement_context placement{
+        .region = &region,
+        .chunk = &chunk,
+        .states = &registry,
+        .generation = provider::generation_context{.min_y = 0,
+                                                   .height = 32,
+                                                   .sea_level = 8},
+        .height = [](heightmap_kind, jint, jint) { return jint{5}; },
+        .resolve_state =
+            [&registry](std::string_view key) {
+                return registry.find(key).value_or(no_block_state);
+            },
+        .should_freeze = [](const block_pos &) { return false; },
+        .should_snow = [](const block_pos &) { return true; },
+    };
+    feature::feature_context context{.placement = placement};
+    const feature::freeze_top_layer_feature freeze{*ice, *snow};
+    auto random = worldgen_random{std::make_unique<legacy_random_source>(1)};
+    for (auto _ : state) {
+        const auto placed =
+            freeze.place(context, random, block_pos{.x = 0, .y = 0, .z = 0});
+        auto result = placed;
+        benchmark::DoNotOptimize(result);
+    }
+}
+
 } // namespace
 
 BENCHMARK(structure_area);
 BENCHMARK(template_place);
+BENCHMARK(feature_freeze);
