@@ -157,17 +157,24 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=pathlib.Path)
     parser.add_argument("--port", type=int, default=25599)
     parser.add_argument("--settle", type=float, default=20.0)
+    parser.add_argument(
+        "--plain",
+        action="store_true",
+        help="keep the normal multi-noise overworld (biome oracle) instead of "
+        "generating a terrain-only world",
+    )
     args = parser.parse_args()
 
     root = args.output.resolve()
     shutil.rmtree(root, ignore_errors=True)
-    preset = read_pack_data(
-        args.server_jar, "data/minecraft/worldgen/world_preset/normal.json"
-    )
-    biome = read_pack_data(
-        args.server_jar, "data/minecraft/worldgen/biome/plains.json"
-    )
-    write_pack(preset, biome, root / "world/datapacks/t2oracle")
+    if not args.plain:
+        preset = read_pack_data(
+            args.server_jar, "data/minecraft/worldgen/world_preset/normal.json"
+        )
+        biome = read_pack_data(
+            args.server_jar, "data/minecraft/worldgen/biome/plains.json"
+        )
+        write_pack(preset, biome, root / "world/datapacks/t2oracle")
     write_server_files(root, args.seed, args.port)
     run_server(root, args.server_jar, args.settle)
 
