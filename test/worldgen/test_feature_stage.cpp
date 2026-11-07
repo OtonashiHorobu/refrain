@@ -1,0 +1,119 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+#include <refrain/data/json.hpp>
+#include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/feature/feature_stage.hpp>
+
+#include <boost/ut.hpp>
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace {
+
+using refrain::worldgen::block_state_registry;
+using refrain::worldgen::chunk_region;
+using refrain::worldgen::chunk_status;
+using refrain::worldgen::heightmap_kind;
+using refrain::worldgen::proto_chunk;
+using refrain::worldgen::feature::biome_feature_list;
+using refrain::worldgen::feature::decode_placement;
+using refrain::worldgen::feature::decorate;
+using refrain::worldgen::feature::feature_context;
+using refrain::worldgen::feature::feature_sorter;
+using refrain::worldgen::feature::placed_feature_runtime;
+using refrain::worldgen::feature::placement_context;
+using refrain::worldgen::feature::simple_block_feature;
+using refrain::worldgen::feature::step_features;
+using refrain::worldgen::provider::generation_context;
+
+auto parse(std::string_view text) -> refrain::data::json::value {
+    auto parsed = refrain::data::json::value::parse(text);
+    return parsed ? std::move(*parsed) : refrain::data::json::value{};
+}
+
+} // namespace
+
+using namespace boost::ut;
+using namespace refrain::worldgen;
+
+suite<"worldgen/feature-stage"> feature_stage_tests = [] {
+    "a simple block feature places through count, in_square and heightmap"_test =
+        [] {
+            block_state_registry registry;
+            auto stone = registry.intern("minecraft:stone",
+                                         {.air = false,
+                                          .blocks_motion = true,
+                                          .blocks_motion_no_leaves = true});
+            expect(stone.has_value());
+            if (!stone) {
+                return;
+            }
+
+            proto_chunk chunk{registry, 0, 0, 0, 32};
+            chunk.set_status(chunk_status::biomes);
+            for (jint x = 0; x < 16; ++x) {
+                for (jint z = 0; z < 16; ++z) {
+                    expect(chunk.set_state(x, 4, z, *stone));
+                }
+            }
+            chunk_region region{chunk, 1};
+
+            const std::vector<biome_feature_list> lists{{
+                .biome = "oracle:test",
+                .steps = {{}, {}, {}, {}, {}, {}, {}, {}, {}, {"oracle:stone"}},
+            }};
+            const auto plan = feature_sorter::build({"oracle:test"}, lists);
+            expect(plan.has_value());
+            if (!plan) {
+                return;
+            }
+
+            placed_feature_runtime placed;
+            placed.id = "oracle:stone";
+            const auto feature = simple_block_feature{*stone, false};
+            placed.configured = &feature;
+            const auto placement_document = parse(
+                R"([{"type":"minecraft:count","count":2},
+                    {"type":"minecraft:in_square"},
+                    {"type":"minecraft:heightmap","heightmap":"WORLD_SURFACE_WG"}])");
+            if (!placement_document.is_array()) {
+                return;
+            }
+            for (const auto &entry : *placement_document.as_array()) {
+                auto modifier = decode_placement(entry);
+                expect(modifier.has_value());
+                if (modifier) {
+                    placed.placement.push_back(std::move(*modifier));
+                }
+            }
+            expect(placed.placement.size() == 3U);
+
+            std::unordered_map<std::string, placed_feature_runtime> runtime;
+            runtime.emplace("oracle:stone", std::move(placed));
+
+            placement_context placement{
+                .region = &region,
+                .chunk = &chunk,
+                .states = &registry,
+                .generation = generation_context{.min_y = 0,
+                                                 .height = 32,
+                                                 .sea_level = 8},
+            };
+            feature_context context{.placement = placement};
+            decorate(context, *plan, runtime, {"oracle:test"}, lists, 12345);
+
+            std::size_t placed_count = 0;
+            for (jint x = 0; x < 16; ++x) {
+                for (jint z = 0; z < 16; ++z) {
+                    if (chunk.state_at(x, 5, z) == *stone) {
+                        ++placed_count;
+                    }
+                }
+            }
+            expect(placed_count == 2U);
+        };
+};
