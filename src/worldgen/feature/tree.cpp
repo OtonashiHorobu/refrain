@@ -526,11 +526,6 @@ void place_on_ground_decorator::place(
         }
         const jint heightmap = context.context.placement.chunk->first_available(
             heightmap_kind::motion_blocking_no_leaves, local_x, local_z);
-        std::fprintf(
-            stderr, "ground pos=%d,%d,%d above=%d floor=%d hm=%d ymax=%d\n",
-            static_cast<int>(x), static_cast<int>(y), static_cast<int>(z),
-            static_cast<int>(above_ok), static_cast<int>(floor_ok),
-            static_cast<int>(heightmap), static_cast<int>(max_scan_y));
         if (above_ok && floor_ok && heightmap <= above.y) {
             const auto state = provider_->get(context.context.placement,
                                               context.random, above);
