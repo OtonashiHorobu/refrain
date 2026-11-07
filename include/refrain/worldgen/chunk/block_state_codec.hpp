@@ -10,6 +10,7 @@
 #include <refrain/core/error.hpp>
 #include <refrain/worldgen/core/java_compat.hpp>
 
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -23,6 +24,11 @@ namespace refrain::worldgen {
 /// `id`/`Name` and optional `properties`.
 [[nodiscard]] auto decode_state_key(const data::json::value &value)
     -> result<std::string>;
+
+/// One property value from a canonical key.
+[[nodiscard]] auto state_property(std::string_view key,
+                                  std::string_view property)
+    -> std::optional<std::string_view>;
 
 /// Replaces one property in a canonical key (leaves it unchanged when the
 /// property is absent).

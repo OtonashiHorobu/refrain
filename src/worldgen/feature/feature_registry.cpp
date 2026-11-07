@@ -6,6 +6,7 @@
 
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/feature/rule_test.hpp>
+#include <refrain/worldgen/feature/tree.hpp>
 
 #include <string>
 #include <string_view>
@@ -489,6 +490,144 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             }
             features_.emplace(
                 id, std::make_unique<block_pile_feature>(std::move(*provider)));
+            continue;
+        }
+        if (*type == "minecraft:tree") {
+            const auto *trunk_value = document.document.find("trunk_provider");
+            const auto *trunk_placer = document.document.find("trunk_placer");
+            const auto *foliage_value =
+                document.document.find("foliage_provider");
+            const auto *foliage_placer =
+                document.document.find("foliage_placer");
+            const auto *minimum_size = document.document.find("minimum_size");
+            const auto *decorators = document.document.find("decorators");
+            const auto *below_value =
+                document.document.find("below_trunk_provider");
+            if (trunk_value == nullptr || trunk_placer == nullptr ||
+                foliage_value == nullptr || foliage_placer == nullptr ||
+                minimum_size == nullptr || decorators == nullptr ||
+                below_value == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "tree feature is incomplete")};
+            }
+            if (document.document.find("root_placer") != nullptr) {
+                return std::unexpected{
+                    make_error(error_code::unsupported,
+                               "tree root placers are not implemented")};
+            }
+            if (!decorators->is_array() || !decorators->as_array()->empty()) {
+                return std::unexpected{
+                    make_error(error_code::unsupported,
+                               "tree decorators are not implemented")};
+            }
+            const auto *trunk_type = trunk_placer->find("type");
+            if (trunk_type == nullptr ||
+                trunk_type->as_string() !=
+                    std::optional<std::string_view>{
+                        "minecraft:straight_trunk_placer"}) {
+                return std::unexpected{make_error(error_code::unsupported,
+                                                  "unsupported trunk placer")};
+            }
+            const auto *foliage_type = foliage_placer->find("type");
+            if (foliage_type == nullptr ||
+                foliage_type->as_string() !=
+                    std::optional<std::string_view>{
+                        "minecraft:blob_foliage_placer"}) {
+                return std::unexpected{make_error(
+                    error_code::unsupported, "unsupported foliage placer")};
+            }
+            const auto *minimum_type = minimum_size->find("type");
+            if (minimum_type == nullptr ||
+                minimum_type->as_string() !=
+                    std::optional<std::string_view>{
+                        "minecraft:two_layers_feature_size"}) {
+                return std::unexpected{make_error(error_code::unsupported,
+                                                  "unsupported feature size")};
+            }
+            auto trunk = decode_state_provider(*trunk_value, *states_);
+            auto foliage = decode_state_provider(*foliage_value, *states_);
+            auto below = decode_state_provider(*below_value, *states_);
+            const auto base_height = trunk_placer->find("base_height");
+            const auto rand_a = trunk_placer->find("height_rand_a");
+            const auto rand_b = trunk_placer->find("height_rand_b");
+            const auto radius = foliage_placer->find("radius");
+            const auto offset = foliage_placer->find("offset");
+            const auto height = foliage_placer->find("height");
+            if (!trunk || !foliage || !below || base_height == nullptr ||
+                rand_a == nullptr || rand_b == nullptr || radius == nullptr ||
+                offset == nullptr || height == nullptr) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "tree feature is invalid")};
+            }
+            const auto base_value = base_height->as_int64();
+            const auto rand_a_value = rand_a->as_int64();
+            const auto rand_b_value = rand_b->as_int64();
+            const auto height_value = height->as_int64();
+            auto radius_provider = provider::int_provider::decode(*radius);
+            auto offset_provider = provider::int_provider::decode(*offset);
+            if (!base_value || !rand_a_value || !rand_b_value ||
+                !height_value || !radius_provider || !offset_provider) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "tree feature numbers are invalid")};
+            }
+            jint limit = 1;
+            jint lower = 0;
+            jint upper = 1;
+            if (const auto *field = minimum_size->find("limit");
+                field != nullptr) {
+                const auto value = field->as_int64();
+                if (!value) {
+                    return std::unexpected{value.error()};
+                }
+                limit = static_cast<jint>(*value);
+            }
+            if (const auto *field = minimum_size->find("lower_size");
+                field != nullptr) {
+                const auto value = field->as_int64();
+                if (!value) {
+                    return std::unexpected{value.error()};
+                }
+                lower = static_cast<jint>(*value);
+            }
+            if (const auto *field = minimum_size->find("upper_size");
+                field != nullptr) {
+                const auto value = field->as_int64();
+                if (!value) {
+                    return std::unexpected{value.error()};
+                }
+                upper = static_cast<jint>(*value);
+            }
+            bool has_min_clipped = false;
+            jint min_clipped = 0;
+            if (const auto *field = minimum_size->find("min_clipped_height");
+                field != nullptr) {
+                const auto value = field->as_int64();
+                if (!value) {
+                    return std::unexpected{value.error()};
+                }
+                has_min_clipped = true;
+                min_clipped = static_cast<jint>(*value);
+            }
+            bool ignore_vines = false;
+            if (const auto *field = document.document.find("ignore_vines");
+                field != nullptr) {
+                const auto value = field->as_bool();
+                if (!value) {
+                    return std::unexpected{value.error()};
+                }
+                ignore_vines = *value;
+            }
+            features_.emplace(
+                id,
+                std::make_unique<tree_feature>(
+                    *states_, std::move(*trunk), std::move(*foliage),
+                    std::move(*below), static_cast<jint>(*base_value),
+                    static_cast<jint>(*rand_a_value),
+                    static_cast<jint>(*rand_b_value),
+                    std::move(*radius_provider), std::move(*offset_provider),
+                    static_cast<jint>(*height_value), limit, lower, upper,
+                    has_min_clipped, min_clipped, ignore_vines));
             continue;
         }
         return std::unexpected{
