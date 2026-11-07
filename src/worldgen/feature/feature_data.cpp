@@ -101,10 +101,12 @@ auto load_feature_data(std::string_view data_root) -> result<feature_data_set> {
         const auto worldgen = base + "/worldgen";
 
         loaded_documents features;
-        if (const auto collected =
-                collect_documents(worldgen + "/feature", "", features);
-            !collected && collected.error().code != error_code::not_found) {
-            return std::unexpected{collected.error()};
+        if (core::io::is_directory(worldgen + "/feature")) {
+            if (const auto collected =
+                    collect_documents(worldgen + "/feature", "", features);
+                !collected) {
+                return std::unexpected{collected.error()};
+            }
         }
         for (auto &[id, document] : features.documents) {
             result.features.emplace(
@@ -114,10 +116,12 @@ auto load_feature_data(std::string_view data_root) -> result<feature_data_set> {
         }
 
         loaded_documents placed;
-        if (const auto collected =
-                collect_documents(worldgen + "/placed_feature", "", placed);
-            !collected && collected.error().code != error_code::not_found) {
-            return std::unexpected{collected.error()};
+        if (core::io::is_directory(worldgen + "/placed_feature")) {
+            if (const auto collected =
+                    collect_documents(worldgen + "/placed_feature", "", placed);
+                !collected) {
+                return std::unexpected{collected.error()};
+            }
         }
         for (auto &[id, document] : placed.documents) {
             const auto *feature = document.find("feature");
@@ -146,10 +150,12 @@ auto load_feature_data(std::string_view data_root) -> result<feature_data_set> {
         }
 
         loaded_documents biomes;
-        if (const auto collected =
-                collect_documents(worldgen + "/biome", "", biomes);
-            !collected && collected.error().code != error_code::not_found) {
-            return std::unexpected{collected.error()};
+        if (core::io::is_directory(worldgen + "/biome")) {
+            if (const auto collected =
+                    collect_documents(worldgen + "/biome", "", biomes);
+                !collected) {
+                return std::unexpected{collected.error()};
+            }
         }
         for (auto &[id, document] : biomes.documents) {
             auto steps = biome_lists(document);
