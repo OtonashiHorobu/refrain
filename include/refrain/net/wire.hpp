@@ -401,6 +401,40 @@ struct merchant_offer {
 [[nodiscard]] auto decode_merchant_offer(reader &in, merchant_offer &value)
     -> status;
 
+/// One entity metadata entry. The active representation is selected by the
+/// serializer id; unused fields keep their defaults.
+struct metadata_value {
+    std::uint8_t index{0};
+    std::uint32_t serializer{0};
+    std::int64_t integer{0};
+    double floating{0.0};
+    std::string text{};
+    text_component component{};
+    item_stack stack{};
+    bool flag{false};
+    std::array<double, 4> vector{};
+    std::array<std::uint32_t, 3> ids{};
+    data::resource_location dimension{};
+    std::int64_t position{0};
+
+    friend auto operator==(const metadata_value &, const metadata_value &)
+        -> bool = default;
+};
+
+/// An entity metadata list ending with the 255 terminator.
+struct entity_metadata {
+    std::vector<metadata_value> values{};
+
+    friend auto operator==(const entity_metadata &, const entity_metadata &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_entity_metadata(writer &out,
+                                          const entity_metadata &value)
+    -> status;
+[[nodiscard]] auto decode_entity_metadata(reader &in, entity_metadata &value)
+    -> status;
+
 /// Writes a network-NBT string tag. The text must be valid UTF-8 without NUL
 /// and within the Basic Multilingual Plane, because Java's modified UTF-8
 /// encodes supplementary code points as surrogate pairs.

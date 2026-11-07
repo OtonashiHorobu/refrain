@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 68ab48bc0e01cef4
+// Schema hash: 959e5112fb541051
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -1291,6 +1291,14 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::s
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"slot", &::refrain::protocol::v777::play::clientbound::set_display_objective::slot},
         refrain::reflect::custom_field{"objective_name", &::refrain::protocol::v777::play::clientbound::set_display_objective::objective_name});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::set_entity_data'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::set_entity_data> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::set_entity_data";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"entity_id", &::refrain::protocol::v777::play::clientbound::set_entity_data::entity_id},
+        refrain::reflect::custom_field{"values", &::refrain::protocol::v777::play::clientbound::set_entity_data::values});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::set_entity_link'.

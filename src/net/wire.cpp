@@ -1286,6 +1286,363 @@ auto decode_map_patch(reader &in, map_patch &value) -> status {
     return status_ok();
 }
 
+namespace {
+
+[[nodiscard]] auto write_metadata_value(writer &out,
+                                        const metadata_value &value) -> status {
+    out.write_u8(value.index);
+    out.write_varint(value.serializer);
+    switch (value.serializer) {
+    case 0:
+        out.write_u8(static_cast<std::uint8_t>(value.integer));
+        break;
+    case 1:
+        out.write_varint(static_cast<std::uint32_t>(value.integer));
+        break;
+    case 2:
+        out.write_varlong(static_cast<std::uint64_t>(value.integer));
+        break;
+    case 3:
+        out.write_f32(static_cast<float>(value.floating));
+        break;
+    case 4:
+        return out.write_string(value.text);
+    case 5:
+        return encode_text_component(out, value.component);
+    case 6:
+        out.write_bool(value.flag);
+        if (value.flag) {
+            return encode_text_component(out, value.component);
+        }
+        break;
+    case 7:
+        return encode_item_stack(out, value.stack);
+    case 8:
+        out.write_bool(value.flag);
+        break;
+    case 9:
+    case 39:
+        out.write_f32(static_cast<float>(value.vector[0]));
+        out.write_f32(static_cast<float>(value.vector[1]));
+        out.write_f32(static_cast<float>(value.vector[2]));
+        break;
+    case 40:
+        for (const auto component : value.vector) {
+            out.write_f32(static_cast<float>(component));
+        }
+        break;
+    case 10:
+        out.write_i64(value.integer);
+        break;
+    case 11:
+        out.write_bool(value.flag);
+        if (value.flag) {
+            out.write_i64(value.integer);
+        }
+        break;
+    case 12:
+    case 14:
+    case 20:
+    case 21:
+    case 22:
+    case 23:
+    case 24:
+    case 25:
+    case 26:
+    case 27:
+    case 28:
+    case 29:
+    case 30:
+    case 31:
+    case 32:
+    case 34:
+    case 35:
+    case 36:
+    case 37:
+    case 38:
+    case 42:
+    case 43:
+        out.write_varint(static_cast<std::uint32_t>(value.integer));
+        break;
+    case 13:
+        out.write_bool(value.flag);
+        if (value.flag) {
+            out.write_varint(static_cast<std::uint32_t>(value.integer));
+        }
+        break;
+    case 15:
+        out.write_varint(static_cast<std::uint32_t>(value.integer));
+        break;
+    case 18:
+        for (const auto id : value.ids) {
+            out.write_varint(id);
+        }
+        break;
+    case 19:
+        out.write_varint(
+            value.flag ? static_cast<std::uint32_t>(value.integer) + 1U : 0U);
+        break;
+    case 33:
+        out.write_bool(value.flag);
+        if (value.flag) {
+            if (auto written{out.write_identifier(value.dimension)}; !written) {
+                return written;
+            }
+            out.write_i64(value.position);
+        }
+        break;
+    case 16:
+    case 17:
+    case 41:
+        return std::unexpected{
+            make_error(error_code::unsupported,
+                       "entity_metadata: serializer is not implemented")};
+    default:
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "entity_metadata: unknown serializer id")};
+    }
+    return status_ok();
+}
+
+[[nodiscard]] auto read_metadata_value(reader &in, std::uint8_t index,
+                                       metadata_value &value) -> status {
+    value = metadata_value{};
+    value.index = index;
+    auto serializer{in.read_varint()};
+    if (!serializer) {
+        return std::unexpected{std::move(serializer.error())};
+    }
+    value.serializer = *serializer;
+    switch (*serializer) {
+    case 0: {
+        auto byte{in.read_u8()};
+        if (!byte) {
+            return std::unexpected{std::move(byte.error())};
+        }
+        value.integer = static_cast<std::int8_t>(*byte);
+        return status_ok();
+    }
+    case 1:
+    case 12:
+    case 14:
+    case 20:
+    case 21:
+    case 22:
+    case 23:
+    case 24:
+    case 25:
+    case 26:
+    case 27:
+    case 28:
+    case 29:
+    case 30:
+    case 31:
+    case 32:
+    case 34:
+    case 35:
+    case 36:
+    case 37:
+    case 38:
+    case 42:
+    case 43: {
+        auto number{in.read_varint()};
+        if (!number) {
+            return std::unexpected{std::move(number.error())};
+        }
+        value.integer = *number;
+        return status_ok();
+    }
+    case 2: {
+        auto number{in.read_varlong()};
+        if (!number) {
+            return std::unexpected{std::move(number.error())};
+        }
+        value.integer = static_cast<std::int64_t>(*number);
+        return status_ok();
+    }
+    case 3: {
+        auto number{in.read_f32()};
+        if (!number) {
+            return std::unexpected{std::move(number.error())};
+        }
+        value.floating = *number;
+        return status_ok();
+    }
+    case 4: {
+        auto text{in.read_string()};
+        if (!text) {
+            return std::unexpected{std::move(text.error())};
+        }
+        value.text = std::move(*text);
+        return status_ok();
+    }
+    case 5:
+        return decode_text_component(in, value.component);
+    case 6: {
+        auto present{in.read_bool()};
+        if (!present) {
+            return std::unexpected{std::move(present.error())};
+        }
+        value.flag = *present;
+        if (*present) {
+            return decode_text_component(in, value.component);
+        }
+        return status_ok();
+    }
+    case 7:
+        return decode_item_stack(in, value.stack);
+    case 8: {
+        auto flag{in.read_bool()};
+        if (!flag) {
+            return std::unexpected{std::move(flag.error())};
+        }
+        value.flag = *flag;
+        return status_ok();
+    }
+    case 9:
+    case 39:
+    case 40: {
+        const auto count{*serializer == 40U ? 4U : 3U};
+        for (std::uint32_t component_index{0}; component_index < count;
+             ++component_index) {
+            auto component{in.read_f32()};
+            if (!component) {
+                return std::unexpected{std::move(component.error())};
+            }
+            value.vector[component_index] = *component;
+        }
+        return status_ok();
+    }
+    case 10: {
+        auto number{in.read_i64()};
+        if (!number) {
+            return std::unexpected{std::move(number.error())};
+        }
+        value.integer = *number;
+        return status_ok();
+    }
+    case 11: {
+        auto present{in.read_bool()};
+        if (!present) {
+            return std::unexpected{std::move(present.error())};
+        }
+        value.flag = *present;
+        if (*present) {
+            auto number{in.read_i64()};
+            if (!number) {
+                return std::unexpected{std::move(number.error())};
+            }
+            value.integer = *number;
+        }
+        return status_ok();
+    }
+    case 13: {
+        auto present{in.read_bool()};
+        if (!present) {
+            return std::unexpected{std::move(present.error())};
+        }
+        value.flag = *present;
+        if (*present) {
+            auto number{in.read_varint()};
+            if (!number) {
+                return std::unexpected{std::move(number.error())};
+            }
+            value.integer = *number;
+        }
+        return status_ok();
+    }
+    case 15: {
+        auto number{in.read_varint()};
+        if (!number) {
+            return std::unexpected{std::move(number.error())};
+        }
+        value.integer = *number;
+        value.flag = *number != 0U;
+        return status_ok();
+    }
+    case 18: {
+        for (auto &id : value.ids) {
+            auto number{in.read_varint()};
+            if (!number) {
+                return std::unexpected{std::move(number.error())};
+            }
+            id = *number;
+        }
+        return status_ok();
+    }
+    case 19: {
+        auto number{in.read_varint()};
+        if (!number) {
+            return std::unexpected{std::move(number.error())};
+        }
+        value.flag = *number != 0U;
+        value.integer =
+            value.flag ? static_cast<std::int64_t>(*number - 1U) : 0;
+        return status_ok();
+    }
+    case 33: {
+        auto present{in.read_bool()};
+        if (!present) {
+            return std::unexpected{std::move(present.error())};
+        }
+        value.flag = *present;
+        if (*present) {
+            auto dimension{in.read_identifier()};
+            auto position{in.read_i64()};
+            if (!dimension || !position) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "entity_metadata: truncated global position")};
+            }
+            value.dimension = std::move(*dimension);
+            value.position = *position;
+        }
+        return status_ok();
+    }
+    case 16:
+    case 17:
+    case 41:
+        return std::unexpected{
+            make_error(error_code::unsupported,
+                       "entity_metadata: serializer is not implemented")};
+    default:
+        return std::unexpected{make_error(
+            error_code::parse_error, "entity_metadata: unknown serializer id")};
+    }
+}
+
+} // namespace
+
+auto encode_entity_metadata(writer &out, const entity_metadata &value)
+    -> status {
+    for (const auto &entry : value.values) {
+        if (auto status{write_metadata_value(out, entry)}; !status) {
+            return status;
+        }
+    }
+    out.write_u8(255);
+    return status_ok();
+}
+
+auto decode_entity_metadata(reader &in, entity_metadata &value) -> status {
+    value.values.clear();
+    while (true) {
+        auto index{in.read_u8()};
+        if (!index) {
+            return std::unexpected{std::move(index.error())};
+        }
+        if (*index == 255U) {
+            return status_ok();
+        }
+        metadata_value entry{};
+        if (auto status{read_metadata_value(in, *index, entry)}; !status) {
+            return status;
+        }
+        value.values.push_back(std::move(entry));
+    }
+}
+
 auto encode_component_predicate(writer &out, const component_predicate &)
     -> status {
     out.write_varint(0); // empty predicate

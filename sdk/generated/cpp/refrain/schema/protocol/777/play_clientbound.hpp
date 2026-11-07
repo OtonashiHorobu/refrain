@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 68ab48bc0e01cef4
+// Schema hash: 959e5112fb541051
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -934,6 +934,14 @@ struct set_display_objective {
     std::uint32_t slot;
     // attributes: #[max(32767)]
     std::string objective_name;
+};
+
+struct set_entity_data {
+    static constexpr std::uint16_t packet_id = 0x65;
+    static constexpr std::string_view packet_name = "set_entity_data";
+
+    std::uint32_t entity_id;
+    ::refrain::net::entity_metadata values;
 };
 
 struct set_entity_link {
@@ -4877,6 +4885,36 @@ struct show_dialog {
     auto value_0 = in.read_string(32767);
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.objective_name = std::move(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_set_entity_data(::refrain::net::writer &out, const set_entity_data &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(value.entity_id);
+  }
+  {
+    if (auto written = ::refrain::net::encode_entity_metadata(out, value.values); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_set_entity_data(::refrain::net::reader &in, set_entity_data &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.entity_id = *value_0;
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_entity_metadata(in, value.values); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }

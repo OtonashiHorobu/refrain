@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 68ab48bc0e01cef4
+// Schema hash: 959e5112fb541051
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_HPP
@@ -22,7 +22,7 @@
 namespace refrain::protocol::v777 {
 
 /// Packets declared for this stage, ordered by flow and id.
-inline constexpr std::array<packet_descriptor, 202> play_packets{{
+inline constexpr std::array<packet_descriptor, 203> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x0, "bundle_delimiter"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x1, "add_entity"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x2, "animate"},
@@ -116,6 +116,7 @@ inline constexpr std::array<packet_descriptor, 202> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x62, "set_cursor_item"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x63, "set_default_spawn_position"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x64, "set_display_objective"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x65, "set_entity_data"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x66, "set_entity_link"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x67, "set_entity_motion"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x68, "set_equipment"},

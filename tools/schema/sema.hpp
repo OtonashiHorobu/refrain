@@ -77,6 +77,8 @@ enum class primitive_kind : std::uint8_t {
     component_predicate,
     /// Merchant trade offer.
     merchant_offer,
+    /// Entity metadata list terminated by the 255 marker.
+    entity_metadata,
     void_type,
 };
 

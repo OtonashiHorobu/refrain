@@ -101,6 +101,8 @@ namespace {
             return "::refrain::net::component_predicate";
         case primitive_kind::merchant_offer:
             return "::refrain::net::merchant_offer";
+        case primitive_kind::entity_metadata:
+            return "::refrain::net::entity_metadata";
         case primitive_kind::void_type:
             return "void";
         }
@@ -719,18 +721,30 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.line("}}");
             return;
         case primitive_kind::component_predicate:
-            writer.line("if (auto written = ::refrain::net::encode_component_predicate("
-                        "out, {}); !written) {{",
-                        expression);
+            writer.line(
+                "if (auto written = ::refrain::net::encode_component_predicate("
+                "out, {}); !written) {{",
+                expression);
             writer.indent();
             writer.line("return written;");
             writer.dedent();
             writer.line("}}");
             return;
         case primitive_kind::merchant_offer:
-            writer.line("if (auto written = ::refrain::net::encode_merchant_offer("
-                        "out, {}); !written) {{",
-                        expression);
+            writer.line(
+                "if (auto written = ::refrain::net::encode_merchant_offer("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::entity_metadata:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_entity_metadata("
+                "out, {}); !written) {{",
+                expression);
             writer.indent();
             writer.line("return written;");
             writer.dedent();
@@ -1164,9 +1178,10 @@ void emit_decode_value(code_writer &writer, const model &program,
             writer.line("}}");
             return;
         case primitive_kind::component_predicate:
-            writer.line("if (auto decoded = ::refrain::net::decode_component_predicate("
-                        "in, {}); !decoded) {{",
-                        target);
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_component_predicate("
+                "in, {}); !decoded) {{",
+                target);
             writer.indent();
             writer.line(
                 "return std::unexpected{{std::move(decoded.error())}};");
@@ -1174,9 +1189,21 @@ void emit_decode_value(code_writer &writer, const model &program,
             writer.line("}}");
             return;
         case primitive_kind::merchant_offer:
-            writer.line("if (auto decoded = ::refrain::net::decode_merchant_offer("
-                        "in, {}); !decoded) {{",
-                        target);
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_merchant_offer("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::entity_metadata:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_entity_metadata("
+                "in, {}); !decoded) {{",
+                target);
             writer.indent();
             writer.line(
                 "return std::unexpected{{std::move(decoded.error())}};");

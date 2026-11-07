@@ -70,6 +70,78 @@ const suite tests = [] {
         }
     };
 
+    "entity metadata round trips common serializers"_test = [] {
+        net::entity_metadata metadata{};
+        net::metadata_value byte_value{};
+        byte_value.index = 0U;
+        byte_value.serializer = 0U;
+        byte_value.integer = -5;
+        metadata.values.push_back(byte_value);
+        net::metadata_value int_value{};
+        int_value.index = 1U;
+        int_value.serializer = 1U;
+        int_value.integer = 300;
+        metadata.values.push_back(int_value);
+        net::metadata_value text_value{};
+        text_value.index = 2U;
+        text_value.serializer = 4U;
+        text_value.text = "hello";
+        metadata.values.push_back(text_value);
+        net::metadata_value component_value{};
+        component_value.index = 3U;
+        component_value.serializer = 5U;
+        component_value.component.text = "Title";
+        metadata.values.push_back(component_value);
+        net::metadata_value stack_value{};
+        stack_value.index = 4U;
+        stack_value.serializer = 7U;
+        stack_value.stack = net::item_stack{.count = 2U, .item_id = 5U};
+        metadata.values.push_back(stack_value);
+        net::metadata_value pos_value{};
+        pos_value.index = 5U;
+        pos_value.serializer = 10U;
+        pos_value.integer = 1234;
+        metadata.values.push_back(pos_value);
+        net::metadata_value villager{};
+        villager.index = 6U;
+        villager.serializer = 18U;
+        villager.ids = {1U, 2U, 3U};
+        metadata.values.push_back(villager);
+        net::metadata_value vector{};
+        vector.index = 7U;
+        vector.serializer = 39U;
+        vector.vector = {1.0, 2.0, 3.0, 0.0};
+        metadata.values.push_back(vector);
+
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_entity_metadata(out, metadata)));
+        net::reader in{bytes};
+        net::entity_metadata decoded{};
+        expect(static_cast<bool>(net::decode_entity_metadata(in, decoded)));
+        expect(decoded.values.size() == metadata.values.size());
+        if (decoded.values.size() == metadata.values.size()) {
+            expect(decoded.values[0].integer == -5);
+            expect(decoded.values[1].integer == 300);
+            expect(decoded.values[2].text == "hello");
+            expect(decoded.values[3].component.text == "Title");
+            expect(decoded.values[4].stack.count == 2U);
+            expect(decoded.values[5].integer == 1234);
+            expect(decoded.values[6].ids[0] == 1U &&
+                   decoded.values[6].ids[2] == 3U);
+            expect(decoded.values[7].vector[2] == 3.0);
+        }
+        expect(in.empty());
+
+        const std::array unsupported{std::byte{0}, std::byte{16}};
+        net::reader unsupported_in{unsupported};
+        net::entity_metadata rejected{};
+        const auto status{
+            net::decode_entity_metadata(unsupported_in, rejected)};
+        expect(!status);
+        expect(status.error().code == refrain::error_code::unsupported);
+    };
+
     "player info update round trips action-gated fields"_test = [] {
         net::player_info_update value{};
         value.actions =

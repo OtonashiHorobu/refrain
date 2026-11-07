@@ -554,6 +554,11 @@ packet set_display_objective = 100 {
     #[max(32767)] objective_name: string;
 }
 
+packet set_entity_data = 101 {
+    entity_id: varint_id;
+    values: entity_metadata;
+}
+
 packet set_entity_link = 102 {
     #[fixed] source_id: i32;
     #[fixed] dest_id: i32;

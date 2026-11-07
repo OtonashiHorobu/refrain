@@ -96,6 +96,8 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "component_predicate";
     case primitive_kind::merchant_offer:
         return "merchant_offer";
+    case primitive_kind::entity_metadata:
+        return "entity_metadata";
     case primitive_kind::void_type:
         return "void";
     }
@@ -140,6 +142,7 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"tracked_waypoint", primitive_kind::tracked_waypoint},
         std::pair{"component_predicate", primitive_kind::component_predicate},
         std::pair{"merchant_offer", primitive_kind::merchant_offer},
+        std::pair{"entity_metadata", primitive_kind::entity_metadata},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -306,6 +309,7 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::tracked_waypoint:
     case primitive_kind::component_predicate:
     case primitive_kind::merchant_offer:
+    case primitive_kind::entity_metadata:
     case primitive_kind::void_type:
         return false;
     }
@@ -350,6 +354,7 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::tracked_waypoint:
     case primitive_kind::component_predicate:
     case primitive_kind::merchant_offer:
+    case primitive_kind::entity_metadata:
     case primitive_kind::void_type:
         return false;
     }
@@ -2287,6 +2292,7 @@ class analyzer {
             case primitive_kind::tracked_waypoint:
             case primitive_kind::component_predicate:
             case primitive_kind::merchant_offer:
+            case primitive_kind::entity_metadata:
                 // Rejected for RIDL in resolve_type(); a wire-only primitive
                 // has no in-process ABI layout.
                 return std::nullopt;
