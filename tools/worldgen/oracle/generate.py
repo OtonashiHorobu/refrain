@@ -949,6 +949,27 @@ def main() -> int:
         (minecraft_feature / "fallen_oak_tree.json").write_text(
             json.dumps(fallen, indent=2) + "\n"
         )
+        pine = read_pack_data(
+            args.server_jar, "data/minecraft/worldgen/feature/pine.json"
+        )
+        (minecraft_feature / "pine.json").write_text(
+            json.dumps(pine, indent=2) + "\n"
+        )
+        (placed_dir / "real_pine.json").write_text(
+            json.dumps(
+                {
+                    "feature": "minecraft:pine",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 230, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
         (placed_dir / "fallen_oak.json").write_text(
             json.dumps(
                 {

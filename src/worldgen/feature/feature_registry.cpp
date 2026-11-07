@@ -925,6 +925,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 foliage_type_kind = foliage_kind::spruce;
             } else if (foliage_name == "minecraft:mega_pine_foliage_placer") {
                 foliage_type_kind = foliage_kind::mega_pine;
+            } else if (foliage_name == "minecraft:pine_foliage_placer") {
+                foliage_type_kind = foliage_kind::pine;
             } else if (foliage_name == "minecraft:fancy_foliage_placer") {
                 foliage_type_kind = foliage_kind::fancy;
             } else if (foliage_name == "minecraft:dark_oak_foliage_placer") {
@@ -967,7 +969,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             const auto rand_a_value = rand_a->as_int64();
             const auto rand_b_value = rand_b->as_int64();
             jint height_value = 0;
-            if (height != nullptr) {
+            if (height != nullptr && foliage_type_kind != foliage_kind::pine) {
                 const auto parsed_height = height->as_int64();
                 if (!parsed_height) {
                     return std::unexpected{parsed_height.error()};
