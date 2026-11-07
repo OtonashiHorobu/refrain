@@ -132,9 +132,9 @@ auto decode_random_spread(const data::json::value &document)
         if (!name) {
             return std::unexpected{name.error()};
         }
-        if (*name == "minecraft:triangular") {
+        if (*name == "minecraft:triangular" || *name == "triangular") {
             placement.spread = spread_type::triangular;
-        } else if (*name != "minecraft:linear") {
+        } else if (*name != "minecraft:linear" && *name != "linear") {
             return std::unexpected{
                 make_error(error_code::unsupported, "unknown spread type")};
         }

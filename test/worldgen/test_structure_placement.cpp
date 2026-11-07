@@ -4,6 +4,7 @@
 
 #include <refrain/data/json.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
+#include <refrain/worldgen/structure/structure_set.hpp>
 
 #include <boost/ut.hpp>
 
@@ -73,5 +74,30 @@ suite<"worldgen/structure-placement"> structure_placement_tests = [] {
         expect(linear.is_structure_chunk(12345, 20, 7));
         expect(!linear.is_structure_chunk(12345, 21, 7));
         expect(linear.is_structure_chunk(-1, 9, 8));
+    };
+};
+
+suite<"worldgen/structure-set"> structure_set_tests = [] {
+    "a structure set decodes entries and a random spread placement"_test = [] {
+        auto document = refrain::data::json::value::parse(
+            R"({"structures":[{"structure":"minecraft:village_plains","weight":2},{"structure":"minecraft:village_taiga","weight":1}],"placement":{"type":"minecraft:random_spread","spacing":34,"separation":8,"salt":10387312,"spread_type":"linear"}})");
+        expect(document.has_value());
+        if (!document) {
+            return;
+        }
+        const auto set =
+            structure::decode_structure_set("minecraft:villages", *document);
+        expect(set.has_value());
+        if (!set) {
+            return;
+        }
+        expect(set->structures.size() == 2U);
+        expect(set->structures[0].structure == "minecraft:village_plains");
+        expect(set->structures[0].weight == 2);
+        expect(set->random_spread.has_value());
+        if (set->random_spread) {
+            expect(set->random_spread->spacing == 34);
+            expect(set->random_spread->separation == 8);
+        }
     };
 };
