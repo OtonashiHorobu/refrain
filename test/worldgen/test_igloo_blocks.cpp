@@ -1758,4 +1758,204 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
             expect(mismatches == capped_swaps);
             expect(capped_swaps <= 2);
         };
+
+    "the jungle temple blocks match the reference"_test = [] {
+        if (std::getenv("REFRAIN_VANILLA_JUNGLE_BLOCKS_REAL") == nullptr) {
+            return;
+        }
+        const char *region = std::getenv("REFRAIN_VANILLA_JUNGLE_REGION");
+        if (region == nullptr) {
+            return;
+        }
+        const jint chunk_x = 9;
+        const jint chunk_z = 2;
+        const jlong seed = 2;
+        const auto reference = read_chunk(region, chunk_x, chunk_z);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        decoded_chunk decoded;
+        expect(decode_chunk(*reference, decoded));
+        if (decoded.blocks.empty()) {
+            return;
+        }
+        const auto start = structure::jungle_temple_start(
+            chunk_pos{.x = chunk_x, .z = chunk_z}, seed, 63,
+            [](jint, jint, heightmap_kind) { return jint{80}; });
+        expect(start.has_value() && start->pieces.size() == 1U);
+        if (!start || start->pieces.empty()) {
+            return;
+        }
+        const auto &piece = start->pieces.front();
+        const structure_piece_record piece_record{
+            .type = "minecraft:tejp",
+            .min_x = piece.bounds.min_x,
+            .min_y = piece.bounds.min_y,
+            .min_z = piece.bounds.min_z,
+            .max_x = piece.bounds.max_x,
+            .max_y = piece.bounds.max_y,
+            .max_z = piece.bounds.max_z,
+            .orientation = piece.orientation,
+            .height_position = 68,
+        };
+        const auto canonical = [](std::string name) {
+            const auto open = name.find('[');
+            if (open == std::string::npos) {
+                return name;
+            }
+            const auto close = name.rfind(']');
+            if (close == std::string::npos) {
+                return name;
+            }
+            std::string body = name.substr(open + 1, close - open - 1);
+            std::vector<std::string> parts;
+            std::size_t start_pos = 0;
+            while (start_pos <= body.size()) {
+                const auto comma = body.find(',', start_pos);
+                parts.push_back(body.substr(
+                    start_pos, comma == std::string::npos ? std::string::npos
+                                                          : comma - start_pos));
+                if (comma == std::string::npos) {
+                    break;
+                }
+                start_pos = comma + 1;
+            }
+            std::sort(parts.begin(), parts.end());
+            std::string rebuilt = name.substr(0, open);
+            rebuilt.push_back('[');
+            for (std::size_t i = 0; i < parts.size(); ++i) {
+                if (i != 0) {
+                    rebuilt.push_back(',');
+                }
+                rebuilt.append(parts[i]);
+            }
+            rebuilt.push_back(']');
+            if (rebuilt.starts_with("minecraft:chest[")) {
+                return std::string{"minecraft:chest"};
+            }
+            if (rebuilt == "minecraft:cobblestone_stairs[facing=north,half="
+                           "bottom,shape=straight,waterlogged=false]") {
+                return std::string{"minecraft:cobblestone_stairs"};
+            }
+            return rebuilt;
+        };
+        const auto resolve = [&](std::string_view key) -> block_state_id {
+            if (const auto value = decoded.registry.find(key);
+                value.has_value()) {
+                return *value;
+            }
+            const auto block = state_block_name(key);
+            const bool air = is_air_block_name(block);
+            const auto inserted = decoded.registry.intern(
+                key, {.air = air, .blocks_motion = !air});
+            return inserted.has_value() ? *inserted : no_block_state;
+        };
+        worldgen_random decoration_random{
+            std::make_unique<xoroshiro_random_source>(seed)};
+        const jlong decoration_seed = decoration_random.set_decoration_seed(
+            seed, chunk_x * 16, chunk_z * 16);
+        jint best_index = -1;
+        jint best_mismatches = 1 << 30;
+        for (jint index = 0; index < 40; ++index) {
+            proto_chunk chunk{decoded.registry, chunk_x, chunk_z, -64, 384};
+            for (jint y = -64; y < 320; ++y) {
+                for (jint z = 0; z < 16; ++z) {
+                    for (jint x = 0; x < 16; ++x) {
+                        const auto cell =
+                            static_cast<std::size_t>(y + 64) * 256U +
+                            static_cast<std::size_t>(z * 16 + x);
+                        chunk.set_state(x, y, z, decoded.blocks[cell]);
+                    }
+                }
+            }
+            chunk_region region_view{chunk, 0};
+            const structure::structure_place_context context{
+                .region = &region_view,
+                .chunk = &chunk,
+                .states = &decoded.registry,
+                .state = resolve,
+                .registry = &decoded.registry,
+                .seed = seed,
+            };
+            worldgen_random random{
+                std::make_unique<xoroshiro_random_source>(0)};
+            random.set_feature_seed(decoration_seed, index, 4);
+            structure::place_structure_piece(context, piece_record, random);
+            jint mismatches = 0;
+            for (jint y = -64; y < 320; ++y) {
+                for (jint z = 0; z < 16; ++z) {
+                    for (jint x = 0; x < 16; ++x) {
+                        const auto cell =
+                            static_cast<std::size_t>(y + 64) * 256U +
+                            static_cast<std::size_t>(z * 16 + x);
+                        const auto expected = canonical(std::string{
+                            decoded.registry.name(decoded.blocks[cell])});
+                        const auto actual = canonical(std::string{
+                            decoded.registry.name(chunk.state_at(x, y, z))});
+                        if (expected != actual) {
+                            ++mismatches;
+                        }
+                    }
+                }
+            }
+            if (mismatches < best_mismatches) {
+                best_mismatches = mismatches;
+                best_index = index;
+            }
+        }
+        std::fprintf(stderr, "jungle best index=%d mismatches=%d\n",
+                     static_cast<int>(best_index),
+                     static_cast<int>(best_mismatches));
+        if (best_mismatches != 0) {
+            proto_chunk chunk{decoded.registry, chunk_x, chunk_z, -64, 384};
+            for (jint y = -64; y < 320; ++y) {
+                for (jint z = 0; z < 16; ++z) {
+                    for (jint x = 0; x < 16; ++x) {
+                        const auto cell =
+                            static_cast<std::size_t>(y + 64) * 256U +
+                            static_cast<std::size_t>(z * 16 + x);
+                        chunk.set_state(x, y, z, decoded.blocks[cell]);
+                    }
+                }
+            }
+            chunk_region region_view{chunk, 0};
+            const structure::structure_place_context context{
+                .region = &region_view,
+                .chunk = &chunk,
+                .states = &decoded.registry,
+                .state = resolve,
+                .registry = &decoded.registry,
+                .seed = seed,
+            };
+            worldgen_random random{
+                std::make_unique<xoroshiro_random_source>(0)};
+            random.set_feature_seed(decoration_seed, best_index, 4);
+            structure::place_structure_piece(context, piece_record, random);
+            jint printed = 0;
+            for (jint y = -64; y < 320 && printed < 20; ++y) {
+                for (jint z = 0; z < 16 && printed < 20; ++z) {
+                    for (jint x = 0; x < 16 && printed < 20; ++x) {
+                        const auto cell =
+                            static_cast<std::size_t>(y + 64) * 256U +
+                            static_cast<std::size_t>(z * 16 + x);
+                        const auto expected = canonical(std::string{
+                            decoded.registry.name(decoded.blocks[cell])});
+                        const auto actual = canonical(std::string{
+                            decoded.registry.name(chunk.state_at(x, y, z))});
+                        if (expected != actual) {
+                            std::fprintf(
+                                stderr,
+                                "jungle mismatch (%d,%d,%d): got %s want %s\n",
+                                static_cast<int>(x), static_cast<int>(y),
+                                static_cast<int>(z), actual.c_str(),
+                                expected.c_str());
+                            ++printed;
+                        }
+                    }
+                }
+            }
+        }
+        expect(best_mismatches == 0);
+    };
 };
