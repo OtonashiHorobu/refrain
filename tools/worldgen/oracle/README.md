@@ -38,6 +38,18 @@ REFRAIN_VANILLA_SURFACE_REGION=/tmp/t2surface/world/dimensions/minecraft/overwor
     ./build/Release/bin/refrain-tests
 ```
 
+To exercise the surface pass against real multi-noise biomes, `--biomes` keeps
+the normal overworld preset but strips carvers and features from every biome:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --biomes \
+    --server-jar /path/to/server.jar --seed 12345 --output /tmp/t2biomes
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_SURFACE_REGION=/tmp/t2biomes/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_VANILLA_SURFACE_BIOMES=1 \
+    ./build/Release/bin/refrain-tests
+```
+
 The biome oracle uses a plain overworld instead: `--plain` skips the data pack,
 so the normal multi-noise biome source writes real biomes (surface rules,
 features and structures still run but do not affect the biome grid):

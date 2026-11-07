@@ -275,10 +275,15 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
 
         auto root_factory = new_positional_factory(algorithm::xoroshiro, seed);
         multi_noise_biome_source source{overworld_parameters()};
-        const auto parameters = overworld_parameters();
+        const bool real_biomes =
+            std::getenv("REFRAIN_VANILLA_SURFACE_BIOMES") != nullptr;
         std::set<std::string> possible_biomes;
-        for (const auto &parameter : parameters) {
-            possible_biomes.insert(parameter.biome);
+        if (real_biomes) {
+            for (const auto &parameter : overworld_parameters()) {
+                possible_biomes.insert(parameter.biome);
+            }
+        } else {
+            possible_biomes.insert("oracle:terrain");
         }
 
         constexpr std::array<std::array<jint, 2>, 5> chunks{{
@@ -387,10 +392,17 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                                   biome_manager::obfuscate_seed(seed)};
 
             material_providers providers;
-            providers.biome = [&manager, &source](jint x, jint y,
-                                                  jint z) -> std::string_view {
-                return source.biome(manager.get_biome(x, y, z));
-            };
+            if (real_biomes) {
+                providers.biome = [&manager,
+                                   &source](jint x, jint y,
+                                            jint z) -> std::string_view {
+                    return source.biome(manager.get_biome(x, y, z));
+                };
+            } else {
+                providers.biome = [](jint, jint, jint) -> std::string_view {
+                    return "oracle:terrain";
+                };
+            }
             providers.preliminary_surface = [&settings, &context](jint x,
                                                                   jint z) {
                 return settings->router.chunk_surface_level->sample_value(
