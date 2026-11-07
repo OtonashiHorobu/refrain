@@ -277,13 +277,17 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
         multi_noise_biome_source source{overworld_parameters()};
         const bool real_biomes =
             std::getenv("REFRAIN_VANILLA_SURFACE_BIOMES") != nullptr;
+        const char *fixed_biome_raw =
+            std::getenv("REFRAIN_VANILLA_SURFACE_FIXED_BIOME");
+        const std::string fixed_biome =
+            fixed_biome_raw == nullptr ? "oracle:terrain" : fixed_biome_raw;
         std::set<std::string> possible_biomes;
         if (real_biomes) {
             for (const auto &parameter : overworld_parameters()) {
                 possible_biomes.insert(parameter.biome);
             }
         } else {
-            possible_biomes.insert("oracle:terrain");
+            possible_biomes.insert(fixed_biome);
         }
 
         constexpr std::array<std::array<jint, 2>, 5> chunks{{
@@ -399,8 +403,9 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                     return source.biome(manager.get_biome(x, y, z));
                 };
             } else {
-                providers.biome = [](jint, jint, jint) -> std::string_view {
-                    return "oracle:terrain";
+                providers.biome = [fixed_biome](jint, jint,
+                                                jint) -> std::string_view {
+                    return fixed_biome;
                 };
             }
             providers.preliminary_surface = [&settings, &context](jint x,

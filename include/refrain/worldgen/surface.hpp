@@ -38,6 +38,7 @@ inline constexpr state_id no_state = std::numeric_limits<state_id>::max();
 struct state_properties {
     bool air{false};
     bool fluid{false};
+    bool water{false};
 };
 
 /// Interns block-state keys. The chunk and the material rules share one table,
@@ -148,6 +149,12 @@ class material_context {
     [[nodiscard]] auto surface_secondary() -> double;
     [[nodiscard]] auto min_surface_level() -> jint;
     [[nodiscard]] auto band(jint x, jint y, jint z) -> state_id;
+
+    /// `MaterialSystem.erodedBadlandsExtension`.
+    void eroded_badlands_extension(
+        jint block_x, jint block_z, jint height, jint min_y,
+        const std::function<state_id(jint, jint, jint)> &get,
+        const std::function<void(jint, jint, jint, state_id)> &set);
     [[nodiscard]] auto resolve_anchor(const vertical_anchor &anchor) const
         -> jint;
     [[nodiscard]] auto random_factory(std::string_view name)
@@ -250,6 +257,12 @@ class surface_system {
     [[nodiscard]] auto surface_secondary(jint x, jint z) -> double;
     [[nodiscard]] auto band(jint x, jint y, jint z) -> state_id;
 
+    /// `MaterialSystem.erodedBadlandsExtension`.
+    void eroded_badlands_extension(
+        jint block_x, jint block_z, jint height, jint min_y,
+        const std::function<state_id(jint, jint, jint)> &get,
+        const std::function<void(jint, jint, jint, state_id)> &set);
+
     /// Runs one chunk's surface pass. `get`/`set` use absolute coordinates;
     /// `world_surface` is the write-time heightmap indexed by `x + z*16`.
     [[nodiscard]] auto build_surface(
@@ -269,6 +282,9 @@ class surface_system {
     const noise_stack *surface_noise_{nullptr};
     const noise_stack *surface_secondary_noise_{nullptr};
     const noise_stack *clay_bands_offset_noise_{nullptr};
+    const noise_stack *badlands_surface_noise_{nullptr};
+    const noise_stack *badlands_pillar_noise_{nullptr};
+    const noise_stack *badlands_pillar_roof_noise_{nullptr};
     std::array<state_id, 192> clay_bands_{};
 };
 

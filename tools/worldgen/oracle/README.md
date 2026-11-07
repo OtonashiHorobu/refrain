@@ -50,6 +50,18 @@ REFRAIN_VANILLA_SURFACE_BIOMES=1 \
     ./build/Release/bin/refrain-tests
 ```
 
+`--fixed-biome` changes the fixed biome of the surface world (the real biome is
+copied with empty carvers/features), for example eroded badlands:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --surface --fixed-biome minecraft:eroded_badlands \
+    --server-jar /path/to/server.jar --seed 12345 --output /tmp/t2badlands
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_SURFACE_REGION=/tmp/t2badlands/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_VANILLA_SURFACE_FIXED_BIOME=minecraft:eroded_badlands \
+    ./build/Release/bin/refrain-tests
+```
+
 The biome oracle uses a plain overworld instead: `--plain` skips the data pack,
 so the normal multi-noise biome source writes real biomes (surface rules,
 features and structures still run but do not affect the biome grid):
