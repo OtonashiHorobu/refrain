@@ -42,6 +42,7 @@ using refrain::worldgen::feature::place_on_ground_decorator;
 using refrain::worldgen::feature::placed_feature_document;
 using refrain::worldgen::feature::placed_feature_runtime;
 using refrain::worldgen::feature::placement_context;
+using refrain::worldgen::feature::shelf_mushroom_decorator;
 using refrain::worldgen::feature::simple_block_feature;
 using refrain::worldgen::feature::simple_state;
 using refrain::worldgen::feature::spring_feature;
@@ -557,6 +558,49 @@ suite<"worldgen/placement-water"> placement_water_tests = [] {
                                block_pos{.x = 0, .y = 0, .z = 0}, out);
             expect(out.empty());
         }
+    };
+};
+
+suite<"worldgen/shelf-mushroom"> shelf_mushroom_tests = [] {
+    "shelf mushrooms attach to standing trunk sides"_test = [] {
+        block_state_registry registry;
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 1};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 32,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        const std::vector<block_pos> logs{{.x = 8, .y = 5, .z = 8},
+                                          {.x = 8, .y = 6, .z = 8},
+                                          {.x = 8, .y = 7, .z = 8}};
+        const std::vector<block_pos> leaves{};
+        shelf_mushroom_decorator decorator{1.0F};
+        const tree_decorator_context decorator_context{.context = context,
+                                                       .states = registry,
+                                                       .random = random,
+                                                       .logs = logs,
+                                                       .leaves = leaves};
+        decorator.place(decorator_context);
+        std::size_t mushrooms = 0;
+        for (jint y = 0; y < 32; ++y) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint z = 0; z < 16; ++z) {
+                    mushrooms += registry.name(chunk.state_at(x, y, z))
+                                     .starts_with("minecraft:shelf_mushroom");
+                }
+            }
+        }
+        expect(mushrooms > 0U);
     };
 };
 
