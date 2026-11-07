@@ -634,6 +634,20 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 if (decorator_name == "minecraft:trunk_vine") {
                     decoded_decorators.push_back(
                         std::make_unique<trunk_vine_decorator>());
+                } else if (decorator_name == "minecraft:beehive") {
+                    const auto *probability = entry.find("probability");
+                    if (probability == nullptr) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "beehive has no probability")};
+                    }
+                    const auto value = probability->as_double();
+                    if (!value) {
+                        return std::unexpected{value.error()};
+                    }
+                    decoded_decorators.push_back(
+                        std::make_unique<beehive_decorator>(
+                            static_cast<float>(*value)));
                 } else if (decorator_name == "minecraft:alter_ground") {
                     const auto *provider_value = entry.find("provider");
                     if (provider_value == nullptr) {
@@ -866,7 +880,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                     std::move(spruce_trunk_height), std::move(mega_pine_crown),
                     height_value, limit, lower, upper, three_layers,
                     upper_limit, middle, has_min_clipped, min_clipped,
-                    ignore_vines));
+                    ignore_vines, std::move(decoded_decorators)));
             continue;
         }
         return std::unexpected{

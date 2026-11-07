@@ -128,20 +128,27 @@ auto child(const data::nbt::compound *entries, std::string_view key)
     return found == entries->end() ? nullptr : &found->second;
 }
 
-auto canonical_state_name(std::string_view name) -> std::string_view {
+auto canonical_state_name(std::string_view name) -> std::string {
     if (name.size() > 8 && name.ends_with("[axis=y]")) {
         const auto base = name.substr(0, name.size() - 8);
         if (base.ends_with("_log") || base.ends_with("_stem") ||
             base.ends_with("_wood")) {
-            return base;
+            return std::string{base};
         }
+    }
+    constexpr std::string_view honey_default = ",honey_level=0]";
+    if (name.ends_with(honey_default)) {
+        std::string canonical{
+            name.substr(0, name.size() - honey_default.size())};
+        canonical.push_back(']');
+        return canonical;
     }
     constexpr std::string_view leaf_defaults =
         "[distance=7,persistent=false,waterlogged=false]";
     if (name.size() > leaf_defaults.size() && name.ends_with(leaf_defaults)) {
-        return name.substr(0, name.size() - leaf_defaults.size());
+        return std::string{name.substr(0, name.size() - leaf_defaults.size())};
     }
-    return name;
+    return std::string{name};
 }
 
 auto decode_expected(const data::nbt::value &root, block_states &states)

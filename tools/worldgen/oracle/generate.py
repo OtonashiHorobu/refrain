@@ -364,6 +364,7 @@ def main() -> int:
             "oracle:real_jungle",
             "oracle:mega_tree",
             "oracle:real_mega_pine",
+            "oracle:bee_tree",
         ]
         biome_dir = pack / "data/oracle/worldgen/biome"
         biome_dir.mkdir(parents=True)
@@ -819,6 +820,62 @@ def main() -> int:
         )
         (provider_dir / "podzol_beneath_tree.json").write_text(
             json.dumps(podzol_provider, indent=2) + "\n"
+        )
+        (feature_dir / "bee_tree.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:tree",
+                    "trunk_provider": {
+                        "id": "minecraft:oak_log",
+                        "properties": {"axis": "y"},
+                    },
+                    "trunk_placer": {
+                        "type": "minecraft:straight_trunk_placer",
+                        "base_height": 5,
+                        "height_rand_a": 2,
+                        "height_rand_b": 0,
+                    },
+                    "foliage_provider": {
+                        "id": "minecraft:oak_leaves",
+                        "properties": {
+                            "distance": "7",
+                            "persistent": "false",
+                            "waterlogged": "false",
+                        },
+                    },
+                    "foliage_placer": {
+                        "type": "minecraft:blob_foliage_placer",
+                        "radius": 2,
+                        "offset": 0,
+                        "height": 3,
+                    },
+                    "minimum_size": {
+                        "type": "minecraft:two_layers_feature_size"
+                    },
+                    "decorators": [
+                        {"type": "minecraft:beehive", "probability": 1.0}
+                    ],
+                    "ignore_vines": True,
+                    "below_trunk_provider": {"id": "minecraft:dirt"},
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "bee_tree.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:bee_tree",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 130, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
         )
         (placed_dir / "real_mega_pine.json").write_text(
             json.dumps(

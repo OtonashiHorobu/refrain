@@ -172,6 +172,56 @@ void leave_vine_decorator::place(const tree_decorator_context &context) const {
     }
 }
 
+void beehive_decorator::place(const tree_decorator_context &context) const {
+    if (context.logs.empty()) {
+        return;
+    }
+    if (context.random.next_float() >= probability_) {
+        return;
+    }
+    const jint hive_y =
+        context.leaves.empty()
+            ? std::min(context.logs.front().y + 1 + context.random.next_int(3),
+                       context.logs.back().y)
+            : std::max(context.leaves.front().y - 1,
+                       context.logs.front().y + 1);
+    std::vector<block_pos> placements;
+    for (const auto &log : context.logs) {
+        if (log.y != hive_y) {
+            continue;
+        }
+        placements.push_back({.x = log.x + 1, .y = log.y, .z = log.z});
+        placements.push_back({.x = log.x, .y = log.y, .z = log.z + 1});
+        placements.push_back({.x = log.x - 1, .y = log.y, .z = log.z});
+    }
+    for (std::size_t i = placements.size(); i > 1; --i) {
+        const auto swap_to = static_cast<std::size_t>(
+            context.random.next_int(static_cast<jint>(i)));
+        std::swap(placements[i - 1], placements[swap_to]);
+    }
+    for (const auto &position : placements) {
+        const block_pos south{
+            .x = position.x, .y = position.y, .z = position.z + 1};
+        if (!context.is_air(position) || !context.is_air(south)) {
+            continue;
+        }
+        auto key = std::string{"minecraft:bee_nest[facing=south]"};
+        auto found = context.states.find(key);
+        if (!found) {
+            const auto interned = context.states.intern(
+                key, state_traits{.air = false,
+                                  .blocks_motion = true,
+                                  .blocks_motion_no_leaves = true});
+            if (!interned) {
+                return;
+            }
+            found = *interned;
+        }
+        context.set_block(position, *found);
+        return;
+    }
+}
+
 void alter_ground_decorator::place_block_at(
     const tree_decorator_context &context, const block_pos &pos) const {
     for (jint dy = 2; dy >= -3; --dy) {
