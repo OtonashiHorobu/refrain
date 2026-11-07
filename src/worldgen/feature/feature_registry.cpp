@@ -97,6 +97,31 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       *state, schedule_tick));
             continue;
         }
+        if (*type == "minecraft:disk") {
+            const auto *state_provider =
+                document.document.find("state_provider");
+            const auto *target = document.document.find("target");
+            const auto *radius = document.document.find("radius");
+            const auto *half_height = document.document.find("half_height");
+            if (state_provider == nullptr || target == nullptr ||
+                radius == nullptr || half_height == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "disk feature is incomplete")};
+            }
+            auto state = decode_simple_state(*state_provider, *states_);
+            auto predicate = decode_block_predicate(*target, *states_);
+            auto radius_provider = provider::int_provider::decode(*radius);
+            const auto half = half_height->as_int64();
+            if (!state || !predicate || !radius_provider || !half) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "disk feature is invalid")};
+            }
+            features_.emplace(id, std::make_unique<disk_feature>(
+                                      *state, std::move(*predicate),
+                                      std::move(*radius_provider),
+                                      static_cast<jint>(*half)));
+            continue;
+        }
         return std::unexpected{
             make_error(error_code::unsupported, "unsupported feature type")};
     }
