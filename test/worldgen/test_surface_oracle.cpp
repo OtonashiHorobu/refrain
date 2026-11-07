@@ -174,6 +174,32 @@ auto decode_expected(const data::nbt::value &root, block_states &states)
                     return std::nullopt;
                 }
                 name = std::string{*id_text};
+                const auto *properties = child(compound, "properties");
+                if (properties != nullptr) {
+                    const auto *property_map = properties->as_compound();
+                    if (property_map == nullptr) {
+                        return std::nullopt;
+                    }
+                    std::vector<std::pair<std::string, std::string>> sorted;
+                    for (const auto &[property, raw] : *property_map) {
+                        const auto property_text = raw.as_string();
+                        if (!property_text) {
+                            return std::nullopt;
+                        }
+                        sorted.emplace_back(property, *property_text);
+                    }
+                    std::sort(sorted.begin(), sorted.end());
+                    name.push_back('[');
+                    for (std::size_t i = 0; i < sorted.size(); ++i) {
+                        if (i != 0) {
+                            name.push_back(',');
+                        }
+                        name.append(sorted[i].first);
+                        name.push_back('=');
+                        name.append(sorted[i].second);
+                    }
+                    name.push_back(']');
+                }
             } else {
                 return std::nullopt;
             }
