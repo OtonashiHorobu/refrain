@@ -1009,7 +1009,7 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
         expect(mismatches == 0);
     };
 
-    "the beached shipwreck blocks match the reference"_test = [] {
+    "shipwreck blocks match the reference"_test = [] {
         if (std::getenv("REFRAIN_VANILLA_WRECK_BLOCKS_REAL") == nullptr) {
             return;
         }
@@ -1022,6 +1022,11 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
         jint chunk_z = 8;
         jlong seed = 1;
         jint template_y = 57;
+        bool beached = true;
+        if (const char *value = std::getenv("REFRAIN_VANILLA_WRECK_BEACHED");
+            value != nullptr) {
+            beached = std::atoi(value) != 0;
+        }
         if (const char *value = std::getenv("REFRAIN_VANILLA_WRECK_CHUNK_X");
             value != nullptr) {
             chunk_x = std::atoi(value);
@@ -1051,7 +1056,7 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
         structure::structure_template_manager manager{templates_root,
                                                       decoded.registry};
         auto start = structure::shipwreck_start(
-            chunk_pos{.x = chunk_x, .z = chunk_z}, seed, manager, true,
+            chunk_pos{.x = chunk_x, .z = chunk_z}, seed, manager, beached,
             [](jint, jint, heightmap_kind) { return jint{70}; });
         expect(start.pieces.size() == 1U);
         if (start.pieces.empty()) {
@@ -1116,14 +1121,37 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
                     .pivot = piece.template_pivot,
                 },
                 piece.template_origin);
-            for (jint y = std::max(bounds.min_y, 55);
-                 y <= std::min(bounds.max_y, 70); ++y) {
+            const auto natural = [](std::string_view name) {
+                return name == "minecraft:stone" ||
+                       name == "minecraft:deepslate" ||
+                       name == "minecraft:dirt" ||
+                       name == "minecraft:grass_block" ||
+                       name == "minecraft:sand" || name == "minecraft:gravel" ||
+                       name == "minecraft:sandstone" ||
+                       name == "minecraft:water" || name == "minecraft:air" ||
+                       name == "minecraft:andesite" ||
+                       name == "minecraft:diorite" ||
+                       name == "minecraft:granite" ||
+                       name == "minecraft:tuff" || name == "minecraft:clay";
+            };
+            for (jint y = bounds.min_y; y <= std::min(bounds.max_y, 70); ++y) {
                 for (jint z = std::max(bounds.min_z, chunk_z * 16);
                      z <= std::min(bounds.max_z, chunk_z * 16 + 15); ++z) {
                     for (jint x = std::max(bounds.min_x, chunk_x * 16);
                          x <= std::min(bounds.max_x, chunk_x * 16 + 15); ++x) {
+                        const auto cell =
+                            static_cast<std::size_t>(y + 64) * 256U +
+                            static_cast<std::size_t>((z & 15) * 16 + (x & 15));
+                        const auto reference_name = std::string{
+                            decoded.registry.name(decoded.blocks[cell])};
+                        if (natural(reference_name)) {
+                            continue;
+                        }
+                        const bool was_water =
+                            reference_name.find("waterlogged=true") !=
+                            std::string::npos;
                         chunk.set_state(x & 15, y, z & 15,
-                                        y <= 62 ? *water : *air_state);
+                                        was_water ? *water : *air_state);
                     }
                 }
             }
@@ -1182,7 +1210,7 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
                 }
                 (void)remap_misses;
                 if (water_id && air_id) {
-                    for (jint y = std::max(wreck_bounds.min_y, 55);
+                    for (jint y = wreck_bounds.min_y;
                          y <= std::min(wreck_bounds.max_y, 70); ++y) {
                         for (jint z = std::max(wreck_bounds.min_z, cz * 16);
                              z <= std::min(wreck_bounds.max_z, cz * 16 + 15);
@@ -1191,9 +1219,34 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
                                  x <=
                                  std::min(wreck_bounds.max_x, cx * 16 + 15);
                                  ++x) {
+                                const auto cell =
+                                    static_cast<std::size_t>(y + 64) * 256U +
+                                    static_cast<std::size_t>((z & 15) * 16 +
+                                                             (x & 15));
+                                const auto name =
+                                    loaded->registry.name(loaded->blocks[cell]);
+                                if (name == "minecraft:stone" ||
+                                    name == "minecraft:deepslate" ||
+                                    name == "minecraft:dirt" ||
+                                    name == "minecraft:grass_block" ||
+                                    name == "minecraft:sand" ||
+                                    name == "minecraft:gravel" ||
+                                    name == "minecraft:sandstone" ||
+                                    name == "minecraft:water" ||
+                                    name == "minecraft:air" ||
+                                    name == "minecraft:andesite" ||
+                                    name == "minecraft:diorite" ||
+                                    name == "minecraft:granite" ||
+                                    name == "minecraft:tuff" ||
+                                    name == "minecraft:clay") {
+                                    continue;
+                                }
+                                const bool was_water =
+                                    name.find("waterlogged=true") !=
+                                    std::string::npos;
                                 neighbour->set_state(x & 15, y, z & 15,
-                                                     y <= 62 ? *water_id
-                                                             : *air_id);
+                                                     was_water ? *water_id
+                                                               : *air_id);
                             }
                         }
                     }
