@@ -850,9 +850,44 @@ auto transform_state(block_state_registry &states, block_state_id state,
         return name == "north" || name == "south" || name == "east" ||
                name == "west" || name == "up" || name == "down";
     };
+    // Stair shapes mirror with the block's own rule before the generic
+    // facing transform: LEFT_RIGHT swaps both left/right pairs for Z-axis
+    // facings, FRONT_BACK swaps only the outer pair for X-axis facings.
+    std::string stair_shape{};
+    std::string original_facing{};
+    if (parsed.name.ends_with("_stairs")) {
+        for (const auto &[property, value] : parsed.properties) {
+            if (property == "shape") {
+                stair_shape = value;
+            } else if (property == "facing") {
+                original_facing = value;
+            }
+        }
+        const bool z_axis =
+            original_facing == "north" || original_facing == "south";
+        const bool x_axis =
+            original_facing == "east" || original_facing == "west";
+        const auto swap = [&](std::string_view left, std::string_view right) {
+            if (stair_shape == left) {
+                stair_shape = right;
+            } else if (stair_shape == right) {
+                stair_shape = left;
+            }
+        };
+        if (transform.mirror == template_mirror::left_right && z_axis) {
+            swap("outer_left", "outer_right");
+            swap("inner_left", "inner_right");
+        } else if (transform.mirror == template_mirror::front_back && x_axis) {
+            swap("outer_left", "outer_right");
+        }
+    }
     std::vector<std::pair<std::string, std::string>> properties;
     properties.reserve(parsed.properties.size());
     for (const auto &[property, value] : parsed.properties) {
+        if (property == "shape" && !stair_shape.empty()) {
+            properties.emplace_back(property, stair_shape);
+            continue;
+        }
         if (property == "facing") {
             properties.emplace_back(
                 property, std::string{rotate_direction(

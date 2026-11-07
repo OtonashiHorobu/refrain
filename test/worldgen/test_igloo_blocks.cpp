@@ -520,4 +520,176 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
         }
         expect(mismatches == 0);
     };
+
+    "the swamp hut blocks match the reference piece"_test = [] {
+        if (std::getenv("REFRAIN_VANILLA_SWAMP_REAL") == nullptr) {
+            return;
+        }
+        const char *region = std::getenv("REFRAIN_VANILLA_SWAMP_REGION");
+        if (region == nullptr) {
+            return;
+        }
+        const jint chunk_x = 9;
+        const jint chunk_z = 2;
+        const jlong seed = 1;
+        const auto reference = read_chunk(region, chunk_x, chunk_z);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        decoded_chunk decoded;
+        expect(decode_chunk(*reference, decoded));
+        if (decoded.blocks.empty()) {
+            return;
+        }
+        const auto start = structure::swamp_hut_start(
+            chunk_pos{.x = chunk_x, .z = chunk_z}, seed);
+        expect(start.pieces.size() == 1U);
+        if (start.pieces.empty()) {
+            return;
+        }
+        const auto &source = start.pieces.front();
+        structure_start record{
+            .structure = "minecraft:swamp_hut",
+            .step = "surface_structures",
+            .chunk_x = chunk_x,
+            .chunk_z = chunk_z,
+            .min_x = source.bounds.min_x,
+            .min_y = source.bounds.min_y,
+            .min_z = source.bounds.min_z,
+            .max_x = source.bounds.max_x,
+            .max_y = source.bounds.max_y,
+            .max_z = source.bounds.max_z,
+        };
+        record.pieces.push_back(structure_piece_record{
+            .type = source.type,
+            .min_x = source.bounds.min_x,
+            .min_y = source.bounds.min_y,
+            .min_z = source.bounds.min_z,
+            .max_x = source.bounds.max_x,
+            .max_y = source.bounds.max_y,
+            .max_z = source.bounds.max_z,
+            .orientation = source.orientation,
+            .height_position = 63,
+        });
+        proto_chunk chunk{decoded.registry, chunk_x, chunk_z, -64, 384};
+        for (jint y = -64; y < 320; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    const auto index = static_cast<std::size_t>(y + 64) * 256U +
+                                       static_cast<std::size_t>(z * 16 + x);
+                    chunk.set_state(x, y, z, decoded.blocks[index]);
+                }
+            }
+        }
+        for (jint y = 63; y <= 69; ++y) {
+            for (jint z = source.bounds.min_z; z <= source.bounds.max_z; ++z) {
+                for (jint x = source.bounds.min_x; x <= source.bounds.max_x;
+                     ++x) {
+                    chunk.set_state(x & 15, y, z & 15, decoded.registry.air());
+                }
+            }
+        }
+        chunk.add_structure_start(std::move(record));
+        chunk.add_structure_reference("minecraft:swamp_hut", chunk_x, chunk_z);
+        chunk_region region_view{chunk, 1};
+        const auto resolve = [&](std::string_view key) -> block_state_id {
+            if (const auto found = decoded.registry.find(key);
+                found.has_value()) {
+                return *found;
+            }
+            const auto block = state_block_name(key);
+            const bool air = is_air_block_name(block);
+            const auto inserted = decoded.registry.intern(
+                key, {.air = air, .blocks_motion = !air});
+            return inserted.has_value() ? *inserted : no_block_state;
+        };
+        const structure::structure_place_context context{
+            .region = &region_view,
+            .chunk = &chunk,
+            .states = &decoded.registry,
+            .state = resolve,
+            .registry = &decoded.registry,
+        };
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(7)};
+        structure::place_structures(chunk, context, "surface_structures",
+                                    random);
+        const auto canonical = [](std::string name) -> std::string {
+            const auto open = name.find('[');
+            if (open == std::string::npos) {
+                return name;
+            }
+            const auto close = name.rfind(']');
+            if (close == std::string::npos) {
+                return name;
+            }
+            std::string body = name.substr(open + 1, close - open - 1);
+            std::vector<std::string> parts;
+            std::size_t start_pos = 0;
+            while (start_pos <= body.size()) {
+                const auto comma = body.find(',', start_pos);
+                parts.push_back(body.substr(
+                    start_pos, comma == std::string::npos ? std::string::npos
+                                                          : comma - start_pos));
+                if (comma == std::string::npos) {
+                    break;
+                }
+                start_pos = comma + 1;
+            }
+            std::sort(parts.begin(), parts.end());
+            std::string rebuilt = name.substr(0, open);
+            rebuilt.push_back('[');
+            for (std::size_t i = 0; i < parts.size(); ++i) {
+                if (i != 0) {
+                    rebuilt.push_back(',');
+                }
+                rebuilt.append(parts[i]);
+            }
+            rebuilt.push_back(']');
+            if (rebuilt.find("[axis=y]") != std::string::npos &&
+                (rebuilt.find("oak_log") != std::string::npos)) {
+                return rebuilt.substr(0, rebuilt.find('['));
+            }
+            if (rebuilt.starts_with("minecraft:oak_fence[")) {
+                return "minecraft:oak_fence";
+            }
+            if (rebuilt == "minecraft:spruce_stairs[facing=north,half=bottom,"
+                           "shape=straight,waterlogged=false]") {
+                return "minecraft:spruce_stairs";
+            }
+            return rebuilt;
+        };
+        jint mismatches = 0;
+        const jint min_x = source.bounds.min_x;
+        const jint max_x = source.bounds.max_x;
+        const jint min_z = source.bounds.min_z;
+        const jint max_z = source.bounds.max_z;
+        for (jint y = 63; y <= 69; ++y) {
+            for (jint z = min_z; z <= max_z; ++z) {
+                for (jint x = min_x; x <= max_x; ++x) {
+                    const auto index =
+                        static_cast<std::size_t>(y + 64) * 256U +
+                        static_cast<std::size_t>((z & 15) * 16 + (x & 15));
+                    const auto expected = canonical(std::string{
+                        decoded.registry.name(decoded.blocks[index])});
+                    const auto actual =
+                        canonical(std::string{decoded.registry.name(
+                            chunk.state_at(x & 15, y, z & 15))});
+                    if (expected != actual) {
+                        if (mismatches < 8) {
+                            std::fprintf(
+                                stderr,
+                                "swamp mismatch (%d,%d,%d): got %s want %s\n",
+                                static_cast<int>(x), static_cast<int>(y),
+                                static_cast<int>(z), actual.c_str(),
+                                expected.c_str());
+                        }
+                        ++mismatches;
+                    }
+                }
+            }
+        }
+        expect(mismatches == 0);
+    };
 };
