@@ -406,6 +406,8 @@ def main() -> int:
                 "oracle:glowstone_extra",
                 "oracle:scattered_ore",
                 "oracle:replace_blobs",
+                "oracle:platform_stone_delta",
+                "oracle:delta",
             ]
         )
         (biome_dir / "feature.json").write_text(
@@ -1254,6 +1256,17 @@ def main() -> int:
             "state": "minecraft:gold_block",
             "radius": {"type": "minecraft:constant", "value": 2},
         })
+        write_doc(feature_dir / "platform_air.json", {
+            "type": "minecraft:simple_block",
+            "to_place": {"id": "minecraft:air"},
+        })
+        write_doc(feature_dir / "delta.json", {
+            "type": "minecraft:delta_feature",
+            "contents": "minecraft:lava",
+            "rim": "minecraft:magma_block",
+            "size": {"type": "minecraft:constant", "value": 2},
+            "rim_size": {"type": "minecraft:constant", "value": 1},
+        })
 
         def fixed(name: str, feature_id: str, positions: list[list[int]]) -> None:
             write_doc(placed_dir / f"{name}.json", {
@@ -1288,6 +1301,12 @@ def main() -> int:
         fixed("glowstone_extra", "oracle:glowstone_extra", [[8, 100, 8]])
         fixed("scattered_ore", "oracle:scattered_ore", [[3, 100, 12]])
         fixed("replace_blobs", "oracle:replace_blobs", [[8, 100, 12]])
+        fixed(
+            "platform_stone_delta",
+            "oracle:platform_stone",
+            [[x, y, z] for y in (99, 100) for x in range(4, 9) for z in range(10, 15)],
+        )
+        fixed("delta", "oracle:delta", [[6, 100, 12]])
     elif args.structures:
         preset = read_pack_data(
             args.server_jar, "data/minecraft/worldgen/world_preset/normal.json"
