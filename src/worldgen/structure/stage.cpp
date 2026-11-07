@@ -54,10 +54,12 @@ auto orientation(jint direction) -> jint {
     }
 }
 
-auto make_start(std::string_view id, const chunk_pos &chunk,
-                structure_piece piece) -> structure_start {
+auto make_start(std::string_view id, std::string_view step,
+                const chunk_pos &chunk, structure_piece piece)
+    -> structure_start {
     structure_start start{
         .structure = std::string{id},
+        .step = std::string{step},
         .chunk = chunk,
         .pieces = {std::move(piece)},
         .references = 0,
@@ -143,7 +145,7 @@ auto surface_start(const structure_start_context &context,
     } else {
         piece.type = "minecraft:tejp";
     }
-    return make_start(structure.id, chunk, std::move(piece));
+    return make_start(structure.id, structure.step, chunk, std::move(piece));
 }
 
 auto try_generate(const structure_start_context &context,
@@ -162,6 +164,7 @@ auto try_generate(const structure_start_context &context,
         }
         auto start = buried_treasure_start(chunk);
         start.structure = structure.id;
+        start.step = structure.step;
         return start;
     }
     if (structure.type == "minecraft:swamp_hut") {
@@ -214,16 +217,31 @@ void write_structure_stage(proto_chunk &chunk,
             start.chunk.z != chunk.chunk_z()) {
             continue;
         }
-        chunk.add_structure_start(
-            ::refrain::worldgen::structure_start{.structure = start.structure,
-                                                 .chunk_x = start.chunk.x,
-                                                 .chunk_z = start.chunk.z,
-                                                 .min_x = start.bounds.min_x,
-                                                 .min_y = start.bounds.min_y,
-                                                 .min_z = start.bounds.min_z,
-                                                 .max_x = start.bounds.max_x,
-                                                 .max_y = start.bounds.max_y,
-                                                 .max_z = start.bounds.max_z});
+        ::refrain::worldgen::structure_start record{
+            .structure = start.structure,
+            .step = start.step,
+            .chunk_x = start.chunk.x,
+            .chunk_z = start.chunk.z,
+            .min_x = start.bounds.min_x,
+            .min_y = start.bounds.min_y,
+            .min_z = start.bounds.min_z,
+            .max_x = start.bounds.max_x,
+            .max_y = start.bounds.max_y,
+            .max_z = start.bounds.max_z,
+        };
+        record.pieces.reserve(start.pieces.size());
+        for (const auto &piece : start.pieces) {
+            record.pieces.push_back(::refrain::worldgen::structure_piece_record{
+                .type = piece.type,
+                .min_x = piece.bounds.min_x,
+                .min_y = piece.bounds.min_y,
+                .min_z = piece.bounds.min_z,
+                .max_x = piece.bounds.max_x,
+                .max_y = piece.bounds.max_y,
+                .max_z = piece.bounds.max_z,
+                .orientation = piece.orientation});
+        }
+        chunk.add_structure_start(std::move(record));
     }
     for (const auto &reference : result.references) {
         chunk.add_structure_reference(reference.structure, reference.chunk_x,

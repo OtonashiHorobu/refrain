@@ -34,8 +34,20 @@ struct block_pos {
                                       const block_pos &) = default;
 };
 
+struct structure_piece_record {
+    std::string type{};
+    jint min_x{0};
+    jint min_y{0};
+    jint min_z{0};
+    jint max_x{0};
+    jint max_y{0};
+    jint max_z{0};
+    jint orientation{-1};
+};
+
 struct structure_start {
     std::string structure{};
+    std::string step{};
     jint chunk_x{0};
     jint chunk_z{0};
     jint min_x{0};
@@ -44,6 +56,7 @@ struct structure_start {
     jint max_x{0};
     jint max_y{0};
     jint max_z{0};
+    std::vector<structure_piece_record> pieces{};
 };
 
 struct structure_reference {

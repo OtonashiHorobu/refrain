@@ -411,6 +411,11 @@ suite<"worldgen/structure-stage"> structure_stage_tests = [] {
         structure::write_structure_stage(chunk, result);
         expect(chunk.structure_starts().size() == 1U);
         expect(chunk.structure_starts().front().structure == "oracle:buried");
+        expect(chunk.structure_starts().front().pieces.size() == 1U);
+        expect(chunk.structure_starts().front().pieces.front().type ==
+               "minecraft:btp");
+        expect(chunk.structure_starts().front().pieces.front().orientation ==
+               -1);
         expect(chunk.structure_starts().front().chunk_x == 6);
         expect(chunk.structure_starts().front().chunk_z == -2);
         expect(chunk.structure_references().size() == result.references.size());

@@ -37,6 +37,7 @@ struct structure_piece {
 
 struct structure_start {
     std::string structure{};
+    std::string step{};
     chunk_pos chunk{};
     std::vector<structure_piece> pieces{};
     jint references{0};
