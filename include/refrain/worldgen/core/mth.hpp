@@ -11,11 +11,43 @@
 
 #include <refrain/worldgen/core/java_compat.hpp>
 
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
 
 namespace refrain::worldgen::mth {
+
+namespace detail {
+
+/// Java `Mth.SIN`: 65536 samples of `Math.sin(i / 10430.378350470453)`.
+inline auto sin_table() -> const std::array<float, 65536> & {
+    static const auto table = [] {
+        std::array<float, 65536> values{};
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            values[i] = static_cast<float>(
+                std::sin(static_cast<double>(i) / 10430.378350470453));
+        }
+        return values;
+    }();
+    return table;
+}
+
+} // namespace detail
+
+/// `Mth.sin`: table lookup, not `std::sin`.
+[[nodiscard]] inline auto sin(double value) -> float {
+    const auto index = static_cast<std::size_t>(
+        static_cast<jlong>(value * 10430.378350470453) & 65535LL);
+    return detail::sin_table()[index];
+}
+
+/// `Mth.cos`: the sine table shifted by a quarter turn.
+[[nodiscard]] inline auto cos(double value) -> float {
+    const auto index = static_cast<std::size_t>(
+        static_cast<jlong>(value * 10430.378350470453 + 16384.0) & 65535LL);
+    return detail::sin_table()[index];
+}
 
 /// `Mth.floor`: truncation of `Math.floor`, i.e. the mathematical floor.
 [[nodiscard]] inline auto floor(float value) -> jint {
