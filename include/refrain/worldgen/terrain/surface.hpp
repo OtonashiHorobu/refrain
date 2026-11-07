@@ -32,7 +32,8 @@
 
 namespace refrain::worldgen {
 class block_state_registry;
-}
+class proto_chunk;
+} // namespace refrain::worldgen
 
 namespace refrain::worldgen::surface {
 
@@ -286,6 +287,15 @@ class surface_system {
         const std::function<state_id(jint, jint, jint)> &get,
         const std::function<void(jint, jint, jint, state_id)> &set,
         const std::function<jint(jint, jint)> &world_surface) -> status;
+
+    /// Runs one chunk's surface pass against a generation chunk. The chunk
+    /// must be at `biomes` status so its worldgen heightmap keeps updating.
+    [[nodiscard]] auto build_surface(
+        proto_chunk &chunk, material_context &context,
+        const rule_evaluator &rule, const biome_climates &climates,
+        const biome_temperatures &temperatures,
+        const std::function<std::string_view(jint, jint, jint)> &biome)
+        -> status;
 
   private:
     void frozen_ocean_extension(
