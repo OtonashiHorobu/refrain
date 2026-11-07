@@ -15,6 +15,7 @@ on. Their output is the source of truth for the constants frozen in the tests:
 | `BiomeVectors.java` | `test/worldgen/test_overworld_biomes.cpp` | overworld parameter table fingerprint and selections |
 | `BiomeManagerVectors.java` | `test/worldgen/test_biome_manager.cpp` | seed obfuscation and fuzzy quart-corner selection |
 | `BeardifierVectors.java` | `test/worldgen/test_beardifier.cpp` | Beardifier samples, volume path and kernel entries |
+| `SimplexVectors.java` | `test/worldgen/test_simplex.cpp` | legacy SimplexNoise, frozen-temperature stack, biome-info noise |
 
 ```bash
 tools/worldgen/vectors/run.sh /path/to/server.jar [class]

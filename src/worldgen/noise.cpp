@@ -284,6 +284,196 @@ auto noise_stack::add_to_volume(buffer &output, const volume &volume,
     }
 }
 
+simplex_noise::simplex_noise(random_source &random, bool discard_noise_offset) {
+    const double scale = discard_noise_offset ? 0.0 : 256.0;
+    offset_x_ = random.next_double() * scale;
+    offset_y_ = random.next_double() * scale;
+    offset_z_ = random.next_double() * scale;
+    for (std::size_t i = 0; i < perms_.size(); ++i) {
+        perms_[i] = static_cast<std::uint8_t>(i);
+    }
+    for (jint i = 0; i < 256; ++i) {
+        const jint offset = random.next_int(256 - i);
+        std::swap(perms_[static_cast<std::size_t>(i)],
+                  perms_[static_cast<std::size_t>(offset + i)]);
+    }
+}
+
+auto simplex_noise::permute_value(jint value) const -> jint {
+    return static_cast<jint>(perms_[static_cast<std::size_t>(value) & 0xFFU]);
+}
+
+auto simplex_noise::corner_noise3d(jint index, double x, double y, double z,
+                                   double base) const -> double {
+    double squared = base - x * x - y * y - z * z;
+    if (squared < 0.0) {
+        return 0.0;
+    }
+    squared *= squared;
+    const auto &gradient = gradients[static_cast<std::size_t>(index)];
+    const double dot = static_cast<double>(gradient.x) * x +
+                       static_cast<double>(gradient.y) * y +
+                       static_cast<double>(gradient.z) * z;
+    return squared * squared * dot;
+}
+
+auto simplex_noise::get(double x_in, double y_in) const -> float {
+    static const double sqrt_three = std::sqrt(3.0);
+    static const double f2 = 0.5 * (sqrt_three - 1.0);
+    static const double g2 = (3.0 - sqrt_three) / 6.0;
+    const double x_in_offset = x_in + offset_x_;
+    const double y_in_offset = y_in + offset_y_;
+    const double s = (x_in_offset + y_in_offset) * f2;
+    const jint i = mth::floor(x_in_offset + s);
+    const jint j = mth::floor(y_in_offset + s);
+    const double t = static_cast<double>(i + j) * g2;
+    const double x0 = x_in_offset - (static_cast<double>(i) - t);
+    const double y0 = y_in_offset - (static_cast<double>(j) - t);
+    jint i1 = 0;
+    jint j1 = 0;
+    if (x0 > y0) {
+        i1 = 1;
+        j1 = 0;
+    } else {
+        i1 = 0;
+        j1 = 1;
+    }
+    const double x1 = x0 - static_cast<double>(i1) + g2;
+    const double y1 = y0 - static_cast<double>(j1) + g2;
+    const double x2 = x0 - 1.0 + 2.0 * g2;
+    const double y2 = y0 - 1.0 + 2.0 * g2;
+    const jint ii = i & 0xFF;
+    const jint jj = j & 0xFF;
+    const jint gi0 = permute_value(ii + permute_value(jj)) % 12;
+    const jint gi1 = permute_value(ii + i1 + permute_value(jj + j1)) % 12;
+    const jint gi2 = permute_value(ii + 1 + permute_value(jj + 1)) % 12;
+    const double n0 = corner_noise3d(gi0, x0, y0, 0.0, 0.5);
+    const double n1 = corner_noise3d(gi1, x1, y1, 0.0, 0.5);
+    const double n2 = corner_noise3d(gi2, x2, y2, 0.0, 0.5);
+    return static_cast<float>(70.0 * (n0 + n1 + n2));
+}
+
+auto simplex_noise::get(double x_in, double y_in, double z_in) const -> float {
+    const double x_offset_in = x_in + offset_x_;
+    const double y_offset_in = y_in + offset_y_;
+    const double z_offset_in = z_in + offset_z_;
+    constexpr double f3 = 0.3333333333333333;
+    const double s = (x_offset_in + y_offset_in + z_offset_in) * f3;
+    const jint i = mth::floor(x_offset_in + s);
+    const jint j = mth::floor(y_offset_in + s);
+    const jint k = mth::floor(z_offset_in + s);
+    constexpr double g3 = 0.16666666666666666;
+    const double t = static_cast<double>(i + j + k) * g3;
+    const double x0 = x_offset_in - (static_cast<double>(i) - t);
+    const double y0 = y_offset_in - (static_cast<double>(j) - t);
+    const double z0 = z_offset_in - (static_cast<double>(k) - t);
+    jint i1 = 0;
+    jint j1 = 0;
+    jint k1 = 0;
+    jint i2 = 0;
+    jint j2 = 0;
+    jint k2 = 0;
+    if (x0 >= y0) {
+        if (y0 >= z0) {
+            i1 = 1;
+            j1 = 0;
+            k1 = 0;
+            i2 = 1;
+            j2 = 1;
+            k2 = 0;
+        } else if (x0 >= z0) {
+            i1 = 1;
+            j1 = 0;
+            k1 = 0;
+            i2 = 1;
+            j2 = 0;
+            k2 = 1;
+        } else {
+            i1 = 0;
+            j1 = 0;
+            k1 = 1;
+            i2 = 1;
+            j2 = 0;
+            k2 = 1;
+        }
+    } else if (y0 < z0) {
+        i1 = 0;
+        j1 = 0;
+        k1 = 1;
+        i2 = 0;
+        j2 = 1;
+        k2 = 1;
+    } else if (x0 < z0) {
+        i1 = 0;
+        j1 = 1;
+        k1 = 0;
+        i2 = 0;
+        j2 = 1;
+        k2 = 1;
+    } else {
+        i1 = 0;
+        j1 = 1;
+        k1 = 0;
+        i2 = 1;
+        j2 = 1;
+        k2 = 0;
+    }
+    const double x1 = x0 - static_cast<double>(i1) + g3;
+    const double y1 = y0 - static_cast<double>(j1) + g3;
+    const double z1 = z0 - static_cast<double>(k1) + g3;
+    const double x2 = x0 - static_cast<double>(i2) + 0.3333333333333333;
+    const double y2 = y0 - static_cast<double>(j2) + 0.3333333333333333;
+    const double z2 = z0 - static_cast<double>(k2) + 0.3333333333333333;
+    const double x3 = x0 - 0.5;
+    const double y3 = y0 - 0.5;
+    const double z3 = z0 - 0.5;
+    const jint ii = i & 0xFF;
+    const jint jj = j & 0xFF;
+    const jint kk = k & 0xFF;
+    const jint gi0 =
+        permute_value(ii + permute_value(jj + permute_value(kk))) % 12;
+    const jint gi1 =
+        permute_value(ii + i1 +
+                      permute_value(jj + j1 + permute_value(kk + k1))) %
+        12;
+    const jint gi2 =
+        permute_value(ii + i2 +
+                      permute_value(jj + j2 + permute_value(kk + k2))) %
+        12;
+    const jint gi3 =
+        permute_value(ii + 1 + permute_value(jj + 1 + permute_value(kk + 1))) %
+        12;
+    const double n0 = corner_noise3d(gi0, x0, y0, z0, 0.6);
+    const double n1 = corner_noise3d(gi1, x1, y1, z1, 0.6);
+    const double n2 = corner_noise3d(gi2, x2, y2, z2, 0.6);
+    const double n3 = corner_noise3d(gi3, x3, y3, z3, 0.6);
+    return static_cast<float>(32.0 * (n0 + n1 + n2 + n3));
+}
+
+void simplex_noise::add_to_volume(buffer &output, const volume &vol,
+                                  double xz_scale, double y_scale,
+                                  float amplitude) const {
+    std::size_t index = 0;
+    for (jint z = 0; z < vol.size_z(); ++z) {
+        const double z_coord = static_cast<double>(vol.block_z(z)) * xz_scale;
+        for (jint x = 0; x < vol.size_x(); ++x) {
+            const double x_coord =
+                static_cast<double>(vol.block_x(x)) * xz_scale;
+            for (jint y = 0; y < vol.size_y(); ++y) {
+                const double y_coord =
+                    static_cast<double>(vol.block_y(y)) * y_scale;
+                output.add_to(index,
+                              amplitude * get(x_coord, y_coord, z_coord));
+                ++index;
+            }
+        }
+    }
+}
+
+auto simplex_noise::range() const -> interval {
+    return interval::of_symmetric(2.0F);
+}
+
 noise_stack::noise_stack(std::vector<layer> layers)
     : layers_{std::move(layers)} {
     for (const auto &l : layers_) {

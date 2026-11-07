@@ -115,6 +115,34 @@ class smeared_perlin_noise final : public perlin_noise {
     double fudge_y_scale_{0.0};
 };
 
+/// Java `SimplexNoise`: the legacy simplex variant still used by biome
+/// temperature and a few structure helpers.
+class simplex_noise final : public noise {
+  public:
+    /// Consumes three `nextDouble` draws and then 256 `nextInt(256 - i)` draws.
+    /// `discard_noise_offset` zeroes the three offsets.
+    simplex_noise(random_source &random, bool discard_noise_offset);
+
+    [[nodiscard]] auto get(double x, double y) const -> float override;
+    [[nodiscard]] auto get(double x, double y, double z) const
+        -> float override;
+
+    void add_to_volume(buffer &output, const volume &volume, double xz_scale,
+                       double y_scale, float amplitude) const override;
+
+    [[nodiscard]] auto range() const -> interval override;
+
+  private:
+    [[nodiscard]] auto permute_value(jint value) const -> jint;
+    [[nodiscard]] auto corner_noise3d(jint index, double x, double y, double z,
+                                      double base) const -> double;
+
+    std::array<std::uint8_t, 256> perms_{};
+    double offset_x_{0.0};
+    double offset_y_{0.0};
+    double offset_z_{0.0};
+};
+
 /// Java `NoiseStack`: a sum of layers at fixed frequencies.
 class noise_stack final : public noise {
   public:
