@@ -626,6 +626,10 @@ auto decode_height(const value &input)
 
 } // namespace
 
+auto make_constant_float(float value) -> std::unique_ptr<float_provider> {
+    return std::make_unique<constant_float>(value);
+}
+
 auto int_provider::decode(const data::json::value &value)
     -> result<std::unique_ptr<int_provider>> {
     return decode_int(value);
