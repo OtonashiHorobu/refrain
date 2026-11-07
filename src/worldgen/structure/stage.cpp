@@ -217,6 +217,41 @@ auto try_generate(const structure_start_context &context,
         start.step = structure.step;
         return start;
     }
+    if (structure.type == "minecraft:ocean_ruin") {
+        if (context.templates == nullptr) {
+            return std::nullopt;
+        }
+        bool warm = true;
+        if (const auto *value = structure.config.find("biome_temp");
+            value != nullptr) {
+            warm = value->as_string().value_or("warm") == "warm";
+        }
+        float large_probability = 0.3F;
+        if (const auto *value = structure.config.find("large_probability");
+            value != nullptr) {
+            large_probability =
+                static_cast<float>(value->as_double().value_or(0.3));
+        }
+        float cluster_probability = 0.9F;
+        if (const auto *value = structure.config.find("cluster_probability");
+            value != nullptr) {
+            cluster_probability =
+                static_cast<float>(value->as_double().value_or(0.9));
+        }
+        const jint middle_x = chunk.x * 16 + 8;
+        const jint middle_z = chunk.z * 16 + 8;
+        const jint y = context.height_at(middle_x, middle_z,
+                                         heightmap_kind::ocean_floor_wg);
+        if (!biome_allowed(context, structure, middle_x, y, middle_z)) {
+            return std::nullopt;
+        }
+        auto start =
+            ocean_ruin_start(chunk, context.seed, *context.templates, warm,
+                             large_probability, cluster_probability);
+        start.structure = structure.id;
+        start.step = structure.step;
+        return start;
+    }
     if (structure.type == "minecraft:desert_pyramid") {
         if (!biome_column_allowed(context, structure, chunk.x * 16 + 8,
                                   chunk.z * 16 + 8)) {
@@ -338,7 +373,9 @@ void write_structure_stage(proto_chunk &chunk,
                 .template_pivot_y = piece.template_pivot.y,
                 .template_pivot_z = piece.template_pivot.z,
                 .height_position = piece.height_position,
-                .height_offset = piece.height_offset});
+                .height_offset = piece.height_offset,
+                .integrity = piece.integrity,
+                .large = piece.large});
         }
         chunk.add_structure_start(std::move(record));
     }

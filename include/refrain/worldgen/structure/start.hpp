@@ -43,6 +43,8 @@ struct structure_piece {
     block_pos template_pivot{};
     jint height_position{-1};
     jint height_offset{0};
+    float integrity{1.0F};
+    bool large{false};
 };
 
 struct structure_start {

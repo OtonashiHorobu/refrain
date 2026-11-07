@@ -29,6 +29,14 @@ class structure_template_manager;
     const std::function<jint(jint, jint, heightmap_kind)> &height_at)
     -> structure_start;
 
+/// `OceanRuinStructure`: the main ruin piece plus an optional cluster of
+/// small ruins. `warm` selects the warm or cold template pools.
+[[nodiscard]] auto ocean_ruin_start(const chunk_pos &chunk, jlong seed,
+                                    structure_template_manager &templates,
+                                    bool warm, float large_probability,
+                                    float cluster_probability)
+    -> structure_start;
+
 /// `DesertPyramidStructure`: one 21x21x15 single piece at generation height
 /// 64, below the lowest surface corner of the plot.
 [[nodiscard]] auto desert_pyramid_start(const chunk_pos &chunk, jlong seed)

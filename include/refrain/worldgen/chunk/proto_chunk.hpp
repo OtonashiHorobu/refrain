@@ -54,6 +54,8 @@ struct structure_piece_record {
     jint template_pivot_z{0};
     jint height_position{-1};
     jint height_offset{0};
+    float integrity{1.0F};
+    bool large{false};
 };
 
 struct structure_start {
