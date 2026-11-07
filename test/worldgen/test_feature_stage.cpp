@@ -328,6 +328,59 @@ suite<"worldgen/placement"> placement_tests = [] {
     };
 };
 
+suite<"worldgen/placement-water"> placement_water_tests = [] {
+    "the surface water depth filter compares final heightmaps"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto water = registry.intern(
+            "minecraft:water", {.air = false, .fluid = true, .water = true});
+        expect(stone.has_value() && water.has_value());
+        if (!stone || !water) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        for (jint x = 0; x < 16; ++x) {
+            for (jint z = 0; z < 16; ++z) {
+                (void)chunk.set_state(x, 5, z, *stone);
+                for (jint y = 6; y <= 8; ++y) {
+                    (void)chunk.set_state(x, y, z, *water);
+                }
+            }
+        }
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 1};
+        const placement_context context{
+            .region = &region, .chunk = &chunk, .states = &registry};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        auto filter = decode_placement(
+            parse(
+                R"({"type":"minecraft:surface_water_depth_filter","max_water_depth":3})"),
+            registry);
+        expect(filter.has_value());
+        if (!filter) {
+            return;
+        }
+        std::vector<block_pos> out;
+        (*filter)->modify(context, random, block_pos{.x = 0, .y = 0, .z = 0},
+                          out);
+        expect(out.size() == 1U);
+        out.clear();
+        auto shallow = decode_placement(
+            parse(
+                R"({"type":"minecraft:surface_water_depth_filter","max_water_depth":2})"),
+            registry);
+        if (shallow) {
+            (*shallow)->modify(context, random,
+                               block_pos{.x = 0, .y = 0, .z = 0}, out);
+            expect(out.empty());
+        }
+    };
+};
+
 suite<"worldgen/state-provider"> state_provider_tests = [] {
     "weighted providers sample both entries"_test = [] {
         block_state_registry registry;
