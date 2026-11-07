@@ -5,6 +5,7 @@
 #include <refrain/core/io.hpp>
 #include <refrain/data/vanilla.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/terrain/surface.hpp>
 
 #include <boost/ut.hpp>
 
@@ -214,7 +215,7 @@ suite<"worldgen/block-state-registry"> block_state_registry_tests = [] {
                  {"minecraft:stone", "minecraft:bedrock", "minecraft:dirt"});
         tags.add("minecraft:uncarvable", {"minecraft:bedrock"});
 
-        const auto registry = build_block_state_registry(*tables, tags);
+        auto registry = build_block_state_registry(*tables, tags);
         expect(registry.has_value());
         if (!registry) {
             return;
@@ -239,11 +240,21 @@ suite<"worldgen/block-state-registry"> block_state_registry_tests = [] {
         expect(registry->traits(*leaves).blocks_motion);
         expect(!registry->traits(*leaves).blocks_motion_no_leaves);
         expect(registry->traits(*water).fluid);
+        expect(registry->traits(*water).water);
         expect(registry->traits(*water).air == false);
         expect(registry->traits(*slab).fluid);
         expect(registry->in_tag(*bedrock, "minecraft:uncarvable"));
         expect(!registry->in_tag(*stone, "minecraft:uncarvable"));
         expect(registry->name(registry->air()) == "minecraft:air");
         expect(registry->vanilla_id(*stone) == 1);
+
+        surface::block_states bound{*registry};
+        expect(bound.intern("minecraft:stone") == *stone);
+        expect(bound.name(*stone) == "minecraft:stone");
+        expect(bound.properties(*water).water);
+        expect(!bound.properties(*stone).fluid);
+        const auto custom = bound.intern("minecraft:test_custom");
+        expect(custom != surface::no_state);
+        expect(registry->find("minecraft:test_custom").has_value());
     };
 };

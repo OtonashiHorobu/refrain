@@ -4,6 +4,8 @@
 
 #include <refrain/worldgen/terrain/surface.hpp>
 
+#include <refrain/worldgen/chunk/block_state_registry.hpp>
+
 #include <refrain/core/io.hpp>
 #include <refrain/data/json.hpp>
 #include <refrain/worldgen/core/mth.hpp>
@@ -111,11 +113,35 @@ auto material_context::density_cache::value_at(jint x, jint y, jint z) const
 }
 
 auto block_states::intern(std::string_view name) -> state_id {
+    if (registry_ != nullptr) {
+        if (const auto found = registry_->find(name); found.has_value()) {
+            return *found;
+        }
+        const auto id = registry_->intern(
+            name, state_traits{.air = false,
+                               .blocks_motion = true,
+                               .blocks_motion_no_leaves = true});
+        return id.has_value() ? *id : no_state;
+    }
     return intern(name, default_properties(name));
 }
 
 auto block_states::intern(std::string_view name, state_properties properties)
     -> state_id {
+    if (registry_ != nullptr) {
+        if (const auto found = registry_->find(name); found.has_value()) {
+            return *found;
+        }
+        const auto id = registry_->intern(
+            name,
+            state_traits{.air = properties.air,
+                         .fluid = properties.fluid,
+                         .water = properties.water,
+                         .blocks_motion = !properties.air && !properties.fluid,
+                         .blocks_motion_no_leaves =
+                             !properties.air && !properties.fluid});
+        return id.has_value() ? *id : no_state;
+    }
     const std::string key{name};
     if (const auto found = index_.find(key); found != index_.end()) {
         return found->second;
@@ -132,17 +158,32 @@ auto block_states::intern(std::string_view name, state_properties properties)
 
 auto block_states::find(std::string_view name) const
     -> std::optional<state_id> {
+    if (registry_ != nullptr) {
+        return registry_->find(name);
+    }
     const auto found = index_.find(std::string{name});
     return found == index_.end() ? std::nullopt
                                  : std::optional<state_id>{found->second};
 }
 
 auto block_states::name(state_id id) const -> std::string_view {
+    if (registry_ != nullptr) {
+        return registry_->name(id);
+    }
     return names_[id];
 }
 
 auto block_states::properties(state_id id) const -> state_properties {
+    if (registry_ != nullptr) {
+        const auto traits = registry_->traits(id);
+        return state_properties{
+            .air = traits.air, .fluid = traits.fluid, .water = traits.water};
+    }
     return properties_[id];
+}
+
+auto block_states::size() const noexcept -> std::size_t {
+    return registry_ != nullptr ? registry_->size() : names_.size();
 }
 
 material_context::material_context(

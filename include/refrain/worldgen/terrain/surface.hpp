@@ -30,6 +30,10 @@
 #include <utility>
 #include <vector>
 
+namespace refrain::worldgen {
+class block_state_registry;
+}
+
 namespace refrain::worldgen::surface {
 
 using state_id = std::uint16_t;
@@ -47,6 +51,12 @@ struct state_properties {
 /// the key.
 class block_states {
   public:
+    block_states() = default;
+    /// Binds the table to the generation-wide registry; every interned or
+    /// looked-up key then shares ids with the chunk.
+    explicit block_states(block_state_registry &registry)
+        : registry_{&registry} {}
+
     [[nodiscard]] auto intern(std::string_view name) -> state_id;
     [[nodiscard]] auto intern(std::string_view name,
                               state_properties properties) -> state_id;
@@ -54,11 +64,10 @@ class block_states {
         -> std::optional<state_id>;
     [[nodiscard]] auto name(state_id id) const -> std::string_view;
     [[nodiscard]] auto properties(state_id id) const -> state_properties;
-    [[nodiscard]] auto size() const noexcept -> std::size_t {
-        return names_.size();
-    }
+    [[nodiscard]] auto size() const noexcept -> std::size_t;
 
   private:
+    block_state_registry *registry_{nullptr};
     std::vector<std::string> names_{};
     std::vector<state_properties> properties_{};
     std::unordered_map<std::string, state_id> index_{};

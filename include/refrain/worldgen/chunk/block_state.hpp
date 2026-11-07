@@ -25,6 +25,7 @@ inline constexpr block_state_id no_block_state =
 struct state_traits {
     bool air{true};
     bool fluid{false};
+    bool water{false};
     bool blocks_motion{false};
     bool blocks_motion_no_leaves{false};
 };
@@ -36,8 +37,8 @@ class block_state_table {
     block_state_table() = default;
     block_state_table(const block_state_table &) = delete;
     auto operator=(const block_state_table &) -> block_state_table & = delete;
-    block_state_table(block_state_table &&) = delete;
-    auto operator=(block_state_table &&) -> block_state_table & = delete;
+    block_state_table(block_state_table &&) = default;
+    auto operator=(block_state_table &&) -> block_state_table & = default;
     virtual ~block_state_table() = default;
 
     [[nodiscard]] virtual auto air() const -> block_state_id = 0;
