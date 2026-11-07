@@ -20,6 +20,7 @@
 #include <refrain/worldgen/biome/overworld_biome_builder.hpp>
 #include <refrain/worldgen/carver/carver_data.hpp>
 #include <refrain/worldgen/carver/carver_stage.hpp>
+#include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
@@ -488,6 +489,42 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             expect(water_state.has_value());
             expect(lava_state.has_value());
             expect(bedrock_state.has_value());
+            const auto loaded_tags = load_block_tags(data_root);
+            expect(loaded_tags.has_value());
+            if (loaded_tags) {
+                for (const auto &[tag, raw] : loaded_tags->entries()) {
+                    (void)raw;
+                    const auto names = loaded_tags->resolve(tag);
+                    if (!names) {
+                        continue;
+                    }
+                    std::vector<block_state_id> ids;
+                    for (const auto &name : *names) {
+                        if (const auto found = block_registry.find(name);
+                            found.has_value()) {
+                            ids.push_back(*found);
+                            continue;
+                        }
+                        const auto block = name;
+                        const bool air = is_air_block_name(block);
+                        const bool water = block == "minecraft:water";
+                        const bool fluid = water || block == "minecraft:lava" ||
+                                           block == "minecraft:bubble_column";
+                        const bool leaves = block.ends_with("_leaves");
+                        if (const auto interned = block_registry.intern(
+                                name, {.air = air,
+                                       .fluid = fluid,
+                                       .water = water,
+                                       .blocks_motion = !air && !fluid,
+                                       .blocks_motion_no_leaves =
+                                           !air && !fluid && !leaves});
+                            interned.has_value()) {
+                            ids.push_back(*interned);
+                        }
+                    }
+                    block_registry.add_tag(tag, ids);
+                }
+            }
             expect(coal_ore_state.has_value());
             expect(sand_state.has_value());
             expect(dirt_state.has_value());

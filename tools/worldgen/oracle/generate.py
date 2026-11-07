@@ -387,6 +387,25 @@ def main() -> int:
         ]
         biome_dir = pack / "data/oracle/worldgen/biome"
         biome_dir.mkdir(parents=True)
+        biome["features"][9].extend(
+            [
+                "oracle:platform_grass",
+                "oracle:platform_dirt_red",
+                "oracle:platform_dirt_brown",
+                "oracle:platform_nylium",
+                "oracle:platform_stone_wall",
+                "oracle:platform_stone_scattered",
+                "oracle:platform_stone_blobs",
+                "oracle:bamboo",
+                "oracle:huge_fungus",
+                "oracle:huge_red_mushroom",
+                "oracle:huge_brown_mushroom",
+                "oracle:vines",
+                "oracle:glowstone_extra",
+                "oracle:scattered_ore",
+                "oracle:replace_blobs",
+            ]
+        )
         (biome_dir / "feature.json").write_text(
             json.dumps(biome, indent=2) + "\n"
         )
@@ -1124,6 +1143,129 @@ def main() -> int:
             )
             + "\n"
         )
+        def write_doc(path: pathlib.Path, document: dict) -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(document, indent=2) + "\n")
+
+        write_doc(feature_dir / "platform_grass.json", {
+            "type": "minecraft:simple_block",
+            "to_place": {"id": "minecraft:grass_block"},
+        })
+        write_doc(feature_dir / "platform_dirt.json", {
+            "type": "minecraft:simple_block",
+            "to_place": {"id": "minecraft:dirt"},
+        })
+        write_doc(feature_dir / "platform_nylium.json", {
+            "type": "minecraft:simple_block",
+            "to_place": {"id": "minecraft:crimson_nylium"},
+        })
+        write_doc(feature_dir / "platform_stone.json", {
+            "type": "minecraft:simple_block",
+            "to_place": {"id": "minecraft:stone"},
+        })
+        write_doc(feature_dir / "bamboo.json", {
+            "type": "minecraft:bamboo",
+            "probability": 0.0,
+        })
+        write_doc(feature_dir / "huge_fungus.json", {
+            "type": "minecraft:huge_fungus",
+            "valid_base_block": "minecraft:crimson_nylium",
+            "stem_state": "minecraft:crimson_stem",
+            "hat_state": "minecraft:nether_wart_block",
+            "decor_state": "minecraft:shroomlight",
+            "replaceable_blocks": {
+                "type": "minecraft:matching_blocks",
+                "blocks": ["minecraft:air"],
+            },
+        })
+        for name, cap in (
+            ("huge_red_mushroom", "minecraft:red_mushroom_block"),
+            ("huge_brown_mushroom", "minecraft:brown_mushroom_block"),
+        ):
+            write_doc(feature_dir / f"{name}.json", {
+                "type": f"minecraft:{name}",
+                "cap_provider": {"id": cap},
+                "stem_provider": {"id": "minecraft:mushroom_stem"},
+                "can_place_on": {
+                    "type": "minecraft:matching_blocks",
+                    "blocks": ["minecraft:dirt"],
+                },
+            })
+        write_doc(feature_dir / "vines.json", {
+            "type": "minecraft:vines",
+        })
+        write_doc(feature_dir / "glowstone_extra.json", {
+            "type": "minecraft:random_neighbor_spread",
+            "accepted_neighbors": "minecraft:glowstone",
+            "attempts": 100,
+            "block": {"id": "minecraft:glowstone"},
+            "can_replace": {
+                "type": "minecraft:matching_block_tag",
+                "tag": "minecraft:air",
+            },
+            "xz_offset": {
+                "type": "minecraft:uniform",
+                "min_inclusive": -7,
+                "max_inclusive": 7,
+            },
+            "y_offset": {
+                "type": "minecraft:uniform",
+                "min_inclusive": -11,
+                "max_inclusive": 0,
+            },
+        })
+        write_doc(feature_dir / "scattered_ore.json", {
+            "type": "minecraft:scattered_ore",
+            "size": 8,
+            "discard_chance_on_air_exposure": 0.0,
+            "targets": [{
+                "target": {
+                    "predicate_type": "minecraft:block_match",
+                    "block": "minecraft:stone",
+                },
+                "state": "minecraft:gold_ore",
+            }],
+        })
+        write_doc(feature_dir / "replace_blobs.json", {
+            "type": "minecraft:netherrack_replace_blobs",
+            "target": "minecraft:stone",
+            "state": "minecraft:gold_block",
+            "radius": {"type": "minecraft:constant", "value": 2},
+        })
+
+        def fixed(name: str, feature_id: str, positions: list[list[int]]) -> None:
+            write_doc(placed_dir / f"{name}.json", {
+                "feature": feature_id,
+                "placement": [{
+                    "type": "minecraft:fixed_placement",
+                    "positions": positions,
+                }],
+            })
+
+        fixed("platform_grass", "oracle:platform_grass", [[2, 99, 2]])
+        fixed("platform_dirt_red", "oracle:platform_dirt", [[10, 99, 2]])
+        fixed("platform_dirt_brown", "oracle:platform_dirt", [[14, 99, 2]])
+        fixed("platform_nylium", "oracle:platform_nylium", [[6, 99, 2]])
+        fixed("platform_stone_wall", "oracle:platform_stone", [[3, 100, 6]])
+        fixed(
+            "platform_stone_scattered",
+            "oracle:platform_stone",
+            [[x, 99, z] for x in range(1, 6) for z in range(10, 15)],
+        )
+        fixed(
+            "platform_stone_blobs",
+            "oracle:platform_stone",
+            [[x, 99, z] for x in range(6, 11) for z in range(10, 15)],
+        )
+        fixed("bamboo", "oracle:bamboo", [[2, 100, 2]])
+        fixed("huge_fungus", "oracle:huge_fungus", [[6, 100, 2]])
+        fixed("huge_red_mushroom", "oracle:huge_red_mushroom", [[10, 100, 2]])
+        fixed("huge_brown_mushroom", "oracle:huge_brown_mushroom",
+              [[14, 100, 2]])
+        fixed("vines", "oracle:vines", [[2, 100, 6]])
+        fixed("glowstone_extra", "oracle:glowstone_extra", [[8, 100, 8]])
+        fixed("scattered_ore", "oracle:scattered_ore", [[3, 100, 12]])
+        fixed("replace_blobs", "oracle:replace_blobs", [[8, 100, 12]])
     elif args.structures:
         preset = read_pack_data(
             args.server_jar, "data/minecraft/worldgen/world_preset/normal.json"
