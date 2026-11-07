@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace refrain::net {
 
@@ -20,6 +21,22 @@ struct text_component {
     friend auto operator==(const text_component &, const text_component &)
         -> bool = default;
 };
+
+/// A network-NBT tag in encoded form. An empty payload is the end tag, which
+/// the optional compound codec uses for absence.
+struct nbt_blob {
+    std::vector<std::byte> bytes{};
+
+    friend auto operator==(const nbt_blob &, const nbt_blob &)
+        -> bool = default;
+};
+
+/// Writes the stored tag bytes; an empty tag is written as the end tag.
+[[nodiscard]] auto encode_nbt(writer &out, const nbt_blob &value) -> status;
+
+/// Reads one complete network-NBT tag, copying its exact bytes. Nesting depth,
+/// element counts and total size are bounded.
+[[nodiscard]] auto decode_nbt(reader &in, nbt_blob &value) -> status;
 
 /// A quantized vector. The wire form stores a shared exponent and three
 /// 15-bit normalized components, or a single zero byte for the zero vector.

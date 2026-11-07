@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 37ad437ddc6c0e0a
+// Schema hash: db66f0c829a44af5
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
@@ -623,6 +623,14 @@ struct use_item {
     std::int32_t sequence;
     float y_rot;
     float x_rot;
+};
+
+struct custom_click_action {
+    static constexpr std::uint16_t packet_id = 0x44;
+    static constexpr std::string_view packet_name = "custom_click_action";
+
+    ::refrain::data::resource_location id;
+    ::refrain::net::nbt_blob payload;
 };
 [[nodiscard]] inline auto encode_accept_teleportation(::refrain::net::writer &out, const accept_teleportation &value) -> ::refrain::status {
   static_cast<void>(out);
@@ -2770,6 +2778,38 @@ struct use_item {
     auto value_0 = in.read_f32();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.x_rot = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_custom_click_action(::refrain::net::writer &out, const custom_click_action &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.id); !written) {
+      return written;
+    }
+  }
+  {
+    if (auto written = ::refrain::net::encode_nbt(out, value.payload); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_custom_click_action(::refrain::net::reader &in, custom_click_action &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.id = std::move(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_nbt(in, value.payload); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }

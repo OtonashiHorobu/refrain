@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 37ad437ddc6c0e0a
+// Schema hash: db66f0c829a44af5
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_HPP
@@ -22,7 +22,7 @@
 namespace refrain::protocol::v777 {
 
 /// Packets declared for this stage, ordered by flow and id.
-inline constexpr std::array<packet_descriptor, 27> configuration_packets{{
+inline constexpr std::array<packet_descriptor, 28> configuration_packets{{
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0x0, "cookie_request"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0x1, "custom_payload"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0x2, "disconnect"},
@@ -49,6 +49,7 @@ inline constexpr std::array<packet_descriptor, 27> configuration_packets{{
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::serverbound, 0x5, "pong"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::serverbound, 0x6, "resource_pack"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::serverbound, 0x7, "select_known_packs"},
+  packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::serverbound, 0x8, "custom_click_action"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::serverbound, 0x9, "accept_code_of_conduct"},
 }};
 

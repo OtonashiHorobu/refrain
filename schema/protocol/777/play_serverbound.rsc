@@ -355,3 +355,8 @@ packet use_item = 67 {
     y_rot: f32;
     x_rot: f32;
 }
+
+packet custom_click_action = 68 {
+    id: identifier;
+    payload: nbt;
+}

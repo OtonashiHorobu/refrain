@@ -6,6 +6,7 @@
 
 module refrain::protocol::v777::configuration::serverbound;
 version 777;
+import refrain::protocol::v777::wire;
 
 import refrain::protocol::v777::common;
 
@@ -44,4 +45,11 @@ packet select_known_packs = 7 {
 }
 
 packet accept_code_of_conduct = 9 {
+}
+
+// Generated protocol layouts.
+
+packet custom_click_action = 8 {
+    id: identifier;
+    payload: nbt;
 }

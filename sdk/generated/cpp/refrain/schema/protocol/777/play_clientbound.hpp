@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 37ad437ddc6c0e0a
+// Schema hash: db66f0c829a44af5
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -275,6 +275,16 @@ struct block_destruction {
     std::int32_t id;
     std::int64_t pos;
     std::int8_t progress;
+};
+
+struct block_entity_data {
+    static constexpr std::uint16_t packet_id = 0x6;
+    static constexpr std::string_view packet_name = "block_entity_data";
+
+    std::int64_t get_pos;
+    // attributes: #[varint]
+    std::int32_t get_type;
+    ::refrain::net::nbt_blob get_tag;
 };
 
 struct block_event {
@@ -909,6 +919,15 @@ struct tab_list {
 
     ::refrain::net::text_component header;
     ::refrain::net::text_component footer;
+};
+
+struct tag_query {
+    static constexpr std::uint16_t packet_id = 0x7E;
+    static constexpr std::string_view packet_name = "tag_query";
+
+    // attributes: #[varint]
+    std::int32_t transaction_id;
+    ::refrain::net::nbt_blob tag;
 };
 
 struct take_item_entity {
@@ -2016,6 +2035,44 @@ struct clear_dialog {
     auto value_0 = in.read_i64();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.progress = static_cast<decltype(value.progress)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_block_entity_data(::refrain::net::writer &out, const block_entity_data &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_i64(static_cast<std::int64_t>(value.get_pos));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.get_type));
+  }
+  {
+    if (auto written = ::refrain::net::encode_nbt(out, value.get_tag); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_block_entity_data(::refrain::net::reader &in, block_entity_data &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.get_pos = static_cast<decltype(value.get_pos)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.get_type = static_cast<decltype(value.get_type)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_nbt(in, value.get_tag); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }
@@ -4234,6 +4291,36 @@ struct clear_dialog {
   }
   {
     if (auto decoded = ::refrain::net::decode_text_component(in, value.footer); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_tag_query(::refrain::net::writer &out, const tag_query &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.transaction_id));
+  }
+  {
+    if (auto written = ::refrain::net::encode_nbt(out, value.tag); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_tag_query(::refrain::net::reader &in, tag_query &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.transaction_id = static_cast<decltype(value.transaction_id)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_nbt(in, value.tag); !decoded) {
       return std::unexpected{std::move(decoded.error())};
     }
   }

@@ -45,6 +45,8 @@ enum class primitive_kind : std::uint8_t {
     item_stack,
     /// Quantized low-precision vector; RSC wire schemas only.
     lp_vec3,
+    /// Network NBT tag; RSC wire schemas only.
+    nbt,
     void_type,
 };
 

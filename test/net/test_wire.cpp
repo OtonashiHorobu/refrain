@@ -70,6 +70,54 @@ const suite tests = [] {
         }
     };
 
+    "nbt end tag round trips as an empty value"_test = [] {
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_nbt(out, net::nbt_blob{})));
+        const bool end_tag{bytes == std::vector<std::byte>{std::byte{0}}};
+        expect(end_tag);
+        net::reader in{bytes};
+        net::nbt_blob decoded{};
+        expect(static_cast<bool>(net::decode_nbt(in, decoded)));
+        expect(decoded.bytes.empty());
+        expect(in.empty());
+    };
+
+    "nbt compound round trips byte for byte"_test = [] {
+        // TAG_Compound with an empty name holding one TAG_Int named "value".
+        std::vector<std::byte> tag;
+        const auto push = [&tag](std::initializer_list<int> values) {
+            for (const int value : values) {
+                tag.push_back(static_cast<std::byte>(value));
+            }
+        };
+        push({10, 0, 0, 3, 0, 5});
+        for (const char character : std::string_view{"value"}) {
+            tag.push_back(static_cast<std::byte>(character));
+        }
+        push({0, 0, 0, 42, 0});
+        const net::nbt_blob value{.bytes = tag};
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_nbt(out, value)));
+        net::reader in{bytes};
+        net::nbt_blob decoded{};
+        expect(static_cast<bool>(net::decode_nbt(in, decoded)));
+        const bool same{decoded.bytes == tag};
+        expect(same);
+        expect(in.empty());
+    };
+
+    "nbt rejects a truncated tag"_test = [] {
+        const std::array bytes{std::byte{10}, std::byte{0}, std::byte{0},
+                               std::byte{3}};
+        net::reader in{bytes};
+        net::nbt_blob decoded{};
+        const auto status{net::decode_nbt(in, decoded)};
+        expect(!status);
+        expect(status.error().code == refrain::error_code::parse_error);
+    };
+
     "lp vec3 encodes the zero vector as one byte"_test = [] {
         std::vector<std::byte> bytes;
         net::writer out{bytes};

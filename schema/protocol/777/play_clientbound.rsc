@@ -169,6 +169,12 @@ packet block_destruction = 5 {
     progress: i8;
 }
 
+packet block_entity_data = 6 {
+    get_pos: i64;
+    #[varint] get_type: i32;
+    get_tag: nbt;
+}
+
 packet block_event = 7 {
     pos: i64;
     b0: i8;
@@ -518,6 +524,11 @@ packet system_chat = 124 {
 packet tab_list = 125 {
     header: text_component;
     footer: text_component;
+}
+
+packet tag_query = 126 {
+    #[varint] transaction_id: i32;
+    tag: nbt;
 }
 
 packet take_item_entity = 127 {

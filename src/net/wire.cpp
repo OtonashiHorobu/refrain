@@ -59,6 +59,229 @@ constexpr double lp_abs_min{3.051944088384301E-5};
 
 } // namespace
 
+namespace {
+
+constexpr std::uint32_t nbt_max_depth{512};
+
+void append_bytes(std::vector<std::byte> &out,
+                  std::span<const std::byte> bytes) {
+    out.insert(out.end(), bytes.begin(), bytes.end());
+}
+
+[[nodiscard]] auto copy_next(reader &in, std::size_t count,
+                             std::vector<std::byte> &out) -> status {
+    if (count > refrain::net::max_frame_length || count > in.remaining()) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "nbt: truncated payload")};
+    }
+    auto bytes{in.read_bytes(count)};
+    if (!bytes) {
+        return std::unexpected{std::move(bytes.error())};
+    }
+    append_bytes(out, *bytes);
+    return status_ok();
+}
+
+[[nodiscard]] auto read_nbt_payload(reader &in, std::uint8_t type,
+                                    std::vector<std::byte> &out,
+                                    std::uint32_t depth) -> status;
+
+[[nodiscard]] auto read_nbt_tag(reader &in, std::vector<std::byte> &out,
+                                std::uint32_t depth) -> status {
+    if (depth > nbt_max_depth) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "nbt: nesting is too deep")};
+    }
+    auto type{in.read_u8()};
+    if (!type) {
+        return std::unexpected{std::move(type.error())};
+    }
+    out.push_back(static_cast<std::byte>(*type));
+    if (*type == 0U) {
+        return status_ok();
+    }
+    auto name_length{in.read_u16()};
+    if (!name_length) {
+        return std::unexpected{std::move(name_length.error())};
+    }
+    out.push_back(static_cast<std::byte>((*name_length >> 8U) & 0xFFU));
+    out.push_back(static_cast<std::byte>(*name_length & 0xFFU));
+    if (auto status{copy_next(in, *name_length, out)}; !status) {
+        return status;
+    }
+    return read_nbt_payload(in, *type, out, depth);
+}
+
+[[nodiscard]] auto read_nbt_list(reader &in, std::vector<std::byte> &out,
+                                 std::uint32_t depth) -> status {
+    auto element{in.read_u8()};
+    if (!element) {
+        return std::unexpected{std::move(element.error())};
+    }
+    out.push_back(static_cast<std::byte>(*element));
+    auto count{in.read_i32()};
+    if (!count) {
+        return std::unexpected{std::move(count.error())};
+    }
+    if (*count < 0) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "nbt: negative list length")};
+    }
+    const auto value_count{static_cast<std::uint32_t>(*count)};
+    out.push_back(static_cast<std::byte>((value_count >> 24U) & 0xFFU));
+    out.push_back(static_cast<std::byte>((value_count >> 16U) & 0xFFU));
+    out.push_back(static_cast<std::byte>((value_count >> 8U) & 0xFFU));
+    out.push_back(static_cast<std::byte>(value_count & 0xFFU));
+    if (value_count > in.remaining()) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "nbt: truncated list")};
+    }
+    for (std::uint32_t index{0}; index < value_count; ++index) {
+        if (auto status{read_nbt_payload(in, *element, out, depth + 1)};
+            !status) {
+            return status;
+        }
+    }
+    return status_ok();
+}
+
+[[nodiscard]] auto read_nbt_compound(reader &in, std::vector<std::byte> &out,
+                                     std::uint32_t depth) -> status {
+    while (true) {
+        if (depth > nbt_max_depth) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "nbt: nesting is too deep")};
+        }
+        auto type{in.read_u8()};
+        if (!type) {
+            return std::unexpected{std::move(type.error())};
+        }
+        out.push_back(static_cast<std::byte>(*type));
+        if (*type == 0U) {
+            return status_ok();
+        }
+        auto name_length{in.read_u16()};
+        if (!name_length) {
+            return std::unexpected{std::move(name_length.error())};
+        }
+        out.push_back(static_cast<std::byte>((*name_length >> 8U) & 0xFFU));
+        out.push_back(static_cast<std::byte>(*name_length & 0xFFU));
+        if (auto status{copy_next(in, *name_length, out)}; !status) {
+            return status;
+        }
+        if (auto status{read_nbt_payload(in, *type, out, depth + 1)}; !status) {
+            return status;
+        }
+    }
+}
+
+[[nodiscard]] auto read_nbt_payload(reader &in, std::uint8_t type,
+                                    std::vector<std::byte> &out,
+                                    std::uint32_t depth) -> status {
+    switch (type) {
+    case 0:
+        return status_ok();
+    case 1:
+        return copy_next(in, 1, out);
+    case 2:
+        return copy_next(in, 2, out);
+    case 3:
+    case 5:
+        return copy_next(in, 4, out);
+    case 4:
+    case 6:
+        return copy_next(in, 8, out);
+    case 7: {
+        auto length{in.read_i32()};
+        if (!length) {
+            return std::unexpected{std::move(length.error())};
+        }
+        if (*length < 0) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "nbt: negative byte array length")};
+        }
+        const auto count{static_cast<std::uint32_t>(*length)};
+        out.push_back(static_cast<std::byte>((count >> 24U) & 0xFFU));
+        out.push_back(static_cast<std::byte>((count >> 16U) & 0xFFU));
+        out.push_back(static_cast<std::byte>((count >> 8U) & 0xFFU));
+        out.push_back(static_cast<std::byte>(count & 0xFFU));
+        return copy_next(in, count, out);
+    }
+    case 8: {
+        auto length{in.read_u16()};
+        if (!length) {
+            return std::unexpected{std::move(length.error())};
+        }
+        out.push_back(static_cast<std::byte>((*length >> 8U) & 0xFFU));
+        out.push_back(static_cast<std::byte>(*length & 0xFFU));
+        return copy_next(in, *length, out);
+    }
+    case 9:
+        return read_nbt_list(in, out, depth);
+    case 10:
+        return read_nbt_compound(in, out, depth);
+    case 11: {
+        auto length{in.read_i32()};
+        if (!length) {
+            return std::unexpected{std::move(length.error())};
+        }
+        if (*length < 0) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "nbt: negative int array length")};
+        }
+        const auto count{static_cast<std::uint32_t>(*length)};
+        out.push_back(static_cast<std::byte>((count >> 24U) & 0xFFU));
+        out.push_back(static_cast<std::byte>((count >> 16U) & 0xFFU));
+        out.push_back(static_cast<std::byte>((count >> 8U) & 0xFFU));
+        out.push_back(static_cast<std::byte>(count & 0xFFU));
+        return copy_next(in, static_cast<std::size_t>(count) * 4U, out);
+    }
+    case 12: {
+        auto length{in.read_i32()};
+        if (!length) {
+            return std::unexpected{std::move(length.error())};
+        }
+        if (*length < 0) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "nbt: negative long array length")};
+        }
+        const auto count{static_cast<std::uint32_t>(*length)};
+        out.push_back(static_cast<std::byte>((count >> 24U) & 0xFFU));
+        out.push_back(static_cast<std::byte>((count >> 16U) & 0xFFU));
+        out.push_back(static_cast<std::byte>((count >> 8U) & 0xFFU));
+        out.push_back(static_cast<std::byte>(count & 0xFFU));
+        return copy_next(in, static_cast<std::size_t>(count) * 8U, out);
+    }
+    default:
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       fmt::format("nbt: unknown tag type {}", type))};
+    }
+}
+
+} // namespace
+
+auto encode_nbt(writer &out, const nbt_blob &value) -> status {
+    if (value.bytes.empty()) {
+        out.write_u8(0);
+        return status_ok();
+    }
+    out.write_bytes(value.bytes);
+    return status_ok();
+}
+
+auto decode_nbt(reader &in, nbt_blob &value) -> status {
+    std::vector<std::byte> bytes;
+    if (auto status{read_nbt_tag(in, bytes, 0)}; !status) {
+        return status;
+    }
+    if (bytes.size() == 1U && bytes.front() == std::byte{0}) {
+        bytes.clear();
+    }
+    value.bytes = std::move(bytes);
+    return status_ok();
+}
+
 auto encode_lp_vec3(writer &out, const lp_vec3 &value) -> status {
     const auto x{sanitize_component(value.x)};
     const auto y{sanitize_component(value.y)};

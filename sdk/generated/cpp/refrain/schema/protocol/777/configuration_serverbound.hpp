@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 37ad437ddc6c0e0a
+// Schema hash: db66f0c829a44af5
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_SERVERBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_SERVERBOUND_HPP
@@ -19,6 +19,7 @@
 #include <refrain/core/error.hpp>
 #include <refrain/net/base.hpp>
 #include <refrain/data/resource_location.hpp>
+#include <refrain/net/wire.hpp>
 #include <refrain/schema/protocol/777/common.hpp>
 
 namespace refrain::protocol::v777::configuration::serverbound {
@@ -87,6 +88,14 @@ struct accept_code_of_conduct {
     static constexpr std::uint16_t packet_id = 0x9;
     static constexpr std::string_view packet_name = "accept_code_of_conduct";
 
+};
+
+struct custom_click_action {
+    static constexpr std::uint16_t packet_id = 0x8;
+    static constexpr std::string_view packet_name = "custom_click_action";
+
+    ::refrain::data::resource_location id;
+    ::refrain::net::nbt_blob payload;
 };
 [[nodiscard]] inline auto encode_client_information(::refrain::net::writer &out, const client_information &value) -> ::refrain::status {
   static_cast<void>(out);
@@ -307,6 +316,38 @@ struct accept_code_of_conduct {
 [[nodiscard]] inline auto decode_accept_code_of_conduct(::refrain::net::reader &in, accept_code_of_conduct &value) -> ::refrain::status {
   static_cast<void>(in);
   static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_custom_click_action(::refrain::net::writer &out, const custom_click_action &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.id); !written) {
+      return written;
+    }
+  }
+  {
+    if (auto written = ::refrain::net::encode_nbt(out, value.payload); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_custom_click_action(::refrain::net::reader &in, custom_click_action &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.id = std::move(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_nbt(in, value.payload); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
   return ::refrain::status_ok();
 }
 
