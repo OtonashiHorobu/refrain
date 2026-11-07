@@ -466,4 +466,12 @@ auto simple_selector_feature::place(feature_context &context,
                                random, origin);
 }
 
+auto boolean_selector_feature::place(feature_context &context,
+                                     worldgen_random &random,
+                                     const block_pos &origin) const -> bool {
+    const bool result = random.next_boolean();
+    return context.place_by_id(result ? feature_true_ : feature_false_, random,
+                               origin);
+}
+
 } // namespace refrain::worldgen::feature

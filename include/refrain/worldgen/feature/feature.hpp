@@ -230,4 +230,20 @@ class simple_selector_feature final : public feature {
     std::vector<std::string> entries_{};
 };
 
+/// `RandomBooleanSelectorFeature`.
+class boolean_selector_feature final : public feature {
+  public:
+    boolean_selector_feature(std::string feature_true,
+                             std::string feature_false)
+        : feature_true_{std::move(feature_true)},
+          feature_false_{std::move(feature_false)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::string feature_true_{};
+    std::string feature_false_{};
+};
+
 } // namespace refrain::worldgen::feature

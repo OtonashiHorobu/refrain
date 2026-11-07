@@ -456,6 +456,24 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       std::move(entries)));
             continue;
         }
+        if (*type == "minecraft:random_boolean_selector") {
+            const auto *true_value = document.document.find("feature_true");
+            const auto *false_value = document.document.find("feature_false");
+            if (true_value == nullptr || false_value == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "boolean selector is incomplete")};
+            }
+            auto true_id = reference_id(*true_value);
+            auto false_id = reference_id(*false_value);
+            if (!true_id || !false_id) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "boolean selector is invalid")};
+            }
+            features_.emplace(id,
+                              std::make_unique<boolean_selector_feature>(
+                                  std::move(*true_id), std::move(*false_id)));
+            continue;
+        }
         return std::unexpected{
             make_error(error_code::unsupported, "unsupported feature type")};
     }
