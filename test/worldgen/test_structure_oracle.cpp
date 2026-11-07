@@ -1659,4 +1659,68 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             expect(actual.bounds.max_z == (*values)[5]);
         }
     };
+
+    "a real jungle temple start matches orientation and box"_test = [] {
+        if (std::getenv("REFRAIN_VANILLA_JUNGLE_REAL") == nullptr) {
+            return;
+        }
+        const char *region = std::getenv("REFRAIN_VANILLA_JUNGLE_REGION");
+        if (region == nullptr) {
+            return;
+        }
+        const jint chunk_x = 9;
+        const jint chunk_z = 2;
+        const jlong seed = 2;
+        const auto start = refrain::worldgen::structure::jungle_temple_start(
+            chunk_pos{.x = chunk_x, .z = chunk_z}, seed, 63,
+            [](jint, jint, refrain::worldgen::heightmap_kind) {
+                return jint{80};
+            });
+        expect(start.has_value());
+        if (!start) {
+            return;
+        }
+        const auto reference = read_chunk(region, chunk_x, chunk_z);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        const auto *structures = child(reference->as_compound(), "structures");
+        const auto *starts_value =
+            structures == nullptr ? nullptr
+                                  : child(structures->as_compound(), "starts");
+        const auto *expected = starts_value == nullptr
+                                   ? nullptr
+                                   : child(starts_value->as_compound(),
+                                           "minecraft:jungle_pyramid");
+        expect(expected != nullptr);
+        if (expected == nullptr) {
+            return;
+        }
+        const auto *children = child(expected->as_compound(), "Children");
+        const auto *pieces =
+            children == nullptr ? nullptr : children->as_list();
+        expect(pieces != nullptr && pieces->items.size() == 1U);
+        if (pieces == nullptr || pieces->items.size() != 1U ||
+            start->pieces.size() != 1U) {
+            return;
+        }
+        const auto *piece = pieces->items.front().as_compound();
+        const auto &actual = start->pieces.front();
+        const auto *id = child(piece, "id");
+        const auto *bb = child(piece, "BB");
+        const auto *orientation = child(piece, "O");
+        const auto values = bb == nullptr ? std::nullopt : bb->as_int_array();
+        expect(id != nullptr && bb != nullptr && orientation != nullptr);
+        if (id == nullptr || bb == nullptr || orientation == nullptr ||
+            !values || values->size() != 6U) {
+            return;
+        }
+        expect(id->as_string() == actual.type);
+        expect(orientation->as_int() == actual.orientation);
+        expect(actual.bounds.min_x == (*values)[0]);
+        expect(actual.bounds.min_z == (*values)[2]);
+        expect(actual.bounds.max_x == (*values)[3]);
+        expect(actual.bounds.max_z == (*values)[5]);
+    };
 };
