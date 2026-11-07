@@ -4,6 +4,8 @@
 
 #include <refrain/worldgen/structure/placement_stage.hpp>
 
+#include <refrain/worldgen/structure/generation.hpp>
+
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 
 #include <array>
@@ -478,6 +480,121 @@ void place_buried_treasure(const structure_place_context &context,
         }
         (void)create_chest(context, x, y, z, random);
         return;
+    }
+}
+
+void place_ocean_ruin_piece(const structure_place_context &context,
+                            const structure_piece_record &piece,
+                            worldgen_random &random) {
+    if (context.templates == nullptr || context.region == nullptr) {
+        return;
+    }
+    const auto &templ = context.templates->get_or_create(piece.template_id);
+    if (templ.palettes.empty()) {
+        return;
+    }
+    block_pos origin{
+        .x = piece.template_x, .y = piece.template_y, .z = piece.template_z};
+    if (piece.height_position >= 0) {
+        origin.y = piece.height_position;
+    } else {
+        const auto column_x = origin.x & 15;
+        const auto column_z = origin.z & 15;
+        auto *column_chunk = context.region->find(origin.x >> 4, origin.z >> 4);
+        if (column_chunk != nullptr) {
+            origin.y = column_chunk->first_available(
+                heightmap_kind::ocean_floor_wg, column_x, column_z);
+            const auto corner = transform_position(
+                block_pos{.x = templ.size_x - 1, .y = 0, .z = templ.size_z - 1},
+                template_transform{
+                    .mirror = template_mirror::none,
+                    .rotation =
+                        static_cast<template_rotation>(piece.template_rotation),
+                    .pivot = block_pos{},
+                });
+            origin.y =
+                ocean_ruin_floor_height(*context.region, *context.registry,
+                                        context.chunk->min_y(), origin,
+                                        block_pos{.x = origin.x + corner.x,
+                                                  .y = origin.y + corner.y,
+                                                  .z = origin.z + corner.z});
+        }
+    }
+    block_rot_processor rot{piece.integrity, {}, false};
+    block_ignore_processor ignore{
+        std::vector<std::string>{"minecraft:air", "minecraft:structure_block"}};
+    template_place_settings settings{};
+    settings.transform = template_transform{
+        .mirror = template_mirror::none,
+        .rotation = static_cast<template_rotation>(piece.template_rotation),
+        .pivot = block_pos{},
+    };
+    settings.liquids = liquid_settings::apply_waterlogging;
+    settings.bounds = template_bounds{
+        .min_x = context.chunk->chunk_x() * 16,
+        .min_y = context.chunk->min_y(),
+        .min_z = context.chunk->chunk_z() * 16,
+        .max_x = context.chunk->chunk_x() * 16 + 15,
+        .max_y = context.chunk->min_y() + context.chunk->height() - 1,
+        .max_z = context.chunk->chunk_z() * 16 + 15,
+    };
+    settings.processors = {&rot, &ignore};
+    settings.random = &random;
+    (void)place_template(*context.region, *context.registry, templ, origin,
+                         settings);
+    const std::string loot = piece.large
+                                 ? "minecraft:chests/underwater_ruin_big"
+                                 : "minecraft:chests/underwater_ruin_small";
+    for (const auto &palette : templ.palettes) {
+        for (const auto &block : palette) {
+            if (block.nbt == nullptr) {
+                continue;
+            }
+            const auto metadata = block.nbt->find("metadata");
+            if (metadata == block.nbt->end()) {
+                continue;
+            }
+            const auto text = metadata->second.as_string();
+            if (!text) {
+                continue;
+            }
+            const auto relative = transform_position(
+                block_pos{.x = block.x, .y = block.y, .z = block.z},
+                settings.transform);
+            const auto world = block_pos{.x = origin.x + relative.x,
+                                         .y = origin.y + relative.y,
+                                         .z = origin.z + relative.z};
+            if (context.chunk == nullptr ||
+                (world.x >> 4) != context.chunk->chunk_x() ||
+                (world.z >> 4) != context.chunk->chunk_z()) {
+                continue;
+            }
+            if (*text == "chest") {
+                const auto current_name = block_name(
+                    context,
+                    context.region->state_at(world.x, world.y, world.z));
+                if (!current_name.starts_with("minecraft:chest")) {
+                    continue;
+                }
+                data::nbt::compound entity;
+                entity["id"] = data::nbt::value{std::string{"minecraft:chest"}};
+                entity["x"] = data::nbt::value{world.x};
+                entity["y"] = data::nbt::value{world.y};
+                entity["z"] = data::nbt::value{world.z};
+                entity["LootTable"] = data::nbt::value{std::string{loot}};
+                entity["LootTableSeed"] = data::nbt::value{random.next_long()};
+                (void)context.region->set_block_entity(
+                    world.x, world.y, world.z, std::move(entity));
+            } else if (*text == "drowned") {
+                const auto water = context.state("minecraft:water");
+                const auto air = context.state("minecraft:air");
+                const auto replacement = world.y > 63 ? air : water;
+                if (replacement != no_block_state) {
+                    (void)context.region->set_block_state(world.x, world.y,
+                                                          world.z, replacement);
+                }
+            }
+        }
     }
 }
 
@@ -1068,6 +1185,8 @@ void place_structure_piece(const structure_place_context &context,
         place_desert_pyramid(context, piece, random);
     } else if (piece.type == "minecraft:shipwreck") {
         place_shipwreck_piece(context, piece, random);
+    } else if (piece.type == "minecraft:ocean_ruin") {
+        place_ocean_ruin_piece(context, piece, random);
     }
 }
 
