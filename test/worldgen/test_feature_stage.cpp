@@ -23,6 +23,7 @@ using refrain::worldgen::heightmap_kind;
 using refrain::worldgen::proto_chunk;
 using refrain::worldgen::feature::biome_feature_list;
 using refrain::worldgen::feature::block_blob_feature;
+using refrain::worldgen::feature::boolean_selector_feature;
 using refrain::worldgen::feature::configured_feature_document;
 using refrain::worldgen::feature::decode_block_predicate;
 using refrain::worldgen::feature::decode_placement;
@@ -124,6 +125,24 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
             }
             expect(placed_count == 2U);
         };
+};
+
+suite<"worldgen/boolean-selector"> boolean_selector_tests = [] {
+    "the boolean selector forwards to one nested feature"_test = [] {
+        feature_context context;
+        std::string chosen;
+        context.place_by_id = [&chosen](std::string_view id, worldgen_random &,
+                                        const block_pos &) {
+            chosen = std::string{id};
+            return true;
+        };
+        boolean_selector_feature selector{"oracle:true", "oracle:false"};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        expect(
+            selector.place(context, random, block_pos{.x = 0, .y = 0, .z = 0}));
+        expect(chosen == "oracle:true" || chosen == "oracle:false");
+    };
 };
 
 suite<"worldgen/block-blob"> block_blob_tests = [] {
