@@ -237,6 +237,52 @@ class count_on_every_layer final : public placement_modifier {
     std::unique_ptr<provider::int_provider> count_;
 };
 
+class environment_scan final : public placement_modifier {
+  public:
+    environment_scan(jint direction, std::unique_ptr<block_predicate> target,
+                     std::unique_ptr<block_predicate> allowed, jint max_steps)
+        : direction_{direction}, target_{std::move(target)},
+          allowed_{std::move(allowed)}, max_steps_{max_steps} {}
+    void modify(const placement_context &context, worldgen_random &,
+                const block_pos &origin,
+                std::vector<block_pos> &out) const override {
+        block_pos pos = origin;
+        const auto allowed = [&](const block_pos &value) {
+            return allowed_ == nullptr ||
+                   allowed_->test(*context.region, *context.states, value);
+        };
+        const auto target = [&](const block_pos &value) {
+            return target_->test(*context.region, *context.states, value);
+        };
+        if (!allowed(pos)) {
+            return;
+        }
+        for (jint i = 0; i < max_steps_; ++i) {
+            if (target(pos)) {
+                out.push_back(pos);
+                return;
+            }
+            pos.y += direction_;
+            if (pos.y < context.chunk->min_y() ||
+                pos.y >= context.chunk->min_y() + context.chunk->height()) {
+                return;
+            }
+            if (!allowed(pos)) {
+                break;
+            }
+        }
+        if (target(pos)) {
+            out.push_back(pos);
+        }
+    }
+
+  private:
+    jint direction_{-1};
+    std::unique_ptr<block_predicate> target_;
+    std::unique_ptr<block_predicate> allowed_;
+    jint max_steps_{1};
+};
+
 class surface_water_depth_filter final : public placement_modifier {
   public:
     explicit surface_water_depth_filter(jint max_depth)
@@ -385,6 +431,42 @@ auto decode_placement(const data::json::value &document,
         }
         return std::unique_ptr<placement_modifier>{
             std::make_unique<offset_placement>(x, y, z)};
+    }
+    if (*type == "minecraft:environment_scan") {
+        const auto *direction = document.find("direction_of_search");
+        const auto *target = document.find("target_condition");
+        const auto *max_steps = document.find("max_steps");
+        if (direction == nullptr || target == nullptr || max_steps == nullptr) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "environment_scan is incomplete")};
+        }
+        const auto direction_name = direction->as_string();
+        if (!direction_name ||
+            (*direction_name != "up" && *direction_name != "down")) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "environment direction is invalid")};
+        }
+        auto target_predicate = decode_block_predicate(*target, states);
+        if (!target_predicate) {
+            return std::unexpected{target_predicate.error()};
+        }
+        std::unique_ptr<block_predicate> allowed_predicate;
+        if (const auto *allowed = document.find("allowed_search_condition");
+            allowed != nullptr) {
+            auto decoded = decode_block_predicate(*allowed, states);
+            if (!decoded) {
+                return std::unexpected{decoded.error()};
+            }
+            allowed_predicate = std::move(*decoded);
+        }
+        const auto steps = max_steps->as_int64();
+        if (!steps) {
+            return std::unexpected{steps.error()};
+        }
+        return std::unique_ptr<placement_modifier>{
+            std::make_unique<environment_scan>(
+                *direction_name == "up" ? 1 : -1, std::move(*target_predicate),
+                std::move(allowed_predicate), static_cast<jint>(*steps))};
     }
     if (*type == "minecraft:count_on_every_layer") {
         const auto *count_field = document.find("count");
