@@ -21,6 +21,8 @@
 
 namespace refrain::worldgen::feature {
 
+class tree_decorator;
+
 class feature_registry {
   public:
     explicit feature_registry(block_state_registry &states)
@@ -44,6 +46,8 @@ class feature_registry {
         -> result<std::unique_ptr<state_provider>>;
     [[nodiscard]] auto nested_reference(const data::json::value &input)
         -> result<std::string>;
+    [[nodiscard]] auto decode_fallen_decorators(const data::json::value &list)
+        -> result<std::vector<std::unique_ptr<tree_decorator>>>;
 
     block_state_registry *states_{nullptr};
     std::unordered_map<std::string, state_provider_document>

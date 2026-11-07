@@ -649,6 +649,118 @@ void alter_ground_decorator::place(
     }
 }
 
+auto fallen_tree_feature::place(feature_context &context,
+                                worldgen_random &random,
+                                const block_pos &origin) const -> bool {
+    const auto valid_tree_pos = [&](const block_pos &pos) {
+        const auto state =
+            context.placement.region->state_at(pos.x, pos.y, pos.z);
+        return is_air_block_name(context.placement.states->name(state)) ||
+               context.placement.states->in_tag(
+                   state, "minecraft:replaceable_by_trees");
+    };
+    const auto solid_below = [&](const block_pos &pos) {
+        return context.placement.states
+            ->traits(
+                context.placement.region->state_at(pos.x, pos.y - 1, pos.z))
+            .blocks_motion;
+    };
+    const auto may_place_on = [&](const block_pos &pos) {
+        return valid_tree_pos(pos) && solid_below(pos);
+    };
+    const auto place_log = [&](const block_pos &pos, std::string_view axis) {
+        auto state = trunk_provider_->get(context.placement, random, pos);
+        if (!axis.empty()) {
+            const auto key = context.placement.states->name(state);
+            auto modified = std::string{key};
+            modified = with_state_property(modified, "axis", axis);
+            auto found = states_->find(modified);
+            if (!found) {
+                const auto interned = states_->intern(
+                    modified, context.placement.states->traits(state));
+                if (interned) {
+                    found = *interned;
+                }
+            }
+            if (found) {
+                state = *found;
+            }
+        }
+        (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                        state);
+        context.placement.chunk->mark_post_processing(pos.x, pos.y + 1, pos.z);
+        return pos;
+    };
+    const auto decorate =
+        [&](const std::vector<block_pos> &logs,
+            const std::vector<std::unique_ptr<tree_decorator>> &decorators) {
+            if (decorators.empty() || logs.empty()) {
+                return;
+            }
+            tree_decorator_context decorator_context{.context = context,
+                                                     .states = *states_,
+                                                     .random = random,
+                                                     .logs = logs,
+                                                     .leaves = {}};
+            for (const auto &decorator : decorators) {
+                decorator->place(decorator_context);
+            }
+        };
+
+    const std::array<std::array<jint, 3>, 4> horizontal{{
+        {0, 0, -1},
+        {1, 0, 0},
+        {0, 0, 1},
+        {-1, 0, 0},
+    }};
+    const auto direction =
+        horizontal[static_cast<std::size_t>(random.next_int(4))];
+    const jint length = log_length_->sample(random) - 2;
+    block_pos start{.x = origin.x + direction[0] * (2 + random.next_int(2)),
+                    .y = origin.y,
+                    .z = origin.z + direction[2] * (2 + random.next_int(2))};
+    start.y += 1;
+    for (jint i = 0; i < 6; ++i) {
+        if (may_place_on(start)) {
+            break;
+        }
+        --start.y;
+    }
+    const block_pos saved = start;
+    bool can_place = true;
+    jint gap = 0;
+    for (jint i = 0; i < length; ++i) {
+        if (!valid_tree_pos(start)) {
+            can_place = false;
+            break;
+        }
+        if (!solid_below(start)) {
+            if (++gap > 2) {
+                can_place = false;
+                break;
+            }
+        } else {
+            gap = 0;
+        }
+        start.x += direction[0];
+        start.z += direction[2];
+    }
+    start = saved;
+    if (!can_place) {
+        return true;
+    }
+    std::vector<block_pos> logs;
+    for (jint i = 0; i < length; ++i) {
+        logs.push_back(place_log(start, direction[0] != 0 ? "x" : "z"));
+        start.x += direction[0];
+        start.z += direction[2];
+    }
+    const std::vector<block_pos> stump{place_log(origin, {})};
+    decorate(stump, stump_decorators_);
+    decorate(logs, log_decorators_);
+    return true;
+}
+
 auto tree_feature::valid_tree_pos(feature_context &context,
                                   const block_pos &pos) const -> bool {
     const auto state = context.placement.region->state_at(pos.x, pos.y, pos.z);

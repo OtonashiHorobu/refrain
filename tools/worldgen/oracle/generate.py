@@ -914,6 +914,56 @@ def main() -> int:
         (minecraft_feature / "jungle_tree.json").write_text(
             json.dumps(jungle_tree, indent=2) + "\n"
         )
+        (feature_dir / "platform.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:simple_block",
+                    "to_place": {"id": "minecraft:stone"},
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        platform_positions = [
+            [x, 63, z] for x in range(4, 13) for z in range(4, 13)
+        ]
+        (placed_dir / "platform.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:platform",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": platform_positions,
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        fallen = read_pack_data(
+            args.server_jar,
+            "data/minecraft/worldgen/feature/fallen_oak_tree.json",
+        )
+        (minecraft_feature / "fallen_oak_tree.json").write_text(
+            json.dumps(fallen, indent=2) + "\n"
+        )
+        (placed_dir / "fallen_oak.json").write_text(
+            json.dumps(
+                {
+                    "feature": "minecraft:fallen_oak_tree",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 64, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
         (placed_dir / "real_jungle_tree.json").write_text(
             json.dumps(
                 {
