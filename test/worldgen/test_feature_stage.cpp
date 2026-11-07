@@ -50,6 +50,7 @@ using refrain::worldgen::feature::iceberg_feature;
 using refrain::worldgen::feature::lake_feature;
 using refrain::worldgen::feature::large_dripstone_feature;
 using refrain::worldgen::feature::leave_vine_decorator;
+using refrain::worldgen::feature::monster_room_feature;
 using refrain::worldgen::feature::place_on_ground_decorator;
 using refrain::worldgen::feature::placed_feature_document;
 using refrain::worldgen::feature::placed_feature_runtime;
@@ -1140,6 +1141,149 @@ suite<"worldgen/underwater-magma"> underwater_magma_tests = [] {
         expect(
             feature.place(context, random, block_pos{.x = 8, .y = 23, .z = 8}));
         expect(chunk.state_at(8, 19, 8) == *magma);
+    };
+};
+
+suite<"worldgen/monster-room"> monster_room_tests = [] {
+    "a solid shell with one wall hole becomes a spawner room"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto cave_air = registry.intern("minecraft:cave_air", {.air = true});
+        auto cobblestone = registry.intern("minecraft:cobblestone",
+                                           {.air = false,
+                                            .blocks_motion = true,
+                                            .blocks_motion_no_leaves = true});
+        auto mossy = registry.intern("minecraft:mossy_cobblestone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto spawner = registry.intern("minecraft:spawner",
+                                       {.air = false,
+                                        .blocks_motion = true,
+                                        .blocks_motion_no_leaves = true});
+        auto chest = registry.intern("minecraft:chest[facing=north]",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(stone && cave_air && cobblestone && mossy && spawner && chest);
+        if (!stone || !cave_air || !cobblestone || !mossy || !spawner ||
+            !chest) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 64};
+        for (jint y = 24; y <= 36; ++y) {
+            for (jint z = 2; z <= 14; ++z) {
+                for (jint x = 2; x <= 14; ++x) {
+                    chunk.set_state(x, y, z, *stone);
+                }
+            }
+        }
+        // Two vertical shafts; exactly one of them lies on the room wall for
+        // either random room size.
+        for (jint y = 30; y <= 31; ++y) {
+            chunk.set_state(5, y, 8, *cave_air);
+            chunk.set_state(4, y, 8, *cave_air);
+        }
+        chunk_region region{chunk, 0};
+        const auto resolve = [&](std::string_view key) -> block_state_id {
+            if (const auto found = registry.find(key); found.has_value()) {
+                return *found;
+            }
+            const auto block = state_block_name(key);
+            const bool air = is_air_block_name(block);
+            const auto inserted =
+                registry.intern(key, {.air = air, .blocks_motion = !air});
+            return inserted.has_value() ? *inserted : no_block_state;
+        };
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 64,
+                                            .sea_level = 8,
+                                        },
+                                    .resolve_state = resolve,
+                                }};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        monster_room_feature feature;
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 30, .z = 8}));
+        expect(chunk.state_at(8, 30, 8) == *spawner);
+        const auto *entity =
+            chunk.block_entity_at(block_pos{.x = 8, .y = 30, .z = 8});
+        expect(entity != nullptr);
+        if (entity != nullptr) {
+            const auto spawn_data = entity->find("SpawnData");
+            expect(spawn_data != entity->end());
+            if (spawn_data != entity->end()) {
+                const auto *compound = spawn_data->second.as_compound();
+                expect(compound != nullptr);
+                if (compound != nullptr) {
+                    const auto id = compound->find("id");
+                    expect(id != compound->end());
+                }
+            }
+        }
+        const auto wall_below = chunk.state_at(8, 29, 8);
+        expect(wall_below == *cobblestone || wall_below == *mossy);
+        bool found_wall = false;
+        for (jint y = 29; y <= 34 && !found_wall; ++y) {
+            for (jint z = 4; z <= 12 && !found_wall; ++z) {
+                for (jint x = 4; x <= 12; ++x) {
+                    const auto state = chunk.state_at(x, y, z);
+                    if (state == *cobblestone || state == *mossy) {
+                        found_wall = true;
+                        break;
+                    }
+                }
+            }
+        }
+        expect(found_wall);
+    };
+
+    "a fully solid block has no hole and is rejected"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(stone.has_value());
+        if (!stone) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 64};
+        for (jint y = 24; y <= 36; ++y) {
+            for (jint z = 2; z <= 14; ++z) {
+                for (jint x = 2; x <= 14; ++x) {
+                    chunk.set_state(x, y, z, *stone);
+                }
+            }
+        }
+        chunk_region region{chunk, 0};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 64,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        monster_room_feature feature;
+        expect(!feature.place(context, random,
+                              block_pos{.x = 8, .y = 30, .z = 8}));
+        expect(chunk.state_at(8, 30, 8) == *stone);
     };
 };
 

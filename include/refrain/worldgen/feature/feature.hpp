@@ -467,6 +467,14 @@ class freeze_top_layer_feature final : public feature {
     block_state_id snow_{no_block_state};
 };
 
+/// `MonsterRoomFeature`: a cobblestone dungeon room with a spawner and up to
+/// two loot chests, carved into a solid shell.
+class monster_room_feature final : public feature {
+  public:
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+};
+
 /// `SpikeFeature`: a tapering spike above a base block with an optional
 /// downward pillar (ice spikes).
 class spike_feature final : public feature {

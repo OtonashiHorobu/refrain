@@ -4,6 +4,9 @@
 
 #include <refrain/worldgen/feature/feature.hpp>
 
+#include <array>
+#include <tuple>
+
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/core/mth.hpp>
 #include <refrain/worldgen/noise/noise.hpp>
@@ -1487,6 +1490,171 @@ auto freeze_top_layer_feature::place(feature_context &context,
             }
         }
     }
+    return true;
+}
+
+auto monster_room_feature::place(feature_context &context,
+                                 worldgen_random &random,
+                                 const block_pos &origin) const -> bool {
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
+    const auto is_solid = [&](const block_pos &pos) {
+        return states.traits(region.state_at(pos.x, pos.y, pos.z))
+            .blocks_motion;
+    };
+    const auto is_empty = [&](const block_pos &pos) {
+        return states.traits(region.state_at(pos.x, pos.y, pos.z)).air;
+    };
+    const jint xr = random.next_int(2) + 2;
+    const jint zr = random.next_int(2) + 2;
+    const jint min_x = -xr - 1;
+    const jint max_x = xr + 1;
+    const jint min_z = -zr - 1;
+    const jint max_z = zr + 1;
+    jint hole_count = 0;
+    for (jint dx = min_x; dx <= max_x; ++dx) {
+        for (jint dy = -1; dy <= 4; ++dy) {
+            for (jint dz = min_z; dz <= max_z; ++dz) {
+                const block_pos pos{
+                    .x = origin.x + dx, .y = origin.y + dy, .z = origin.z + dz};
+                const bool solid = is_solid(pos);
+                if ((dy == -1 || dy == 4) && !solid) {
+                    return false;
+                }
+                if ((dx == min_x || dx == max_x || dz == min_z ||
+                     dz == max_z) &&
+                    dy == 0 && is_empty(pos) &&
+                    is_empty(
+                        block_pos{.x = pos.x, .y = pos.y + 1, .z = pos.z})) {
+                    ++hole_count;
+                }
+            }
+        }
+    }
+    if (hole_count < 1 || hole_count > 5) {
+        return false;
+    }
+    const auto replaceable = [&](const block_pos &pos) {
+        return !states.in_tag(region.state_at(pos.x, pos.y, pos.z),
+                              "minecraft:features_cannot_replace");
+    };
+    const auto safe_set = [&](const block_pos &pos, block_state_id state) {
+        if (replaceable(pos)) {
+            (void)region.set_block_state(pos.x, pos.y, pos.z, state);
+        }
+    };
+    const auto resolve = [&](std::string_view key) -> block_state_id {
+        return context.placement.resolve_state
+                   ? context.placement.resolve_state(key)
+                   : no_block_state;
+    };
+    const auto cave_air = resolve("minecraft:cave_air");
+    const auto cobblestone = resolve("minecraft:cobblestone");
+    const auto mossy = resolve("minecraft:mossy_cobblestone");
+    for (jint dx = min_x; dx <= max_x; ++dx) {
+        for (jint dy = 3; dy >= -1; --dy) {
+            for (jint dz = min_z; dz <= max_z; ++dz) {
+                const block_pos pos{
+                    .x = origin.x + dx, .y = origin.y + dy, .z = origin.z + dz};
+                const auto current = region.state_at(pos.x, pos.y, pos.z);
+                const auto name = state_block_name(states.name(current));
+                const bool border = dx == min_x || dy == -1 || dz == min_z ||
+                                    dx == max_x || dy == 4 || dz == max_z;
+                if (border) {
+                    if (pos.y >= context.placement.chunk->min_y() &&
+                        !is_solid(block_pos{
+                            .x = pos.x, .y = pos.y - 1, .z = pos.z})) {
+                        (void)region.set_block_state(pos.x, pos.y, pos.z,
+                                                     cave_air);
+                    } else if (states.traits(current).blocks_motion &&
+                               name != "minecraft:chest") {
+                        if (dy == -1 && random.next_int(4) != 0) {
+                            safe_set(pos, mossy);
+                        } else {
+                            safe_set(pos, cobblestone);
+                        }
+                    }
+                } else if (name != "minecraft:chest" &&
+                           name != "minecraft:spawner") {
+                    safe_set(pos, cave_air);
+                }
+            }
+        }
+    }
+    for (jint attempt = 0; attempt < 2; ++attempt) {
+        for (jint i = 0; i < 3; ++i) {
+            const jint chest_x = origin.x + random.next_int(xr * 2 + 1) - xr;
+            const jint chest_z = origin.z + random.next_int(zr * 2 + 1) - zr;
+            const block_pos chest_pos{
+                .x = chest_x, .y = origin.y, .z = chest_z};
+            if (!is_empty(chest_pos)) {
+                continue;
+            }
+            jint walls = 0;
+            std::string_view facing = "north";
+            for (const auto &[dx, dz] : std::array<std::pair<jint, jint>, 4>{
+                     {{0, -1}, {1, 0}, {0, 1}, {-1, 0}}}) {
+                if (is_solid(block_pos{
+                        .x = chest_x + dx, .y = origin.y, .z = chest_z + dz})) {
+                    ++walls;
+                }
+            }
+            if (walls != 1) {
+                continue;
+            }
+            // `StructurePiece.reorient`: face away from the single solid
+            // horizontal neighbour.
+            for (const auto &[name, dx, dz] :
+                 std::array<std::tuple<std::string_view, jint, jint>, 4>{
+                     {{"north", 0, -1},
+                      {"east", 1, 0},
+                      {"south", 0, 1},
+                      {"west", -1, 0}}}) {
+                if (is_solid(block_pos{
+                        .x = chest_x + dx, .y = origin.y, .z = chest_z + dz})) {
+                    facing = name == "north"   ? "south"
+                             : name == "south" ? "north"
+                             : name == "east"  ? "west"
+                                               : "east";
+                    break;
+                }
+            }
+            const std::string key =
+                "minecraft:chest[facing=" + std::string{facing} + "]";
+            const auto chest = resolve(key);
+            if (chest != no_block_state) {
+                safe_set(chest_pos, chest);
+                data::nbt::compound entity;
+                entity["id"] = data::nbt::value{std::string{"minecraft:chest"}};
+                entity["x"] = data::nbt::value{chest_x};
+                entity["y"] = data::nbt::value{origin.y};
+                entity["z"] = data::nbt::value{chest_z};
+                entity["LootTable"] = data::nbt::value{
+                    std::string{"minecraft:chests/simple_dungeon"}};
+                entity["LootTableSeed"] = data::nbt::value{random.next_long()};
+                (void)region.set_block_entity(chest_x, origin.y, chest_z,
+                                              std::move(entity));
+                break;
+            }
+        }
+    }
+    const auto spawner = resolve("minecraft:spawner");
+    if (spawner == no_block_state) {
+        return true;
+    }
+    safe_set(origin, spawner);
+    static constexpr std::array<std::string_view, 4> mobs{
+        "minecraft:skeleton", "minecraft:zombie", "minecraft:zombie",
+        "minecraft:spider"};
+    const auto mob = mobs[static_cast<std::size_t>(random.next_int(4))];
+    data::nbt::compound spawner_entity;
+    spawner_entity["id"] =
+        data::nbt::value{std::string{"minecraft:mob_spawner"}};
+    data::nbt::compound spawn_data;
+    spawn_data["id"] = data::nbt::value{std::string{mob}};
+    spawner_entity["SpawnData"] = data::nbt::value{std::move(spawn_data)};
+    (void)region.set_block_entity(origin.x, origin.y, origin.z,
+                                  std::move(spawner_entity));
     return true;
 }
 

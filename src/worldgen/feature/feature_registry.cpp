@@ -763,6 +763,10 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                                     std::move(*rim_provider)));
             continue;
         }
+        if (*type == "minecraft:monster_room") {
+            features_.emplace(id, std::make_unique<monster_room_feature>());
+            continue;
+        }
         if (*type == "minecraft:spike") {
             const auto *state = document.document.find("state");
             const auto *can_place = document.document.find("can_place_on");
