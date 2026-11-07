@@ -280,4 +280,17 @@ class block_pile_feature final : public feature {
     std::unique_ptr<state_provider> provider_{};
 };
 
+/// `OverlayFeature`: places every nested placed feature at the same origin.
+class overlay_feature final : public feature {
+  public:
+    explicit overlay_feature(std::vector<std::string> features)
+        : features_{std::move(features)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::vector<std::string> features_{};
+};
+
 } // namespace refrain::worldgen::feature

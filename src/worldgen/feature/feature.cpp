@@ -535,4 +535,13 @@ auto block_pile_feature::place(feature_context &context,
     return true;
 }
 
+auto overlay_feature::place(feature_context &context, worldgen_random &random,
+                            const block_pos &origin) const -> bool {
+    bool placed = false;
+    for (const auto &id : features_) {
+        placed = context.place_by_id(id, random, origin) || placed;
+    }
+    return placed;
+}
+
 } // namespace refrain::worldgen::feature
