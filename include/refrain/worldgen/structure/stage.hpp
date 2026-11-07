@@ -34,6 +34,19 @@ struct structure_start_context {
     std::function<jint(jint block_x, jint block_z, heightmap_kind)> height_at{};
 };
 
+struct structure_area {
+    std::vector<structure_start> starts{};
+    std::vector<structure_reference> references{};
+};
+
+/// Generates starts for every chunk in the radius-`radius` square around
+/// `target`, then collects the references into `target`. Starts are returned
+/// for the whole square so callers can write each source chunk's own list.
+[[nodiscard]] auto
+generate_structure_area(const chunk_pos &target,
+                        const structure_start_context &context, jint radius)
+    -> structure_area;
+
 /// Generates every structure start owned by `chunk`, in structure-set order.
 /// Unsupported structure types produce no start; their sets are still advanced
 /// exactly like the reference, so an unsupported candidate does not consume a

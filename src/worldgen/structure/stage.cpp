@@ -181,6 +181,23 @@ auto try_generate(const structure_start_context &context,
 
 } // namespace
 
+auto generate_structure_area(const chunk_pos &target,
+                             const structure_start_context &context,
+                             jint radius) -> structure_area {
+    structure_area area;
+    for (jint dx = -radius; dx <= radius; ++dx) {
+        for (jint dz = -radius; dz <= radius; ++dz) {
+            const chunk_pos chunk{.x = target.x + dx, .z = target.z + dz};
+            auto starts = generate_structure_starts(chunk, context);
+            area.starts.insert(area.starts.end(),
+                               std::make_move_iterator(starts.begin()),
+                               std::make_move_iterator(starts.end()));
+        }
+    }
+    area.references = collect_references(area.starts, target, radius);
+    return area;
+}
+
 auto generate_structure_starts(const chunk_pos &chunk,
                                const structure_start_context &context)
     -> std::vector<structure_start> {

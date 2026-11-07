@@ -493,6 +493,44 @@ suite<"worldgen/structure-stage"> structure_stage_tests = [] {
                    .empty());
     };
 
+    "a structure area collects exactly the overlapping reference"_test = [] {
+        structure::structure_data_set data;
+        data.structures.emplace("minecraft:buried_treasure",
+                                structure::structure_document{
+                                    .id = "minecraft:buried_treasure",
+                                    .type = "minecraft:buried_treasure",
+                                    .step = "underground_structures",
+                                    .biome_ids = {"minecraft:beach"},
+                                });
+        data.sets.emplace(
+            "minecraft:buried_treasures",
+            structure::structure_set{
+                .id = "minecraft:buried_treasures",
+                .structures = {{.structure = "minecraft:buried_treasure",
+                                .weight = 1}},
+                .random_spread =
+                    random_spread_placement{.spacing = 1,
+                                            .separation = 0,
+                                            .salt = 0,
+                                            .spread = spread_type::linear,
+                                            .frequency = 1.0F},
+            });
+        const structure::structure_start_context context{
+            .seed = 12345,
+            .data = &data,
+            .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+            .biome_name = [](std::uint16_t) { return "minecraft:beach"; },
+            .height_at = [](jint, jint, heightmap_kind) { return 70; },
+        };
+        const auto area = structure::generate_structure_area(
+            chunk_pos{.x = 0, .z = 0}, context, 8);
+        expect(area.starts.size() == 289U);
+        expect(area.references.size() == 1U);
+        expect(area.references.front().chunk_x == 0);
+        expect(area.references.front().chunk_z == 0);
+        expect(area.references.front().count == 1);
+    };
+
     "the write stage keeps only starts owned by the chunk"_test = [] {
         const std::vector<structure::selected_structure> structures{{
             .id = "oracle:buried",
