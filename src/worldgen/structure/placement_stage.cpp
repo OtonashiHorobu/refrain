@@ -483,6 +483,378 @@ void place_buried_treasure(const structure_place_context &context,
     }
 }
 
+void place_jungle_temple(const structure_place_context &context,
+                         const structure_piece_record &piece,
+                         worldgen_random &random) {
+    if (context.region == nullptr || context.states == nullptr) {
+        return;
+    }
+    const jint base_y =
+        piece.height_position >= 0 ? piece.height_position : piece.min_y;
+    const auto local = [&](jint x, jint y, jint z) {
+        return piece_local_to_world(piece, base_y, x, y, z);
+    };
+    const auto resolve = [&](std::string_view key) {
+        return context.state ? context.state(key) : no_block_state;
+    };
+    template_mirror mirror = template_mirror::none;
+    template_rotation rotation = template_rotation::none;
+    switch (piece.orientation) {
+    case 0:
+        mirror = template_mirror::left_right;
+        break;
+    case 1:
+        mirror = template_mirror::left_right;
+        rotation = template_rotation::clockwise_90;
+        break;
+    case 3:
+        rotation = template_rotation::clockwise_90;
+        break;
+    default:
+        break;
+    }
+    const auto orient_state = [&](block_state_id state) {
+        if (context.registry == nullptr) {
+            return state;
+        }
+        return transform_state(*context.registry, state,
+                               template_transform{.mirror = mirror,
+                                                  .rotation = rotation,
+                                                  .pivot = block_pos{}});
+    };
+    const auto place = [&](block_state_id state, jint x, jint y, jint z) {
+        if (state == no_block_state) {
+            return;
+        }
+        const auto pos = local(x, y, z);
+        (void)context.region->set_block_state(pos.x, pos.y, pos.z,
+                                              orient_state(state));
+    };
+    const auto place_raw = [&](block_state_id state, jint x, jint y, jint z) {
+        if (state == no_block_state) {
+            return;
+        }
+        const auto pos = local(x, y, z);
+        (void)context.region->set_block_state(pos.x, pos.y, pos.z, state);
+    };
+    const auto place_key = [&](std::string_view key, jint x, jint y, jint z) {
+        place(resolve(key), x, y, z);
+    };
+    const auto air = resolve("minecraft:air");
+    const auto cobble = resolve("minecraft:cobblestone");
+    const auto mossy = resolve("minecraft:mossy_cobblestone");
+    const auto box = [&](jint x0, jint y0, jint z0, jint x1, jint y1, jint z1,
+                         bool skip_air) {
+        for (jint y = y0; y <= y1; ++y) {
+            for (jint x = x0; x <= x1; ++x) {
+                for (jint z = z0; z <= z1; ++z) {
+                    const auto pos = local(x, y, z);
+                    if (skip_air && context.states
+                                        ->traits(context.region->state_at(
+                                            pos.x, pos.y, pos.z))
+                                        .air) {
+                        continue;
+                    }
+                    const auto state =
+                        random.next_float() < 0.4F ? cobble : mossy;
+                    place(state, x, y, z);
+                }
+            }
+        }
+    };
+    const auto air_box = [&](jint x0, jint y0, jint z0, jint x1, jint y1,
+                             jint z1) {
+        for (jint y = y0; y <= y1; ++y) {
+            for (jint x = x0; x <= x1; ++x) {
+                for (jint z = z0; z <= z1; ++z) {
+                    place(air, x, y, z);
+                }
+            }
+        }
+    };
+    const auto stairs = [&](std::string_view facing, jint x, jint y, jint z) {
+        const std::string key =
+            "minecraft:cobblestone_stairs[facing=" + std::string{facing} +
+            ",half=bottom,shape=straight,waterlogged=false]";
+        place_key(key, x, y, z);
+    };
+    const auto chest_at = [&](jint x, jint y, jint z,
+                              std::string_view loot) -> bool {
+        const auto pos = local(x, y, z);
+        if ((pos.x >> 4) != context.chunk->chunk_x() ||
+            (pos.z >> 4) != context.chunk->chunk_z()) {
+            return false;
+        }
+        if (block_name(context,
+                       context.region->state_at(pos.x, pos.y, pos.z)) ==
+            "minecraft:chest") {
+            return false;
+        }
+        const auto facing = chest_facing(context, pos.x, pos.y, pos.z);
+        const std::string key =
+            "minecraft:chest[facing=" + std::string{facing} +
+            ",type=single,waterlogged=false]";
+        const auto state = resolve(key);
+        if (state == no_block_state) {
+            return false;
+        }
+        place_raw(state, x, y, z);
+        data::nbt::compound entity;
+        entity["id"] = data::nbt::value{std::string{"minecraft:chest"}};
+        entity["x"] = data::nbt::value{pos.x};
+        entity["y"] = data::nbt::value{pos.y};
+        entity["z"] = data::nbt::value{pos.z};
+        entity["LootTable"] = data::nbt::value{std::string{loot}};
+        entity["LootTableSeed"] = data::nbt::value{random.next_long()};
+        (void)context.region->set_block_entity(pos.x, pos.y, pos.z,
+                                               std::move(entity));
+        return true;
+    };
+    const auto dispenser_at = [&](jint x, jint y, jint z,
+                                  std::string_view facing,
+                                  std::string_view loot) -> bool {
+        const auto pos = local(x, y, z);
+        if ((pos.x >> 4) != context.chunk->chunk_x() ||
+            (pos.z >> 4) != context.chunk->chunk_z()) {
+            return false;
+        }
+        if (block_name(context,
+                       context.region->state_at(pos.x, pos.y, pos.z)) ==
+            "minecraft:dispenser") {
+            return false;
+        }
+        const std::string key =
+            "minecraft:dispenser[facing=" + std::string{facing} +
+            ",triggered=false]";
+        const auto state = resolve(key);
+        if (state == no_block_state) {
+            return false;
+        }
+        place(state, x, y, z);
+        data::nbt::compound entity;
+        entity["id"] = data::nbt::value{std::string{"minecraft:dispenser"}};
+        entity["x"] = data::nbt::value{pos.x};
+        entity["y"] = data::nbt::value{pos.y};
+        entity["z"] = data::nbt::value{pos.z};
+        entity["LootTable"] = data::nbt::value{std::string{loot}};
+        entity["LootTableSeed"] = data::nbt::value{random.next_long()};
+        (void)context.region->set_block_entity(pos.x, pos.y, pos.z,
+                                               std::move(entity));
+        return true;
+    };
+
+    box(0, -4, 0, 11, 0, 14, false);
+    box(2, 1, 2, 9, 2, 2, false);
+    box(2, 1, 12, 9, 2, 12, false);
+    box(2, 1, 3, 2, 2, 11, false);
+    box(9, 1, 3, 9, 2, 11, false);
+    box(1, 3, 1, 10, 6, 1, false);
+    box(1, 3, 13, 10, 6, 13, false);
+    box(1, 3, 2, 1, 6, 12, false);
+    box(10, 3, 2, 10, 6, 12, false);
+    box(2, 3, 2, 9, 3, 12, false);
+    box(2, 6, 2, 9, 6, 12, false);
+    box(3, 7, 3, 8, 7, 11, false);
+    box(4, 8, 4, 7, 8, 10, false);
+    air_box(3, 1, 3, 8, 2, 11);
+    air_box(4, 3, 6, 7, 3, 9);
+    air_box(2, 4, 2, 9, 5, 12);
+    air_box(4, 6, 5, 7, 6, 9);
+    air_box(5, 7, 6, 6, 7, 8);
+    air_box(5, 1, 2, 6, 2, 2);
+    air_box(5, 2, 12, 6, 2, 12);
+    air_box(5, 5, 1, 6, 5, 1);
+    air_box(5, 5, 13, 6, 5, 13);
+    place(air, 1, 5, 5);
+    place(air, 10, 5, 5);
+    place(air, 1, 5, 9);
+    place(air, 10, 5, 9);
+    for (jint z = 0; z <= 14; z += 14) {
+        box(2, 4, z, 2, 5, z, false);
+        box(4, 4, z, 4, 5, z, false);
+        box(7, 4, z, 7, 5, z, false);
+        box(9, 4, z, 9, 5, z, false);
+    }
+    box(5, 6, 0, 6, 6, 0, false);
+    for (jint x = 0; x <= 11; x += 11) {
+        for (jint z = 2; z <= 12; z += 2) {
+            box(x, 4, z, x, 5, z, false);
+        }
+        box(x, 6, 5, x, 6, 5, false);
+        box(x, 6, 9, x, 6, 9, false);
+    }
+    box(2, 7, 2, 2, 9, 2, false);
+    box(9, 7, 2, 9, 9, 2, false);
+    box(2, 7, 12, 2, 9, 12, false);
+    box(9, 7, 12, 9, 9, 12, false);
+    box(4, 9, 4, 4, 9, 4, false);
+    box(7, 9, 4, 7, 9, 4, false);
+    box(4, 9, 10, 4, 9, 10, false);
+    box(7, 9, 10, 7, 9, 10, false);
+    box(5, 9, 7, 6, 9, 7, false);
+    stairs("north", 5, 9, 6);
+    stairs("north", 6, 9, 6);
+    stairs("south", 5, 9, 8);
+    stairs("south", 6, 9, 8);
+    stairs("north", 4, 0, 0);
+    stairs("north", 5, 0, 0);
+    stairs("north", 6, 0, 0);
+    stairs("north", 7, 0, 0);
+    stairs("north", 4, 1, 8);
+    stairs("north", 4, 2, 9);
+    stairs("north", 4, 3, 10);
+    stairs("north", 7, 1, 8);
+    stairs("north", 7, 2, 9);
+    stairs("north", 7, 3, 10);
+    box(4, 1, 9, 4, 1, 9, false);
+    box(7, 1, 9, 7, 1, 9, false);
+    box(4, 1, 10, 7, 2, 10, false);
+    box(5, 4, 5, 6, 4, 5, false);
+    stairs("east", 4, 4, 5);
+    stairs("west", 7, 4, 5);
+    for (jint i = 0; i < 4; ++i) {
+        stairs("south", 5, -i, 6 + i);
+        stairs("south", 6, -i, 6 + i);
+        air_box(5, -i, 7 + i, 6, -i, 9 + i);
+    }
+    air_box(1, -3, 12, 10, -1, 13);
+    air_box(1, -3, 1, 3, -1, 13);
+    air_box(1, -3, 1, 9, -1, 5);
+    for (jint z = 1; z <= 13; z += 2) {
+        box(1, -3, z, 1, -2, z, false);
+    }
+    for (jint z = 2; z <= 12; z += 2) {
+        box(1, -1, z, 3, -1, z, false);
+    }
+    box(2, -2, 1, 5, -2, 1, false);
+    box(7, -2, 1, 9, -2, 1, false);
+    box(6, -3, 1, 6, -3, 1, false);
+    box(6, -1, 1, 6, -1, 1, false);
+    place_key(
+        "minecraft:tripwire_hook[attached=true,facing=east,powered=false]", 1,
+        -3, 8);
+    place_key(
+        "minecraft:tripwire_hook[attached=true,facing=west,powered=false]", 4,
+        -3, 8);
+    place_key("minecraft:tripwire[attached=true,disarmed=false,east=true,north="
+              "false,powered=false,south=false,west=true]",
+              2, -3, 8);
+    place_key("minecraft:tripwire[attached=true,disarmed=false,east=true,north="
+              "false,powered=false,south=false,west=true]",
+              3, -3, 8);
+    place_key("minecraft:redstone_wire[east=none,north=side,power=0,south=side,"
+              "west=none]",
+              5, -3, 7);
+    place_key("minecraft:redstone_wire[east=none,north=side,power=0,south=side,"
+              "west=none]",
+              5, -3, 6);
+    place_key("minecraft:redstone_wire[east=none,north=side,power=0,south=side,"
+              "west=none]",
+              5, -3, 5);
+    place_key("minecraft:redstone_wire[east=none,north=side,power=0,south=side,"
+              "west=none]",
+              5, -3, 4);
+    place_key("minecraft:redstone_wire[east=none,north=side,power=0,south=side,"
+              "west=none]",
+              5, -3, 3);
+    place_key("minecraft:redstone_wire[east=none,north=side,power=0,south=side,"
+              "west=none]",
+              5, -3, 2);
+    place_key("minecraft:redstone_wire[east=none,north=side,power=0,south=none,"
+              "west=side]",
+              5, -3, 1);
+    place_key("minecraft:redstone_wire[east=side,north=none,power=0,south=none,"
+              "west=side]",
+              4, -3, 1);
+    place(mossy, 3, -3, 1);
+    if (!dispenser_at(3, -2, 1, "north",
+                      "minecraft:chests/jungle_temple_dispenser")) {
+        // The reference always places this dispenser in this template.
+    }
+    place_key(
+        "minecraft:vine[east=false,north=false,south=true,up=false,west=false]",
+        3, -2, 2);
+    place_key(
+        "minecraft:tripwire_hook[attached=true,facing=north,powered=false]", 7,
+        -3, 1);
+    place_key(
+        "minecraft:tripwire_hook[attached=true,facing=south,powered=false]", 7,
+        -3, 5);
+    place_key("minecraft:tripwire[attached=true,disarmed=false,east=false,"
+              "north=true,powered=false,south=true,west=false]",
+              7, -3, 2);
+    place_key("minecraft:tripwire[attached=true,disarmed=false,east=false,"
+              "north=true,powered=false,south=true,west=false]",
+              7, -3, 3);
+    place_key("minecraft:tripwire[attached=true,disarmed=false,east=false,"
+              "north=true,powered=false,south=true,west=false]",
+              7, -3, 4);
+    place_key("minecraft:redstone_wire[east=side,north=none,power=0,south=none,"
+              "west=side]",
+              8, -3, 6);
+    place_key("minecraft:redstone_wire[east=none,north=none,power=0,south=side,"
+              "west=side]",
+              9, -3, 6);
+    place_key("minecraft:redstone_wire[east=none,north=side,power=0,south=up,"
+              "west=none]",
+              9, -3, 5);
+    place(mossy, 9, -3, 4);
+    place_key("minecraft:redstone_wire[east=none,north=side,power=0,south=side,"
+              "west=none]",
+              9, -2, 4);
+    if (!dispenser_at(9, -2, 3, "west",
+                      "minecraft:chests/jungle_temple_dispenser")) {
+    }
+    place_key(
+        "minecraft:vine[east=true,north=false,south=false,up=false,west=false]",
+        8, -1, 3);
+    place_key(
+        "minecraft:vine[east=true,north=false,south=false,up=false,west=false]",
+        8, -2, 3);
+    if (!chest_at(8, -3, 3, "minecraft:chests/jungle_temple")) {
+    }
+    place(mossy, 9, -3, 2);
+    place(mossy, 8, -3, 1);
+    place(mossy, 4, -3, 5);
+    place(mossy, 5, -2, 5);
+    place(mossy, 5, -1, 5);
+    place(mossy, 6, -3, 5);
+    place(mossy, 7, -2, 5);
+    place(mossy, 7, -1, 5);
+    place(mossy, 8, -3, 5);
+    box(9, -1, 1, 9, -1, 5, false);
+    air_box(8, -3, 8, 10, -1, 10);
+    place_key("minecraft:chiseled_stone_bricks", 8, -2, 11);
+    place_key("minecraft:chiseled_stone_bricks", 9, -2, 11);
+    place_key("minecraft:chiseled_stone_bricks", 10, -2, 11);
+    place_key("minecraft:lever[face=wall,facing=north,powered=false]", 8, -2,
+              12);
+    place_key("minecraft:lever[face=wall,facing=north,powered=false]", 9, -2,
+              12);
+    place_key("minecraft:lever[face=wall,facing=north,powered=false]", 10, -2,
+              12);
+    box(8, -3, 8, 8, -3, 10, false);
+    box(10, -3, 8, 10, -3, 10, false);
+    place(mossy, 10, -2, 9);
+    place_key("minecraft:redstone_wire[east=none,north=side,power=0,south=side,"
+              "west=none]",
+              8, -2, 9);
+    place_key("minecraft:redstone_wire[east=none,north=side,power=0,south=side,"
+              "west=none]",
+              8, -2, 10);
+    place_key("minecraft:redstone_wire[east=side,north=side,power=0,south=side,"
+              "west=side]",
+              10, -1, 9);
+    place_key("minecraft:sticky_piston[extended=false,facing=up]", 9, -2, 8);
+    place_key("minecraft:sticky_piston[extended=false,facing=west]", 10, -2, 8);
+    place_key("minecraft:sticky_piston[extended=false,facing=west]", 10, -1, 8);
+    place_key(
+        "minecraft:repeater[delay=1,facing=north,locked=false,powered=false]",
+        10, -2, 10);
+    if (!chest_at(9, -3, 10, "minecraft:chests/jungle_temple")) {
+    }
+}
+
 void place_ocean_ruin_piece(const structure_place_context &context,
                             const structure_piece_record &piece,
                             worldgen_random &random) {
@@ -1204,6 +1576,8 @@ void place_structure_piece(const structure_place_context &context,
         place_shipwreck_piece(context, piece, random);
     } else if (piece.type == "minecraft:ocean_ruin") {
         place_ocean_ruin_piece(context, piece, random);
+    } else if (piece.type == "minecraft:tejp") {
+        place_jungle_temple(context, piece, random);
     }
 }
 
