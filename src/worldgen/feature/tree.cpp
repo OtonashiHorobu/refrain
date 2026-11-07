@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -169,6 +170,76 @@ void leave_vine_decorator::place(const tree_decorator_context &context) const {
                 add_hanging(pos, "north");
             }
         }
+    }
+}
+
+void attached_to_leaves_decorator::place(
+    const tree_decorator_context &context) const {
+    auto shuffled = context.leaves;
+    for (std::size_t i = shuffled.size(); i > 1; --i) {
+        const auto swap_to = static_cast<std::size_t>(
+            context.random.next_int(static_cast<jint>(i)));
+        std::swap(shuffled[i - 1], shuffled[swap_to]);
+    }
+    std::set<std::array<jint, 3>> blacklist;
+    const auto direction_vector = [](std::string_view name) {
+        if (name == "down") {
+            return std::array<jint, 3>{0, -1, 0};
+        }
+        if (name == "up") {
+            return std::array<jint, 3>{0, 1, 0};
+        }
+        if (name == "north") {
+            return std::array<jint, 3>{0, 0, -1};
+        }
+        if (name == "south") {
+            return std::array<jint, 3>{0, 0, 1};
+        }
+        if (name == "west") {
+            return std::array<jint, 3>{-1, 0, 0};
+        }
+        return std::array<jint, 3>{1, 0, 0};
+    };
+    for (const auto &leaf : shuffled) {
+        if (directions_.empty()) {
+            continue;
+        }
+        const auto direction = direction_vector(
+            directions_[static_cast<std::size_t>(context.random.next_int(
+                static_cast<jint>(directions_.size())))]);
+        const block_pos placement{.x = leaf.x + direction[0],
+                                  .y = leaf.y + direction[1],
+                                  .z = leaf.z + direction[2]};
+        const std::array<jint, 3> key{placement.x, placement.y, placement.z};
+        if (blacklist.contains(key) ||
+            context.random.next_float() >= probability_) {
+            continue;
+        }
+        bool empty = true;
+        for (jint i = 1; i <= required_empty_; ++i) {
+            const block_pos pos{.x = leaf.x + direction[0] * i,
+                                .y = leaf.y + direction[1] * i,
+                                .z = leaf.z + direction[2] * i};
+            if (!context.is_air(pos)) {
+                empty = false;
+                break;
+            }
+        }
+        if (!empty) {
+            continue;
+        }
+        for (jint x = placement.x - exclusion_xz_;
+             x <= placement.x + exclusion_xz_; ++x) {
+            for (jint y = placement.y - exclusion_y_;
+                 y <= placement.y + exclusion_y_; ++y) {
+                for (jint z = placement.z - exclusion_xz_;
+                     z <= placement.z + exclusion_xz_; ++z) {
+                    blacklist.insert({x, y, z});
+                }
+            }
+        }
+        context.set_block(placement, provider_->get(context.context.placement,
+                                                    context.random, placement));
     }
 }
 

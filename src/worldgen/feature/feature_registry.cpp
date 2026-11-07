@@ -634,6 +634,65 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 if (decorator_name == "minecraft:trunk_vine") {
                     decoded_decorators.push_back(
                         std::make_unique<trunk_vine_decorator>());
+                } else if (decorator_name == "minecraft:attached_to_leaves") {
+                    const auto *probability = entry.find("probability");
+                    const auto *provider_value = entry.find("block_provider");
+                    const auto *directions = entry.find("directions");
+                    if (probability == nullptr || provider_value == nullptr ||
+                        directions == nullptr || !directions->is_array()) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "attached_to_leaves is incomplete")};
+                    }
+                    const auto probability_value = probability->as_double();
+                    auto provider = decode_provider(*provider_value);
+                    if (!probability_value || !provider) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "attached_to_leaves is invalid")};
+                    }
+                    std::vector<std::string> direction_names;
+                    for (const auto &direction : *directions->as_array()) {
+                        const auto name = direction.as_string();
+                        if (!name) {
+                            return std::unexpected{
+                                make_error(error_code::parse_error,
+                                           "attached direction is invalid")};
+                        }
+                        direction_names.emplace_back(*name);
+                    }
+                    jint exclusion_xz = 0;
+                    jint exclusion_y = 0;
+                    jint required_empty = 1;
+                    if (const auto *field = entry.find("exclusion_radius_xz");
+                        field != nullptr) {
+                        const auto value = field->as_int64();
+                        if (!value) {
+                            return std::unexpected{value.error()};
+                        }
+                        exclusion_xz = static_cast<jint>(*value);
+                    }
+                    if (const auto *field = entry.find("exclusion_radius_y");
+                        field != nullptr) {
+                        const auto value = field->as_int64();
+                        if (!value) {
+                            return std::unexpected{value.error()};
+                        }
+                        exclusion_y = static_cast<jint>(*value);
+                    }
+                    if (const auto *field = entry.find("required_empty_blocks");
+                        field != nullptr) {
+                        const auto value = field->as_int64();
+                        if (!value) {
+                            return std::unexpected{value.error()};
+                        }
+                        required_empty = static_cast<jint>(*value);
+                    }
+                    decoded_decorators.push_back(
+                        std::make_unique<attached_to_leaves_decorator>(
+                            static_cast<float>(*probability_value),
+                            exclusion_xz, exclusion_y, std::move(*provider),
+                            required_empty, std::move(direction_names)));
                 } else if (decorator_name == "minecraft:cocoa") {
                     const auto *probability = entry.find("probability");
                     if (probability == nullptr) {
