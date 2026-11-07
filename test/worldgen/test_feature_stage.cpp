@@ -36,12 +36,14 @@ using refrain::worldgen::feature::feature_registry;
 using refrain::worldgen::feature::feature_sorter;
 using refrain::worldgen::feature::foliage_kind;
 using refrain::worldgen::feature::leave_vine_decorator;
+using refrain::worldgen::feature::place_on_ground_decorator;
 using refrain::worldgen::feature::placed_feature_document;
 using refrain::worldgen::feature::placed_feature_runtime;
 using refrain::worldgen::feature::placement_context;
 using refrain::worldgen::feature::simple_block_feature;
 using refrain::worldgen::feature::simple_state;
 using refrain::worldgen::feature::spring_feature;
+using refrain::worldgen::feature::tree_decorator_context;
 using refrain::worldgen::feature::tree_feature;
 using refrain::worldgen::feature::trunk_kind;
 using refrain::worldgen::feature::trunk_vine_decorator;
@@ -553,6 +555,69 @@ suite<"worldgen/placement-water"> placement_water_tests = [] {
                                block_pos{.x = 0, .y = 0, .z = 0}, out);
             expect(out.empty());
         }
+    };
+};
+
+suite<"worldgen/ground-decorator"> ground_decorator_tests = [] {
+    "place_on_ground puts blocks above solid ground"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto litter = registry.intern("minecraft:leaf_litter",
+                                      {.air = false,
+                                       .blocks_motion = true,
+                                       .blocks_motion_no_leaves = true});
+        expect(stone.has_value() && litter.has_value());
+        if (!stone || !litter) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        for (jint x = 0; x < 16; ++x) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint y = 0; y <= 5; ++y) {
+                    (void)chunk.set_state(x, y, z, *stone);
+                }
+            }
+        }
+        (void)chunk.set_state(8, 7, 8, *stone);
+        (void)chunk.set_state(8, 8, 8, *stone);
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 1};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 32,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        const std::vector<block_pos> logs{{.x = 8, .y = 7, .z = 8},
+                                          {.x = 8, .y = 8, .z = 8}};
+        const std::vector<block_pos> leaves{};
+        place_on_ground_decorator decorator{100, 0, 1, simple_state(*litter)};
+        const tree_decorator_context decorator_context{.context = context,
+                                                       .states = registry,
+                                                       .random = random,
+                                                       .logs = logs,
+                                                       .leaves = leaves};
+        decorator.place(decorator_context);
+        std::size_t placed = 0;
+        for (jint y = 6; y < 12; ++y) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint z = 0; z < 16; ++z) {
+                    placed += registry.name(chunk.state_at(x, y, z)) ==
+                              "minecraft:leaf_litter";
+                }
+            }
+        }
+        expect(placed > 0U) << placed;
     };
 };
 

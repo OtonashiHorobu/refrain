@@ -634,6 +634,48 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 if (decorator_name == "minecraft:trunk_vine") {
                     decoded_decorators.push_back(
                         std::make_unique<trunk_vine_decorator>());
+                } else if (decorator_name == "minecraft:place_on_ground") {
+                    jint tries = 128;
+                    jint radius = 2;
+                    jint height = 1;
+                    if (const auto *field = entry.find("tries");
+                        field != nullptr) {
+                        const auto value = field->as_int64();
+                        if (!value) {
+                            return std::unexpected{value.error()};
+                        }
+                        tries = static_cast<jint>(*value);
+                    }
+                    if (const auto *field = entry.find("radius");
+                        field != nullptr) {
+                        const auto value = field->as_int64();
+                        if (!value) {
+                            return std::unexpected{value.error()};
+                        }
+                        radius = static_cast<jint>(*value);
+                    }
+                    if (const auto *field = entry.find("height");
+                        field != nullptr) {
+                        const auto value = field->as_int64();
+                        if (!value) {
+                            return std::unexpected{value.error()};
+                        }
+                        height = static_cast<jint>(*value);
+                    }
+                    const auto *provider_value =
+                        entry.find("block_state_provider");
+                    if (provider_value == nullptr) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "place_on_ground has no provider")};
+                    }
+                    auto provider = decode_provider(*provider_value);
+                    if (!provider) {
+                        return std::unexpected{provider.error()};
+                    }
+                    decoded_decorators.push_back(
+                        std::make_unique<place_on_ground_decorator>(
+                            tries, radius, height, std::move(*provider)));
                 } else if (decorator_name == "minecraft:beehive") {
                     const auto *probability = entry.find("probability");
                     if (probability == nullptr) {
