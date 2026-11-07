@@ -1001,4 +1001,50 @@ suite<"worldgen/template"> template_tests = [] {
         expect(suspicious_count == 2);
         expect(sand_count == 2);
     };
+
+    "template palettes and rot use positional seeds by default"_test = [] {
+        block_state_registry registry;
+        const auto stone = registry.intern(
+            "minecraft:stone", {.air = false, .blocks_motion = true});
+        const auto dirt = registry.intern(
+            "minecraft:dirt", {.air = false, .blocks_motion = true});
+        expect(stone && dirt);
+        if (!stone || !dirt) {
+            return;
+        }
+        structure_template templ{};
+        templ.size_x = 1;
+        templ.size_y = 1;
+        templ.size_z = 1;
+        templ.palettes.push_back(
+            {template_block_info{.x = 0, .y = 0, .z = 0, .state = *stone}});
+        templ.palettes.push_back(
+            {template_block_info{.x = 0, .y = 0, .z = 0, .state = *dirt}});
+        legacy_random_source probe{mth_get_seed(0, 10, 0)};
+        const auto expected_palette = probe.next_int(2);
+        template_place_settings settings{};
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk_region region{chunk, 0};
+        (void)place_template(region, registry, templ,
+                             block_pos{.x = 0, .y = 10, .z = 0}, settings);
+        const auto chosen = chunk.state_at(0, 10, 0);
+        expect(chosen == (expected_palette == 0 ? *stone : *dirt));
+
+        structure_template rot_template{};
+        rot_template.size_x = 1;
+        rot_template.size_y = 1;
+        rot_template.size_z = 1;
+        rot_template.palettes.push_back(
+            {template_block_info{.x = 0, .y = 0, .z = 0, .state = *stone}});
+        legacy_random_source rot_probe{mth_get_seed(0, 20, 0)};
+        const bool kept = rot_probe.next_float() <= 0.5F;
+        block_rot_processor rot{0.5F, {}, false};
+        auto rot_settings = template_place_settings{};
+        rot_settings.processors = {&rot};
+        proto_chunk rot_chunk{registry, 0, 0, 0, 32};
+        chunk_region rot_region{rot_chunk, 0};
+        (void)place_template(rot_region, registry, rot_template,
+                             block_pos{.x = 0, .y = 20, .z = 0}, rot_settings);
+        expect((rot_chunk.state_at(0, 20, 0) == *stone) == kept);
+    };
 };
