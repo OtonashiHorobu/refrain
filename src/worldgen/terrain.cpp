@@ -24,6 +24,8 @@ auto fill_chunk(const fill_options &options,
     const jint empty_height = options.min_y - 1;
     chunk.ocean_floor.fill(empty_height);
     chunk.world_surface.fill(empty_height);
+    chunk.post_processing.resize(
+        static_cast<std::size_t>((options.height + 15) / 16));
 
     const volume vol{chunk_width,  options.height, chunk_depth,
                      chunk_x * 16, options.min_y,  chunk_z * 16};
@@ -55,6 +57,15 @@ auto fill_chunk(const fill_options &options,
                 }
                 chunk.world_surface[column] =
                     std::max(chunk.world_surface[column], block_y);
+                if (aquifer.should_schedule_fluid_update() &&
+                    (*state == options.blocks.default_fluid ||
+                     *state == options.blocks.lava)) {
+                    const jint local_y = block_y - options.min_y;
+                    const auto section = static_cast<std::size_t>(local_y >> 4);
+                    const auto packed = static_cast<std::uint16_t>(
+                        (x & 15) | ((local_y & 15) << 4) | ((z & 15) << 8));
+                    chunk.post_processing[section].push_back(packed);
+                }
             }
         }
     }

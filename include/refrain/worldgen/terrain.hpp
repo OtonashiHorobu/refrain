@@ -117,6 +117,10 @@ struct chunk_blocks {
     std::vector<std::uint16_t> states{};
     std::array<jint, 256> ocean_floor{};
     std::array<jint, 256> world_surface{};
+    /// `ChunkAccess.postProcessing` per section: packed `x | y<<4 | z<<8`
+    /// coordinates of fluid blocks the aquifer asked to schedule. Section
+    /// indices are relative to `min_y`.
+    std::vector<std::vector<std::uint16_t>> post_processing{};
 
     [[nodiscard]] auto at(jint x, jint y, jint z) const -> std::uint16_t {
         return states[static_cast<std::size_t>(y - min_y) * 256U +
@@ -141,7 +145,8 @@ struct fill_options {
 /// volume, walk y from the top down and write the aquifer/default block result.
 /// Air is skipped. `world_surface` records every written state, while
 /// `ocean_floor` only records states in `minecraft:blocks_motion_in_heightmap`;
-/// the fill writes stone and fluids, and no fluid belongs to that tag.
+/// the fill writes stone and fluids, and no fluid belongs to that tag. Fluid
+/// writes the aquifer asks to schedule are recorded in `post_processing`.
 [[nodiscard]] auto fill_chunk(const fill_options &options,
                               const density::sampler &final_density,
                               const density::sampler_context &context,

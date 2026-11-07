@@ -137,10 +137,44 @@ auto block_id(std::string_view name) -> std::optional<std::uint16_t> {
     return std::nullopt;
 }
 
+/// `PostProcessing` is a list of per-section short lists; entries are packed
+/// `x | y<<4 | z<<8` relative to the chunk section.
+auto decode_post_processing(const data::nbt::value &root)
+    -> std::optional<std::vector<std::vector<std::uint16_t>>> {
+    const auto *value = root.get("PostProcessing");
+    if (value == nullptr) {
+        return std::nullopt;
+    }
+    const auto *list = value->as_list();
+    if (list == nullptr) {
+        return std::nullopt;
+    }
+    std::vector<std::vector<std::uint16_t>> sections;
+    sections.reserve(list->items.size());
+    for (const auto &section : list->items) {
+        std::vector<std::uint16_t> offsets;
+        if (const auto *inner = section.as_list(); inner != nullptr) {
+            offsets.reserve(inner->items.size());
+            for (const auto &entry : inner->items) {
+                const auto packed = entry.as_short();
+                if (!packed) {
+                    return std::nullopt;
+                }
+                offsets.push_back(static_cast<std::uint16_t>(*packed));
+            }
+        } else if (!section.is(data::nbt::tag_type::end)) {
+            return std::nullopt;
+        }
+        sections.push_back(std::move(offsets));
+    }
+    return sections;
+}
+
 struct vanilla_chunk {
     std::vector<std::uint16_t> blocks{}; ///< index `(y-min_y)*256 + z*16 + x`
     std::array<jint, 256> world_surface{};
     std::array<jint, 256> ocean_floor{};
+    std::vector<std::vector<std::uint16_t>> post_processing{};
 
     [[nodiscard]] auto at(jint x, jint y, jint z) const -> std::uint16_t {
         return blocks[static_cast<std::size_t>(y - oracle_min_y) * 256U +
@@ -304,6 +338,11 @@ auto decode_chunk(const data::nbt::value &root, jint chunk_x, jint chunk_z)
     }
     chunk.world_surface = *surface_heights;
     chunk.ocean_floor = *floor_heights;
+    const auto post_processing = decode_post_processing(root);
+    if (!post_processing) {
+        return std::nullopt;
+    }
+    chunk.post_processing = *post_processing;
     return chunk;
 }
 
