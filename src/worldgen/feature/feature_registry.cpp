@@ -440,6 +440,71 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       static_cast<jint>(*size_value), discard));
             continue;
         }
+        if (*type == "minecraft:huge_fungus") {
+            const auto *base = document.document.find("valid_base_block");
+            const auto *stem = document.document.find("stem_state");
+            const auto *hat = document.document.find("hat_state");
+            const auto *decor = document.document.find("decor_state");
+            const auto *replaceable =
+                document.document.find("replaceable_blocks");
+            if (base == nullptr || stem == nullptr || hat == nullptr ||
+                decor == nullptr || replaceable == nullptr) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "huge fungus is incomplete")};
+            }
+            const auto base_key = decode_state_key(*base);
+            const auto stem_key = decode_state_key(*stem);
+            const auto hat_key = decode_state_key(*hat);
+            const auto decor_key = decode_state_key(*decor);
+            auto filter = decode_block_predicate(*replaceable, *states_);
+            if (!base_key || !stem_key || !hat_key || !decor_key || !filter) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "huge fungus is invalid")};
+            }
+            const auto base_state = resolve_state(*states_, *base_key);
+            const auto stem_state = resolve_state(*states_, *stem_key);
+            const auto hat_state = resolve_state(*states_, *hat_key);
+            const auto decor_state = resolve_state(*states_, *decor_key);
+            if (!base_state || !stem_state || !hat_state || !decor_state) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "huge fungus state is invalid")};
+            }
+            bool planted = false;
+            if (const auto *field = document.document.find("planted");
+                field != nullptr) {
+                const auto value = field->as_bool();
+                if (!value) {
+                    return std::unexpected{value.error()};
+                }
+                planted = *value;
+            }
+            std::array<block_state_id, 3> heads{};
+            for (jint age = 0; age < 3; ++age) {
+                const auto key =
+                    "minecraft:weeping_vines[age=" + std::to_string(23 + age) +
+                    "]";
+                const auto state = resolve_state(*states_, key);
+                if (!state) {
+                    return std::unexpected{make_error(error_code::parse_error,
+                                                      "weeping vines state")};
+                }
+                heads[static_cast<std::size_t>(age)] = *state;
+            }
+            const auto plant_state =
+                resolve_state(*states_, "minecraft:weeping_vines_plant");
+            if (!plant_state) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "weeping vines plant state")};
+            }
+            const bool place_vines =
+                state_block_name(*hat_key) == "minecraft:nether_wart_block";
+            features_.emplace(id,
+                              std::make_unique<huge_fungus_feature>(
+                                  *base_state, *stem_state, *hat_state,
+                                  *decor_state, heads, *plant_state,
+                                  std::move(*filter), planted, place_vines));
+            continue;
+        }
         if (*type == "minecraft:vines") {
             std::array<block_state_id, 6> states{};
             constexpr std::array<std::string_view, 6> keys{{

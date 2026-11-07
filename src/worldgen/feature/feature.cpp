@@ -11,6 +11,11 @@ namespace refrain::worldgen::feature {
 
 namespace {
 
+auto block_name(const feature_context &context, block_state_id state)
+    -> std::string_view {
+    return state_block_name(context.placement.states->name(state));
+}
+
 struct direction_offset {
     jint dx;
     jint dy;
@@ -515,6 +520,194 @@ auto vines_feature::place(feature_context &context, worldgen_random &random,
             origin.x, origin.y, origin.z, states_[state_index[i]]);
     }
     return false;
+}
+
+auto huge_fungus_feature::replaceable(feature_context &context,
+                                      const block_pos &pos,
+                                      bool check_plants) const -> bool {
+    const auto state = context.placement.region->state_at(pos.x, pos.y, pos.z);
+    if (context.placement.states->traits(state).air) {
+        return true;
+    }
+    return check_plants && replaceable_->test(*context.placement.region,
+                                              *context.placement.states, pos);
+}
+
+void huge_fungus_feature::place_stem(feature_context &context,
+                                     worldgen_random &random,
+                                     const block_pos &origin, jint total_height,
+                                     bool huge) const {
+    const jint radius = huge ? 1 : 0;
+    for (jint dx = -radius; dx <= radius; ++dx) {
+        for (jint dz = -radius; dz <= radius; ++dz) {
+            const bool corner =
+                huge && std::abs(dx) == radius && std::abs(dz) == radius;
+            for (jint dy = 0; dy < total_height; ++dy) {
+                const block_pos pos{
+                    .x = origin.x + dx, .y = origin.y + dy, .z = origin.z + dz};
+                if (!replaceable(context, pos, true)) {
+                    continue;
+                }
+                if (planted_) {
+                    (void)context.placement.region->set_block_state(
+                        pos.x, pos.y, pos.z, stem_);
+                } else if (corner) {
+                    if (random.next_float() < 0.1F) {
+                        (void)context.placement.region->set_block_state(
+                            pos.x, pos.y, pos.z, stem_);
+                    }
+                } else {
+                    (void)context.placement.region->set_block_state(
+                        pos.x, pos.y, pos.z, stem_);
+                }
+            }
+        }
+    }
+}
+
+void huge_fungus_feature::place_hat_drop(feature_context &context,
+                                         worldgen_random &random,
+                                         const block_pos &pos,
+                                         bool vines) const {
+    const auto below =
+        context.placement.region->state_at(pos.x, pos.y - 1, pos.z);
+    if (block_name(context, below) == block_name(context, hat_)) {
+        (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                        hat_);
+        return;
+    }
+    if (random.next_float() < 0.15F) {
+        (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                        hat_);
+        if (vines && random.next_int(11) == 0) {
+            try_weeping_vines(context, random, pos);
+        }
+    }
+}
+
+void huge_fungus_feature::place_hat_block(feature_context &context,
+                                          worldgen_random &random,
+                                          const block_pos &pos,
+                                          float decor_chance, float hat_chance,
+                                          float vines_chance) const {
+    if (random.next_float() < decor_chance) {
+        (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                        decor_);
+        return;
+    }
+    if (random.next_float() < hat_chance) {
+        (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                        hat_);
+        if (random.next_float() < vines_chance) {
+            try_weeping_vines(context, random, pos);
+        }
+    }
+}
+
+void huge_fungus_feature::try_weeping_vines(feature_context &context,
+                                            worldgen_random &random,
+                                            const block_pos &pos) const {
+    const block_pos start{.x = pos.x, .y = pos.y - 1, .z = pos.z};
+    if (context.placement.region->state_at(start.x, start.y, start.z) !=
+        context.placement.states->air()) {
+        return;
+    }
+    jint goal = 1 + random.next_int(5);
+    if (random.next_int(7) == 0) {
+        goal *= 2;
+    }
+    block_pos cursor = start;
+    for (jint height = 0; height <= goal; ++height) {
+        if (context.placement.region->state_at(cursor.x, cursor.y, cursor.z) ==
+            context.placement.states->air()) {
+            const bool below_air =
+                height == goal || context.placement.region->state_at(
+                                      cursor.x, cursor.y - 1, cursor.z) ==
+                                      context.placement.states->air();
+            if (below_air) {
+                const auto age = random.next_int(3);
+                (void)context.placement.region->set_block_state(
+                    cursor.x, cursor.y, cursor.z,
+                    weeping_heads_[static_cast<std::size_t>(age)]);
+                break;
+            }
+            (void)context.placement.region->set_block_state(
+                cursor.x, cursor.y, cursor.z, weeping_plant_);
+        }
+        --cursor.y;
+    }
+}
+
+void huge_fungus_feature::place_hat(feature_context &context,
+                                    worldgen_random &random,
+                                    const block_pos &origin, jint total_height,
+                                    bool huge) const {
+    const bool vines = place_vines_;
+    const jint hat_height =
+        std::min(random.next_int(1 + total_height / 3) + 5, total_height);
+    const jint hat_start = total_height - hat_height;
+    for (jint dy = hat_start; dy <= total_height; ++dy) {
+        jint radius = dy < total_height - random.next_int(3) ? 2 : 1;
+        if (hat_height > 8 && dy < hat_start + 4) {
+            radius = 3;
+        }
+        if (huge) {
+            ++radius;
+        }
+        for (jint dx = -radius; dx <= radius; ++dx) {
+            for (jint dz = -radius; dz <= radius; ++dz) {
+                const bool edge_x = dx == -radius || dx == radius;
+                const bool edge_z = dz == -radius || dz == radius;
+                const bool inside = !edge_x && !edge_z && dy != total_height;
+                const bool corner = edge_x && edge_z;
+                const bool hat_bottom = dy < hat_start + 3;
+                const block_pos pos{
+                    .x = origin.x + dx, .y = origin.y + dy, .z = origin.z + dz};
+                if (!replaceable(context, pos, false)) {
+                    continue;
+                }
+                if (hat_bottom) {
+                    if (!inside) {
+                        place_hat_drop(context, random, pos, vines);
+                    }
+                } else if (inside) {
+                    place_hat_block(context, random, pos, 0.1F, 0.2F,
+                                    vines ? 0.1F : 0.0F);
+                } else if (corner) {
+                    place_hat_block(context, random, pos, 0.01F, 0.7F,
+                                    vines ? 0.083F : 0.0F);
+                } else {
+                    place_hat_block(context, random, pos, 0.0005F, 0.98F,
+                                    vines ? 0.07F : 0.0F);
+                }
+            }
+        }
+    }
+}
+
+auto huge_fungus_feature::place(feature_context &context,
+                                worldgen_random &random,
+                                const block_pos &origin) const -> bool {
+    const auto below =
+        context.placement.region->state_at(origin.x, origin.y - 1, origin.z);
+    if (block_name(context, below) != block_name(context, base_)) {
+        return false;
+    }
+    jint total = 4 + random.next_int(10);
+    if (random.next_int(12) == 0) {
+        total *= 2;
+    }
+    if (!planted_ &&
+        origin.y + total + 1 >= context.placement.chunk->min_y() +
+                                    context.placement.chunk->height()) {
+        return false;
+    }
+    const bool huge = !planted_ && random.next_float() < 0.06F;
+    (void)context.placement.region->set_block_state(
+        origin.x, origin.y, origin.z, context.placement.states->air());
+    place_stem(context, random, origin, total, huge);
+    place_hat(context, random, origin, total, huge);
+    return true;
 }
 
 auto sequence_feature::place(feature_context &context, worldgen_random &random,

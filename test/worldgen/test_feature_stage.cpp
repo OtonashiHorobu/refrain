@@ -39,6 +39,7 @@ using refrain::worldgen::feature::feature_data_set;
 using refrain::worldgen::feature::feature_registry;
 using refrain::worldgen::feature::feature_sorter;
 using refrain::worldgen::feature::foliage_kind;
+using refrain::worldgen::feature::huge_fungus_feature;
 using refrain::worldgen::feature::leave_vine_decorator;
 using refrain::worldgen::feature::place_on_ground_decorator;
 using refrain::worldgen::feature::placed_feature_document;
@@ -403,6 +404,85 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
         expect(
             feature.place(context, random, block_pos{.x = 8, .y = 5, .z = 8}));
         expect(chunk.state_at(8, 5, 8) == vines_states[2]);
+    };
+
+    "a planted huge fungus builds a stem and a hat"_test = [] {
+        block_state_registry registry;
+        auto nylium = registry.intern("minecraft:crimson_nylium",
+                                      {.air = false, .blocks_motion = true});
+        auto stem = registry.intern("minecraft:crimson_stem",
+                                    {.air = false, .blocks_motion = true});
+        auto hat = registry.intern("minecraft:nether_wart_block",
+                                   {.air = false, .blocks_motion = true});
+        auto decor = registry.intern("minecraft:shroomlight",
+                                     {.air = false, .blocks_motion = true});
+        std::array<block_state_id, 3> heads{};
+        for (jint age = 0; age < 3; ++age) {
+            const auto state = registry.intern(
+                "minecraft:weeping_vines[age=" + std::to_string(23 + age) + "]",
+                {.air = false});
+            expect(state.has_value());
+            if (!state) {
+                return;
+            }
+            heads[static_cast<std::size_t>(age)] = *state;
+        }
+        auto plant =
+            registry.intern("minecraft:weeping_vines_plant", {.air = false});
+        expect(nylium.has_value() && stem.has_value() && hat.has_value() &&
+               decor.has_value() && plant.has_value());
+        if (!nylium || !stem || !hat || !decor || !plant) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::biomes);
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                expect(chunk.set_state(x, 4, z, *nylium));
+            }
+        }
+        chunk_region region{chunk, 0};
+        placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &registry,
+            .generation =
+                generation_context{.min_y = 0, .height = 32, .sea_level = 8},
+        };
+        feature_context context{.placement = placement};
+        auto replaceable = decode_block_predicate(
+            parse(
+                R"({"type":"minecraft:matching_blocks","blocks":["minecraft:air"]})"),
+            registry);
+        expect(replaceable.has_value());
+        if (!replaceable) {
+            return;
+        }
+        const huge_fungus_feature feature{*nylium,
+                                          *stem,
+                                          *hat,
+                                          *decor,
+                                          heads,
+                                          *plant,
+                                          std::move(*replaceable),
+                                          true,
+                                          true};
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(11)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 5, .z = 8}));
+        expect(chunk.state_at(8, 5, 8) == *stem);
+        jint hat_count = 0;
+        for (jint y = 5; y < 32; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    if (chunk.state_at(x, y, z) == *hat) {
+                        ++hat_count;
+                    }
+                }
+            }
+        }
+        expect(hat_count > 0);
     };
 };
 

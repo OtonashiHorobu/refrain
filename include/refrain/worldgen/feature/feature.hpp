@@ -266,6 +266,52 @@ class vines_feature final : public feature {
     std::array<block_state_id, 6> states_{};
 };
 
+/// `HugeFungusFeature`: crimson/warped stem plus cap, with optional weeping
+/// vines under the cap.
+class huge_fungus_feature final : public feature {
+  public:
+    huge_fungus_feature(block_state_id base, block_state_id stem,
+                        block_state_id hat, block_state_id decor,
+                        std::array<block_state_id, 3> weeping_heads,
+                        block_state_id weeping_plant,
+                        std::unique_ptr<block_predicate> replaceable,
+                        bool planted, bool place_vines)
+        : base_{base}, stem_{stem}, hat_{hat}, decor_{decor},
+          weeping_heads_{weeping_heads}, weeping_plant_{weeping_plant},
+          replaceable_{std::move(replaceable)}, planted_{planted},
+          place_vines_{place_vines} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    [[nodiscard]] auto replaceable(feature_context &context,
+                                   const block_pos &pos,
+                                   bool check_plants) const -> bool;
+    void place_stem(feature_context &context, worldgen_random &random,
+                    const block_pos &origin, jint total_height,
+                    bool huge) const;
+    void place_hat(feature_context &context, worldgen_random &random,
+                   const block_pos &origin, jint total_height, bool huge) const;
+    void place_hat_block(feature_context &context, worldgen_random &random,
+                         const block_pos &pos, float decor_chance,
+                         float hat_chance, float vines_chance) const;
+    void place_hat_drop(feature_context &context, worldgen_random &random,
+                        const block_pos &pos, bool vines) const;
+    void try_weeping_vines(feature_context &context, worldgen_random &random,
+                           const block_pos &pos) const;
+
+    block_state_id base_{no_block_state};
+    block_state_id stem_{no_block_state};
+    block_state_id hat_{no_block_state};
+    block_state_id decor_{no_block_state};
+    std::array<block_state_id, 3> weeping_heads_{};
+    block_state_id weeping_plant_{no_block_state};
+    std::unique_ptr<block_predicate> replaceable_{};
+    bool planted_{false};
+    bool place_vines_{false};
+};
+
 /// `SpringFeature`: a fluid source surrounded by a fixed rock/hole pattern.
 class spring_feature final : public feature {
   public:
