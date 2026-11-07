@@ -194,13 +194,21 @@ void tree_feature::update_leaves(feature_context &context,
                 continue;
             }
             if (smallest != 0) {
-                const auto key = context.placement.states->name(
-                    context.placement.region->state_at(pos.x, pos.y, pos.z));
-                auto modified = std::string{key};
-                modified = with_state_property(modified, "distance",
-                                               std::to_string(smallest));
                 const auto current =
                     context.placement.region->state_at(pos.x, pos.y, pos.z);
+                const auto current_key =
+                    context.placement.states->name(current);
+                const auto previous = state_property(current_key, "distance");
+                if (previous.has_value() &&
+                    std::atoi(std::string{*previous}.c_str()) <= smallest) {
+                    // A later bucket can still contain the same position; keep
+                    // the shortest distance already written.
+                    shape[bounds.index(pos)] = true;
+                    continue;
+                }
+                auto modified = std::string{current_key};
+                modified = with_state_property(modified, "distance",
+                                               std::to_string(smallest));
                 auto found = states_->find(modified);
                 if (!found) {
                     const auto interned = states_->intern(
