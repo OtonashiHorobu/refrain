@@ -363,6 +363,7 @@ def main() -> int:
             "oracle:selector",
             "oracle:real_jungle",
             "oracle:mega_tree",
+            "oracle:real_mega_pine",
         ]
         biome_dir = pack / "data/oracle/worldgen/biome"
         biome_dir.mkdir(parents=True)
@@ -800,6 +801,35 @@ def main() -> int:
                     "decorators": [],
                     "ignore_vines": True,
                     "below_trunk_provider": {"id": "minecraft:dirt"},
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        mega_pine = read_pack_data(
+            args.server_jar,
+            "data/minecraft/worldgen/feature/mega_pine.json",
+        )
+        (minecraft_feature / "mega_pine.json").write_text(
+            json.dumps(mega_pine, indent=2) + "\n"
+        )
+        podzol_provider = read_pack_data(
+            args.server_jar,
+            "data/minecraft/worldgen/block_state_provider/podzol_beneath_tree.json",
+        )
+        (provider_dir / "podzol_beneath_tree.json").write_text(
+            json.dumps(podzol_provider, indent=2) + "\n"
+        )
+        (placed_dir / "real_mega_pine.json").write_text(
+            json.dumps(
+                {
+                    "feature": "minecraft:mega_pine",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 210, 8]],
+                        }
+                    ],
                 },
                 indent=2,
             )

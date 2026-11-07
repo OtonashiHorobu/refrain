@@ -438,6 +438,10 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 "minecraft:sand", {.air = false,
                                    .blocks_motion = true,
                                    .blocks_motion_no_leaves = true});
+            auto dirt_state = block_registry.intern(
+                "minecraft:dirt", {.air = false,
+                                   .blocks_motion = true,
+                                   .blocks_motion_no_leaves = true});
             auto moss_state =
                 block_registry.intern("minecraft:mossy_cobblestone",
                                       {.air = false,
@@ -450,12 +454,18 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             expect(bedrock_state.has_value());
             expect(coal_ore_state.has_value());
             expect(sand_state.has_value());
+            expect(dirt_state.has_value());
             if (!air_state || !stone_state || !water_state || !lava_state ||
                 !bedrock_state || !coal_ore_state || !sand_state) {
                 return;
             }
             const std::array<block_state_id, 1> uncarvable{*bedrock_state};
             block_registry.add_tag("minecraft:uncarvable", uncarvable);
+            if (dirt_state) {
+                const std::array<block_state_id, 1> podzol_ground{*dirt_state};
+                block_registry.add_tag(
+                    "minecraft:beneath_tree_podzol_replaceable", podzol_ground);
+            }
             block_states states{block_registry};
 
             const auto expected = decode_expected(*document, states);

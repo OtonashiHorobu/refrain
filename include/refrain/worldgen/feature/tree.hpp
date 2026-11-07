@@ -54,6 +54,21 @@ class trunk_vine_decorator final : public tree_decorator {
     void place(const tree_decorator_context &context) const override;
 };
 
+class alter_ground_decorator final : public tree_decorator {
+  public:
+    explicit alter_ground_decorator(std::unique_ptr<state_provider> provider)
+        : provider_{std::move(provider)} {}
+    void place(const tree_decorator_context &context) const override;
+
+  private:
+    void place_circle(const tree_decorator_context &context,
+                      const block_pos &center) const;
+    void place_block_at(const tree_decorator_context &context,
+                        const block_pos &pos) const;
+
+    std::unique_ptr<state_provider> provider_;
+};
+
 class leave_vine_decorator final : public tree_decorator {
   public:
     explicit leave_vine_decorator(float probability)
