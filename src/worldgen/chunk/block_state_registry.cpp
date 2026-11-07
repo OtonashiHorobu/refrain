@@ -270,6 +270,7 @@ auto build_block_state_registry(const data::vanilla_tables &tables,
         const state_traits traits{
             .air = is_air_block(block_name),
             .fluid = fluid,
+            .water = water,
             .blocks_motion = motion.contains(block_name),
             .blocks_motion_no_leaves = motion_no_leaves.contains(block_name),
         };
