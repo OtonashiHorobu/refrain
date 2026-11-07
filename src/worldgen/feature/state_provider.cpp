@@ -8,7 +8,9 @@
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/feature/placement.hpp>
+#include <refrain/worldgen/provider.hpp>
 
+#include <array>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -69,6 +71,69 @@ class weighted_provider final : public state_provider {
   private:
     std::vector<std::pair<jint, block_state_id>> entries_;
     jint total_{0};
+};
+
+class rotated_provider final : public state_provider {
+  public:
+    rotated_provider(std::unique_ptr<state_provider> source,
+                     block_state_registry &states, std::string direction)
+        : source_{std::move(source)}, states_{&states},
+          direction_{std::move(direction)} {}
+    [[nodiscard]] auto get(const placement_context &context,
+                           worldgen_random &random, const block_pos &pos) const
+        -> block_state_id override {
+        static constexpr std::array<std::string_view, 6> names{
+            "down", "up", "north", "south", "west", "east"};
+        std::string_view direction = direction_;
+        if (direction.empty()) {
+            direction = names[static_cast<std::size_t>(random.next_int(6))];
+        }
+        std::string_view axis = "y";
+        if (direction == "north" || direction == "south") {
+            axis = "z";
+        } else if (direction == "west" || direction == "east") {
+            axis = "x";
+        }
+        const auto state = source_->get(context, random, pos);
+        auto key = std::string{context.states->name(state)};
+        key = with_state_property(key, "axis", axis);
+        key = with_state_property(key, "facing", direction);
+        if (axis != "y") {
+            key = with_state_property(key, "horizontal_facing", direction);
+        }
+        const auto resolved = resolve_state(*states_, key);
+        return resolved.has_value() ? *resolved : no_block_state;
+    }
+
+  private:
+    std::unique_ptr<state_provider> source_;
+    block_state_registry *states_{nullptr};
+    std::string direction_;
+};
+
+class randomized_int_provider final : public state_provider {
+  public:
+    randomized_int_provider(std::unique_ptr<state_provider> source,
+                            block_state_registry &states, std::string property,
+                            std::unique_ptr<provider::int_provider> values)
+        : source_{std::move(source)}, states_{&states},
+          property_{std::move(property)}, values_{std::move(values)} {}
+    [[nodiscard]] auto get(const placement_context &context,
+                           worldgen_random &random, const block_pos &pos) const
+        -> block_state_id override {
+        const auto state = source_->get(context, random, pos);
+        auto key = std::string{context.states->name(state)};
+        key = with_state_property(key, property_,
+                                  std::to_string(values_->sample(random)));
+        const auto resolved = resolve_state(*states_, key);
+        return resolved.has_value() ? *resolved : no_block_state;
+    }
+
+  private:
+    std::unique_ptr<state_provider> source_;
+    block_state_registry *states_{nullptr};
+    std::string property_;
+    std::unique_ptr<provider::int_provider> values_;
 };
 
 } // namespace
@@ -158,6 +223,49 @@ auto decode_state_provider(const data::json::value &document,
         }
         return std::unique_ptr<state_provider>{
             std::make_unique<weighted_provider>(std::move(decoded), total)};
+    }
+    if (*type == "minecraft:rotated") {
+        const auto *source = document.find("state");
+        if (source == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "rotated provider has no state")};
+        }
+        auto inner = decode_state_provider(*source, states);
+        if (!inner) {
+            return std::unexpected{inner.error()};
+        }
+        std::string direction;
+        if (const auto *field = document.find("direction"); field != nullptr) {
+            const auto text = field->as_string();
+            if (!text) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "rotated direction is invalid")};
+            }
+            direction = std::string{*text};
+        }
+        return std::unique_ptr<state_provider>{
+            std::make_unique<rotated_provider>(std::move(*inner), states,
+                                               std::move(direction))};
+    }
+    if (*type == "minecraft:randomized_int") {
+        const auto *source = document.find("source");
+        const auto *property = document.find("property");
+        const auto *values = document.find("values");
+        if (source == nullptr || property == nullptr || values == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "randomized_int is incomplete")};
+        }
+        auto inner = decode_state_provider(*source, states);
+        auto property_text = property->as_string();
+        auto value_provider = provider::int_provider::decode(*values);
+        if (!inner || !property_text || !value_provider) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "randomized_int is invalid")};
+        }
+        return std::unique_ptr<state_provider>{
+            std::make_unique<randomized_int_provider>(
+                std::move(*inner), states, std::string{*property_text},
+                std::move(*value_provider))};
     }
     return std::unexpected{
         make_error(error_code::unsupported, "unsupported state provider")};

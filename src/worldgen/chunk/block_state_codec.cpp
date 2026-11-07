@@ -31,6 +31,60 @@ auto property_text(const data::json::value &value) -> result<std::string> {
 
 } // namespace
 
+auto with_state_property(std::string_view key, std::string_view property,
+                         std::string_view value) -> std::string {
+    const auto open = key.find('[');
+    if (open == std::string_view::npos) {
+        return std::string{key};
+    }
+    const auto close = key.rfind(']');
+    if (close == std::string_view::npos || close < open) {
+        return std::string{key};
+    }
+    std::vector<std::pair<std::string_view, std::string_view>> properties;
+    std::string_view body = key.substr(open + 1, close - open - 1);
+    while (!body.empty()) {
+        const auto comma = body.find(',');
+        const auto entry = body.substr(0, comma);
+        const auto equals = entry.find('=');
+        if (equals != std::string_view::npos) {
+            properties.emplace_back(entry.substr(0, equals),
+                                    entry.substr(equals + 1));
+        }
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        body = body.substr(comma + 1);
+    }
+    bool replaced = false;
+    for (auto &[name, current] : properties) {
+        if (name == property) {
+            current = value;
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced) {
+        return std::string{key};
+    }
+    std::sort(properties.begin(), properties.end(),
+              [](const auto &left, const auto &right) {
+                  return left.first < right.first;
+              });
+    std::string out{key.substr(0, open)};
+    out.push_back('[');
+    for (std::size_t i = 0; i < properties.size(); ++i) {
+        if (i != 0) {
+            out.push_back(',');
+        }
+        out.append(properties[i].first);
+        out.push_back('=');
+        out.append(properties[i].second);
+    }
+    out.push_back(']');
+    return out;
+}
+
 auto state_block_name(std::string_view key) -> std::string_view {
     const auto bracket = key.find('[');
     return bracket == std::string_view::npos ? key : key.substr(0, bracket);
