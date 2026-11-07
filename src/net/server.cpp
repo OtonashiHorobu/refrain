@@ -4,6 +4,7 @@
 
 #include <refrain/net/server.hpp>
 
+#include <refrain/core/log.hpp>
 #include <refrain/data/nbt.hpp>
 #include <refrain/data/resource_location.hpp>
 #include <refrain/net/auth.hpp>
@@ -237,6 +238,7 @@ struct server::impl {
     void handle_play(std::uint64_t id, std::span<const std::byte> body);
     void send(std::uint64_t id, std::span<const std::byte> packet);
     void close(std::uint64_t id);
+    void reject(std::uint64_t id, std::string_view reason);
     void send_login_disconnect(std::uint64_t id, std::string_view text);
     void send_login_hello(std::uint64_t id);
     void complete_login(std::uint64_t id);
@@ -330,6 +332,7 @@ void server::impl::on_open(std::uint64_t id) {
     if (stopped.load(std::memory_order_relaxed)) {
         return;
     }
+    log::debug("net: connection opened id={}", id);
     const std::lock_guard lock{connections_mutex};
     connections.emplace(id, connection_state_data{});
 }
@@ -409,14 +412,14 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
     reader in{body};
     auto packet_id{in.read_varint()};
     if (!packet_id) {
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
 
     if (state == connection_state::handshake) {
         if (*packet_id != ::refrain::protocol::v777::handshake::serverbound::
                               intention::packet_id) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         ::refrain::protocol::v777::handshake::serverbound::intention
@@ -424,7 +427,7 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
         if (auto decoded{::refrain::protocol::v777::handshake::serverbound::
                              decode_intention(in, intention)};
             !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         {
@@ -441,6 +444,8 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 live.state = connection_state::login;
             }
         }
+        log::debug("net: handshake id={} protocol={} next={}", id,
+                   intention.protocol, intention.next);
         if (intention.next == 1) {
             return;
         }
@@ -448,11 +453,11 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             if (intention.protocol != 777) {
                 send_login_disconnect(
                     id, "Incompatible client: expected protocol 777");
-                close(id);
+                reject(id, "malformed or unexpected packet");
             }
             return;
         }
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
 
@@ -471,12 +476,12 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 live.status_requested = true;
             }
             if (duplicate) {
-                close(id);
+                reject(id, "malformed or unexpected packet");
                 return;
             }
             auto response{encode_status_response(status_json)};
             if (!response) {
-                close(id);
+                reject(id, "malformed or unexpected packet");
                 return;
             }
             send(id, *response);
@@ -488,13 +493,13 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             if (auto decoded{::refrain::protocol::v777::status::serverbound::
                                  decode_ping_request(in, packet)};
                 !decoded) {
-                close(id);
+                reject(id, "malformed or unexpected packet");
                 return;
             }
             send(id, encode_pong_response(packet.time));
             return;
         }
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
 
@@ -512,20 +517,21 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 live.login_started = true;
             }
             if (started) {
-                close(id);
+                reject(id, "malformed or unexpected packet");
                 return;
             }
             login_sb::hello packet{};
             if (auto decoded{login_sb::decode_hello(in, packet)}; !decoded) {
                 send_login_disconnect(id, "Invalid username");
-                close(id);
+                reject(id, "malformed or unexpected packet");
                 return;
             }
             if (!valid_name(packet.name)) {
                 send_login_disconnect(id, "Invalid username");
-                close(id);
+                reject(id, "malformed or unexpected packet");
                 return;
             }
+            log::info("net: login started id={} name={}", id, packet.name);
             const auto session{random_uuid()};
             {
                 const std::lock_guard lock{connections_mutex};
@@ -564,10 +570,15 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             return;
         }
         if (*packet_id == login_sb::login_acknowledged::packet_id) {
+            std::string name;
+            {
+                const std::lock_guard lock{connections_mutex};
+                name = connections.at(id).name;
+            }
             login_sb::login_acknowledged packet{};
             if (auto decoded{login_sb::decode_login_acknowledged(in, packet)};
                 !decoded) {
-                close(id);
+                reject(id, "malformed or unexpected packet");
                 return;
             }
             {
@@ -578,10 +589,11 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 }
                 found->second.state = connection_state::configuration;
             }
+            log::info("net: login complete id={} name={}", id, name);
             send_configuration(id);
             return;
         }
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
 
@@ -591,7 +603,7 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             config_sb::client_information packet{};
             if (auto decoded{config_sb::decode_client_information(in, packet)};
                 !decoded) {
-                close(id);
+                reject(id, "malformed or unexpected packet");
                 return;
             }
             const std::lock_guard lock{connections_mutex};
@@ -608,7 +620,7 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             if (auto decoded{
                     config_sb::decode_finish_configuration(in, packet)};
                 !decoded) {
-                close(id);
+                reject(id, "malformed or unexpected packet");
                 return;
             }
             {
@@ -626,14 +638,14 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             config_sb::keep_alive packet{};
             if (auto decoded{config_sb::decode_keep_alive(in, packet)};
                 !decoded) {
-                close(id);
+                reject(id, "malformed or unexpected packet");
             }
             return;
         }
         case config_sb::pong::packet_id: {
             config_sb::pong packet{};
             if (auto decoded{config_sb::decode_pong(in, packet)}; !decoded) {
-                close(id);
+                reject(id, "malformed or unexpected packet");
             }
             return;
         }
@@ -641,7 +653,7 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             config_sb::select_known_packs packet{};
             if (auto decoded{config_sb::decode_select_known_packs(in, packet)};
                 !decoded) {
-                close(id);
+                reject(id, "malformed or unexpected packet");
             }
             return;
         }
@@ -649,13 +661,15 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             config_sb::custom_payload packet{};
             if (auto decoded{config_sb::decode_custom_payload(in, packet)};
                 !decoded) {
-                close(id);
+                reject(id, "malformed or unexpected packet");
             }
             return;
         }
         default:
             // Cookie and resource-pack replies are only expected after the
             // server sends the matching request, which it does not yet do.
+            log::debug("net: ignored configuration packet id={} packet={}", id,
+                       *packet_id);
             return;
         }
     }
@@ -689,7 +703,7 @@ void server::impl::send_login_hello(std::uint64_t id) {
     auto public_key{server_key->public_key_der()};
     if (!public_key) {
         send_login_disconnect(id, "Server encryption is unavailable");
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
     login_cb::hello packet{
@@ -723,7 +737,7 @@ void server::impl::handle_login_key(std::uint64_t id, reader &in) {
     login_sb::key packet{};
     if (auto decoded{login_sb::decode_key(in, packet)}; !decoded) {
         send_login_disconnect(id, "Malformed encryption response");
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
     std::vector<std::byte> expected_token;
@@ -739,36 +753,36 @@ void server::impl::handle_login_key(std::uint64_t id, reader &in) {
     auto token{server_key->decrypt_pkcs1_v1_5(packet.encrypted_challenge)};
     if (!secret || !token) {
         send_login_disconnect(id, "Malformed encryption response");
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
     if (token->size() != expected_token.size() ||
         !std::equal(token->begin(), token->end(), expected_token.begin())) {
         send_login_disconnect(id, "Invalid verify token");
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
     if (secret->size() != aes128_key_bytes) {
         send_login_disconnect(id, "Invalid shared secret");
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
     auto cipher{aes128_cfb8::create(*secret, *secret)};
     if (!cipher) {
         send_login_disconnect(id, "Encryption is unavailable");
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
     auto public_key{server_key->public_key_der()};
     if (!public_key) {
         send_login_disconnect(id, "Encryption is unavailable");
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
     auto digest{minecraft_server_hash("", *secret, *public_key)};
     if (!digest) {
         send_login_disconnect(id, "Encryption is unavailable");
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
     std::string name;
@@ -784,13 +798,13 @@ void server::impl::handle_login_key(std::uint64_t id, reader &in) {
     }
     if (!auth) {
         send_login_disconnect(id, "Authentication is unavailable");
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
     auto profile{auth->has_joined(name, *digest)};
     if (!profile) {
         send_login_disconnect(id, "Failed to verify username");
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
     {
@@ -961,6 +975,7 @@ auto server::impl::build_configuration() -> status {
 }
 
 void server::impl::send_play_login(std::uint64_t id) {
+    std::string name;
     {
         const std::lock_guard lock{connections_mutex};
         const auto found{connections.find(id)};
@@ -972,7 +987,9 @@ void server::impl::send_play_login(std::uint64_t id) {
         live.y = config.spawn_y;
         live.z = config.spawn_z;
         live.awaiting_teleport = true;
+        name = live.name;
     }
+    log::info("net: player joined id={} name={}", id, name);
     play_cb::login packet{};
     packet.player_id = static_cast<std::int32_t>(id);
     packet.hardcore = config.hardcore;
@@ -1126,7 +1143,7 @@ void server::impl::handle_play(std::uint64_t id,
     reader in{body};
     auto packet_id{in.read_varint()};
     if (!packet_id) {
-        close(id);
+        reject(id, "malformed or unexpected packet");
         return;
     }
     switch (*packet_id) {
@@ -1134,7 +1151,7 @@ void server::impl::handle_play(std::uint64_t id,
         play_sb::accept_teleportation packet{};
         if (auto decoded{play_sb::decode_accept_teleportation(in, packet)};
             !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         if (packet.id != 1) {
@@ -1157,7 +1174,7 @@ void server::impl::handle_play(std::uint64_t id,
     case play_sb::keep_alive::packet_id: {
         play_sb::keep_alive packet{};
         if (auto decoded{play_sb::decode_keep_alive(in, packet)}; !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         const std::lock_guard lock{connections_mutex};
@@ -1175,7 +1192,7 @@ void server::impl::handle_play(std::uint64_t id,
         play_sb::move_player_pos packet{};
         if (auto decoded{play_sb::decode_move_player_pos(in, packet)};
             !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         const std::lock_guard lock{connections_mutex};
@@ -1194,7 +1211,7 @@ void server::impl::handle_play(std::uint64_t id,
         play_sb::move_player_pos_rot packet{};
         if (auto decoded{play_sb::decode_move_player_pos_rot(in, packet)};
             !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         const std::lock_guard lock{connections_mutex};
@@ -1215,7 +1232,7 @@ void server::impl::handle_play(std::uint64_t id,
         play_sb::move_player_rot packet{};
         if (auto decoded{play_sb::decode_move_player_rot(in, packet)};
             !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         const std::lock_guard lock{connections_mutex};
@@ -1233,7 +1250,7 @@ void server::impl::handle_play(std::uint64_t id,
         play_sb::move_player_status_only packet{};
         if (auto decoded{play_sb::decode_move_player_status_only(in, packet)};
             !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         const std::lock_guard lock{connections_mutex};
@@ -1247,7 +1264,7 @@ void server::impl::handle_play(std::uint64_t id,
     case play_sb::player_action::packet_id: {
         play_sb::player_action packet{};
         if (auto decoded{play_sb::decode_player_action(in, packet)}; !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         const auto [x, y, z] = block_position(packet.position);
@@ -1268,7 +1285,7 @@ void server::impl::handle_play(std::uint64_t id,
     case play_sb::use_item_on::packet_id: {
         play_sb::use_item_on packet{};
         if (auto decoded{play_sb::decode_use_item_on(in, packet)}; !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         auto [x, y, z] = block_position(packet.position);
@@ -1311,7 +1328,7 @@ void server::impl::handle_play(std::uint64_t id,
     case play_sb::chat::packet_id: {
         play_sb::chat packet{};
         if (auto decoded{play_sb::decode_chat(in, packet)}; !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         if (packet.message.empty()) {
@@ -1344,7 +1361,7 @@ void server::impl::handle_play(std::uint64_t id,
     case play_sb::chat_command::packet_id: {
         play_sb::chat_command packet{};
         if (auto decoded{play_sb::decode_chat_command(in, packet)}; !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         auto component{component_nbt(fmt::format(
@@ -1363,7 +1380,7 @@ void server::impl::handle_play(std::uint64_t id,
     case play_sb::player_loaded::packet_id: {
         play_sb::player_loaded packet{};
         if (auto decoded{play_sb::decode_player_loaded(in, packet)}; !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         const std::lock_guard lock{connections_mutex};
@@ -1378,7 +1395,7 @@ void server::impl::handle_play(std::uint64_t id,
         play_sb::chunk_batch_received packet{};
         if (auto decoded{play_sb::decode_chunk_batch_received(in, packet)};
             !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         static_cast<void>(packet);
@@ -1388,7 +1405,7 @@ void server::impl::handle_play(std::uint64_t id,
         play_sb::set_carried_item packet{};
         if (auto decoded{play_sb::decode_set_carried_item(in, packet)};
             !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         const std::lock_guard lock{connections_mutex};
@@ -1403,7 +1420,7 @@ void server::impl::handle_play(std::uint64_t id,
         play_sb::client_information packet{};
         if (auto decoded{play_sb::decode_client_information(in, packet)};
             !decoded) {
-            close(id);
+            reject(id, "malformed or unexpected packet");
             return;
         }
         const std::lock_guard lock{connections_mutex};
@@ -1417,6 +1434,7 @@ void server::impl::handle_play(std::uint64_t id,
     default:
         // Packets without server-side state (animation, input, containers)
         // are ignored until their handlers land.
+        log::debug("net: ignored play packet id={} packet={}", id, *packet_id);
         return;
     }
 }
@@ -1446,7 +1464,14 @@ void server::impl::send(std::uint64_t id, std::span<const std::byte> packet) {
     }
 }
 
+void server::impl::reject(std::uint64_t id, std::string_view reason) {
+    log::warn("net: protocol error id={} reason={}", id, reason);
+    close(id);
+}
+
 void server::impl::close(std::uint64_t id) {
+    std::string name;
+    connection_state state{connection_state::handshake};
     {
         const std::lock_guard lock{connections_mutex};
         const auto found{connections.find(id)};
@@ -1454,6 +1479,14 @@ void server::impl::close(std::uint64_t id) {
             return;
         }
         found->second.closed = true;
+        name = found->second.name;
+        state = found->second.state;
+    }
+    if (name.empty()) {
+        log::debug("net: connection closed id={} state={}", id,
+                   to_string(state));
+    } else {
+        log::info("net: player left id={} name={}", id, name);
     }
     if (socket) {
         socket->close(id);
@@ -1493,6 +1526,7 @@ void server::impl::keepalive_loop() {
             }
         }
         for (const auto id : expired) {
+            log::warn("net: keepalive timeout id={}", id);
             close(id);
         }
         for (const auto id : due) {
