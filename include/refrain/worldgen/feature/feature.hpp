@@ -195,6 +195,37 @@ class scattered_ore_feature final : public feature {
     float discard_chance_on_air_exposure_{0.0F};
 };
 
+/// `RandomNeighborSpreadFeature`: writes the origin block, then scatters more
+/// of it next to exactly one accepted neighbour.
+class random_neighbor_spread_feature final : public feature {
+  public:
+    random_neighbor_spread_feature(
+        std::unique_ptr<state_provider> block,
+        std::vector<std::string> accepted_neighbors,
+        std::unique_ptr<block_predicate> can_replace,
+        std::unique_ptr<provider::int_provider> attempts,
+        std::unique_ptr<provider::int_provider> xz_offset,
+        std::unique_ptr<provider::int_provider> y_offset)
+        : block_{std::move(block)},
+          accepted_neighbors_{std::move(accepted_neighbors)},
+          can_replace_{std::move(can_replace)}, attempts_{std::move(attempts)},
+          xz_offset_{std::move(xz_offset)}, y_offset_{std::move(y_offset)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    [[nodiscard]] auto accepted(const block_state_table &states,
+                                block_state_id state) const -> bool;
+
+    std::unique_ptr<state_provider> block_{};
+    std::vector<std::string> accepted_neighbors_{};
+    std::unique_ptr<block_predicate> can_replace_{};
+    std::unique_ptr<provider::int_provider> attempts_{};
+    std::unique_ptr<provider::int_provider> xz_offset_{};
+    std::unique_ptr<provider::int_provider> y_offset_{};
+};
+
 /// `SpringFeature`: a fluid source surrounded by a fixed rock/hole pattern.
 class spring_feature final : public feature {
   public:

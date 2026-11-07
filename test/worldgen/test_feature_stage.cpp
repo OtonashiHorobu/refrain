@@ -42,6 +42,7 @@ using refrain::worldgen::feature::place_on_ground_decorator;
 using refrain::worldgen::feature::placed_feature_document;
 using refrain::worldgen::feature::placed_feature_runtime;
 using refrain::worldgen::feature::placement_context;
+using refrain::worldgen::feature::random_neighbor_spread_feature;
 using refrain::worldgen::feature::replace_blobs_feature;
 using refrain::worldgen::feature::sequence_feature;
 using refrain::worldgen::feature::shelf_mushroom_decorator;
@@ -228,6 +229,68 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
             expect(chunk.state_at(7, 8, 8) == *gold);
             expect(chunk.state_at(8, 6, 8) == *stone);
         };
+
+    "random neighbor spread grows next to exactly one accepted block"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone", {.air = false});
+        auto glowstone = registry.intern("minecraft:glowstone", {.air = false});
+        expect(stone.has_value() && glowstone.has_value());
+        if (!stone || !glowstone) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::biomes);
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                expect(chunk.set_state(x, 4, z, *stone));
+            }
+        }
+        chunk_region region{chunk, 0};
+        placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &registry,
+            .generation =
+                generation_context{.min_y = 0, .height = 32, .sea_level = 8},
+        };
+        feature_context context{.placement = placement};
+        auto can_replace = decode_block_predicate(
+            parse(
+                R"({"type":"minecraft:matching_blocks","blocks":["minecraft:air"]})"),
+            registry);
+        auto attempts =
+            refrain::worldgen::provider::int_provider::decode(parse("64"));
+        auto offset = refrain::worldgen::provider::int_provider::decode(parse(
+            R"({"type":"minecraft:uniform","min_inclusive":-1,"max_inclusive":1})"));
+        auto y_offset = refrain::worldgen::provider::int_provider::decode(parse(
+            R"({"type":"minecraft:uniform","min_inclusive":-1,"max_inclusive":1})"));
+        expect(can_replace.has_value() && attempts.has_value() &&
+               offset.has_value() && y_offset.has_value());
+        if (!can_replace || !attempts || !offset || !y_offset) {
+            return;
+        }
+        auto block = simple_state(*glowstone);
+        const random_neighbor_spread_feature feature{
+            std::move(block),        {"minecraft:glowstone"},
+            std::move(*can_replace), std::move(*attempts),
+            std::move(*offset),      std::move(*y_offset)};
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(7)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 5, .z = 8}));
+        expect(chunk.state_at(8, 5, 8) == *glowstone);
+        std::size_t count = 0;
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint y = 0; y < 32; ++y) {
+                    if (chunk.state_at(x, y, z) == *glowstone) {
+                        ++count;
+                    }
+                }
+            }
+        }
+        expect(count > 1U);
+    };
 };
 
 suite<"worldgen/tree"> tree_tests = [] {

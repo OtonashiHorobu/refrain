@@ -439,6 +439,61 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       static_cast<jint>(*size_value), discard));
             continue;
         }
+        if (*type == "minecraft:random_neighbor_spread") {
+            const auto *block = document.document.find("block");
+            const auto *accepted = document.document.find("accepted_neighbors");
+            const auto *can_replace = document.document.find("can_replace");
+            const auto *attempts = document.document.find("attempts");
+            const auto *xz_offset = document.document.find("xz_offset");
+            const auto *y_offset = document.document.find("y_offset");
+            if (block == nullptr || accepted == nullptr ||
+                can_replace == nullptr || attempts == nullptr ||
+                xz_offset == nullptr || y_offset == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "random neighbor spread is incomplete")};
+            }
+            auto provider = decode_provider(*block);
+            auto predicate = decode_block_predicate(*can_replace, *states_);
+            auto attempts_provider = provider::int_provider::decode(*attempts);
+            auto xz_provider = provider::int_provider::decode(*xz_offset);
+            auto y_provider = provider::int_provider::decode(*y_offset);
+            if (!provider || !predicate || !attempts_provider || !xz_provider ||
+                !y_provider) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "random neighbor spread is invalid")};
+            }
+            std::vector<std::string> accepted_names;
+            if (const auto text = accepted->as_string(); text) {
+                accepted_names.emplace_back(*text);
+            } else if (accepted->is_array()) {
+                for (const auto &entry : *accepted->as_array()) {
+                    const auto entry_name = entry.as_string();
+                    if (!entry_name) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "accepted neighbor is not a block id")};
+                    }
+                    accepted_names.emplace_back(*text);
+                }
+            } else {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "accepted neighbors is not a list")};
+            }
+            for (auto &name : accepted_names) {
+                if (!name.empty() && name.front() == '#') {
+                    name.erase(name.begin());
+                }
+            }
+            features_.emplace(
+                id, std::make_unique<random_neighbor_spread_feature>(
+                        std::move(*provider), std::move(accepted_names),
+                        std::move(*predicate), std::move(*attempts_provider),
+                        std::move(*xz_provider), std::move(*y_provider)));
+            continue;
+        }
         if (*type == "minecraft:scattered_ore") {
             const auto *targets = document.document.find("targets");
             const auto *size = document.document.find("size");

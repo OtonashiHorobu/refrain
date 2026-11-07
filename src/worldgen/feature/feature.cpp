@@ -363,6 +363,65 @@ auto scattered_ore_feature::place(feature_context &context,
     return true;
 }
 
+auto random_neighbor_spread_feature::accepted(const block_state_table &states,
+                                              block_state_id state) const
+    -> bool {
+    const auto name = state_block_name(states.name(state));
+    for (const auto &entry : accepted_neighbors_) {
+        if (!entry.empty() && entry.front() == '#') {
+            if (states.in_tag(state, entry.substr(1))) {
+                return true;
+            }
+        } else if (name == entry) {
+            return true;
+        }
+    }
+    return false;
+}
+
+auto random_neighbor_spread_feature::place(feature_context &context,
+                                           worldgen_random &random,
+                                           const block_pos &origin) const
+    -> bool {
+    const auto write = [&](const block_pos &pos) {
+        const auto state = block_->get(context.placement, random, pos);
+        if (state == no_block_state) {
+            return;
+        }
+        (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                        state);
+    };
+    write(origin);
+    const jint attempts = attempts_->sample(random);
+    for (jint i = 0; i < attempts; ++i) {
+        const block_pos pos{
+            .x = origin.x + xz_offset_->sample(random),
+            .y = origin.y + y_offset_->sample(random),
+            .z = origin.z + xz_offset_->sample(random),
+        };
+        if (!can_replace_->test(*context.placement.region,
+                                *context.placement.states, pos)) {
+            continue;
+        }
+        jint neighbours = 0;
+        for (const auto &direction : all_directions) {
+            const auto state = context.placement.region->state_at(
+                pos.x + direction.dx, pos.y + direction.dy,
+                pos.z + direction.dz);
+            if (accepted(*context.placement.states, state)) {
+                ++neighbours;
+            }
+            if (neighbours > 1) {
+                break;
+            }
+        }
+        if (neighbours == 1) {
+            write(pos);
+        }
+    }
+    return true;
+}
+
 auto sequence_feature::place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool {
     for (const auto &id : features_) {
