@@ -634,6 +634,20 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 if (decorator_name == "minecraft:trunk_vine") {
                     decoded_decorators.push_back(
                         std::make_unique<trunk_vine_decorator>());
+                } else if (decorator_name == "minecraft:cocoa") {
+                    const auto *probability = entry.find("probability");
+                    if (probability == nullptr) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "cocoa has no probability")};
+                    }
+                    const auto value = probability->as_double();
+                    if (!value) {
+                        return std::unexpected{value.error()};
+                    }
+                    decoded_decorators.push_back(
+                        std::make_unique<cocoa_decorator>(
+                            static_cast<float>(*value)));
                 } else if (decorator_name == "minecraft:place_on_ground") {
                     jint tries = 128;
                     jint radius = 2;

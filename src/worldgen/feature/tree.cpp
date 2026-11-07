@@ -172,6 +172,58 @@ void leave_vine_decorator::place(const tree_decorator_context &context) const {
     }
 }
 
+void cocoa_decorator::place(const tree_decorator_context &context) const {
+    if (context.logs.empty()) {
+        return;
+    }
+    if (context.random.next_float() >= probability_) {
+        return;
+    }
+    const jint tree_y = context.logs.front().y;
+    static constexpr std::array<std::array<jint, 3>, 4> horizontal{{
+        {0, 0, -1},
+        {1, 0, 0},
+        {0, 0, 1},
+        {-1, 0, 0},
+    }};
+    static constexpr std::array<std::string_view, 4> names{"north", "east",
+                                                           "south", "west"};
+    for (const auto &log : context.logs) {
+        if (log.y - tree_y > 2) {
+            continue;
+        }
+        for (std::size_t i = 0; i < horizontal.size(); ++i) {
+            if (context.random.next_float() > 0.25F) {
+                continue;
+            }
+            const auto &step = horizontal[i];
+            const block_pos pos{.x = log.x - step[0],
+                                .y = log.y - step[1],
+                                .z = log.z - step[2]};
+            if (!context.is_air(pos)) {
+                continue;
+            }
+            auto key = std::string{"minecraft:cocoa[age="};
+            key.append(std::to_string(context.random.next_int(3)));
+            key.append(",facing=");
+            key.append(names[i]);
+            key.push_back(']');
+            auto found = context.states.find(key);
+            if (!found) {
+                const auto interned = context.states.intern(
+                    key, state_traits{.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+                if (!interned) {
+                    continue;
+                }
+                found = *interned;
+            }
+            context.set_block(pos, *found);
+        }
+    }
+}
+
 void place_on_ground_decorator::place(
     const tree_decorator_context &context) const {
     if (context.logs.empty()) {
