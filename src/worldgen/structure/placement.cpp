@@ -1,0 +1,90 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+#include <refrain/worldgen/structure/placement.hpp>
+
+#include <refrain/data/json.hpp>
+#include <refrain/worldgen/core/rng.hpp>
+
+#include <memory>
+
+namespace refrain::worldgen::structure {
+
+namespace {
+
+auto floor_div(jint value, jint divisor) -> jint {
+    const jint quotient = value / divisor;
+    const jint remainder = value % divisor;
+    return remainder != 0 && ((remainder < 0) != (divisor < 0)) ? quotient - 1
+                                                                : quotient;
+}
+
+} // namespace
+
+auto random_spread_placement::potential_chunk(jlong seed, jint chunk_x,
+                                              jint chunk_z) const -> chunk_pos {
+    const jint grid_x = floor_div(chunk_x, spacing);
+    const jint grid_z = floor_div(chunk_z, spacing);
+    worldgen_random random{std::make_unique<legacy_random_source>(0)};
+    random.set_large_feature_with_salt(seed, grid_x, grid_z, salt);
+    const jint limit = spacing - separation;
+    const auto spread_coordinate = [&]() {
+        if (spread == spread_type::linear) {
+            return random.next_int(limit);
+        }
+        return (random.next_int(limit) + random.next_int(limit)) / 2;
+    };
+    const jint spread_x = spread_coordinate();
+    const jint spread_z = spread_coordinate();
+    return chunk_pos{.x = grid_x * spacing + spread_x,
+                     .z = grid_z * spacing + spread_z};
+}
+
+auto random_spread_placement::is_structure_chunk(jlong seed, jint chunk_x,
+                                                 jint chunk_z) const -> bool {
+    const auto chunk = potential_chunk(seed, chunk_x, chunk_z);
+    return chunk.x == chunk_x && chunk.z == chunk_z;
+}
+
+auto decode_random_spread(const data::json::value &document)
+    -> result<random_spread_placement> {
+    const auto *spacing_value = document.find("spacing");
+    const auto *separation_value = document.find("separation");
+    const auto *salt_value = document.find("salt");
+    if (spacing_value == nullptr || separation_value == nullptr ||
+        salt_value == nullptr) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "random spread is incomplete")};
+    }
+    const auto spacing = spacing_value->as_int64();
+    const auto separation = separation_value->as_int64();
+    const auto salt = salt_value->as_int64();
+    if (!spacing || !separation || !salt) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "random spread numbers are invalid")};
+    }
+    if (*spacing <= *separation) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "spacing must exceed separation")};
+    }
+    random_spread_placement placement{.spacing = static_cast<jint>(*spacing),
+                                      .separation =
+                                          static_cast<jint>(*separation),
+                                      .salt = static_cast<jint>(*salt)};
+    if (const auto *type = document.find("spread_type"); type != nullptr) {
+        const auto name = type->as_string();
+        if (!name) {
+            return std::unexpected{name.error()};
+        }
+        if (*name == "minecraft:triangular") {
+            placement.spread = spread_type::triangular;
+        } else if (*name != "minecraft:linear") {
+            return std::unexpected{
+                make_error(error_code::unsupported, "unknown spread type")};
+        }
+    }
+    return placement;
+}
+
+} // namespace refrain::worldgen::structure
