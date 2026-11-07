@@ -926,6 +926,19 @@ void tree_feature::place_foliage(feature_context &context,
         }
         return;
     }
+    if (foliage_ == foliage_kind::pine) {
+        jint current = 0;
+        for (jint yo = offset; yo >= offset - foliage_height; --yo) {
+            place_leaves_row(context, random, attachment, current, yo,
+                             double_trunk, leaves, placed);
+            if (current >= 1 && yo == offset - foliage_height + 1) {
+                --current;
+            } else if (current < leaf_radius + radius_offset) {
+                ++current;
+            }
+        }
+        return;
+    }
     if (foliage_ == foliage_kind::mega_pine) {
         jint previous = 0;
         for (jint yy = attachment.y - foliage_height + offset;
@@ -1098,13 +1111,18 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
         }
         foliage_height =
             std::max(4, tree_height - spruce_trunk_height_->sample(random));
-    } else if (foliage_ == foliage_kind::mega_pine) {
+    } else if (foliage_ == foliage_kind::mega_pine ||
+               foliage_ == foliage_kind::pine) {
         if (!mega_pine_crown_) {
             return false;
         }
         foliage_height = mega_pine_crown_->sample(random);
     }
-    const jint leaf_radius = foliage_radius_->sample(random);
+    jint leaf_radius = foliage_radius_->sample(random);
+    if (foliage_ == foliage_kind::pine) {
+        const jint trunk_height = tree_height - foliage_height;
+        leaf_radius += random.next_int(std::max(trunk_height + 1, 1));
+    }
     const jint min_y = origin.y;
     const jint max_y = origin.y + tree_height + 1;
     if (min_y < context.placement.chunk->min_y() + 1 ||

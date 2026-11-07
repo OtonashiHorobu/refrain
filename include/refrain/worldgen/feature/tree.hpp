@@ -187,7 +187,8 @@ enum class foliage_kind : std::uint8_t {
     spruce,
     fancy,
     dark_oak,
-    mega_pine
+    mega_pine,
+    pine
 };
 
 class tree_feature final : public feature {
