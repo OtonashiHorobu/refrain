@@ -189,6 +189,7 @@ auto load_noise_settings(std::string_view worldgen_root,
             settings.aquifer.*entry.member = std::move(*decoded);
         }
     }
+    settings.documents = documents;
     return settings;
 }
 
