@@ -127,6 +127,52 @@ suite<"worldgen/terrain-fill"> terrain_fill_tests = [] {
         expect(chunk.world_surface[0] == 127);
     };
 
+    "a sampled column agrees with the full chunk heightmap"_test = [] {
+        const fill_settings settings;
+        const sampler_context context;
+        disabled_aquifer aquifer{fluid_picker{.sea_level = settings.sea_level,
+                                              .default_fluid = 20,
+                                              .lava = 30,
+                                              .air = 0}};
+        auto value = gradient_y(-64, 320, 1.5F, -1.5F);
+        const auto chunk =
+            fill_chunk(settings, *value, context, 3, -2, aquifer);
+        const column_height_options options{
+            .min_y = settings.min_y,
+            .height = settings.height,
+            .sea_level = settings.sea_level,
+            .blocks = settings.blocks,
+        };
+        const auto not_air = [](std::uint16_t state) { return state != 0; };
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                const auto height = first_occupied_height(
+                    options, *value, context, 3 * 16 + x, -2 * 16 + z, not_air);
+                expect(
+                    height ==
+                    chunk.world_surface[static_cast<std::size_t>(z * 16 + x)]);
+            }
+        }
+    };
+
+    "an empty sampled column reports the bottom of the world minus one"_test =
+        [] {
+            const column_height_options options{
+                .min_y = -64,
+                .height = 384,
+                .sea_level = -100,
+                .blocks = block_ids{.air = 0,
+                                    .default_block = 10,
+                                    .default_fluid = 20,
+                                    .lava = 30},
+            };
+            const sampler_context context;
+            auto value = density::constant(-1.0F);
+            const auto not_air = [](std::uint16_t state) { return state != 0; };
+            expect(first_occupied_height(options, *value, context, 0, 0,
+                                         not_air) == -65);
+        };
+
     "the lava column replaces the fluid below -54"_test = [] {
         const fill_settings settings;
         const sampler_context context;

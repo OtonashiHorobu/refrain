@@ -4,7 +4,10 @@
 
 #include <refrain/worldgen/terrain/terrain.hpp>
 
+#include <refrain/worldgen/terrain/aquifer.hpp>
+
 #include <algorithm>
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
@@ -70,6 +73,48 @@ auto fill_chunk(const fill_options &options,
         }
     }
     return chunk;
+}
+
+auto first_occupied_height(const column_height_options &options,
+                           const density::sampler &final_density,
+                           const density::sampler_context &context,
+                           jint block_x, jint block_z,
+                           const std::function<bool(std::uint16_t)> &predicate)
+    -> jint {
+    const volume vol{1, options.height, 1, block_x, options.min_y, block_z};
+    buffer density_buffer{vol.size()};
+    final_density.sample_volume(context, density_buffer, vol);
+
+    const fluid_picker picker{.sea_level = options.sea_level,
+                              .default_fluid = options.blocks.default_fluid,
+                              .lava = options.blocks.lava,
+                              .air = options.blocks.air};
+    std::unique_ptr<aquifer> fluids;
+    if (options.aquifer != nullptr) {
+        if (options.factory == nullptr) {
+            throw std::invalid_argument{
+                "a noise aquifer requires a positional random factory"};
+        }
+        fluids = std::make_unique<noise_aquifer>(*options.aquifer,
+                                                 *options.factory, vol, picker,
+                                                 options.blocks, context);
+    } else {
+        fluids = std::make_unique<disabled_aquifer>(picker);
+    }
+
+    for (jint y = vol.size_y() - 1; y >= 0; --y) {
+        const jint block_y = vol.block_y(y);
+        const float density = density_buffer.get(vol.index_unchecked(0, y, 0));
+        auto state = fluids->compute_substance(block_x, block_y, block_z,
+                                               static_cast<double>(density));
+        if (!state.has_value()) {
+            state = options.blocks.default_block;
+        }
+        if (predicate(*state)) {
+            return block_y;
+        }
+    }
+    return options.min_y - 1;
 }
 
 void fill_proto_chunk(proto_chunk &chunk, const proto_fill_options &options,

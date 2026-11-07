@@ -15,10 +15,17 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <vector>
 
+namespace refrain::worldgen {
+class positional_random_factory;
+} // namespace refrain::worldgen
+
 namespace refrain::worldgen::terrain {
+
+struct aquifer_config;
 
 /// Block state ids the fill stage works with. The caller maps them to the
 /// vanilla table; air must be the id that is skipped, not written.
@@ -153,6 +160,27 @@ struct fill_options {
                               const density::sampler_context &context,
                               jint chunk_x, jint chunk_z, aquifer &aquifer)
     -> chunk_blocks;
+
+/// One column's first occupied height, as `ChunkGenerator.getBaseHeight` minus
+/// one. The volume is one block wide and tall, matching
+/// `NoiseBasedChunkGenerator.iterateNoiseColumn`; the aquifer therefore sees
+/// the same cell anchors and surface levels as a full-chunk fill.
+struct column_height_options {
+    jint min_y{-64};
+    jint height{384};
+    jint sea_level{63};
+    block_ids blocks{};
+    const aquifer_config *aquifer{nullptr};
+    positional_random_factory *factory{nullptr};
+};
+
+/// Returns the highest `y` whose generated state matches `predicate`, or
+/// `min_y - 1` when the column is empty. `predicate` models the heightmap
+/// type; the caller supplies the block-tag lookup.
+[[nodiscard]] auto first_occupied_height(
+    const column_height_options &options, const density::sampler &final_density,
+    const density::sampler_context &context, jint block_x, jint block_z,
+    const std::function<bool(std::uint16_t)> &predicate) -> jint;
 
 /// `doFill` into a generation chunk. The chunk must be at `biomes` status so
 /// the writes update the two worldgen heightmaps; completing `terrain` primes
