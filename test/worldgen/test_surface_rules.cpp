@@ -69,6 +69,10 @@ class fixture {
             [this](std::string_view) -> positional_random_factory & {
             return *factory;
         };
+        providers.cold_enough_to_snow = [](std::string_view key, jint, jint,
+                                           jint) {
+            return key == "minecraft:plains";
+        };
         providers.possible_biomes = &possible_biomes;
         context = std::make_unique<material_context>(states, bounds, providers,
                                                      density_context);
@@ -221,6 +225,16 @@ suite<"worldgen/surface-rules"> surface_rule_tests = [] {
                 "min_threshold":100.0,"max_threshold":200.0})");
         expect(never != nullptr);
         expect(!never());
+
+        const auto temperature =
+            compile_condition_json(R"({"type":"minecraft:temperature"})");
+        expect(temperature != nullptr);
+        env.biome = "minecraft:plains";
+        env.context->update_y(1, 1, std::numeric_limits<jint>::min(), 10);
+        expect(temperature());
+        env.biome = "minecraft:desert";
+        env.context->update_y(1, 1, std::numeric_limits<jint>::min(), 11);
+        expect(!temperature());
 
         const auto not_steep = compile_condition_json(
             R"({"type":"minecraft:not","invert":{"type":"minecraft:steep"}})");

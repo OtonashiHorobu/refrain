@@ -436,6 +436,16 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             };
             providers.random_factory = [&factories](std::string_view name)
                 -> positional_random_factory & { return factories.get(name); };
+            providers.cold_enough_to_snow =
+                [&climates, &temperatures, sea_level = settings->sea_level](
+                    std::string_view biome, jint x, jint y, jint z) {
+                    const auto *climate = climates.get(biome);
+                    if (climate == nullptr) {
+                        return false;
+                    }
+                    return temperatures.temperature_at(*climate, x, y, z,
+                                                       sea_level) < 0.15F;
+                };
             providers.possible_biomes = &possible_biomes;
 
             material_context rule_context{states, bounds, providers, context};
