@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <span>
 #include <string>
 
@@ -419,4 +420,51 @@ suite<"worldgen/template"> template_tests = [] {
         expect(block_entities == 1U);
         expect(loaded->entities.empty());
     };
+
+    "the manager loads gzip templates and returns an empty one for a missing id"_test =
+        [] {
+            block_state_registry registry;
+            auto stone = registry.intern("minecraft:stone",
+                                         {.air = false,
+                                          .blocks_motion = true,
+                                          .blocks_motion_no_leaves = true});
+            expect(stone.has_value());
+            if (!stone) {
+                return;
+            }
+            const auto directory =
+                std::filesystem::path{core::io::temp_directory()} /
+                "refrain-template-manager";
+            std::filesystem::remove_all(directory);
+            std::filesystem::create_directories(directory / "test" /
+                                                "structure");
+
+            data::nbt::compound root;
+            root["size"] = ints({1, 1, 1});
+            auto palette = data::nbt::make_list(data::nbt::tag_type::compound);
+            (void)palette.push(
+                data::nbt::value{palette_entry("minecraft:stone")});
+            root["palette"] = std::move(palette);
+            auto blocks = data::nbt::make_list(data::nbt::tag_type::compound);
+            (void)blocks.push(data::nbt::value{block_entry({0, 0, 0}, 0)});
+            root["blocks"] = std::move(blocks);
+            const auto written = data::nbt::write_file(
+                (directory / "test" / "structure" / "demo.nbt").string(),
+                data::nbt::value{root}, "", data::nbt::compression::gzip);
+            expect(written.has_value());
+
+            structure_template_manager manager{directory.string(), registry};
+            const auto &loaded = manager.get_or_create("test:demo");
+            expect(loaded.size_x == 1 && loaded.size_y == 1 &&
+                   loaded.size_z == 1);
+            expect(loaded.palettes.size() == 1U);
+            if (!loaded.palettes.empty()) {
+                expect(loaded.palettes.front().size() == 1U);
+            }
+            const auto &missing = manager.get_or_create("test:missing");
+            expect(missing.size_x == 0);
+            expect(missing.palettes.empty());
+            expect(&manager.get_or_create("test:demo") == &loaded);
+            std::filesystem::remove_all(directory);
+        };
 };

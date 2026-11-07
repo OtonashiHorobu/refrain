@@ -4,6 +4,7 @@
 
 #include <refrain/worldgen/structure/template.hpp>
 
+#include <refrain/core/io.hpp>
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/core/rng.hpp>
 
@@ -455,6 +456,30 @@ auto load_structure_template(const block_state_registry &states,
         }
     }
     return out;
+}
+
+auto structure_template_manager::get_or_create(std::string_view id)
+    -> const structure_template & {
+    const std::string key{id};
+    if (const auto found = cache_.find(key); found != cache_.end()) {
+        return found->second;
+    }
+    structure_template loaded;
+    const auto separator = key.find(':');
+    if (separator != std::string::npos && separator + 1 < key.size()) {
+        const std::string path = root_ + "/" + key.substr(0, separator) +
+                                 "/structure/" + key.substr(separator + 1) +
+                                 ".nbt";
+        if (const auto document =
+                data::nbt::read_file(path, data::nbt::compression::gzip);
+            document.has_value()) {
+            if (auto parsed = load_structure_template(*states_, *document);
+                parsed.has_value()) {
+                loaded = std::move(*parsed);
+            }
+        }
+    }
+    return cache_.emplace(key, std::move(loaded)).first->second;
 }
 
 auto place_template(chunk_region &region, block_state_registry &states,

@@ -18,6 +18,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace refrain::worldgen::structure {
@@ -101,6 +103,24 @@ struct template_transform {
 place_template(chunk_region &region, block_state_registry &states,
                const structure_template &templ, const block_pos &origin,
                const template_transform &transform) -> std::size_t;
+
+/// Loads and caches templates from `<root>/<namespace>/structure/<path>.nbt`.
+/// A missing or malformed file yields the empty template, exactly like the
+/// reference manager's `getOrCreate`.
+class structure_template_manager {
+  public:
+    structure_template_manager(std::string root,
+                               const block_state_registry &states)
+        : root_{std::move(root)}, states_{&states} {}
+
+    [[nodiscard]] auto get_or_create(std::string_view id)
+        -> const structure_template &;
+
+  private:
+    std::string root_{};
+    const block_state_registry *states_{nullptr};
+    std::unordered_map<std::string, structure_template> cache_{};
+};
 
 /// `StructureTemplate.load`: resolves the palette against `states` (unknown or
 /// malformed states become air) and keeps only entities that carry an NBT
