@@ -546,7 +546,6 @@ void place_ocean_ruin_piece(const structure_place_context &context,
         .max_z = context.chunk->chunk_z() * 16 + 15,
     };
     settings.processors = {&rot, &ignore, &suspicious};
-    settings.random = &random;
     settings.level_seed = context.seed;
     (void)place_template(*context.region, *context.registry, templ, origin,
                          settings);
@@ -578,11 +577,22 @@ void place_ocean_ruin_piece(const structure_place_context &context,
                 continue;
             }
             if (*text == "chest") {
-                const auto current_name = block_name(
+                const auto previous = block_name(
                     context,
                     context.region->state_at(world.x, world.y, world.z));
-                if (!current_name.starts_with("minecraft:chest")) {
-                    continue;
+                const bool water =
+                    previous == "minecraft:water" ||
+                    previous.starts_with("minecraft:water[level=0");
+                const std::string key = water
+                                            ? "minecraft:chest[facing=north,"
+                                              "type=single,waterlogged=true]"
+                                            : "minecraft:chest[facing=north,"
+                                              "type=single,waterlogged=false]";
+                const auto chest =
+                    context.state ? context.state(key) : no_block_state;
+                if (chest != no_block_state) {
+                    (void)context.region->set_block_state(world.x, world.y,
+                                                          world.z, chest);
                 }
                 data::nbt::compound entity;
                 entity["id"] = data::nbt::value{std::string{"minecraft:chest"}};
@@ -636,7 +646,6 @@ void place_shipwreck_piece(const structure_place_context &context,
         .max_z = context.chunk->chunk_z() * 16 + 15,
     };
     settings.processors = {&ignore};
-    settings.random = &random;
     const block_pos origin{
         .x = piece.template_x, .y = piece.template_y, .z = piece.template_z};
     (void)place_template(*context.region, *context.registry, templ, origin,
