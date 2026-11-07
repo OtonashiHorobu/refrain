@@ -949,4 +949,56 @@ suite<"worldgen/template"> template_tests = [] {
         expect(chunk.state_at(4, 10, 0) != *stone);
         std::filesystem::remove_all(directory);
     };
+
+    "the capped rule processor replaces a limited set of blocks"_test = [] {
+        block_state_registry registry;
+        const auto sand = registry.intern(
+            "minecraft:sand", {.air = false, .blocks_motion = true});
+        const auto suspicious = registry.intern(
+            "minecraft:suspicious_sand", {.air = false, .blocks_motion = true});
+        expect(sand && suspicious);
+        if (!sand || !suspicious) {
+            return;
+        }
+        structure_template templ{};
+        templ.size_x = 4;
+        templ.size_y = 1;
+        templ.size_z = 1;
+        templ.palettes.emplace_back();
+        for (jint x = 0; x < 4; ++x) {
+            templ.palettes.front().push_back(
+                template_block_info{.x = x, .y = 0, .z = 0, .state = *sand});
+        }
+        capped_rule_processor capped{
+            "minecraft:sand", "minecraft:suspicious_sand",
+            "minecraft:archaeology/ocean_ruin_warm", 2};
+        template_place_settings settings{};
+        settings.processors = {&capped};
+        settings.level_seed = 12345;
+        settings.bounds = template_bounds{.min_x = 0,
+                                          .min_y = 0,
+                                          .min_z = 0,
+                                          .max_x = 15,
+                                          .max_y = 31,
+                                          .max_z = 31};
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk_region region{chunk, 0};
+        (void)place_template(region, registry, templ,
+                             block_pos{.x = 0, .y = 10, .z = 0}, settings);
+        jint suspicious_count = 0;
+        jint sand_count = 0;
+        for (jint x = 0; x < 4; ++x) {
+            const auto state = chunk.state_at(x, 10, 0);
+            if (state == *suspicious) {
+                ++suspicious_count;
+                const auto *entity =
+                    chunk.block_entity_at(block_pos{.x = x, .y = 10, .z = 0});
+                expect(entity != nullptr);
+            } else if (state == *sand) {
+                ++sand_count;
+            }
+        }
+        expect(suspicious_count == 2);
+        expect(sand_count == 2);
+    };
 };
