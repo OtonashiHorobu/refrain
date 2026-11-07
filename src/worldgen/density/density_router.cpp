@@ -2,6 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/worldgen/content.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
 
 #include <refrain/core/io.hpp>
@@ -87,6 +88,11 @@ auto load_noise_settings(std::string_view worldgen_root,
                          std::string_view settings_id,
                          algorithm random_algorithm, jlong seed)
     -> result<noise_settings> {
+    const auto materialized = materialize_worldgen_data(worldgen_root);
+    if (!materialized) {
+        return std::unexpected{materialized.error()};
+    }
+    worldgen_root = *materialized;
     const std::string settings_id_text{settings_id};
     const auto slash = settings_id_text.find('/');
     if (slash == std::string::npos) {

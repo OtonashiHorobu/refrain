@@ -5,6 +5,7 @@
 #include <refrain/data/json.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/content.hpp>
+#include <refrain/worldgen/density/density_router.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
 
 #include <boost/ut.hpp>
@@ -36,6 +37,13 @@ suite<"worldgen/content"> worldgen_content_tests = [] {
         expect(buried != structures->structures.end());
         if (buried != structures->structures.end()) {
             expect(structures->allows_biome(buried->second, "minecraft:beach"));
+        }
+        const auto settings = density::load_noise_settings(
+            archive, "minecraft/overworld", algorithm::xoroshiro, 12345);
+        expect(settings.has_value()) << "cannot load overworld noise settings";
+        if (settings) {
+            expect(settings->router.final_density != nullptr);
+            expect(settings->sea_level == 63);
         }
     };
 
