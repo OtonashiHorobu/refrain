@@ -117,9 +117,9 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 return std::unexpected{make_error(
                     error_code::parse_error, "simple block has no to_place")};
             }
-            auto state = decode_simple_state(*to_place, *states_);
-            if (!state) {
-                return std::unexpected{state.error()};
+            auto provider = decode_state_provider(*to_place, *states_);
+            if (!provider) {
+                return std::unexpected{provider.error()};
             }
             bool schedule_tick = false;
             if (const auto *field = document.document.find("schedule_tick");
@@ -131,7 +131,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 schedule_tick = *value;
             }
             features_.emplace(id, std::make_unique<simple_block_feature>(
-                                      *state, schedule_tick));
+                                      std::move(*provider), schedule_tick));
             continue;
         }
         if (*type == "minecraft:disk") {

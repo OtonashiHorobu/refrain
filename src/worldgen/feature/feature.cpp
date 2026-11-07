@@ -9,14 +9,16 @@
 
 namespace refrain::worldgen::feature {
 
-auto simple_block_feature::place(feature_context &context, worldgen_random &,
+auto simple_block_feature::place(feature_context &context,
+                                 worldgen_random &random,
                                  const block_pos &origin) const -> bool {
-    if (state_ == no_block_state) {
+    const auto state = provider_->get(context.placement, random, origin);
+    if (state == no_block_state) {
         return false;
     }
     (void)schedule_tick_;
     return context.placement.region->set_block_state(origin.x, origin.y,
-                                                     origin.z, state_);
+                                                     origin.z, state);
 }
 
 auto disk_feature::place(feature_context &context, worldgen_random &random,
