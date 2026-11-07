@@ -23,6 +23,11 @@ auto generator::generate_terrain(const chunk_pos &pos)
     auto chunk =
         std::make_unique<proto_chunk>(*states_, pos.x, pos.z, min_y_, height_);
     chunk->set_status(chunk_status::biomes);
+    if (stages_.biomes) {
+        if (const auto staged = stages_.biomes(*chunk); !staged) {
+            return std::unexpected{staged.error()};
+        }
+    }
     stages_.fill(*chunk);
 
     if (stages_.surface) {

@@ -18,6 +18,9 @@
 namespace refrain::worldgen {
 
 struct generator_stages {
+    /// Fills the 4x4x4 quart biome grid before any blocks are written; surface
+    /// material rules read biomes back from the chunk.
+    std::function<status(proto_chunk &)> biomes{};
     std::function<void(proto_chunk &)> fill{};
     std::function<status(proto_chunk &)> surface{};
     std::function<status(proto_chunk &)> carve{};
@@ -28,8 +31,8 @@ class generator {
     generator(const block_state_table &states, jint min_y, jint height,
               generator_stages stages);
 
-    /// Generates one chunk to `terrain`: fill, surface, carve, then prime the
-    /// four final heightmaps.
+    /// Generates one chunk to `terrain`: biomes, fill, surface, carve, then
+    /// prime the four final heightmaps.
     [[nodiscard]] auto generate_terrain(const chunk_pos &pos)
         -> result<std::unique_ptr<proto_chunk>>;
 
