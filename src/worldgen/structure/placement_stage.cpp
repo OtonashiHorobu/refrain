@@ -523,6 +523,13 @@ void place_ocean_ruin_piece(const structure_place_context &context,
     block_rot_processor rot{piece.integrity, {}, false};
     block_ignore_processor ignore{
         std::vector<std::string>{"minecraft:air", "minecraft:structure_block"}};
+    const bool warm = piece.template_id.find("/warm") != std::string::npos;
+    capped_rule_processor suspicious{
+        warm ? "minecraft:sand" : "minecraft:gravel",
+        warm ? "minecraft:suspicious_sand" : "minecraft:suspicious_gravel",
+        warm ? "minecraft:archaeology/ocean_ruin_warm"
+             : "minecraft:archaeology/ocean_ruin_cold",
+        5};
     template_place_settings settings{};
     settings.transform = template_transform{
         .mirror = template_mirror::none,
@@ -538,8 +545,9 @@ void place_ocean_ruin_piece(const structure_place_context &context,
         .max_y = context.chunk->min_y() + context.chunk->height() - 1,
         .max_z = context.chunk->chunk_z() * 16 + 15,
     };
-    settings.processors = {&rot, &ignore};
+    settings.processors = {&rot, &ignore, &suspicious};
     settings.random = &random;
+    settings.level_seed = context.seed;
     (void)place_template(*context.region, *context.registry, templ, origin,
                          settings);
     const std::string loot = piece.large

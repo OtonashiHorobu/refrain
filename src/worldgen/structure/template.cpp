@@ -548,6 +548,55 @@ auto zero_position_with_transform(const structure_template &templ,
                      .z = zero.z + mirror_delta_z};
 }
 
+void capped_rule_processor::finalize_processing(
+    block_state_registry &states, jint level_seed, const block_pos &position,
+    std::vector<template_block_info> &blocks) const {
+    if (limit_ <= 0 || blocks.empty()) {
+        return;
+    }
+    legacy_random_source base{level_seed};
+    const jlong factory = base.next_long();
+    legacy_random_source random{
+        mth_get_seed(position.x, position.y, position.z) ^ factory};
+    std::vector<std::size_t> indices(blocks.size());
+    for (std::size_t i = 0; i < indices.size(); ++i) {
+        indices[i] = i;
+    }
+    for (std::size_t i = indices.size(); i > 1; --i) {
+        const auto swap_to =
+            static_cast<std::size_t>(random.next_int(static_cast<jint>(i)));
+        std::swap(indices[i - 1], indices[swap_to]);
+    }
+    jint replaced = 0;
+    for (const auto index : indices) {
+        if (replaced >= limit_) {
+            break;
+        }
+        auto &block = blocks[index];
+        if (state_block_name(states.name(block.state)) != input_block_) {
+            continue;
+        }
+        auto output = states.find(output_state_);
+        if (!output) {
+            const auto interned =
+                states.intern(output_state_, states.traits(block.state));
+            if (!interned) {
+                continue;
+            }
+            output = *interned;
+        }
+        block.state = *output;
+        if (!loot_table_.empty()) {
+            auto entity = std::make_shared<data::nbt::compound>();
+            (*entity)["LootTable"] = data::nbt::value{std::string{loot_table_}};
+            (*entity)["LootTableSeed"] =
+                data::nbt::value{static_cast<jlong>(random.next_long())};
+            block.nbt = std::move(entity);
+        }
+        ++replaced;
+    }
+}
+
 auto decode_processor_list(block_state_registry &states,
                            const data::json::value &document)
     -> result<std::shared_ptr<structure_processor_list>> {
@@ -846,15 +895,25 @@ auto place_template(chunk_region &region, block_state_registry &states,
         found.has_value()) {
         barrier = *found;
     }
-    std::size_t placed = 0;
-    std::vector<block_pos> placed_positions;
+    bool whole_piece = false;
+    for (const auto *processor : settings.processors) {
+        if (processor->evaluates_entire_piece_state()) {
+            whole_piece = true;
+            break;
+        }
+    }
+    std::vector<template_block_info> processed_blocks;
+    std::vector<block_pos> processed_positions;
+    processed_blocks.reserve(palette.size());
+    processed_positions.reserve(palette.size());
     for (const auto &block : palette) {
         const auto relative = transform_position(
             block_pos{.x = block.x, .y = block.y, .z = block.z}, transform);
         const block_pos world{.x = origin.x + relative.x,
                               .y = origin.y + relative.y,
                               .z = origin.z + relative.z};
-        if (settings.bounds.has_value() && !settings.bounds->contains(world)) {
+        if (!whole_piece && settings.bounds.has_value() &&
+            !settings.bounds->contains(world)) {
             continue;
         }
         auto processed = block;
@@ -869,6 +928,25 @@ auto place_template(chunk_region &region, block_state_registry &states,
             processed = *result;
         }
         if (dropped) {
+            continue;
+        }
+        processed_blocks.push_back(std::move(processed));
+        processed_positions.push_back(world);
+    }
+    if (whole_piece) {
+        for (const auto *processor : settings.processors) {
+            if (processor->evaluates_entire_piece_state()) {
+                processor->finalize_processing(states, settings.level_seed,
+                                               origin, processed_blocks);
+            }
+        }
+    }
+    std::size_t placed = 0;
+    std::vector<block_pos> placed_positions;
+    for (std::size_t index = 0; index < processed_blocks.size(); ++index) {
+        const auto &processed = processed_blocks[index];
+        const auto world = processed_positions[index];
+        if (settings.bounds.has_value() && !settings.bounds->contains(world)) {
             continue;
         }
         const auto state = transform_state(states, processed.state, transform);

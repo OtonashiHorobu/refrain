@@ -125,6 +125,53 @@ class template_block_processor {
     [[nodiscard]] virtual auto evaluates_entire_piece_state() const -> bool {
         return false;
     }
+    /// Runs over every processed block of the piece before placement.
+    virtual void
+    finalize_processing(block_state_registry &states, jint level_seed,
+                        const block_pos &position,
+                        std::vector<template_block_info> &blocks) const {
+        (void)states;
+        (void)level_seed;
+        (void)position;
+        (void)blocks;
+    }
+};
+
+/// `CappedProcessor` over a single `RuleProcessor` rule: up to `limit`
+/// matching blocks are replaced, chosen from the whole piece with the
+/// positional random at the piece origin.
+class capped_rule_processor final : public template_block_processor {
+  public:
+    capped_rule_processor(std::string input_block, std::string output_state,
+                          std::string loot_table, jint limit)
+        : input_block_{std::move(input_block)},
+          output_state_{std::move(output_state)},
+          loot_table_{std::move(loot_table)}, limit_{limit} {}
+
+    [[nodiscard]] auto
+    process(const block_state_registry &states, const chunk_region &region,
+            const template_block_info &info, const block_pos &world,
+            worldgen_random *random) const
+        -> std::optional<template_block_info> override {
+        (void)states;
+        (void)region;
+        (void)world;
+        (void)random;
+        return info;
+    }
+    [[nodiscard]] auto evaluates_entire_piece_state() const -> bool override {
+        return true;
+    }
+    void finalize_processing(
+        block_state_registry &states, jint level_seed,
+        const block_pos &position,
+        std::vector<template_block_info> &blocks) const override;
+
+  private:
+    std::string input_block_{};
+    std::string output_state_{};
+    std::string loot_table_{};
+    jint limit_{0};
 };
 
 /// `BlockIgnoreProcessor`: drops blocks whose block name is listed.
@@ -189,6 +236,8 @@ struct template_place_settings {
     /// Shared placement stream; processors and multi-palette selection use it
     /// when non-null, otherwise they seed a legacy source per position.
     worldgen_random *random{nullptr};
+    /// World seed used by whole-piece processors with a positional random.
+    jlong level_seed{0};
 };
 
 /// `StructureTemplate.transform(BlockPos, Mirror, Rotation, pivot)`. Mirroring
