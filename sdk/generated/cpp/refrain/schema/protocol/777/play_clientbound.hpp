@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 7cfeb406836d8806
+// Schema hash: c23e841bac0cde6b
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -200,6 +200,24 @@ struct set_held_slot {
 
     // attributes: #[varint]
     std::uint32_t slot;
+};
+
+struct set_chunk_cache_center {
+    static constexpr std::uint16_t packet_id = 0x60;
+    static constexpr std::string_view packet_name = "set_chunk_cache_center";
+
+    // attributes: #[varint]
+    std::int32_t chunk_x;
+    // attributes: #[varint]
+    std::int32_t chunk_z;
+};
+
+struct set_chunk_cache_radius {
+    static constexpr std::uint16_t packet_id = 0x61;
+    static constexpr std::string_view packet_name = "set_chunk_cache_radius";
+
+    // attributes: #[varint]
+    std::int32_t radius;
 };
 
 struct set_time {
@@ -952,6 +970,54 @@ struct set_time {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.slot = static_cast<decltype(value.slot)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_set_chunk_cache_center(::refrain::net::writer &out, const set_chunk_cache_center &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.chunk_x));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.chunk_z));
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_set_chunk_cache_center(::refrain::net::reader &in, set_chunk_cache_center &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.chunk_x = static_cast<decltype(value.chunk_x)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.chunk_z = static_cast<decltype(value.chunk_z)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_set_chunk_cache_radius(::refrain::net::writer &out, const set_chunk_cache_radius &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.radius));
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_set_chunk_cache_radius(::refrain::net::reader &in, set_chunk_cache_radius &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.radius = static_cast<decltype(value.radius)>(*value_0);
   }
   return ::refrain::status_ok();
 }

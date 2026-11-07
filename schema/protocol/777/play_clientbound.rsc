@@ -124,6 +124,15 @@ packet set_held_slot = 107 {
     #[varint] slot: u32;
 }
 
+packet set_chunk_cache_center = 96 {
+    #[varint] chunk_x: i32;
+    #[varint] chunk_z: i32;
+}
+
+packet set_chunk_cache_radius = 97 {
+    #[varint] radius: i32;
+}
+
 packet set_time = 115 {
     game_time: i64;
     clock_updates: array<clock_update>;

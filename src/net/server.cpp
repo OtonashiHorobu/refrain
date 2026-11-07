@@ -1074,6 +1074,26 @@ void server::impl::send_play_login(std::uint64_t id) {
                     play_cb::encode_set_default_spawn_position);
     }
 
+    // The client discards chunks outside its cache view. The center and
+    // radius must arrive before the first chunk batch.
+    {
+        play_cb::set_chunk_cache_center center{
+            .chunk_x =
+                static_cast<std::int32_t>(std::floor(config.spawn_x / 16.0)),
+            .chunk_z =
+                static_cast<std::int32_t>(std::floor(config.spawn_z / 16.0)),
+        };
+        send_packet(id, play_cb::set_chunk_cache_center::packet_id, center,
+                    play_cb::encode_set_chunk_cache_center);
+    }
+    {
+        play_cb::set_chunk_cache_radius radius{
+            .radius = config.view_distance,
+        };
+        send_packet(id, play_cb::set_chunk_cache_radius::packet_id, radius,
+                    play_cb::encode_set_chunk_cache_radius);
+    }
+
     // The client needs a spawn position and a first chunk batch before it can
     // leave the loading screen.
     {

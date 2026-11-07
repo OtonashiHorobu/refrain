@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 7cfeb406836d8806
+// Schema hash: c23e841bac0cde6b
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -469,6 +469,21 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::s
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::set_held_slot";
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"slot", &::refrain::protocol::v777::play::clientbound::set_held_slot::slot});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::set_chunk_cache_center'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::set_chunk_cache_center> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::set_chunk_cache_center";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"chunk_x", &::refrain::protocol::v777::play::clientbound::set_chunk_cache_center::chunk_x},
+        refrain::reflect::custom_field{"chunk_z", &::refrain::protocol::v777::play::clientbound::set_chunk_cache_center::chunk_z});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::set_chunk_cache_radius'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::set_chunk_cache_radius> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::set_chunk_cache_radius";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"radius", &::refrain::protocol::v777::play::clientbound::set_chunk_cache_radius::radius});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::set_time'.

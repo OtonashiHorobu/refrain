@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 7cfeb406836d8806
+// Schema hash: c23e841bac0cde6b
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_HPP
@@ -22,7 +22,7 @@
 namespace refrain::protocol::v777 {
 
 /// Packets declared for this stage, ordered by flow and id.
-inline constexpr std::array<packet_descriptor, 29> play_packets{{
+inline constexpr std::array<packet_descriptor, 31> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x4, "block_changed_ack"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x8, "block_update"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0xA, "change_difficulty"},
@@ -35,6 +35,8 @@ inline constexpr std::array<packet_descriptor, 29> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x32, "login"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x41, "player_abilities"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x49, "player_position"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x60, "set_chunk_cache_center"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x61, "set_chunk_cache_radius"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x63, "set_default_spawn_position"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x6B, "set_held_slot"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x73, "set_time"},
