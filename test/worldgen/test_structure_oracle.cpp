@@ -1161,4 +1161,116 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
                 expect(actual.bounds.max_z == (*values)[5]);
             }
         };
+
+    "an ocean shipwreck start picks the ocean template list"_test = [] {
+        if (std::getenv("REFRAIN_VANILLA_WRECK_OCEAN_REAL") == nullptr) {
+            return;
+        }
+        const char *region = std::getenv("REFRAIN_VANILLA_WRECK_OCEAN_REGION");
+        const char *root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+        const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
+        if (region == nullptr || root == nullptr || templates_root == nullptr) {
+            return;
+        }
+        const jint chunk_x = 4;
+        const jint chunk_z = 8;
+        const jlong seed = 1;
+        const auto data =
+            refrain::worldgen::structure::load_structure_data(root);
+        expect(data.has_value());
+        if (!data) {
+            return;
+        }
+        refrain::worldgen::block_state_registry registry;
+        refrain::worldgen::structure::structure_template_manager manager{
+            templates_root, registry};
+        const refrain::worldgen::structure::structure_start_context context{
+            .seed = seed,
+            .data = &*data,
+            .min_y = -64,
+            .world_height = 384,
+            .sea_level = 63,
+            .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+            .biome_name = [](std::uint16_t) -> std::string_view {
+                return "minecraft:ocean";
+            },
+            .height_at =
+                [](jint, jint, refrain::worldgen::heightmap_kind) {
+                    return jint{70};
+                },
+            .templates = &manager,
+        };
+        const auto starts =
+            refrain::worldgen::structure::generate_structure_starts(
+                chunk_pos{.x = chunk_x, .z = chunk_z}, context);
+        const refrain::worldgen::structure::structure_start *wreck = nullptr;
+        for (const auto &start : starts) {
+            if (start.structure == "minecraft:shipwreck") {
+                wreck = &start;
+            }
+        }
+        expect(wreck != nullptr);
+        if (wreck == nullptr) {
+            return;
+        }
+        const auto reference = read_chunk(region, chunk_x, chunk_z);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        const auto *structures = child(reference->as_compound(), "structures");
+        const auto *starts_value =
+            structures == nullptr ? nullptr
+                                  : child(structures->as_compound(), "starts");
+        const auto *expected =
+            starts_value == nullptr
+                ? nullptr
+                : child(starts_value->as_compound(), "minecraft:shipwreck");
+        expect(expected != nullptr);
+        if (expected == nullptr) {
+            return;
+        }
+        const auto *children = child(expected->as_compound(), "Children");
+        const auto *pieces =
+            children == nullptr ? nullptr : children->as_list();
+        expect(pieces != nullptr && pieces->items.size() == 1U);
+        if (pieces == nullptr || pieces->items.size() != 1U ||
+            wreck->pieces.size() != 1U) {
+            return;
+        }
+        const auto *piece = pieces->items.front().as_compound();
+        const auto &actual = wreck->pieces.front();
+        const auto *template_id = child(piece, "Template");
+        const auto *rotation = child(piece, "Rot");
+        const auto *template_x = child(piece, "TPX");
+        const auto *template_z = child(piece, "TPZ");
+        const auto *bb = child(piece, "BB");
+        const auto values = bb == nullptr ? std::nullopt : bb->as_int_array();
+        expect(template_id != nullptr && rotation != nullptr &&
+               template_x != nullptr && template_z != nullptr);
+        if (template_id == nullptr || rotation == nullptr ||
+            template_x == nullptr || template_z == nullptr) {
+            return;
+        }
+        expect(template_id->as_string() == actual.template_id);
+        expect(template_x->as_int() == actual.template_origin.x);
+        expect(template_z->as_int() == actual.template_origin.z);
+        const auto rot_text = rotation->as_string();
+        expect(rot_text.has_value());
+        if (rot_text) {
+            const jint expected_rotation = *rot_text == "CLOCKWISE_180"  ? 2
+                                           : *rot_text == "CLOCKWISE_90" ? 1
+                                           : *rot_text == "COUNTERCLOCKWISE_90"
+                                               ? 3
+                                               : 0;
+            expect(actual.template_rotation == expected_rotation);
+        }
+        expect(values.has_value() && values->size() == 6U);
+        if (values && values->size() == 6U) {
+            expect(actual.bounds.min_x == (*values)[0]);
+            expect(actual.bounds.min_z == (*values)[2]);
+            expect(actual.bounds.max_x == (*values)[3]);
+            expect(actual.bounds.max_z == (*values)[5]);
+        }
+    };
 };
