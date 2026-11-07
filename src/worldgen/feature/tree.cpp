@@ -133,6 +133,45 @@ void trunk_vine_decorator::place(const tree_decorator_context &context) const {
     }
 }
 
+void leave_vine_decorator::place(const tree_decorator_context &context) const {
+    const auto add_hanging = [&](const block_pos &start,
+                                 std::string_view direction) {
+        context.place_vine(start, direction);
+        block_pos below{.x = start.x, .y = start.y - 1, .z = start.z};
+        for (jint remaining = 4; remaining > 0 && context.is_air(below);
+             --remaining) {
+            context.place_vine(below, direction);
+            --below.y;
+        }
+    };
+    for (const auto &leaf : context.leaves) {
+        if (context.random.next_float() < probability_) {
+            const block_pos pos{.x = leaf.x - 1, .y = leaf.y, .z = leaf.z};
+            if (context.is_air(pos)) {
+                add_hanging(pos, "east");
+            }
+        }
+        if (context.random.next_float() < probability_) {
+            const block_pos pos{.x = leaf.x + 1, .y = leaf.y, .z = leaf.z};
+            if (context.is_air(pos)) {
+                add_hanging(pos, "west");
+            }
+        }
+        if (context.random.next_float() < probability_) {
+            const block_pos pos{.x = leaf.x, .y = leaf.y, .z = leaf.z - 1};
+            if (context.is_air(pos)) {
+                add_hanging(pos, "south");
+            }
+        }
+        if (context.random.next_float() < probability_) {
+            const block_pos pos{.x = leaf.x, .y = leaf.y, .z = leaf.z + 1};
+            if (context.is_air(pos)) {
+                add_hanging(pos, "north");
+            }
+        }
+    }
+}
+
 auto tree_feature::valid_tree_pos(feature_context &context,
                                   const block_pos &pos) const -> bool {
     const auto state = context.placement.region->state_at(pos.x, pos.y, pos.z);
