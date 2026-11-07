@@ -340,6 +340,7 @@ attribute_comment(const std::vector<attribute> &attributes,
     case primitive_kind::nbt:
     case primitive_kind::varint_id:
     case primitive_kind::message_signature_packed:
+    case primitive_kind::filter_mask:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";
@@ -384,6 +385,7 @@ attribute_comment(const std::vector<attribute> &attributes,
     case primitive_kind::nbt:
     case primitive_kind::varint_id:
     case primitive_kind::message_signature_packed:
+    case primitive_kind::filter_mask:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";

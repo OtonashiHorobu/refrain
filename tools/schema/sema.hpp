@@ -51,6 +51,8 @@ enum class primitive_kind : std::uint8_t {
     varint_id,
     /// Chat signature reference or full 256-byte signature; RSC wire only.
     message_signature_packed,
+    /// Chat filter mask: a type id plus an optional byte mask; RSC wire only.
+    filter_mask,
     void_type,
 };
 

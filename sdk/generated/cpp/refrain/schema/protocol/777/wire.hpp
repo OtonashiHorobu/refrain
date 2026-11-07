@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 5035ffd9b91bc1fc
+// Schema hash: a04690b2c21fe519
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -228,6 +228,18 @@ struct wire_lerp_steps {
     std::int8_t y_rot;
     std::int8_t x_rot;
     float weight;
+};
+
+struct wire_packed {
+    std::vector<::refrain::net::message_signature_packed> entries;
+};
+
+struct wire_body {
+    // attributes: #[max(256)]
+    std::string content;
+    std::int64_t time_stamp;
+    std::int64_t salt;
+    ::refrain::protocol::v777::wire::wire_packed last_seen;
 };
 
 struct wire_recipe_display_id {
@@ -1723,6 +1735,86 @@ struct wire_position_move_rotation {
     auto value_0 = in.read_f32();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.weight = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_packed(::refrain::net::writer &out, const wire_packed &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.entries.size()));
+    for (const auto &item_0 : value.entries) {
+      if (auto written = ::refrain::net::encode_message_signature_packed(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_packed(::refrain::net::reader &in, wire_packed &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    value.entries.clear();
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::net::message_signature_packed value_0{};
+      if (auto decoded = ::refrain::net::decode_message_signature_packed(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.entries.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_body(::refrain::net::writer &out, const wire_body &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_string(value.content, 256); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.time_stamp));
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.salt));
+  }
+  {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_packed(out, value.last_seen); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_body(::refrain::net::reader &in, wire_body &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_string(256);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.content = std::move(*value_0);
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.time_stamp = static_cast<decltype(value.time_stamp)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.salt = static_cast<decltype(value.salt)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_packed(in, value.last_seen); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }

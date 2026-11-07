@@ -380,6 +380,44 @@ auto decode_message_signature_packed(reader &in,
     return status_ok();
 }
 
+auto encode_filter_mask(writer &out, const filter_mask &value) -> status {
+    if (value.type > 2U) {
+        return std::unexpected{make_error(error_code::invalid_argument,
+                                          "filter_mask: type is out of range")};
+    }
+    out.write_varint(value.type);
+    if (value.type == 2U) {
+        out.write_varint(static_cast<std::uint32_t>(value.mask.size()));
+        out.write_bytes(value.mask);
+    }
+    return status_ok();
+}
+
+auto decode_filter_mask(reader &in, filter_mask &value) -> status {
+    auto type{in.read_varint()};
+    if (!type) {
+        return std::unexpected{std::move(type.error())};
+    }
+    if (*type > 2U) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "filter_mask: type is out of range")};
+    }
+    value.type = *type;
+    value.mask.clear();
+    if (*type == 2U) {
+        auto length{in.read_varint()};
+        if (!length) {
+            return std::unexpected{std::move(length.error())};
+        }
+        auto bytes{in.read_bytes(*length)};
+        if (!bytes) {
+            return std::unexpected{std::move(bytes.error())};
+        }
+        value.mask.assign(bytes->begin(), bytes->end());
+    }
+    return status_ok();
+}
+
 auto encode_item_stack(writer &out, const item_stack &value) -> status {
     if (value.count != 0) {
         return std::unexpected{make_error(

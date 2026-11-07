@@ -70,6 +70,8 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "varint_id";
     case primitive_kind::message_signature_packed:
         return "message_signature_packed";
+    case primitive_kind::filter_mask:
+        return "filter_mask";
     case primitive_kind::void_type:
         return "void";
     }
@@ -101,6 +103,7 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"varint_id", primitive_kind::varint_id},
         std::pair{"message_signature_packed",
                   primitive_kind::message_signature_packed},
+        std::pair{"filter_mask", primitive_kind::filter_mask},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -254,6 +257,7 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::nbt:
     case primitive_kind::varint_id:
     case primitive_kind::message_signature_packed:
+    case primitive_kind::filter_mask:
     case primitive_kind::void_type:
         return false;
     }
@@ -285,6 +289,7 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::nbt:
     case primitive_kind::varint_id:
     case primitive_kind::message_signature_packed:
+    case primitive_kind::filter_mask:
     case primitive_kind::void_type:
         return false;
     }
@@ -2209,6 +2214,7 @@ class analyzer {
             case primitive_kind::nbt:
             case primitive_kind::varint_id:
             case primitive_kind::message_signature_packed:
+            case primitive_kind::filter_mask:
                 // Rejected for RIDL in resolve_type(); a wire-only primitive
                 // has no in-process ABI layout.
                 return std::nullopt;

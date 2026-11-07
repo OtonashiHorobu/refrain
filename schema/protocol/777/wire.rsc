@@ -177,6 +177,17 @@ struct wire_lerp_steps {
     weight: f32;
 }
 
+struct wire_packed {
+    entries: array<message_signature_packed>;
+}
+
+struct wire_body {
+    #[max(256)] content: string;
+    time_stamp: i64;
+    salt: i64;
+    last_seen: wire_packed;
+}
+
 struct wire_recipe_display_id {
     #[varint] index: i32;
 }

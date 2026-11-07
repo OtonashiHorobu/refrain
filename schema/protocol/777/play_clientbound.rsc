@@ -358,6 +358,17 @@ packet place_ghost_recipe = 64 {
     recipe_display: varint_id;
 }
 
+packet player_chat = 66 {
+    #[varint] global_index: i32;
+    sender: uuid;
+    #[varint] index: i32;
+    signature: optional<wire_message_signature>;
+    body: wire_body;
+    unsigned_content: optional<text_component>;
+    filter_mask: filter_mask;
+    chat_type: wire_bound;
+}
+
 packet player_combat_end = 67 {
     #[varint] duration: i32;
 }

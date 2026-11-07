@@ -70,6 +70,34 @@ const suite tests = [] {
         }
     };
 
+    "filter mask round trips both short and partial forms"_test = [] {
+        for (const std::uint32_t type : {0U, 1U}) {
+            net::filter_mask value{.type = type};
+            std::vector<std::byte> bytes;
+            net::writer out{bytes};
+            expect(static_cast<bool>(net::encode_filter_mask(out, value)));
+            expect(bytes.size() == 1U);
+            net::reader in{bytes};
+            net::filter_mask decoded{.type = 9U};
+            expect(static_cast<bool>(net::decode_filter_mask(in, decoded)));
+            expect(decoded.type == type);
+            expect(decoded.mask.empty());
+            expect(in.empty());
+        }
+        net::filter_mask partial{.type = 2U,
+                                 .mask = {std::byte{0xAA}, std::byte{0x01}}};
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_filter_mask(out, partial)));
+        net::reader in{bytes};
+        net::filter_mask decoded{};
+        expect(static_cast<bool>(net::decode_filter_mask(in, decoded)));
+        expect(decoded.type == 2U);
+        const bool same{decoded.mask == partial.mask};
+        expect(same);
+        expect(in.empty());
+    };
+
     "packed message signature round trips both forms"_test = [] {
         net::message_signature_packed id_form{};
         id_form.id = 5U;

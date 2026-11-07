@@ -77,6 +77,20 @@ struct message_signature_packed {
 decode_message_signature_packed(reader &in, message_signature_packed &value)
     -> status;
 
+/// A chat filter mask: a VarInt type (0 pass-through, 1 fully filtered,
+/// 2 partially filtered) followed by a byte-set for the partial form.
+struct filter_mask {
+    std::uint32_t type{0};
+    std::vector<std::byte> mask{};
+
+    friend auto operator==(const filter_mask &, const filter_mask &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_filter_mask(writer &out, const filter_mask &value)
+    -> status;
+[[nodiscard]] auto decode_filter_mask(reader &in, filter_mask &value) -> status;
+
 /// An item stack on the wire. Only the empty stack is implemented: the codec
 /// writes and accepts a zero item count and reports `error_code::unsupported`
 /// for any item payload, which requires the data-component graph.

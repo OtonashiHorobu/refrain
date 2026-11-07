@@ -75,6 +75,8 @@ namespace {
             return "std::uint32_t";
         case primitive_kind::message_signature_packed:
             return "::refrain::net::message_signature_packed";
+        case primitive_kind::filter_mask:
+            return "::refrain::net::filter_mask";
         case primitive_kind::void_type:
             return "void";
         }
@@ -587,6 +589,15 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::filter_mask:
+            writer.line("if (auto written = ::refrain::net::encode_filter_mask("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -890,6 +901,16 @@ void emit_decode_value(code_writer &writer, const model &program,
         case primitive_kind::message_signature_packed:
             writer.line("if (auto decoded = "
                         "::refrain::net::decode_message_signature_packed("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::filter_mask:
+            writer.line("if (auto decoded = ::refrain::net::decode_filter_mask("
                         "in, {}); !decoded) {{",
                         target);
             writer.indent();

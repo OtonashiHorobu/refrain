@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 5035ffd9b91bc1fc
+// Schema hash: a04690b2c21fe519
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -607,6 +607,22 @@ struct place_ghost_recipe {
     // attributes: #[varint]
     std::int32_t container_id;
     std::uint32_t recipe_display;
+};
+
+struct player_chat {
+    static constexpr std::uint16_t packet_id = 0x42;
+    static constexpr std::string_view packet_name = "player_chat";
+
+    // attributes: #[varint]
+    std::int32_t global_index;
+    ::refrain::net::uuid sender;
+    // attributes: #[varint]
+    std::int32_t index;
+    std::optional<::refrain::protocol::v777::wire::wire_message_signature> signature;
+    ::refrain::protocol::v777::wire::wire_body body;
+    std::optional<::refrain::net::text_component> unsigned_content;
+    ::refrain::net::filter_mask filter_mask;
+    ::refrain::protocol::v777::wire::wire_bound chat_type;
 };
 
 struct player_combat_end {
@@ -3375,6 +3391,116 @@ struct show_dialog {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.recipe_display = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_player_chat(::refrain::net::writer &out, const player_chat &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.global_index));
+  }
+  {
+    if (auto written = out.write_uuid(value.sender); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.index));
+  }
+  {
+    out.write_bool(value.signature.has_value());
+    if (value.signature.has_value()) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_message_signature(out, value.signature.value()); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_body(out, value.body); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.unsigned_content.has_value());
+    if (value.unsigned_content.has_value()) {
+      if (auto written = ::refrain::net::encode_text_component(out, value.unsigned_content.value()); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    if (auto written = ::refrain::net::encode_filter_mask(out, value.filter_mask); !written) {
+      return written;
+    }
+  }
+  {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_bound(out, value.chat_type); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_player_chat(::refrain::net::reader &in, player_chat &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.global_index = static_cast<decltype(value.global_index)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_uuid();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.sender = *value_0;
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.index = static_cast<decltype(value.index)>(*value_0);
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::protocol::v777::wire::wire_message_signature value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_message_signature(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.signature = std::move(value_0);
+    } else {
+      value.signature.reset();
+    }
+  }
+  {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_body(in, value.body); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::net::text_component value_0{};
+      if (auto decoded = ::refrain::net::decode_text_component(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.unsigned_content = std::move(value_0);
+    } else {
+      value.unsigned_content.reset();
+    }
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_filter_mask(in, value.filter_mask); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_bound(in, value.chat_type); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }
