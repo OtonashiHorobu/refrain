@@ -1519,6 +1519,101 @@ struct speleothem_column {
 
 } // namespace
 
+auto fossil_feature::place(feature_context &context, worldgen_random &random,
+                           const block_pos &origin) const -> bool {
+    if (context.templates == nullptr || context.registry == nullptr ||
+        fossil_structures_.empty() ||
+        fossil_structures_.size() != overlay_structures_.size()) {
+        return false;
+    }
+    const auto rotation =
+        static_cast<structure::template_rotation>(random.next_int(4));
+    const auto index = static_cast<std::size_t>(
+        random.next_int(static_cast<jint>(fossil_structures_.size())));
+    const auto &templ =
+        context.templates->get_or_create(fossil_structures_[index]);
+    const auto &overlay =
+        context.templates->get_or_create(overlay_structures_[index]);
+    if (templ.palettes.empty()) {
+        return false;
+    }
+    const auto transform = structure::template_transform{
+        .mirror = structure::template_mirror::none,
+        .rotation = rotation,
+        .pivot = block_pos{},
+    };
+    const auto size = structure::rotated_template_size(templ, rotation);
+    const block_pos low{
+        .x = origin.x - size.x / 2, .y = origin.y, .z = origin.z - size.z / 2};
+    jint lowest = origin.y;
+    for (jint x = 0; x < size.x; ++x) {
+        for (jint z = 0; z < size.z; ++z) {
+            if (context.placement.height) {
+                lowest = std::min(lowest, context.placement.height(
+                                              heightmap_kind::ocean_floor_wg,
+                                              low.x + x, low.z + z));
+            }
+        }
+    }
+    const auto target_y = std::max(lowest - 15 - random.next_int(10),
+                                   context.placement.generation.min_y + 10);
+    const auto target = structure::zero_position_with_transform(
+        templ, block_pos{.x = low.x, .y = target_y, .z = low.z},
+        structure::template_mirror::none, rotation);
+    const auto bounds =
+        structure::template_bounding_box(templ, transform, target);
+    const auto &states = *context.placement.states;
+    auto &region = *context.placement.region;
+    const auto empty_corner = [&](jint x, jint y, jint z) {
+        const auto state = region.state_at(x, y, z);
+        const auto traits = states.traits(state);
+        return traits.air || traits.water || traits.fluid;
+    };
+    jint corners = 0;
+    for (const jint x : {bounds.min_x, bounds.max_x}) {
+        for (const jint y : {bounds.min_y, bounds.max_y}) {
+            for (const jint z : {bounds.min_z, bounds.max_z}) {
+                if (empty_corner(x, y, z)) {
+                    ++corners;
+                }
+            }
+        }
+    }
+    if (corners > max_empty_corners_) {
+        return false;
+    }
+    structure::template_place_settings settings{};
+    settings.transform = transform;
+    settings.random = &random;
+    settings.bounds = structure::template_bounds{
+        .min_x = origin.x - 16,
+        .min_y = context.placement.generation.min_y,
+        .min_z = origin.z - 16,
+        .max_x = origin.x + 16,
+        .max_y = context.placement.generation.min_y +
+                 context.placement.generation.height - 1,
+        .max_z = origin.z + 16,
+    };
+    const auto *fossil_list = context.processor_list
+                                  ? context.processor_list(fossil_processors_)
+                                  : nullptr;
+    if (fossil_list != nullptr) {
+        settings.processors = fossil_list->processors;
+    }
+    (void)structure::place_template(region, *context.registry, templ, target,
+                                    settings);
+    settings.processors.clear();
+    const auto *overlay_list = context.processor_list
+                                   ? context.processor_list(overlay_processors_)
+                                   : nullptr;
+    if (overlay_list != nullptr) {
+        settings.processors = overlay_list->processors;
+    }
+    (void)structure::place_template(region, *context.registry, overlay, target,
+                                    settings);
+    return true;
+}
+
 auto speleothem_cluster_feature::place(feature_context &context,
                                        worldgen_random &random,
                                        const block_pos &origin) const -> bool {

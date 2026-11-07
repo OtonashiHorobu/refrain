@@ -9,12 +9,14 @@
 
 #pragma once
 
+#include <refrain/data/json.hpp>
 #include <refrain/data/nbt.hpp>
 #include <refrain/worldgen/chunk/block_state.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/chunk/chunk_region.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/core/java_compat.hpp>
+#include <refrain/worldgen/core/rng.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -115,9 +117,10 @@ class template_block_processor {
         -> template_block_processor & = delete;
     virtual ~template_block_processor() = default;
 
-    [[nodiscard]] virtual auto process(const block_state_registry &states,
-                                       const template_block_info &info,
-                                       const block_pos &world) const
+    [[nodiscard]] virtual auto
+    process(const block_state_registry &states, const chunk_region &region,
+            const template_block_info &info, const block_pos &world,
+            worldgen_random *random) const
         -> std::optional<template_block_info> = 0;
     [[nodiscard]] virtual auto evaluates_entire_piece_state() const -> bool {
         return false;
@@ -130,13 +133,52 @@ class block_ignore_processor final : public template_block_processor {
     explicit block_ignore_processor(std::vector<std::string> blocks)
         : blocks_{std::move(blocks)} {}
 
-    [[nodiscard]] auto process(const block_state_registry &states,
-                               const template_block_info &info,
-                               const block_pos &world) const
+    [[nodiscard]] auto
+    process(const block_state_registry &states, const chunk_region &region,
+            const template_block_info &info, const block_pos &world,
+            worldgen_random *random) const
         -> std::optional<template_block_info> override;
 
   private:
     std::vector<std::string> blocks_{};
+};
+
+/// `BlockRotProcessor`: drops a fraction of the blocks using the placement
+/// random stream, or a per-position legacy source when the stream is null.
+class block_rot_processor final : public template_block_processor {
+  public:
+    block_rot_processor(float integrity, std::vector<std::string> rottable,
+                        bool has_rottable)
+        : integrity_{integrity}, rottable_{std::move(rottable)},
+          has_rottable_{has_rottable} {}
+
+    [[nodiscard]] auto
+    process(const block_state_registry &states, const chunk_region &region,
+            const template_block_info &info, const block_pos &world,
+            worldgen_random *random) const
+        -> std::optional<template_block_info> override;
+
+  private:
+    float integrity_{1.0F};
+    std::vector<std::string> rottable_{};
+    bool has_rottable_{false};
+};
+
+/// `ProtectedBlockProcessor`: keeps the template block only when the world
+/// block at the position is not protected.
+class protected_blocks_processor final : public template_block_processor {
+  public:
+    explicit protected_blocks_processor(std::string tag)
+        : tag_{std::move(tag)} {}
+
+    [[nodiscard]] auto
+    process(const block_state_registry &states, const chunk_region &region,
+            const template_block_info &info, const block_pos &world,
+            worldgen_random *random) const
+        -> std::optional<template_block_info> override;
+
+  private:
+    std::string tag_{};
 };
 
 struct template_place_settings {
@@ -144,6 +186,9 @@ struct template_place_settings {
     std::optional<template_bounds> bounds{};
     std::vector<const template_block_processor *> processors{};
     liquid_settings liquids{liquid_settings::apply_waterlogging};
+    /// Shared placement stream; processors and multi-palette selection use it
+    /// when non-null, otherwise they seed a legacy source per position.
+    worldgen_random *random{nullptr};
 };
 
 /// `StructureTemplate.transform(BlockPos, Mirror, Rotation, pivot)`. Mirroring
@@ -180,6 +225,29 @@ place_template(chunk_region &region, block_state_registry &states,
 /// Loads and caches templates from `<root>/<namespace>/structure/<path>.nbt`.
 /// A missing or malformed file yields the empty template, exactly like the
 /// reference manager's `getOrCreate`.
+struct structure_processor_list {
+    std::vector<std::unique_ptr<template_block_processor>> owned{};
+    std::vector<const template_block_processor *> processors{};
+};
+
+/// Decodes `worldgen/processor_list` JSON. Supported processor types are
+/// `block_rot`, `protected_blocks` and `block_ignore`; `nop` yields nothing.
+[[nodiscard]] auto decode_processor_list(block_state_registry &states,
+                                         const data::json::value &document)
+    -> result<std::shared_ptr<structure_processor_list>>;
+
+/// `StructureTemplate.getSize(rotation)`.
+[[nodiscard]] auto rotated_template_size(const structure_template &templ,
+                                         template_rotation rotation)
+    -> block_pos;
+
+/// `StructureTemplate.getZeroPositionWithTransform`.
+[[nodiscard]] auto zero_position_with_transform(const structure_template &templ,
+                                                const block_pos &zero,
+                                                template_mirror mirror,
+                                                template_rotation rotation)
+    -> block_pos;
+
 class structure_template_manager {
   public:
     structure_template_manager(std::string root, block_state_registry &states)

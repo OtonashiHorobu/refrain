@@ -503,6 +503,162 @@ auto structure_template_manager::get_or_create(std::string_view id) const
     return cache_.emplace(key, std::move(loaded)).first->second;
 }
 
+auto rotated_template_size(const structure_template &templ,
+                           template_rotation rotation) -> block_pos {
+    switch (rotation) {
+    case template_rotation::clockwise_90:
+    case template_rotation::counterclockwise_90:
+        return block_pos{
+            .x = templ.size_z, .y = templ.size_y, .z = templ.size_x};
+    default:
+        return block_pos{
+            .x = templ.size_x, .y = templ.size_y, .z = templ.size_z};
+    }
+}
+
+auto zero_position_with_transform(const structure_template &templ,
+                                  const block_pos &zero, template_mirror mirror,
+                                  template_rotation rotation) -> block_pos {
+    const jint size_x = templ.size_x - 1;
+    const jint size_z = templ.size_z - 1;
+    const jint mirror_delta_x =
+        mirror == template_mirror::front_back ? size_x : 0;
+    const jint mirror_delta_z =
+        mirror == template_mirror::left_right ? size_z : 0;
+    switch (rotation) {
+    case template_rotation::counterclockwise_90:
+        return block_pos{.x = zero.x + mirror_delta_z,
+                         .y = zero.y,
+                         .z = zero.z + size_x - mirror_delta_x};
+    case template_rotation::clockwise_90:
+        return block_pos{.x = zero.x + size_z - mirror_delta_z,
+                         .y = zero.y,
+                         .z = zero.z + mirror_delta_x};
+    case template_rotation::clockwise_180:
+        return block_pos{.x = zero.x + size_x - mirror_delta_x,
+                         .y = zero.y,
+                         .z = zero.z + size_z - mirror_delta_z};
+    case template_rotation::none:
+        break;
+    }
+    return block_pos{.x = zero.x + mirror_delta_x,
+                     .y = zero.y,
+                     .z = zero.z + mirror_delta_z};
+}
+
+auto decode_processor_list(block_state_registry &states,
+                           const data::json::value &document)
+    -> result<std::shared_ptr<structure_processor_list>> {
+    const auto string_of =
+        [](const data::json::value *value) -> std::optional<std::string> {
+        if (value == nullptr) {
+            return std::nullopt;
+        }
+        const auto text = value->as_string();
+        if (!text) {
+            return std::nullopt;
+        }
+        return std::string{*text};
+    };
+    const auto double_of =
+        [](const data::json::value *value) -> std::optional<double> {
+        if (value == nullptr) {
+            return std::nullopt;
+        }
+        const auto number = value->as_double();
+        if (!number) {
+            return std::nullopt;
+        }
+        return *number;
+    };
+    const auto array_of = [](const data::json::value *value)
+        -> std::optional<std::span<const data::json::value>> {
+        if (value == nullptr) {
+            return std::nullopt;
+        }
+        const auto array = value->as_array();
+        if (!array) {
+            return std::nullopt;
+        }
+        return *array;
+    };
+    (void)states;
+    const auto *processors = document.find("processors");
+    const auto entries = array_of(processors);
+    if (!entries) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "processor list has no processors")};
+    }
+    auto list = std::make_shared<structure_processor_list>();
+    for (const auto &entry : *entries) {
+        const auto type = string_of(entry.find("processor_type"));
+        if (!type) {
+            return std::unexpected{
+                make_error(error_code::parse_error, "processor has no type")};
+        }
+        if (*type == "minecraft:block_rot") {
+            const auto integrity = double_of(entry.find("integrity"));
+            if (!integrity) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "block_rot has no integrity")};
+            }
+            std::vector<std::string> rottable;
+            const auto *rottable_value = entry.find("rottable_blocks");
+            const bool has_rottable = rottable_value != nullptr;
+            if (const auto text = string_of(rottable_value); text.has_value()) {
+                std::string tag{*text};
+                if (tag.starts_with('#')) {
+                    tag.erase(0, 1);
+                }
+                rottable.push_back(std::move(tag));
+            } else if (const auto array = array_of(rottable_value);
+                       array.has_value()) {
+                for (const auto &item : *array) {
+                    if (const auto item_text = item.as_string();
+                        item_text.has_value()) {
+                        rottable.emplace_back(*item_text);
+                    }
+                }
+            }
+            list->owned.push_back(std::make_unique<block_rot_processor>(
+                static_cast<float>(*integrity), std::move(rottable),
+                has_rottable));
+            list->processors.push_back(list->owned.back().get());
+        } else if (*type == "minecraft:protected_blocks") {
+            const auto value = string_of(entry.find("value"));
+            if (!value) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "protected_blocks has no value")};
+            }
+            std::string tag{*value};
+            if (tag.starts_with('#')) {
+                tag.erase(0, 1);
+            }
+            list->owned.push_back(
+                std::make_unique<protected_blocks_processor>(std::move(tag)));
+            list->processors.push_back(list->owned.back().get());
+        } else if (*type == "minecraft:block_ignore") {
+            std::vector<std::string> blocks;
+            if (const auto array = array_of(entry.find("blocks"));
+                array.has_value()) {
+                for (const auto &item : *array) {
+                    if (const auto item_text = item.as_string();
+                        item_text.has_value()) {
+                        blocks.emplace_back(*item_text);
+                    }
+                }
+            }
+            list->owned.push_back(
+                std::make_unique<block_ignore_processor>(std::move(blocks)));
+            list->processors.push_back(list->owned.back().get());
+        } else if (*type != "minecraft:nop") {
+            return std::unexpected{
+                make_error(error_code::parse_error, "unsupported processor")};
+        }
+    }
+    return list;
+}
+
 auto place_template(chunk_region &region, block_state_registry &states,
                     const structure_template &templ, const block_pos &origin,
                     const template_transform &transform) -> std::size_t {
@@ -518,10 +674,16 @@ auto place_template(chunk_region &region, block_state_registry &states,
         return 0;
     }
     std::size_t palette_index = 0;
-    if (templ.palettes.size() > 1) {
-        legacy_random_source random{mth_get_seed(origin.x, origin.y, origin.z)};
-        palette_index = static_cast<std::size_t>(
-            random.next_int(static_cast<jint>(templ.palettes.size())));
+    if (settings.random != nullptr) {
+        palette_index = static_cast<std::size_t>(settings.random->next_int(
+            static_cast<jint>(templ.palettes.size())));
+    } else if (templ.palettes.size() > 1) {
+        {
+            legacy_random_source random{
+                mth_get_seed(origin.x, origin.y, origin.z)};
+            palette_index = static_cast<std::size_t>(
+                random.next_int(static_cast<jint>(templ.palettes.size())));
+        }
     }
     const auto &palette = templ.palettes[palette_index];
     block_state_id barrier = states.air();
@@ -542,7 +704,8 @@ auto place_template(chunk_region &region, block_state_registry &states,
         auto processed = block;
         bool dropped = false;
         for (const auto *processor : settings.processors) {
-            const auto result = processor->process(states, processed, world);
+            const auto result = processor->process(states, region, processed,
+                                                   world, settings.random);
             if (!result) {
                 dropped = true;
                 break;
@@ -593,12 +756,56 @@ auto template_bounding_box(const structure_template &templ,
 }
 
 auto block_ignore_processor::process(const block_state_registry &states,
+                                     const chunk_region &region,
                                      const template_block_info &info,
-                                     const block_pos &world) const
+                                     const block_pos &world,
+                                     worldgen_random *random) const
     -> std::optional<template_block_info> {
+    (void)region;
     (void)world;
+    (void)random;
     const auto name = state_block_name(states.name(info.state));
     if (std::find(blocks_.begin(), blocks_.end(), name) != blocks_.end()) {
+        return std::nullopt;
+    }
+    return info;
+}
+
+auto block_rot_processor::process(const block_state_registry &states,
+                                  const chunk_region &region,
+                                  const template_block_info &info,
+                                  const block_pos &world,
+                                  worldgen_random *random) const
+    -> std::optional<template_block_info> {
+    (void)region;
+    if (has_rottable_) {
+        const auto name = state_block_name(states.name(info.state));
+        if (std::find(rottable_.begin(), rottable_.end(), name) ==
+            rottable_.end()) {
+            return info;
+        }
+    }
+    float draw = 0.0F;
+    if (random != nullptr) {
+        draw = random->next_float();
+    } else {
+        legacy_random_source local{mth_get_seed(world.x, world.y, world.z)};
+        draw = local.next_float();
+    }
+    if (!(draw <= integrity_)) {
+        return std::nullopt;
+    }
+    return info;
+}
+
+auto protected_blocks_processor::process(const block_state_registry &states,
+                                         const chunk_region &region,
+                                         const template_block_info &info,
+                                         const block_pos &world,
+                                         worldgen_random *random) const
+    -> std::optional<template_block_info> {
+    (void)random;
+    if (states.in_tag(region.state_at(world.x, world.y, world.z), tag_)) {
         return std::nullopt;
     }
     return info;

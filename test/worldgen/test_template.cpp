@@ -592,6 +592,83 @@ suite<"worldgen/template"> template_tests = [] {
             expect(name != registry.name(*stairs));
         };
 
+    "block_rot and protected_blocks filter template entries"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(stone.has_value());
+        if (!stone) {
+            return;
+        }
+        data::nbt::compound root;
+        root["size"] = ints({4, 1, 1});
+        auto palette = data::nbt::make_list(data::nbt::tag_type::compound);
+        (void)palette.push(data::nbt::value{palette_entry("minecraft:stone")});
+        root["palette"] = std::move(palette);
+        auto blocks = data::nbt::make_list(data::nbt::tag_type::compound);
+        for (jint x = 0; x < 4; ++x) {
+            (void)blocks.push(data::nbt::value{block_entry({x, 0, 0}, 0)});
+        }
+        root["blocks"] = std::move(blocks);
+        const auto loaded =
+            load_structure_template(registry, data::nbt::value{root});
+        expect(loaded.has_value());
+        if (!loaded) {
+            return;
+        }
+        block_rot_processor drop_all{0.0F, {}, false};
+        block_rot_processor keep_all{1.0F, {}, false};
+        proto_chunk chunk{registry, 0, 0, 0, 16};
+        chunk_region region{chunk, 0};
+        template_place_settings settings{};
+        settings.processors = {&drop_all};
+        expect(place_template(region, registry, *loaded,
+                              block_pos{.x = 0, .y = 0, .z = 0},
+                              settings) == 0U);
+        settings.processors = {&keep_all};
+        expect(place_template(region, registry, *loaded,
+                              block_pos{.x = 0, .y = 0, .z = 0},
+                              settings) == 4U);
+
+        registry.add_tag("minecraft:features_cannot_replace",
+                         std::span<const block_state_id>{&*stone, 1});
+        for (jint x = 0; x < 4; ++x) {
+            chunk.set_state(x, 0, 0, registry.air());
+        }
+        chunk.set_state(1, 0, 0, *stone);
+        protected_blocks_processor protected_blocks{
+            "minecraft:features_cannot_replace"};
+        settings.processors = {&protected_blocks};
+        expect(place_template(region, registry, *loaded,
+                              block_pos{.x = 0, .y = 0, .z = 0},
+                              settings) == 3U);
+        expect(chunk.state_at(1, 0, 0) == *stone);
+    };
+
+    "a processor list decodes block_rot and protected_blocks"_test = [] {
+        block_state_registry registry;
+        const auto document = data::json::value::parse(R"({
+            "processors": [
+                {"processor_type": "minecraft:block_rot", "integrity": 0.9},
+                {"processor_type": "minecraft:protected_blocks",
+                 "value": "#minecraft:features_cannot_replace"},
+                {"processor_type": "minecraft:nop"}
+            ]
+        })");
+        expect(document.has_value());
+        if (!document) {
+            return;
+        }
+        const auto list = decode_processor_list(registry, *document);
+        expect(list.has_value());
+        if (!list) {
+            return;
+        }
+        expect((*list)->processors.size() == 2U);
+    };
+
     "unknown palette names and indices resolve to air"_test = [] {
         block_state_registry registry;
         data::nbt::compound root;

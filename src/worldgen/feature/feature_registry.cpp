@@ -763,6 +763,61 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                                     std::move(*rim_provider)));
             continue;
         }
+        if (*type == "minecraft:fossil") {
+            const auto *fossils = document.document.find("fossil_structures");
+            const auto *overlays = document.document.find("overlay_structures");
+            const auto *fossil_processors =
+                document.document.find("fossil_processors");
+            const auto *overlay_processors =
+                document.document.find("overlay_processors");
+            const auto *max_corners =
+                document.document.find("max_empty_corners_allowed");
+            if (fossils == nullptr || overlays == nullptr ||
+                fossil_processors == nullptr || overlay_processors == nullptr ||
+                max_corners == nullptr) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "fossil is incomplete")};
+            }
+            const auto fossil_array = fossils->as_array();
+            const auto overlay_array = overlays->as_array();
+            const auto fossil_processor = fossil_processors->as_string();
+            const auto overlay_processor = overlay_processors->as_string();
+            const auto max_corners_value = max_corners->as_int64();
+            if (!fossil_array || !overlay_array || !fossil_processor ||
+                !overlay_processor || !max_corners_value) {
+                return std::unexpected{
+                    make_error(error_code::parse_error, "fossil is invalid")};
+            }
+            std::vector<std::string> fossil_ids;
+            std::vector<std::string> overlay_ids;
+            for (const auto &item : *fossil_array) {
+                const auto text = item.as_string();
+                if (!text) {
+                    return std::unexpected{make_error(error_code::parse_error,
+                                                      "fossil id is invalid")};
+                }
+                fossil_ids.emplace_back(*text);
+            }
+            for (const auto &item : *overlay_array) {
+                const auto text = item.as_string();
+                if (!text) {
+                    return std::unexpected{make_error(error_code::parse_error,
+                                                      "overlay id is invalid")};
+                }
+                overlay_ids.emplace_back(*text);
+            }
+            if (fossil_ids.size() != overlay_ids.size()) {
+                return std::unexpected{
+                    make_error(error_code::parse_error, "fossil lists differ")};
+            }
+            features_.emplace(id,
+                              std::make_unique<fossil_feature>(
+                                  std::move(fossil_ids), std::move(overlay_ids),
+                                  std::string{*fossil_processor},
+                                  std::string{*overlay_processor},
+                                  static_cast<jint>(*max_corners_value)));
+            continue;
+        }
         if (*type == "minecraft:speleothem_cluster") {
             const auto *base = document.document.find("base_block");
             const auto *pointed = document.document.find("pointed_block");

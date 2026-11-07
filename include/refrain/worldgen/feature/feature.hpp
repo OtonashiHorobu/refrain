@@ -14,6 +14,7 @@
 #include <refrain/worldgen/feature/rule_test.hpp>
 #include <refrain/worldgen/feature/state_provider.hpp>
 #include <refrain/worldgen/provider.hpp>
+#include <refrain/worldgen/structure/template.hpp>
 
 #include <array>
 
@@ -25,6 +26,13 @@ struct feature_context {
     /// supplies this; selectors use it for their nested entries.
     std::function<bool(std::string_view, worldgen_random &, const block_pos &)>
         place_by_id{};
+    /// Template and processor-list sources for features that place `.nbt`
+    /// content (fossils).
+    const structure::structure_template_manager *templates{nullptr};
+    /// Mutable table for template state resolution.
+    block_state_registry *registry{nullptr};
+    std::function<const structure::structure_processor_list *(std::string_view)>
+        processor_list{};
 };
 
 class feature {
@@ -466,6 +474,31 @@ class freeze_top_layer_feature final : public feature {
   private:
     block_state_id ice_{no_block_state};
     block_state_id snow_{no_block_state};
+};
+
+/// `FossilFeature`: places a fossil template below the surface, then the
+/// matching coal overlay template.
+class fossil_feature final : public feature {
+  public:
+    fossil_feature(std::vector<std::string> fossil_structures,
+                   std::vector<std::string> overlay_structures,
+                   std::string fossil_processors,
+                   std::string overlay_processors, jint max_empty_corners)
+        : fossil_structures_{std::move(fossil_structures)},
+          overlay_structures_{std::move(overlay_structures)},
+          fossil_processors_{std::move(fossil_processors)},
+          overlay_processors_{std::move(overlay_processors)},
+          max_empty_corners_{max_empty_corners} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::vector<std::string> fossil_structures_{};
+    std::vector<std::string> overlay_structures_{};
+    std::string fossil_processors_{};
+    std::string overlay_processors_{};
+    jint max_empty_corners_{0};
 };
 
 /// `SpeleothemClusterFeature`: a field of pointed dripstone columns grown
