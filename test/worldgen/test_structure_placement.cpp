@@ -379,9 +379,9 @@ suite<"worldgen/structure-stage"> structure_stage_tests = [] {
         expect(result.starts.size() == 289U);
         expect(!result.starts.empty());
         expect(result.starts.front().structure == "oracle:buried");
-        // The target chunk owns this start; references come from other
-        // chunks only.
-        expect(result.references.empty());
+        expect(result.references.size() == 1U);
+        expect(result.references.front().structure == "oracle:buried");
+        expect(result.references.front().count >= 1);
     };
 
     "references are counted only for starts overlapping the target chunk"_test =
@@ -397,20 +397,18 @@ suite<"worldgen/structure-stage"> structure_stage_tests = [] {
                             .max_z = -23}},
                 {.structure = "oracle:buried",
                  .chunk = {.x = 5, .z = -2},
-                 .bounds = {.min_x = 97,
+                 .bounds = {.min_x = 89,
                             .min_y = 90,
                             .min_z = -23,
-                            .max_x = 97,
+                            .max_x = 89,
                             .max_y = 90,
                             .max_z = -23}},
             };
             const auto references = structure::collect_references(
                 starts, chunk_pos{.x = 6, .z = -2}, 8);
             expect(references.size() == 1U);
-            if (references.size() == 1U) {
-                expect(references.front().chunk_x == 5);
-                expect(references.front().count == 1);
-            }
+            expect(references.front().chunk_x == 6);
+            expect(references.front().count == 1);
         };
 
     "structure sets generate a surface start with its rotated piece"_test = [] {
@@ -530,7 +528,10 @@ suite<"worldgen/structure-stage"> structure_stage_tests = [] {
         const auto area = structure::generate_structure_area(
             chunk_pos{.x = 0, .z = 0}, context, 8);
         expect(area.starts.size() == 289U);
-        expect(area.references.empty());
+        expect(area.references.size() == 1U);
+        expect(area.references.front().chunk_x == 0);
+        expect(area.references.front().chunk_z == 0);
+        expect(area.references.front().count == 1);
     };
 
     "the write stage keeps only starts owned by the chunk"_test = [] {
@@ -557,9 +558,7 @@ suite<"worldgen/structure-stage"> structure_stage_tests = [] {
         expect(chunk.structure_starts().front().chunk_x == 6);
         expect(chunk.structure_starts().front().chunk_z == -2);
         expect(chunk.structure_references().size() == result.references.size());
-        if (!chunk.structure_references().empty()) {
-            expect(chunk.structure_references().front().count >= 1);
-        }
+        expect(chunk.structure_references().front().count >= 1);
     };
 };
 

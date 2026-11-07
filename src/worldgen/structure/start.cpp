@@ -62,10 +62,7 @@ auto collect_references(std::vector<structure_start> &starts,
                                 .count = 1});
     };
     for (auto &start : starts) {
-        // A start is stored in its own chunk's start list; only other chunks
-        // record a reference to it.
-        if ((start.chunk.x == chunk.x && start.chunk.z == chunk.z) ||
-            !start.bounds.intersects_chunk(chunk) ||
+        if (!start.bounds.intersects_chunk(chunk) ||
             !start.can_add_reference()) {
             continue;
         }
