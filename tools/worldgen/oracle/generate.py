@@ -433,6 +433,7 @@ def main() -> int:
                 "oracle:cave_blob_7",
                 "oracle:cave_blob_8",
                 "oracle:large_dripstone",
+                "oracle:lava_lake",
             ]
         )
         (biome_dir / "feature.json").write_text(
@@ -529,6 +530,31 @@ def main() -> int:
                         {
                             "type": "minecraft:fixed_placement",
                             "positions": [[4, 25, 4]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (feature_dir / "lava_lake.json").write_text(
+            json.dumps(
+                read_pack_data(
+                    args.server_jar,
+                    "data/minecraft/worldgen/feature/lake_lava.json",
+                ),
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "lava_lake.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:lava_lake",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, -40, 8]],
                         }
                     ],
                 },

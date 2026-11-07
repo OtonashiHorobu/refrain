@@ -138,6 +138,12 @@ auto canonical_state_name(std::string_view name) -> std::string {
             return std::string{base};
         }
     }
+    constexpr std::string_view fluid_default = "[level=0]";
+    if (name.ends_with(fluid_default) &&
+        (name.starts_with("minecraft:lava") ||
+         name.starts_with("minecraft:water"))) {
+        return std::string{name.substr(0, name.size() - fluid_default.size())};
+    }
     constexpr std::string_view honey_default = ",honey_level=0]";
     if (name.ends_with(honey_default)) {
         std::string canonical{
@@ -828,8 +834,8 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                         },
                 };
                 feature_placement.region = nullptr;
-                feature_placement.height =
-                    [&chunk](heightmap_kind kind, jint x, jint z) -> jint {
+                feature_placement.height = [&chunk](heightmap_kind kind, jint x,
+                                                    jint z) -> jint {
                     const jint local_x = x - chunk.chunk_x() * 16;
                     const jint local_z = z - chunk.chunk_z() * 16;
                     if (local_x < 0 || local_x > 15 || local_z < 0 ||
