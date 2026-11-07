@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: eca131f75aa31435
+// Schema hash: 7bd695fd36f1623c
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -1315,6 +1315,13 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::s
         refrain::reflect::custom_field{"saturation", &::refrain::protocol::v777::play::clientbound::set_health::saturation});
 };
 
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::set_objective'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::set_objective> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::set_objective";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"payload", &::refrain::protocol::v777::play::clientbound::set_objective::payload});
+};
+
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::set_passengers'.
 template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::set_passengers> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::set_passengers";
@@ -1329,6 +1336,13 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::s
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"slot", &::refrain::protocol::v777::play::clientbound::set_player_inventory::slot},
         refrain::reflect::custom_field{"contents", &::refrain::protocol::v777::play::clientbound::set_player_inventory::contents});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::set_player_team'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::set_player_team> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::set_player_team";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"payload", &::refrain::protocol::v777::play::clientbound::set_player_team::payload});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::set_score'.
@@ -1402,6 +1416,13 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::s
 template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::start_configuration> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::start_configuration";
     static constexpr auto fields = std::make_tuple();
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::stop_sound'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::stop_sound> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::stop_sound";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"payload", &::refrain::protocol::v777::play::clientbound::stop_sound::payload});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::store_cookie'.
@@ -2254,12 +2275,12 @@ template <> struct custom_traits<::refrain::protocol::v777::wire::wire_data> {
         refrain::reflect::custom_field{"key_signature", &::refrain::protocol::v777::wire::wire_data::key_signature});
 };
 
-/// Generated RSC struct 'refrain::protocol::v777::wire::wire_type_86'.
-template <> struct custom_traits<::refrain::protocol::v777::wire::wire_type_86> {
-    static constexpr std::string_view type_name = "refrain::protocol::v777::wire::wire_type_86";
+/// Generated RSC struct 'refrain::protocol::v777::wire::wire_type_85'.
+template <> struct custom_traits<::refrain::protocol::v777::wire::wire_type_85> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::wire::wire_type_85";
     static constexpr auto fields = std::make_tuple(
-        refrain::reflect::custom_field{"added_components", &::refrain::protocol::v777::wire::wire_type_86::added_components},
-        refrain::reflect::custom_field{"removed_components", &::refrain::protocol::v777::wire::wire_type_86::removed_components});
+        refrain::reflect::custom_field{"added_components", &::refrain::protocol::v777::wire::wire_type_85::added_components},
+        refrain::reflect::custom_field{"removed_components", &::refrain::protocol::v777::wire::wire_type_85::removed_components});
 };
 
 /// Generated RSC struct 'refrain::protocol::v777::wire::wire_actual_item'.

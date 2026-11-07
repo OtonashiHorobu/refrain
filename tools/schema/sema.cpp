@@ -82,6 +82,12 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "advancement_seen";
     case primitive_kind::vec_delta:
         return "vec_delta";
+    case primitive_kind::sound_selector:
+        return "sound_selector";
+    case primitive_kind::objective_update:
+        return "objective_update";
+    case primitive_kind::team_update:
+        return "team_update";
     case primitive_kind::void_type:
         return "void";
     }
@@ -119,6 +125,9 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"map_patch", primitive_kind::map_patch},
         std::pair{"advancement_seen", primitive_kind::advancement_seen},
         std::pair{"vec_delta", primitive_kind::vec_delta},
+        std::pair{"sound_selector", primitive_kind::sound_selector},
+        std::pair{"objective_update", primitive_kind::objective_update},
+        std::pair{"team_update", primitive_kind::team_update},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -278,6 +287,9 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::map_patch:
     case primitive_kind::advancement_seen:
     case primitive_kind::vec_delta:
+    case primitive_kind::sound_selector:
+    case primitive_kind::objective_update:
+    case primitive_kind::team_update:
     case primitive_kind::void_type:
         return false;
     }
@@ -315,6 +327,9 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::map_patch:
     case primitive_kind::advancement_seen:
     case primitive_kind::vec_delta:
+    case primitive_kind::sound_selector:
+    case primitive_kind::objective_update:
+    case primitive_kind::team_update:
     case primitive_kind::void_type:
         return false;
     }
@@ -2245,6 +2260,9 @@ class analyzer {
             case primitive_kind::map_patch:
             case primitive_kind::advancement_seen:
             case primitive_kind::vec_delta:
+            case primitive_kind::sound_selector:
+            case primitive_kind::objective_update:
+            case primitive_kind::team_update:
                 // Rejected for RIDL in resolve_type(); a wire-only primitive
                 // has no in-process ABI layout.
                 return std::nullopt;

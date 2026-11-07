@@ -87,6 +87,12 @@ namespace {
             return "::refrain::net::advancement_seen";
         case primitive_kind::vec_delta:
             return "::refrain::net::vec_delta";
+        case primitive_kind::sound_selector:
+            return "::refrain::net::sound_selector";
+        case primitive_kind::objective_update:
+            return "::refrain::net::objective_update";
+        case primitive_kind::team_update:
+            return "::refrain::net::team_update";
         case primitive_kind::void_type:
             return "void";
         }
@@ -655,6 +661,35 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::sound_selector:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_sound_selector("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::objective_update:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_objective_update("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::team_update:
+            writer.line("if (auto written = ::refrain::net::encode_team_update("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -1020,6 +1055,38 @@ void emit_decode_value(code_writer &writer, const model &program,
             return;
         case primitive_kind::vec_delta:
             writer.line("if (auto decoded = ::refrain::net::decode_vec_delta("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::sound_selector:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_sound_selector("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::objective_update:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_objective_update("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::team_update:
+            writer.line("if (auto decoded = ::refrain::net::decode_team_update("
                         "in, {}); !decoded) {{",
                         target);
             writer.indent();

@@ -567,6 +567,10 @@ packet set_health = 106 {
     saturation: f32;
 }
 
+packet set_objective = 108 {
+    payload: objective_update;
+}
+
 packet set_passengers = 109 {
     #[varint] vehicle: i32;
     #[varint] passengers: array<i32>;
@@ -575,6 +579,10 @@ packet set_passengers = 109 {
 packet set_player_inventory = 110 {
     #[varint] slot: i32;
     contents: item_stack;
+}
+
+packet set_player_team = 111 {
+    payload: team_update;
 }
 
 packet set_score = 112 {
@@ -624,6 +632,10 @@ packet sound = 119 {
 }
 
 packet start_configuration = 120 {
+}
+
+packet stop_sound = 121 {
+    payload: sound_selector;
 }
 
 packet store_cookie = 122 {

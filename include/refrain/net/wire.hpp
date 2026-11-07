@@ -8,6 +8,7 @@
 
 #include <compare>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -194,6 +195,68 @@ struct vec_delta {
 [[nodiscard]] auto encode_vec_delta(writer &out, const vec_delta &value)
     -> status;
 [[nodiscard]] auto decode_vec_delta(reader &in, vec_delta &value) -> status;
+
+/// Stop-sound selector: flags bit 0 carries a source id and bit 1 a name.
+struct sound_selector {
+    std::uint32_t flags{0};
+    std::uint32_t source{0};
+    data::resource_location name{};
+
+    friend auto operator==(const sound_selector &, const sound_selector &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_sound_selector(writer &out,
+                                         const sound_selector &value) -> status;
+[[nodiscard]] auto decode_sound_selector(reader &in, sound_selector &value)
+    -> status;
+
+/// Scoreboard objective add/change/remove. The optional number format is not
+/// yet supported and is rejected when present.
+struct objective_update {
+    std::string name{};
+    std::uint8_t method{0};
+    text_component display{};
+    std::uint32_t render_type{0};
+
+    friend auto operator==(const objective_update &, const objective_update &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_objective_update(writer &out,
+                                           const objective_update &value)
+    -> status;
+[[nodiscard]] auto decode_objective_update(reader &in, objective_update &value)
+    -> status;
+
+/// Scoreboard team parameters, present for add/change.
+struct team_parameters {
+    text_component display{};
+    text_component prefix{};
+    text_component suffix{};
+    std::uint32_t visibility{0};
+    std::uint32_t collision{0};
+    std::optional<std::uint32_t> color{};
+    std::uint8_t options{0};
+
+    friend auto operator==(const team_parameters &, const team_parameters &)
+        -> bool = default;
+};
+
+/// Scoreboard team add/remove/change/join/leave payload.
+struct team_update {
+    std::string name{};
+    std::uint8_t method{0};
+    std::optional<team_parameters> parameters{};
+    std::vector<std::string> players{};
+
+    friend auto operator==(const team_update &, const team_update &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_team_update(writer &out, const team_update &value)
+    -> status;
+[[nodiscard]] auto decode_team_update(reader &in, team_update &value) -> status;
 
 /// An item stack on the wire. Only the empty stack is implemented: the codec
 /// writes and accepts a zero item count and reports `error_code::unsupported`

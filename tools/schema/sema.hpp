@@ -63,6 +63,12 @@ enum class primitive_kind : std::uint8_t {
     advancement_seen,
     /// Entity movement delta: packed flags/step count plus deltas.
     vec_delta,
+    /// Sound source/name selector used by stop-sound.
+    sound_selector,
+    /// Scoreboard objective add/change/remove payload.
+    objective_update,
+    /// Scoreboard team add/change/join/leave payload.
+    team_update,
     void_type,
 };
 

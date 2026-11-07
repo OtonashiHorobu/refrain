@@ -380,6 +380,241 @@ auto decode_message_signature_packed(reader &in,
     return status_ok();
 }
 
+auto encode_sound_selector(writer &out, const sound_selector &value) -> status {
+    if (value.flags > 3U) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "sound_selector: flags are out of range")};
+    }
+    out.write_u8(static_cast<std::uint8_t>(value.flags));
+    if ((value.flags & 1U) != 0U) {
+        out.write_varint(value.source);
+    }
+    if ((value.flags & 2U) != 0U) {
+        return out.write_identifier(value.name);
+    }
+    return status_ok();
+}
+
+auto decode_sound_selector(reader &in, sound_selector &value) -> status {
+    auto flags{in.read_u8()};
+    if (!flags) {
+        return std::unexpected{std::move(flags.error())};
+    }
+    if (*flags > 3U) {
+        return std::unexpected{make_error(
+            error_code::parse_error, "sound_selector: flags are out of range")};
+    }
+    value.flags = *flags;
+    if ((*flags & 1U) != 0U) {
+        auto source{in.read_varint()};
+        if (!source) {
+            return std::unexpected{std::move(source.error())};
+        }
+        value.source = *source;
+    }
+    if ((*flags & 2U) != 0U) {
+        auto name{in.read_identifier()};
+        if (!name) {
+            return std::unexpected{std::move(name.error())};
+        }
+        value.name = std::move(*name);
+    }
+    return status_ok();
+}
+
+auto encode_objective_update(writer &out, const objective_update &value)
+    -> status {
+    if (value.method > 2U) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "objective_update: method is out of range")};
+    }
+    if (auto written{out.write_string(value.name)}; !written) {
+        return written;
+    }
+    out.write_u8(value.method);
+    if (value.method == 0U || value.method == 2U) {
+        if (auto written{encode_text_component(out, value.display)}; !written) {
+            return written;
+        }
+        out.write_varint(value.render_type);
+        out.write_bool(false); // number format is not implemented
+    }
+    return status_ok();
+}
+
+auto decode_objective_update(reader &in, objective_update &value) -> status {
+    auto name{in.read_string()};
+    if (!name) {
+        return std::unexpected{std::move(name.error())};
+    }
+    value.name = std::move(*name);
+    auto method{in.read_u8()};
+    if (!method) {
+        return std::unexpected{std::move(method.error())};
+    }
+    if (*method > 2U) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "objective_update: method is out of range")};
+    }
+    value.method = *method;
+    if (*method == 0U || *method == 2U) {
+        if (auto decoded{decode_text_component(in, value.display)}; !decoded) {
+            return decoded;
+        }
+        auto render_type{in.read_varint()};
+        if (!render_type) {
+            return std::unexpected{std::move(render_type.error())};
+        }
+        value.render_type = *render_type;
+        auto has_format{in.read_bool()};
+        if (!has_format) {
+            return std::unexpected{std::move(has_format.error())};
+        }
+        if (*has_format) {
+            return std::unexpected{make_error(
+                error_code::unsupported,
+                "objective_update: number formats are not implemented")};
+        }
+    }
+    return status_ok();
+}
+
+auto encode_team_parameters(writer &out, const team_parameters &value)
+    -> status {
+    for (const auto *component :
+         {&value.display, &value.prefix, &value.suffix}) {
+        if (auto written{encode_text_component(out, *component)}; !written) {
+            return written;
+        }
+    }
+    out.write_varint(value.visibility);
+    out.write_varint(value.collision);
+    out.write_bool(value.color.has_value());
+    if (value.color.has_value()) {
+        out.write_varint(*value.color);
+    }
+    out.write_u8(value.options);
+    return status_ok();
+}
+
+auto decode_team_parameters(reader &in, team_parameters &value) -> status {
+    for (auto *component : {&value.display, &value.prefix, &value.suffix}) {
+        if (auto decoded{decode_text_component(in, *component)}; !decoded) {
+            return decoded;
+        }
+    }
+    auto visibility{in.read_varint()};
+    auto collision{in.read_varint()};
+    if (!visibility || !collision) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "team_update: truncated")};
+    }
+    value.visibility = *visibility;
+    value.collision = *collision;
+    value.color.reset();
+    auto has_color{in.read_bool()};
+    if (!has_color) {
+        return std::unexpected{std::move(has_color.error())};
+    }
+    if (*has_color) {
+        auto color{in.read_varint()};
+        if (!color) {
+            return std::unexpected{std::move(color.error())};
+        }
+        value.color = *color;
+    }
+    auto options{in.read_u8()};
+    if (!options) {
+        return std::unexpected{std::move(options.error())};
+    }
+    value.options = *options;
+    return status_ok();
+}
+
+auto encode_team_update(writer &out, const team_update &value) -> status {
+    if (value.method > 4U) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "team_update: method is out of range")};
+    }
+    if (auto written{out.write_string(value.name)}; !written) {
+        return written;
+    }
+    out.write_u8(value.method);
+    const bool has_parameters{value.method == 0U || value.method == 2U};
+    const bool has_players{value.method == 0U || value.method == 3U ||
+                           value.method == 4U};
+    if (has_parameters) {
+        if (!value.parameters.has_value()) {
+            return std::unexpected{make_error(
+                error_code::invalid_argument,
+                "team_update: parameters are required for this method")};
+        }
+        if (auto written{encode_team_parameters(out, *value.parameters)};
+            !written) {
+            return written;
+        }
+    }
+    if (has_players) {
+        out.write_varint(static_cast<std::uint32_t>(value.players.size()));
+        for (const auto &player : value.players) {
+            if (auto written{out.write_string(player)}; !written) {
+                return written;
+            }
+        }
+    }
+    return status_ok();
+}
+
+auto decode_team_update(reader &in, team_update &value) -> status {
+    auto name{in.read_string()};
+    if (!name) {
+        return std::unexpected{std::move(name.error())};
+    }
+    value.name = std::move(*name);
+    auto method{in.read_u8()};
+    if (!method) {
+        return std::unexpected{std::move(method.error())};
+    }
+    if (*method > 4U) {
+        return std::unexpected{make_error(
+            error_code::parse_error, "team_update: method is out of range")};
+    }
+    value.method = *method;
+    value.parameters.reset();
+    value.players.clear();
+    if (*method == 0U || *method == 2U) {
+        team_parameters parameters{};
+        if (auto decoded{decode_team_parameters(in, parameters)}; !decoded) {
+            return decoded;
+        }
+        value.parameters = std::move(parameters);
+    }
+    if (*method == 0U || *method == 3U || *method == 4U) {
+        auto count{in.read_varint()};
+        if (!count) {
+            return std::unexpected{std::move(count.error())};
+        }
+        if (*count > in.remaining()) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "team_update: player list exceeds the payload")};
+        }
+        value.players.reserve(*count);
+        for (std::uint32_t index{0}; index < *count; ++index) {
+            auto player{in.read_string()};
+            if (!player) {
+                return std::unexpected{std::move(player.error())};
+            }
+            value.players.push_back(std::move(*player));
+        }
+    }
+    return status_ok();
+}
+
 auto encode_vec_delta(writer &out, const vec_delta &value) -> status {
     if (value.steps.size() > 0x7FFFFFFFU) {
         return std::unexpected{make_error(error_code::invalid_argument,

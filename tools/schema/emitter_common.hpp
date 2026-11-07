@@ -346,6 +346,9 @@ attribute_comment(const std::vector<attribute> &attributes,
     case primitive_kind::map_patch:
     case primitive_kind::advancement_seen:
     case primitive_kind::vec_delta:
+    case primitive_kind::sound_selector:
+    case primitive_kind::objective_update:
+    case primitive_kind::team_update:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";
@@ -396,6 +399,9 @@ attribute_comment(const std::vector<attribute> &attributes,
     case primitive_kind::map_patch:
     case primitive_kind::advancement_seen:
     case primitive_kind::vec_delta:
+    case primitive_kind::sound_selector:
+    case primitive_kind::objective_update:
+    case primitive_kind::team_update:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";

@@ -70,6 +70,116 @@ const suite tests = [] {
         }
     };
 
+    "sound selector round trips flags, source and name"_test = [] {
+        const auto name{refrain::data::resource_location::parse(
+            "minecraft:block.note_block")};
+        expect(name.has_value());
+        if (!name) {
+            return;
+        }
+        const net::sound_selector value{
+            .flags = 3U, .source = 4U, .name = *name};
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_sound_selector(out, value)));
+        net::reader in{bytes};
+        net::sound_selector decoded{};
+        expect(static_cast<bool>(net::decode_sound_selector(in, decoded)));
+        expect(decoded.flags == 3U);
+        expect(decoded.source == 4U);
+        expect(decoded.name.to_string() == name->to_string());
+        expect(in.empty());
+
+        const net::sound_selector none{};
+        bytes.clear();
+        net::writer none_out{bytes};
+        expect(static_cast<bool>(net::encode_sound_selector(none_out, none)));
+        expect(bytes.size() == 1U);
+    };
+
+    "objective update round trips add and remove forms"_test = [] {
+        net::objective_update add{};
+        add.name = "sidebar";
+        add.method = 0U;
+        add.display.text = "Scoreboard";
+        add.render_type = 1U;
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_objective_update(out, add)));
+        net::reader in{bytes};
+        net::objective_update decoded{};
+        expect(static_cast<bool>(net::decode_objective_update(in, decoded)));
+        expect(decoded.name == add.name);
+        expect(decoded.method == 0U);
+        expect(decoded.display.text == add.display.text);
+        expect(decoded.render_type == 1U);
+        expect(in.empty());
+
+        net::objective_update remove{};
+        remove.name = "sidebar";
+        remove.method = 1U;
+        bytes.clear();
+        net::writer remove_out{bytes};
+        expect(static_cast<bool>(
+            net::encode_objective_update(remove_out, remove)));
+        net::reader remove_in{bytes};
+        net::objective_update remove_decoded{};
+        expect(static_cast<bool>(
+            net::decode_objective_update(remove_in, remove_decoded)));
+        expect(remove_decoded.method == 1U);
+        expect(remove_in.empty());
+    };
+
+    "team update round trips create and leave forms"_test = [] {
+        net::team_update create{};
+        create.name = "red";
+        create.method = 0U;
+        net::team_parameters parameters{};
+        parameters.display.text = "Red Team";
+        parameters.prefix.text = "[R] ";
+        parameters.suffix.text = "";
+        parameters.visibility = 0U;
+        parameters.collision = 0U;
+        parameters.color = 1U;
+        parameters.options = 0x03U;
+        create.parameters = parameters;
+        create.players = {"alice", "bob"};
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_team_update(out, create)));
+        net::reader in{bytes};
+        net::team_update decoded{};
+        expect(static_cast<bool>(net::decode_team_update(in, decoded)));
+        expect(decoded.name == create.name);
+        expect(decoded.method == 0U);
+        expect(decoded.parameters.has_value());
+        if (decoded.parameters) {
+            expect(decoded.parameters->display.text == "Red Team");
+            expect(decoded.parameters->color == 1U);
+            expect(decoded.parameters->options == 0x03U);
+        }
+        const bool same_players{decoded.players == create.players};
+        expect(same_players);
+        expect(in.empty());
+
+        net::team_update leave{};
+        leave.name = "red";
+        leave.method = 4U;
+        leave.players = {"alice"};
+        bytes.clear();
+        net::writer leave_out{bytes};
+        expect(static_cast<bool>(net::encode_team_update(leave_out, leave)));
+        net::reader leave_in{bytes};
+        net::team_update leave_decoded{};
+        expect(static_cast<bool>(
+            net::decode_team_update(leave_in, leave_decoded)));
+        expect(leave_decoded.method == 4U);
+        expect(!leave_decoded.parameters.has_value());
+        const bool same_leave{leave_decoded.players == leave.players};
+        expect(same_leave);
+        expect(leave_in.empty());
+    };
+
     "movement delta round trips linear and stepped forms"_test = [] {
         const net::vec_delta linear{.on_ground = true, .x = 1, .y = -2, .z = 3};
         std::vector<std::byte> bytes;

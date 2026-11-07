@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: eca131f75aa31435
+// Schema hash: 7bd695fd36f1623c
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -961,6 +961,13 @@ struct set_health {
     float saturation;
 };
 
+struct set_objective {
+    static constexpr std::uint16_t packet_id = 0x6C;
+    static constexpr std::string_view packet_name = "set_objective";
+
+    ::refrain::net::objective_update payload;
+};
+
 struct set_passengers {
     static constexpr std::uint16_t packet_id = 0x6D;
     static constexpr std::string_view packet_name = "set_passengers";
@@ -978,6 +985,13 @@ struct set_player_inventory {
     // attributes: #[varint]
     std::int32_t slot;
     ::refrain::net::item_stack contents;
+};
+
+struct set_player_team {
+    static constexpr std::uint16_t packet_id = 0x6F;
+    static constexpr std::string_view packet_name = "set_player_team";
+
+    ::refrain::net::team_update payload;
 };
 
 struct set_score {
@@ -1062,6 +1076,13 @@ struct start_configuration {
     static constexpr std::uint16_t packet_id = 0x78;
     static constexpr std::string_view packet_name = "start_configuration";
 
+};
+
+struct stop_sound {
+    static constexpr std::uint16_t packet_id = 0x79;
+    static constexpr std::string_view packet_name = "stop_sound";
+
+    ::refrain::net::sound_selector payload;
 };
 
 struct store_cookie {
@@ -4899,6 +4920,28 @@ struct show_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_set_objective(::refrain::net::writer &out, const set_objective &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_objective_update(out, value.payload); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_set_objective(::refrain::net::reader &in, set_objective &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_objective_update(in, value.payload); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_set_passengers(::refrain::net::writer &out, const set_passengers &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -4961,6 +5004,28 @@ struct show_dialog {
   }
   {
     if (auto decoded = ::refrain::net::decode_item_stack(in, value.contents); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_set_player_team(::refrain::net::writer &out, const set_player_team &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_team_update(out, value.payload); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_set_player_team(::refrain::net::reader &in, set_player_team &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_team_update(in, value.payload); !decoded) {
       return std::unexpected{std::move(decoded.error())};
     }
   }
@@ -5324,6 +5389,28 @@ struct show_dialog {
 [[nodiscard]] inline auto decode_start_configuration(::refrain::net::reader &in, start_configuration &value) -> ::refrain::status {
   static_cast<void>(in);
   static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_stop_sound(::refrain::net::writer &out, const stop_sound &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_sound_selector(out, value.payload); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_stop_sound(::refrain::net::reader &in, stop_sound &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_sound_selector(in, value.payload); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
   return ::refrain::status_ok();
 }
 
