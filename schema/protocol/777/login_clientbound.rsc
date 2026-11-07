@@ -6,6 +6,7 @@
 
 module refrain::protocol::v777::login::clientbound;
 version 777;
+import refrain::protocol::v777::wire;
 
 struct profile_property {
     name: string;
@@ -35,4 +36,10 @@ packet login_finished = 2 {
 
 packet login_compression = 3 {
     #[varint] threshold: u32;
+}
+
+// Generated protocol layouts.
+
+packet cookie_request = 5 {
+    key: identifier;
 }

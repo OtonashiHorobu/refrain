@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: c23e841bac0cde6b
+// Schema hash: 26f951db567137ba
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_LOGIN_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_LOGIN_CLIENTBOUND_HPP
@@ -18,6 +18,7 @@
 #include <vector>
 #include <refrain/core/error.hpp>
 #include <refrain/net/base.hpp>
+#include <refrain/data/resource_location.hpp>
 
 namespace refrain::protocol::v777::login::clientbound {
 
@@ -64,6 +65,13 @@ struct login_compression {
 
     // attributes: #[varint]
     std::uint32_t threshold;
+};
+
+struct cookie_request {
+    static constexpr std::uint16_t packet_id = 0x5;
+    static constexpr std::string_view packet_name = "cookie_request";
+
+    ::refrain::data::resource_location key;
 };
 [[nodiscard]] inline auto encode_profile_property(::refrain::net::writer &out, const profile_property &value) -> ::refrain::status {
   static_cast<void>(out);
@@ -282,6 +290,28 @@ struct login_compression {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.threshold = static_cast<decltype(value.threshold)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_cookie_request(::refrain::net::writer &out, const cookie_request &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.key); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_cookie_request(::refrain::net::reader &in, cookie_request &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.key = std::move(*value_0);
   }
   return ::refrain::status_ok();
 }

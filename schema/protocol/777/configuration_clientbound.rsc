@@ -7,6 +7,7 @@
 
 module refrain::protocol::v777::configuration::clientbound;
 version 777;
+import refrain::protocol::v777::wire;
 
 import refrain::protocol::v777::common;
 
@@ -32,4 +33,33 @@ packet update_enabled_features = 13 {
 
 packet select_known_packs = 15 {
     packs: array<known_pack>;
+}
+
+// Generated protocol layouts.
+
+packet cookie_request = 0 {
+    key: identifier;
+}
+
+packet reset_chat = 6 {
+}
+
+packet resource_pack_pop = 8 {
+    id: optional<uuid>;
+}
+
+packet post_effects = 10 {
+    post_effects: array<identifier>;
+}
+
+packet transfer = 12 {
+    #[max(32767)] host: string;
+    #[varint] port: i32;
+}
+
+packet clear_dialog = 18 {
+}
+
+packet code_of_conduct = 20 {
+    #[max(32767)] code_of_conduct: string;
 }

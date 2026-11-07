@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: c23e841bac0cde6b
+// Schema hash: 26f951db567137ba
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
@@ -64,6 +64,57 @@ struct select_known_packs {
     static constexpr std::string_view packet_name = "select_known_packs";
 
     std::vector<::refrain::protocol::v777::common::known_pack> packs;
+};
+
+struct cookie_request {
+    static constexpr std::uint16_t packet_id = 0x0;
+    static constexpr std::string_view packet_name = "cookie_request";
+
+    ::refrain::data::resource_location key;
+};
+
+struct reset_chat {
+    static constexpr std::uint16_t packet_id = 0x6;
+    static constexpr std::string_view packet_name = "reset_chat";
+
+};
+
+struct resource_pack_pop {
+    static constexpr std::uint16_t packet_id = 0x8;
+    static constexpr std::string_view packet_name = "resource_pack_pop";
+
+    std::optional<::refrain::net::uuid> id;
+};
+
+struct post_effects {
+    static constexpr std::uint16_t packet_id = 0xA;
+    static constexpr std::string_view packet_name = "post_effects";
+
+    std::vector<::refrain::data::resource_location> post_effects;
+};
+
+struct transfer {
+    static constexpr std::uint16_t packet_id = 0xC;
+    static constexpr std::string_view packet_name = "transfer";
+
+    // attributes: #[max(32767)]
+    std::string host;
+    // attributes: #[varint]
+    std::int32_t port;
+};
+
+struct clear_dialog {
+    static constexpr std::uint16_t packet_id = 0x12;
+    static constexpr std::string_view packet_name = "clear_dialog";
+
+};
+
+struct code_of_conduct {
+    static constexpr std::uint16_t packet_id = 0x14;
+    static constexpr std::string_view packet_name = "code_of_conduct";
+
+    // attributes: #[max(32767)]
+    std::string code_of_conduct;
 };
 [[nodiscard]] inline auto encode_custom_payload(::refrain::net::writer &out, const custom_payload &value) -> ::refrain::status {
   static_cast<void>(out);
@@ -210,6 +261,169 @@ struct select_known_packs {
       }
       value.packs.push_back(std::move(value_0));
     }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_cookie_request(::refrain::net::writer &out, const cookie_request &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.key); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_cookie_request(::refrain::net::reader &in, cookie_request &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.key = std::move(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_reset_chat(::refrain::net::writer &out, const reset_chat &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_reset_chat(::refrain::net::reader &in, reset_chat &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_resource_pack_pop(::refrain::net::writer &out, const resource_pack_pop &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_bool(value.id.has_value());
+    if (value.id.has_value()) {
+      if (auto written = out.write_uuid(value.id.value()); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_resource_pack_pop(::refrain::net::reader &in, resource_pack_pop &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::net::uuid value_0{};
+      auto value_1 = in.read_uuid();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = *value_1;
+      value.id = std::move(value_0);
+    } else {
+      value.id.reset();
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_post_effects(::refrain::net::writer &out, const post_effects &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.post_effects.size()));
+    for (const auto &item_0 : value.post_effects) {
+      if (auto written = out.write_identifier(item_0); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_post_effects(::refrain::net::reader &in, post_effects &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.post_effects.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::data::resource_location value_0{};
+      auto value_1 = in.read_identifier();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = std::move(*value_1);
+      value.post_effects.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_transfer(::refrain::net::writer &out, const transfer &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_string(value.host, 32767); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.port));
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_transfer(::refrain::net::reader &in, transfer &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_string(32767);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.host = std::move(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.port = static_cast<decltype(value.port)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_clear_dialog(::refrain::net::writer &out, const clear_dialog &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_clear_dialog(::refrain::net::reader &in, clear_dialog &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_code_of_conduct(::refrain::net::writer &out, const code_of_conduct &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_string(value.code_of_conduct, 32767); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_code_of_conduct(::refrain::net::reader &in, code_of_conduct &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_string(32767);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.code_of_conduct = std::move(*value_0);
   }
   return ::refrain::status_ok();
 }

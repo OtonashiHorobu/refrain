@@ -7,6 +7,7 @@
 
 module refrain::protocol::v777::play::clientbound;
 version 777;
+import refrain::protocol::v777::wire;
 
 struct global_pos {
     dimension: identifier;
@@ -136,4 +137,282 @@ packet set_chunk_cache_radius = 97 {
 packet set_time = 115 {
     game_time: i64;
     clock_updates: array<clock_update>;
+}
+
+// Generated protocol layouts.
+
+packet animate = 2 {
+    #[varint] id: i32;
+    action: i8;
+}
+
+packet block_destruction = 5 {
+    #[varint] id: i32;
+    pos: i64;
+    progress: i8;
+}
+
+packet block_event = 7 {
+    pos: i64;
+    b0: i8;
+    b1: i8;
+    #[varint] block: i32;
+}
+
+packet boss_event = 9 {
+}
+
+packet clear_titles = 14 {
+    reset_times: bool;
+}
+
+packet container_close = 17 {
+    #[varint] container_id: i32;
+}
+
+packet container_set_data = 19 {
+    #[varint] container_id: i32;
+    #[fixed] id: i16;
+    #[fixed] value: i16;
+}
+
+packet cookie_request = 21 {
+    key: identifier;
+}
+
+packet cooldown = 22 {
+    cooldown_group: identifier;
+    #[varint] duration: i32;
+}
+
+packet custom_chat_completions = 23 {
+    #[varint] action: i32;
+    entries: array<string>;
+}
+
+packet debug_sample = 30 {
+    sample: array<i64>;
+    #[varint] debug_sample_type: u32;
+}
+
+packet add_transient_block = 37 {
+    pos: i64;
+    #[varint] block_state: i32;
+}
+
+packet forget_level_chunk = 38 {
+    pos: i64;
+}
+
+packet game_test_highlight_pos = 41 {
+    absolute_pos: i64;
+    relative_pos: i64;
+}
+
+packet mount_screen_open = 42 {
+    #[varint] container_id: i32;
+    #[varint] inventory_columns: i32;
+    #[fixed] entity_id: i32;
+}
+
+packet hurt_animation = 43 {
+    #[varint] id: i32;
+    yaw: f32;
+}
+
+packet level_event = 47 {
+    #[fixed] type_: i32;
+    pos: i64;
+    #[fixed] data: i32;
+    global_event: bool;
+}
+
+packet low_disk_space_warning = 51 {
+}
+
+packet move_minecart_along_track = 56 {
+    #[varint] entity_id: i32;
+    lerp_steps: array<wire_lerp_steps>;
+}
+
+packet open_book = 59 {
+    #[varint] hand: u32;
+}
+
+packet open_sign_editor = 61 {
+    pos: i64;
+    #[varint] slot: i32;
+}
+
+packet ping = 62 {
+    #[fixed] id: i32;
+}
+
+packet pong_response = 63 {
+    time: i64;
+}
+
+packet place_ghost_recipe = 64 {
+    #[varint] container_id: i32;
+    #[varint] recipe_display: i32;
+}
+
+packet player_combat_end = 67 {
+    #[varint] duration: i32;
+}
+
+packet player_combat_enter = 68 {
+}
+
+packet player_info_remove = 70 {
+    profile_ids: array<uuid>;
+}
+
+packet player_rotation = 74 {
+    y_rot: f32;
+    relative_y: bool;
+    x_rot: f32;
+    relative_x: bool;
+}
+
+packet recipe_book_remove = 76 {
+    recipes: array<wire_recipe_display_id>;
+}
+
+packet recipe_book_settings = 77 {
+    book_settings: wire_book_settings;
+}
+
+packet remove_mob_effect = 79 {
+    #[varint] entity_id: i32;
+    #[varint] effect: i32;
+}
+
+packet resource_pack_pop = 81 {
+    id: optional<uuid>;
+}
+
+packet post_effects = 83 {
+    post_effects: array<identifier>;
+}
+
+packet rotate_head = 85 {
+    #[varint] entity_id: i32;
+    y_head_rot: i8;
+}
+
+packet set_border_center = 90 {
+    new_center_x: f64;
+    new_center_z: f64;
+}
+
+packet set_border_lerp_size = 91 {
+    old_size: f64;
+    new_size: f64;
+    #[varlong] lerp_time: i64;
+}
+
+packet set_border_size = 92 {
+    size: f64;
+}
+
+packet set_border_warning_delay = 93 {
+    #[varint] warning_delay: i32;
+}
+
+packet set_border_warning_distance = 94 {
+    #[varint] warning_blocks: i32;
+}
+
+packet set_camera = 95 {
+    #[varint] camera_id: i32;
+}
+
+packet set_display_objective = 100 {
+    #[varint] slot: u32;
+    #[max(32767)] objective_name: string;
+}
+
+packet set_entity_link = 102 {
+    #[fixed] source_id: i32;
+    #[fixed] dest_id: i32;
+}
+
+packet set_experience = 105 {
+    experience_progress: f32;
+    #[varint] experience_level: i32;
+    #[varint] total_experience: i32;
+}
+
+packet set_health = 106 {
+    health: f32;
+    #[varint] food: i32;
+    saturation: f32;
+}
+
+packet set_passengers = 109 {
+    #[varint] vehicle: i32;
+    #[varint] passengers: array<i32>;
+}
+
+packet set_simulation_distance = 113 {
+    #[varint] simulation_distance: i32;
+}
+
+packet set_titles_animation = 117 {
+    #[fixed] fade_in: i32;
+    #[fixed] stay: i32;
+    #[fixed] fade_out: i32;
+}
+
+packet start_configuration = 120 {
+}
+
+packet swing_animation = 123 {
+    #[varint] entity_id: i32;
+    #[varint] hand: u32;
+    animation: wire_swing_animation;
+}
+
+packet take_item_entity = 127 {
+    #[varint] item_id: i32;
+    #[varint] player_id: i32;
+    #[varint] amount: i32;
+}
+
+packet teleport_entity = 128 {
+    #[varint] id: i32;
+    change: wire_position_move_rotation;
+    #[fixed] relatives: i32;
+    on_ground: bool;
+}
+
+packet ticking_state = 130 {
+    tick_rate: f32;
+    is_frozen: bool;
+}
+
+packet ticking_step = 131 {
+    #[varint] tick_steps: i32;
+}
+
+packet transfer = 132 {
+    #[max(32767)] host: string;
+    #[varint] port: i32;
+}
+
+packet update_mob_effect = 135 {
+    #[varint] entity_id: i32;
+    #[varint] effect: i32;
+    #[varint] effect_amplifier: i32;
+    #[varint] effect_duration_ticks: i32;
+    flags_: i8;
+}
+
+packet projectile_power = 138 {
+    #[varint] id: i32;
+    acceleration_power: f64;
+}
+
+packet clear_dialog = 142 {
 }

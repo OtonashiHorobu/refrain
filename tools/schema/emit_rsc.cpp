@@ -709,7 +709,7 @@ void emit_decode_value(code_writer &writer, const model &program,
             writer.line(
                 "return "
                 "std::unexpected{{::refrain::make_error(::refrain::error_code::"
-                "parse_error, \"field '{}' exceeds its declared maximum\");",
+                "parse_error, \"field '{}' exceeds its declared maximum\")}};",
                 label);
             writer.dedent();
             writer.line("}}");
