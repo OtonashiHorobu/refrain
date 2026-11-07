@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 42ffb9d36f8b9f98
+// Schema hash: 4e63c511eed40c8b
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
@@ -305,7 +305,7 @@ struct debug_subscription_request {
     static constexpr std::uint16_t packet_id = 0x17;
     static constexpr std::string_view packet_name = "debug_subscription_request";
 
-    std::uint32_t payload;
+    std::vector<std::uint32_t> payload;
 };
 
 struct edit_book {
@@ -1620,7 +1620,10 @@ struct custom_click_action {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_varint(value.payload);
+    out.write_varint(static_cast<std::uint32_t>(value.payload.size()));
+    for (const auto &item_0 : value.payload) {
+      out.write_varint(item_0);
+    }
   }
   return ::refrain::status_ok();
 }
@@ -1629,9 +1632,16 @@ struct custom_click_action {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto value_0 = in.read_varint();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.payload = *value_0;
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.payload.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      std::uint32_t value_0{};
+      auto value_1 = in.read_varint();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = *value_1;
+      value.payload.push_back(std::move(value_0));
+    }
   }
   return ::refrain::status_ok();
 }

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 42ffb9d36f8b9f98
+// Schema hash: 4e63c511eed40c8b
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_HPP
@@ -22,7 +22,7 @@
 namespace refrain::protocol::v777 {
 
 /// Packets declared for this stage, ordered by flow and id.
-inline constexpr std::array<packet_descriptor, 178> play_packets{{
+inline constexpr std::array<packet_descriptor, 179> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x0, "bundle_delimiter"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x1, "add_entity"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x2, "animate"},
@@ -59,7 +59,9 @@ inline constexpr std::array<packet_descriptor, 178> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x2B, "hurt_animation"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x2C, "initialize_border"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x2D, "keep_alive"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x2E, "level_chunk_with_light"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x2F, "level_event"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x31, "light_update"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x32, "login"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x33, "low_disk_space_warning"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x38, "move_minecart_along_track"},
@@ -110,7 +112,6 @@ inline constexpr std::array<packet_descriptor, 178> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x6B, "set_held_slot"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x6D, "set_passengers"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x6E, "set_player_inventory"},
-  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x6F, "set_player_team"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x71, "set_simulation_distance"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x72, "set_subtitle_text"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x73, "set_time"},

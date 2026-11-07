@@ -33,11 +33,6 @@ struct wire_argument_signatures {
     entries: array<wire_entry_3>;
 }
 
-struct wire_untrusted_entry {
-    type_: either<varint_id, text_component>;
-    #[max(32767)] link: string;
-}
-
 struct wire_update {
     #[varint] offset: i32;
     #[fixed_bytes(20)] acknowledged: bytes;
@@ -53,6 +48,11 @@ struct wire_data {
 struct wire_entry_4 {
     game_rule_key: identifier;
     #[max(32767)] value: string;
+}
+
+struct wire_untrusted_entry {
+    type_: either<varint_id, text_component>;
+    #[max(32767)] link: string;
 }
 
 struct wire_data_3 {
@@ -74,9 +74,36 @@ struct wire_entry {
     tooltip: optional<text_component>;
 }
 
+struct wire_packed_registry_entry {
+    id: identifier;
+    data: optional<nbt>;
+}
+
 struct wire_sound_event {
     location: identifier;
     fixed_range: optional<f32>;
+}
+
+struct wire_block_entities_data {
+    packed_xz: i8;
+    #[fixed] y: i16;
+    type_: varint_id;
+    tag: nbt;
+}
+
+struct wire_clientbound_level_chunk_packet_data {
+    heightmaps: map<varint_id, array<i64>>;
+    #[max(2097152)] buffer: bytes;
+    block_entities_data: array<wire_block_entities_data>;
+}
+
+struct wire_light_data {
+    #[max(32767)] sky_y_mask: bytes;
+    #[max(32767)] block_y_mask: bytes;
+    #[max(32767)] empty_sky_y_mask: bytes;
+    #[max(32767)] empty_block_y_mask: bytes;
+    sky_updates: array<bytes>;
+    block_updates: array<bytes>;
 }
 
 struct wire_global_pos {
@@ -115,10 +142,10 @@ struct wire_type_settings {
 }
 
 struct wire_book_settings {
-    o_o_crafting: wire_type_settings;
-    o_o_furnace: wire_type_settings;
-    o_o_blast_furnace: wire_type_settings;
-    o_o_smoker: wire_type_settings;
+    crafting: wire_type_settings;
+    furnace: wire_type_settings;
+    blast_furnace: wire_type_settings;
+    smoker: wire_type_settings;
 }
 
 struct wire_swing_animation {

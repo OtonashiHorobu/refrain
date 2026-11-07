@@ -49,7 +49,8 @@ packet reset_chat = 6 {
 }
 
 packet registry_data = 7 {
-    payload: identifier;
+    registry: identifier;
+    entries: array<wire_packed_registry_entry>;
 }
 
 packet resource_pack_pop = 8 {
@@ -79,7 +80,7 @@ packet transfer = 12 {
 }
 
 packet custom_report_details = 16 {
-    payload: map<string, string>;
+    details: map<string, string>;
 }
 
 packet server_links = 17 {

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 42ffb9d36f8b9f98
+// Schema hash: 4e63c511eed40c8b
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
@@ -95,7 +95,8 @@ struct registry_data {
     static constexpr std::uint16_t packet_id = 0x7;
     static constexpr std::string_view packet_name = "registry_data";
 
-    ::refrain::data::resource_location payload;
+    ::refrain::data::resource_location registry;
+    std::vector<::refrain::protocol::v777::wire::wire_packed_registry_entry> entries;
 };
 
 struct resource_pack_pop {
@@ -148,7 +149,7 @@ struct custom_report_details {
     static constexpr std::uint16_t packet_id = 0x10;
     static constexpr std::string_view packet_name = "custom_report_details";
 
-    std::map<std::string, std::string> payload;
+    std::map<std::string, std::string> details;
 };
 
 struct server_links {
@@ -377,8 +378,16 @@ struct code_of_conduct {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    if (auto written = out.write_identifier(value.payload); !written) {
+    if (auto written = out.write_identifier(value.registry); !written) {
       return written;
+    }
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.entries.size()));
+    for (const auto &item_0 : value.entries) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_packed_registry_entry(out, item_0); !written) {
+        return written;
+      }
     }
   }
   return ::refrain::status_ok();
@@ -390,7 +399,19 @@ struct code_of_conduct {
   {
     auto value_0 = in.read_identifier();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.payload = std::move(*value_0);
+    value.registry = std::move(*value_0);
+  }
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.entries.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::protocol::v777::wire::wire_packed_registry_entry value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_packed_registry_entry(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.entries.push_back(std::move(value_0));
+    }
   }
   return ::refrain::status_ok();
 }
@@ -604,8 +625,8 @@ struct code_of_conduct {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_varint(static_cast<std::uint32_t>(value.payload.size()));
-    for (const auto &entry_0 : value.payload) {
+    out.write_varint(static_cast<std::uint32_t>(value.details.size()));
+    for (const auto &entry_0 : value.details) {
       if (auto written = out.write_string(entry_0.first, 32767); !written) {
         return written;
       }
@@ -623,7 +644,7 @@ struct code_of_conduct {
   {
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.payload.clear();
+    value.details.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       std::string map_key_0{};
       auto value_1 = in.read_string(32767);
@@ -633,7 +654,7 @@ struct code_of_conduct {
       auto value_2 = in.read_string(32767);
       if (!value_2) return std::unexpected{std::move(value_2.error())};
       map_value_0 = std::move(*value_2);
-      value.payload.emplace(std::move(map_key_0), std::move(map_value_0));
+      value.details.emplace(std::move(map_key_0), std::move(map_value_0));
     }
   }
   return ::refrain::status_ok();

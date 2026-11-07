@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 42ffb9d36f8b9f98
+// Schema hash: 4e63c511eed40c8b
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -20,6 +20,8 @@
 #include <refrain/net/base.hpp>
 #include <refrain/data/resource_location.hpp>
 #include <refrain/net/wire.hpp>
+#include <map>
+#include <utility>
 #include <variant>
 
 namespace refrain::protocol::v777::wire {
@@ -50,12 +52,6 @@ struct wire_argument_signatures {
     std::vector<::refrain::protocol::v777::wire::wire_entry_3> entries;
 };
 
-struct wire_untrusted_entry {
-    std::variant<std::uint32_t, ::refrain::net::text_component> type_;
-    // attributes: #[max(32767)]
-    std::string link;
-};
-
 struct wire_update {
     // attributes: #[varint]
     std::int32_t offset;
@@ -76,6 +72,12 @@ struct wire_entry_4 {
     ::refrain::data::resource_location game_rule_key;
     // attributes: #[max(32767)]
     std::string value;
+};
+
+struct wire_untrusted_entry {
+    std::variant<std::uint32_t, ::refrain::net::text_component> type_;
+    // attributes: #[max(32767)]
+    std::string link;
 };
 
 struct wire_vec3i {
@@ -108,9 +110,42 @@ struct wire_entry {
     std::optional<::refrain::net::text_component> tooltip;
 };
 
+struct wire_packed_registry_entry {
+    ::refrain::data::resource_location id;
+    std::optional<::refrain::net::nbt_blob> data;
+};
+
 struct wire_sound_event {
     ::refrain::data::resource_location location;
     std::optional<float> fixed_range;
+};
+
+struct wire_block_entities_data {
+    std::int8_t packed_xz;
+    // attributes: #[fixed]
+    std::int16_t y;
+    std::uint32_t type_;
+    ::refrain::net::nbt_blob tag;
+};
+
+struct wire_clientbound_level_chunk_packet_data {
+    std::map<std::uint32_t, std::vector<std::int64_t>> heightmaps;
+    // attributes: #[max(2097152)]
+    std::vector<std::byte> buffer;
+    std::vector<::refrain::protocol::v777::wire::wire_block_entities_data> block_entities_data;
+};
+
+struct wire_light_data {
+    // attributes: #[max(32767)]
+    std::vector<std::byte> sky_y_mask;
+    // attributes: #[max(32767)]
+    std::vector<std::byte> block_y_mask;
+    // attributes: #[max(32767)]
+    std::vector<std::byte> empty_sky_y_mask;
+    // attributes: #[max(32767)]
+    std::vector<std::byte> empty_block_y_mask;
+    std::vector<std::vector<std::byte>> sky_updates;
+    std::vector<std::vector<std::byte>> block_updates;
 };
 
 struct wire_global_pos {
@@ -158,10 +193,10 @@ struct wire_type_settings {
 };
 
 struct wire_book_settings {
-    ::refrain::protocol::v777::wire::wire_type_settings o_o_crafting;
-    ::refrain::protocol::v777::wire::wire_type_settings o_o_furnace;
-    ::refrain::protocol::v777::wire::wire_type_settings o_o_blast_furnace;
-    ::refrain::protocol::v777::wire::wire_type_settings o_o_smoker;
+    ::refrain::protocol::v777::wire::wire_type_settings crafting;
+    ::refrain::protocol::v777::wire::wire_type_settings furnace;
+    ::refrain::protocol::v777::wire::wire_type_settings blast_furnace;
+    ::refrain::protocol::v777::wire::wire_type_settings smoker;
 };
 
 struct wire_swing_animation {
@@ -335,55 +370,6 @@ struct wire_position_move_rotation {
   return ::refrain::status_ok();
 }
 
-[[nodiscard]] inline auto encode_wire_untrusted_entry(::refrain::net::writer &out, const wire_untrusted_entry &value) -> ::refrain::status {
-  static_cast<void>(out);
-  static_cast<void>(value);
-  {
-    out.write_bool(std::holds_alternative<std::uint32_t>(value.type_));
-    if (std::holds_alternative<std::uint32_t>(value.type_)) {
-      out.write_varint(std::get<0>(value.type_));
-    } else {
-      if (auto written = ::refrain::net::encode_text_component(out, std::get<1>(value.type_)); !written) {
-        return written;
-      }
-    }
-  }
-  {
-    if (auto written = out.write_string(value.link, 32767); !written) {
-      return written;
-    }
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto decode_wire_untrusted_entry(::refrain::net::reader &in, wire_untrusted_entry &value) -> ::refrain::status {
-  static_cast<void>(in);
-  static_cast<void>(value);
-  {
-    auto left_0 = in.read_bool();
-    if (!left_0) return std::unexpected{std::move(left_0.error())};
-    if (*left_0) {
-      std::uint32_t value_0{};
-      auto value_1 = in.read_varint();
-      if (!value_1) return std::unexpected{std::move(value_1.error())};
-      value_0 = *value_1;
-      value.type_.template emplace<0>(std::move(value_0));
-    } else {
-      ::refrain::net::text_component value_0{};
-      if (auto decoded = ::refrain::net::decode_text_component(in, value_0); !decoded) {
-        return std::unexpected{std::move(decoded.error())};
-      }
-      value.type_.template emplace<1>(std::move(value_0));
-    }
-  }
-  {
-    auto value_0 = in.read_string(32767);
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.link = std::move(*value_0);
-  }
-  return ::refrain::status_ok();
-}
-
 [[nodiscard]] inline auto encode_wire_update(::refrain::net::writer &out, const wire_update &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -505,6 +491,55 @@ struct wire_position_move_rotation {
     auto value_0 = in.read_string(32767);
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.value = std::move(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_untrusted_entry(::refrain::net::writer &out, const wire_untrusted_entry &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_bool(std::holds_alternative<std::uint32_t>(value.type_));
+    if (std::holds_alternative<std::uint32_t>(value.type_)) {
+      out.write_varint(std::get<0>(value.type_));
+    } else {
+      if (auto written = ::refrain::net::encode_text_component(out, std::get<1>(value.type_)); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    if (auto written = out.write_string(value.link, 32767); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_untrusted_entry(::refrain::net::reader &in, wire_untrusted_entry &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto left_0 = in.read_bool();
+    if (!left_0) return std::unexpected{std::move(left_0.error())};
+    if (*left_0) {
+      std::uint32_t value_0{};
+      auto value_1 = in.read_varint();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = *value_1;
+      value.type_.template emplace<0>(std::move(value_0));
+    } else {
+      ::refrain::net::text_component value_0{};
+      if (auto decoded = ::refrain::net::decode_text_component(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.type_.template emplace<1>(std::move(value_0));
+    }
+  }
+  {
+    auto value_0 = in.read_string(32767);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.link = std::move(*value_0);
   }
   return ::refrain::status_ok();
 }
@@ -713,6 +748,49 @@ struct wire_position_move_rotation {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_wire_packed_registry_entry(::refrain::net::writer &out, const wire_packed_registry_entry &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.id); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.data.has_value());
+    if (value.data.has_value()) {
+      if (auto written = ::refrain::net::encode_nbt(out, value.data.value()); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_packed_registry_entry(::refrain::net::reader &in, wire_packed_registry_entry &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.id = std::move(*value_0);
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::net::nbt_blob value_0{};
+      if (auto decoded = ::refrain::net::decode_nbt(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.data = std::move(value_0);
+    } else {
+      value.data.reset();
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_wire_sound_event(::refrain::net::writer &out, const wire_sound_event &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -749,6 +827,256 @@ struct wire_position_move_rotation {
       value.fixed_range = std::move(value_0);
     } else {
       value.fixed_range.reset();
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_block_entities_data(::refrain::net::writer &out, const wire_block_entities_data &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_i64(static_cast<std::int64_t>(value.packed_xz));
+  }
+  {
+    out.write_u16(static_cast<std::uint16_t>(value.y));
+  }
+  {
+    out.write_varint(value.type_);
+  }
+  {
+    if (auto written = ::refrain::net::encode_nbt(out, value.tag); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_block_entities_data(::refrain::net::reader &in, wire_block_entities_data &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.packed_xz = static_cast<decltype(value.packed_xz)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_u16();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.y = static_cast<decltype(value.y)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.type_ = *value_0;
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_nbt(in, value.tag); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_clientbound_level_chunk_packet_data(::refrain::net::writer &out, const wire_clientbound_level_chunk_packet_data &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.heightmaps.size()));
+    for (const auto &entry_0 : value.heightmaps) {
+      out.write_varint(entry_0.first);
+      out.write_varint(static_cast<std::uint32_t>(entry_0.second.size()));
+      for (const auto &item_1 : entry_0.second) {
+        out.write_i64(static_cast<std::int64_t>(item_1));
+      }
+    }
+  }
+  {
+    if (value.buffer.size() > 2097152) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'buffer' exceeds its declared maximum")};
+    }
+    out.write_varint(static_cast<std::uint32_t>(value.buffer.size()));
+    out.write_bytes(std::span<const std::byte>{value.buffer });
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.block_entities_data.size()));
+    for (const auto &item_0 : value.block_entities_data) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_block_entities_data(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_clientbound_level_chunk_packet_data(::refrain::net::reader &in, wire_clientbound_level_chunk_packet_data &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.heightmaps.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      std::uint32_t map_key_0{};
+      auto value_1 = in.read_varint();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      map_key_0 = *value_1;
+      std::vector<std::int64_t> map_value_0{};
+      auto count_2 = in.read_varint();
+      if (!count_2) return std::unexpected{std::move(count_2.error())};
+      map_value_0.clear();
+      for (std::uint32_t index_2 = 0; index_2 < *count_2; ++index_2) {
+        std::int64_t value_2{};
+        auto value_3 = in.read_i64();
+        if (!value_3) return std::unexpected{std::move(value_3.error())};
+        value_2 = static_cast<decltype(value_2)>(*value_3);
+        map_value_0.push_back(std::move(value_2));
+      }
+      value.heightmaps.emplace(std::move(map_key_0), std::move(map_value_0));
+    }
+  }
+  {
+    auto length_0 = in.read_varint();
+    if (!length_0) return std::unexpected{std::move(length_0.error())};
+    if (*length_0 > 2097152) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::parse_error, "field 'buffer' exceeds its declared maximum")};
+    }
+    auto value_0 = in.read_bytes(*length_0);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.buffer = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.block_entities_data.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::protocol::v777::wire::wire_block_entities_data value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_block_entities_data(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.block_entities_data.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_light_data(::refrain::net::writer &out, const wire_light_data &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (value.sky_y_mask.size() > 32767) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'sky_y_mask' exceeds its declared maximum")};
+    }
+    out.write_varint(static_cast<std::uint32_t>(value.sky_y_mask.size()));
+    out.write_bytes(std::span<const std::byte>{value.sky_y_mask });
+  }
+  {
+    if (value.block_y_mask.size() > 32767) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'block_y_mask' exceeds its declared maximum")};
+    }
+    out.write_varint(static_cast<std::uint32_t>(value.block_y_mask.size()));
+    out.write_bytes(std::span<const std::byte>{value.block_y_mask });
+  }
+  {
+    if (value.empty_sky_y_mask.size() > 32767) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'empty_sky_y_mask' exceeds its declared maximum")};
+    }
+    out.write_varint(static_cast<std::uint32_t>(value.empty_sky_y_mask.size()));
+    out.write_bytes(std::span<const std::byte>{value.empty_sky_y_mask });
+  }
+  {
+    if (value.empty_block_y_mask.size() > 32767) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'empty_block_y_mask' exceeds its declared maximum")};
+    }
+    out.write_varint(static_cast<std::uint32_t>(value.empty_block_y_mask.size()));
+    out.write_bytes(std::span<const std::byte>{value.empty_block_y_mask });
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.sky_updates.size()));
+    for (const auto &item_0 : value.sky_updates) {
+      out.write_varint(static_cast<std::uint32_t>(item_0.size()));
+      out.write_bytes(std::span<const std::byte>{item_0 });
+    }
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.block_updates.size()));
+    for (const auto &item_0 : value.block_updates) {
+      out.write_varint(static_cast<std::uint32_t>(item_0.size()));
+      out.write_bytes(std::span<const std::byte>{item_0 });
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_light_data(::refrain::net::reader &in, wire_light_data &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto length_0 = in.read_varint();
+    if (!length_0) return std::unexpected{std::move(length_0.error())};
+    if (*length_0 > 32767) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::parse_error, "field 'sky_y_mask' exceeds its declared maximum")};
+    }
+    auto value_0 = in.read_bytes(*length_0);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.sky_y_mask = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  {
+    auto length_0 = in.read_varint();
+    if (!length_0) return std::unexpected{std::move(length_0.error())};
+    if (*length_0 > 32767) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::parse_error, "field 'block_y_mask' exceeds its declared maximum")};
+    }
+    auto value_0 = in.read_bytes(*length_0);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.block_y_mask = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  {
+    auto length_0 = in.read_varint();
+    if (!length_0) return std::unexpected{std::move(length_0.error())};
+    if (*length_0 > 32767) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::parse_error, "field 'empty_sky_y_mask' exceeds its declared maximum")};
+    }
+    auto value_0 = in.read_bytes(*length_0);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.empty_sky_y_mask = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  {
+    auto length_0 = in.read_varint();
+    if (!length_0) return std::unexpected{std::move(length_0.error())};
+    if (*length_0 > 32767) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::parse_error, "field 'empty_block_y_mask' exceeds its declared maximum")};
+    }
+    auto value_0 = in.read_bytes(*length_0);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.empty_block_y_mask = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.sky_updates.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      std::vector<std::byte> value_0{};
+      auto length_1 = in.read_varint();
+      if (!length_1) return std::unexpected{std::move(length_1.error())};
+      auto value_1 = in.read_bytes(*length_1);
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = std::vector<std::byte>{value_1->begin(), value_1->end()};
+      value.sky_updates.push_back(std::move(value_0));
+    }
+  }
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.block_updates.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      std::vector<std::byte> value_0{};
+      auto length_1 = in.read_varint();
+      if (!length_1) return std::unexpected{std::move(length_1.error())};
+      auto value_1 = in.read_bytes(*length_1);
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = std::vector<std::byte>{value_1->begin(), value_1->end()};
+      value.block_updates.push_back(std::move(value_0));
     }
   }
   return ::refrain::status_ok();
@@ -1046,22 +1374,22 @@ struct wire_position_move_rotation {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_settings(out, value.o_o_crafting); !written) {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_settings(out, value.crafting); !written) {
       return written;
     }
   }
   {
-    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_settings(out, value.o_o_furnace); !written) {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_settings(out, value.furnace); !written) {
       return written;
     }
   }
   {
-    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_settings(out, value.o_o_blast_furnace); !written) {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_settings(out, value.blast_furnace); !written) {
       return written;
     }
   }
   {
-    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_settings(out, value.o_o_smoker); !written) {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_settings(out, value.smoker); !written) {
       return written;
     }
   }
@@ -1072,22 +1400,22 @@ struct wire_position_move_rotation {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_settings(in, value.o_o_crafting); !decoded) {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_settings(in, value.crafting); !decoded) {
       return std::unexpected{std::move(decoded.error())};
     }
   }
   {
-    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_settings(in, value.o_o_furnace); !decoded) {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_settings(in, value.furnace); !decoded) {
       return std::unexpected{std::move(decoded.error())};
     }
   }
   {
-    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_settings(in, value.o_o_blast_furnace); !decoded) {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_settings(in, value.blast_furnace); !decoded) {
       return std::unexpected{std::move(decoded.error())};
     }
   }
   {
-    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_settings(in, value.o_o_smoker); !decoded) {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_settings(in, value.smoker); !decoded) {
       return std::unexpected{std::move(decoded.error())};
     }
   }

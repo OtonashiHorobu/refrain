@@ -289,11 +289,24 @@ packet hurt_animation = 43 {
     yaw: f32;
 }
 
+packet level_chunk_with_light = 46 {
+    #[fixed] x: i32;
+    #[fixed] z: i32;
+    chunk_data: wire_clientbound_level_chunk_packet_data;
+    light_data: wire_light_data;
+}
+
 packet level_event = 47 {
     #[fixed] type_: i32;
     pos: i64;
     #[fixed] data: i32;
     global_event: bool;
+}
+
+packet light_update = 49 {
+    #[varint] x: i32;
+    #[varint] z: i32;
+    light_data: wire_light_data;
 }
 
 packet low_disk_space_warning = 51 {
@@ -368,7 +381,7 @@ packet recipe_book_settings = 77 {
 }
 
 packet remove_entities = 78 {
-    #[varint] payload: array<i32>;
+    #[varint] entity_ids: array<i32>;
 }
 
 packet remove_mob_effect = 79 {
@@ -497,10 +510,6 @@ packet set_player_inventory = 110 {
     contents: item_stack;
 }
 
-packet set_player_team = 111 {
-    #[max(32767)] payload: array<string>;
-}
-
 packet set_simulation_distance = 113 {
     #[varint] simulation_distance: i32;
 }
@@ -614,7 +623,7 @@ packet projectile_power = 138 {
 }
 
 packet custom_report_details = 139 {
-    payload: map<string, string>;
+    details: map<string, string>;
 }
 
 packet server_links = 140 {

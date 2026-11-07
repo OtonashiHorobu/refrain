@@ -424,8 +424,8 @@ const suite tests = [] {
 
     "net/protocol round trips a map payload"_test = [] {
         v777::configuration::clientbound::custom_report_details packet{};
-        packet.payload.emplace("alpha", "one");
-        packet.payload.emplace("beta", "two");
+        packet.details.emplace("alpha", "one");
+        packet.details.emplace("beta", "two");
         std::vector<std::byte> body;
         net::writer out{body};
         out.write_varint(packet.packet_id);
@@ -446,13 +446,13 @@ const suite tests = [] {
                 in, decoded)};
         expect(status.has_value());
         expect(in.empty());
-        const bool same{decoded.payload == packet.payload};
+        const bool same{decoded.details == packet.details};
         expect(same);
     };
 
     "net/protocol round trips a varint array payload"_test = [] {
         v777::play::clientbound::remove_entities packet{};
-        packet.payload = {1, 300, -1};
+        packet.entity_ids = {1, 300, -1};
         std::vector<std::byte> body;
         net::writer out{body};
         out.write_varint(packet.packet_id);
@@ -467,7 +467,7 @@ const suite tests = [] {
             v777::play::clientbound::decode_remove_entities(in, decoded)};
         expect(status.has_value());
         expect(in.empty());
-        const bool same{decoded.payload == packet.payload};
+        const bool same{decoded.entity_ids == packet.entity_ids};
         expect(same);
     };
 

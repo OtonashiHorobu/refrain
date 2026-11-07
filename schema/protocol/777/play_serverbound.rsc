@@ -174,7 +174,7 @@ packet custom_payload = 22 {
 }
 
 packet debug_subscription_request = 23 {
-    payload: varint_id;
+    payload: array<varint_id>;
 }
 
 packet edit_book = 24 {
