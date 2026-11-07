@@ -149,7 +149,9 @@ auto get_fiddled_distance(jlong seed, jint x, jint y, jint z, double distance_x,
     const double dx = distance_x + fiddle_x;
     const double dy = distance_y + fiddle_y;
     const double dz = distance_z + fiddle_z;
-    return dx * dx + dy * dy + dz * dz;
+    // Java adds the three squares in z, y, x order; the order is observable
+    // when two corners are nearly equidistant.
+    return dz * dz + dy * dy + dx * dx;
 }
 
 } // namespace
