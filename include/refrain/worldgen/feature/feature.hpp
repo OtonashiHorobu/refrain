@@ -467,6 +467,25 @@ class freeze_top_layer_feature final : public feature {
     block_state_id snow_{no_block_state};
 };
 
+/// `SpikeFeature`: a tapering spike above a base block with an optional
+/// downward pillar (ice spikes).
+class spike_feature final : public feature {
+  public:
+    spike_feature(block_state_id state,
+                  std::unique_ptr<block_predicate> can_place_on,
+                  std::unique_ptr<block_predicate> can_replace)
+        : state_{state}, can_place_on_{std::move(can_place_on)},
+          can_replace_{std::move(can_replace)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    block_state_id state_{no_block_state};
+    std::unique_ptr<block_predicate> can_place_on_{};
+    std::unique_ptr<block_predicate> can_replace_{};
+};
+
 /// `UnderwaterMagmaFeature`: magma blocks buried in the floor under a water
 /// column, chosen from a cube around the scanned floor.
 class underwater_magma_feature final : public feature {

@@ -763,6 +763,28 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                                     std::move(*rim_provider)));
             continue;
         }
+        if (*type == "minecraft:spike") {
+            const auto *state = document.document.find("state");
+            const auto *can_place = document.document.find("can_place_on");
+            const auto *can_replace = document.document.find("can_replace");
+            if (state == nullptr || can_place == nullptr ||
+                can_replace == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::parse_error, "spike is incomplete")};
+            }
+            const auto state_id = decode_simple_state(*state, *states_);
+            auto place_predicate = decode_block_predicate(*can_place, *states_);
+            auto replace_predicate =
+                decode_block_predicate(*can_replace, *states_);
+            if (!state_id || !place_predicate || !replace_predicate) {
+                return std::unexpected{
+                    make_error(error_code::parse_error, "spike is invalid")};
+            }
+            features_.emplace(id, std::make_unique<spike_feature>(
+                                      *state_id, std::move(*place_predicate),
+                                      std::move(*replace_predicate)));
+            continue;
+        }
         if (*type == "minecraft:underwater_magma") {
             const auto *range = document.document.find("floor_search_range");
             const auto *radius =

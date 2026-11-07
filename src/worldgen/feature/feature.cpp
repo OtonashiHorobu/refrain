@@ -1490,6 +1490,99 @@ auto freeze_top_layer_feature::place(feature_context &context,
     return true;
 }
 
+auto spike_feature::place(feature_context &context, worldgen_random &random,
+                          const block_pos &origin_in) const -> bool {
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
+    block_pos origin = origin_in;
+    while (states.traits(region.state_at(origin.x, origin.y, origin.z)).air &&
+           origin.y > context.placement.chunk->min_y() + 2) {
+        --origin.y;
+    }
+    if (!can_place_on_->test(region, states, origin)) {
+        return false;
+    }
+    origin.y += random.next_int(4);
+    const jint height = random.next_int(4) + 7;
+    const jint width = height / 4 + random.next_int(2);
+    if (width > 1 && random.next_int(60) == 0) {
+        origin.y += 10 + random.next_int(30);
+    }
+    for (jint y_off = 0; y_off < height; ++y_off) {
+        const float scale =
+            (1.0F - static_cast<float>(y_off) / static_cast<float>(height)) *
+            static_cast<float>(width);
+        const jint new_width =
+            static_cast<jint>(std::ceil(static_cast<double>(scale)));
+        for (jint xo = -new_width; xo <= new_width; ++xo) {
+            const float dx = static_cast<float>(std::abs(xo)) - 0.25F;
+            for (jint zo = -new_width; zo <= new_width; ++zo) {
+                const float dz = static_cast<float>(std::abs(zo)) - 0.25F;
+                const bool inside = (xo == 0 && zo == 0) ||
+                                    !(dx * dx + dz * dz > scale * scale);
+                if (!inside) {
+                    continue;
+                }
+                const bool edge = (xo != -new_width && xo != new_width &&
+                                   zo != -new_width && zo != new_width) ||
+                                  !(random.next_float() > 0.75F);
+                if (!edge) {
+                    continue;
+                }
+                const block_pos pos{.x = origin.x + xo,
+                                    .y = origin.y + y_off,
+                                    .z = origin.z + zo};
+                const auto current = region.state_at(pos.x, pos.y, pos.z);
+                if (states.traits(current).air ||
+                    can_replace_->test(region, states, pos)) {
+                    (void)region.set_block_state(pos.x, pos.y, pos.z, state_);
+                }
+                if (y_off != 0 && new_width > 1) {
+                    const block_pos negative{.x = origin.x + xo,
+                                             .y = origin.y - y_off,
+                                             .z = origin.z + zo};
+                    const auto negative_state =
+                        region.state_at(negative.x, negative.y, negative.z);
+                    if (states.traits(negative_state).air ||
+                        can_replace_->test(region, states, negative)) {
+                        (void)region.set_block_state(negative.x, negative.y,
+                                                     negative.z, state_);
+                    }
+                }
+            }
+        }
+    }
+    jint pillar_width = width - 1;
+    pillar_width = std::clamp(pillar_width, 0, 1);
+    for (jint xo = -pillar_width; xo <= pillar_width; ++xo) {
+        for (jint zo = -pillar_width; zo <= pillar_width; ++zo) {
+            block_pos cursor{
+                .x = origin.x + xo, .y = origin.y - 1, .z = origin.z + zo};
+            jint run_length = 50;
+            if (std::abs(xo) == 1 && std::abs(zo) == 1) {
+                run_length = random.next_int(5);
+            }
+            while (cursor.y > 50) {
+                const auto state =
+                    region.state_at(cursor.x, cursor.y, cursor.z);
+                if (!states.traits(state).air &&
+                    !can_replace_->test(region, states, cursor) &&
+                    state != state_) {
+                    break;
+                }
+                (void)region.set_block_state(cursor.x, cursor.y, cursor.z,
+                                             state_);
+                --cursor.y;
+                if (--run_length <= 0) {
+                    cursor.y -= random.next_int(5) + 1;
+                    run_length = random.next_int(5);
+                }
+            }
+        }
+    }
+    return true;
+}
+
 auto underwater_magma_feature::place(feature_context &context,
                                      worldgen_random &random,
                                      const block_pos &origin) const -> bool {
