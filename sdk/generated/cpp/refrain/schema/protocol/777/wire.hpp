@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 4cc80e4fd118f796
+// Schema hash: 7500108ecf9f3c10
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -227,6 +227,10 @@ struct wire_book_settings {
     ::refrain::protocol::v777::wire::wire_type_settings furnace;
     ::refrain::protocol::v777::wire::wire_type_settings blast_furnace;
     ::refrain::protocol::v777::wire::wire_type_settings smoker;
+};
+
+struct wire_network_payload {
+    std::map<::refrain::data::resource_location, std::vector<std::uint32_t>> tags;
 };
 
 struct wire_swing_animation {
@@ -1686,6 +1690,53 @@ struct wire_position_move_rotation {
   {
     if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_settings(in, value.smoker); !decoded) {
       return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_network_payload(::refrain::net::writer &out, const wire_network_payload &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.tags.size()));
+    for (const auto &entry_0 : value.tags) {
+      if (auto written = out.write_identifier(entry_0.first); !written) {
+        return written;
+      }
+      out.write_varint(static_cast<std::uint32_t>(entry_0.second.size()));
+      for (const auto &item_1 : entry_0.second) {
+        out.write_varint(item_1);
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_network_payload(::refrain::net::reader &in, wire_network_payload &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.tags.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::data::resource_location map_key_0{};
+      auto value_1 = in.read_identifier();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      map_key_0 = std::move(*value_1);
+      std::vector<std::uint32_t> map_value_0{};
+      map_value_0.clear();
+      auto count_2 = in.read_varint();
+      if (!count_2) return std::unexpected{std::move(count_2.error())};
+      for (std::uint32_t index_2 = 0; index_2 < *count_2; ++index_2) {
+        std::uint32_t value_2{};
+        auto value_3 = in.read_varint();
+        if (!value_3) return std::unexpected{std::move(value_3.error())};
+        value_2 = *value_3;
+        map_value_0.push_back(std::move(value_2));
+      }
+      value.tags.emplace(std::move(map_key_0), std::move(map_value_0));
     }
   }
   return ::refrain::status_ok();

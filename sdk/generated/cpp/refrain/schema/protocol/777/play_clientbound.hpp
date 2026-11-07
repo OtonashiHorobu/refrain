@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 4cc80e4fd118f796
+// Schema hash: 7500108ecf9f3c10
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -1085,6 +1085,13 @@ struct update_mob_effect {
     // attributes: #[varint]
     std::int32_t effect_duration_ticks;
     std::int8_t flags_;
+};
+
+struct update_tags {
+    static constexpr std::uint16_t packet_id = 0x89;
+    static constexpr std::string_view packet_name = "update_tags";
+
+    std::map<::refrain::data::resource_location, ::refrain::protocol::v777::wire::wire_network_payload> tags;
 };
 
 struct projectile_power {
@@ -5153,6 +5160,45 @@ struct show_dialog {
     auto value_0 = in.read_i64();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.flags_ = static_cast<decltype(value.flags_)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_update_tags(::refrain::net::writer &out, const update_tags &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.tags.size()));
+    for (const auto &entry_0 : value.tags) {
+      if (auto written = out.write_identifier(entry_0.first); !written) {
+        return written;
+      }
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_network_payload(out, entry_0.second); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_update_tags(::refrain::net::reader &in, update_tags &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.tags.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::data::resource_location map_key_0{};
+      auto value_1 = in.read_identifier();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      map_key_0 = std::move(*value_1);
+      ::refrain::protocol::v777::wire::wire_network_payload map_value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_network_payload(in, map_value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.tags.emplace(std::move(map_key_0), std::move(map_value_0));
+    }
   }
   return ::refrain::status_ok();
 }

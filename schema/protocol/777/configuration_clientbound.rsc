@@ -79,6 +79,10 @@ packet transfer = 12 {
     #[varint] port: i32;
 }
 
+packet update_tags = 14 {
+    tags: map<identifier, wire_network_payload>;
+}
+
 packet custom_report_details = 16 {
     details: map<string, string>;
 }

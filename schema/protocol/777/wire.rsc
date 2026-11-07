@@ -176,6 +176,10 @@ struct wire_book_settings {
     smoker: wire_type_settings;
 }
 
+struct wire_network_payload {
+    tags: map<identifier, array<varint_id>>;
+}
+
 struct wire_swing_animation {
     type_: varint_id;
     #[varint] duration: i32;

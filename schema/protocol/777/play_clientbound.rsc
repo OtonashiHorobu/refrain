@@ -630,6 +630,10 @@ packet update_mob_effect = 135 {
     flags_: i8;
 }
 
+packet update_tags = 137 {
+    tags: map<identifier, wire_network_payload>;
+}
+
 packet projectile_power = 138 {
     #[varint] id: i32;
     acceleration_power: f64;
