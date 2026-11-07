@@ -65,12 +65,16 @@ auto collect_documents(const std::string &directory, const std::string &prefix,
 
 auto collect_tag_ids(const data::json::value &document)
     -> result<std::vector<std::string>> {
-    if (!document.is_array()) {
+    const data::json::value *values = &document;
+    if (document.is_object()) {
+        values = document.find("values");
+    }
+    if (values == nullptr || !values->is_array()) {
         return std::unexpected{
-            make_error(error_code::parse_error, "biome tag is not an array")};
+            make_error(error_code::parse_error, "biome tag has no values")};
     }
     std::vector<std::string> ids;
-    for (const auto &entry : *document.as_array()) {
+    for (const auto &entry : *values->as_array()) {
         if (const auto text = entry.as_string(); text.has_value()) {
             ids.emplace_back(*text);
             continue;
@@ -185,7 +189,10 @@ auto load_structure_data(std::string_view data_root)
             for (const auto &[id, document] : documents) {
                 auto ids = collect_tag_ids(document);
                 if (!ids) {
-                    return std::unexpected{ids.error()};
+                    return std::unexpected{
+                        make_error(ids.error().code,
+                                   ids.error().message + " (" + name + ":" +
+                                       id + ") " + document.dump())};
                 }
                 auto &values = result.biome_tags[name + ":" + id];
                 values.insert(values.end(),

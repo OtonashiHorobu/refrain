@@ -210,6 +210,30 @@ suite<"worldgen/structure-data"> structure_data_tests = [] {
         expect(decoded->biome_tag == "minecraft:has_structure/village_plains");
         expect(decoded->biome_ids.empty());
     };
+    "the reference data resolves structure biome tags"_test = [] {
+        const char *root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+        if (root == nullptr) {
+            return;
+        }
+        const auto data = structure::load_structure_data(root);
+        expect(data.has_value()) << "cannot load structure data";
+        if (!data) {
+            return;
+        }
+        expect(data->sets.size() >= 20U)
+            << "unexpected structure-set count: " << data->sets.size();
+        const auto buried = data->structures.find("minecraft:buried_treasure");
+        expect(buried != data->structures.end());
+        if (buried == data->structures.end()) {
+            return;
+        }
+        expect(data->allows_biome(buried->second, "minecraft:beach"))
+            << "beach missing";
+        expect(data->allows_biome(buried->second, "minecraft:snowy_beach"))
+            << "snowy beach missing";
+        expect(!data->allows_biome(buried->second, "minecraft:plains"))
+            << "plains accepted";
+    };
 };
 
 suite<"worldgen/buried-treasure"> buried_treasure_tests = [] {
