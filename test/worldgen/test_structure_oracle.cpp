@@ -723,4 +723,180 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
         expect(piece.bounds.max_z == (*values)[5]);
         expect((*values)[4] - (*values)[1] == 14);
     };
+
+    "the igloo set selects the same chunks across a generated region"_test =
+        [] {
+            if (std::getenv("REFRAIN_VANILLA_IGLOO_GRID") == nullptr) {
+                return;
+            }
+            const char *region = std::getenv("REFRAIN_VANILLA_IGLOO_REGION");
+            const char *root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+            const char *templates_root =
+                std::getenv("REFRAIN_VANILLA_STRUCTURES");
+            if (region == nullptr || root == nullptr ||
+                templates_root == nullptr) {
+                return;
+            }
+            const auto data =
+                refrain::worldgen::structure::load_structure_data(root);
+            expect(data.has_value());
+            if (!data) {
+                return;
+            }
+            refrain::worldgen::block_state_registry registry;
+            refrain::worldgen::structure::structure_template_manager manager{
+                templates_root, registry};
+            const refrain::worldgen::structure::structure_start_context context{
+                .seed = 1,
+                .data = &*data,
+                .min_y = -64,
+                .world_height = 384,
+                .sea_level = 63,
+                .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+                .biome_name = [](std::uint16_t) -> std::string_view {
+                    return "minecraft:snowy_taiga";
+                },
+                .height_at =
+                    [](jint, jint, refrain::worldgen::heightmap_kind) {
+                        return jint{90};
+                    },
+                .templates = &manager,
+            };
+            std::vector<refrain::worldgen::structure::structure_start> starts;
+            for (jint chunk_x = -12; chunk_x <= 19; ++chunk_x) {
+                for (jint chunk_z = -12; chunk_z <= 19; ++chunk_z) {
+                    auto generated =
+                        refrain::worldgen::structure::generate_structure_starts(
+                            chunk_pos{.x = chunk_x, .z = chunk_z}, context);
+                    for (auto &start : generated) {
+                        starts.push_back(std::move(start));
+                    }
+                }
+            }
+            jint mismatches = 0;
+            jint checked = 0;
+            for (jint chunk_x = -4; chunk_x <= 11; ++chunk_x) {
+                for (jint chunk_z = -4; chunk_z <= 11; ++chunk_z) {
+                    const auto reference = read_chunk(region, chunk_x, chunk_z);
+                    if (!reference) {
+                        continue;
+                    }
+                    const auto *structures =
+                        child(reference->as_compound(), "structures");
+                    const auto *starts_value =
+                        structures == nullptr
+                            ? nullptr
+                            : child(structures->as_compound(), "starts");
+                    const auto *igloo = starts_value == nullptr
+                                            ? nullptr
+                                            : child(starts_value->as_compound(),
+                                                    "minecraft:igloo");
+                    const auto *our = static_cast<
+                        const refrain::worldgen::structure::structure_start *>(
+                        nullptr);
+                    (void)our;
+                    const refrain::worldgen::structure::structure_start *mine =
+                        nullptr;
+                    for (const auto &start : starts) {
+                        if (start.structure == "minecraft:igloo" &&
+                            start.chunk.x == chunk_x &&
+                            start.chunk.z == chunk_z) {
+                            mine = &start;
+                        }
+                    }
+                    const bool expected = igloo != nullptr;
+                    if (expected != (mine != nullptr)) {
+                        ++mismatches;
+                        if (mismatches < 6) {
+                            std::fprintf(stderr,
+                                         "igloo presence mismatch chunk "
+                                         "(%d,%d): expected=%d ours=%d\n",
+                                         static_cast<int>(chunk_x),
+                                         static_cast<int>(chunk_z),
+                                         expected ? 1 : 0,
+                                         mine != nullptr ? 1 : 0);
+                        }
+                        continue;
+                    }
+                    if (expected && mine != nullptr) {
+                        const auto *children =
+                            child(igloo->as_compound(), "Children");
+                        const auto *pieces =
+                            children == nullptr ? nullptr : children->as_list();
+                        if (pieces == nullptr || pieces->items.empty() ||
+                            mine->pieces.empty()) {
+                            ++mismatches;
+                            continue;
+                        }
+                        const auto *expected_piece =
+                            pieces->items.front().as_compound();
+                        const auto *template_id =
+                            child(expected_piece, "Template");
+                        const auto *template_x = child(expected_piece, "TPX");
+                        const auto *template_y = child(expected_piece, "TPY");
+                        const auto *template_z = child(expected_piece, "TPZ");
+                        const auto &actual = mine->pieces.front();
+                        if (template_id == nullptr || template_x == nullptr ||
+                            template_y == nullptr || template_z == nullptr ||
+                            template_id->as_string() != actual.template_id ||
+                            template_x->as_int() != actual.template_origin.x ||
+                            template_y->as_int() != actual.template_origin.y ||
+                            template_z->as_int() != actual.template_origin.z) {
+                            ++mismatches;
+                            if (mismatches < 6) {
+                                std::fprintf(
+                                    stderr,
+                                    "igloo piece mismatch chunk (%d,%d)\n",
+                                    static_cast<int>(chunk_x),
+                                    static_cast<int>(chunk_z));
+                            }
+                        }
+                    }
+                    const auto *references =
+                        structures == nullptr
+                            ? nullptr
+                            : child(structures->as_compound(), "References");
+                    const auto *igloo_reference =
+                        references == nullptr ? nullptr
+                                              : child(references->as_compound(),
+                                                      "minecraft:igloo");
+                    jint expected_references = 0;
+                    if (igloo_reference != nullptr) {
+                        const auto packed = igloo_reference->as_long_array();
+                        if (!packed || packed->empty()) {
+                            ++mismatches;
+                            continue;
+                        }
+                        expected_references = static_cast<jint>((*packed)[0]);
+                    }
+                    jint actual_references = 0;
+                    for (const auto &start : starts) {
+                        if (start.structure == "minecraft:igloo" &&
+                            (start.chunk.x != chunk_x ||
+                             start.chunk.z != chunk_z) &&
+                            start.bounds.intersects_chunk(
+                                chunk_pos{.x = chunk_x, .z = chunk_z})) {
+                            ++actual_references;
+                        }
+                    }
+                    if (expected_references != actual_references) {
+                        ++mismatches;
+                        if (mismatches < 6) {
+                            std::fprintf(stderr,
+                                         "igloo reference mismatch chunk "
+                                         "(%d,%d): expected=%d ours=%d\n",
+                                         static_cast<int>(chunk_x),
+                                         static_cast<int>(chunk_z),
+                                         static_cast<int>(expected_references),
+                                         static_cast<int>(actual_references));
+                        }
+                    }
+                    ++checked;
+                }
+            }
+            std::fprintf(stderr, "igloo grid checked %d chunks\n",
+                         static_cast<int>(checked));
+            expect(checked > 0);
+            expect(mismatches == 0);
+        };
 };
