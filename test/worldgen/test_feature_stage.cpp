@@ -777,7 +777,7 @@ suite<"worldgen/selector"> selector_tests = [] {
             configured_feature_document{
                 .id = "oracle:selector",
                 .document = parse(
-                    R"({"type":"minecraft:random_selector","default":"oracle:pb","features":[{"chance":1.0,"feature":"oracle:pa"}]})")});
+                    R"({"type":"minecraft:random_selector","default":{"feature":"oracle:b","placement":[]},"features":[{"chance":1.0,"feature":{"feature":"oracle:a","placement":[]}}]})")});
         const auto placed_entry = [](std::string id, std::string feature,
                                      std::string placement) {
             return std::pair{
@@ -799,7 +799,8 @@ suite<"worldgen/selector"> selector_tests = [] {
                                                  .steps = {{"oracle:ps"}}});
 
         feature_registry features{registry};
-        expect(features.load(data).has_value());
+        const auto loaded = features.load(data);
+        expect(loaded.has_value()) << loaded.error().message;
         const auto plan = feature_sorter::build({"oracle:test"}, data.biomes);
         expect(plan.has_value());
         if (!plan) {

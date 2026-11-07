@@ -75,35 +75,6 @@ auto decode_simple_state(const data::json::value &provider,
     return resolve_state(states, *key);
 }
 
-auto reference_id(const data::json::value &input) -> result<std::string> {
-    if (const auto text = input.as_string(); text.has_value()) {
-        return std::string{*text};
-    }
-    if (!input.is_object()) {
-        return std::unexpected{make_error(
-            error_code::parse_error, "placed feature reference is invalid")};
-    }
-    const auto *feature = input.find("feature");
-    if (feature == nullptr) {
-        return std::unexpected{make_error(error_code::parse_error,
-                                          "placed feature has no feature")};
-    }
-    if (!feature->is_string()) {
-        return std::unexpected{
-            make_error(error_code::unsupported,
-                       "inline nested feature objects are not implemented")};
-    }
-    const auto *placement = input.find("placement");
-    if (placement != nullptr) {
-        if (!placement->is_array() || !placement->as_array()->empty()) {
-            return std::unexpected{
-                make_error(error_code::unsupported,
-                           "nested placement lists are not implemented")};
-        }
-    }
-    return std::string{*feature->as_string()};
-}
-
 } // namespace
 
 auto feature_registry::decode_provider(const data::json::value &document)
@@ -116,7 +87,37 @@ auto feature_registry::decode_provider(const data::json::value &document)
         });
 }
 
+auto feature_registry::nested_reference(const data::json::value &input)
+    -> result<std::string> {
+    if (const auto text = input.as_string(); text.has_value()) {
+        return std::string{*text};
+    }
+    if (!input.is_object()) {
+        return std::unexpected{make_error(
+            error_code::parse_error, "nested placed reference is invalid")};
+    }
+    const auto *feature = input.find("feature");
+    if (feature == nullptr || !feature->is_string()) {
+        return std::unexpected{
+            make_error(error_code::unsupported,
+                       "inline nested feature objects are not implemented")};
+    }
+    const auto *placement = input.find("placement");
+    if (placement == nullptr || !placement->is_array()) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "nested placement is missing")};
+    }
+    const auto id = "#nested:" + std::to_string(next_nested_++);
+    nested_placed_.push_back(
+        nested_placed_entry{.id = id,
+                            .feature = std::string{*feature->as_string()},
+                            .placement = *placement});
+    return id;
+}
+
 auto feature_registry::load(const feature_data_set &data) -> status {
+    nested_placed_.clear();
+    next_nested_ = 0;
     providers_.clear();
     provider_documents_ = data.state_providers;
     std::set<std::string> visiting;
@@ -429,7 +430,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 return std::unexpected{make_error(
                     error_code::parse_error, "random selector is incomplete")};
             }
-            auto default_id = reference_id(*default_value);
+            auto default_id = nested_reference(*default_value);
             if (!default_id) {
                 return std::unexpected{default_id.error()};
             }
@@ -443,7 +444,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                    "selector entry is incomplete")};
                 }
                 const auto chance_value = chance->as_double();
-                auto reference = reference_id(*feature);
+                auto reference = nested_reference(*feature);
                 if (!chance_value || !reference) {
                     return std::unexpected{make_error(
                         error_code::parse_error, "selector entry is invalid")};
@@ -474,7 +475,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                    "selector entry is incomplete")};
                 }
                 const auto weight_value = weight->as_int64();
-                auto reference = reference_id(*data_field);
+                auto reference = nested_reference(*data_field);
                 if (!weight_value || !reference) {
                     return std::unexpected{make_error(
                         error_code::parse_error, "selector entry is invalid")};
@@ -495,7 +496,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             }
             std::vector<std::string> entries;
             for (const auto &entry : *features->as_array()) {
-                auto reference = reference_id(entry);
+                auto reference = nested_reference(entry);
                 if (!reference) {
                     return std::unexpected{reference.error()};
                 }
@@ -512,8 +513,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 return std::unexpected{make_error(
                     error_code::parse_error, "boolean selector is incomplete")};
             }
-            auto true_id = reference_id(*true_value);
-            auto false_id = reference_id(*false_value);
+            auto true_id = nested_reference(*true_value);
+            auto false_id = nested_reference(*false_value);
             if (!true_id || !false_id) {
                 return std::unexpected{make_error(
                     error_code::parse_error, "boolean selector is invalid")};
@@ -771,6 +772,25 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             runtime.placement.push_back(std::move(*modifier));
         }
         placed_.emplace(id, std::move(runtime));
+    }
+    for (const auto &nested : nested_placed_) {
+        const auto configured = features_.find(nested.feature);
+        if (configured == features_.end()) {
+            return std::unexpected{
+                make_error(error_code::not_found,
+                           "nested placed feature names a missing feature")};
+        }
+        placed_feature_runtime runtime;
+        runtime.id = nested.id;
+        runtime.configured = configured->second.get();
+        for (const auto &entry : *nested.placement.as_array()) {
+            auto modifier = decode_placement(entry, *states_);
+            if (!modifier) {
+                return std::unexpected{modifier.error()};
+            }
+            runtime.placement.push_back(std::move(*modifier));
+        }
+        placed_.emplace(nested.id, std::move(runtime));
     }
     return {};
 }
