@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/data/json.hpp>
+#include <refrain/worldgen/structure/generation.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
 #include <refrain/worldgen/structure/start.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
@@ -158,5 +159,19 @@ suite<"worldgen/structure-data"> structure_data_tests = [] {
         expect(decoded->adaptation ==
                structure::terrain_adaptation::beard_thin);
         expect(decoded->biomes.is_string());
+    };
+};
+
+suite<"worldgen/buried-treasure"> buried_treasure_tests = [] {
+    "the buried treasure start has one centre-column piece"_test = [] {
+        const auto start =
+            structure::buried_treasure_start(chunk_pos{.x = 2, .z = -3});
+        expect(start.structure == "minecraft:buried_treasure");
+        expect(start.pieces.size() == 1U);
+        expect(start.bounds.min_x == 41);
+        expect(start.bounds.max_x == 41);
+        expect(start.bounds.min_z == -39);
+        expect(start.bounds.min_y == 90);
+        expect(start.max_references == 1);
     };
 };
