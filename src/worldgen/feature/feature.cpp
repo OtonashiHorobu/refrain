@@ -366,4 +366,72 @@ auto block_blob_feature::place(feature_context &context,
     return true;
 }
 
+auto offset(block_direction direction, const block_pos &pos) -> block_pos {
+    switch (direction) {
+    case block_direction::down:
+        return {.x = pos.x, .y = pos.y - 1, .z = pos.z};
+    case block_direction::up:
+        return {.x = pos.x, .y = pos.y + 1, .z = pos.z};
+    case block_direction::north:
+        return {.x = pos.x, .y = pos.y, .z = pos.z - 1};
+    case block_direction::south:
+        return {.x = pos.x, .y = pos.y, .z = pos.z + 1};
+    case block_direction::west:
+        return {.x = pos.x - 1, .y = pos.y, .z = pos.z};
+    case block_direction::east:
+        return {.x = pos.x + 1, .y = pos.y, .z = pos.z};
+    }
+    return pos;
+}
+
+void block_column_feature::truncate(std::vector<jint> &heights,
+                                    jint total_height, jint new_height,
+                                    bool prioritize_tip) {
+    jint remove = total_height - new_height;
+    const jint step = prioritize_tip ? 1 : -1;
+    jint index = prioritize_tip ? 0 : static_cast<jint>(heights.size()) - 1;
+    while (index >= 0 && index < static_cast<jint>(heights.size()) &&
+           remove > 0) {
+        const jint from_layer =
+            std::min(heights[static_cast<std::size_t>(index)], remove);
+        remove -= from_layer;
+        heights[static_cast<std::size_t>(index)] -= from_layer;
+        index += step;
+    }
+}
+
+auto block_column_feature::place(feature_context &context,
+                                 worldgen_random &random,
+                                 const block_pos &origin) const -> bool {
+    std::vector<jint> heights(layers_.size(), 0);
+    jint total_height = 0;
+    for (std::size_t i = 0; i < layers_.size(); ++i) {
+        heights[i] = layers_[i].height->sample(random);
+        total_height += heights[i];
+    }
+    if (total_height == 0) {
+        return false;
+    }
+
+    block_pos place_pos = origin;
+    block_pos next_pos = offset(direction_, place_pos);
+    for (jint y = 0; y < total_height; ++y) {
+        if (!allowed_placement_->test(*context.placement.region,
+                                      *context.placement.states, next_pos)) {
+            truncate(heights, total_height, y, prioritize_tip_);
+            break;
+        }
+        next_pos = offset(direction_, next_pos);
+    }
+
+    for (std::size_t i = 0; i < layers_.size(); ++i) {
+        for (jint y = 0; y < heights[i]; ++y) {
+            (void)context.placement.region->set_block_state(
+                place_pos.x, place_pos.y, place_pos.z, layers_[i].state);
+            place_pos = offset(direction_, place_pos);
+        }
+    }
+    return true;
+}
+
 } // namespace refrain::worldgen::feature

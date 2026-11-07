@@ -351,6 +351,7 @@ def main() -> int:
             "oracle:sand_disk",
             "oracle:coal_ore",
             "oracle:moss_blob",
+            "oracle:stone_column",
         ]
         biome_dir = pack / "data/oracle/worldgen/biome"
         biome_dir.mkdir(parents=True)
@@ -470,6 +471,27 @@ def main() -> int:
             )
             + "\n"
         )
+        (feature_dir / "stone_column.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:block_column",
+                    "layers": [
+                        {
+                            "height": 3,
+                            "provider": {"id": "minecraft:stone"},
+                        }
+                    ],
+                    "direction": "up",
+                    "allowed_placement": {
+                        "type": "minecraft:matching_blocks",
+                        "blocks": ["minecraft:air"],
+                    },
+                    "prioritize_tip": False,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
         (placed_dir / "moss_blob.json").write_text(
             json.dumps(
                 {
@@ -478,6 +500,21 @@ def main() -> int:
                         {
                             "type": "minecraft:fixed_placement",
                             "positions": [[8, 30, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "stone_column.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:stone_column",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 80, 8]],
                         }
                     ],
                 },
