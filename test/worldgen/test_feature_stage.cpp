@@ -328,6 +328,47 @@ suite<"worldgen/placement"> placement_tests = [] {
     };
 };
 
+suite<"worldgen/placement-layers"> placement_layer_tests = [] {
+    "count_on_every_layer walks each ground layer"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(stone.has_value());
+        if (!stone) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        for (jint x = 0; x < 16; ++x) {
+            for (jint z = 0; z < 16; ++z) {
+                (void)chunk.set_state(x, 5, z, *stone);
+                (void)chunk.set_state(x, 10, z, *stone);
+            }
+        }
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 1};
+        const placement_context context{
+            .region = &region, .chunk = &chunk, .states = &registry};
+        auto modifier = decode_placement(
+            parse(R"({"type":"minecraft:count_on_every_layer","count":1})"),
+            registry);
+        expect(modifier.has_value());
+        if (!modifier) {
+            return;
+        }
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        std::vector<block_pos> out;
+        (*modifier)->modify(context, random, block_pos{.x = 0, .y = 0, .z = 0},
+                            out);
+        expect(out.size() == 2U);
+        for (const auto &position : out) {
+            expect(position.y == 6 || position.y == 11);
+        }
+    };
+};
+
 suite<"worldgen/placement-water"> placement_water_tests = [] {
     "the surface water depth filter compares final heightmaps"_test = [] {
         block_state_registry registry;
