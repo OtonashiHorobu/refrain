@@ -99,7 +99,7 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
                 return;
             }
             for (const auto &entry : *placement_document.as_array()) {
-                auto modifier = decode_placement(entry);
+                auto modifier = decode_placement(entry, registry);
                 expect(modifier.has_value());
                 if (modifier) {
                     placed.placement.push_back(std::move(*modifier));
@@ -287,6 +287,44 @@ suite<"worldgen/tree"> tree_tests = [] {
             }
         }
         expect(leaf_blocks > 0U);
+    };
+};
+
+suite<"worldgen/placement"> placement_tests = [] {
+    "the block predicate filter keeps only matching positions"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(stone.has_value());
+        if (!stone) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::terrain);
+        (void)chunk.set_state(1, 2, 3, *stone);
+        chunk_region region{chunk, 1};
+        const placement_context context{
+            .region = &region, .chunk = &chunk, .states = &registry};
+        auto modifier = decode_placement(
+            parse(
+                R"({"type":"minecraft:block_predicate_filter","predicate":{"type":"minecraft:matching_blocks","blocks":["minecraft:stone"]}})"),
+            registry);
+        expect(modifier.has_value());
+        if (!modifier) {
+            return;
+        }
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        std::vector<block_pos> out;
+        (*modifier)->modify(context, random, block_pos{.x = 1, .y = 2, .z = 3},
+                            out);
+        expect(out.size() == 1U);
+        out.clear();
+        (*modifier)->modify(context, random, block_pos{.x = 0, .y = 0, .z = 0},
+                            out);
+        expect(out.empty());
     };
 };
 

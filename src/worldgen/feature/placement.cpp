@@ -4,6 +4,9 @@
 
 #include <refrain/worldgen/feature/placement.hpp>
 
+#include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/feature/block_predicate.hpp>
+
 #include <refrain/data/json.hpp>
 
 #include <string_view>
@@ -173,6 +176,22 @@ class offset_placement final : public placement_modifier {
     jint z_{0};
 };
 
+class block_predicate_filter final : public placement_modifier {
+  public:
+    explicit block_predicate_filter(std::unique_ptr<block_predicate> predicate)
+        : predicate_{std::move(predicate)} {}
+    void modify(const placement_context &context, worldgen_random &,
+                const block_pos &position,
+                std::vector<block_pos> &out) const override {
+        if (predicate_->test(*context.region, *context.states, position)) {
+            out.push_back(position);
+        }
+    }
+
+  private:
+    std::unique_ptr<block_predicate> predicate_;
+};
+
 class fixed_placement final : public placement_modifier {
   public:
     explicit fixed_placement(std::vector<block_pos> positions)
@@ -200,7 +219,8 @@ class fixed_placement final : public placement_modifier {
 
 } // namespace
 
-auto decode_placement(const data::json::value &document)
+auto decode_placement(const data::json::value &document,
+                      block_state_registry &states)
     -> result<std::unique_ptr<placement_modifier>> {
     const auto type = type_of(document);
     if (!type) {
@@ -279,6 +299,20 @@ auto decode_placement(const data::json::value &document)
         }
         return std::unique_ptr<placement_modifier>{
             std::make_unique<offset_placement>(x, y, z)};
+    }
+    if (*type == "minecraft:block_predicate_filter") {
+        const auto *predicate_field = document.find("predicate");
+        if (predicate_field == nullptr) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "block_predicate_filter has no predicate")};
+        }
+        auto predicate = decode_block_predicate(*predicate_field, states);
+        if (!predicate) {
+            return std::unexpected{predicate.error()};
+        }
+        return std::unique_ptr<placement_modifier>{
+            std::make_unique<block_predicate_filter>(std::move(*predicate))};
     }
     if (*type == "minecraft:fixed_placement") {
         const auto *positions = document.find("positions");
