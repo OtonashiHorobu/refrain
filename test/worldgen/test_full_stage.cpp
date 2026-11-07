@@ -10,8 +10,15 @@
 #include <refrain/data/nbt.hpp>
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/chunk/chunk_region.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
+#include <refrain/worldgen/structure/generation.hpp>
+#include <refrain/worldgen/structure/placement_stage.hpp>
+#include <refrain/worldgen/structure/stage.hpp>
+#include <refrain/worldgen/structure/start.hpp>
+#include <refrain/worldgen/structure/structure_data.hpp>
+#include <refrain/worldgen/structure/template.hpp>
 #include <refrain/worldgen/terrain/aquifer.hpp>
 #include <refrain/worldgen/terrain/terrain.hpp>
 
@@ -254,11 +261,12 @@ auto decode(const data::nbt::value &document) -> std::optional<decoded> {
 } // namespace
 
 suite<"worldgen/full-stage"> full_stage_tests = [] {
-    "the fill stage matches a world with an empty material rule"_test = [] {
+    "fill and structure placement reproduce the reference chunk"_test = [] {
         const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
         const char *region_path = std::getenv("REFRAIN_VANILLA_JUNGLE_REGION");
         const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
-        if (data_root == nullptr || region_path == nullptr ||
+        if (std::getenv("REFRAIN_FULL_STAGE_STRUCTURES") == nullptr ||
+            data_root == nullptr || region_path == nullptr ||
             templates_root == nullptr) {
             return;
         }
@@ -331,6 +339,128 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                                   sampler_context, aquifer);
         chunk.set_status(chunk_status::terrain);
 
+        {
+            const auto data = structure::load_structure_data(data_root);
+            expect(data.has_value());
+            if (!data) {
+                return;
+            }
+            structure::structure_template_manager manager{templates_root,
+                                                          states};
+            const structure::structure_start_context start_context{
+                .seed = seed,
+                .data = &*data,
+                .min_y = oracle_min_y,
+                .world_height = oracle_height,
+                .sea_level = settings->sea_level,
+                .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+                .biome_name = [](std::uint16_t) -> std::string_view {
+                    return "minecraft:jungle";
+                },
+                .height_at =
+                    [&chunk](jint x, jint z, heightmap_kind kind) {
+                        const jint local_x = x - chunk.chunk_x() * 16;
+                        const jint local_z = z - chunk.chunk_z() * 16;
+                        if (local_x < 0 || local_x > 15 || local_z < 0 ||
+                            local_z > 15) {
+                            return chunk.min_y();
+                        }
+                        return chunk.first_available(kind, local_x, local_z);
+                    },
+                .templates = &manager,
+            };
+            const auto starts = structure::generate_structure_starts(
+                chunk_pos{.x = chunk_x, .z = chunk_z}, start_context);
+            expect(!starts.empty());
+            if (starts.empty()) {
+                return;
+            }
+            for (const auto &start : starts) {
+                ::refrain::worldgen::structure_start record{
+                    .structure = start.structure,
+                    .step = start.step,
+                    .chunk_x = chunk_x,
+                    .chunk_z = chunk_z,
+                    .min_x = start.bounds.min_x,
+                    .min_y = start.bounds.min_y,
+                    .min_z = start.bounds.min_z,
+                    .max_x = start.bounds.max_x,
+                    .max_y = start.bounds.max_y,
+                    .max_z = start.bounds.max_z,
+                };
+                for (const auto &piece : start.pieces) {
+                    record.pieces.push_back(
+                        ::refrain::worldgen::structure_piece_record{
+                            .type = piece.type,
+                            .min_x = piece.bounds.min_x,
+                            .min_y = piece.bounds.min_y,
+                            .min_z = piece.bounds.min_z,
+                            .max_x = piece.bounds.max_x,
+                            .max_y = piece.bounds.max_y,
+                            .max_z = piece.bounds.max_z,
+                            .orientation = piece.orientation,
+                            .template_id = piece.template_id,
+                            .template_x = piece.template_origin.x,
+                            .template_y = piece.template_origin.y,
+                            .template_z = piece.template_origin.z,
+                            .template_rotation = piece.template_rotation,
+                            .template_mirror = piece.template_mirror,
+                            .template_pivot_x = piece.template_pivot.x,
+                            .template_pivot_y = piece.template_pivot.y,
+                            .template_pivot_z = piece.template_pivot.z,
+                            .height_position = piece.height_position,
+                            .height_offset = piece.height_offset,
+                            .integrity = piece.integrity,
+                            .large = piece.large,
+                        });
+                }
+                chunk.add_structure_start(std::move(record));
+            }
+            const auto resolve = [&](std::string_view key) -> block_state_id {
+                if (const auto value = states.find(key); value) {
+                    return *value;
+                }
+                const auto block = state_block_name(key);
+                const bool air = is_air_block_name(block);
+                const auto interned =
+                    states.intern(key, {.air = air, .blocks_motion = !air});
+                return interned.has_value() ? *interned : no_block_state;
+            };
+            chunk_region region_view{chunk, 0};
+            const structure::structure_place_context place_context{
+                .region = &region_view,
+                .chunk = &chunk,
+                .states = &states,
+                .state = resolve,
+                .templates = &manager,
+                .registry = &states,
+                .seed = seed,
+            };
+            worldgen_random decoration_random{
+                std::make_unique<xoroshiro_random_source>(seed)};
+            const jlong decoration_seed = decoration_random.set_decoration_seed(
+                seed, chunk_x * 16, chunk_z * 16);
+            for (const auto &start : starts) {
+                const auto index =
+                    structure::structure_step_index(*data, start.structure);
+                expect(index.has_value());
+                if (!index) {
+                    continue;
+                }
+                jint step = 0;
+                if (start.step == "surface_structures") {
+                    step = 4;
+                } else if (start.step == "underground_structures") {
+                    step = 3;
+                }
+                auto placement_random = worldgen_random{
+                    std::make_unique<xoroshiro_random_source>(0)};
+                placement_random.set_feature_seed(decoration_seed, *index,
+                                                  step);
+                structure::place_structures(chunk, place_context, start.step,
+                                            placement_random);
+            }
+        }
         std::size_t mismatches = 0;
         for (jint y = oracle_min_y; y < oracle_min_y + oracle_height; ++y) {
             for (jint z = 0; z < 16; ++z) {
