@@ -55,6 +55,9 @@ class random_source {
     [[nodiscard]] virtual auto next_long() -> jlong;
     [[nodiscard]] virtual auto next_float() -> float;
     [[nodiscard]] virtual auto next_double() -> double;
+    /// `MarsagliaPolarGaussian.nextGaussian`; the cached second value is reset
+    /// by `set_seed`.
+    [[nodiscard]] virtual auto next_gaussian() -> double = 0;
     [[nodiscard]] virtual auto next_boolean() -> bool;
 
     virtual void set_seed(jlong seed) = 0;
@@ -84,9 +87,12 @@ class legacy_random_source final : public random_source {
         -> std::unique_ptr<positional_random_factory> override;
 
     [[nodiscard]] auto state() const noexcept -> jlong { return state_; }
+    [[nodiscard]] auto next_gaussian() -> double override;
 
   private:
     jlong state_{0};
+    double next_gaussian_{0.0};
+    bool has_next_gaussian_{false};
 };
 
 /// Same algorithm as `legacy_random_source`, without atomics. The reference
@@ -127,6 +133,7 @@ class xoroshiro_random_source final : public random_source {
     [[nodiscard]] auto next_int(jint bound) -> jint override;
     [[nodiscard]] auto next_long() -> jlong override;
     [[nodiscard]] auto next_double() -> double override;
+    [[nodiscard]] auto next_gaussian() -> double override;
     void set_seed(jlong seed) override;
     [[nodiscard]] auto fork() -> std::unique_ptr<random_source> override;
     [[nodiscard]] auto fork_positional()
@@ -140,6 +147,8 @@ class xoroshiro_random_source final : public random_source {
     }
 
     xoroshiro128pp generator_{};
+    double next_gaussian_{0.0};
+    bool has_next_gaussian_{false};
 };
 
 /// 128-bit seed split used by xoroshiro's seeding.
@@ -222,6 +231,7 @@ class worldgen_random {
     [[nodiscard]] auto next_float() -> float;
     [[nodiscard]] auto next_double() -> double;
     [[nodiscard]] auto next_boolean() -> bool;
+    [[nodiscard]] auto next_gaussian() -> double;
 
     void set_seed(jlong seed);
     [[nodiscard]] auto fork() -> std::unique_ptr<random_source>;
@@ -247,6 +257,8 @@ class worldgen_random {
   private:
     std::unique_ptr<random_source> source_;
     int count_{0};
+    double next_gaussian_{0.0};
+    bool has_next_gaussian_{false};
 };
 
 /// The two generators selected by `noise_settings.legacy_random_source`.
