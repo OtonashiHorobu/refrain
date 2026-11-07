@@ -141,6 +141,9 @@ packet set_time = 115 {
 
 // Generated protocol layouts.
 
+packet bundle_delimiter = 0 {
+}
+
 packet animate = 2 {
     #[varint] id: i32;
     action: i8;
@@ -177,10 +180,24 @@ packet container_close = 17 {
     #[varint] container_id: i32;
 }
 
+packet container_set_content = 18 {
+    #[varint] container_id: i32;
+    #[varint] state_id: i32;
+    items: array<item_stack>;
+    carried_item: item_stack;
+}
+
 packet container_set_data = 19 {
     #[varint] container_id: i32;
     #[fixed] id: i16;
     #[fixed] value: i16;
+}
+
+packet container_set_slot = 20 {
+    #[varint] container_id: i32;
+    #[varint] state_id: i32;
+    #[fixed] slot: i16;
+    item_stack: item_stack;
 }
 
 packet cookie_request = 21 {
@@ -200,6 +217,10 @@ packet custom_chat_completions = 23 {
 packet debug_sample = 30 {
     sample: array<i64>;
     #[varint] debug_sample_type: u32;
+}
+
+packet disconnect = 32 {
+    payload: text_component;
 }
 
 packet add_transient_block = 37 {
@@ -240,6 +261,10 @@ packet low_disk_space_warning = 51 {
 packet move_minecart_along_track = 56 {
     #[varint] entity_id: i32;
     lerp_steps: array<wire_lerp_steps>;
+}
+
+packet move_vehicle = 58 {
+    payload: wire_position_and_rotation;
 }
 
 packet open_book = 59 {
@@ -363,6 +388,10 @@ packet set_camera = 95 {
     #[varint] camera_id: i32;
 }
 
+packet set_cursor_item = 98 {
+    contents: item_stack;
+}
+
 packet set_display_objective = 100 {
     #[varint] slot: u32;
     #[max(32767)] objective_name: string;
@@ -388,6 +417,11 @@ packet set_health = 106 {
 packet set_passengers = 109 {
     #[varint] vehicle: i32;
     #[varint] passengers: array<i32>;
+}
+
+packet set_player_inventory = 110 {
+    #[varint] slot: i32;
+    contents: item_stack;
 }
 
 packet set_simulation_distance = 113 {

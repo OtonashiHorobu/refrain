@@ -69,6 +69,36 @@ const suite tests = [] {
         }
     };
 
+    "empty item stack round trips"_test = [] {
+        const net::item_stack value{};
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_item_stack(out, value)));
+        expect(bytes.size() == 1U);
+        expect(bytes[0] == std::byte{0});
+        net::reader in{bytes};
+        net::item_stack decoded{.count = 7};
+        expect(static_cast<bool>(net::decode_item_stack(in, decoded)));
+        expect(decoded == value);
+        expect(in.empty());
+    };
+
+    "non-empty item stacks are rejected"_test = [] {
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        const auto status{
+            net::encode_item_stack(out, net::item_stack{.count = 1})};
+        expect(!status);
+        expect(status.error().code == refrain::error_code::unsupported);
+
+        const std::array encoded{std::byte{1}};
+        net::reader in{encoded};
+        net::item_stack decoded{};
+        const auto decode{net::decode_item_stack(in, decoded)};
+        expect(!decode);
+        expect(decode.error().code == refrain::error_code::unsupported);
+    };
+
     "text component rejects invalid utf8"_test = [] {
         std::vector<std::byte> bytes;
         net::writer out{bytes};

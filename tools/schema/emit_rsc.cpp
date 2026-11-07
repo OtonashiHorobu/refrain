@@ -65,6 +65,8 @@ namespace {
             return "::refrain::net::uuid";
         case primitive_kind::text_component:
             return "::refrain::net::text_component";
+        case primitive_kind::item_stack:
+            return "::refrain::net::item_stack";
         case primitive_kind::void_type:
             return "void";
         }
@@ -520,6 +522,15 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::item_stack:
+            writer.line("if (auto written = ::refrain::net::encode_item_stack("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -689,6 +700,16 @@ void emit_decode_value(code_writer &writer, const model &program,
                 "if (auto decoded = ::refrain::net::decode_text_component("
                 "in, {}); !decoded) {{",
                 target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::item_stack:
+            writer.line("if (auto decoded = ::refrain::net::decode_item_stack("
+                        "in, {}); !decoded) {{",
+                        target);
             writer.indent();
             writer.line(
                 "return std::unexpected{{std::move(decoded.error())}};");
@@ -871,7 +892,8 @@ void emit_decode_value(code_writer &writer, const model &program,
     const auto uses_wire = [&](const auto &self,
                                const resolved_type &type) -> bool {
         if (type.kind == resolved_type::category::primitive) {
-            return type.primitive == primitive_kind::text_component;
+            return type.primitive == primitive_kind::text_component ||
+                   type.primitive == primitive_kind::item_stack;
         }
         return std::ranges::any_of(type.arguments, [&](const auto &argument) {
             return self(self, argument);

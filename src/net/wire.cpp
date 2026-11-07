@@ -32,6 +32,30 @@ namespace {
 
 } // namespace
 
+auto encode_item_stack(writer &out, const item_stack &value) -> status {
+    if (value.count != 0) {
+        return std::unexpected{make_error(
+            error_code::unsupported,
+            "item_stack: non-empty stacks need the data-component codec")};
+    }
+    out.write_varint(0);
+    return status_ok();
+}
+
+auto decode_item_stack(reader &in, item_stack &value) -> status {
+    auto count{in.read_varint()};
+    if (!count) {
+        return std::unexpected{std::move(count.error())};
+    }
+    if (*count != 0) {
+        return std::unexpected{make_error(
+            error_code::unsupported,
+            "item_stack: non-empty stacks need the data-component codec")};
+    }
+    value.count = 0;
+    return status_ok();
+}
+
 auto encode_text_component(writer &out, const text_component &value) -> status {
     if (!is_valid_utf8(value.text)) {
         return std::unexpected{

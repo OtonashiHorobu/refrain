@@ -150,6 +150,10 @@ packet container_slot_state_changed = 20 {
     new_state: bool;
 }
 
+packet debug_subscription_request = 23 {
+    #[varint] payload: i32;
+}
+
 packet edit_book = 24 {
     #[varint] slot: i32;
     pages: array<string>;
@@ -261,6 +265,11 @@ packet set_command_minecart = 56 {
     #[varint] entity: i32;
     #[max(32767)] command: string;
     track_output: bool;
+}
+
+packet set_creative_mode_slot = 57 {
+    #[fixed] slot_num: i16;
+    item_stack: item_stack;
 }
 
 packet set_jigsaw_block = 59 {

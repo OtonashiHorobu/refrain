@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: b600db2aac55a885
+// Schema hash: fbc9968bc3817b27
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -230,6 +230,12 @@ struct set_time {
     std::vector<::refrain::protocol::v777::play::clientbound::clock_update> clock_updates;
 };
 
+struct bundle_delimiter {
+    static constexpr std::uint16_t packet_id = 0x0;
+    static constexpr std::string_view packet_name = "bundle_delimiter";
+
+};
+
 struct animate {
     static constexpr std::uint16_t packet_id = 0x2;
     static constexpr std::string_view packet_name = "animate";
@@ -294,6 +300,18 @@ struct container_close {
     std::int32_t container_id;
 };
 
+struct container_set_content {
+    static constexpr std::uint16_t packet_id = 0x12;
+    static constexpr std::string_view packet_name = "container_set_content";
+
+    // attributes: #[varint]
+    std::int32_t container_id;
+    // attributes: #[varint]
+    std::int32_t state_id;
+    std::vector<::refrain::net::item_stack> items;
+    ::refrain::net::item_stack carried_item;
+};
+
 struct container_set_data {
     static constexpr std::uint16_t packet_id = 0x13;
     static constexpr std::string_view packet_name = "container_set_data";
@@ -304,6 +322,19 @@ struct container_set_data {
     std::int16_t id;
     // attributes: #[fixed]
     std::int16_t value;
+};
+
+struct container_set_slot {
+    static constexpr std::uint16_t packet_id = 0x14;
+    static constexpr std::string_view packet_name = "container_set_slot";
+
+    // attributes: #[varint]
+    std::int32_t container_id;
+    // attributes: #[varint]
+    std::int32_t state_id;
+    // attributes: #[fixed]
+    std::int16_t slot;
+    ::refrain::net::item_stack item_stack;
 };
 
 struct cookie_request {
@@ -338,6 +369,13 @@ struct debug_sample {
     std::vector<std::int64_t> sample;
     // attributes: #[varint]
     std::uint32_t debug_sample_type;
+};
+
+struct disconnect {
+    static constexpr std::uint16_t packet_id = 0x20;
+    static constexpr std::string_view packet_name = "disconnect";
+
+    ::refrain::net::text_component payload;
 };
 
 struct add_transient_block {
@@ -410,6 +448,13 @@ struct move_minecart_along_track {
     // attributes: #[varint]
     std::int32_t entity_id;
     std::vector<::refrain::protocol::v777::wire::wire_lerp_steps> lerp_steps;
+};
+
+struct move_vehicle {
+    static constexpr std::uint16_t packet_id = 0x3A;
+    static constexpr std::string_view packet_name = "move_vehicle";
+
+    ::refrain::protocol::v777::wire::wire_position_and_rotation payload;
 };
 
 struct open_book {
@@ -629,6 +674,13 @@ struct set_camera {
     std::int32_t camera_id;
 };
 
+struct set_cursor_item {
+    static constexpr std::uint16_t packet_id = 0x62;
+    static constexpr std::string_view packet_name = "set_cursor_item";
+
+    ::refrain::net::item_stack contents;
+};
+
 struct set_display_objective {
     static constexpr std::uint16_t packet_id = 0x64;
     static constexpr std::string_view packet_name = "set_display_objective";
@@ -678,6 +730,15 @@ struct set_passengers {
     std::int32_t vehicle;
     // attributes: #[varint]
     std::vector<std::int32_t> passengers;
+};
+
+struct set_player_inventory {
+    static constexpr std::uint16_t packet_id = 0x6E;
+    static constexpr std::string_view packet_name = "set_player_inventory";
+
+    // attributes: #[varint]
+    std::int32_t slot;
+    ::refrain::net::item_stack contents;
 };
 
 struct set_simulation_distance {
@@ -1669,6 +1730,18 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_bundle_delimiter(::refrain::net::writer &out, const bundle_delimiter &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_bundle_delimiter(::refrain::net::reader &in, bundle_delimiter &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_animate(::refrain::net::writer &out, const animate &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -1885,6 +1958,64 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_container_set_content(::refrain::net::writer &out, const container_set_content &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.container_id));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.state_id));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.items.size()));
+    for (const auto &item_0 : value.items) {
+      if (auto written = ::refrain::net::encode_item_stack(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    if (auto written = ::refrain::net::encode_item_stack(out, value.carried_item); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_container_set_content(::refrain::net::reader &in, container_set_content &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.container_id = static_cast<decltype(value.container_id)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.state_id = static_cast<decltype(value.state_id)>(*value_0);
+  }
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.items.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::net::item_stack value_0{};
+      if (auto decoded = ::refrain::net::decode_item_stack(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.items.push_back(std::move(value_0));
+    }
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_item_stack(in, value.carried_item); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_container_set_data(::refrain::net::writer &out, const container_set_data &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -1917,6 +2048,52 @@ struct clear_dialog {
     auto value_0 = in.read_u16();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.value = static_cast<decltype(value.value)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_container_set_slot(::refrain::net::writer &out, const container_set_slot &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.container_id));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.state_id));
+  }
+  {
+    out.write_u16(static_cast<std::uint16_t>(value.slot));
+  }
+  {
+    if (auto written = ::refrain::net::encode_item_stack(out, value.item_stack); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_container_set_slot(::refrain::net::reader &in, container_set_slot &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.container_id = static_cast<decltype(value.container_id)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.state_id = static_cast<decltype(value.state_id)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_u16();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.slot = static_cast<decltype(value.slot)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_item_stack(in, value.item_stack); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }
@@ -2047,6 +2224,28 @@ struct clear_dialog {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.debug_sample_type = static_cast<decltype(value.debug_sample_type)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_disconnect(::refrain::net::writer &out, const disconnect &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_text_component(out, value.payload); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_disconnect(::refrain::net::reader &in, disconnect &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_text_component(in, value.payload); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }
@@ -2282,6 +2481,28 @@ struct clear_dialog {
         return std::unexpected{std::move(decoded.error())};
       }
       value.lerp_steps.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_move_vehicle(::refrain::net::writer &out, const move_vehicle &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_position_and_rotation(out, value.payload); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_move_vehicle(::refrain::net::reader &in, move_vehicle &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_position_and_rotation(in, value.payload); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
     }
   }
   return ::refrain::status_ok();
@@ -3035,6 +3256,28 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_set_cursor_item(::refrain::net::writer &out, const set_cursor_item &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_item_stack(out, value.contents); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_set_cursor_item(::refrain::net::reader &in, set_cursor_item &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_item_stack(in, value.contents); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_set_display_objective(::refrain::net::writer &out, const set_display_objective &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -3198,6 +3441,36 @@ struct clear_dialog {
       if (!value_1) return std::unexpected{std::move(value_1.error())};
       value_0 = static_cast<decltype(value_0)>(*value_1);
       value.passengers.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_set_player_inventory(::refrain::net::writer &out, const set_player_inventory &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.slot));
+  }
+  {
+    if (auto written = ::refrain::net::encode_item_stack(out, value.contents); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_set_player_inventory(::refrain::net::reader &in, set_player_inventory &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.slot = static_cast<decltype(value.slot)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_item_stack(in, value.contents); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
     }
   }
   return ::refrain::status_ok();

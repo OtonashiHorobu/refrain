@@ -40,6 +40,9 @@ enum class primitive_kind : std::uint8_t {
     uuid,
     /// Network NBT text component; RSC wire schemas only.
     text_component,
+    /// Item stack; RSC wire schemas only. The current codec encodes empty
+    /// stacks and rejects non-empty payloads.
+    item_stack,
     void_type,
 };
 

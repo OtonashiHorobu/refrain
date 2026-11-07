@@ -41,7 +41,15 @@ packet cookie_request = 0 {
     key: identifier;
 }
 
+packet disconnect = 2 {
+    payload: text_component;
+}
+
 packet reset_chat = 6 {
+}
+
+packet registry_data = 7 {
+    payload: identifier;
 }
 
 packet resource_pack_pop = 8 {

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: b600db2aac55a885
+// Schema hash: fbc9968bc3817b27
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
@@ -19,6 +19,7 @@
 #include <refrain/core/error.hpp>
 #include <refrain/net/base.hpp>
 #include <refrain/data/resource_location.hpp>
+#include <refrain/net/wire.hpp>
 #include <refrain/schema/protocol/777/common.hpp>
 #include <refrain/schema/protocol/777/wire.hpp>
 
@@ -266,6 +267,14 @@ struct container_slot_state_changed {
     bool new_state;
 };
 
+struct debug_subscription_request {
+    static constexpr std::uint16_t packet_id = 0x17;
+    static constexpr std::string_view packet_name = "debug_subscription_request";
+
+    // attributes: #[varint]
+    std::int32_t payload;
+};
+
 struct edit_book {
     static constexpr std::uint16_t packet_id = 0x18;
     static constexpr std::string_view packet_name = "edit_book";
@@ -464,6 +473,15 @@ struct set_command_minecart {
     // attributes: #[max(32767)]
     std::string command;
     bool track_output;
+};
+
+struct set_creative_mode_slot {
+    static constexpr std::uint16_t packet_id = 0x39;
+    static constexpr std::string_view packet_name = "set_creative_mode_slot";
+
+    // attributes: #[fixed]
+    std::int16_t slot_num;
+    ::refrain::net::item_stack item_stack;
 };
 
 struct set_jigsaw_block {
@@ -1375,6 +1393,26 @@ struct use_item {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_debug_subscription_request(::refrain::net::writer &out, const debug_subscription_request &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.payload));
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_debug_subscription_request(::refrain::net::reader &in, debug_subscription_request &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.payload = static_cast<decltype(value.payload)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_edit_book(::refrain::net::writer &out, const edit_book &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -2060,6 +2098,36 @@ struct use_item {
     auto value_0 = in.read_bool();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.track_output = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_set_creative_mode_slot(::refrain::net::writer &out, const set_creative_mode_slot &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_u16(static_cast<std::uint16_t>(value.slot_num));
+  }
+  {
+    if (auto written = ::refrain::net::encode_item_stack(out, value.item_stack); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_set_creative_mode_slot(::refrain::net::reader &in, set_creative_mode_slot &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_u16();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.slot_num = static_cast<decltype(value.slot_num)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_item_stack(in, value.item_stack); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }

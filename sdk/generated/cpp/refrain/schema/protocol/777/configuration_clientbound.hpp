@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: b600db2aac55a885
+// Schema hash: fbc9968bc3817b27
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
@@ -74,10 +74,24 @@ struct cookie_request {
     ::refrain::data::resource_location key;
 };
 
+struct disconnect {
+    static constexpr std::uint16_t packet_id = 0x2;
+    static constexpr std::string_view packet_name = "disconnect";
+
+    ::refrain::net::text_component payload;
+};
+
 struct reset_chat {
     static constexpr std::uint16_t packet_id = 0x6;
     static constexpr std::string_view packet_name = "reset_chat";
 
+};
+
+struct registry_data {
+    static constexpr std::uint16_t packet_id = 0x7;
+    static constexpr std::string_view packet_name = "registry_data";
+
+    ::refrain::data::resource_location payload;
 };
 
 struct resource_pack_pop {
@@ -301,6 +315,28 @@ struct code_of_conduct {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_disconnect(::refrain::net::writer &out, const disconnect &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_text_component(out, value.payload); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_disconnect(::refrain::net::reader &in, disconnect &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_text_component(in, value.payload); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_reset_chat(::refrain::net::writer &out, const reset_chat &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -310,6 +346,28 @@ struct code_of_conduct {
 [[nodiscard]] inline auto decode_reset_chat(::refrain::net::reader &in, reset_chat &value) -> ::refrain::status {
   static_cast<void>(in);
   static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_registry_data(::refrain::net::writer &out, const registry_data &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.payload); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_registry_data(::refrain::net::reader &in, registry_data &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.payload = std::move(*value_0);
+  }
   return ::refrain::status_ok();
 }
 
