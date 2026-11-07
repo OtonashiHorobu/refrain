@@ -439,6 +439,55 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       static_cast<jint>(*size_value), discard));
             continue;
         }
+        if (*type == "minecraft:scattered_ore") {
+            const auto *targets = document.document.find("targets");
+            const auto *size = document.document.find("size");
+            if (targets == nullptr || !targets->is_array() || size == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "scattered ore is incomplete")};
+            }
+            const auto size_value = size->as_int64();
+            if (!size_value) {
+                return std::unexpected{size_value.error()};
+            }
+            float discard = 0.0F;
+            if (const auto *field =
+                    document.document.find("discard_chance_on_air_exposure");
+                field != nullptr) {
+                const auto value = field->as_double();
+                if (!value) {
+                    return std::unexpected{value.error()};
+                }
+                discard = static_cast<float>(*value);
+            }
+            std::vector<block_replacement> replacements;
+            for (const auto &entry : *targets->as_array()) {
+                const auto *target = entry.find("target");
+                const auto *state = entry.find("state");
+                if (target == nullptr || state == nullptr) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "scattered ore replacement is incomplete")};
+                }
+                auto test = decode_rule_test(*target, *states_);
+                const auto key = decode_state_key(*state);
+                if (!test || !key) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "scattered ore replacement is invalid")};
+                }
+                auto state_id = resolve_state(*states_, *key);
+                if (!state_id) {
+                    return std::unexpected{state_id.error()};
+                }
+                replacements.push_back(block_replacement{
+                    .target = std::move(*test), .state = *state_id});
+            }
+            features_.emplace(id, std::make_unique<scattered_ore_feature>(
+                                      std::move(replacements),
+                                      static_cast<jint>(*size_value), discard));
+            continue;
+        }
         if (*type == "minecraft:spring_feature") {
             const auto *state_value = document.document.find("state");
             const auto *valid_value = document.document.find("valid_blocks");

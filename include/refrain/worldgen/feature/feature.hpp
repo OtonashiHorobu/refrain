@@ -170,6 +170,31 @@ class blue_ice_feature final : public feature {
     block_state_id air_{no_block_state};
 };
 
+/// `ScatteredOreFeature`: a handful of single-block ore replacements close to
+/// the origin.
+class scattered_ore_feature final : public feature {
+  public:
+    scattered_ore_feature(std::vector<block_replacement> targets, jint size,
+                          float discard_chance_on_air_exposure)
+        : targets_{std::move(targets)}, size_{size},
+          discard_chance_on_air_exposure_{discard_chance_on_air_exposure} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    [[nodiscard]] auto can_place(feature_context &context,
+                                 worldgen_random &random, block_state_id state,
+                                 const block_pos &pos,
+                                 const rule_test &target) const -> bool;
+    [[nodiscard]] auto adjacent_to_air(feature_context &context,
+                                       const block_pos &pos) const -> bool;
+
+    std::vector<block_replacement> targets_{};
+    jint size_{0};
+    float discard_chance_on_air_exposure_{0.0F};
+};
+
 /// `SpringFeature`: a fluid source surrounded by a fixed rock/hole pattern.
 class spring_feature final : public feature {
   public:

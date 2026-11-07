@@ -305,6 +305,64 @@ auto spring_feature::valid(feature_context &context, const block_pos &pos) const
            valid_blocks_.end();
 }
 
+auto scattered_ore_feature::adjacent_to_air(feature_context &context,
+                                            const block_pos &pos) const
+    -> bool {
+    for (const auto &direction : all_directions) {
+        const auto state = context.placement.region->state_at(
+            pos.x + direction.dx, pos.y + direction.dy, pos.z + direction.dz);
+        if (context.placement.states->traits(state).air) {
+            return true;
+        }
+    }
+    return false;
+}
+
+auto scattered_ore_feature::can_place(feature_context &context,
+                                      worldgen_random &random,
+                                      block_state_id state,
+                                      const block_pos &pos,
+                                      const rule_test &target) const -> bool {
+    if (!target.test(state, pos, random)) {
+        return false;
+    }
+    if (discard_chance_on_air_exposure_ <= 0.0F) {
+        return true;
+    }
+    if (discard_chance_on_air_exposure_ >= 1.0F) {
+        return !adjacent_to_air(context, pos);
+    }
+    return random.next_float() >= discard_chance_on_air_exposure_ ||
+           !adjacent_to_air(context, pos);
+}
+
+auto scattered_ore_feature::place(feature_context &context,
+                                  worldgen_random &random,
+                                  const block_pos &origin) const -> bool {
+    const jint tries = random.next_int(size_ + 1);
+    for (jint i = 0; i < tries; ++i) {
+        const jint distance = std::min(i, 7);
+        const auto spread = [&]() {
+            return static_cast<jint>(
+                std::lround((random.next_float() - random.next_float()) *
+                            static_cast<float>(distance)));
+        };
+        const block_pos pos{.x = origin.x + spread(),
+                            .y = origin.y + spread(),
+                            .z = origin.z + spread()};
+        const auto state =
+            context.placement.region->state_at(pos.x, pos.y, pos.z);
+        for (const auto &target : targets_) {
+            if (can_place(context, random, state, pos, *target.target)) {
+                (void)context.placement.region->set_block_state(
+                    pos.x, pos.y, pos.z, target.state);
+                break;
+            }
+        }
+    }
+    return true;
+}
+
 auto sequence_feature::place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool {
     for (const auto &id : features_) {
