@@ -66,6 +66,9 @@ auto load_carvers(std::string_view data_root) -> result<loaded_carvers> {
 
     for (const auto &namespace_name : *namespaces) {
         const auto base = std::string{data_root} + "/" + namespace_name;
+        if (!core::io::is_directory(base)) {
+            continue;
+        }
         if (const auto files = json_files(base + "/worldgen/carver"); files) {
             for (const auto &file : *files) {
                 const auto document = data::json::value::parse_file(
