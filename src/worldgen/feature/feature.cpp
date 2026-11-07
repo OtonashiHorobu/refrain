@@ -434,4 +434,36 @@ auto block_column_feature::place(feature_context &context,
     return true;
 }
 
+auto random_selector_feature::place(feature_context &context,
+                                    worldgen_random &random,
+                                    const block_pos &origin) const -> bool {
+    for (const auto &[chance, id] : entries_) {
+        if (random.next_float() < chance) {
+            return context.place_by_id(id, random, origin);
+        }
+    }
+    return context.place_by_id(default_id_, random, origin);
+}
+
+auto weighted_selector_feature::place(feature_context &context,
+                                      worldgen_random &random,
+                                      const block_pos &origin) const -> bool {
+    jint selection = random.next_int(total_);
+    for (const auto &[weight, id] : entries_) {
+        selection -= weight;
+        if (selection < 0) {
+            return context.place_by_id(id, random, origin);
+        }
+    }
+    return false;
+}
+
+auto simple_selector_feature::place(feature_context &context,
+                                    worldgen_random &random,
+                                    const block_pos &origin) const -> bool {
+    const jint index = random.next_int(static_cast<jint>(entries_.size()));
+    return context.place_by_id(entries_[static_cast<std::size_t>(index)],
+                               random, origin);
+}
+
 } // namespace refrain::worldgen::feature

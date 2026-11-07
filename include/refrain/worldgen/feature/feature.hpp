@@ -17,6 +17,10 @@ namespace refrain::worldgen::feature {
 
 struct feature_context {
     placement_context placement{};
+    /// Places a top-level or nested placed feature by id. The decoration stage
+    /// supplies this; selectors use it for their nested entries.
+    std::function<bool(std::string_view, worldgen_random &, const block_pos &)>
+        place_by_id{};
 };
 
 class feature {
@@ -181,6 +185,49 @@ class block_column_feature final : public feature {
     block_direction direction_{block_direction::up};
     std::unique_ptr<block_predicate> allowed_placement_{};
     bool prioritize_tip_{false};
+};
+
+/// `RandomSelectorFeature`: independent chances, then the default.
+class random_selector_feature final : public feature {
+  public:
+    random_selector_feature(std::vector<std::pair<float, std::string>> entries,
+                            std::string default_id)
+        : entries_{std::move(entries)}, default_id_{std::move(default_id)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::vector<std::pair<float, std::string>> entries_{};
+    std::string default_id_{};
+};
+
+/// `WeightedRandomSelectorFeature`.
+class weighted_selector_feature final : public feature {
+  public:
+    weighted_selector_feature(std::vector<std::pair<jint, std::string>> entries,
+                              jint total)
+        : entries_{std::move(entries)}, total_{total} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::vector<std::pair<jint, std::string>> entries_{};
+    jint total_{0};
+};
+
+/// `SimpleRandomSelectorFeature`.
+class simple_selector_feature final : public feature {
+  public:
+    explicit simple_selector_feature(std::vector<std::string> entries)
+        : entries_{std::move(entries)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::vector<std::string> entries_{};
 };
 
 } // namespace refrain::worldgen::feature

@@ -4,6 +4,8 @@
 
 #include <refrain/data/json.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/feature/feature_data.hpp>
+#include <refrain/worldgen/feature/feature_registry.hpp>
 #include <refrain/worldgen/feature/feature_stage.hpp>
 
 #include <boost/ut.hpp>
@@ -21,11 +23,15 @@ using refrain::worldgen::heightmap_kind;
 using refrain::worldgen::proto_chunk;
 using refrain::worldgen::feature::biome_feature_list;
 using refrain::worldgen::feature::block_blob_feature;
+using refrain::worldgen::feature::configured_feature_document;
 using refrain::worldgen::feature::decode_block_predicate;
 using refrain::worldgen::feature::decode_placement;
 using refrain::worldgen::feature::decorate;
 using refrain::worldgen::feature::feature_context;
+using refrain::worldgen::feature::feature_data_set;
+using refrain::worldgen::feature::feature_registry;
 using refrain::worldgen::feature::feature_sorter;
+using refrain::worldgen::feature::placed_feature_document;
 using refrain::worldgen::feature::placed_feature_runtime;
 using refrain::worldgen::feature::placement_context;
 using refrain::worldgen::feature::simple_block_feature;
@@ -229,5 +235,88 @@ suite<"worldgen/spring"> spring_tests = [] {
         expect(
             spring.place(context, random, block_pos{.x = 8, .y = 10, .z = 8}));
         expect(chunk.state_at(8, 10, 8) == *water);
+    };
+};
+
+suite<"worldgen/selector"> selector_tests = [] {
+    "a random selector places the first matching nested feature"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto moss = registry.intern("minecraft:mossy_cobblestone",
+                                    {.air = false,
+                                     .blocks_motion = true,
+                                     .blocks_motion_no_leaves = true});
+        expect(stone.has_value() && moss.has_value());
+        if (!stone || !moss) {
+            return;
+        }
+
+        feature_data_set data;
+        data.features.emplace(
+            "oracle:a",
+            configured_feature_document{
+                .id = "oracle:a",
+                .document = parse(
+                    R"({"type":"minecraft:simple_block","to_place":{"id":"minecraft:stone"}})")});
+        data.features.emplace(
+            "oracle:b",
+            configured_feature_document{
+                .id = "oracle:b",
+                .document = parse(
+                    R"({"type":"minecraft:simple_block","to_place":{"id":"minecraft:mossy_cobblestone"}})")});
+        data.features.emplace(
+            "oracle:selector",
+            configured_feature_document{
+                .id = "oracle:selector",
+                .document = parse(
+                    R"({"type":"minecraft:random_selector","default":"oracle:pb","features":[{"chance":1.0,"feature":"oracle:pa"}]})")});
+        const auto placed_entry = [](std::string id, std::string feature,
+                                     std::string placement) {
+            return std::pair{
+                id, placed_feature_document{.id = id,
+                                            .feature = std::move(feature),
+                                            .placement = parse(placement)}};
+        };
+        data.placed.emplace("oracle:pa",
+                            placed_entry("oracle:pa", "oracle:a", "[]").second);
+        data.placed.emplace("oracle:pb",
+                            placed_entry("oracle:pb", "oracle:b", "[]").second);
+        data.placed.emplace(
+            "oracle:ps",
+            placed_entry(
+                "oracle:ps", "oracle:selector",
+                R"([{"type":"minecraft:fixed_placement","positions":[[8,5,8]]}])")
+                .second);
+        data.biomes.push_back(biome_feature_list{.biome = "oracle:test",
+                                                 .steps = {{"oracle:ps"}}});
+
+        feature_registry features{registry};
+        expect(features.load(data).has_value());
+        const auto plan = feature_sorter::build({"oracle:test"}, data.biomes);
+        expect(plan.has_value());
+        if (!plan) {
+            return;
+        }
+
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 1};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 32,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        decorate(context, *plan, features.placed(), {"oracle:test"},
+                 data.biomes, 12345);
+        expect(chunk.state_at(8, 5, 8) == *stone);
     };
 };
