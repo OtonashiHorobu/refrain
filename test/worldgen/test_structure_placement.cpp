@@ -338,8 +338,26 @@ suite<"worldgen/structure-piece-placement"> structure_piece_placement_tests =
                 }
             }
             expect(found_chest);
-            expect(chunk.block_entity_at(block_pos{.x = 9, .y = 4, .z = 9}) !=
-                   nullptr);
+            const auto *entity =
+                chunk.block_entity_at(block_pos{.x = 9, .y = 4, .z = 9});
+            expect(entity != nullptr);
+            if (entity != nullptr) {
+                const auto id = entity->find("id");
+                const auto table = entity->find("LootTable");
+                const auto seed = entity->find("LootTableSeed");
+                const auto components = entity->find("components");
+                const auto keep_packed = entity->find("keepPacked");
+                expect(id != entity->end() &&
+                       id->second.as_string() == "minecraft:chest");
+                expect(table != entity->end() &&
+                       table->second.as_string() ==
+                           "minecraft:chests/buried_treasure");
+                expect(seed != entity->end() && seed->second.as_long());
+                expect(components != entity->end() &&
+                       components->second.as_compound());
+                expect(keep_packed != entity->end() &&
+                       keep_packed->second.as_byte() == 0);
+            }
         };
     };
 

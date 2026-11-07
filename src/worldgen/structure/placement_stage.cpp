@@ -125,6 +125,8 @@ auto create_chest(const structure_place_context &context, jint x, jint y,
     entity.emplace("LootTable", data::nbt::value{std::string{
                                     "minecraft:chests/buried_treasure"}});
     entity.emplace("LootTableSeed", data::nbt::value{random.next_long()});
+    entity.emplace("components", data::nbt::value{data::nbt::compound{}});
+    entity.emplace("keepPacked", data::nbt::value{static_cast<std::int8_t>(0)});
     context.chunk->set_block_entity(block_pos{.x = x & 15, .y = y, .z = z & 15},
                                     std::move(entity));
     return true;

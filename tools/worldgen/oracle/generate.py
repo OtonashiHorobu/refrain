@@ -228,6 +228,12 @@ def main() -> int:
         "structure generation, no carvers or features, empty surface rules",
     )
     parser.add_argument(
+        "--keep-features",
+        action="store_true",
+        help="with --structures, keep the fixed biome's real features and "
+        "surface materials",
+    )
+    parser.add_argument(
         "--fixed-biome",
         default="oracle:terrain",
         help="biome of the fixed source used by --surface (default "
@@ -1129,11 +1135,12 @@ def main() -> int:
         override = read_pack_data(
             args.server_jar, f"data/{namespace}/worldgen/biome/{path}.json"
         )
-        override["carvers"] = []
-        override["features"] = []
+        if not args.keep_features:
+            override["carvers"] = []
+            override["features"] = []
         write_pack(preset, biome, root / "world/datapacks/t2oracle",
-                   empty_material_rule=True, fixed_biome=args.fixed_biome,
-                   biome_override=override)
+                   empty_material_rule=not args.keep_features,
+                   fixed_biome=args.fixed_biome, biome_override=override)
     elif not args.plain:
         preset = read_pack_data(
             args.server_jar, "data/minecraft/worldgen/world_preset/normal.json"
