@@ -7,6 +7,7 @@
 #include <refrain/core/io.hpp>
 
 #include <algorithm>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -62,7 +63,56 @@ auto collect_documents(const std::string &directory, const std::string &prefix,
     return {};
 }
 
+auto collect_tag_ids(const data::json::value &document)
+    -> result<std::vector<std::string>> {
+    if (!document.is_array()) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "biome tag is not an array")};
+    }
+    std::vector<std::string> ids;
+    for (const auto &entry : *document.as_array()) {
+        if (const auto text = entry.as_string(); text.has_value()) {
+            ids.emplace_back(*text);
+            continue;
+        }
+        const auto *id = entry.find("id");
+        if (id == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "biome tag entry has no id")};
+        }
+        const auto text = id->as_string();
+        if (!text) {
+            return std::unexpected{text.error()};
+        }
+        ids.emplace_back(*text);
+    }
+    return ids;
+}
+
+void resolve_tag(
+    const std::string &tag,
+    const std::unordered_map<std::string, std::vector<std::string>> &tags,
+    std::set<std::string> &visited, std::vector<std::string> &out) {
+    const auto found = tags.find(tag);
+    if (found == tags.end() || !visited.insert(tag).second) {
+        return;
+    }
+    for (const auto &entry : found->second) {
+        if (!entry.empty() && entry.front() == '#') {
+            resolve_tag(entry.substr(1), tags, visited, out);
+        } else {
+            out.push_back(entry);
+        }
+    }
+}
+
 } // namespace
+
+auto structure_data_set::allows_biome(const structure_document &structure,
+                                      std::string_view biome) const -> bool {
+    return std::find(structure.biome_ids.begin(), structure.biome_ids.end(),
+                     biome) != structure.biome_ids.end();
+}
 
 auto decode_structure_document(std::string_view id,
                                const data::json::value &document)
@@ -86,7 +136,18 @@ auto decode_structure_document(std::string_view id,
         .config = document,
     };
     if (const auto *biomes = document.find("biomes"); biomes != nullptr) {
-        decoded.biomes = *biomes;
+        if (const auto name = biomes->as_string(); name.has_value()) {
+            if (name->empty() || name->front() != '#') {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "structure biome string is not a tag")};
+            }
+            decoded.biome_tag = name->substr(1);
+        } else if (const auto ids = collect_tag_ids(*biomes); ids) {
+            decoded.biome_ids = *ids;
+        } else {
+            return std::unexpected{ids.error()};
+        }
     }
     if (const auto *adaptation = document.find("terrain_adaptation");
         adaptation != nullptr) {
@@ -113,6 +174,26 @@ auto load_structure_data(std::string_view data_root)
         if (!core::io::is_directory(base)) {
             continue;
         }
+        const auto tags_root = base + "/tags/worldgen/biome";
+        if (core::io::is_directory(tags_root)) {
+            std::unordered_map<std::string, data::json::value> documents;
+            if (const auto collected =
+                    collect_documents(tags_root, "", documents);
+                !collected) {
+                return std::unexpected{collected.error()};
+            }
+            for (const auto &[id, document] : documents) {
+                auto ids = collect_tag_ids(document);
+                if (!ids) {
+                    return std::unexpected{ids.error()};
+                }
+                auto &values = result.biome_tags[name + ":" + id];
+                values.insert(values.end(),
+                              std::make_move_iterator(ids->begin()),
+                              std::make_move_iterator(ids->end()));
+            }
+        }
+
         const auto worldgen = base + "/worldgen";
         std::unordered_map<std::string, data::json::value> structures;
         if (core::io::is_directory(worldgen + "/structure")) {
@@ -127,6 +208,11 @@ auto load_structure_data(std::string_view data_root)
             auto decoded = decode_structure_document(full_id, document);
             if (!decoded) {
                 return std::unexpected{decoded.error()};
+            }
+            if (!decoded->biome_tag.empty()) {
+                std::set<std::string> visited;
+                resolve_tag(decoded->biome_tag, result.biome_tags, visited,
+                            decoded->biome_ids);
             }
             result.structures.emplace(full_id, std::move(*decoded));
         }

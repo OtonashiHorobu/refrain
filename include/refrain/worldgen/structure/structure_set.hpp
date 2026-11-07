@@ -29,6 +29,12 @@ struct structure_set {
     std::string id{};
     std::vector<weighted_structure> structures{};
     std::optional<random_spread_placement> random_spread{};
+
+    /// `ChunkGenerator.createStructures`' weighted draw order: one entry per
+    /// draw, without replacement, until the list is empty. A failed structure
+    /// generation continues this order with the same random stream.
+    [[nodiscard]] auto weighted_order(jlong seed, const chunk_pos &chunk) const
+        -> std::vector<weighted_structure>;
 };
 
 [[nodiscard]] auto decode_structure_set(std::string_view id,

@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace refrain::worldgen::structure {
 
@@ -30,13 +31,18 @@ struct structure_document {
     std::string type{};
     std::string step{};
     terrain_adaptation adaptation{terrain_adaptation::none};
-    data::json::value biomes{};
+    std::string biome_tag{};              ///< set for a `#tag` biome list
+    std::vector<std::string> biome_ids{}; ///< resolved allowed biomes
     data::json::value config{};
 };
 
 struct structure_data_set {
     std::unordered_map<std::string, structure_document> structures{};
     std::unordered_map<std::string, structure_set> sets{};
+    std::unordered_map<std::string, std::vector<std::string>> biome_tags{};
+
+    [[nodiscard]] auto allows_biome(const structure_document &structure,
+                                    std::string_view biome) const -> bool;
 };
 
 [[nodiscard]] auto decode_structure_document(std::string_view id,

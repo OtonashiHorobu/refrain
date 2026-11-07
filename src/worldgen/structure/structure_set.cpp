@@ -5,10 +5,49 @@
 #include <refrain/worldgen/structure/structure_set.hpp>
 
 #include <refrain/data/json.hpp>
+#include <refrain/worldgen/core/rng.hpp>
 
+#include <memory>
 #include <utility>
 
 namespace refrain::worldgen::structure {
+
+auto structure_set::weighted_order(jlong seed, const chunk_pos &chunk) const
+    -> std::vector<weighted_structure> {
+    if (structures.empty()) {
+        return {};
+    }
+    if (structures.size() == 1) {
+        return structures;
+    }
+    std::vector<weighted_structure> options = structures;
+    std::vector<weighted_structure> result;
+    result.reserve(options.size());
+    worldgen_random random{std::make_unique<legacy_random_source>(0)};
+    random.set_large_feature_seed(seed, chunk.x, chunk.z);
+    jint total = 0;
+    for (const auto &option : options) {
+        total += option.weight;
+    }
+    while (!options.empty()) {
+        jint choice = random.next_int(total);
+        std::size_t index = 0;
+        for (; index < options.size(); ++index) {
+            choice -= options[index].weight;
+            if (choice < 0) {
+                break;
+            }
+        }
+        if (index == options.size()) {
+            index = options.size() - 1;
+        }
+        const auto selected = options[index];
+        result.push_back(selected);
+        total -= selected.weight;
+        options.erase(options.begin() + static_cast<std::ptrdiff_t>(index));
+    }
+    return result;
+}
 
 auto decode_structure_set(std::string_view id,
                           const data::json::value &document)

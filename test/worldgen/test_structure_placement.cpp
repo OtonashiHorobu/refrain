@@ -122,6 +122,10 @@ suite<"worldgen/structure-set"> structure_set_tests = [] {
         expect(set->structures.size() == 2U);
         expect(set->structures[0].structure == "minecraft:village_plains");
         expect(set->structures[0].weight == 2);
+        const auto order =
+            set->weighted_order(12345, chunk_pos{.x = 1, .z = 2});
+        expect(order.size() == 2U);
+        expect(order[0].structure != order[1].structure);
         expect(set->random_spread.has_value());
         if (set->random_spread) {
             expect(set->random_spread->spacing == 34);
@@ -203,7 +207,8 @@ suite<"worldgen/structure-data"> structure_data_tests = [] {
         expect(decoded->step == "surface_structures");
         expect(decoded->adaptation ==
                structure::terrain_adaptation::beard_thin);
-        expect(decoded->biomes.is_string());
+        expect(decoded->biome_tag == "minecraft:has_structure/village_plains");
+        expect(decoded->biome_ids.empty());
     };
 };
 
