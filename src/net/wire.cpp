@@ -1878,6 +1878,605 @@ constexpr auto particle_kinds = [] {
 
 } // namespace
 
+namespace {
+
+[[nodiscard]] auto write_position_list(writer &out,
+                                       const std::vector<std::int64_t> &values)
+    -> status {
+    out.write_varint(static_cast<std::uint32_t>(values.size()));
+    for (const auto value : values) {
+        out.write_i64(value);
+    }
+    return status_ok();
+}
+
+[[nodiscard]] auto read_position_list(reader &in,
+                                      std::vector<std::int64_t> &values)
+    -> status {
+    auto count{in.read_varint()};
+    if (!count) {
+        return std::unexpected{std::move(count.error())};
+    }
+    if (static_cast<std::size_t>(*count) * 8U > in.remaining()) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "debug_value: position list exceeds the payload")};
+    }
+    values.clear();
+    values.reserve(*count);
+    for (std::uint32_t index{0}; index < *count; ++index) {
+        auto value{in.read_i64()};
+        if (!value) {
+            return std::unexpected{std::move(value.error())};
+        }
+        values.push_back(*value);
+    }
+    return status_ok();
+}
+
+[[nodiscard]] auto write_string_list(writer &out,
+                                     const std::vector<std::string> &values)
+    -> status {
+    out.write_varint(static_cast<std::uint32_t>(values.size()));
+    for (const auto &value : values) {
+        if (auto written{out.write_string(value)}; !written) {
+            return written;
+        }
+    }
+    return status_ok();
+}
+
+[[nodiscard]] auto read_string_list(reader &in,
+                                    std::vector<std::string> &values)
+    -> status {
+    auto count{in.read_varint()};
+    if (!count) {
+        return std::unexpected{std::move(count.error())};
+    }
+    if (*count > in.remaining()) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "debug_value: string list exceeds the payload")};
+    }
+    values.clear();
+    values.reserve(*count);
+    for (std::uint32_t index{0}; index < *count; ++index) {
+        auto value{in.read_string()};
+        if (!value) {
+            return std::unexpected{std::move(value.error())};
+        }
+        values.push_back(std::move(*value));
+    }
+    return status_ok();
+}
+
+[[nodiscard]] auto write_path_node(writer &out, const debug_path_node &node)
+    -> status {
+    out.write_i32(node.x);
+    out.write_i32(node.y);
+    out.write_i32(node.z);
+    out.write_f32(node.walked_distance);
+    out.write_f32(node.cost_malus);
+    out.write_bool(node.closed);
+    out.write_varint(node.type);
+    out.write_f32(node.f);
+    return status_ok();
+}
+
+[[nodiscard]] auto read_path_node(reader &in, debug_path_node &node) -> status {
+    auto x{in.read_i32()};
+    auto y{in.read_i32()};
+    auto z{in.read_i32()};
+    auto walked{in.read_f32()};
+    auto cost{in.read_f32()};
+    auto closed{in.read_bool()};
+    auto type{in.read_varint()};
+    auto f{in.read_f32()};
+    if (!x || !y || !z || !walked || !cost || !closed || !type || !f) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "debug_value: truncated path node")};
+    }
+    node.x = *x;
+    node.y = *y;
+    node.z = *z;
+    node.walked_distance = *walked;
+    node.cost_malus = *cost;
+    node.closed = *closed;
+    node.type = *type;
+    node.f = *f;
+    return status_ok();
+}
+
+[[nodiscard]] auto write_node_list(writer &out,
+                                   const std::vector<debug_path_node> &nodes)
+    -> status {
+    out.write_varint(static_cast<std::uint32_t>(nodes.size()));
+    for (const auto &node : nodes) {
+        if (auto status{write_path_node(out, node)}; !status) {
+            return status;
+        }
+    }
+    return status_ok();
+}
+
+[[nodiscard]] auto read_node_list(reader &in,
+                                  std::vector<debug_path_node> &nodes)
+    -> status {
+    auto count{in.read_varint()};
+    if (!count) {
+        return std::unexpected{std::move(count.error())};
+    }
+    if (static_cast<std::size_t>(*count) * 24U > in.remaining()) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "debug_value: node list exceeds the payload")};
+    }
+    nodes.clear();
+    nodes.reserve(*count);
+    for (std::uint32_t index{0}; index < *count; ++index) {
+        debug_path_node node{};
+        if (auto status{read_path_node(in, node)}; !status) {
+            return status;
+        }
+        nodes.push_back(node);
+    }
+    return status_ok();
+}
+
+[[nodiscard]] auto write_debug_value(writer &out, std::uint32_t subscription,
+                                     const debug_value &value) -> status {
+    switch (subscription) {
+    case 1: // bees
+        out.write_bool(value.has_a);
+        if (value.has_a) {
+            out.write_i64(value.pos_a);
+        }
+        out.write_bool(value.has_b);
+        if (value.has_b) {
+            out.write_i64(value.pos_b);
+        }
+        out.write_varint(value.u_a);
+        return write_position_list(out, value.positions_a);
+    case 2: // brains
+        for (const auto &text : {value.s_a, value.s_b}) {
+            if (auto written{out.write_string(text)}; !written) {
+                return written;
+            }
+        }
+        out.write_i32(value.i_a);
+        out.write_f32(value.f_a);
+        out.write_f32(value.f_b);
+        if (auto written{out.write_string(value.s_c)}; !written) {
+            return written;
+        }
+        out.write_bool(value.flag_a);
+        out.write_i32(value.i_b);
+        for (const auto *list : {&value.strings_a, &value.strings_b,
+                                 &value.strings_c, &value.strings_d}) {
+            if (auto status{write_string_list(out, *list)}; !status) {
+                return status;
+            }
+        }
+        for (const auto *list : {&value.positions_a, &value.positions_b}) {
+            if (auto status{write_position_list(out, *list)}; !status) {
+                return status;
+            }
+        }
+        return status_ok();
+    case 3: // breezes
+        out.write_bool(value.has_a);
+        if (value.has_a) {
+            out.write_varint(value.u_a);
+        }
+        out.write_bool(value.has_b);
+        if (value.has_b) {
+            out.write_i64(value.pos_b);
+        }
+        return status_ok();
+    case 4: // goals
+        out.write_varint(static_cast<std::uint32_t>(value.goals.size()));
+        for (const auto &goal : value.goals) {
+            out.write_varint(goal.priority);
+            out.write_bool(goal.running);
+            if (auto written{out.write_string(goal.name, 255)}; !written) {
+                return written;
+            }
+        }
+        return status_ok();
+    case 5: // entity paths
+        out.write_bool(value.flag_a);
+        out.write_i32(value.i_a);
+        out.write_i64(value.pos_a);
+        for (const auto *list :
+             {&value.nodes_a, &value.nodes_b, &value.nodes_c, &value.nodes_d}) {
+            if (auto status{write_node_list(out, *list)}; !status) {
+                return status;
+            }
+        }
+        out.write_f32(value.f_a);
+        return status_ok();
+    case 6: // entity block intersections
+        out.write_varint(value.u_a);
+        return status_ok();
+    case 7: // bee hives
+        out.write_varint(value.u_a);
+        out.write_varint(value.u_b);
+        out.write_varint(value.u_c);
+        out.write_bool(value.flag_a);
+        return status_ok();
+    case 8: // pois
+        out.write_i64(value.pos_a);
+        out.write_varint(value.u_a);
+        out.write_varint(value.u_b);
+        return status_ok();
+    case 9: // redstone wire orientations
+        out.write_varint(value.u_a);
+        return status_ok();
+    case 10: // village sections (unit)
+        return status_ok();
+    case 11: // raids
+        return write_position_list(out, value.positions_a);
+    case 12: // structures
+        out.write_i64(value.pos_a);
+        out.write_i64(value.pos_b);
+        out.write_varint(static_cast<std::uint32_t>(value.pieces.size()));
+        for (const auto &piece : value.pieces) {
+            out.write_i64(piece.min_pos);
+            out.write_i64(piece.max_pos);
+            out.write_bool(piece.start);
+        }
+        return status_ok();
+    case 13: // game event listeners
+        out.write_varint(value.u_a);
+        return status_ok();
+    case 14: // neighbor updates
+        out.write_i64(value.pos_a);
+        return status_ok();
+    case 15: // game events
+        out.write_varint(value.u_a);
+        out.write_f64(value.d_a);
+        out.write_f64(value.d_b);
+        out.write_f64(value.d_c);
+        return status_ok();
+    default:
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "debug_value: subscription has no value codec")};
+    }
+}
+
+[[nodiscard]] auto read_debug_value(reader &in, std::uint32_t subscription,
+                                    debug_value &value) -> status {
+    value = debug_value{};
+    switch (subscription) {
+    case 1: { // bees
+        auto has_hive{in.read_bool()};
+        if (!has_hive) {
+            return std::unexpected{std::move(has_hive.error())};
+        }
+        value.has_a = *has_hive;
+        if (*has_hive) {
+            auto pos{in.read_i64()};
+            if (!pos) {
+                return std::unexpected{std::move(pos.error())};
+            }
+            value.pos_a = *pos;
+        }
+        auto has_flower{in.read_bool()};
+        if (!has_flower) {
+            return std::unexpected{std::move(has_flower.error())};
+        }
+        value.has_b = *has_flower;
+        if (*has_flower) {
+            auto pos{in.read_i64()};
+            if (!pos) {
+                return std::unexpected{std::move(pos.error())};
+            }
+            value.pos_b = *pos;
+        }
+        auto travel{in.read_varint()};
+        if (!travel) {
+            return std::unexpected{std::move(travel.error())};
+        }
+        value.u_a = *travel;
+        return read_position_list(in, value.positions_a);
+    }
+    case 2: { // brains
+        auto name{in.read_string()};
+        auto profession{in.read_string()};
+        if (!name || !profession) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "debug_value: truncated brain")};
+        }
+        value.s_a = std::move(*name);
+        value.s_b = std::move(*profession);
+        auto xp{in.read_i32()};
+        auto health{in.read_f32()};
+        auto max_health{in.read_f32()};
+        if (!xp || !health || !max_health) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "debug_value: truncated brain")};
+        }
+        value.i_a = *xp;
+        value.f_a = *health;
+        value.f_b = *max_health;
+        auto inventory{in.read_string()};
+        auto wants_golem{in.read_bool()};
+        auto anger{in.read_i32()};
+        if (!inventory || !wants_golem || !anger) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "debug_value: truncated brain")};
+        }
+        value.s_c = std::move(*inventory);
+        value.flag_a = *wants_golem;
+        value.i_b = *anger;
+        for (auto *list : {&value.strings_a, &value.strings_b, &value.strings_c,
+                           &value.strings_d}) {
+            if (auto status{read_string_list(in, *list)}; !status) {
+                return status;
+            }
+        }
+        for (auto *list : {&value.positions_a, &value.positions_b}) {
+            if (auto status{read_position_list(in, *list)}; !status) {
+                return status;
+            }
+        }
+        return status_ok();
+    }
+    case 3: { // breezes
+        auto has_target{in.read_bool()};
+        if (!has_target) {
+            return std::unexpected{std::move(has_target.error())};
+        }
+        value.has_a = *has_target;
+        if (*has_target) {
+            auto target{in.read_varint()};
+            if (!target) {
+                return std::unexpected{std::move(target.error())};
+            }
+            value.u_a = *target;
+        }
+        auto has_jump{in.read_bool()};
+        if (!has_jump) {
+            return std::unexpected{std::move(has_jump.error())};
+        }
+        value.has_b = *has_jump;
+        if (*has_jump) {
+            auto pos{in.read_i64()};
+            if (!pos) {
+                return std::unexpected{std::move(pos.error())};
+            }
+            value.pos_b = *pos;
+        }
+        return status_ok();
+    }
+    case 4: { // goals
+        auto count{in.read_varint()};
+        if (!count) {
+            return std::unexpected{std::move(count.error())};
+        }
+        if (*count > in.remaining()) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "debug_value: goal list exceeds the payload")};
+        }
+        value.goals.clear();
+        value.goals.reserve(*count);
+        for (std::uint32_t index{0}; index < *count; ++index) {
+            debug_goal goal{};
+            auto priority{in.read_varint()};
+            auto running{in.read_bool()};
+            auto name{in.read_string(255)};
+            if (!priority || !running || !name) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "debug_value: truncated goal")};
+            }
+            goal.priority = *priority;
+            goal.running = *running;
+            goal.name = std::move(*name);
+            value.goals.push_back(std::move(goal));
+        }
+        return status_ok();
+    }
+    case 5: { // entity paths
+        auto reached{in.read_bool()};
+        auto next{in.read_i32()};
+        auto target{in.read_i64()};
+        if (!reached || !next || !target) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "debug_value: truncated path")};
+        }
+        value.flag_a = *reached;
+        value.i_a = *next;
+        value.pos_a = *target;
+        for (auto *list :
+             {&value.nodes_a, &value.nodes_b, &value.nodes_c, &value.nodes_d}) {
+            if (auto status{read_node_list(in, *list)}; !status) {
+                return status;
+            }
+        }
+        auto distance{in.read_f32()};
+        if (!distance) {
+            return std::unexpected{std::move(distance.error())};
+        }
+        value.f_a = *distance;
+        return status_ok();
+    }
+    case 6:
+    case 9:
+    case 13:
+    case 15: {
+        auto number{in.read_varint()};
+        if (!number) {
+            return std::unexpected{std::move(number.error())};
+        }
+        value.u_a = *number;
+        if (subscription == 15U) {
+            auto x{in.read_f64()};
+            auto y{in.read_f64()};
+            auto z{in.read_f64()};
+            if (!x || !y || !z) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "debug_value: truncated game event")};
+            }
+            value.d_a = *x;
+            value.d_b = *y;
+            value.d_c = *z;
+        }
+        return status_ok();
+    }
+    case 7: {
+        auto block{in.read_varint()};
+        auto occupants{in.read_varint()};
+        auto honey{in.read_varint()};
+        auto sedated{in.read_bool()};
+        if (!block || !occupants || !honey || !sedated) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "debug_value: truncated hive")};
+        }
+        value.u_a = *block;
+        value.u_b = *occupants;
+        value.u_c = *honey;
+        value.flag_a = *sedated;
+        return status_ok();
+    }
+    case 8: {
+        auto pos{in.read_i64()};
+        auto type{in.read_varint()};
+        auto free{in.read_varint()};
+        if (!pos || !type || !free) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "debug_value: truncated poi")};
+        }
+        value.pos_a = *pos;
+        value.u_a = *type;
+        value.u_b = *free;
+        return status_ok();
+    }
+    case 10:
+        return status_ok();
+    case 11:
+        return read_position_list(in, value.positions_a);
+    case 12: {
+        auto min{in.read_i64()};
+        auto max{in.read_i64()};
+        auto count{in.read_varint()};
+        if (!min || !max || !count) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "debug_value: truncated structure")};
+        }
+        value.pos_a = *min;
+        value.pos_b = *max;
+        if (static_cast<std::size_t>(*count) * 17U > in.remaining()) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "debug_value: structure pieces exceed the payload")};
+        }
+        value.pieces.clear();
+        value.pieces.reserve(*count);
+        for (std::uint32_t index{0}; index < *count; ++index) {
+            debug_structure_piece piece{};
+            auto piece_min{in.read_i64()};
+            auto piece_max{in.read_i64()};
+            auto start{in.read_bool()};
+            if (!piece_min || !piece_max || !start) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "debug_value: truncated structure piece")};
+            }
+            piece.min_pos = *piece_min;
+            piece.max_pos = *piece_max;
+            piece.start = *start;
+            value.pieces.push_back(piece);
+        }
+        return status_ok();
+    }
+    case 14: {
+        auto pos{in.read_i64()};
+        if (!pos) {
+            return std::unexpected{std::move(pos.error())};
+        }
+        value.pos_a = *pos;
+        return status_ok();
+    }
+    default:
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "debug_value: unknown subscription")};
+    }
+}
+
+} // namespace
+
+auto encode_debug_subscription_update(writer &out,
+                                      const debug_subscription_update &value)
+    -> status {
+    if (value.subscription > 15U) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "debug_subscription_update: unknown subscription")};
+    }
+    out.write_varint(value.subscription);
+    out.write_bool(value.has_value);
+    if (!value.has_value) {
+        return status_ok();
+    }
+    return write_debug_value(out, value.subscription, value.value);
+}
+
+auto decode_debug_subscription_update(reader &in,
+                                      debug_subscription_update &value)
+    -> status {
+    auto subscription{in.read_varint()};
+    if (!subscription) {
+        return std::unexpected{std::move(subscription.error())};
+    }
+    if (*subscription > 15U) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "debug_subscription_update: unknown subscription")};
+    }
+    value.subscription = *subscription;
+    auto has_value{in.read_bool()};
+    if (!has_value) {
+        return std::unexpected{std::move(has_value.error())};
+    }
+    value.has_value = *has_value;
+    if (!*has_value) {
+        value.value = debug_value{};
+        return status_ok();
+    }
+    return read_debug_value(in, value.subscription, value.value);
+}
+
+auto encode_debug_subscription_event(writer &out,
+                                     const debug_subscription_event &value)
+    -> status {
+    if (value.subscription == 0U || value.subscription > 15U) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "debug_subscription_event: unknown subscription")};
+    }
+    out.write_varint(value.subscription);
+    return write_debug_value(out, value.subscription, value.value);
+}
+
+auto decode_debug_subscription_event(reader &in,
+                                     debug_subscription_event &value)
+    -> status {
+    auto subscription{in.read_varint()};
+    if (!subscription) {
+        return std::unexpected{std::move(subscription.error())};
+    }
+    if (*subscription == 0U || *subscription > 15U) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "debug_subscription_event: unknown subscription")};
+    }
+    value.subscription = *subscription;
+    return read_debug_value(in, value.subscription, value.value);
+}
+
 auto encode_particle_options(writer &out, const particle_options &value)
     -> status {
     bool known{false};

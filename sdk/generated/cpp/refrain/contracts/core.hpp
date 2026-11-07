@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 3e46c08897b5a857
+// Schema hash: fcc4e99d514b6390
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_CORE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_CORE_HPP

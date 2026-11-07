@@ -70,6 +70,64 @@ const suite tests = [] {
         }
     };
 
+    "debug subscription updates and events round trip"_test = [] {
+        net::debug_subscription_update update{};
+        update.subscription = 1U;
+        update.has_value = true;
+        update.value.has_a = true;
+        update.value.pos_a = 1234;
+        update.value.u_a = 7U;
+        update.value.positions_a = {42, 43};
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(
+            net::encode_debug_subscription_update(out, update)));
+        net::reader in{bytes};
+        net::debug_subscription_update decoded{};
+        expect(static_cast<bool>(
+            net::decode_debug_subscription_update(in, decoded)));
+        expect(decoded.subscription == 1U);
+        expect(decoded.has_value);
+        expect(decoded.value.has_a);
+        expect(decoded.value.pos_a == 1234);
+        expect(decoded.value.u_a == 7U);
+        expect(decoded.value.positions_a.size() == 2U);
+        expect(in.empty());
+
+        net::debug_subscription_update empty{};
+        empty.subscription = 14U;
+        empty.has_value = false;
+        bytes.clear();
+        net::writer empty_out{bytes};
+        expect(static_cast<bool>(
+            net::encode_debug_subscription_update(empty_out, empty)));
+        net::reader empty_in{bytes};
+        net::debug_subscription_update empty_decoded{};
+        expect(static_cast<bool>(
+            net::decode_debug_subscription_update(empty_in, empty_decoded)));
+        expect(!empty_decoded.has_value);
+        expect(empty_in.empty());
+
+        net::debug_subscription_event event{};
+        event.subscription = 15U;
+        event.value.u_a = 3U;
+        event.value.d_a = 1.0;
+        event.value.d_b = 2.0;
+        event.value.d_c = 3.0;
+        bytes.clear();
+        net::writer event_out{bytes};
+        expect(static_cast<bool>(
+            net::encode_debug_subscription_event(event_out, event)));
+        net::reader event_in{bytes};
+        net::debug_subscription_event event_decoded{};
+        expect(static_cast<bool>(
+            net::decode_debug_subscription_event(event_in, event_decoded)));
+        expect(event_decoded.subscription == 15U);
+        expect(event_decoded.value.u_a == 3U);
+        expect(event_decoded.value.d_c == 3.0);
+        expect(event_in.empty());
+    };
+
     "particle options round trip simple and parameterized types"_test = [] {
         net::particle_options simple{};
         simple.type = 0U;

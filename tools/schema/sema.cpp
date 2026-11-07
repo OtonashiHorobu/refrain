@@ -120,6 +120,10 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "single_input_set";
     case primitive_kind::particle_options:
         return "particle_options";
+    case primitive_kind::debug_subscription_update:
+        return "debug_subscription_update";
+    case primitive_kind::debug_subscription_event:
+        return "debug_subscription_event";
     case primitive_kind::void_type:
         return "void";
     }
@@ -176,6 +180,8 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"recipe_display_entry", primitive_kind::recipe_display_entry},
         std::pair{"single_input_set", primitive_kind::single_input_set},
         std::pair{"particle_options", primitive_kind::particle_options},
+        std::pair{"debug_subscription_update", primitive_kind::debug_subscription_update},
+        std::pair{"debug_subscription_event", primitive_kind::debug_subscription_event},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -355,6 +361,8 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::recipe_display_entry:
     case primitive_kind::single_input_set:
     case primitive_kind::particle_options:
+    case primitive_kind::debug_subscription_update:
+    case primitive_kind::debug_subscription_event:
     case primitive_kind::void_type:
         return false;
     }
@@ -412,6 +420,8 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::recipe_display_entry:
     case primitive_kind::single_input_set:
     case primitive_kind::particle_options:
+    case primitive_kind::debug_subscription_update:
+    case primitive_kind::debug_subscription_event:
     case primitive_kind::void_type:
         return false;
     }
@@ -2361,6 +2371,8 @@ class analyzer {
             case primitive_kind::recipe_display_entry:
             case primitive_kind::single_input_set:
             case primitive_kind::particle_options:
+            case primitive_kind::debug_subscription_update:
+            case primitive_kind::debug_subscription_event:
                 // Rejected for RIDL in resolve_type(); a wire-only primitive
                 // has no in-process ABI layout.
                 return std::nullopt;

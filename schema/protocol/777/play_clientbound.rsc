@@ -260,19 +260,22 @@ packet damage_event = 25 {
 }
 
 packet "debug/block_value" = 26 {
-    #[rest] payload: bytes;
+    block_pos: i64;
+    update: debug_subscription_update;
 }
 
 packet "debug/chunk_value" = 27 {
-    #[rest] payload: bytes;
+    chunk_pos: i64;
+    update: debug_subscription_update;
 }
 
 packet "debug/entity_value" = 28 {
-    #[rest] payload: bytes;
+    #[varint] entity_id: i32;
+    update: debug_subscription_update;
 }
 
 packet "debug/event" = 29 {
-    #[rest] payload: bytes;
+    event_: debug_subscription_event;
 }
 
 packet debug_sample = 30 {

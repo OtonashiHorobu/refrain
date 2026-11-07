@@ -125,6 +125,10 @@ namespace {
             return "::refrain::net::single_input_set";
         case primitive_kind::particle_options:
             return "::refrain::net::particle_options";
+        case primitive_kind::debug_subscription_update:
+            return "::refrain::net::debug_subscription_update";
+        case primitive_kind::debug_subscription_event:
+            return "::refrain::net::debug_subscription_event";
         case primitive_kind::void_type:
             return "void";
         }
@@ -879,6 +883,26 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::debug_subscription_update:
+            writer.line("if (auto written = "
+                        "::refrain::net::encode_debug_subscription_update("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::debug_subscription_event:
+            writer.line("if (auto written = "
+                        "::refrain::net::encode_debug_subscription_event("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -1452,6 +1476,28 @@ void emit_decode_value(code_writer &writer, const model &program,
                 "if (auto decoded = ::refrain::net::decode_particle_options("
                 "in, {}); !decoded) {{",
                 target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::debug_subscription_update:
+            writer.line("if (auto decoded = "
+                        "::refrain::net::decode_debug_subscription_update("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::debug_subscription_event:
+            writer.line("if (auto decoded = "
+                        "::refrain::net::decode_debug_subscription_event("
+                        "in, {}); !decoded) {{",
+                        target);
             writer.indent();
             writer.line(
                 "return std::unexpected{{std::move(decoded.error())}};");

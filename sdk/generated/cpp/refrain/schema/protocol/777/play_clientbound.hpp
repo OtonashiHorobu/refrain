@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 3e46c08897b5a857
+// Schema hash: fcc4e99d514b6390
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -441,32 +441,32 @@ struct debug_block_value {
     static constexpr std::uint16_t packet_id = 0x1A;
     static constexpr std::string_view packet_name = "debug/block_value";
 
-    // attributes: #[rest]
-    std::vector<std::byte> payload;
+    std::int64_t block_pos;
+    ::refrain::net::debug_subscription_update update;
 };
 
 struct debug_chunk_value {
     static constexpr std::uint16_t packet_id = 0x1B;
     static constexpr std::string_view packet_name = "debug/chunk_value";
 
-    // attributes: #[rest]
-    std::vector<std::byte> payload;
+    std::int64_t chunk_pos;
+    ::refrain::net::debug_subscription_update update;
 };
 
 struct debug_entity_value {
     static constexpr std::uint16_t packet_id = 0x1C;
     static constexpr std::string_view packet_name = "debug/entity_value";
 
-    // attributes: #[rest]
-    std::vector<std::byte> payload;
+    // attributes: #[varint]
+    std::int32_t entity_id;
+    ::refrain::net::debug_subscription_update update;
 };
 
 struct debug_event {
     static constexpr std::uint16_t packet_id = 0x1D;
     static constexpr std::string_view packet_name = "debug/event";
 
-    // attributes: #[rest]
-    std::vector<std::byte> payload;
+    ::refrain::net::debug_subscription_event event_;
 };
 
 struct debug_sample {
@@ -3025,7 +3025,12 @@ struct show_dialog {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_bytes(value.payload);
+    out.write_i64(static_cast<std::int64_t>(value.block_pos));
+  }
+  {
+    if (auto written = ::refrain::net::encode_debug_subscription_update(out, value.update); !written) {
+      return written;
+    }
   }
   return ::refrain::status_ok();
 }
@@ -3034,9 +3039,14 @@ struct show_dialog {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto value_0 = in.read_bytes(in.remaining());
+    auto value_0 = in.read_i64();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
+    value.block_pos = static_cast<decltype(value.block_pos)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_debug_subscription_update(in, value.update); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }
@@ -3045,7 +3055,12 @@ struct show_dialog {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_bytes(value.payload);
+    out.write_i64(static_cast<std::int64_t>(value.chunk_pos));
+  }
+  {
+    if (auto written = ::refrain::net::encode_debug_subscription_update(out, value.update); !written) {
+      return written;
+    }
   }
   return ::refrain::status_ok();
 }
@@ -3054,9 +3069,14 @@ struct show_dialog {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto value_0 = in.read_bytes(in.remaining());
+    auto value_0 = in.read_i64();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
+    value.chunk_pos = static_cast<decltype(value.chunk_pos)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_debug_subscription_update(in, value.update); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }
@@ -3065,7 +3085,12 @@ struct show_dialog {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_bytes(value.payload);
+    out.write_varint(static_cast<std::uint32_t>(value.entity_id));
+  }
+  {
+    if (auto written = ::refrain::net::encode_debug_subscription_update(out, value.update); !written) {
+      return written;
+    }
   }
   return ::refrain::status_ok();
 }
@@ -3074,9 +3099,14 @@ struct show_dialog {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto value_0 = in.read_bytes(in.remaining());
+    auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
+    value.entity_id = static_cast<decltype(value.entity_id)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_debug_subscription_update(in, value.update); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }
@@ -3085,7 +3115,9 @@ struct show_dialog {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_bytes(value.payload);
+    if (auto written = ::refrain::net::encode_debug_subscription_event(out, value.event_); !written) {
+      return written;
+    }
   }
   return ::refrain::status_ok();
 }
@@ -3094,9 +3126,9 @@ struct show_dialog {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto value_0 = in.read_bytes(in.remaining());
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
+    if (auto decoded = ::refrain::net::decode_debug_subscription_event(in, value.event_); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }

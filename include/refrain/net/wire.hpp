@@ -625,6 +625,111 @@ struct particle_options {
 [[nodiscard]] auto decode_particle_options(reader &in, particle_options &value)
     -> status;
 
+/// One node in a debug path.
+struct debug_path_node {
+    std::int32_t x{0};
+    std::int32_t y{0};
+    std::int32_t z{0};
+    float walked_distance{0.0F};
+    float cost_malus{0.0F};
+    float f{0.0F};
+    bool closed{false};
+    std::uint32_t type{0};
+
+    friend auto operator==(const debug_path_node &, const debug_path_node &)
+        -> bool = default;
+};
+
+/// One goal entry in a debug goal dump.
+struct debug_goal {
+    std::uint32_t priority{0};
+    bool running{false};
+    std::string name{};
+
+    friend auto operator==(const debug_goal &, const debug_goal &)
+        -> bool = default;
+};
+
+/// One structure piece in a debug structure dump.
+struct debug_structure_piece {
+    std::int64_t min_pos{0};
+    std::int64_t max_pos{0};
+    bool start{false};
+
+    friend auto operator==(const debug_structure_piece &,
+                           const debug_structure_piece &) -> bool = default;
+};
+
+/// Debug subscription value; the subscription id selects the fields.
+struct debug_value {
+    std::vector<debug_path_node> nodes_a{};
+    std::vector<debug_path_node> nodes_b{};
+    std::vector<debug_path_node> nodes_c{};
+    std::vector<debug_path_node> nodes_d{};
+    std::vector<debug_goal> goals{};
+    std::vector<debug_structure_piece> pieces{};
+    std::vector<std::int64_t> positions_a{};
+    std::vector<std::int64_t> positions_b{};
+    std::vector<std::string> strings_a{};
+    std::vector<std::string> strings_b{};
+    std::vector<std::string> strings_c{};
+    std::vector<std::string> strings_d{};
+    std::int64_t pos_a{0};
+    std::int64_t pos_b{0};
+    std::int64_t pos_c{0};
+    std::uint32_t u_a{0};
+    std::uint32_t u_b{0};
+    std::uint32_t u_c{0};
+    std::int32_t i_a{0};
+    std::int32_t i_b{0};
+    float f_a{0.0F};
+    float f_b{0.0F};
+    float f_c{0.0F};
+    double d_a{0.0};
+    double d_b{0.0};
+    double d_c{0.0};
+    bool has_a{false};
+    bool has_b{false};
+    bool flag_a{false};
+    bool flag_b{false};
+    std::string s_a{};
+    std::string s_b{};
+    std::string s_c{};
+
+    friend auto operator==(const debug_value &, const debug_value &)
+        -> bool = default;
+};
+
+/// A debug subscription update: id, optional value.
+struct debug_subscription_update {
+    std::uint32_t subscription{0};
+    bool has_value{false};
+    debug_value value{};
+
+    friend auto operator==(const debug_subscription_update &,
+                           const debug_subscription_update &) -> bool = default;
+};
+
+/// A debug subscription event: id and value.
+struct debug_subscription_event {
+    std::uint32_t subscription{0};
+    debug_value value{};
+
+    friend auto operator==(const debug_subscription_event &,
+                           const debug_subscription_event &) -> bool = default;
+};
+
+[[nodiscard]] auto encode_debug_subscription_update(
+    writer &out, const debug_subscription_update &value) -> status;
+[[nodiscard]] auto
+decode_debug_subscription_update(reader &in, debug_subscription_update &value)
+    -> status;
+[[nodiscard]] auto encode_debug_subscription_event(
+    writer &out, const debug_subscription_event &value) -> status;
+[[nodiscard]] auto
+decode_debug_subscription_event(reader &in, debug_subscription_event &value)
+    -> status;
+
 /// One entity metadata entry. The active representation is selected by the
 /// serializer id; unused fields keep their defaults.
 struct metadata_value {

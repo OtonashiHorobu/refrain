@@ -101,6 +101,10 @@ enum class primitive_kind : std::uint8_t {
     single_input_set,
     /// Hand-written wire payload: particle_options.
     particle_options,
+    /// Hand-written wire payload: debug_subscription_update.
+    debug_subscription_update,
+    /// Hand-written wire payload: debug_subscription_event.
+    debug_subscription_event,
     void_type,
 };
 
