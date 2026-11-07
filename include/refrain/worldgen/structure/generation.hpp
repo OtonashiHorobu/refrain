@@ -19,6 +19,11 @@ namespace refrain::worldgen::structure {
 
 class structure_template_manager;
 
+/// `DesertPyramidStructure`: one 21x21x15 single piece at generation height
+/// 64, below the lowest surface corner of the plot.
+[[nodiscard]] auto desert_pyramid_start(const chunk_pos &chunk, jlong seed)
+    -> structure_start;
+
 /// `SwampHutStructure`: one 7x7x9 scattered hut piece at y=64. The piece keeps
 /// the unshifted box; placement moves it to the average ground height.
 [[nodiscard]] auto swamp_hut_start(const chunk_pos &chunk, jlong seed)

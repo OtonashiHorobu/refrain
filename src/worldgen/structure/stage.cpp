@@ -197,7 +197,31 @@ auto try_generate(const structure_start_context &context,
         return start;
     }
     if (structure.type == "minecraft:desert_pyramid") {
-        return surface_start(context, structure, chunk, 21, 15, 21, true);
+        if (!biome_column_allowed(context, structure, chunk.x * 16 + 8,
+                                  chunk.z * 16 + 8)) {
+            return std::nullopt;
+        }
+        const jint west = chunk.x * 16;
+        const jint north = chunk.z * 16;
+        const auto height = [&](jint x, jint z) {
+            return context.height_at(x, z, heightmap_kind::world_surface_wg);
+        };
+        const jint lowest = std::min(
+            std::min(height(west, north), height(west, north + 21)),
+            std::min(height(west + 21, north), height(west + 21, north + 21)));
+        if (lowest < context.sea_level) {
+            return std::nullopt;
+        }
+        const jint middle_x = west + 8;
+        const jint middle_z = north + 8;
+        const jint middle_y = height(middle_x, middle_z);
+        if (!biome_allowed(context, structure, middle_x, middle_y, middle_z)) {
+            return std::nullopt;
+        }
+        auto start = desert_pyramid_start(chunk, context.seed);
+        start.structure = structure.id;
+        start.step = structure.step;
+        return start;
     }
     if (structure.type == "minecraft:jungle_temple") {
         return surface_start(context, structure, chunk, 12, 10, 15, true);

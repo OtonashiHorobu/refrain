@@ -98,6 +98,29 @@ auto igloo_start(const chunk_pos &chunk, jlong seed,
     return start;
 }
 
+auto desert_pyramid_start(const chunk_pos &chunk, jlong seed)
+    -> structure_start {
+    worldgen_random random{std::make_unique<legacy_random_source>(0)};
+    random.set_large_feature_seed(seed, chunk.x, chunk.z);
+    static constexpr std::array<jint, 4> orientations{2, 3, 0, 1};
+    const jint direction =
+        orientations[static_cast<std::size_t>(random.next_int(4))];
+    const structure_bbox bounds{.min_x = chunk.x * 16,
+                                .min_y = 64,
+                                .min_z = chunk.z * 16,
+                                .max_x = chunk.x * 16 + 20,
+                                .max_y = 64 + 14,
+                                .max_z = chunk.z * 16 + 20};
+    structure_start start{.structure = "minecraft:desert_pyramid",
+                          .chunk = chunk,
+                          .references = 0,
+                          .max_references = 1,
+                          .bounds = bounds};
+    start.pieces.push_back(structure_piece{
+        .type = "minecraft:tedp", .bounds = bounds, .orientation = direction});
+    return start;
+}
+
 auto swamp_hut_start(const chunk_pos &chunk, jlong seed) -> structure_start {
     worldgen_random random{std::make_unique<legacy_random_source>(0)};
     random.set_large_feature_seed(seed, chunk.x, chunk.z);
