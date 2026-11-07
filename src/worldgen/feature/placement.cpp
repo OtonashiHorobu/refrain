@@ -177,9 +177,21 @@ class fixed_placement final : public placement_modifier {
   public:
     explicit fixed_placement(std::vector<block_pos> positions)
         : positions_{std::move(positions)} {}
-    void modify(const placement_context &, worldgen_random &, const block_pos &,
+    void modify(const placement_context &, worldgen_random &,
+                const block_pos &origin,
                 std::vector<block_pos> &out) const override {
-        out.insert(out.end(), positions_.begin(), positions_.end());
+        const auto chunk_of = [](jint coordinate) {
+            return coordinate >= 0 ? coordinate / 16
+                                   : -(((-coordinate) + 15) / 16);
+        };
+        const jint chunk_x = chunk_of(origin.x);
+        const jint chunk_z = chunk_of(origin.z);
+        for (const auto &position : positions_) {
+            if (chunk_of(position.x) == chunk_x &&
+                chunk_of(position.z) == chunk_z) {
+                out.push_back(position);
+            }
+        }
     }
 
   private:
