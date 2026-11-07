@@ -119,9 +119,12 @@ auto block_states::intern(std::string_view name) -> state_id {
             return *found;
         }
         const auto id = registry_->intern(
-            name, state_traits{.air = false,
-                               .blocks_motion = true,
-                               .blocks_motion_no_leaves = true});
+            name,
+            state_traits{
+                .air = false,
+                .blocks_motion = true,
+                .blocks_motion_no_leaves =
+                    !name.substr(0, name.find('[')).ends_with("_leaves")});
         return id.has_value() ? *id : no_state;
     }
     return intern(name, default_properties(name));

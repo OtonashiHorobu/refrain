@@ -42,12 +42,13 @@ auto resolve_state(block_state_registry &states, std::string_view key)
                        key.find("waterlogged=true") != std::string_view::npos;
     const bool fluid = water || block == "minecraft:lava" ||
                        block == "minecraft:bubble_column";
-    return states.intern(
-        key, state_traits{.air = air,
-                          .fluid = fluid,
-                          .water = water,
-                          .blocks_motion = !air && !fluid,
-                          .blocks_motion_no_leaves = !air && !fluid});
+    const bool leaves = block.ends_with("_leaves");
+    return states.intern(key, state_traits{.air = air,
+                                           .fluid = fluid,
+                                           .water = water,
+                                           .blocks_motion = !air && !fluid,
+                                           .blocks_motion_no_leaves =
+                                               !air && !fluid && !leaves});
 }
 
 auto decode_simple_state(const data::json::value &provider,
