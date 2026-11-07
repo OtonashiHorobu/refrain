@@ -14,6 +14,8 @@
 #include <refrain/worldgen/feature/rule_test.hpp>
 #include <refrain/worldgen/feature/state_provider.hpp>
 
+#include <array>
+
 namespace refrain::worldgen::feature {
 
 struct feature_context {
@@ -246,6 +248,22 @@ class bamboo_feature final : public feature {
     block_state_id top_large_{no_block_state};
     block_state_id top_small_{no_block_state};
     block_state_id podzol_{no_block_state};
+};
+
+/// `VinesFeature`: one vine block attached to the first acceptable horizontal
+/// or upward neighbour.
+class vines_feature final : public feature {
+  public:
+    /// Indexed by `Direction.get3DDataValue()`: down, up, north, south, west,
+    /// east. The down entry is unused.
+    explicit vines_feature(std::array<block_state_id, 6> states)
+        : states_{states} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::array<block_state_id, 6> states_{};
 };
 
 /// `SpringFeature`: a fluid source surrounded by a fixed rock/hole pattern.

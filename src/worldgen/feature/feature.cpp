@@ -489,6 +489,34 @@ auto bamboo_feature::place(feature_context &context, worldgen_random &random,
     return true;
 }
 
+auto vines_feature::place(feature_context &context, worldgen_random &random,
+                          const block_pos &origin) const -> bool {
+    (void)random;
+    if (context.placement.region->state_at(origin.x, origin.y, origin.z) !=
+        context.placement.states->air()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < all_directions.size(); ++i) {
+        const auto &direction = all_directions[i];
+        if (direction.dy == -1) {
+            continue;
+        }
+        const auto neighbor = context.placement.region->state_at(
+            origin.x + direction.dx, origin.y + direction.dy,
+            origin.z + direction.dz);
+        if (!context.placement.states->traits(neighbor).blocks_motion) {
+            continue;
+        }
+        // all_directions order is down, up, north, south, west, east; the
+        // state array uses Direction.get3DDataValue order.
+        static constexpr std::array<std::size_t, 6> state_index{0, 1, 2,
+                                                                3, 4, 5};
+        return context.placement.region->set_block_state(
+            origin.x, origin.y, origin.z, states_[state_index[i]]);
+    }
+    return false;
+}
+
 auto sequence_feature::place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool {
     for (const auto &id : features_) {

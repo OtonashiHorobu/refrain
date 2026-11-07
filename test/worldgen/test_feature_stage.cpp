@@ -55,6 +55,7 @@ using refrain::worldgen::feature::tree_decorator_context;
 using refrain::worldgen::feature::tree_feature;
 using refrain::worldgen::feature::trunk_kind;
 using refrain::worldgen::feature::trunk_vine_decorator;
+using refrain::worldgen::feature::vines_feature;
 using refrain::worldgen::provider::generation_context;
 
 auto parse(std::string_view text) -> refrain::data::json::value {
@@ -351,6 +352,57 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
             }
         }
         expect(bamboo_count >= 5);
+    };
+
+    "vines attach to the first acceptable neighbour"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false, .blocks_motion = true});
+        expect(stone.has_value());
+        if (!stone) {
+            return;
+        }
+        std::array<block_state_id, 6> vines_states{};
+        constexpr std::array<std::string_view, 6> keys{{
+            "minecraft:vine[east=false,north=false,south=false,up=false,west="
+            "false]",
+            "minecraft:vine[east=false,north=false,south=false,up=true,west="
+            "false]",
+            "minecraft:vine[east=false,north=true,south=false,up=false,west="
+            "false]",
+            "minecraft:vine[east=false,north=false,south=true,up=false,west="
+            "false]",
+            "minecraft:vine[east=false,north=false,south=false,up=false,west="
+            "true]",
+            "minecraft:vine[east=true,north=false,south=false,up=false,west="
+            "false]",
+        }};
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+            const auto state = registry.intern(keys[i], {.air = false});
+            expect(state.has_value());
+            if (!state) {
+                return;
+            }
+            vines_states[i] = *state;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::biomes);
+        expect(chunk.set_state(8, 5, 7, *stone));
+        chunk_region region{chunk, 0};
+        placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &registry,
+            .generation =
+                generation_context{.min_y = 0, .height = 32, .sea_level = 8},
+        };
+        feature_context context{.placement = placement};
+        const vines_feature feature{vines_states};
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(1)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 5, .z = 8}));
+        expect(chunk.state_at(8, 5, 8) == vines_states[2]);
     };
 };
 

@@ -440,6 +440,33 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       static_cast<jint>(*size_value), discard));
             continue;
         }
+        if (*type == "minecraft:vines") {
+            std::array<block_state_id, 6> states{};
+            constexpr std::array<std::string_view, 6> keys{{
+                "minecraft:vine[east=false,north=false,south=false,up=false,"
+                "west=false]",
+                "minecraft:vine[east=false,north=false,south=false,up=true,"
+                "west=false]",
+                "minecraft:vine[east=false,north=true,south=false,up=false,"
+                "west=false]",
+                "minecraft:vine[east=false,north=false,south=true,up=false,"
+                "west=false]",
+                "minecraft:vine[east=false,north=false,south=false,up=false,"
+                "west=true]",
+                "minecraft:vine[east=true,north=false,south=false,up=false,"
+                "west=false]",
+            }};
+            for (std::size_t i = 0; i < keys.size(); ++i) {
+                const auto state = resolve_state(*states_, keys[i]);
+                if (!state) {
+                    return std::unexpected{make_error(error_code::parse_error,
+                                                      "vine state is invalid")};
+                }
+                states[i] = *state;
+            }
+            features_.emplace(id, std::make_unique<vines_feature>(states));
+            continue;
+        }
         if (*type == "minecraft:bamboo") {
             const auto *probability = document.document.find("probability");
             if (probability == nullptr) {
