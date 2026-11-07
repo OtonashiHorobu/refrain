@@ -14,6 +14,30 @@
 
 namespace {
 
+class stage_table final : public refrain::worldgen::block_state_table {
+  public:
+    [[nodiscard]] auto air() const
+        -> refrain::worldgen::block_state_id override {
+        return 0;
+    }
+    [[nodiscard]] auto traits(refrain::worldgen::block_state_id) const
+        -> refrain::worldgen::state_traits override {
+        return {.air = true};
+    }
+    [[nodiscard]] auto name(refrain::worldgen::block_state_id) const
+        -> std::string_view override {
+        return "minecraft:air";
+    }
+    [[nodiscard]] auto in_tag(refrain::worldgen::block_state_id,
+                              std::string_view) const -> bool override {
+        return false;
+    }
+};
+
+} // namespace
+
+namespace {
+
 using refrain::worldgen::structure::frequency_reduction_method;
 using refrain::worldgen::structure::random_spread_placement;
 using refrain::worldgen::structure::spread_type;
@@ -215,5 +239,27 @@ suite<"worldgen/structure-stage"> structure_stage_tests = [] {
         expect(!result.references.empty());
         expect(result.references.front().structure == "oracle:buried");
         expect(result.references.front().count >= 1);
+    };
+
+    "the write stage keeps only starts owned by the chunk"_test = [] {
+        const std::vector<structure::selected_structure> structures{{
+            .id = "oracle:buried",
+            .placement = {.spacing = 1,
+                          .separation = 0,
+                          .salt = 0,
+                          .spread = structure::spread_type::linear,
+                          .frequency = 1.0F},
+        }};
+        const auto result = structure::generate_buried_starts(
+            12345, chunk_pos{.x = 6, .z = -2}, structures, 8);
+        const stage_table table;
+        proto_chunk chunk{table, 6, -2, -64, 384};
+        structure::write_structure_stage(chunk, result);
+        expect(chunk.structure_starts().size() == 1U);
+        expect(chunk.structure_starts().front().structure == "oracle:buried");
+        expect(chunk.structure_starts().front().chunk_x == 6);
+        expect(chunk.structure_starts().front().chunk_z == -2);
+        expect(chunk.structure_references().size() == result.references.size());
+        expect(chunk.structure_references().front().count >= 1);
     };
 };

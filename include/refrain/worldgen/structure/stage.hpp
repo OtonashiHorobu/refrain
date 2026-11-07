@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
 #include <refrain/worldgen/structure/start.hpp>
 
@@ -30,5 +31,10 @@ struct buried_starts_result {
 generate_buried_starts(jlong seed, const chunk_pos &target,
                        const std::vector<selected_structure> &structures,
                        jint radius) -> buried_starts_result;
+
+/// Copies the starts owned by `chunk` and every reference into the chunk's
+/// structure containers.
+void write_structure_stage(proto_chunk &chunk,
+                           const buried_starts_result &result);
 
 } // namespace refrain::worldgen::structure

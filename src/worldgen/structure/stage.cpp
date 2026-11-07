@@ -8,6 +8,30 @@
 
 namespace refrain::worldgen::structure {
 
+void write_structure_stage(proto_chunk &chunk,
+                           const buried_starts_result &result) {
+    for (const auto &start : result.starts) {
+        if (start.chunk.x != chunk.chunk_x() ||
+            start.chunk.z != chunk.chunk_z()) {
+            continue;
+        }
+        chunk.add_structure_start(
+            ::refrain::worldgen::structure_start{.structure = start.structure,
+                                                 .chunk_x = start.chunk.x,
+                                                 .chunk_z = start.chunk.z,
+                                                 .min_x = start.bounds.min_x,
+                                                 .min_y = start.bounds.min_y,
+                                                 .min_z = start.bounds.min_z,
+                                                 .max_x = start.bounds.max_x,
+                                                 .max_y = start.bounds.max_y,
+                                                 .max_z = start.bounds.max_z});
+    }
+    for (const auto &reference : result.references) {
+        chunk.add_structure_reference(reference.structure, reference.chunk_x,
+                                      reference.chunk_z, reference.count);
+    }
+}
+
 auto generate_buried_starts(jlong seed, const chunk_pos &target,
                             const std::vector<selected_structure> &structures,
                             jint radius) -> buried_starts_result {
