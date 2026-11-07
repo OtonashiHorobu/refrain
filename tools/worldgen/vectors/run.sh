@@ -10,12 +10,12 @@
 # prints the draws. Compare the output with the constants in
 # test/worldgen/test_rng.cpp after a version bump.
 #
-# Usage: tools/worldgen/vectors/run.sh /path/to/server.jar
+# Usage: tools/worldgen/vectors/run.sh /path/to/server.jar [class] [args...]
 
 set -euo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-    echo "usage: $0 /path/to/server.jar [class]" >&2
+if [[ $# -lt 1 ]]; then
+    echo "usage: $0 /path/to/server.jar [class] [args...]" >&2
     exit 2
 fi
 
@@ -42,5 +42,12 @@ mv "$work"/META-INF/versions "$work"/versions
 
 classpath=$(tr ';' ':' < "$work/META-INF/classpath-joined")
 
+class=${2:-Vectors}
+if [[ $# -ge 2 ]]; then
+    shift 2
+else
+    shift 1
+fi
+
 cd "$work"
-java -cp "$classpath" "$script_dir/${2:-Vectors}.java"
+java -cp "$classpath" "$script_dir/$class.java" "$@"
