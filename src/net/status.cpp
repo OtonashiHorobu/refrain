@@ -78,8 +78,8 @@ auto build_status_json(const status_info &info) -> std::string {
 
     auto version{object_of()};
     add(version, "name", json::value{info.version_name});
-    add(version, "protocol", json::value{static_cast<std::int64_t>(
-                                 info.protocol)});
+    add(version, "protocol",
+        json::value{static_cast<std::int64_t>(info.protocol)});
     add(root, "version", json::value{std::move(version)});
 
     if (!info.favicon.empty()) {
@@ -95,7 +95,8 @@ auto parse_status_json(std::string_view text) -> result<status_info> {
         return std::unexpected{std::move(parsed.error())};
     }
     if (!parsed->is_object()) {
-        return std::unexpected{status_failure("status response is not an object")};
+        return std::unexpected{
+            status_failure("status response is not an object")};
     }
     status_info info{};
     if (const auto *description{parsed->find("description")};
@@ -202,14 +203,12 @@ auto decode_handshake(std::span<const std::byte> body)
     if (*packet_id !=
         protocol::v777::handshake::serverbound::intention::packet_id) {
         return std::unexpected{status_failure(fmt::format(
-            "handshake packet id is {}, expected {}",
-            *packet_id,
+            "handshake packet id is {}, expected {}", *packet_id,
             protocol::v777::handshake::serverbound::intention::packet_id))};
     }
     protocol::v777::handshake::serverbound::intention packet{};
-    if (auto decoded{
-            protocol::v777::handshake::serverbound::decode_intention(in,
-                                                                     packet)};
+    if (auto decoded{protocol::v777::handshake::serverbound::decode_intention(
+            in, packet)};
         !decoded) {
         return std::unexpected{std::move(decoded.error())};
     }
@@ -228,7 +227,8 @@ auto encode_status_request() -> std::vector<std::byte> {
         protocol::v777::status::serverbound::status_request::packet_id);
     protocol::v777::status::serverbound::status_request packet{};
     static_cast<void>(
-        protocol::v777::status::serverbound::encode_status_request(out, packet));
+        protocol::v777::status::serverbound::encode_status_request(out,
+                                                                   packet));
     return body;
 }
 
@@ -252,8 +252,8 @@ auto encode_status_response(std::string_view text)
     protocol::v777::status::clientbound::status_response packet{
         .json = std::string{text}};
     if (auto written{
-            protocol::v777::status::clientbound::encode_status_response(out,
-                                                                        packet)};
+            protocol::v777::status::clientbound::encode_status_response(
+                out, packet)};
         !written) {
         return std::unexpected{std::move(written.error())};
     }
