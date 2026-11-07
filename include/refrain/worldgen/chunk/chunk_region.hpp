@@ -57,6 +57,11 @@ class chunk_region {
     /// when the target is absent or outside the write radius.
     auto set_block_state(jint x, jint y, jint z, block_state_id state) -> bool;
 
+    /// Writes a block entity by world position with the same write-zone rule
+    /// as `set_block_state`.
+    auto set_block_entity(jint x, jint y, jint z, data::nbt::compound entity)
+        -> bool;
+
     /// Height of the centre chunk's heightmap at chunk-local coordinates.
     [[nodiscard]] auto first_available(heightmap_kind kind, jint x,
                                        jint z) const -> jint;

@@ -91,6 +91,27 @@ suite<"worldgen/chunk-region"> chunk_region_tests = [] {
         expect(region.state_at(0, 1, 16) == air);
     };
 
+    "block entities follow the write radius too"_test = [] {
+        const test_table table;
+        proto_chunk center{table, 0, 0, 0, 32};
+        proto_chunk east{table, 1, 0, 0, 32};
+        proto_chunk far{table, 2, 0, 0, 32};
+        chunk_region region{center, 1};
+        region.attach(east);
+        region.attach(far);
+
+        refrain::data::nbt::compound entity;
+        entity["id"] =
+            refrain::data::nbt::value{std::string{"minecraft:chest"}};
+        expect(region.set_block_entity(0, 1, 0, entity));
+        expect(region.set_block_entity(16, 1, 0, entity));
+        expect(!region.set_block_entity(32, 1, 0, entity));
+        expect(region.dropped_writes() == 1U);
+        expect(center.block_entity_at({.x = 0, .y = 1, .z = 0}) != nullptr);
+        expect(east.block_entity_at({.x = 0, .y = 1, .z = 0}) != nullptr);
+        expect(far.block_entity_at({.x = 0, .y = 1, .z = 0}) == nullptr);
+    };
+
     "a zero write radius only writes the centre"_test = [] {
         const test_table table;
         proto_chunk center{table, 0, 0, 0, 32};

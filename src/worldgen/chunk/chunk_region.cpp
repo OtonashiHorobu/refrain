@@ -55,6 +55,20 @@ auto chunk_region::set_block_state(jint x, jint y, jint z, block_state_id state)
     return chunk->set_state(x - pos.x * 16, y, z - pos.z * 16, state);
 }
 
+auto chunk_region::set_block_entity(jint x, jint y, jint z,
+                                    data::nbt::compound entity) -> bool {
+    const chunk_pos pos{.x = floor_div16(x), .z = floor_div16(z)};
+    auto *chunk = find(pos);
+    if (chunk == nullptr || !within_write_zone(pos)) {
+        ++dropped_writes_;
+        return false;
+    }
+    chunk->set_block_entity(
+        block_pos{.x = x - pos.x * 16, .y = y, .z = z - pos.z * 16},
+        std::move(entity));
+    return true;
+}
+
 auto chunk_region::first_available(heightmap_kind kind, jint x, jint z) const
     -> jint {
     return center_->first_available(kind, x, z);
