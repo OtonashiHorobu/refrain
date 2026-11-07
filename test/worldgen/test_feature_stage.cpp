@@ -42,6 +42,8 @@ using refrain::worldgen::feature::place_on_ground_decorator;
 using refrain::worldgen::feature::placed_feature_document;
 using refrain::worldgen::feature::placed_feature_runtime;
 using refrain::worldgen::feature::placement_context;
+using refrain::worldgen::feature::replace_blobs_feature;
+using refrain::worldgen::feature::sequence_feature;
 using refrain::worldgen::feature::shelf_mushroom_decorator;
 using refrain::worldgen::feature::simple_block_feature;
 using refrain::worldgen::feature::simple_state;
@@ -137,6 +139,94 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
                 }
             }
             expect(placed_count == 2U);
+        };
+
+    "a sequence runs nested placed features in order and stops on failure"_test =
+        [] {
+            block_state_registry registry;
+            auto stone = registry.intern("minecraft:stone", {.air = false});
+            expect(stone.has_value());
+            if (!stone) {
+                return;
+            }
+            proto_chunk chunk{registry, 0, 0, 0, 32};
+            chunk.set_status(chunk_status::biomes);
+            chunk_region region{chunk, 0};
+            placement_context placement{
+                .region = &region,
+                .chunk = &chunk,
+                .states = &registry,
+                .generation = generation_context{.min_y = 0,
+                                                 .height = 32,
+                                                 .sea_level = 8},
+            };
+            feature_context context{.placement = placement};
+            std::vector<std::string> order;
+            context.place_by_id = [&](std::string_view id, worldgen_random &,
+                                      const block_pos &) {
+                order.emplace_back(id);
+                return id != "oracle:stop";
+            };
+            const sequence_feature sequence{{"oracle:first", "oracle:second"}};
+            auto random =
+                worldgen_random{std::make_unique<legacy_random_source>(1)};
+            expect(sequence.place(context, random,
+                                  block_pos{.x = 1, .y = 2, .z = 3}));
+            expect(order ==
+                   std::vector<std::string>({"oracle:first", "oracle:second"}));
+            order.clear();
+            const sequence_feature failing{
+                {"oracle:first", "oracle:stop", "oracle:third"}};
+            expect(!failing.place(context, random,
+                                  block_pos{.x = 1, .y = 2, .z = 3}));
+            expect(order ==
+                   std::vector<std::string>({"oracle:first", "oracle:stop"}));
+        };
+
+    "replace blobs replaces a manhattan ball around the target block"_test =
+        [] {
+            block_state_registry registry;
+            auto stone = registry.intern("minecraft:stone", {.air = false});
+            auto gold = registry.intern("minecraft:gold_block", {.air = false});
+            expect(stone.has_value() && gold.has_value());
+            if (!stone || !gold) {
+                return;
+            }
+            proto_chunk chunk{registry, 0, 0, 0, 32};
+            chunk.set_status(chunk_status::biomes);
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    for (jint y = 4; y <= 8; ++y) {
+                        expect(chunk.set_state(x, y, z, *stone));
+                    }
+                }
+            }
+            chunk_region region{chunk, 0};
+            placement_context placement{
+                .region = &region,
+                .chunk = &chunk,
+                .states = &registry,
+                .generation = generation_context{.min_y = 0,
+                                                 .height = 32,
+                                                 .sea_level = 8},
+            };
+            feature_context context{.placement = placement};
+            auto radius =
+                refrain::worldgen::provider::int_provider::decode(parse("1"));
+            expect(radius.has_value());
+            if (!radius) {
+                return;
+            }
+            const replace_blobs_feature feature{*stone, *gold,
+                                                std::move(*radius)};
+            auto random =
+                worldgen_random{std::make_unique<legacy_random_source>(1)};
+            expect(feature.place(context, random,
+                                 block_pos{.x = 8, .y = 10, .z = 8}));
+            expect(chunk.state_at(8, 8, 8) == *gold);
+            expect(chunk.state_at(8, 7, 8) == *gold);
+            expect(chunk.state_at(7, 8, 8) == *gold);
+            expect(chunk.state_at(8, 6, 8) == *stone);
         };
 };
 

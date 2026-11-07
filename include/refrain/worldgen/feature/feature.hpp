@@ -118,6 +118,58 @@ class ore_feature final : public feature {
     float discard_chance_on_air_exposure_{0.0F};
 };
 
+/// `SequenceFeature`: runs nested placed features in order and stops at the
+/// first failure.
+class sequence_feature final : public feature {
+  public:
+    explicit sequence_feature(std::vector<std::string> features)
+        : features_{std::move(features)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::vector<std::string> features_{};
+};
+
+/// `ReplaceBlobsFeature`: finds the target block below the origin and replaces
+/// a Manhattan-radius ellipsoid of it.
+class replace_blobs_feature final : public feature {
+  public:
+    replace_blobs_feature(block_state_id target, block_state_id replacement,
+                          std::unique_ptr<provider::int_provider> radius)
+        : target_{target}, replacement_{replacement},
+          radius_{std::move(radius)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    block_state_id target_{no_block_state};
+    block_state_id replacement_{no_block_state};
+    std::unique_ptr<provider::int_provider> radius_{};
+};
+
+/// `BlueIceFeature`: grows a blue-ice blob from water next to packed ice.
+class blue_ice_feature final : public feature {
+  public:
+    blue_ice_feature(block_state_id blue_ice, block_state_id water,
+                     block_state_id packed_ice, block_state_id ice,
+                     block_state_id air)
+        : blue_ice_{blue_ice}, water_{water}, packed_ice_{packed_ice},
+          ice_{ice}, air_{air} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    block_state_id blue_ice_{no_block_state};
+    block_state_id water_{no_block_state};
+    block_state_id packed_ice_{no_block_state};
+    block_state_id ice_{no_block_state};
+    block_state_id air_{no_block_state};
+};
+
 /// `SpringFeature`: a fluid source surrounded by a fixed rock/hole pattern.
 class spring_feature final : public feature {
   public:

@@ -9,6 +9,25 @@
 
 namespace refrain::worldgen::feature {
 
+namespace {
+
+struct direction_offset {
+    jint dx;
+    jint dy;
+    jint dz;
+};
+
+constexpr std::array<direction_offset, 6> all_directions{{
+    {.dx = 0, .dy = -1, .dz = 0},
+    {.dx = 0, .dy = 1, .dz = 0},
+    {.dx = 0, .dy = 0, .dz = -1},
+    {.dx = 0, .dy = 0, .dz = 1},
+    {.dx = -1, .dy = 0, .dz = 0},
+    {.dx = 1, .dy = 0, .dz = 0},
+}};
+
+} // namespace
+
 auto simple_block_feature::place(feature_context &context,
                                  worldgen_random &random,
                                  const block_pos &origin) const -> bool {
@@ -284,6 +303,127 @@ auto spring_feature::valid(feature_context &context, const block_pos &pos) const
         context.placement.region->state_at(pos.x, pos.y, pos.z)));
     return std::find(valid_blocks_.begin(), valid_blocks_.end(), name) !=
            valid_blocks_.end();
+}
+
+auto sequence_feature::place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool {
+    for (const auto &id : features_) {
+        if (!context.place_by_id(id, random, origin)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+auto replace_blobs_feature::place(feature_context &context,
+                                  worldgen_random &random,
+                                  const block_pos &origin) const -> bool {
+    const jint max_y = context.placement.chunk->min_y() +
+                       context.placement.chunk->height() - 1;
+    block_pos cursor{
+        .x = origin.x,
+        .y = std::clamp(origin.y, context.placement.chunk->min_y() + 1, max_y),
+        .z = origin.z};
+    const auto target_name =
+        state_block_name(context.placement.states->name(target_));
+    while (cursor.y > context.placement.chunk->min_y() + 1) {
+        const auto state =
+            context.placement.region->state_at(cursor.x, cursor.y, cursor.z);
+        if (state_block_name(context.placement.states->name(state)) ==
+            target_name) {
+            break;
+        }
+        --cursor.y;
+    }
+    if (cursor.y <= context.placement.chunk->min_y() + 1) {
+        return false;
+    }
+    const jint radius_x = radius_->sample(random);
+    const jint radius_y = radius_->sample(random);
+    const jint radius_z = radius_->sample(random);
+    const jint maximum = std::max(radius_x, std::max(radius_y, radius_z));
+    bool replaced = false;
+    for (jint y = cursor.y - radius_y; y <= cursor.y + radius_y; ++y) {
+        for (jint z = cursor.z - radius_z; z <= cursor.z + radius_z; ++z) {
+            for (jint x = cursor.x - radius_x; x <= cursor.x + radius_x; ++x) {
+                if (std::abs(x - cursor.x) + std::abs(y - cursor.y) +
+                        std::abs(z - cursor.z) >
+                    maximum) {
+                    continue;
+                }
+                const auto state = context.placement.region->state_at(x, y, z);
+                if (state_block_name(context.placement.states->name(state)) !=
+                    target_name) {
+                    continue;
+                }
+                if (context.placement.region->set_block_state(x, y, z,
+                                                              replacement_)) {
+                    replaced = true;
+                }
+            }
+        }
+    }
+    return replaced;
+}
+
+auto blue_ice_feature::place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool {
+    if (origin.y > context.placement.generation.sea_level - 1) {
+        return false;
+    }
+    const auto is = [&](jint x, jint y, jint z, block_state_id state) {
+        return context.placement.region->state_at(x, y, z) == state;
+    };
+    if (!is(origin.x, origin.y, origin.z, water_) &&
+        !is(origin.x, origin.y - 1, origin.z, water_)) {
+        return false;
+    }
+    bool packed = false;
+    for (const auto &direction : all_directions) {
+        if (direction.dy == -1) {
+            continue;
+        }
+        if (is(origin.x + direction.dx, origin.y + direction.dy,
+               origin.z + direction.dz, packed_ice_)) {
+            packed = true;
+            break;
+        }
+    }
+    if (!packed) {
+        return false;
+    }
+    (void)context.placement.region->set_block_state(origin.x, origin.y,
+                                                    origin.z, blue_ice_);
+    for (jint i = 0; i < 200; ++i) {
+        jint y_offset = random.next_int(5) - random.next_int(6);
+        jint xz = 3;
+        if (y_offset < 2) {
+            xz += y_offset / 2;
+        }
+        if (xz < 1) {
+            continue;
+        }
+        const block_pos place{
+            .x = origin.x + random.next_int(xz) - random.next_int(xz),
+            .y = origin.y + y_offset,
+            .z = origin.z + random.next_int(xz) - random.next_int(xz),
+        };
+        const auto state =
+            context.placement.region->state_at(place.x, place.y, place.z);
+        if (state != air_ && state != water_ && state != packed_ice_ &&
+            state != ice_) {
+            continue;
+        }
+        for (const auto &direction : all_directions) {
+            if (is(place.x + direction.dx, place.y + direction.dy,
+                   place.z + direction.dz, blue_ice_)) {
+                (void)context.placement.region->set_block_state(
+                    place.x, place.y, place.z, blue_ice_);
+                break;
+            }
+        }
+    }
+    return true;
 }
 
 auto spring_feature::place(feature_context &context, worldgen_random &,

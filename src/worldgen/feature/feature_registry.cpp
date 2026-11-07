@@ -291,6 +291,68 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       std::move(*provider), schedule_tick));
             continue;
         }
+        if (*type == "minecraft:sequence") {
+            const auto *features = document.document.find("features");
+            if (features == nullptr || !features->is_array()) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "sequence feature is incomplete")};
+            }
+            std::vector<std::string> nested;
+            for (const auto &entry : *features->as_array()) {
+                auto reference = nested_reference(entry);
+                if (!reference) {
+                    return std::unexpected{reference.error()};
+                }
+                nested.push_back(std::move(*reference));
+            }
+            features_.emplace(
+                id, std::make_unique<sequence_feature>(std::move(nested)));
+            continue;
+        }
+        if (*type == "minecraft:netherrack_replace_blobs" ||
+            *type == "minecraft:replace_blobs") {
+            const auto *target = document.document.find("target");
+            const auto *replacement = document.document.find("state");
+            const auto *radius = document.document.find("radius");
+            if (target == nullptr || replacement == nullptr ||
+                radius == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "replace blobs is incomplete")};
+            }
+            const auto target_key = decode_state_key(*target);
+            const auto replacement_key = decode_state_key(*replacement);
+            auto radius_provider = provider::int_provider::decode(*radius);
+            if (!target_key || !replacement_key || !radius_provider) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "replace blobs is invalid")};
+            }
+            auto target_state = resolve_state(*states_, *target_key);
+            auto replacement_state = resolve_state(*states_, *replacement_key);
+            if (!target_state || !replacement_state) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "replace blobs state is invalid")};
+            }
+            features_.emplace(id, std::make_unique<replace_blobs_feature>(
+                                      *target_state, *replacement_state,
+                                      std::move(*radius_provider)));
+            continue;
+        }
+        if (*type == "minecraft:blue_ice") {
+            const auto blue_ice = resolve_state(*states_, "minecraft:blue_ice");
+            const auto water = resolve_state(*states_, "minecraft:water");
+            const auto packed_ice =
+                resolve_state(*states_, "minecraft:packed_ice");
+            const auto ice = resolve_state(*states_, "minecraft:ice");
+            const auto air = resolve_state(*states_, "minecraft:air");
+            if (!blue_ice || !water || !packed_ice || !ice || !air) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "blue ice states are invalid")};
+            }
+            features_.emplace(id,
+                              std::make_unique<blue_ice_feature>(
+                                  *blue_ice, *water, *packed_ice, *ice, *air));
+            continue;
+        }
         if (*type == "minecraft:disk") {
             const auto *state_provider =
                 document.document.find("state_provider");
