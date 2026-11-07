@@ -21,9 +21,11 @@
 #include <cstdlib>
 #include <fstream>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -815,6 +817,213 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
                             std::fprintf(
                                 stderr,
                                 "buried mismatch (%d,%d,%d): got %s want %s\n",
+                                static_cast<int>(x), static_cast<int>(y),
+                                static_cast<int>(z), actual.c_str(),
+                                expected.c_str());
+                        }
+                        ++mismatches;
+                    }
+                }
+            }
+        }
+        expect(mismatches == 0);
+    };
+
+    "the desert pyramid blocks match the reference"_test = [] {
+        if (std::getenv("REFRAIN_VANILLA_PYRAMID_REAL") == nullptr) {
+            return;
+        }
+        const char *region = std::getenv("REFRAIN_VANILLA_PYRAMID_REGION");
+        if (region == nullptr) {
+            return;
+        }
+        const jint chunk_x = 0;
+        const jint chunk_z = 10;
+        const jlong seed = 2;
+        const auto reference = read_chunk(region, chunk_x, chunk_z);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        decoded_chunk decoded;
+        expect(decode_chunk(*reference, decoded));
+        if (decoded.blocks.empty()) {
+            return;
+        }
+        auto start = structure::desert_pyramid_start(
+            chunk_pos{.x = chunk_x, .z = chunk_z}, seed);
+        expect(start.pieces.size() == 1U);
+        if (start.pieces.empty()) {
+            return;
+        }
+        const auto &source = start.pieces.front();
+        expect(source.orientation == 3);
+        structure_start record{
+            .structure = "minecraft:desert_pyramid",
+            .step = "surface_structures",
+            .chunk_x = chunk_x,
+            .chunk_z = chunk_z,
+            .min_x = source.bounds.min_x,
+            .min_y = source.bounds.min_y,
+            .min_z = source.bounds.min_z,
+            .max_x = source.bounds.max_x,
+            .max_y = source.bounds.max_y,
+            .max_z = source.bounds.max_z,
+        };
+        const structure_piece_record piece_record{
+            .type = "minecraft:tedp",
+            .min_x = source.bounds.min_x,
+            .min_y = source.bounds.min_y,
+            .min_z = source.bounds.min_z,
+            .max_x = source.bounds.max_x,
+            .max_y = source.bounds.max_y,
+            .max_z = source.bounds.max_z,
+            .orientation = source.orientation,
+            .height_position = 76,
+            .height_offset = -1,
+        };
+        record.pieces.push_back(piece_record);
+        proto_chunk chunk{decoded.registry, chunk_x, chunk_z, -64, 384};
+        for (jint y = -64; y < 320; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    const auto index = static_cast<std::size_t>(y + 64) * 256U +
+                                       static_cast<std::size_t>(z * 16 + x);
+                    chunk.set_state(x, y, z, decoded.blocks[index]);
+                }
+            }
+        }
+        chunk.add_structure_start(std::move(record));
+        chunk_region region_view{chunk, 1};
+        const auto resolve = [&](std::string_view key) -> block_state_id {
+            if (const auto value = decoded.registry.find(key);
+                value.has_value()) {
+                return *value;
+            }
+            const auto block = state_block_name(key);
+            const bool air = is_air_block_name(block);
+            const auto inserted = decoded.registry.intern(
+                key, {.air = air, .blocks_motion = !air});
+            return inserted.has_value() ? *inserted : no_block_state;
+        };
+        const structure::structure_place_context context{
+            .region = &region_view,
+            .chunk = &chunk,
+            .states = &decoded.registry,
+            .state = resolve,
+            .registry = &decoded.registry,
+        };
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(7)};
+        structure::place_structures(chunk, context, "surface_structures",
+                                    random);
+
+        std::set<std::tuple<jint, jint, jint>> excluded;
+        const auto &piece = piece_record;
+        const auto exclude_local = [&](jint x, jint y, jint z) {
+            const auto pos =
+                structure::piece_local_to_world(piece, 75, x, y, z);
+            excluded.emplace(pos.x, pos.y, pos.z);
+        };
+        for (jint x = 14; x <= 18; ++x) {
+            for (jint z = 11; z <= 15; ++z) {
+                exclude_local(x, 0, z); // collapsed roof
+            }
+        }
+        for (jint x = 14; x <= 18; ++x) {
+            for (jint y = -3; y <= -1; ++y) {
+                for (jint z = 11; z <= 15; ++z) {
+                    exclude_local(x, y, z); // sand / suspicious sand
+                }
+            }
+        }
+        for (const auto &[x, y, z] :
+             std::array<std::tuple<jint, jint, jint>, 10>{{{19, -3, 13},
+                                                           {19, -2, 13},
+                                                           {13, -3, 13},
+                                                           {13, -2, 13},
+                                                           {16, -3, 16},
+                                                           {16, -2, 16},
+                                                           {16, -3, 10},
+                                                           {16, -2, 10},
+                                                           {15, -1, 17},
+                                                           {16, -1, 17}}}) {
+            exclude_local(x, y, z);
+        }
+        const auto canonical = [](std::string name) -> std::string {
+            const auto open = name.find('[');
+            if (open == std::string::npos) {
+                return name;
+            }
+            const auto close = name.rfind(']');
+            if (close == std::string::npos) {
+                return name;
+            }
+            std::string body = name.substr(open + 1, close - open - 1);
+            std::vector<std::string> parts;
+            std::size_t start_pos = 0;
+            while (start_pos <= body.size()) {
+                const auto comma = body.find(',', start_pos);
+                parts.push_back(body.substr(
+                    start_pos, comma == std::string::npos ? std::string::npos
+                                                          : comma - start_pos));
+                if (comma == std::string::npos) {
+                    break;
+                }
+                start_pos = comma + 1;
+            }
+            std::sort(parts.begin(), parts.end());
+            std::string rebuilt = name.substr(0, open);
+            rebuilt.push_back('[');
+            for (std::size_t i = 0; i < parts.size(); ++i) {
+                if (i != 0) {
+                    rebuilt.push_back(',');
+                }
+                rebuilt.append(parts[i]);
+            }
+            rebuilt.push_back(']');
+            if (rebuilt == "minecraft:sandstone_stairs[facing=north,half="
+                           "bottom,shape=straight,waterlogged=false]") {
+                return "minecraft:sandstone_stairs";
+            }
+            if (rebuilt.starts_with("minecraft:chest[")) {
+                std::string compact = rebuilt;
+                for (const auto *drop :
+                     {",type=single", ",waterlogged=false"}) {
+                    const auto pos = compact.find(drop);
+                    if (pos != std::string::npos) {
+                        compact.erase(pos,
+                                      std::char_traits<char>::length(drop));
+                    }
+                }
+                if (compact == "minecraft:chest[facing=north]") {
+                    return "minecraft:chest";
+                }
+                return compact;
+            }
+            return rebuilt;
+        };
+        jint mismatches = 0;
+        for (jint y = -64; y < 320; ++y) {
+            for (jint z = chunk_z * 16; z < chunk_z * 16 + 16; ++z) {
+                for (jint x = chunk_x * 16; x < chunk_x * 16 + 16; ++x) {
+                    if (excluded.contains(
+                            std::tuple<jint, jint, jint>{x, y, z})) {
+                        continue;
+                    }
+                    const auto index =
+                        static_cast<std::size_t>(y + 64) * 256U +
+                        static_cast<std::size_t>((z & 15) * 16 + (x & 15));
+                    const auto expected = canonical(std::string{
+                        decoded.registry.name(decoded.blocks[index])});
+                    const auto actual =
+                        canonical(std::string{decoded.registry.name(
+                            chunk.state_at(x & 15, y, z & 15))});
+                    if (expected != actual) {
+                        if (mismatches < 8) {
+                            std::fprintf(
+                                stderr,
+                                "pyramid mismatch (%d,%d,%d): got %s want %s\n",
                                 static_cast<int>(x), static_cast<int>(y),
                                 static_cast<int>(z), actual.c_str(),
                                 expected.c_str());
