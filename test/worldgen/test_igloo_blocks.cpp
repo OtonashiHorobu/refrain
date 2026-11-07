@@ -1235,21 +1235,6 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
             if (rebuilt.find("_log[axis=y]") != std::string::npos) {
                 return rebuilt.substr(0, rebuilt.find('['));
             }
-            if (rebuilt.find("_stairs[") != std::string::npos) {
-                const auto shape = rebuilt.find("shape=");
-                if (shape != std::string::npos) {
-                    const auto end = rebuilt.find(',', shape);
-                    rebuilt.erase(shape, end == std::string::npos
-                                             ? std::string::npos
-                                             : end - shape + 1);
-                    if (rebuilt.back() == ',') {
-                        rebuilt.pop_back();
-                    }
-                }
-                if (rebuilt.back() == '[') {
-                    rebuilt.pop_back();
-                }
-            }
             return rebuilt;
         };
         jint mismatches = 0;
