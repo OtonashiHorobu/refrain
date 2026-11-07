@@ -483,4 +483,56 @@ auto boolean_selector_feature::place(feature_context &context,
                                origin);
 }
 
+auto block_pile_feature::may_place_on(feature_context &context,
+                                      const block_pos &pos,
+                                      worldgen_random &random) const -> bool {
+    const block_pos below{.x = pos.x, .y = pos.y - 1, .z = pos.z};
+    const auto state =
+        context.placement.region->state_at(below.x, below.y, below.z);
+    if (context.placement.states->name(state) == "minecraft:dirt_path") {
+        return random.next_boolean();
+    }
+    return context.placement.states->traits(state).blocks_motion;
+}
+
+void block_pile_feature::try_place(feature_context &context,
+                                   const block_pos &pos,
+                                   worldgen_random &random) const {
+    const auto name = context.placement.states->name(
+        context.placement.region->state_at(pos.x, pos.y, pos.z));
+    if (!is_air_block_name(name) || !may_place_on(context, pos, random)) {
+        return;
+    }
+    const auto state = provider_->get(context.placement, random, pos);
+    (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z, state);
+}
+
+auto block_pile_feature::place(feature_context &context,
+                               worldgen_random &random,
+                               const block_pos &origin) const -> bool {
+    if (origin.y < context.placement.chunk->min_y() + 5) {
+        return false;
+    }
+    const jint xr = 2 + random.next_int(2);
+    const jint zr = 2 + random.next_int(2);
+    for (jint z = origin.z - zr; z <= origin.z + zr; ++z) {
+        const jint zd = origin.z - z;
+        for (jint y = origin.y; y <= origin.y + 1; ++y) {
+            for (jint x = origin.x - xr; x <= origin.x + xr; ++x) {
+                const jint xd = origin.x - x;
+                const float first = random.next_float();
+                const float second = random.next_float();
+                if (xd * xd + zd * zd <= first * 10.0F - second * 6.0F) {
+                    try_place(context, block_pos{.x = x, .y = y, .z = z},
+                              random);
+                } else if (random.next_float() < 0.031F) {
+                    try_place(context, block_pos{.x = x, .y = y, .z = z},
+                              random);
+                }
+            }
+        }
+    }
+    return true;
+}
+
 } // namespace refrain::worldgen::feature

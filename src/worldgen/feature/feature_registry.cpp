@@ -476,6 +476,21 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                   std::move(*true_id), std::move(*false_id)));
             continue;
         }
+        if (*type == "minecraft:block_pile") {
+            const auto *provider_value =
+                document.document.find("state_provider");
+            if (provider_value == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "block pile has no provider")};
+            }
+            auto provider = decode_state_provider(*provider_value, *states_);
+            if (!provider) {
+                return std::unexpected{provider.error()};
+            }
+            features_.emplace(
+                id, std::make_unique<block_pile_feature>(std::move(*provider)));
+            continue;
+        }
         return std::unexpected{
             make_error(error_code::unsupported, "unsupported feature type")};
     }
