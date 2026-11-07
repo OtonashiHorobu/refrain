@@ -56,4 +56,9 @@ struct structure_start {
                                     const chunk_pos &chunk, jint radius)
     -> std::vector<const structure_start *>;
 
+/// Adds one reference from `chunk` to every nearby start with a free slot.
+[[nodiscard]] auto collect_references(std::vector<structure_start> &starts,
+                                      const chunk_pos &chunk, jint radius)
+    -> std::vector<structure_reference>;
+
 } // namespace refrain::worldgen::structure
