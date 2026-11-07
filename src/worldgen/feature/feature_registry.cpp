@@ -764,7 +764,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
         runtime.id = id;
         runtime.configured = configured->second.get();
         for (const auto &entry : *document.placement.as_array()) {
-            auto modifier = decode_placement(entry);
+            auto modifier = decode_placement(entry, *states_);
             if (!modifier) {
                 return std::unexpected{modifier.error()};
             }

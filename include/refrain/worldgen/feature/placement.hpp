@@ -23,6 +23,10 @@ namespace refrain::data::json {
 class value;
 } // namespace refrain::data::json
 
+namespace refrain::worldgen {
+class block_state_registry;
+}
+
 namespace refrain::worldgen::feature {
 
 struct placement_context {
@@ -50,7 +54,8 @@ class placement_modifier {
 };
 
 /// Decodes one JSON placement entry.
-[[nodiscard]] auto decode_placement(const data::json::value &document)
+[[nodiscard]] auto decode_placement(const data::json::value &document,
+                                    block_state_registry &states)
     -> result<std::unique_ptr<placement_modifier>>;
 
 } // namespace refrain::worldgen::feature
