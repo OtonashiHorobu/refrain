@@ -560,7 +560,8 @@ if(REFRAIN_BUILD_BENCH)
     target_include_directories(refrain-bench PRIVATE "${PROJECT_SOURCE_DIR}/bench/include")
     target_link_libraries(refrain-bench PRIVATE refrain-kernel
                           refrain-contracts refrain-world refrain-sim
-                          refrain-data benchmark::benchmark_main)
+                          refrain-worldgen refrain-data
+                          benchmark::benchmark_main)
     refrain_apply_warnings(refrain-bench)
 
     # Library-comparison benchmarks: the sources are optional and live outside
