@@ -17,6 +17,7 @@
 #include <refrain/worldgen/biome/biome_climate.hpp>
 #include <refrain/worldgen/biome/biome_manager.hpp>
 #include <refrain/worldgen/biome/biome_source.hpp>
+#include <refrain/worldgen/biome/biome_view.hpp>
 #include <refrain/worldgen/biome/overworld_biome_builder.hpp>
 #include <refrain/worldgen/carver/carver_data.hpp>
 #include <refrain/worldgen/carver/carver_stage.hpp>
@@ -591,6 +592,14 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             proto_chunk chunk{block_registry, chunk_x, chunk_z, oracle_min_y,
                               oracle_height};
             chunk.set_status(chunk_status::biomes);
+            const climate_sampler sampler{*settings->router.temperature,
+                                          *settings->router.vegetation,
+                                          *settings->router.continents,
+                                          *settings->router.erosion,
+                                          *settings->router.depth,
+                                          *settings->router.ridges,
+                                          context};
+            fill_chunk_biomes(chunk, source, sampler);
             const terrain::proto_fill_options fill_options{
                 .air = *air_state,
                 .default_block = *stone_state,
@@ -635,15 +644,14 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                                   static_cast<state_id>(*stone_state),
                                   static_cast<state_id>(*air_state)};
             factory_provider factories{*root_factory};
-            const climate_sampler sampler{*settings->router.temperature,
-                                          *settings->router.vegetation,
-                                          *settings->router.continents,
-                                          *settings->router.erosion,
-                                          *settings->router.depth,
-                                          *settings->router.ridges,
-                                          context};
-            climate_biome_resolver resolver{source, sampler};
-            biome_manager manager{resolver,
+            climate_biome_resolver uncached_resolver{source, sampler};
+            chunk_biome_resolver biome_view{
+                [&chunk, chunk_x, chunk_z](jint cx,
+                                           jint cz) -> const proto_chunk * {
+                    return cx == chunk_x && cz == chunk_z ? &chunk : nullptr;
+                },
+                uncached_resolver};
+            biome_manager manager{biome_view,
                                   biome_manager::obfuscate_seed(seed)};
 
             material_providers providers;
