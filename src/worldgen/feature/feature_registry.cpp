@@ -759,6 +759,32 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                                     std::move(*rim_provider)));
             continue;
         }
+        if (*type == "minecraft:underwater_magma") {
+            const auto *range = document.document.find("floor_search_range");
+            const auto *radius =
+                document.document.find("placement_radius_around_floor");
+            const auto *probability = document.document.find(
+                "placement_probability_per_valid_position");
+            if (range == nullptr || radius == nullptr ||
+                probability == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "underwater magma is incomplete")};
+            }
+            const auto range_value = range->as_int64();
+            const auto radius_value = radius->as_int64();
+            const auto probability_value = probability->as_double();
+            const auto magma = resolve_state(*states_, "minecraft:magma_block");
+            if (!range_value || !radius_value || !probability_value || !magma) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "underwater magma is invalid")};
+            }
+            features_.emplace(id, std::make_unique<underwater_magma_feature>(
+                                      static_cast<jint>(*range_value),
+                                      static_cast<jint>(*radius_value),
+                                      static_cast<float>(*probability_value),
+                                      *magma));
+            continue;
+        }
         if (*type == "minecraft:lake") {
             const auto *fluid = document.document.find("fluid");
             const auto *barrier = document.document.find("barrier");

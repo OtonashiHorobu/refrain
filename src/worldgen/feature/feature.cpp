@@ -1490,6 +1490,74 @@ auto freeze_top_layer_feature::place(feature_context &context,
     return true;
 }
 
+auto underwater_magma_feature::place(feature_context &context,
+                                     worldgen_random &random,
+                                     const block_pos &origin) const -> bool {
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
+    const auto is_water = [&](const block_pos &pos) {
+        const auto traits = states.traits(region.state_at(pos.x, pos.y, pos.z));
+        return traits.water && !traits.air;
+    };
+    if (!is_water(origin)) {
+        return false;
+    }
+    jint floor_y = origin.y;
+    for (jint step = 1; step < floor_search_range_; ++step) {
+        if (!is_water(block_pos{.x = origin.x, .y = floor_y, .z = origin.z})) {
+            break;
+        }
+        --floor_y;
+    }
+    if (is_water(block_pos{.x = origin.x, .y = floor_y, .z = origin.z})) {
+        return false;
+    }
+    const auto is_water_or_air = [&](const block_pos &pos) {
+        const auto traits = states.traits(region.state_at(pos.x, pos.y, pos.z));
+        return traits.water || traits.air;
+    };
+    const auto visible = [&](const block_pos &pos) {
+        return !states.traits(region.state_at(pos.x, pos.y, pos.z))
+                    .blocks_motion;
+    };
+    const block_pos floor{.x = origin.x, .y = floor_y, .z = origin.z};
+    bool placed = false;
+    for (jint z = -placement_radius_; z <= placement_radius_; ++z) {
+        for (jint y = -placement_radius_; y <= placement_radius_; ++y) {
+            for (jint x = -placement_radius_; x <= placement_radius_; ++x) {
+                const block_pos pos{
+                    .x = floor.x + x, .y = floor.y + y, .z = floor.z + z};
+                if (!(random.next_float() < probability_)) {
+                    continue;
+                }
+                if (is_water_or_air(pos)) {
+                    continue;
+                }
+                const block_pos below{.x = pos.x, .y = pos.y - 1, .z = pos.z};
+                if (visible(below)) {
+                    continue;
+                }
+                bool neighbour_visible = false;
+                for (const auto &offset : horizontal_neighbors) {
+                    const block_pos neighbour{.x = pos.x + offset.first,
+                                              .y = pos.y,
+                                              .z = pos.z + offset.second};
+                    if (visible(neighbour)) {
+                        neighbour_visible = true;
+                        break;
+                    }
+                }
+                if (neighbour_visible) {
+                    continue;
+                }
+                (void)region.set_block_state(pos.x, pos.y, pos.z, magma_);
+                placed = true;
+            }
+        }
+    }
+    return placed;
+}
+
 auto lake_feature::place(feature_context &context, worldgen_random &random,
                          const block_pos &initial) const -> bool {
     if (initial.y <= context.placement.chunk->min_y() + 4) {

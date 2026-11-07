@@ -467,6 +467,27 @@ class freeze_top_layer_feature final : public feature {
     block_state_id snow_{no_block_state};
 };
 
+/// `UnderwaterMagmaFeature`: magma blocks buried in the floor under a water
+/// column, chosen from a cube around the scanned floor.
+class underwater_magma_feature final : public feature {
+  public:
+    underwater_magma_feature(jint floor_search_range,
+                             jint placement_radius_around_floor,
+                             float placement_probability, block_state_id magma)
+        : floor_search_range_{floor_search_range},
+          placement_radius_{placement_radius_around_floor},
+          probability_{placement_probability}, magma_{magma} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    jint floor_search_range_{0};
+    jint placement_radius_{0};
+    float probability_{0.0F};
+    block_state_id magma_{no_block_state};
+};
+
 /// `LakeFeature`: an ellipsoid lake carved into solid ground, lined with a
 /// barrier block and filled with the fluid (the deprecated lava/water lake).
 class lake_feature final : public feature {

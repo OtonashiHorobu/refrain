@@ -65,6 +65,7 @@ using refrain::worldgen::feature::tree_decorator_context;
 using refrain::worldgen::feature::tree_feature;
 using refrain::worldgen::feature::trunk_kind;
 using refrain::worldgen::feature::trunk_vine_decorator;
+using refrain::worldgen::feature::underwater_magma_feature;
 using refrain::worldgen::feature::vines_feature;
 using refrain::worldgen::provider::generation_context;
 
@@ -1064,6 +1065,60 @@ suite<"worldgen/tree"> tree_tests = [] {
             }
         }
         expect(leaf_blocks > 0U);
+    };
+};
+
+suite<"worldgen/underwater-magma"> underwater_magma_tests = [] {
+    "magma fills buried floor positions under a water column"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto water = registry.intern(
+            "minecraft:water", {.air = false, .fluid = true, .water = true});
+        auto magma = registry.intern("minecraft:magma_block",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(stone && water && magma);
+        if (!stone || !water || !magma) {
+            return;
+        }
+
+        proto_chunk chunk{registry, 0, 0, 0, 64};
+        chunk.set_status(chunk_status::terrain);
+        for (jint y = 0; y < 64; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    chunk.set_state(x, y, z, *stone);
+                }
+            }
+        }
+        for (jint y = 20; y <= 23; ++y) {
+            chunk.set_state(8, y, 8, *water);
+        }
+        chunk_region region{chunk, 0};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 64,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        underwater_magma_feature feature{5, 1, 1.0F, *magma};
+
+        expect(!feature.place(context, random,
+                              block_pos{.x = 8, .y = 40, .z = 8}));
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 23, .z = 8}));
+        expect(chunk.state_at(8, 19, 8) == *magma);
     };
 };
 
