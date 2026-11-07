@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -499,6 +500,53 @@ auto mineshaft_start(const chunk_pos &chunk, jlong seed, jint min_y,
                     : direction_orientation(piece.direction),
         });
     }
+    return start;
+}
+
+auto jungle_temple_start(
+    const chunk_pos &chunk, jlong seed, jint sea_level,
+    const std::function<jint(jint, jint, heightmap_kind)> &height_at)
+    -> std::optional<structure_start> {
+    constexpr jint width = 12;
+    constexpr jint depth = 15;
+    const jint min_x = chunk.x * 16;
+    const jint min_z = chunk.z * 16;
+    const jint corner_heights[4] = {
+        height_at(min_x, min_z, heightmap_kind::world_surface_wg),
+        height_at(min_x, min_z + depth, heightmap_kind::world_surface_wg),
+        height_at(min_x + width, min_z, heightmap_kind::world_surface_wg),
+        height_at(min_x + width, min_z + depth,
+                  heightmap_kind::world_surface_wg),
+    };
+    const jint lowest =
+        std::min(std::min(corner_heights[0], corner_heights[1]),
+                 std::min(corner_heights[2], corner_heights[3]));
+    if (lowest < sea_level) {
+        return std::nullopt;
+    }
+    worldgen_random random{std::make_unique<legacy_random_source>(0)};
+    random.set_large_feature_seed(seed, chunk.x, chunk.z);
+    static constexpr std::array<jint, 4> horizontal{2, 3, 0, 1};
+    const jint direction =
+        horizontal[static_cast<std::size_t>(random.next_int(4))];
+    const bool z_axis = direction == 2 || direction == 0;
+    const jint max_x = min_x + (z_axis ? width - 1 : depth - 1);
+    const jint max_z = min_z + (z_axis ? depth - 1 : width - 1);
+    structure_start start{.structure = "minecraft:jungle_pyramid",
+                          .chunk = chunk,
+                          .references = 0,
+                          .max_references = 1,
+                          .bounds = {.min_x = min_x,
+                                     .min_y = 64,
+                                     .min_z = min_z,
+                                     .max_x = max_x,
+                                     .max_y = 73,
+                                     .max_z = max_z}};
+    start.pieces.push_back(structure_piece{
+        .type = "minecraft:tejp",
+        .bounds = start.bounds,
+        .orientation = direction,
+    });
     return start;
 }
 

@@ -196,6 +196,23 @@ auto try_generate(const structure_start_context &context,
         start.step = structure.step;
         return start;
     }
+    if (structure.type == "minecraft:jungle_temple") {
+        const jint middle_x = chunk.x * 16 + 8;
+        const jint middle_z = chunk.z * 16 + 8;
+        const jint y = context.height_at(middle_x, middle_z,
+                                         heightmap_kind::world_surface_wg);
+        if (!biome_allowed(context, structure, middle_x, y, middle_z)) {
+            return std::nullopt;
+        }
+        auto start = jungle_temple_start(chunk, context.seed, context.sea_level,
+                                         context.height_at);
+        if (!start) {
+            return std::nullopt;
+        }
+        start->structure = structure.id;
+        start->step = structure.step;
+        return *start;
+    }
     if (structure.type == "minecraft:mineshaft") {
         bool mesa = false;
         if (const auto *value = structure.config.find("mineshaft_type");

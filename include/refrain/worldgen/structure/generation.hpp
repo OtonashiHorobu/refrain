@@ -29,6 +29,13 @@ class structure_template_manager;
     const std::function<jint(jint, jint, heightmap_kind)> &height_at)
     -> structure_start;
 
+/// `JungleTempleStructure`: one 12x10x15 scattered piece on the surface,
+/// rejected when its corner heights are below sea level.
+[[nodiscard]] auto jungle_temple_start(
+    const chunk_pos &chunk, jlong seed, jint sea_level,
+    const std::function<jint(jint, jint, heightmap_kind)> &height_at)
+    -> std::optional<structure_start>;
+
 /// `MineshaftStructure`: the recursive room/corridor/crossing/stairs set,
 /// moved below sea level after generation.
 [[nodiscard]] auto mineshaft_start(const chunk_pos &chunk, jlong seed,
