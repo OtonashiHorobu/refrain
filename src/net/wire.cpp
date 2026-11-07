@@ -380,6 +380,41 @@ auto decode_message_signature_packed(reader &in,
     return status_ok();
 }
 
+auto encode_advancement_seen(writer &out, const advancement_seen &value)
+    -> status {
+    if (value.action > 1U) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "advancement_seen: action is out of range")};
+    }
+    out.write_varint(value.action);
+    if (value.action == 0U) {
+        return out.write_identifier(value.tab);
+    }
+    return status_ok();
+}
+
+auto decode_advancement_seen(reader &in, advancement_seen &value) -> status {
+    auto action{in.read_varint()};
+    if (!action) {
+        return std::unexpected{std::move(action.error())};
+    }
+    if (*action > 1U) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "advancement_seen: action is out of range")};
+    }
+    value.action = *action;
+    if (*action == 0U) {
+        auto tab{in.read_identifier()};
+        if (!tab) {
+            return std::unexpected{std::move(tab.error())};
+        }
+        value.tab = std::move(*tab);
+    }
+    return status_ok();
+}
+
 auto encode_stat_entry(writer &out, const stat_entry &value) -> status {
     out.write_varint(value.type);
     out.write_varint(value.value);

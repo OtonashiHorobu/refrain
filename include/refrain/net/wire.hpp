@@ -151,6 +151,22 @@ struct map_patch {
     -> status;
 [[nodiscard]] auto decode_map_patch(reader &in, map_patch &value) -> status;
 
+/// Advancement screen selection: action 0 opens a tab and carries its
+/// identifier; action 1 closes the screen.
+struct advancement_seen {
+    std::uint32_t action{1};
+    data::resource_location tab{};
+
+    friend auto operator==(const advancement_seen &, const advancement_seen &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_advancement_seen(writer &out,
+                                           const advancement_seen &value)
+    -> status;
+[[nodiscard]] auto decode_advancement_seen(reader &in, advancement_seen &value)
+    -> status;
+
 /// An item stack on the wire. Only the empty stack is implemented: the codec
 /// writes and accepts a zero item count and reports `error_code::unsupported`
 /// for any item payload, which requires the data-component graph.

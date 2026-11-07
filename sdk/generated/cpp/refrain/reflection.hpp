@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 65507ac10423ea04
+// Schema hash: 48da152b6e326191
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -1945,6 +1945,13 @@ template <> struct custom_traits<::refrain::protocol::v777::play::serverbound::r
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"id", &::refrain::protocol::v777::play::serverbound::resource_pack::id},
         refrain::reflect::custom_field{"action", &::refrain::protocol::v777::play::serverbound::resource_pack::action});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::serverbound::seen_advancements'.
+template <> struct custom_traits<::refrain::protocol::v777::play::serverbound::seen_advancements> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::serverbound::seen_advancements";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"payload", &::refrain::protocol::v777::play::serverbound::seen_advancements::payload});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::serverbound::select_trade'.

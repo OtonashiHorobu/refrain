@@ -70,6 +70,37 @@ const suite tests = [] {
         }
     };
 
+    "advancement screen selection round trips both actions"_test = [] {
+        const auto tab{
+            refrain::data::resource_location::parse("minecraft:story/root")};
+        expect(tab.has_value());
+        if (!tab) {
+            return;
+        }
+        const net::advancement_seen opened{.action = 0U, .tab = *tab};
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_advancement_seen(out, opened)));
+        net::reader in{bytes};
+        net::advancement_seen decoded{};
+        expect(static_cast<bool>(net::decode_advancement_seen(in, decoded)));
+        expect(decoded.action == 0U);
+        expect(decoded.tab.to_string() == tab->to_string());
+        expect(in.empty());
+
+        const net::advancement_seen closed{.action = 1U};
+        bytes.clear();
+        net::writer closed_out{bytes};
+        expect(static_cast<bool>(
+            net::encode_advancement_seen(closed_out, closed)));
+        expect(bytes.size() == 1U);
+        net::reader closed_in{bytes};
+        net::advancement_seen closed_decoded{.action = 0U};
+        expect(static_cast<bool>(
+            net::decode_advancement_seen(closed_in, closed_decoded)));
+        expect(closed_decoded.action == 1U);
+    };
+
     "stat entry round trips two varints"_test = [] {
         const net::stat_entry value{.type = 3U, .value = 42U};
         std::vector<std::byte> bytes;

@@ -290,6 +290,10 @@ packet resource_pack = 50 {
     action: varint_id;
 }
 
+packet seen_advancements = 51 {
+    payload: advancement_seen;
+}
+
 packet select_trade = 52 {
     #[varint] item: i32;
 }

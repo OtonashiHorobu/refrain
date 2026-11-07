@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 65507ac10423ea04
+// Schema hash: 48da152b6e326191
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
@@ -503,6 +503,13 @@ struct resource_pack {
 
     ::refrain::net::uuid id;
     std::uint32_t action;
+};
+
+struct seen_advancements {
+    static constexpr std::uint16_t packet_id = 0x33;
+    static constexpr std::string_view packet_name = "seen_advancements";
+
+    ::refrain::net::advancement_seen payload;
 };
 
 struct select_trade {
@@ -2391,6 +2398,28 @@ struct custom_click_action {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.action = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_seen_advancements(::refrain::net::writer &out, const seen_advancements &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_advancement_seen(out, value.payload); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_seen_advancements(::refrain::net::reader &in, seen_advancements &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_advancement_seen(in, value.payload); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }

@@ -83,6 +83,8 @@ namespace {
             return "::refrain::net::position_path";
         case primitive_kind::map_patch:
             return "::refrain::net::map_patch";
+        case primitive_kind::advancement_seen:
+            return "::refrain::net::advancement_seen";
         case primitive_kind::void_type:
             return "void";
         }
@@ -632,6 +634,16 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::advancement_seen:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_advancement_seen("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -978,6 +990,17 @@ void emit_decode_value(code_writer &writer, const model &program,
             writer.line("if (auto decoded = ::refrain::net::decode_map_patch("
                         "in, {}); !decoded) {{",
                         target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_seen:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_advancement_seen("
+                "in, {}); !decoded) {{",
+                target);
             writer.indent();
             writer.line(
                 "return std::unexpected{{std::move(decoded.error())}};");

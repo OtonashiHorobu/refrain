@@ -78,6 +78,8 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "position_path";
     case primitive_kind::map_patch:
         return "map_patch";
+    case primitive_kind::advancement_seen:
+        return "advancement_seen";
     case primitive_kind::void_type:
         return "void";
     }
@@ -113,6 +115,7 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"stat_entry", primitive_kind::stat_entry},
         std::pair{"position_path", primitive_kind::position_path},
         std::pair{"map_patch", primitive_kind::map_patch},
+        std::pair{"advancement_seen", primitive_kind::advancement_seen},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -270,6 +273,7 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::stat_entry:
     case primitive_kind::position_path:
     case primitive_kind::map_patch:
+    case primitive_kind::advancement_seen:
     case primitive_kind::void_type:
         return false;
     }
@@ -305,6 +309,7 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::stat_entry:
     case primitive_kind::position_path:
     case primitive_kind::map_patch:
+    case primitive_kind::advancement_seen:
     case primitive_kind::void_type:
         return false;
     }
@@ -2233,6 +2238,7 @@ class analyzer {
             case primitive_kind::stat_entry:
             case primitive_kind::position_path:
             case primitive_kind::map_patch:
+            case primitive_kind::advancement_seen:
                 // Rejected for RIDL in resolve_type(); a wire-only primitive
                 // has no in-process ABI layout.
                 return std::nullopt;
