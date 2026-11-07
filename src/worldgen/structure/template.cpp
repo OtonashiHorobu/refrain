@@ -659,6 +659,159 @@ auto decode_processor_list(block_state_registry &states,
     return list;
 }
 
+namespace {
+
+auto neighbour_pos(const block_pos &pos, std::string_view direction)
+    -> block_pos {
+    if (direction == "north") {
+        return {.x = pos.x, .y = pos.y, .z = pos.z - 1};
+    }
+    if (direction == "south") {
+        return {.x = pos.x, .y = pos.y, .z = pos.z + 1};
+    }
+    if (direction == "east") {
+        return {.x = pos.x + 1, .y = pos.y, .z = pos.z};
+    }
+    if (direction == "west") {
+        return {.x = pos.x - 1, .y = pos.y, .z = pos.z};
+    }
+    if (direction == "up") {
+        return {.x = pos.x, .y = pos.y + 1, .z = pos.z};
+    }
+    return {.x = pos.x, .y = pos.y - 1, .z = pos.z};
+}
+
+auto opposite_direction(std::string_view direction) -> std::string_view {
+    if (direction == "north") {
+        return "south";
+    }
+    if (direction == "south") {
+        return "north";
+    }
+    if (direction == "east") {
+        return "west";
+    }
+    if (direction == "west") {
+        return "east";
+    }
+    return direction;
+}
+
+auto update_template_block(block_state_registry &states, chunk_region &region,
+                           const block_pos &pos) -> bool {
+    const auto current = region.state_at(pos.x, pos.y, pos.z);
+    auto parsed = parse_state(states.name(current));
+    const auto find_property = [&](std::string_view name) -> std::string {
+        for (const auto &[property, value] : parsed.properties) {
+            if (property == name) {
+                return value;
+            }
+        }
+        return {};
+    };
+    const auto is_fence = [](std::string_view name) {
+        return name.ends_with("_fence");
+    };
+    const auto replace = [&](std::string_view name,
+                             std::string_view value) -> bool {
+        bool changed = false;
+        for (auto &[property, current_value] : parsed.properties) {
+            if (property == name && current_value != value) {
+                current_value = std::string{value};
+                changed = true;
+            }
+        }
+        return changed;
+    };
+    bool changed = false;
+    if (is_fence(parsed.name)) {
+        for (const auto *direction : {"north", "east", "south", "west"}) {
+            const auto target = neighbour_pos(pos, direction);
+            const auto state = region.state_at(target.x, target.y, target.z);
+            const auto name = std::string{states.name(state)};
+            const auto traits = states.traits(state);
+            const bool solid =
+                traits.blocks_motion && !name.ends_with("_fence") &&
+                !name.ends_with("_stairs") && !name.ends_with("_slab") &&
+                !name.ends_with("_door") && !name.ends_with("_trapdoor") &&
+                !name.ends_with("_fence_gate") && !name.ends_with("_wall") &&
+                name != "minecraft:water";
+            if (replace(direction,
+                        (is_fence(name) || solid) ? "true" : "false")) {
+                changed = true;
+            }
+        }
+    } else if (parsed.name.ends_with("_stairs")) {
+        const auto facing = find_property("facing");
+        const auto half = find_property("half");
+        const auto stairs_neighbour = [&](std::string_view direction)
+            -> std::pair<std::string, std::string> {
+            const auto target = neighbour_pos(pos, direction);
+            const auto parsed_neighbour = parse_state(
+                states.name(region.state_at(target.x, target.y, target.z)));
+            if (!parsed_neighbour.name.ends_with("_stairs")) {
+                return {};
+            }
+            std::string neighbour_facing;
+            std::string neighbour_half;
+            for (const auto &[property, value] : parsed_neighbour.properties) {
+                if (property == "facing") {
+                    neighbour_facing = value;
+                } else if (property == "half") {
+                    neighbour_half = value;
+                }
+            }
+            return {neighbour_facing, neighbour_half};
+        };
+        const auto axis = [](std::string_view value) {
+            return value == "north" || value == "south" ? 'z' : 'x';
+        };
+        std::string shape = "straight";
+        const auto [behind_facing, behind_half] = stairs_neighbour(facing);
+        if (!behind_facing.empty() && behind_half == half &&
+            axis(behind_facing) != axis(facing)) {
+            shape = behind_facing == (facing == "north"   ? "west"
+                                      : facing == "east"  ? "north"
+                                      : facing == "south" ? "east"
+                                                          : "south")
+                        ? "outer_left"
+                        : "outer_right";
+        } else {
+            const auto [front_facing, front_half] =
+                stairs_neighbour(opposite_direction(facing));
+            if (!front_facing.empty() && front_half == half &&
+                axis(front_facing) != axis(facing)) {
+                shape = front_facing == (facing == "north"   ? "west"
+                                         : facing == "east"  ? "north"
+                                         : facing == "south" ? "east"
+                                                             : "south")
+                            ? "inner_left"
+                            : "inner_right";
+            }
+        }
+        if (replace("shape", shape)) {
+            changed = true;
+        }
+    }
+    if (!changed) {
+        return false;
+    }
+    const auto key = build_state_key(parsed.name, parsed.properties);
+    const auto updated = find_state(states, parsed.name, parsed.properties);
+    if (updated != no_block_state) {
+        (void)region.set_block_state(pos.x, pos.y, pos.z, updated);
+        return true;
+    }
+    const auto interned = states.intern(key, states.traits(current));
+    if (interned) {
+        (void)region.set_block_state(pos.x, pos.y, pos.z, *interned);
+        return true;
+    }
+    return false;
+}
+
+} // namespace
+
 auto place_template(chunk_region &region, block_state_registry &states,
                     const structure_template &templ, const block_pos &origin,
                     const template_transform &transform) -> std::size_t {
@@ -692,6 +845,7 @@ auto place_template(chunk_region &region, block_state_registry &states,
         barrier = *found;
     }
     std::size_t placed = 0;
+    std::vector<block_pos> placed_positions;
     for (const auto &block : palette) {
         const auto relative = transform_position(
             block_pos{.x = block.x, .y = block.y, .z = block.z}, transform);
@@ -734,6 +888,7 @@ auto place_template(chunk_region &region, block_state_registry &states,
         if (!region.set_block_state(world.x, world.y, world.z, state)) {
             continue;
         }
+        placed_positions.push_back(world);
         ++placed;
         if (!previous_fluid.empty()) {
             auto current = std::string{states.name(state)};
@@ -762,6 +917,9 @@ auto place_template(chunk_region &region, block_state_registry &states,
             (void)region.set_block_entity(world.x, world.y, world.z,
                                           std::move(entity));
         }
+    }
+    for (const auto &pos : placed_positions) {
+        (void)update_template_block(states, region, pos);
     }
     return placed;
 }
