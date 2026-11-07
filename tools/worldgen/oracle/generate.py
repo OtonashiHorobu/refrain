@@ -417,6 +417,7 @@ def main() -> int:
                 "oracle:replace_blobs",
                 "oracle:platform_stone_delta",
                 "oracle:delta",
+                "oracle:amethyst_geode",
             ]
         )
         (biome_dir / "feature.json").write_text(
@@ -453,6 +454,33 @@ def main() -> int:
         )
         placed_dir = pack / "data/oracle/worldgen/placed_feature"
         placed_dir.mkdir(parents=True)
+        geode = read_pack_data(
+            args.server_jar,
+            "data/minecraft/worldgen/feature/amethyst_geode.json",
+        )
+        # The oracle generates every compared chunk on its own, so a feature
+        # that crosses a chunk border is only complete in the reference batch.
+        # Keep this test geode inside its chunk.
+        geode["min_gen_offset"] = -6
+        geode["max_gen_offset"] = 6
+        (feature_dir / "amethyst_geode.json").write_text(
+            json.dumps(geode, indent=2) + "\n"
+        )
+        (placed_dir / "amethyst_geode.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:amethyst_geode",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, -20, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
         (placed_dir / "stone_patch.json").write_text(
             json.dumps(
                 {
