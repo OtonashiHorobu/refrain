@@ -16,8 +16,14 @@
 
 namespace refrain::worldgen::feature {
 
-enum class trunk_kind : std::uint8_t { straight, forking, fancy };
-enum class foliage_kind : std::uint8_t { blob, acacia, spruce, fancy };
+enum class trunk_kind : std::uint8_t { straight, forking, fancy, dark_oak };
+enum class foliage_kind : std::uint8_t {
+    blob,
+    acacia,
+    spruce,
+    fancy,
+    dark_oak
+};
 
 class tree_feature final : public feature {
   public:
@@ -31,7 +37,8 @@ class tree_feature final : public feature {
                  std::unique_ptr<provider::int_provider> foliage_offset,
                  std::unique_ptr<provider::int_provider> spruce_trunk_height,
                  jint foliage_height, jint size_limit, jint lower_size,
-                 jint upper_size, bool has_min_clipped, jint min_clipped,
+                 jint upper_size, bool three_layers, jint upper_limit,
+                 jint middle_size, bool has_min_clipped, jint min_clipped,
                  bool ignore_vines)
         : states_{&states}, kind_{kind}, foliage_{foliage},
           trunk_provider_{std::move(trunk_provider)},
@@ -44,8 +51,9 @@ class tree_feature final : public feature {
           spruce_trunk_height_{std::move(spruce_trunk_height)},
           foliage_height_{foliage_height}, size_limit_{size_limit},
           lower_size_{lower_size}, upper_size_{upper_size},
-          has_min_clipped_{has_min_clipped}, min_clipped_{min_clipped},
-          ignore_vines_{ignore_vines} {}
+          three_layers_{three_layers}, upper_limit_{upper_limit},
+          middle_size_{middle_size}, has_min_clipped_{has_min_clipped},
+          min_clipped_{min_clipped}, ignore_vines_{ignore_vines} {}
 
     [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool override;
@@ -60,10 +68,14 @@ class tree_feature final : public feature {
     void place_foliage(feature_context &context, worldgen_random &random,
                        const block_pos &attachment, jint leaf_radius,
                        jint radius_offset, jint foliage_height,
-                       std::vector<block_pos> &leaves, bool &placed) const;
+                       bool double_trunk, std::vector<block_pos> &leaves,
+                       bool &placed) const;
     void place_leaves_row(feature_context &context, worldgen_random &random,
                           const block_pos &origin, jint radius, jint y,
-                          std::vector<block_pos> &leaves, bool &placed) const;
+                          bool double_trunk, std::vector<block_pos> &leaves,
+                          bool &placed) const;
+    [[nodiscard]] auto size_at_height(jint tree_height, jint y) const -> jint;
+
     void update_leaves(feature_context &context,
                        const std::vector<block_pos> &logs,
                        const std::vector<block_pos> &leaves) const;
@@ -84,6 +96,9 @@ class tree_feature final : public feature {
     jint size_limit_{1};
     jint lower_size_{0};
     jint upper_size_{1};
+    bool three_layers_{false};
+    jint upper_limit_{1};
+    jint middle_size_{1};
     bool has_min_clipped_{false};
     jint min_clipped_{0};
     bool ignore_vines_{false};

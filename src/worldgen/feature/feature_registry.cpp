@@ -580,6 +580,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 kind = trunk_kind::forking;
             } else if (*trunk_name == "minecraft:fancy_trunk_placer") {
                 kind = trunk_kind::fancy;
+            } else if (*trunk_name == "minecraft:dark_oak_trunk_placer") {
+                kind = trunk_kind::dark_oak;
             } else if (*trunk_name != "minecraft:straight_trunk_placer") {
                 return std::unexpected{make_error(error_code::unsupported,
                                                   "unsupported trunk placer")};
@@ -597,15 +599,22 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 foliage_type_kind = foliage_kind::spruce;
             } else if (foliage_name == "minecraft:fancy_foliage_placer") {
                 foliage_type_kind = foliage_kind::fancy;
+            } else if (foliage_name == "minecraft:dark_oak_foliage_placer") {
+                foliage_type_kind = foliage_kind::dark_oak;
             } else if (foliage_name != "minecraft:blob_foliage_placer") {
                 return std::unexpected{make_error(
                     error_code::unsupported, "unsupported foliage placer")};
             }
             const auto *minimum_type = minimum_size->find("type");
-            if (minimum_type == nullptr ||
-                minimum_type->as_string() !=
-                    std::optional<std::string_view>{
-                        "minecraft:two_layers_feature_size"}) {
+            if (minimum_type == nullptr || !minimum_type->as_string()) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "feature size has no type")};
+            }
+            const auto minimum_name = *minimum_type->as_string();
+            bool three_layers = false;
+            if (minimum_name == "minecraft:three_layers_feature_size") {
+                three_layers = true;
+            } else if (minimum_name != "minecraft:two_layers_feature_size") {
                 return std::unexpected{make_error(error_code::unsupported,
                                                   "unsupported feature size")};
             }
@@ -686,6 +695,26 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 }
                 upper = static_cast<jint>(*value);
             }
+            jint upper_limit = 1;
+            jint middle = 1;
+            if (three_layers) {
+                if (const auto *field = minimum_size->find("upper_limit");
+                    field != nullptr) {
+                    const auto value = field->as_int64();
+                    if (!value) {
+                        return std::unexpected{value.error()};
+                    }
+                    upper_limit = static_cast<jint>(*value);
+                }
+                if (const auto *field = minimum_size->find("middle_size");
+                    field != nullptr) {
+                    const auto value = field->as_int64();
+                    if (!value) {
+                        return std::unexpected{value.error()};
+                    }
+                    middle = static_cast<jint>(*value);
+                }
+            }
             bool has_min_clipped = false;
             jint min_clipped = 0;
             if (const auto *field = minimum_size->find("min_clipped_height");
@@ -716,7 +745,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                     static_cast<jint>(*rand_b_value),
                     std::move(*radius_provider), std::move(*offset_provider),
                     std::move(spruce_trunk_height), height_value, limit, lower,
-                    upper, has_min_clipped, min_clipped, ignore_vines));
+                    upper, three_layers, upper_limit, middle, has_min_clipped,
+                    min_clipped, ignore_vines));
             continue;
         }
         return std::unexpected{

@@ -176,6 +176,9 @@ suite<"worldgen/tree"> tree_tests = [] {
                           0,
                           1,
                           false,
+                          1,
+                          1,
+                          false,
                           0,
                           true};
         proto_chunk chunk{registry, 0, 0, 0, 32};
@@ -251,6 +254,9 @@ suite<"worldgen/tree"> tree_tests = [] {
                           1,
                           0,
                           2,
+                          false,
+                          1,
+                          1,
                           false,
                           0,
                           true};

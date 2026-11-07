@@ -359,6 +359,7 @@ def main() -> int:
             "oracle:real_spruce",
             "oracle:real_acacia",
             "oracle:real_fancy_oak",
+            "oracle:real_dark_oak",
         ]
         biome_dir = pack / "data/oracle/worldgen/biome"
         biome_dir.mkdir(parents=True)
@@ -745,6 +746,28 @@ def main() -> int:
         )
         (minecraft_feature / "fancy_oak.json").write_text(
             json.dumps(fancy_oak, indent=2) + "\n"
+        )
+        dark_oak = read_pack_data(
+            args.server_jar,
+            "data/minecraft/worldgen/feature/dark_oak.json",
+        )
+        (minecraft_feature / "dark_oak.json").write_text(
+            json.dumps(dark_oak, indent=2) + "\n"
+        )
+        (placed_dir / "real_dark_oak.json").write_text(
+            json.dumps(
+                {
+                    "feature": "minecraft:dark_oak",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 280, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
         )
         (placed_dir / "real_fancy_oak.json").write_text(
             json.dumps(
