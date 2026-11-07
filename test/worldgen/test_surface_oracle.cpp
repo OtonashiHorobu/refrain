@@ -151,6 +151,34 @@ auto canonical_state_name(std::string_view name) -> std::string {
     return std::string{name};
 }
 
+auto decode_expected_heightmap(const data::nbt::value &root,
+                               std::string_view name)
+    -> std::optional<std::array<jint, 256>> {
+    const auto *heightmaps = child(root.as_compound(), "Heightmaps");
+    if (heightmaps == nullptr) {
+        return std::nullopt;
+    }
+    const auto *map = child(heightmaps->as_compound(), name);
+    if (map == nullptr) {
+        return std::nullopt;
+    }
+    const auto packed = map->as_long_array();
+    if (!packed) {
+        return std::nullopt;
+    }
+    std::array<jint, 256> out{};
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        const auto word = i / 7;
+        const auto shift = (i % 7) * 9;
+        if (word >= packed->size()) {
+            return std::nullopt;
+        }
+        out[i] = static_cast<jint>(
+            (static_cast<std::uint64_t>((*packed)[word]) >> shift) & 0x1FFU);
+    }
+    return out;
+}
+
 auto decode_expected(const data::nbt::value &root, block_states &states)
     -> std::optional<std::vector<state_id>> {
     const auto *sections = child(root.as_compound(), "sections");
@@ -398,6 +426,7 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             {2, 2},
         }};
         std::size_t mismatches = 0;
+        std::size_t map_mismatches = 0;
         std::size_t compared = 0;
         for (const auto &coordinates : chunks) {
             const jint chunk_x = coordinates[0];
@@ -773,8 +802,36 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                     }
                 }
             }
+
+            if (const auto expected_ws =
+                    decode_expected_heightmap(*document, "WORLD_SURFACE")) {
+                for (jint z = 0; z < 16; ++z) {
+                    for (jint x = 0; x < 16; ++x) {
+                        const auto actual_height = chunk.first_available(
+                            heightmap_kind::world_surface, x, z);
+                        const auto expected_height =
+                            (*expected_ws)[static_cast<std::size_t>(z * 16 +
+                                                                    x)] +
+                            oracle_min_y;
+                        if (actual_height != expected_height) {
+                            if (map_mismatches < 4) {
+                                std::fprintf(stderr,
+                                             "heightmap %d,%d: got %d want "
+                                             "%d\n",
+                                             static_cast<int>(x),
+                                             static_cast<int>(z),
+                                             static_cast<int>(actual_height),
+                                             static_cast<int>(expected_height));
+                            }
+                            ++map_mismatches;
+                        }
+                    }
+                }
+            }
         }
         expect(compared == 5U * 384U * 256U);
         expect(mismatches == 0) << "surface mismatches: " << mismatches;
+        expect(map_mismatches == 0)
+            << "heightmap mismatches: " << map_mismatches;
     };
 };
