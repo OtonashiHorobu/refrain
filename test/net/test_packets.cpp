@@ -390,6 +390,27 @@ const suite tests = [] {
         expect(std::get<0>(decoded.sound) == 42U);
     };
 
+    "net/protocol round trips a cached chat signature reference"_test = [] {
+        v777::play::clientbound::delete_chat packet{};
+        packet.message_signature.id = 7U;
+        std::vector<std::byte> body;
+        net::writer out{body};
+        out.write_varint(packet.packet_id);
+        const auto encoded{
+            v777::play::clientbound::encode_delete_chat(out, packet)};
+        expect(encoded.has_value());
+        net::reader in{body};
+        auto id{in.read_varint()};
+        expect(id.has_value());
+        v777::play::clientbound::delete_chat decoded{};
+        const auto status{
+            v777::play::clientbound::decode_delete_chat(in, decoded)};
+        expect(status.has_value());
+        expect(in.empty());
+        expect(!decoded.message_signature.full);
+        expect(decoded.message_signature.id == 7U);
+    };
+
     "net/protocol round trips a fixed-size line array"_test = [] {
         v777::play::serverbound::sign_update packet{};
         packet.pos = 1234;

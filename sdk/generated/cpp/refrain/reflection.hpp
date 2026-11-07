@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: a05c72a592e0c44c
+// Schema hash: 5035ffd9b91bc1fc
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -801,6 +801,13 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::d
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"sample", &::refrain::protocol::v777::play::clientbound::debug_sample::sample},
         refrain::reflect::custom_field{"debug_sample_type", &::refrain::protocol::v777::play::clientbound::debug_sample::debug_sample_type});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::delete_chat'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::delete_chat> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::delete_chat";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"message_signature", &::refrain::protocol::v777::play::clientbound::delete_chat::message_signature});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::disconnect'.

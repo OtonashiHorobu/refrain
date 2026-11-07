@@ -73,6 +73,8 @@ namespace {
             return "::refrain::net::nbt_blob";
         case primitive_kind::varint_id:
             return "std::uint32_t";
+        case primitive_kind::message_signature_packed:
+            return "::refrain::net::message_signature_packed";
         case primitive_kind::void_type:
             return "void";
         }
@@ -575,6 +577,16 @@ void emit_encode_value(code_writer &writer, const model &program,
         case primitive_kind::varint_id:
             writer.line("out.write_varint({});", expression);
             return;
+        case primitive_kind::message_signature_packed:
+            writer.line("if (auto written = "
+                        "::refrain::net::encode_message_signature_packed("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -875,6 +887,17 @@ void emit_decode_value(code_writer &writer, const model &program,
                         depth, depth);
             writer.line("{} = *value_{};", target, depth);
             return;
+        case primitive_kind::message_signature_packed:
+            writer.line("if (auto decoded = "
+                        "::refrain::net::decode_message_signature_packed("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -1169,7 +1192,8 @@ void emit_decode_value(code_writer &writer, const model &program,
             return type.primitive == primitive_kind::text_component ||
                    type.primitive == primitive_kind::item_stack ||
                    type.primitive == primitive_kind::lp_vec3 ||
-                   type.primitive == primitive_kind::nbt;
+                   type.primitive == primitive_kind::nbt ||
+                   type.primitive == primitive_kind::message_signature_packed;
         }
         return std::ranges::any_of(type.arguments, [&](const auto &argument) {
             return self(self, argument);

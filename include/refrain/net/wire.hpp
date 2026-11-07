@@ -57,6 +57,26 @@ struct lp_vec3 {
 /// Reads a quantized vector; truncated input is a parse error.
 [[nodiscard]] auto decode_lp_vec3(reader &in, lp_vec3 &value) -> status;
 
+/// A chat signature reference: either a cache id or the full 256-byte
+/// signature.
+struct message_signature_packed {
+    std::uint32_t id{0};
+    std::array<std::byte, 256> signature{};
+    bool full{false};
+
+    friend auto operator==(const message_signature_packed &,
+                           const message_signature_packed &) -> bool = default;
+};
+
+/// Writes the id form (`id + 1`) or the full signature form (`0` + bytes).
+[[nodiscard]] auto encode_message_signature_packed(
+    writer &out, const message_signature_packed &value) -> status;
+
+/// Reads either form; a full signature consumes exactly 256 bytes.
+[[nodiscard]] auto
+decode_message_signature_packed(reader &in, message_signature_packed &value)
+    -> status;
+
 /// An item stack on the wire. Only the empty stack is implemented: the codec
 /// writes and accepts a zero item count and reports `error_code::unsupported`
 /// for any item payload, which requires the data-component graph.

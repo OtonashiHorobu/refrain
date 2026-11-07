@@ -345,6 +345,41 @@ auto decode_lp_vec3(reader &in, lp_vec3 &value) -> status {
     return status_ok();
 }
 
+auto encode_message_signature_packed(writer &out,
+                                     const message_signature_packed &value)
+    -> status {
+    if (value.full) {
+        out.write_varint(0);
+        out.write_bytes(value.signature);
+        return status_ok();
+    }
+    out.write_varint(value.id + 1U);
+    return status_ok();
+}
+
+auto decode_message_signature_packed(reader &in,
+                                     message_signature_packed &value)
+    -> status {
+    auto header{in.read_varint()};
+    if (!header) {
+        return std::unexpected{std::move(header.error())};
+    }
+    if (*header == 0U) {
+        auto signature{in.read_bytes(256)};
+        if (!signature) {
+            return std::unexpected{std::move(signature.error())};
+        }
+        std::copy(signature->begin(), signature->end(),
+                  value.signature.begin());
+        value.full = true;
+        value.id = 0;
+        return status_ok();
+    }
+    value.full = false;
+    value.id = *header - 1U;
+    return status_ok();
+}
+
 auto encode_item_stack(writer &out, const item_stack &value) -> status {
     if (value.count != 0) {
         return std::unexpected{make_error(

@@ -49,6 +49,8 @@ enum class primitive_kind : std::uint8_t {
     nbt,
     /// Registry/identifier number encoded as a VarInt; RSC wire schemas only.
     varint_id,
+    /// Chat signature reference or full 256-byte signature; RSC wire only.
+    message_signature_packed,
     void_type,
 };
 

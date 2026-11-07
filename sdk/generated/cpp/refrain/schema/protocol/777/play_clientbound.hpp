@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: a05c72a592e0c44c
+// Schema hash: 5035ffd9b91bc1fc
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -428,6 +428,13 @@ struct debug_sample {
 
     std::vector<std::int64_t> sample;
     std::uint32_t debug_sample_type;
+};
+
+struct delete_chat {
+    static constexpr std::uint16_t packet_id = 0x1F;
+    static constexpr std::string_view packet_name = "delete_chat";
+
+    ::refrain::net::message_signature_packed message_signature;
 };
 
 struct disconnect {
@@ -2755,6 +2762,28 @@ struct show_dialog {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.debug_sample_type = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_delete_chat(::refrain::net::writer &out, const delete_chat &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_message_signature_packed(out, value.message_signature); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_delete_chat(::refrain::net::reader &in, delete_chat &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_message_signature_packed(in, value.message_signature); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }

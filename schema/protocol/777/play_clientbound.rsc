@@ -256,6 +256,10 @@ packet debug_sample = 30 {
     debug_sample_type: varint_id;
 }
 
+packet delete_chat = 31 {
+    message_signature: message_signature_packed;
+}
+
 packet disconnect = 32 {
     payload: text_component;
 }

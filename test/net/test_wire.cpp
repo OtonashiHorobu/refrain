@@ -70,6 +70,42 @@ const suite tests = [] {
         }
     };
 
+    "packed message signature round trips both forms"_test = [] {
+        net::message_signature_packed id_form{};
+        id_form.id = 5U;
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(
+            net::encode_message_signature_packed(out, id_form)));
+        net::reader in{bytes};
+        net::message_signature_packed decoded{};
+        expect(static_cast<bool>(
+            net::decode_message_signature_packed(in, decoded)));
+        expect(!decoded.full);
+        expect(decoded.id == 5U);
+        expect(in.empty());
+
+        net::message_signature_packed full_form{};
+        full_form.full = true;
+        for (std::size_t index{0}; index < full_form.signature.size();
+             ++index) {
+            full_form.signature[index] = static_cast<std::byte>(index & 0xFFU);
+        }
+        bytes.clear();
+        net::writer full_out{bytes};
+        expect(static_cast<bool>(
+            net::encode_message_signature_packed(full_out, full_form)));
+        expect(bytes.size() == 257U);
+        net::reader full_in{bytes};
+        net::message_signature_packed full_decoded{};
+        expect(static_cast<bool>(
+            net::decode_message_signature_packed(full_in, full_decoded)));
+        expect(full_decoded.full);
+        const bool same{full_decoded.signature == full_form.signature};
+        expect(same);
+        expect(full_in.empty());
+    };
+
     "nbt end tag round trips as an empty value"_test = [] {
         std::vector<std::byte> bytes;
         net::writer out{bytes};
