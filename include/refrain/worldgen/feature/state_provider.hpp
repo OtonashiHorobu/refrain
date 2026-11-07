@@ -13,7 +13,9 @@
 #include <refrain/worldgen/chunk/chunk_region.hpp>
 #include <refrain/worldgen/core/rng.hpp>
 
+#include <functional>
 #include <memory>
+#include <string_view>
 
 namespace refrain::data::json {
 class value;
@@ -45,8 +47,13 @@ class state_provider {
 [[nodiscard]] auto simple_state(block_state_id state)
     -> std::unique_ptr<state_provider>;
 
-[[nodiscard]] auto decode_state_provider(const data::json::value &document,
-                                         block_state_registry &states)
+using state_provider_resolver =
+    std::function<const state_provider *(std::string_view)>;
+
+[[nodiscard]] auto
+decode_state_provider(const data::json::value &document,
+                      block_state_registry &states,
+                      const state_provider_resolver &resolve = {})
     -> result<std::unique_ptr<state_provider>>;
 
 } // namespace refrain::worldgen::feature

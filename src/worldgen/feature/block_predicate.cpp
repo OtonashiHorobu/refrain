@@ -78,6 +78,36 @@ class matching_tag final : public block_predicate {
     std::string tag_;
 };
 
+class not_predicate final : public block_predicate {
+  public:
+    explicit not_predicate(std::unique_ptr<block_predicate> inner)
+        : inner_{std::move(inner)} {}
+    [[nodiscard]] auto test(const chunk_region &region,
+                            const block_state_table &states,
+                            const block_pos &pos) const -> bool override {
+        return !inner_->test(region, states, pos);
+    }
+
+  private:
+    std::unique_ptr<block_predicate> inner_;
+};
+
+class any_of final : public block_predicate {
+  public:
+    explicit any_of(std::vector<std::unique_ptr<block_predicate>> rules)
+        : rules_{std::move(rules)} {}
+    [[nodiscard]] auto test(const chunk_region &region,
+                            const block_state_table &states,
+                            const block_pos &pos) const -> bool override {
+        return std::any_of(rules_.begin(), rules_.end(), [&](const auto &rule) {
+            return rule->test(region, states, pos);
+        });
+    }
+
+  private:
+    std::vector<std::unique_ptr<block_predicate>> rules_;
+};
+
 class all_of final : public block_predicate {
   public:
     explicit all_of(std::vector<std::unique_ptr<block_predicate>> rules)
@@ -126,6 +156,36 @@ auto decode_block_predicate(const data::json::value &document,
         }
         return std::unique_ptr<block_predicate>{
             std::make_unique<matching_blocks>(std::move(*list))};
+    }
+    if (*type == "minecraft:not") {
+        const auto *predicate = document.find("predicate");
+        if (predicate == nullptr) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "not predicate has no predicate")};
+        }
+        auto inner = decode_block_predicate(*predicate, states);
+        if (!inner) {
+            return std::unexpected{inner.error()};
+        }
+        return std::unique_ptr<block_predicate>{
+            std::make_unique<not_predicate>(std::move(*inner))};
+    }
+    if (*type == "minecraft:any_of") {
+        const auto *rules = document.find("predicates");
+        if (rules == nullptr || !rules->is_array()) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "any_of has no predicate list")};
+        }
+        std::vector<std::unique_ptr<block_predicate>> decoded;
+        for (const auto &entry : *rules->as_array()) {
+            auto predicate = decode_block_predicate(entry, states);
+            if (!predicate) {
+                return std::unexpected{predicate.error()};
+            }
+            decoded.push_back(std::move(*predicate));
+        }
+        return std::unique_ptr<block_predicate>{
+            std::make_unique<any_of>(std::move(decoded))};
     }
     if (*type == "minecraft:all_of") {
         const auto *rules = document.find("predicates");

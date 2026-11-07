@@ -115,6 +115,21 @@ auto load_feature_data(std::string_view data_root) -> result<feature_data_set> {
                                             .document = std::move(document)});
         }
 
+        loaded_documents providers;
+        if (core::io::is_directory(worldgen + "/block_state_provider")) {
+            if (const auto collected = collect_documents(
+                    worldgen + "/block_state_provider", "", providers);
+                !collected) {
+                return std::unexpected{collected.error()};
+            }
+        }
+        for (auto &[id, document] : providers.documents) {
+            result.state_providers.emplace(
+                name + ":" + id,
+                state_provider_document{.id = name + ":" + id,
+                                        .document = std::move(document)});
+        }
+
         loaded_documents placed;
         if (core::io::is_directory(worldgen + "/placed_feature")) {
             if (const auto collected =
