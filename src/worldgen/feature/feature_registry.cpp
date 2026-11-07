@@ -591,6 +591,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             foliage_kind foliage_type_kind = foliage_kind::blob;
             if (foliage_name == "minecraft:acacia_foliage_placer") {
                 foliage_type_kind = foliage_kind::acacia;
+            } else if (foliage_name == "minecraft:spruce_foliage_placer") {
+                foliage_type_kind = foliage_kind::spruce;
             } else if (foliage_name != "minecraft:blob_foliage_placer") {
                 return std::unexpected{make_error(
                     error_code::unsupported, "unsupported foliage placer")};
@@ -633,6 +635,20 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             }
             auto radius_provider = provider::int_provider::decode(*radius);
             auto offset_provider = provider::int_provider::decode(*offset);
+            std::unique_ptr<provider::int_provider> spruce_trunk_height;
+            if (foliage_type_kind == foliage_kind::spruce) {
+                const auto *trunk_height = foliage_placer->find("trunk_height");
+                if (trunk_height == nullptr) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "spruce foliage has no trunk_height")};
+                }
+                auto decoded = provider::int_provider::decode(*trunk_height);
+                if (!decoded) {
+                    return std::unexpected{decoded.error()};
+                }
+                spruce_trunk_height = std::move(*decoded);
+            }
             if (!base_value || !rand_a_value || !rand_b_value ||
                 !radius_provider || !offset_provider) {
                 return std::unexpected{
@@ -687,15 +703,16 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 ignore_vines = *value;
             }
             features_.emplace(
-                id, std::make_unique<tree_feature>(
-                        *states_, kind, foliage_type_kind, std::move(*trunk),
-                        std::move(*foliage), std::move(*below),
-                        static_cast<jint>(*base_value),
-                        static_cast<jint>(*rand_a_value),
-                        static_cast<jint>(*rand_b_value),
-                        std::move(*radius_provider),
-                        std::move(*offset_provider), height_value, limit, lower,
-                        upper, has_min_clipped, min_clipped, ignore_vines));
+                id,
+                std::make_unique<tree_feature>(
+                    *states_, kind, foliage_type_kind, std::move(*trunk),
+                    std::move(*foliage), std::move(*below),
+                    static_cast<jint>(*base_value),
+                    static_cast<jint>(*rand_a_value),
+                    static_cast<jint>(*rand_b_value),
+                    std::move(*radius_provider), std::move(*offset_provider),
+                    std::move(spruce_trunk_height), height_value, limit, lower,
+                    upper, has_min_clipped, min_clipped, ignore_vines));
             continue;
         }
         return std::unexpected{
