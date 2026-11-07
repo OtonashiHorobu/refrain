@@ -20,6 +20,8 @@ using refrain::worldgen::chunk_status;
 using refrain::worldgen::heightmap_kind;
 using refrain::worldgen::proto_chunk;
 using refrain::worldgen::feature::biome_feature_list;
+using refrain::worldgen::feature::block_blob_feature;
+using refrain::worldgen::feature::decode_block_predicate;
 using refrain::worldgen::feature::decode_placement;
 using refrain::worldgen::feature::decorate;
 using refrain::worldgen::feature::feature_context;
@@ -116,6 +118,68 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
             }
             expect(placed_count == 2U);
         };
+};
+
+suite<"worldgen/block-blob"> block_blob_tests = [] {
+    "a blob places around its anchor"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto moss = registry.intern("minecraft:mossy_cobblestone",
+                                    {.air = false,
+                                     .blocks_motion = true,
+                                     .blocks_motion_no_leaves = true});
+        expect(stone.has_value());
+        expect(moss.has_value());
+        if (!stone || !moss) {
+            return;
+        }
+
+        const auto predicate_document = parse(
+            R"({"type":"minecraft:matching_blocks","blocks":["minecraft:stone"]})");
+        auto predicate = decode_block_predicate(predicate_document, registry);
+        expect(predicate.has_value());
+        if (!predicate) {
+            return;
+        }
+
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::biomes);
+        for (jint y = 0; y < 20; ++y) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint z = 0; z < 16; ++z) {
+                    (void)chunk.set_state(x, y, z, *stone);
+                }
+            }
+        }
+        chunk_region region{chunk, 1};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 32,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        block_blob_feature blob{*moss, std::move(*predicate)};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        expect(blob.place(context, random, block_pos{.x = 8, .y = 10, .z = 8}));
+        std::size_t moss_count = 0;
+        for (jint y = 0; y < 20; ++y) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint z = 0; z < 16; ++z) {
+                    moss_count += chunk.state_at(x, y, z) == *moss;
+                }
+            }
+        }
+        expect(moss_count > 0U);
+    };
 };
 
 suite<"worldgen/spring"> spring_tests = [] {

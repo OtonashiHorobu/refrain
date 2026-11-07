@@ -440,6 +440,20 @@ def main() -> int:
             )
             + "\n"
         )
+        (feature_dir / "moss_blob.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:block_blob",
+                    "state": "minecraft:mossy_cobblestone",
+                    "can_place_on": {
+                        "type": "minecraft:matching_blocks",
+                        "blocks": ["minecraft:stone"],
+                    },
+                },
+                indent=2,
+            )
+            + "\n"
+        )
         (placed_dir / "coal_ore.json").write_text(
             json.dumps(
                 {
@@ -448,6 +462,21 @@ def main() -> int:
                         {
                             "type": "minecraft:fixed_placement",
                             "positions": [[8, 40, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "moss_blob.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:moss_blob",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 30, 8]],
                         }
                     ],
                 },
