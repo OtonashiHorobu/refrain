@@ -312,6 +312,37 @@ class huge_fungus_feature final : public feature {
     bool place_vines_{false};
 };
 
+/// `HugeRedMushroomFeature` / `HugeBrownMushroomFeature`: a stem with a
+/// property-shaped cap.
+class huge_mushroom_feature final : public feature {
+  public:
+    huge_mushroom_feature(bool red, std::unique_ptr<state_provider> cap,
+                          std::unique_ptr<state_provider> stem,
+                          jint foliage_radius,
+                          std::unique_ptr<block_predicate> can_place_on)
+        : red_{red}, cap_{std::move(cap)}, stem_{std::move(stem)},
+          foliage_radius_{foliage_radius},
+          can_place_on_{std::move(can_place_on)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    [[nodiscard]] auto radius_for_height(jint height, jint y) const -> jint;
+    auto make_cap(feature_context &context, worldgen_random &random,
+                  const block_pos &origin, jint height) const -> void;
+    void place_trunk(feature_context &context, worldgen_random &random,
+                     const block_pos &origin, jint height) const;
+    void place_mushroom_block(feature_context &context, const block_pos &pos,
+                              block_state_id state) const;
+
+    bool red_{false};
+    std::unique_ptr<state_provider> cap_{};
+    std::unique_ptr<state_provider> stem_{};
+    jint foliage_radius_{2};
+    std::unique_ptr<block_predicate> can_place_on_{};
+};
+
 /// `SpringFeature`: a fluid source surrounded by a fixed rock/hole pattern.
 class spring_feature final : public feature {
   public:

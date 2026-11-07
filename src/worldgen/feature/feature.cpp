@@ -710,6 +710,173 @@ auto huge_fungus_feature::place(feature_context &context,
     return true;
 }
 
+auto huge_mushroom_feature::radius_for_height(jint height, jint y) const
+    -> jint {
+    if (red_) {
+        if (y < height && y >= height - 3) {
+            return foliage_radius_;
+        }
+        return y == height ? foliage_radius_ : 0;
+    }
+    return y <= 3 ? 0 : foliage_radius_;
+}
+
+void huge_mushroom_feature::place_mushroom_block(feature_context &context,
+                                                 const block_pos &pos,
+                                                 block_state_id state) const {
+    const auto current =
+        context.placement.region->state_at(pos.x, pos.y, pos.z);
+    if (context.placement.states->traits(current).air ||
+        context.placement.states->in_tag(
+            current, "minecraft:replaceable_by_mushrooms")) {
+        (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                        state);
+    }
+}
+
+auto huge_mushroom_feature::place(feature_context &context,
+                                  worldgen_random &random,
+                                  const block_pos &origin) const -> bool {
+    jint height = random.next_int(3) + 4;
+    if (random.next_int(12) == 0) {
+        height *= 2;
+    }
+    const jint min_y = context.placement.chunk->min_y();
+    const jint max_y = min_y + context.placement.chunk->height() - 1;
+    if (origin.y < min_y + 1 || origin.y + height + 1 > max_y) {
+        return false;
+    }
+    if (!can_place_on_->test(
+            *context.placement.region, *context.placement.states,
+            block_pos{.x = origin.x, .y = origin.y - 1, .z = origin.z})) {
+        return false;
+    }
+    for (jint dy = 0; dy <= height; ++dy) {
+        const jint radius = radius_for_height(height, dy);
+        for (jint dx = -radius; dx <= radius; ++dx) {
+            for (jint dz = -radius; dz <= radius; ++dz) {
+                const auto state = context.placement.region->state_at(
+                    origin.x + dx, origin.y + dy, origin.z + dz);
+                if (!context.placement.states->traits(state).air &&
+                    !context.placement.states->in_tag(state,
+                                                      "minecraft:leaves")) {
+                    return false;
+                }
+            }
+        }
+    }
+    make_cap(context, random, origin, height);
+    place_trunk(context, random, origin, height);
+    return true;
+}
+
+void huge_mushroom_feature::make_cap(feature_context &context,
+                                     worldgen_random &random,
+                                     const block_pos &origin,
+                                     jint height) const {
+    if (red_) {
+        for (jint dy = height - 3; dy <= height; ++dy) {
+            const jint radius =
+                dy < height ? foliage_radius_ : foliage_radius_ - 1;
+            const jint center = foliage_radius_ - 2;
+            for (jint dx = -radius; dx <= radius; ++dx) {
+                for (jint dz = -radius; dz <= radius; ++dz) {
+                    const bool edge_x = dx == -radius || dx == radius;
+                    const bool edge_z = dz == -radius || dz == radius;
+                    if (dy < height && edge_x == edge_z) {
+                        continue;
+                    }
+                    const auto pos = block_pos{.x = origin.x + dx,
+                                               .y = origin.y + dy,
+                                               .z = origin.z + dz};
+                    auto state = cap_->get(context.placement, random, origin);
+                    if (state == no_block_state) {
+                        continue;
+                    }
+                    auto key = context.placement.states->name(state);
+                    auto variant = with_state_property(
+                        key, "up", dy >= height - 1 ? "true" : "false");
+                    variant = with_state_property(
+                        variant, "west", dx < -center ? "true" : "false");
+                    variant = with_state_property(
+                        variant, "east", dx > center ? "true" : "false");
+                    variant = with_state_property(
+                        variant, "north", dz < -center ? "true" : "false");
+                    variant = with_state_property(
+                        variant, "south", dz > center ? "true" : "false");
+                    if (context.placement.resolve_state) {
+                        const auto resolved =
+                            context.placement.resolve_state(variant);
+                        if (resolved != no_block_state) {
+                            state = resolved;
+                        }
+                    }
+                    place_mushroom_block(context, pos, state);
+                }
+            }
+        }
+        return;
+    }
+    for (jint dx = -foliage_radius_; dx <= foliage_radius_; ++dx) {
+        for (jint dz = -foliage_radius_; dz <= foliage_radius_; ++dz) {
+            const bool min_x = dx == -foliage_radius_;
+            const bool max_x = dx == foliage_radius_;
+            const bool min_z = dz == -foliage_radius_;
+            const bool max_z = dz == foliage_radius_;
+            const bool x_edge = min_x || max_x;
+            const bool z_edge = min_z || max_z;
+            if (x_edge && z_edge) {
+                continue;
+            }
+            const auto pos = block_pos{
+                .x = origin.x + dx, .y = origin.y + height, .z = origin.z + dz};
+            auto state = cap_->get(context.placement, random, origin);
+            if (state == no_block_state) {
+                continue;
+            }
+            auto key = context.placement.states->name(state);
+            auto variant = with_state_property(
+                key, "west",
+                (min_x || (z_edge && dx == 1 - foliage_radius_)) ? "true"
+                                                                 : "false");
+            variant = with_state_property(
+                variant, "east",
+                (max_x || (z_edge && dx == foliage_radius_ - 1)) ? "true"
+                                                                 : "false");
+            variant = with_state_property(
+                variant, "north",
+                (min_z || (x_edge && dz == 1 - foliage_radius_)) ? "true"
+                                                                 : "false");
+            variant = with_state_property(
+                variant, "south",
+                (max_z || (x_edge && dz == foliage_radius_ - 1)) ? "true"
+                                                                 : "false");
+            if (context.placement.resolve_state) {
+                const auto resolved = context.placement.resolve_state(variant);
+                if (resolved != no_block_state) {
+                    state = resolved;
+                }
+            }
+            place_mushroom_block(context, pos, state);
+        }
+    }
+}
+
+void huge_mushroom_feature::place_trunk(feature_context &context,
+                                        worldgen_random &random,
+                                        const block_pos &origin,
+                                        jint height) const {
+    for (jint dy = 0; dy < height; ++dy) {
+        const auto state = stem_->get(context.placement, random, origin);
+        if (state == no_block_state) {
+            continue;
+        }
+        place_mushroom_block(
+            context,
+            block_pos{.x = origin.x, .y = origin.y + dy, .z = origin.z}, state);
+    }
+}
+
 auto sequence_feature::place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool {
     for (const auto &id : features_) {

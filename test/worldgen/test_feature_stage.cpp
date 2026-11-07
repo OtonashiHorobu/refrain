@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/data/json.hpp>
+#include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/feature/feature_data.hpp>
 #include <refrain/worldgen/feature/feature_registry.hpp>
@@ -40,6 +41,7 @@ using refrain::worldgen::feature::feature_registry;
 using refrain::worldgen::feature::feature_sorter;
 using refrain::worldgen::feature::foliage_kind;
 using refrain::worldgen::feature::huge_fungus_feature;
+using refrain::worldgen::feature::huge_mushroom_feature;
 using refrain::worldgen::feature::leave_vine_decorator;
 using refrain::worldgen::feature::place_on_ground_decorator;
 using refrain::worldgen::feature::placed_feature_document;
@@ -483,6 +485,81 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
             }
         }
         expect(hat_count > 0);
+    };
+
+    "a huge mushroom builds a stem and a shaped cap"_test = [] {
+        block_state_registry registry;
+        auto dirt = registry.intern("minecraft:dirt",
+                                    {.air = false, .blocks_motion = true});
+        auto cap = registry.intern(
+            "minecraft:brown_mushroom_block[down=true,east=true,north=true,"
+            "south=true,up=true,west=true]",
+            {.air = false, .blocks_motion = true});
+        auto stem = registry.intern(
+            "minecraft:mushroom_stem[down=false,east=true,north=true,"
+            "south=true,up=false,west=true]",
+            {.air = false, .blocks_motion = true});
+        expect(dirt.has_value() && cap.has_value() && stem.has_value());
+        if (!dirt || !cap || !stem) {
+            return;
+        }
+        const std::array<block_state_id, 1> dirt_tag{*dirt};
+        registry.add_tag("minecraft:huge_brown_mushroom_can_place_on",
+                         dirt_tag);
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::biomes);
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                expect(chunk.set_state(x, 4, z, *dirt));
+            }
+        }
+        chunk_region region{chunk, 0};
+        const auto resolve = [&registry](std::string_view key) {
+            if (const auto found = registry.find(key); found) {
+                return *found;
+            }
+            const auto block = state_block_name(key);
+            const bool air = is_air_block_name(block);
+            return registry.intern(key, {.air = air, .blocks_motion = !air})
+                .value_or(no_block_state);
+        };
+        placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &registry,
+            .generation =
+                generation_context{.min_y = 0, .height = 32, .sea_level = 8},
+            .resolve_state = resolve,
+        };
+        feature_context context{.placement = placement};
+        auto predicate = decode_block_predicate(
+            parse(
+                R"({"type":"minecraft:matching_block_tag","tag":"minecraft:huge_brown_mushroom_can_place_on"})"),
+            registry);
+        expect(predicate.has_value());
+        if (!predicate) {
+            return;
+        }
+        const huge_mushroom_feature feature{false, simple_state(*cap),
+                                            simple_state(*stem), 2,
+                                            std::move(*predicate)};
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(5)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 5, .z = 8}));
+        expect(chunk.state_at(8, 5, 8) == *stem);
+        bool cap_found = false;
+        for (jint y = 5; y < 32; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    if (state_block_name(registry.name(chunk.state_at(
+                            x, y, z))) == "minecraft:brown_mushroom_block") {
+                        cap_found = true;
+                    }
+                }
+            }
+        }
+        expect(cap_found);
     };
 };
 

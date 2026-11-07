@@ -37,6 +37,9 @@ struct placement_context {
     /// World-coordinate heightmap lookup; features that probe outside the
     /// centre chunk use it.
     std::function<jint(worldgen::heightmap_kind, jint, jint)> height{};
+    /// Resolves a canonical state key when a feature has to synthesise a
+    /// property variant (for example mushroom cap faces).
+    std::function<block_state_id(std::string_view)> resolve_state{};
 };
 
 class placement_modifier {

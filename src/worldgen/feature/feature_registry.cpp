@@ -440,6 +440,38 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       static_cast<jint>(*size_value), discard));
             continue;
         }
+        if (*type == "minecraft:huge_red_mushroom" ||
+            *type == "minecraft:huge_brown_mushroom") {
+            const auto *cap = document.document.find("cap_provider");
+            const auto *stem = document.document.find("stem_provider");
+            const auto *can_place = document.document.find("can_place_on");
+            if (cap == nullptr || stem == nullptr || can_place == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "huge mushroom is incomplete")};
+            }
+            auto cap_provider = decode_provider(*cap);
+            auto stem_provider = decode_provider(*stem);
+            auto predicate = decode_block_predicate(*can_place, *states_);
+            if (!cap_provider || !stem_provider || !predicate) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "huge mushroom is invalid")};
+            }
+            jint radius = 2;
+            if (const auto *field = document.document.find("foliage_radius");
+                field != nullptr) {
+                const auto value = field->as_int64();
+                if (!value) {
+                    return std::unexpected{value.error()};
+                }
+                radius = static_cast<jint>(*value);
+            }
+            features_.emplace(id, std::make_unique<huge_mushroom_feature>(
+                                      *type == "minecraft:huge_red_mushroom",
+                                      std::move(*cap_provider),
+                                      std::move(*stem_provider), radius,
+                                      std::move(*predicate)));
+            continue;
+        }
         if (*type == "minecraft:huge_fungus") {
             const auto *base = document.document.find("valid_base_block");
             const auto *stem = document.document.find("stem_state");
