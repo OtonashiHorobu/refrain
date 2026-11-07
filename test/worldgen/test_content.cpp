@@ -23,9 +23,9 @@ suite<"worldgen/content"> worldgen_content_tests = [] {
         if (!root) {
             return;
         }
-        const auto tags = load_block_tags(*root);
+        const auto tags = load_block_tags(archive);
         expect(tags.has_value()) << "cannot load block tags";
-        const auto structures = structure::load_structure_data(*root);
+        const auto structures = structure::load_structure_data(archive);
         expect(structures.has_value()) << "cannot load structure data";
         if (!structures) {
             return;

@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/content.hpp>
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/json.hpp>
@@ -123,6 +124,11 @@ auto block_tag_set::resolve_into(std::string_view tag,
 }
 
 auto load_block_tags(std::string_view data_root) -> result<block_tag_set> {
+    const auto materialized = materialize_worldgen_data(data_root);
+    if (!materialized) {
+        return std::unexpected{materialized.error()};
+    }
+    data_root = *materialized;
     block_tag_set tags;
     const auto namespaces = core::io::list_directory(data_root);
     if (!namespaces) {

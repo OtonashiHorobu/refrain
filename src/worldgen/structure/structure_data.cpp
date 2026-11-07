@@ -2,6 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/worldgen/content.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
 
 #include <refrain/core/io.hpp>
@@ -166,6 +167,11 @@ auto decode_structure_document(std::string_view id,
 
 auto load_structure_data(std::string_view data_root)
     -> result<structure_data_set> {
+    const auto materialized = materialize_worldgen_data(data_root);
+    if (!materialized) {
+        return std::unexpected{materialized.error()};
+    }
+    data_root = *materialized;
     structure_data_set result;
     const auto namespaces = core::io::list_directory(data_root);
     if (!namespaces) {
