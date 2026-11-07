@@ -167,6 +167,22 @@ auto try_generate(const structure_start_context &context,
         start.step = structure.step;
         return start;
     }
+    if (structure.type == "minecraft:igloo") {
+        if (context.templates == nullptr) {
+            return std::nullopt;
+        }
+        const jint center_x = chunk.x * 16 + 8;
+        const jint center_z = chunk.z * 16 + 8;
+        const jint center_y = context.height_at(
+            center_x, center_z, heightmap_kind::world_surface_wg);
+        if (!biome_allowed(context, structure, center_x, center_y, center_z)) {
+            return std::nullopt;
+        }
+        auto start = igloo_start(chunk, context.seed, *context.templates);
+        start.structure = structure.id;
+        start.step = structure.step;
+        return start;
+    }
     if (structure.type == "minecraft:swamp_hut") {
         return surface_start(context, structure, chunk, 7, 7, 9, false);
     }

@@ -11,6 +11,7 @@
 #include <refrain/worldgen/structure/placement.hpp>
 #include <refrain/worldgen/structure/start.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
+#include <refrain/worldgen/structure/template.hpp>
 
 #include <functional>
 #include <string>
@@ -32,6 +33,9 @@ struct structure_start_context {
         biome_at{};
     std::function<std::string_view(std::uint16_t)> biome_name{};
     std::function<jint(jint block_x, jint block_z, heightmap_kind)> height_at{};
+    /// Template source for structure types that place `.nbt` pieces. Null
+    /// leaves those types ungenerated.
+    structure_template_manager *templates{nullptr};
 };
 
 struct structure_area {

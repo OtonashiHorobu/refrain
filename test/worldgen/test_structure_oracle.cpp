@@ -3,9 +3,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/data/nbt.hpp>
+#include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/structure/generation.hpp>
 #include <refrain/worldgen/structure/stage.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
+#include <refrain/worldgen/structure/template.hpp>
 
 #include <boost/ut.hpp>
 
@@ -346,6 +348,137 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             expect(generated.front().bounds.max_x == (*values)[3]);
             expect(generated.front().bounds.max_y == (*values)[4]);
             expect(generated.front().bounds.max_z == (*values)[5]);
+        }
+    };
+
+    "a real igloo start reproduces its template pieces"_test = [] {
+        if (std::getenv("REFRAIN_VANILLA_IGLOO_REAL") == nullptr) {
+            return;
+        }
+        const char *region = std::getenv("REFRAIN_VANILLA_IGLOO_REGION");
+        const char *root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+        const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
+        if (region == nullptr || root == nullptr || templates_root == nullptr) {
+            return;
+        }
+        jint chunk_x = 0;
+        jint chunk_z = 10;
+        if (const char *value = std::getenv("REFRAIN_VANILLA_IGLOO_CHUNK_X");
+            value != nullptr) {
+            chunk_x = std::atoi(value);
+        }
+        if (const char *value = std::getenv("REFRAIN_VANILLA_IGLOO_CHUNK_Z");
+            value != nullptr) {
+            chunk_z = std::atoi(value);
+        }
+        jlong seed = 1;
+        if (const char *value = std::getenv("REFRAIN_VANILLA_IGLOO_SEED");
+            value != nullptr) {
+            seed = std::strtoll(value, nullptr, 10);
+        }
+        const auto data =
+            refrain::worldgen::structure::load_structure_data(root);
+        expect(data.has_value()) << "cannot load real structure data";
+        if (!data) {
+            return;
+        }
+        refrain::worldgen::block_state_registry registry;
+        refrain::worldgen::structure::structure_template_manager manager{
+            templates_root, registry};
+        const refrain::worldgen::structure::structure_start_context context{
+            .seed = seed,
+            .data = &*data,
+            .min_y = -64,
+            .world_height = 384,
+            .sea_level = 63,
+            .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+            .biome_name = [](std::uint16_t) -> std::string_view {
+                return "minecraft:snowy_taiga";
+            },
+            .height_at =
+                [](jint, jint, refrain::worldgen::heightmap_kind) {
+                    return jint{90};
+                },
+            .templates = &manager,
+        };
+        const auto generated =
+            refrain::worldgen::structure::generate_structure_starts(
+                chunk_pos{.x = chunk_x, .z = chunk_z}, context);
+        const refrain::worldgen::structure::structure_start *igloo = nullptr;
+        for (const auto &start : generated) {
+            if (start.structure == "minecraft:igloo") {
+                igloo = &start;
+            }
+        }
+        expect(igloo != nullptr) << "igloo start missing";
+        if (igloo == nullptr) {
+            return;
+        }
+        expect(igloo->pieces.size() == 1U);
+        if (igloo->pieces.empty()) {
+            return;
+        }
+        const auto &piece = igloo->pieces.front();
+        expect(piece.template_id == "minecraft:igloo/top");
+        expect(piece.template_origin.x == 0);
+        expect(piece.template_origin.y == 90);
+        expect(piece.template_origin.z == 160);
+        expect(piece.template_rotation == 2);
+        expect(piece.bounds.min_x == 0);
+        expect(piece.bounds.min_y == 90);
+        expect(piece.bounds.min_z == 163);
+        expect(piece.bounds.max_x == 6);
+        expect(piece.bounds.max_y == 94);
+        expect(piece.bounds.max_z == 170);
+
+        const auto reference = read_chunk(region, chunk_x, chunk_z);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        const auto *structures = child(reference->as_compound(), "structures");
+        const auto *starts = structures == nullptr
+                                 ? nullptr
+                                 : child(structures->as_compound(), "starts");
+        const auto *igloo_start =
+            starts == nullptr ? nullptr
+                              : child(starts->as_compound(), "minecraft:igloo");
+        expect(igloo_start != nullptr);
+        if (igloo_start == nullptr) {
+            return;
+        }
+        const auto *children = child(igloo_start->as_compound(), "Children");
+        const auto *pieces_list =
+            children == nullptr ? nullptr : children->as_list();
+        expect(pieces_list != nullptr && pieces_list->items.size() == 1U);
+        if (pieces_list == nullptr || pieces_list->items.empty()) {
+            return;
+        }
+        const auto *expected = pieces_list->items.front().as_compound();
+        const auto *template_id = child(expected, "Template");
+        const auto *template_x = child(expected, "TPX");
+        const auto *template_y = child(expected, "TPY");
+        const auto *template_z = child(expected, "TPZ");
+        expect(template_id != nullptr && template_x != nullptr &&
+               template_y != nullptr && template_z != nullptr);
+        if (template_id == nullptr || template_x == nullptr ||
+            template_y == nullptr || template_z == nullptr) {
+            return;
+        }
+        expect(template_id->as_string() == piece.template_id);
+        expect(template_x->as_int() == piece.template_origin.x);
+        expect(template_y->as_int() == piece.template_origin.y);
+        expect(template_z->as_int() == piece.template_origin.z);
+        const auto *bb = child(expected, "BB");
+        const auto values = bb == nullptr ? std::nullopt : bb->as_int_array();
+        expect(values.has_value() && values->size() == 6U);
+        if (values && values->size() == 6U) {
+            expect(piece.bounds.min_x == (*values)[0]);
+            expect(piece.bounds.min_y == (*values)[1]);
+            expect(piece.bounds.min_z == (*values)[2]);
+            expect(piece.bounds.max_x == (*values)[3]);
+            expect(piece.bounds.max_y == (*values)[4]);
+            expect(piece.bounds.max_z == (*values)[5]);
         }
     };
 };
