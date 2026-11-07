@@ -557,6 +557,18 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                     .aquifer = &aquifer,
                     .states = &block_registry,
                 };
+                apply.top_material =
+                    [&system, &rule_context, &compiled, &chunk](
+                        jint block_x, jint block_y, jint block_z,
+                        bool under_fluid) -> std::optional<surface::state_id> {
+                    return system.top_material(
+                        rule_context, *compiled, block_x, block_y, block_z,
+                        under_fluid, [&chunk](jint x, jint z) {
+                            return chunk.first_available(
+                                       heightmap_kind::world_surface_wg, x, z) -
+                                   1;
+                        });
+                };
                 carver::apply_carving_mask(chunk, mask, apply);
             }
 
