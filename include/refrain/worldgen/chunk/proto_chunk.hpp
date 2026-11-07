@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -31,6 +32,25 @@ struct block_pos {
 
     friend constexpr auto operator<=>(const block_pos &,
                                       const block_pos &) = default;
+};
+
+struct structure_start {
+    std::string structure{};
+    jint chunk_x{0};
+    jint chunk_z{0};
+    jint min_x{0};
+    jint min_y{0};
+    jint min_z{0};
+    jint max_x{0};
+    jint max_y{0};
+    jint max_z{0};
+};
+
+struct structure_reference {
+    std::string structure{};
+    jint chunk_x{0};
+    jint chunk_z{0};
+    jint count{1};
 };
 
 class proto_chunk {
@@ -58,6 +78,18 @@ class proto_chunk {
     /// Writes one block and updates the heightmaps the current status keeps.
     /// Returns false when the position is outside the build height.
     auto set_state(jint x, jint y, jint z, block_state_id state) -> bool;
+
+    void add_structure_start(structure_start start);
+    void add_structure_reference(std::string_view structure, jint chunk_x,
+                                 jint chunk_z, jint count = 1);
+    [[nodiscard]] auto structure_starts() const
+        -> const std::vector<structure_start> & {
+        return structure_starts_;
+    }
+    [[nodiscard]] auto structure_references() const
+        -> const std::vector<structure_reference> & {
+        return structure_references_;
+    }
 
     [[nodiscard]] auto status() const noexcept -> chunk_status {
         return status_;
@@ -105,6 +137,8 @@ class proto_chunk {
 
     const block_state_table *table_{nullptr};
     heightmap_source source_{};
+    std::vector<structure_start> structure_starts_{};
+    std::vector<structure_reference> structure_references_{};
     jint chunk_x_{0};
     jint chunk_z_{0};
     jint min_y_{0};

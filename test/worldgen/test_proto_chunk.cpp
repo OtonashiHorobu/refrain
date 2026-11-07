@@ -168,6 +168,27 @@ suite<"worldgen/proto-chunk"> proto_chunk_tests = [] {
         expect(chunk.state_at(1, 32, 1) == air);
     };
 
+    "structure starts and references accumulate per chunk"_test = [] {
+        const test_table table;
+        proto_chunk chunk{table, 0, 0, 0, 32};
+        chunk.add_structure_start(
+            structure_start{.structure = "minecraft:village_plains",
+                            .chunk_x = 3,
+                            .chunk_z = 4,
+                            .min_x = 40,
+                            .min_y = 60,
+                            .min_z = 50,
+                            .max_x = 70,
+                            .max_y = 80,
+                            .max_z = 90});
+        chunk.add_structure_reference("minecraft:village_plains", 3, 4);
+        chunk.add_structure_reference("minecraft:village_plains", 3, 4, 2);
+        chunk.add_structure_reference("minecraft:mineshaft", 5, 6);
+        expect(chunk.structure_starts().size() == 1U);
+        expect(chunk.structure_references().size() == 2U);
+        expect(chunk.structure_references()[0].count == 3);
+    };
+
     "status ordering and names"_test = [] {
         expect(status_name(chunk_status::terrain) == "terrain");
         expect(status_name(chunk_status::full) == "full");
