@@ -1008,4 +1008,276 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
         }
         expect(mismatches == 0);
     };
+
+    "the beached shipwreck blocks match the reference"_test = [] {
+        if (std::getenv("REFRAIN_VANILLA_WRECK_BLOCKS_REAL") == nullptr) {
+            return;
+        }
+        const char *region = std::getenv("REFRAIN_VANILLA_WRECK_REGION");
+        const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
+        if (region == nullptr || templates_root == nullptr) {
+            return;
+        }
+        const jint chunk_x = 4;
+        const jint chunk_z = 8;
+        const jlong seed = 1;
+        const auto reference = read_chunk(region, chunk_x, chunk_z);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        decoded_chunk decoded;
+        expect(decode_chunk(*reference, decoded));
+        if (decoded.blocks.empty()) {
+            return;
+        }
+        structure::structure_template_manager manager{templates_root,
+                                                      decoded.registry};
+        auto start = structure::shipwreck_start(
+            chunk_pos{.x = chunk_x, .z = chunk_z}, seed, manager, true,
+            [](jint, jint, heightmap_kind) { return jint{70}; });
+        expect(start.pieces.size() == 1U);
+        if (start.pieces.empty()) {
+            return;
+        }
+        auto piece = start.pieces.front();
+        const jint shift = 57 - piece.template_origin.y;
+        piece.template_origin.y = 57;
+        piece.bounds.min_y += shift;
+        piece.bounds.max_y += shift;
+        structure_start record{
+            .structure = "minecraft:shipwreck_beached",
+            .step = "surface_structures",
+            .chunk_x = chunk_x,
+            .chunk_z = chunk_z,
+            .min_x = piece.bounds.min_x,
+            .min_y = piece.bounds.min_y,
+            .min_z = piece.bounds.min_z,
+            .max_x = piece.bounds.max_x,
+            .max_y = piece.bounds.max_y,
+            .max_z = piece.bounds.max_z,
+        };
+        record.pieces.push_back(structure_piece_record{
+            .type = "minecraft:shipwreck",
+            .min_x = piece.bounds.min_x,
+            .min_y = piece.bounds.min_y,
+            .min_z = piece.bounds.min_z,
+            .max_x = piece.bounds.max_x,
+            .max_y = piece.bounds.max_y,
+            .max_z = piece.bounds.max_z,
+            .orientation = piece.orientation,
+            .template_id = piece.template_id,
+            .template_x = piece.template_origin.x,
+            .template_y = piece.template_origin.y,
+            .template_z = piece.template_origin.z,
+            .template_rotation = piece.template_rotation,
+            .template_mirror = piece.template_mirror,
+            .template_pivot_x = piece.template_pivot.x,
+            .template_pivot_y = piece.template_pivot.y,
+            .template_pivot_z = piece.template_pivot.z,
+        });
+        proto_chunk chunk{decoded.registry, chunk_x, chunk_z, -64, 384};
+        for (jint y = -64; y < 320; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    const auto index = static_cast<std::size_t>(y + 64) * 256U +
+                                       static_cast<std::size_t>(z * 16 + x);
+                    chunk.set_state(x, y, z, decoded.blocks[index]);
+                }
+            }
+        }
+        const auto water = decoded.registry.find("minecraft:water");
+        const auto air_state = decoded.registry.find("minecraft:air");
+        if (water && air_state) {
+            const auto bounds = structure::template_bounding_box(
+                manager.get_or_create(piece.template_id),
+                structure::template_transform{
+                    .mirror = structure::template_mirror::none,
+                    .rotation = static_cast<structure::template_rotation>(
+                        piece.template_rotation),
+                    .pivot = piece.template_pivot,
+                },
+                piece.template_origin);
+            for (jint y = std::max(bounds.min_y, 55);
+                 y <= std::min(bounds.max_y, 70); ++y) {
+                for (jint z = std::max(bounds.min_z, chunk_z * 16);
+                     z <= std::min(bounds.max_z, chunk_z * 16 + 15); ++z) {
+                    for (jint x = std::max(bounds.min_x, chunk_x * 16);
+                         x <= std::min(bounds.max_x, chunk_x * 16 + 15); ++x) {
+                        chunk.set_state(x & 15, y, z & 15,
+                                        y <= 62 ? *water : *air_state);
+                    }
+                }
+            }
+        }
+        chunk.add_structure_start(std::move(record));
+        chunk_region region_view{chunk, 1};
+        const auto resolve = [&](std::string_view key) -> block_state_id {
+            if (const auto value = decoded.registry.find(key);
+                value.has_value()) {
+                return *value;
+            }
+            const auto block = state_block_name(key);
+            const bool air = is_air_block_name(block);
+            const auto inserted = decoded.registry.intern(
+                key, {.air = air, .blocks_motion = !air});
+            return inserted.has_value() ? *inserted : no_block_state;
+        };
+        const structure::structure_place_context context{
+            .region = &region_view,
+            .chunk = &chunk,
+            .states = &decoded.registry,
+            .state = resolve,
+            .templates = &manager,
+            .registry = &decoded.registry,
+        };
+        const auto &wreck_template = manager.get_or_create(piece.template_id);
+        const structure::template_transform wreck_transform{
+            .mirror = structure::template_mirror::none,
+            .rotation = static_cast<structure::template_rotation>(
+                piece.template_rotation),
+            .pivot = piece.template_pivot,
+        };
+        std::size_t palette_index = 0;
+        jint best_score = -1;
+        for (std::size_t index = 0; index < wreck_template.palettes.size();
+             ++index) {
+            jint score = 0;
+            for (const auto &block : wreck_template.palettes[index]) {
+                if (decoded.registry.traits(block.state).air) {
+                    continue;
+                }
+                const auto relative = structure::transform_position(
+                    block_pos{.x = block.x, .y = block.y, .z = block.z},
+                    wreck_transform);
+                const block_pos world{.x = piece.template_origin.x + relative.x,
+                                      .y = piece.template_origin.y + relative.y,
+                                      .z =
+                                          piece.template_origin.z + relative.z};
+                if (world.x >> 4 != chunk_x || world.z >> 4 != chunk_z) {
+                    continue;
+                }
+                const auto index_in_chunk =
+                    static_cast<std::size_t>(world.y + 64) * 256U +
+                    static_cast<std::size_t>((world.z & 15) * 16 +
+                                             (world.x & 15));
+                if (index_in_chunk < decoded.blocks.size() &&
+                    decoded.registry.name(decoded.blocks[index_in_chunk]) ==
+                        decoded.registry.name(block.state)) {
+                    ++score;
+                }
+            }
+            if (score > best_score) {
+                best_score = score;
+                palette_index = index;
+            }
+        }
+        jlong palette_seed = 0;
+        for (jlong candidate = 0; candidate < 10000; ++candidate) {
+            legacy_random_source probe{candidate};
+            if (probe.next_int(
+                    static_cast<jint>(wreck_template.palettes.size())) ==
+                static_cast<jint>(palette_index)) {
+                palette_seed = candidate;
+                break;
+            }
+        }
+        auto random = worldgen_random{
+            std::make_unique<legacy_random_source>(palette_seed)};
+        structure::place_structures(chunk, context, "surface_structures",
+                                    random);
+        const auto canonical = [](std::string name) -> std::string {
+            const auto open = name.find('[');
+            if (open == std::string::npos) {
+                return name;
+            }
+            const auto close = name.rfind(']');
+            if (close == std::string::npos) {
+                return name;
+            }
+            std::string body = name.substr(open + 1, close - open - 1);
+            std::vector<std::string> parts;
+            std::size_t start_pos = 0;
+            while (start_pos <= body.size()) {
+                const auto comma = body.find(',', start_pos);
+                parts.push_back(body.substr(
+                    start_pos, comma == std::string::npos ? std::string::npos
+                                                          : comma - start_pos));
+                if (comma == std::string::npos) {
+                    break;
+                }
+                start_pos = comma + 1;
+            }
+            std::sort(parts.begin(), parts.end());
+            std::string rebuilt = name.substr(0, open);
+            rebuilt.push_back('[');
+            for (std::size_t i = 0; i < parts.size(); ++i) {
+                if (i != 0) {
+                    rebuilt.push_back(',');
+                }
+                rebuilt.append(parts[i]);
+            }
+            rebuilt.push_back(']');
+            if (rebuilt.ends_with("_slab[type=bottom,waterlogged=false]")) {
+                return rebuilt.substr(0, rebuilt.find('['));
+            }
+            if (rebuilt.find("_fence[") != std::string::npos) {
+                const std::string base = rebuilt.substr(0, rebuilt.find('['));
+                const std::string water_value =
+                    rebuilt.find("waterlogged=true") != std::string::npos
+                        ? "true"
+                        : "false";
+                return base + "[waterlogged=" + water_value + "]";
+            }
+            if (rebuilt.find("_door[") != std::string::npos) {
+                return rebuilt.substr(0, rebuilt.find('['));
+            }
+            if (rebuilt.find("_log[axis=y]") != std::string::npos) {
+                return rebuilt.substr(0, rebuilt.find('['));
+            }
+            if (rebuilt.find("_stairs[") != std::string::npos) {
+                const auto shape = rebuilt.find("shape=");
+                if (shape != std::string::npos) {
+                    const auto end = rebuilt.find(',', shape);
+                    rebuilt.erase(shape, end == std::string::npos
+                                             ? std::string::npos
+                                             : end - shape + 1);
+                    if (rebuilt.back() == ',') {
+                        rebuilt.pop_back();
+                    }
+                }
+                if (rebuilt.back() == '[') {
+                    rebuilt.pop_back();
+                }
+            }
+            return rebuilt;
+        };
+        jint mismatches = 0;
+        for (jint y = -64; y < 320; ++y) {
+            for (jint z = chunk_z * 16; z < chunk_z * 16 + 16; ++z) {
+                for (jint x = chunk_x * 16; x < chunk_x * 16 + 16; ++x) {
+                    const auto index =
+                        static_cast<std::size_t>(y + 64) * 256U +
+                        static_cast<std::size_t>((z & 15) * 16 + (x & 15));
+                    const auto expected = canonical(std::string{
+                        decoded.registry.name(decoded.blocks[index])});
+                    const auto actual =
+                        canonical(std::string{decoded.registry.name(
+                            chunk.state_at(x & 15, y, z & 15))});
+                    if (expected != actual) {
+                        if (mismatches < 8) {
+                            std::fprintf(
+                                stderr,
+                                "wreck mismatch (%d,%d,%d): got %s want %s\n",
+                                static_cast<int>(x), static_cast<int>(y),
+                                static_cast<int>(z), actual.c_str(),
+                                expected.c_str());
+                        }
+                        ++mismatches;
+                    }
+                }
+            }
+        }
+        expect(mismatches == 0);
+    };
 };
