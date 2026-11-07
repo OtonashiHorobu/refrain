@@ -362,6 +362,7 @@ def main() -> int:
             "oracle:real_dark_oak",
             "oracle:selector",
             "oracle:real_jungle",
+            "oracle:mega_tree",
         ]
         biome_dir = pack / "data/oracle/worldgen/biome"
         biome_dir.mkdir(parents=True)
@@ -762,6 +763,62 @@ def main() -> int:
         )
         (minecraft_feature / "jungle_tree_no_vine.json").write_text(
             json.dumps(jungle, indent=2) + "\n"
+        )
+        (feature_dir / "mega_tree.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:tree",
+                    "trunk_provider": {
+                        "id": "minecraft:oak_log",
+                        "properties": {"axis": "y"},
+                    },
+                    "trunk_placer": {
+                        "type": "minecraft:giant_trunk_placer",
+                        "base_height": 10,
+                        "height_rand_a": 2,
+                        "height_rand_b": 0,
+                    },
+                    "foliage_provider": {
+                        "id": "minecraft:oak_leaves",
+                        "properties": {
+                            "distance": "7",
+                            "persistent": "false",
+                            "waterlogged": "false",
+                        },
+                    },
+                    "foliage_placer": {
+                        "type": "minecraft:mega_pine_foliage_placer",
+                        "radius": 2,
+                        "offset": 0,
+                        "crown_height": 5,
+                    },
+                    "minimum_size": {
+                        "type": "minecraft:two_layers_feature_size",
+                        "lower_size": 1,
+                        "upper_size": 2,
+                    },
+                    "decorators": [],
+                    "ignore_vines": True,
+                    "below_trunk_provider": {"id": "minecraft:dirt"},
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "mega_tree.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:mega_tree",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 170, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
         )
         (placed_dir / "real_jungle.json").write_text(
             json.dumps(
