@@ -9,6 +9,11 @@
 module refrain::protocol::v777::wire;
 version 777;
 
+struct wire_entry {
+    #[max(32767)] text: string;
+    tooltip: optional<text_component>;
+}
+
 struct wire_lerp_steps {
     position: wire_vec3;
     movement: wire_vec3;
@@ -55,5 +60,11 @@ struct wire_vec3 {
     x: f64;
     y: f64;
     z: f64;
+}
+
+struct wire_vec3i {
+    #[varint] x: i32;
+    #[varint] y: i32;
+    #[varint] z: i32;
 }
 

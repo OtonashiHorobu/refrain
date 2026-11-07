@@ -63,6 +63,8 @@ namespace {
             return "::refrain::data::resource_location";
         case primitive_kind::uuid:
             return "::refrain::net::uuid";
+        case primitive_kind::text_component:
+            return "::refrain::net::text_component";
         case primitive_kind::void_type:
             return "void";
         }
@@ -508,6 +510,16 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::text_component:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_text_component("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -671,6 +683,17 @@ void emit_decode_value(code_writer &writer, const model &program,
                         "std::unexpected{{std::move(value_{}.error())}};",
                         depth, depth);
             writer.line("{} = *value_{};", target, depth);
+            return;
+        case primitive_kind::text_component:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_text_component("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
             return;
         case primitive_kind::void_type:
             return;
@@ -844,11 +867,22 @@ void emit_decode_value(code_writer &writer, const model &program,
             return self(self, argument);
         });
     };
+    bool needs_wire{false};
+    const auto uses_wire = [&](const auto &self,
+                               const resolved_type &type) -> bool {
+        if (type.kind == resolved_type::category::primitive) {
+            return type.primitive == primitive_kind::text_component;
+        }
+        return std::ranges::any_of(type.arguments, [&](const auto &argument) {
+            return self(self, argument);
+        });
+    };
     for (const auto *decl : declarations) {
         for (const auto &field : decl->fields) {
             collect_includes(program, field.type, includes);
             needs_identifier = needs_identifier ||
                                uses_identifier(uses_identifier, field.type);
+            needs_wire = needs_wire || uses_wire(uses_wire, field.type);
         }
     }
     includes.erase(emit::rsc_cpp_include(source_path));
@@ -867,6 +901,9 @@ void emit_decode_value(code_writer &writer, const model &program,
     writer.line("#include <refrain/net/base.hpp>");
     if (needs_identifier) {
         writer.line("#include <refrain/data/resource_location.hpp>");
+    }
+    if (needs_wire) {
+        writer.line("#include <refrain/net/wire.hpp>");
     }
     for (const auto &include : includes) {
         writer.line("#include {}", include);

@@ -38,6 +38,8 @@ enum class primitive_kind : std::uint8_t {
     identifier,
     /// Protocol 128-bit identifier in wire order; RSC wire schemas only.
     uuid,
+    /// Network NBT text component; RSC wire schemas only.
+    text_component,
     void_type,
 };
 

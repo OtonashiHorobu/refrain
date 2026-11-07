@@ -166,6 +166,13 @@ packet clear_titles = 14 {
     reset_times: bool;
 }
 
+packet command_suggestions = 15 {
+    #[varint] id: i32;
+    #[varint] start: i32;
+    #[varint] length: i32;
+    suggestions: array<wire_entry>;
+}
+
 packet container_close = 17 {
     #[varint] container_id: i32;
 }
@@ -239,6 +246,12 @@ packet open_book = 59 {
     #[varint] hand: u32;
 }
 
+packet open_screen = 60 {
+    #[varint] get_container_id: i32;
+    #[varint] get_type: i32;
+    get_title: text_component;
+}
+
 packet open_sign_editor = 61 {
     pos: i64;
     #[varint] slot: i32;
@@ -262,6 +275,11 @@ packet player_combat_end = 67 {
 }
 
 packet player_combat_enter = 68 {
+}
+
+packet player_combat_kill = 69 {
+    #[varint] player_id: i32;
+    message: text_component;
 }
 
 packet player_info_remove = 70 {
@@ -292,6 +310,14 @@ packet resource_pack_pop = 81 {
     id: optional<uuid>;
 }
 
+packet resource_pack_push = 82 {
+    id: uuid;
+    #[max(32767)] url: string;
+    #[max(40)] hash: string;
+    required: bool;
+    prompt: optional<text_component>;
+}
+
 packet post_effects = 83 {
     post_effects: array<identifier>;
 }
@@ -299,6 +325,15 @@ packet post_effects = 83 {
 packet rotate_head = 85 {
     #[varint] entity_id: i32;
     y_head_rot: i8;
+}
+
+packet server_data = 88 {
+    motd: text_component;
+    icon_bytes: optional<bytes>;
+}
+
+packet set_action_bar_text = 89 {
+    text: text_component;
 }
 
 packet set_border_center = 90 {
@@ -359,6 +394,14 @@ packet set_simulation_distance = 113 {
     #[varint] simulation_distance: i32;
 }
 
+packet set_subtitle_text = 114 {
+    text: text_component;
+}
+
+packet set_title_text = 116 {
+    text: text_component;
+}
+
 packet set_titles_animation = 117 {
     #[fixed] fade_in: i32;
     #[fixed] stay: i32;
@@ -374,6 +417,16 @@ packet swing_animation = 123 {
     animation: wire_swing_animation;
 }
 
+packet system_chat = 124 {
+    content: text_component;
+    overlay: bool;
+}
+
+packet tab_list = 125 {
+    header: text_component;
+    footer: text_component;
+}
+
 packet take_item_entity = 127 {
     #[varint] item_id: i32;
     #[varint] player_id: i32;
@@ -385,6 +438,11 @@ packet teleport_entity = 128 {
     change: wire_position_move_rotation;
     #[fixed] relatives: i32;
     on_ground: bool;
+}
+
+packet test_instance_block_status = 129 {
+    status: text_component;
+    size: optional<wire_vec3i>;
 }
 
 packet ticking_state = 130 {

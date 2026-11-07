@@ -334,6 +334,7 @@ attribute_comment(const std::vector<attribute> &attributes,
         return "refrain_bytes";
     case primitive_kind::identifier:
     case primitive_kind::uuid:
+    case primitive_kind::text_component:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";
@@ -372,6 +373,7 @@ attribute_comment(const std::vector<attribute> &attributes,
         return "std::span<const std::uint8_t>";
     case primitive_kind::identifier:
     case primitive_kind::uuid:
+    case primitive_kind::text_component:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";

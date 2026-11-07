@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 26f951db567137ba
+// Schema hash: b600db2aac55a885
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -19,6 +19,7 @@
 #include <refrain/core/error.hpp>
 #include <refrain/net/base.hpp>
 #include <refrain/data/resource_location.hpp>
+#include <refrain/net/wire.hpp>
 #include <refrain/schema/protocol/777/wire.hpp>
 
 namespace refrain::protocol::v777::play::clientbound {
@@ -272,6 +273,19 @@ struct clear_titles {
     bool reset_times;
 };
 
+struct command_suggestions {
+    static constexpr std::uint16_t packet_id = 0xF;
+    static constexpr std::string_view packet_name = "command_suggestions";
+
+    // attributes: #[varint]
+    std::int32_t id;
+    // attributes: #[varint]
+    std::int32_t start;
+    // attributes: #[varint]
+    std::int32_t length;
+    std::vector<::refrain::protocol::v777::wire::wire_entry> suggestions;
+};
+
 struct container_close {
     static constexpr std::uint16_t packet_id = 0x11;
     static constexpr std::string_view packet_name = "container_close";
@@ -406,6 +420,17 @@ struct open_book {
     std::uint32_t hand;
 };
 
+struct open_screen {
+    static constexpr std::uint16_t packet_id = 0x3C;
+    static constexpr std::string_view packet_name = "open_screen";
+
+    // attributes: #[varint]
+    std::int32_t get_container_id;
+    // attributes: #[varint]
+    std::int32_t get_type;
+    ::refrain::net::text_component get_title;
+};
+
 struct open_sign_editor {
     static constexpr std::uint16_t packet_id = 0x3D;
     static constexpr std::string_view packet_name = "open_sign_editor";
@@ -452,6 +477,15 @@ struct player_combat_enter {
     static constexpr std::uint16_t packet_id = 0x44;
     static constexpr std::string_view packet_name = "player_combat_enter";
 
+};
+
+struct player_combat_kill {
+    static constexpr std::uint16_t packet_id = 0x45;
+    static constexpr std::string_view packet_name = "player_combat_kill";
+
+    // attributes: #[varint]
+    std::int32_t player_id;
+    ::refrain::net::text_component message;
 };
 
 struct player_info_remove {
@@ -502,6 +536,19 @@ struct resource_pack_pop {
     std::optional<::refrain::net::uuid> id;
 };
 
+struct resource_pack_push {
+    static constexpr std::uint16_t packet_id = 0x52;
+    static constexpr std::string_view packet_name = "resource_pack_push";
+
+    ::refrain::net::uuid id;
+    // attributes: #[max(32767)]
+    std::string url;
+    // attributes: #[max(40)]
+    std::string hash;
+    bool required;
+    std::optional<::refrain::net::text_component> prompt;
+};
+
 struct post_effects {
     static constexpr std::uint16_t packet_id = 0x53;
     static constexpr std::string_view packet_name = "post_effects";
@@ -516,6 +563,21 @@ struct rotate_head {
     // attributes: #[varint]
     std::int32_t entity_id;
     std::int8_t y_head_rot;
+};
+
+struct server_data {
+    static constexpr std::uint16_t packet_id = 0x58;
+    static constexpr std::string_view packet_name = "server_data";
+
+    ::refrain::net::text_component motd;
+    std::optional<std::vector<std::byte>> icon_bytes;
+};
+
+struct set_action_bar_text {
+    static constexpr std::uint16_t packet_id = 0x59;
+    static constexpr std::string_view packet_name = "set_action_bar_text";
+
+    ::refrain::net::text_component text;
 };
 
 struct set_border_center {
@@ -626,6 +688,20 @@ struct set_simulation_distance {
     std::int32_t simulation_distance;
 };
 
+struct set_subtitle_text {
+    static constexpr std::uint16_t packet_id = 0x72;
+    static constexpr std::string_view packet_name = "set_subtitle_text";
+
+    ::refrain::net::text_component text;
+};
+
+struct set_title_text {
+    static constexpr std::uint16_t packet_id = 0x74;
+    static constexpr std::string_view packet_name = "set_title_text";
+
+    ::refrain::net::text_component text;
+};
+
 struct set_titles_animation {
     static constexpr std::uint16_t packet_id = 0x75;
     static constexpr std::string_view packet_name = "set_titles_animation";
@@ -655,6 +731,22 @@ struct swing_animation {
     ::refrain::protocol::v777::wire::wire_swing_animation animation;
 };
 
+struct system_chat {
+    static constexpr std::uint16_t packet_id = 0x7C;
+    static constexpr std::string_view packet_name = "system_chat";
+
+    ::refrain::net::text_component content;
+    bool overlay;
+};
+
+struct tab_list {
+    static constexpr std::uint16_t packet_id = 0x7D;
+    static constexpr std::string_view packet_name = "tab_list";
+
+    ::refrain::net::text_component header;
+    ::refrain::net::text_component footer;
+};
+
 struct take_item_entity {
     static constexpr std::uint16_t packet_id = 0x7F;
     static constexpr std::string_view packet_name = "take_item_entity";
@@ -677,6 +769,14 @@ struct teleport_entity {
     // attributes: #[fixed]
     std::int32_t relatives;
     bool on_ground;
+};
+
+struct test_instance_block_status {
+    static constexpr std::uint16_t packet_id = 0x81;
+    static constexpr std::string_view packet_name = "test_instance_block_status";
+
+    ::refrain::net::text_component status;
+    std::optional<::refrain::protocol::v777::wire::wire_vec3i> size;
 };
 
 struct ticking_state {
@@ -1709,6 +1809,62 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_command_suggestions(::refrain::net::writer &out, const command_suggestions &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.id));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.start));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.length));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.suggestions.size()));
+    for (const auto &item_0 : value.suggestions) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_entry(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_command_suggestions(::refrain::net::reader &in, command_suggestions &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.id = static_cast<decltype(value.id)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.start = static_cast<decltype(value.start)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.length = static_cast<decltype(value.length)>(*value_0);
+  }
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.suggestions.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::protocol::v777::wire::wire_entry value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_entry(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.suggestions.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_container_close(::refrain::net::writer &out, const container_close &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -2151,6 +2307,44 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_open_screen(::refrain::net::writer &out, const open_screen &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.get_container_id));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.get_type));
+  }
+  {
+    if (auto written = ::refrain::net::encode_text_component(out, value.get_title); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_open_screen(::refrain::net::reader &in, open_screen &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.get_container_id = static_cast<decltype(value.get_container_id)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.get_type = static_cast<decltype(value.get_type)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_text_component(in, value.get_title); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_open_sign_editor(::refrain::net::writer &out, const open_sign_editor &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -2276,6 +2470,36 @@ struct clear_dialog {
 [[nodiscard]] inline auto decode_player_combat_enter(::refrain::net::reader &in, player_combat_enter &value) -> ::refrain::status {
   static_cast<void>(in);
   static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_player_combat_kill(::refrain::net::writer &out, const player_combat_kill &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.player_id));
+  }
+  {
+    if (auto written = ::refrain::net::encode_text_component(out, value.message); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_player_combat_kill(::refrain::net::reader &in, player_combat_kill &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.player_id = static_cast<decltype(value.player_id)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_text_component(in, value.message); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
   return ::refrain::status_ok();
 }
 
@@ -2470,6 +2694,77 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_resource_pack_push(::refrain::net::writer &out, const resource_pack_push &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_uuid(value.id); !written) {
+      return written;
+    }
+  }
+  {
+    if (auto written = out.write_string(value.url, 32767); !written) {
+      return written;
+    }
+  }
+  {
+    if (auto written = out.write_string(value.hash, 40); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.required);
+  }
+  {
+    out.write_bool(value.prompt.has_value());
+    if (value.prompt.has_value()) {
+      if (auto written = ::refrain::net::encode_text_component(out, value.prompt.value()); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_resource_pack_push(::refrain::net::reader &in, resource_pack_push &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_uuid();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.id = *value_0;
+  }
+  {
+    auto value_0 = in.read_string(32767);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.url = std::move(*value_0);
+  }
+  {
+    auto value_0 = in.read_string(40);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.hash = std::move(*value_0);
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.required = *value_0;
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::net::text_component value_0{};
+      if (auto decoded = ::refrain::net::decode_text_component(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.prompt = std::move(value_0);
+    } else {
+      value.prompt.reset();
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_post_effects(::refrain::net::writer &out, const post_effects &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -2526,6 +2821,72 @@ struct clear_dialog {
     auto value_0 = in.read_i64();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.y_head_rot = static_cast<decltype(value.y_head_rot)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_server_data(::refrain::net::writer &out, const server_data &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_text_component(out, value.motd); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.icon_bytes.has_value());
+    if (value.icon_bytes.has_value()) {
+      out.write_varint(static_cast<std::uint32_t>(value.icon_bytes.value().size()));
+      out.write_bytes(std::span<const std::byte>{value.icon_bytes.value() });
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_server_data(::refrain::net::reader &in, server_data &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_text_component(in, value.motd); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      std::vector<std::byte> value_0{};
+      auto length_1 = in.read_varint();
+      if (!length_1) return std::unexpected{std::move(length_1.error())};
+      auto value_1 = in.read_bytes(*length_1);
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = std::vector<std::byte>{value_1->begin(), value_1->end()};
+      value.icon_bytes = std::move(value_0);
+    } else {
+      value.icon_bytes.reset();
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_set_action_bar_text(::refrain::net::writer &out, const set_action_bar_text &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_text_component(out, value.text); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_set_action_bar_text(::refrain::net::reader &in, set_action_bar_text &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_text_component(in, value.text); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }
@@ -2862,6 +3223,50 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_set_subtitle_text(::refrain::net::writer &out, const set_subtitle_text &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_text_component(out, value.text); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_set_subtitle_text(::refrain::net::reader &in, set_subtitle_text &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_text_component(in, value.text); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_set_title_text(::refrain::net::writer &out, const set_title_text &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_text_component(out, value.text); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_set_title_text(::refrain::net::reader &in, set_title_text &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_text_component(in, value.text); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_set_titles_animation(::refrain::net::writer &out, const set_titles_animation &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -2948,6 +3353,68 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_system_chat(::refrain::net::writer &out, const system_chat &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_text_component(out, value.content); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.overlay);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_system_chat(::refrain::net::reader &in, system_chat &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_text_component(in, value.content); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.overlay = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_tab_list(::refrain::net::writer &out, const tab_list &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_text_component(out, value.header); !written) {
+      return written;
+    }
+  }
+  {
+    if (auto written = ::refrain::net::encode_text_component(out, value.footer); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_tab_list(::refrain::net::reader &in, tab_list &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_text_component(in, value.header); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_text_component(in, value.footer); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_take_item_entity(::refrain::net::writer &out, const take_item_entity &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -3026,6 +3493,49 @@ struct clear_dialog {
     auto value_0 = in.read_bool();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.on_ground = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_test_instance_block_status(::refrain::net::writer &out, const test_instance_block_status &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_text_component(out, value.status); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.size.has_value());
+    if (value.size.has_value()) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_vec3i(out, value.size.value()); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_test_instance_block_status(::refrain::net::reader &in, test_instance_block_status &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_text_component(in, value.status); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::protocol::v777::wire::wire_vec3i value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_vec3i(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.size = std::move(value_0);
+    } else {
+      value.size.reset();
+    }
   }
   return ::refrain::status_ok();
 }

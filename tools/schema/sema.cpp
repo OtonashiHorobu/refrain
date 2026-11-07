@@ -58,6 +58,8 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "identifier";
     case primitive_kind::uuid:
         return "uuid";
+    case primitive_kind::text_component:
+        return "text_component";
     case primitive_kind::void_type:
         return "void";
     }
@@ -82,6 +84,7 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"bytes", primitive_kind::bytes},
         std::pair{"identifier", primitive_kind::identifier},
         std::pair{"uuid", primitive_kind::uuid},
+        std::pair{"text_component", primitive_kind::text_component},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -221,6 +224,7 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::bytes:
     case primitive_kind::identifier:
     case primitive_kind::uuid:
+    case primitive_kind::text_component:
     case primitive_kind::void_type:
         return false;
     }
@@ -246,6 +250,7 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::bytes:
     case primitive_kind::identifier:
     case primitive_kind::uuid:
+    case primitive_kind::text_component:
     case primitive_kind::void_type:
         return false;
     }
@@ -1138,7 +1143,8 @@ class analyzer {
                 }
                 if (current_kind == dialect::ridl &&
                     (*primitive == primitive_kind::identifier ||
-                     *primitive == primitive_kind::uuid)) {
+                     *primitive == primitive_kind::uuid ||
+                     *primitive == primitive_kind::text_component)) {
                     error(source.location,
                           std::format("'{}' is only valid in RSC wire "
                                       "schemas",
@@ -2022,6 +2028,7 @@ class analyzer {
                 return size_align{16, 8};
             case primitive_kind::identifier:
             case primitive_kind::uuid:
+            case primitive_kind::text_component:
                 // Rejected for RIDL in resolve_type(); a wire-only primitive
                 // has no in-process ABI layout.
                 return std::nullopt;

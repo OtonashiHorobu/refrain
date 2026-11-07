@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 26f951db567137ba
+// Schema hash: b600db2aac55a885
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -18,8 +18,15 @@
 #include <vector>
 #include <refrain/core/error.hpp>
 #include <refrain/net/base.hpp>
+#include <refrain/net/wire.hpp>
 
 namespace refrain::protocol::v777::wire {
+
+struct wire_entry {
+    // attributes: #[max(32767)]
+    std::string text;
+    std::optional<::refrain::net::text_component> tooltip;
+};
 
 struct wire_vec3 {
     double x;
@@ -71,6 +78,58 @@ struct wire_position_move_rotation {
     float y_rot;
     float x_rot;
 };
+
+struct wire_vec3i {
+    // attributes: #[varint]
+    std::int32_t x;
+    // attributes: #[varint]
+    std::int32_t y;
+    // attributes: #[varint]
+    std::int32_t z;
+};
+[[nodiscard]] inline auto encode_wire_entry(::refrain::net::writer &out, const wire_entry &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_string(value.text, 32767); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.tooltip.has_value());
+    if (value.tooltip.has_value()) {
+      if (auto written = ::refrain::net::encode_text_component(out, value.tooltip.value()); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_entry(::refrain::net::reader &in, wire_entry &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_string(32767);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.text = std::move(*value_0);
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::net::text_component value_0{};
+      if (auto decoded = ::refrain::net::decode_text_component(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.tooltip = std::move(value_0);
+    } else {
+      value.tooltip.reset();
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_wire_vec3(::refrain::net::writer &out, const wire_vec3 &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -373,6 +432,42 @@ struct wire_position_move_rotation {
     auto value_0 = in.read_f32();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.x_rot = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_vec3i(::refrain::net::writer &out, const wire_vec3i &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.x));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.y));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.z));
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_vec3i(::refrain::net::reader &in, wire_vec3i &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.x = static_cast<decltype(value.x)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.y = static_cast<decltype(value.y)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.z = static_cast<decltype(value.z)>(*value_0);
   }
   return ::refrain::status_ok();
 }

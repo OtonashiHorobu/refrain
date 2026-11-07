@@ -48,6 +48,14 @@ packet resource_pack_pop = 8 {
     id: optional<uuid>;
 }
 
+packet resource_pack_push = 9 {
+    id: uuid;
+    #[max(32767)] url: string;
+    #[max(40)] hash: string;
+    required: bool;
+    prompt: optional<text_component>;
+}
+
 packet post_effects = 10 {
     post_effects: array<identifier>;
 }

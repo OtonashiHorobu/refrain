@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 26f951db567137ba
+// Schema hash: b600db2aac55a885
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
@@ -19,6 +19,7 @@
 #include <refrain/core/error.hpp>
 #include <refrain/net/base.hpp>
 #include <refrain/data/resource_location.hpp>
+#include <refrain/net/wire.hpp>
 #include <refrain/schema/protocol/777/common.hpp>
 
 namespace refrain::protocol::v777::configuration::clientbound {
@@ -84,6 +85,19 @@ struct resource_pack_pop {
     static constexpr std::string_view packet_name = "resource_pack_pop";
 
     std::optional<::refrain::net::uuid> id;
+};
+
+struct resource_pack_push {
+    static constexpr std::uint16_t packet_id = 0x9;
+    static constexpr std::string_view packet_name = "resource_pack_push";
+
+    ::refrain::net::uuid id;
+    // attributes: #[max(32767)]
+    std::string url;
+    // attributes: #[max(40)]
+    std::string hash;
+    bool required;
+    std::optional<::refrain::net::text_component> prompt;
 };
 
 struct post_effects {
@@ -327,6 +341,77 @@ struct code_of_conduct {
       value.id = std::move(value_0);
     } else {
       value.id.reset();
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_resource_pack_push(::refrain::net::writer &out, const resource_pack_push &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_uuid(value.id); !written) {
+      return written;
+    }
+  }
+  {
+    if (auto written = out.write_string(value.url, 32767); !written) {
+      return written;
+    }
+  }
+  {
+    if (auto written = out.write_string(value.hash, 40); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.required);
+  }
+  {
+    out.write_bool(value.prompt.has_value());
+    if (value.prompt.has_value()) {
+      if (auto written = ::refrain::net::encode_text_component(out, value.prompt.value()); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_resource_pack_push(::refrain::net::reader &in, resource_pack_push &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_uuid();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.id = *value_0;
+  }
+  {
+    auto value_0 = in.read_string(32767);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.url = std::move(*value_0);
+  }
+  {
+    auto value_0 = in.read_string(40);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.hash = std::move(*value_0);
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.required = *value_0;
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::net::text_component value_0{};
+      if (auto decoded = ::refrain::net::decode_text_component(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.prompt = std::move(value_0);
+    } else {
+      value.prompt.reset();
     }
   }
   return ::refrain::status_ok();
