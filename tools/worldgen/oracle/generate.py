@@ -350,6 +350,7 @@ def main() -> int:
             "oracle:stone_patch",
             "oracle:sand_disk",
             "oracle:coal_ore",
+            "oracle:moss_blob",
         ]
         biome_dir = pack / "data/oracle/worldgen/biome"
         biome_dir.mkdir(parents=True)
