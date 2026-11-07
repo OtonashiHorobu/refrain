@@ -1585,4 +1585,124 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
         }
         expect(best_mismatches == 0);
     };
+
+    "cold ocean ruin blocks differ only in capped suspicious choices"_test =
+        [] {
+            if (std::getenv("REFRAIN_VANILLA_RUIN_COLD_BLOCKS_REAL") ==
+                nullptr) {
+                return;
+            }
+            const char *region =
+                std::getenv("REFRAIN_VANILLA_RUIN_COLD_REGION");
+            const char *templates_root =
+                std::getenv("REFRAIN_VANILLA_STRUCTURES");
+            if (region == nullptr || templates_root == nullptr) {
+                return;
+            }
+            const jint chunk_x = 5;
+            const jint chunk_z = 10;
+            const jlong seed = 1;
+            const jint template_y = 69;
+            const auto reference = read_chunk(region, chunk_x, chunk_z);
+            expect(reference.has_value());
+            if (!reference) {
+                return;
+            }
+            decoded_chunk decoded;
+            expect(decode_chunk(*reference, decoded));
+            if (decoded.blocks.empty()) {
+                return;
+            }
+            structure::structure_template_manager manager{templates_root,
+                                                          decoded.registry};
+            const auto start = structure::ocean_ruin_start(
+                chunk_pos{.x = chunk_x, .z = chunk_z}, seed, manager, false,
+                0.3F, 0.9F);
+            expect(start.pieces.size() == 3U);
+            if (start.pieces.size() != 3U) {
+                return;
+            }
+            std::vector<structure_piece_record> records;
+            for (const auto &piece : start.pieces) {
+                records.push_back(structure_piece_record{
+                    .type = "minecraft:ocean_ruin",
+                    .template_id = piece.template_id,
+                    .template_x = piece.template_origin.x,
+                    .template_y = template_y,
+                    .template_z = piece.template_origin.z,
+                    .template_rotation = piece.template_rotation,
+                    .template_pivot_x = piece.template_pivot.x,
+                    .template_pivot_y = piece.template_pivot.y,
+                    .template_pivot_z = piece.template_pivot.z,
+                    .height_position = template_y,
+                    .integrity = piece.integrity,
+                    .large = piece.large,
+                });
+            }
+            proto_chunk chunk{decoded.registry, chunk_x, chunk_z, -64, 384};
+            for (jint y = -64; y < 320; ++y) {
+                for (jint z = 0; z < 16; ++z) {
+                    for (jint x = 0; x < 16; ++x) {
+                        const auto cell =
+                            static_cast<std::size_t>(y + 64) * 256U +
+                            static_cast<std::size_t>(z * 16 + x);
+                        chunk.set_state(x, y, z, decoded.blocks[cell]);
+                    }
+                }
+            }
+            chunk_region placed_region{chunk, 0};
+            const auto resolve = [&](std::string_view key) -> block_state_id {
+                if (const auto value = decoded.registry.find(key);
+                    value.has_value()) {
+                    return *value;
+                }
+                const auto block = state_block_name(key);
+                const bool air = is_air_block_name(block);
+                const auto inserted = decoded.registry.intern(
+                    key, {.air = air, .blocks_motion = !air});
+                return inserted.has_value() ? *inserted : no_block_state;
+            };
+            const structure::structure_place_context context{
+                .region = &placed_region,
+                .chunk = &chunk,
+                .states = &decoded.registry,
+                .state = resolve,
+                .templates = &manager,
+                .registry = &decoded.registry,
+                .seed = seed,
+            };
+            auto random = worldgen_random{
+                std::make_unique<xoroshiro_random_source>(seed)};
+            for (const auto &record : records) {
+                structure::place_structure_piece(context, record, random);
+            }
+            jint mismatches = 0;
+            jint capped_swaps = 0;
+            for (jint y = -64; y < 320; ++y) {
+                for (jint z = 0; z < 16; ++z) {
+                    for (jint x = 0; x < 16; ++x) {
+                        const auto cell =
+                            static_cast<std::size_t>(y + 64) * 256U +
+                            static_cast<std::size_t>(z * 16 + x);
+                        const auto expected = std::string{
+                            decoded.registry.name(decoded.blocks[cell])};
+                        const auto actual = std::string{
+                            decoded.registry.name(chunk.state_at(x, y, z))};
+                        if (expected == actual) {
+                            continue;
+                        }
+                        ++mismatches;
+                        const auto is_capped = [](std::string_view name) {
+                            return name == "minecraft:gravel" ||
+                                   name == "minecraft:suspicious_gravel";
+                        };
+                        if (is_capped(expected) && is_capped(actual)) {
+                            ++capped_swaps;
+                        }
+                    }
+                }
+            }
+            expect(mismatches == capped_swaps);
+            expect(capped_swaps <= 2);
+        };
 };
