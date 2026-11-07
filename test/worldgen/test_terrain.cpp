@@ -67,6 +67,9 @@ suite<"worldgen/terrain-fill"> terrain_fill_tests = [] {
         auto value = density::constant(-1.0F);
         const auto chunk = fill_chunk(settings, *value, context, 0, 0, aquifer);
         expect(count(chunk, 20) == 117U * 256U);
+        for (const auto &section : chunk.post_processing) {
+            expect(section.empty());
+        }
         expect(count(chunk, 30) == 10U * 256U);
         expect(count(chunk, 10) == 0U);
         expect(chunk.at(0, 62, 0) == 20);
