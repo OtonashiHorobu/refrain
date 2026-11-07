@@ -4,6 +4,7 @@
 
 #include <refrain/data/json.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
+#include <refrain/worldgen/structure/start.hpp>
 #include <refrain/worldgen/structure/structure_set.hpp>
 
 #include <boost/ut.hpp>
@@ -99,5 +100,40 @@ suite<"worldgen/structure-set"> structure_set_tests = [] {
             expect(set->random_spread->spacing == 34);
             expect(set->random_spread->separation == 8);
         }
+    };
+};
+
+suite<"worldgen/structure-start"> structure_start_tests = [] {
+    "bbox intersection, chunk proximity and reference caps"_test = [] {
+        const structure::structure_bbox bounds{.min_x = 10,
+                                               .min_y = 20,
+                                               .min_z = 30,
+                                               .max_x = 40,
+                                               .max_y = 50,
+                                               .max_z = 60};
+        expect(bounds.intersects(structure::structure_bbox{.min_x = 39,
+                                                           .min_y = 49,
+                                                           .min_z = 59,
+                                                           .max_x = 70,
+                                                           .max_y = 80,
+                                                           .max_z = 90}));
+        expect(!bounds.intersects(structure::structure_bbox{.min_x = 41,
+                                                            .min_y = 20,
+                                                            .min_z = 30,
+                                                            .max_x = 60,
+                                                            .max_y = 50,
+                                                            .max_z = 60}));
+        expect(bounds.is_close_to(chunk_pos{.x = 0, .z = 1}, 16));
+        expect(!bounds.is_close_to(chunk_pos{.x = 8, .z = 8}, 0));
+
+        structure::structure_start start{.structure = "minecraft:test",
+                                         .chunk = {.x = 0, .z = 0},
+                                         .references = 0,
+                                         .max_references = 1,
+                                         .bounds = bounds};
+        expect(start.can_add_reference());
+        start.add_reference();
+        expect(!start.can_add_reference());
+        expect(start.references == 1);
     };
 };
