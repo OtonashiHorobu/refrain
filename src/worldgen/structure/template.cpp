@@ -716,6 +716,18 @@ auto place_template(chunk_region &region, block_state_registry &states,
             continue;
         }
         const auto state = transform_state(states, processed.state, transform);
+        std::string previous_fluid;
+        if (settings.liquids == liquid_settings::apply_waterlogging) {
+            previous_fluid = std::string{
+                states.name(region.state_at(world.x, world.y, world.z))};
+            const bool source =
+                previous_fluid == "minecraft:water" ||
+                previous_fluid.starts_with("minecraft:water[level=0") ||
+                previous_fluid.starts_with("minecraft:water[level=0,");
+            if (!source) {
+                previous_fluid.clear();
+            }
+        }
         if (processed.nbt != nullptr) {
             (void)region.set_block_state(world.x, world.y, world.z, barrier);
         }
@@ -723,6 +735,25 @@ auto place_template(chunk_region &region, block_state_registry &states,
             continue;
         }
         ++placed;
+        if (!previous_fluid.empty()) {
+            auto current = std::string{states.name(state)};
+            if (current.find("waterlogged=false") != std::string::npos) {
+                current = with_state_property(current, "waterlogged", "true");
+                std::optional<block_state_id> waterlogged =
+                    states.find(current);
+                if (!waterlogged) {
+                    if (const auto inserted =
+                            states.intern(current, states.traits(state));
+                        inserted) {
+                        waterlogged = *inserted;
+                    }
+                }
+                if (waterlogged) {
+                    (void)region.set_block_state(world.x, world.y, world.z,
+                                                 *waterlogged);
+                }
+            }
+        }
         if (processed.nbt != nullptr) {
             auto entity = *processed.nbt;
             entity["x"] = data::nbt::value{world.x};

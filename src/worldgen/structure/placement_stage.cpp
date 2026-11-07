@@ -481,6 +481,97 @@ void place_buried_treasure(const structure_place_context &context,
     }
 }
 
+void place_shipwreck_piece(const structure_place_context &context,
+                           const structure_piece_record &piece,
+                           worldgen_random &random) {
+    if (context.templates == nullptr) {
+        return;
+    }
+    const auto &templ = context.templates->get_or_create(piece.template_id);
+    if (templ.palettes.empty()) {
+        return;
+    }
+    block_ignore_processor ignore{
+        std::vector<std::string>{"minecraft:air", "minecraft:structure_block"}};
+    template_place_settings settings{};
+    settings.transform = template_transform{
+        .mirror = template_mirror::none,
+        .rotation = static_cast<template_rotation>(piece.template_rotation),
+        .pivot = block_pos{.x = piece.template_pivot_x,
+                           .y = piece.template_pivot_y,
+                           .z = piece.template_pivot_z},
+    };
+    settings.liquids = liquid_settings::apply_waterlogging;
+    settings.bounds = template_bounds{
+        .min_x = context.chunk->chunk_x() * 16,
+        .min_y = context.chunk->min_y(),
+        .min_z = context.chunk->chunk_z() * 16,
+        .max_x = context.chunk->chunk_x() * 16 + 15,
+        .max_y = context.chunk->min_y() + context.chunk->height() - 1,
+        .max_z = context.chunk->chunk_z() * 16 + 15,
+    };
+    settings.processors = {&ignore};
+    settings.random = &random;
+    const block_pos origin{
+        .x = piece.template_x, .y = piece.template_y, .z = piece.template_z};
+    (void)place_template(*context.region, *context.registry, templ, origin,
+                         settings);
+    static const std::array<std::pair<std::string_view, std::string_view>, 3>
+        markers{{
+            {"map_chest", "minecraft:chests/shipwreck_map"},
+            {"treasure_chest", "minecraft:chests/shipwreck_treasure"},
+            {"supply_chest", "minecraft:chests/shipwreck_supply"},
+        }};
+    for (const auto &palette : templ.palettes) {
+        for (const auto &block : palette) {
+            if (block.nbt == nullptr) {
+                continue;
+            }
+            const auto metadata = block.nbt->find("metadata");
+            if (metadata == block.nbt->end()) {
+                continue;
+            }
+            const auto text = metadata->second.as_string();
+            if (!text) {
+                continue;
+            }
+            for (const auto &[marker, loot] : markers) {
+                if (*text != marker) {
+                    continue;
+                }
+                const auto relative = transform_position(
+                    block_pos{.x = block.x, .y = block.y, .z = block.z},
+                    settings.transform);
+                const block_pos world{.x = origin.x + relative.x,
+                                      .y = origin.y + relative.y,
+                                      .z = origin.z + relative.z};
+                const auto below =
+                    block_pos{.x = world.x, .y = world.y - 1, .z = world.z};
+                if (context.chunk == nullptr ||
+                    (below.x >> 4) != context.chunk->chunk_x() ||
+                    (below.z >> 4) != context.chunk->chunk_z()) {
+                    continue;
+                }
+                const auto name = block_name(
+                    context,
+                    context.region->state_at(below.x, below.y, below.z));
+                if (!name.starts_with("minecraft:chest")) {
+                    continue;
+                }
+                data::nbt::compound entity;
+                entity["id"] = data::nbt::value{std::string{"minecraft:chest"}};
+                entity["x"] = data::nbt::value{below.x};
+                entity["y"] = data::nbt::value{below.y};
+                entity["z"] = data::nbt::value{below.z};
+                entity["LootTable"] = data::nbt::value{std::string{loot}};
+                entity["LootTableSeed"] = data::nbt::value{random.next_long()};
+                (void)context.region->set_block_entity(
+                    below.x, below.y, below.z, std::move(entity));
+            }
+        }
+    }
+}
+
 } // namespace
 
 namespace {
@@ -982,6 +1073,8 @@ void place_structures(proto_chunk &chunk,
                     place_swamp_hut(context, piece);
                 } else if (piece.type == "minecraft:tedp") {
                     place_desert_pyramid(context, piece, random);
+                } else if (piece.type == "minecraft:shipwreck") {
+                    place_shipwreck_piece(context, piece, random);
                 }
             }
         };
