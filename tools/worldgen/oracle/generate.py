@@ -230,6 +230,7 @@ def main() -> int:
 
     root = args.output.resolve()
     shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True)
     if args.features_real:
         pack = root / "world/datapacks/t2oracle"
         write_meta(pack)
