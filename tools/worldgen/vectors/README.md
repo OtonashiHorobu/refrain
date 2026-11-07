@@ -12,6 +12,7 @@ on. Their output is the source of truth for the constants frozen in the tests:
 | `MthVectors.java` | `test/worldgen/test_mth.cpp` | `Mth.map`/`clampedMap`/`lerp`/`quantize` |
 | `AquiferVectors.java` | `test/worldgen/test_aquifer.cpp` | aquifer grid conversions, cell centers, similarity |
 | `ClimateVectors.java` | `test/worldgen/test_climate.cpp` | `Climate.ParameterList` R-tree and brute-force selection |
+| `BiomeVectors.java` | `test/worldgen/test_overworld_biomes.cpp` | overworld parameter table fingerprint and selections |
 
 ```bash
 tools/worldgen/vectors/run.sh /path/to/server.jar [class]
@@ -39,6 +40,11 @@ mode. It needs a JDK (26.3 requires Java 25 or newer) and a locally owned
 | `getseed` | `Mth.getSeed` positional hash |
 | `*.at.*`, `*.hash.*` | positional factories, coordinate and name streams |
 | `decoration`, `feature`, `large`, `salt` | `WorldgenRandom` seed formulas on both delegates |
+
+`BiomeVectors` prints the overworld preset's entry count, a FNV-1a fingerprint
+of every entry (biome key plus the seven quantized values) and the selection
+index for 256 synthetic targets. The expected numbers in the overworld test
+come from this output.
 
 `ClimateVectors` reads `test/fixtures/worldgen/climate_vectors.json`, builds
 the reference `Climate.ParameterList` from its synthetic quantized points and

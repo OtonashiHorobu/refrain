@@ -100,16 +100,18 @@ parameter_list::parameter_list(std::vector<entry> values)
     nodes_.reserve(values_.size() * 2);
     std::vector<std::size_t> children;
     children.reserve(values_.size());
-    for (const auto &value : values_) {
-        children.push_back(make_leaf(value));
+    for (std::size_t i = 0; i < values_.size(); ++i) {
+        children.push_back(make_leaf(values_[i], i));
     }
     root_ = build(std::move(children));
 }
 
-auto parameter_list::make_leaf(const entry &value) -> std::size_t {
+auto parameter_list::make_leaf(const entry &value, std::size_t index)
+    -> std::size_t {
     node leaf;
     leaf.space = value.parameters.space();
     leaf.value = value.value;
+    leaf.entry_index = index;
     nodes_.push_back(std::move(leaf));
     return nodes_.size() - 1;
 }
@@ -271,11 +273,19 @@ auto parameter_list::search(std::size_t index,
     return closest;
 }
 
-auto parameter_list::find(const target_point &target) -> std::uint16_t {
+auto parameter_list::select(const target_point &target) -> std::size_t {
     const auto array = target.to_array();
     const std::size_t leaf = search(root_, array, last_result_);
     last_result_ = leaf;
-    return nodes_[leaf].value;
+    return leaf;
+}
+
+auto parameter_list::find(const target_point &target) -> std::uint16_t {
+    return nodes_[select(target)].value;
+}
+
+auto parameter_list::find_index(const target_point &target) -> std::size_t {
+    return nodes_[select(target)].entry_index;
 }
 
 auto parameter_list::find_brute_force(const target_point &target) const
