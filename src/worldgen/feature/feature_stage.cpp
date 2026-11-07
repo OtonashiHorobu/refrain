@@ -66,7 +66,7 @@ void decorate(
     const block_pos origin{.x = context.placement.chunk->chunk_x() * 16,
                            .y = context.placement.chunk->min_y(),
                            .z = context.placement.chunk->chunk_z() * 16};
-    worldgen_random random{std::make_unique<legacy_random_source>(seed)};
+    worldgen_random random{std::make_unique<xoroshiro_random_source>(seed)};
     const jlong decoration_seed =
         random.set_decoration_seed(seed, origin.x, origin.z);
 
