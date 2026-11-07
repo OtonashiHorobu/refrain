@@ -16,8 +16,8 @@
 
 namespace refrain::worldgen::feature {
 
-enum class trunk_kind : std::uint8_t { straight, forking };
-enum class foliage_kind : std::uint8_t { blob, acacia, spruce };
+enum class trunk_kind : std::uint8_t { straight, forking, fancy };
+enum class foliage_kind : std::uint8_t { blob, acacia, spruce, fancy };
 
 class tree_feature final : public feature {
   public:

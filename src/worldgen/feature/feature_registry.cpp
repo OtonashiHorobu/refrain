@@ -578,6 +578,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             trunk_kind kind = trunk_kind::straight;
             if (*trunk_name == "minecraft:forking_trunk_placer") {
                 kind = trunk_kind::forking;
+            } else if (*trunk_name == "minecraft:fancy_trunk_placer") {
+                kind = trunk_kind::fancy;
             } else if (*trunk_name != "minecraft:straight_trunk_placer") {
                 return std::unexpected{make_error(error_code::unsupported,
                                                   "unsupported trunk placer")};
@@ -593,6 +595,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 foliage_type_kind = foliage_kind::acacia;
             } else if (foliage_name == "minecraft:spruce_foliage_placer") {
                 foliage_type_kind = foliage_kind::spruce;
+            } else if (foliage_name == "minecraft:fancy_foliage_placer") {
+                foliage_type_kind = foliage_kind::fancy;
             } else if (foliage_name != "minecraft:blob_foliage_placer") {
                 return std::unexpected{make_error(
                     error_code::unsupported, "unsupported foliage placer")};

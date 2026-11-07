@@ -103,6 +103,13 @@ void tree_feature::place_leaves_row(feature_context &context,
                         : abs_dx == radius && abs_dz == radius && radius > 0) {
                     continue;
                 }
+            } else if (foliage_ == foliage_kind::fancy) {
+                const float x = static_cast<float>(abs_dx) + 0.5F;
+                const float z = static_cast<float>(abs_dz) + 0.5F;
+                if (x * x + z * z >
+                    static_cast<float>(radius) * static_cast<float>(radius)) {
+                    continue;
+                }
             } else if (abs_dx == radius && abs_dz == radius && radius > 0) {
                 continue;
             }
@@ -160,6 +167,16 @@ void tree_feature::place_foliage(feature_context &context,
         for (jint yo = offset; yo >= offset - foliage_height; --yo) {
             const jint current =
                 std::max(leaf_radius + radius_offset - 1 - yo / 2, 0);
+            place_leaves_row(context, random, attachment, current, yo, leaves,
+                             placed);
+        }
+        return;
+    }
+    if (foliage_ == foliage_kind::fancy) {
+        for (jint yo = offset; yo >= offset - foliage_height; --yo) {
+            const jint current =
+                leaf_radius +
+                (yo != offset && yo != offset - foliage_height ? 1 : 0);
             place_leaves_row(context, random, attachment, current, yo, leaves,
                              placed);
         }
@@ -365,6 +382,73 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
         logs.push_back(pos);
         return true;
     };
+    const auto place_log_axis = [&](jint x, jint y, jint z, jint start_x,
+                                    jint start_z) {
+        const block_pos pos{.x = x, .y = y, .z = z};
+        if (!valid_tree_pos(context, pos)) {
+            return false;
+        }
+        const auto state = trunk_provider_->get(context.placement, random, pos);
+        const auto key = context.placement.states->name(state);
+        const jint xdiff = std::abs(x - start_x);
+        const jint zdiff = std::abs(z - start_z);
+        const jint maxdiff = std::max(xdiff, zdiff);
+        std::string_view axis = "y";
+        if (maxdiff > 0) {
+            axis = xdiff == maxdiff ? "x" : "z";
+        }
+        auto modified = std::string{key};
+        modified = with_state_property(modified, "axis", axis);
+        auto found = states_->find(modified);
+        if (!found) {
+            const auto interned = states_->intern(
+                modified, context.placement.states->traits(state));
+            if (interned) {
+                found = *interned;
+            }
+        }
+        if (!found) {
+            return false;
+        }
+        if (!context.placement.region->set_block_state(x, y, z, *found)) {
+            return false;
+        }
+        logs.push_back(pos);
+        return true;
+    };
+    const auto make_limb = [&](const block_pos &start, const block_pos &end,
+                               bool do_place) {
+        if (!do_place && start.x == end.x && start.y == end.y &&
+            start.z == end.z) {
+            return true;
+        }
+        const jint steps = std::max(
+            std::abs(end.x - start.x),
+            std::max(std::abs(end.y - start.y), std::abs(end.z - start.z)));
+        if (steps == 0) {
+            return true;
+        }
+        const float dx =
+            static_cast<float>(end.x - start.x) / static_cast<float>(steps);
+        const float dy =
+            static_cast<float>(end.y - start.y) / static_cast<float>(steps);
+        const float dz =
+            static_cast<float>(end.z - start.z) / static_cast<float>(steps);
+        for (jint i = 0; i <= steps; ++i) {
+            const jint x = start.x + static_cast<jint>(std::floor(
+                                         0.5F + static_cast<float>(i) * dx));
+            const jint y = start.y + static_cast<jint>(std::floor(
+                                         0.5F + static_cast<float>(i) * dy));
+            const jint z = start.z + static_cast<jint>(std::floor(
+                                         0.5F + static_cast<float>(i) * dz));
+            if (do_place) {
+                (void)place_log_axis(x, y, z, start.x, start.z);
+            } else if (!is_free(context, block_pos{.x = x, .y = y, .z = z})) {
+                return false;
+            }
+        }
+        return true;
+    };
     const auto horizontal = [&]() {
         switch (random.next_int(4)) {
         case 0:
@@ -386,7 +470,7 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
         attachments.emplace_back(
             block_pos{.x = origin.x, .y = origin.y + clipped, .z = origin.z},
             0);
-    } else {
+    } else if (kind_ == trunk_kind::forking) {
         const auto [lean_dx, lean_dz] = horizontal();
         const jint lean_height = clipped - random.next_int(4) - 1;
         jint lean_steps = 3 - random.next_int(3);
@@ -435,6 +519,92 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
             if (has_branch) {
                 attachments.emplace_back(
                     block_pos{.x = tx, .y = branch_top, .z = tz}, 0);
+            }
+        }
+    } else {
+        const jint height = clipped + 2;
+        const jint trunk_height =
+            static_cast<jint>(std::floor(static_cast<double>(height) * 0.618));
+        const jint trunk_top = origin.y + trunk_height;
+        const jint relative_start = height - 5;
+        std::vector<std::pair<block_pos, jint>> coordinates;
+        coordinates.emplace_back(block_pos{.x = origin.x,
+                                           .y = origin.y + relative_start,
+                                           .z = origin.z},
+                                 trunk_top);
+        const auto trim = [&](jint local_y) {
+            return static_cast<double>(local_y) >=
+                   static_cast<double>(height) * 0.2;
+        };
+        const auto tree_shape = [&](jint y) {
+            if (static_cast<float>(y) < static_cast<float>(height) * 0.3F) {
+                return -1.0F;
+            }
+            const float radius = static_cast<float>(height) / 2.0F;
+            const float adjacent = radius - static_cast<float>(y);
+            float distance = static_cast<float>(std::sqrt(
+                static_cast<double>(radius * radius - adjacent * adjacent)));
+            if (adjacent == 0.0F) {
+                distance = radius;
+            } else if (std::abs(adjacent) >= radius) {
+                return 0.0F;
+            }
+            return distance * 0.5F;
+        };
+        constexpr double pi = 3.14159265358979323846;
+        for (jint relative = relative_start; relative >= 0; --relative) {
+            const float shape = tree_shape(relative);
+            if (shape < 0.0F) {
+                continue;
+            }
+            const double radius =
+                static_cast<double>(shape) *
+                (static_cast<double>(random.next_float()) + 0.328);
+            const double angle =
+                static_cast<double>(random.next_float()) * 2.0 * pi;
+            const double x = radius * std::sin(angle) + 0.5;
+            const double z = radius * std::cos(angle) + 0.5;
+            const block_pos check{
+                .x = origin.x + static_cast<jint>(std::floor(x)),
+                .y = origin.y + relative - 1,
+                .z = origin.z + static_cast<jint>(std::floor(z))};
+            const block_pos check_end{
+                .x = check.x, .y = check.y + 5, .z = check.z};
+            if (!make_limb(check, check_end, false)) {
+                continue;
+            }
+            const jint dx = origin.x - check.x;
+            const jint dz = origin.z - check.z;
+            const double branch_height =
+                static_cast<double>(check.y) -
+                std::sqrt(static_cast<double>(dx * dx + dz * dz)) * 0.381;
+            const jint branch_top =
+                branch_height > static_cast<double>(trunk_top)
+                    ? trunk_top
+                    : static_cast<jint>(branch_height);
+            const block_pos branch_base{
+                .x = origin.x, .y = branch_top, .z = origin.z};
+            if (make_limb(branch_base, check, false)) {
+                coordinates.emplace_back(check, branch_top);
+            }
+        }
+        (void)make_limb(origin,
+                        block_pos{.x = origin.x,
+                                  .y = origin.y + trunk_height,
+                                  .z = origin.z},
+                        true);
+        for (const auto &[attachment, branch_base] : coordinates) {
+            const block_pos base{
+                .x = origin.x, .y = branch_base, .z = origin.z};
+            if (!(base.x == attachment.x && base.y == attachment.y &&
+                  base.z == attachment.z) &&
+                trim(branch_base - origin.y)) {
+                (void)make_limb(base, attachment, true);
+            }
+        }
+        for (const auto &[attachment, branch_base] : coordinates) {
+            if (trim(branch_base - origin.y)) {
+                attachments.emplace_back(attachment, 0);
             }
         }
     }
