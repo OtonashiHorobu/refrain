@@ -177,6 +177,21 @@ class offset_placement final : public placement_modifier {
     jint z_{0};
 };
 
+class random_chance final : public placement_modifier {
+  public:
+    explicit random_chance(float chance) : chance_{chance} {}
+    void modify(const placement_context &, worldgen_random &random,
+                const block_pos &position,
+                std::vector<block_pos> &out) const override {
+        if (random.next_float() < chance_) {
+            out.push_back(position);
+        }
+    }
+
+  private:
+    float chance_{0.0F};
+};
+
 class count_on_every_layer final : public placement_modifier {
   public:
     explicit count_on_every_layer(std::unique_ptr<provider::int_provider> count)
@@ -467,6 +482,19 @@ auto decode_placement(const data::json::value &document,
             std::make_unique<environment_scan>(
                 *direction_name == "up" ? 1 : -1, std::move(*target_predicate),
                 std::move(allowed_predicate), static_cast<jint>(*steps))};
+    }
+    if (*type == "minecraft:random_chance") {
+        const auto *chance = document.find("chance");
+        if (chance == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "random_chance has no chance")};
+        }
+        const auto value = chance->as_double();
+        if (!value) {
+            return std::unexpected{value.error()};
+        }
+        return std::unique_ptr<placement_modifier>{
+            std::make_unique<random_chance>(static_cast<float>(*value))};
     }
     if (*type == "minecraft:count_on_every_layer") {
         const auto *count_field = document.find("count");

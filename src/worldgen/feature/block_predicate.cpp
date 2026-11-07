@@ -118,6 +118,25 @@ class solid_predicate final : public block_predicate {
     }
 };
 
+class has_sturdy_face final : public block_predicate {
+  public:
+    has_sturdy_face(std::string_view direction, const block_pos &offset)
+        : direction_{direction}, offset_{offset} {}
+    [[nodiscard]] auto test(const chunk_region &region,
+                            const block_state_table &states,
+                            const block_pos &pos) const -> bool override {
+        const block_pos target{.x = pos.x + offset_.x,
+                               .y = pos.y + offset_.y,
+                               .z = pos.z + offset_.z};
+        return states.traits(region.state_at(target.x, target.y, target.z))
+            .blocks_motion;
+    }
+
+  private:
+    std::string direction_;
+    block_pos offset_{};
+};
+
 class matching_fluids final : public block_predicate {
   public:
     matching_fluids(bool water, bool lava) : water_{water}, lava_{lava} {}
@@ -182,6 +201,35 @@ auto decode_block_predicate(const data::json::value &document,
         }
         return std::unique_ptr<block_predicate>{
             std::make_unique<matching_blocks>(std::move(*list))};
+    }
+    if (*type == "minecraft:has_sturdy_face") {
+        const auto *direction = document.find("direction");
+        const auto *offset = document.find("offset");
+        if (direction == nullptr || offset == nullptr || !offset->is_array()) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "has_sturdy_face is incomplete")};
+        }
+        const auto direction_text = direction->as_string();
+        if (!direction_text) {
+            return std::unexpected{direction_text.error()};
+        }
+        const auto values = offset->as_array();
+        if (!values || values->size() != 3) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "has_sturdy_face offset is invalid")};
+        }
+        const auto x = (*values)[0].as_int64();
+        const auto y = (*values)[1].as_int64();
+        const auto z = (*values)[2].as_int64();
+        if (!x || !y || !z) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "has_sturdy_face offset is invalid")};
+        }
+        return std::unique_ptr<block_predicate>{
+            std::make_unique<has_sturdy_face>(
+                *direction_text, block_pos{.x = static_cast<jint>(*x),
+                                           .y = static_cast<jint>(*y),
+                                           .z = static_cast<jint>(*z)})};
     }
     if (*type == "minecraft:solid") {
         return std::unique_ptr<block_predicate>{
