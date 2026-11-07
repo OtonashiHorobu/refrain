@@ -4,6 +4,7 @@
 
 #include <refrain/worldgen/feature/placement.hpp>
 
+#include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/feature/block_predicate.hpp>
 
@@ -176,6 +177,66 @@ class offset_placement final : public placement_modifier {
     jint z_{0};
 };
 
+class count_on_every_layer final : public placement_modifier {
+  public:
+    explicit count_on_every_layer(std::unique_ptr<provider::int_provider> count)
+        : count_{std::move(count)} {}
+    void modify(const placement_context &context, worldgen_random &random,
+                const block_pos &origin,
+                std::vector<block_pos> &out) const override {
+        jint layer = 0;
+        bool found_any = false;
+        do {
+            found_any = false;
+            const jint count = count_->sample(random);
+            for (jint i = 0; i < count; ++i) {
+                const jint x = random.next_int(16) + origin.x;
+                const jint z = random.next_int(16) + origin.z;
+                const jint local_x = x - context.chunk->chunk_x() * 16;
+                const jint local_z = z - context.chunk->chunk_z() * 16;
+                if (local_x < 0 || local_x > 15 || local_z < 0 ||
+                    local_z > 15) {
+                    continue;
+                }
+                const jint start_y = context.chunk->first_available(
+                    heightmap_kind::motion_blocking, local_x, local_z);
+                jint y = start_y;
+                jint current_layer = 0;
+                bool current_air = false;
+                const auto current = context.chunk->state_at(
+                    static_cast<jint>(x), start_y, static_cast<jint>(z));
+                current_air = is_empty(context, current);
+                for (; y >= context.chunk->min_y() + 1; --y) {
+                    const auto below = context.chunk->state_at(
+                        static_cast<jint>(x), y - 1, static_cast<jint>(z));
+                    if (!is_empty(context, below) && current_air &&
+                        state_block_name(context.states->name(below)) !=
+                            "minecraft:bedrock") {
+                        if (current_layer == layer) {
+                            out.push_back(block_pos{.x = x, .y = y, .z = z});
+                            found_any = true;
+                            break;
+                        }
+                        ++current_layer;
+                    }
+                    current_air = is_empty(context, below);
+                }
+            }
+            ++layer;
+        } while (found_any);
+    }
+
+  private:
+    static auto is_empty(const placement_context &context, block_state_id state)
+        -> bool {
+        const auto name = context.states->name(state);
+        return is_air_block_name(name) || name == "minecraft:water" ||
+               name == "minecraft:lava";
+    }
+
+    std::unique_ptr<provider::int_provider> count_;
+};
+
 class surface_water_depth_filter final : public placement_modifier {
   public:
     explicit surface_water_depth_filter(jint max_depth)
@@ -324,6 +385,19 @@ auto decode_placement(const data::json::value &document,
         }
         return std::unique_ptr<placement_modifier>{
             std::make_unique<offset_placement>(x, y, z)};
+    }
+    if (*type == "minecraft:count_on_every_layer") {
+        const auto *count_field = document.find("count");
+        if (count_field == nullptr) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "count_on_every_layer has no count")};
+        }
+        auto count = provider::int_provider::decode(*count_field);
+        if (!count) {
+            return std::unexpected{count.error()};
+        }
+        return std::unique_ptr<placement_modifier>{
+            std::make_unique<count_on_every_layer>(std::move(*count))};
     }
     if (*type == "minecraft:surface_water_depth_filter") {
         const auto *depth = document.find("max_water_depth");
