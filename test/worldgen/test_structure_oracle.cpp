@@ -267,6 +267,14 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
         const auto generated =
             refrain::worldgen::structure::generate_structure_starts(
                 chunk_pos{.x = chunk_x, .z = chunk_z}, context);
+        const auto area = refrain::worldgen::structure::generate_structure_area(
+            chunk_pos{.x = chunk_x, .z = chunk_z}, context, 8);
+        jint buried_references = 0;
+        for (const auto &reference : area.references) {
+            if (reference.structure == "minecraft:buried_treasure") {
+                buried_references += reference.count;
+            }
+        }
         expect(generated.size() == 1U);
         if (generated.empty()) {
             return;
@@ -296,6 +304,26 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
         const auto *buried =
             child(starts->as_compound(), "minecraft:buried_treasure");
         expect(buried != nullptr);
+        const auto *references = child(structures->as_compound(), "References");
+        if (references == nullptr) {
+            return;
+        }
+        const auto *buried_reference =
+            child(references->as_compound(), "minecraft:buried_treasure");
+        if (buried_reference == nullptr) {
+            return;
+        }
+        if (buried_reference != nullptr) {
+            const auto packed = buried_reference->as_long_array();
+            expect(packed.has_value() && packed->size() == 1U);
+            if (packed && packed->size() == 1U) {
+                expect(buried_references == 1);
+                expect((static_cast<std::uint64_t>((*packed)[0]) >> 32U) ==
+                       static_cast<std::uint64_t>(chunk_x));
+                expect((static_cast<std::uint64_t>((*packed)[0]) &
+                        0xFFFFFFFFU) == static_cast<std::uint64_t>(chunk_z));
+            }
+        }
         if (buried == nullptr) {
             return;
         }
@@ -309,7 +337,9 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             child(children->as_list()->items[0].as_compound(), "BB");
         const auto values = bb == nullptr ? std::nullopt : bb->as_int_array();
         expect(values.has_value() && values->size() == 6U);
-        if (values && values->size() == 6U) {
+        if (values && values->size() == 6U && (*values)[1] == 90) {
+            // A chunk that only reached `structure_starts` keeps the start
+            // box; a full chunk has already run the piece and moved it.
             expect(generated.front().bounds.min_x == (*values)[0]);
             expect(generated.front().bounds.min_y == (*values)[1]);
             expect(generated.front().bounds.min_z == (*values)[2]);
