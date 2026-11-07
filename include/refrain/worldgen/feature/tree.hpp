@@ -54,6 +54,21 @@ class trunk_vine_decorator final : public tree_decorator {
     void place(const tree_decorator_context &context) const override;
 };
 
+class place_on_ground_decorator final : public tree_decorator {
+  public:
+    place_on_ground_decorator(jint tries, jint radius, jint height,
+                              std::unique_ptr<state_provider> provider)
+        : tries_{tries}, radius_{radius}, height_{height},
+          provider_{std::move(provider)} {}
+    void place(const tree_decorator_context &context) const override;
+
+  private:
+    jint tries_{128};
+    jint radius_{2};
+    jint height_{1};
+    std::unique_ptr<state_provider> provider_;
+};
+
 class beehive_decorator final : public tree_decorator {
   public:
     explicit beehive_decorator(float probability) : probability_{probability} {}

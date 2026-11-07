@@ -172,6 +172,67 @@ void leave_vine_decorator::place(const tree_decorator_context &context) const {
     }
 }
 
+void place_on_ground_decorator::place(
+    const tree_decorator_context &context) const {
+    if (context.logs.empty()) {
+        return;
+    }
+    const jint min_y = context.logs.front().y;
+    jint min_x = context.logs.front().x;
+    jint max_x = min_x;
+    jint min_z = context.logs.front().z;
+    jint max_z = min_z;
+    for (const auto &log : context.logs) {
+        if (log.y == min_y) {
+            min_x = std::min(min_x, log.x);
+            max_x = std::max(max_x, log.x);
+            min_z = std::min(min_z, log.z);
+            max_z = std::max(max_z, log.z);
+        }
+    }
+    min_x -= radius_;
+    max_x += radius_;
+    min_z -= radius_;
+    max_z += radius_;
+    const jint min_scan_y = min_y - height_;
+    const jint max_scan_y = min_y + height_;
+    for (jint i = 0; i < tries_; ++i) {
+        const jint x = context.random.next_int(max_x - min_x + 1) + min_x;
+        const jint y =
+            context.random.next_int(max_scan_y - min_scan_y + 1) + min_scan_y;
+        const jint z = context.random.next_int(max_z - min_z + 1) + min_z;
+        const block_pos above{.x = x, .y = y + 1, .z = z};
+        const auto above_name = context.context.placement.states->name(
+            context.context.placement.region->state_at(above.x, above.y,
+                                                       above.z));
+        const bool above_ok =
+            is_air_block_name(above_name) || above_name == "minecraft:vine";
+        const auto floor_state =
+            context.context.placement.region->state_at(x, y, z);
+        const bool floor_ok =
+            context.context.placement.states->traits(floor_state).blocks_motion;
+        const jint local_x =
+            x - context.context.placement.chunk->chunk_x() * 16;
+        const jint local_z =
+            z - context.context.placement.chunk->chunk_z() * 16;
+        if (local_x < 0 || local_x > 15 || local_z < 0 || local_z > 15) {
+            continue;
+        }
+        const jint heightmap = context.context.placement.chunk->first_available(
+            heightmap_kind::motion_blocking_no_leaves, local_x, local_z);
+        std::fprintf(
+            stderr, "ground pos=%d,%d,%d above=%d floor=%d hm=%d ymax=%d\n",
+            static_cast<int>(x), static_cast<int>(y), static_cast<int>(z),
+            static_cast<int>(above_ok), static_cast<int>(floor_ok),
+            static_cast<int>(heightmap), static_cast<int>(max_scan_y));
+        if (above_ok && floor_ok && heightmap <= above.y) {
+            const auto state = provider_->get(context.context.placement,
+                                              context.random, above);
+            context.set_block(above, state);
+        }
+    }
+}
+
 void beehive_decorator::place(const tree_decorator_context &context) const {
     if (context.logs.empty()) {
         return;
