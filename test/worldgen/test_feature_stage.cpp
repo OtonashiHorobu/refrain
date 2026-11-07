@@ -35,6 +35,7 @@ using refrain::worldgen::feature::decode_block_predicate;
 using refrain::worldgen::feature::decode_placement;
 using refrain::worldgen::feature::decode_state_provider;
 using refrain::worldgen::feature::decorate;
+using refrain::worldgen::feature::delta_feature;
 using refrain::worldgen::feature::feature_context;
 using refrain::worldgen::feature::feature_data_set;
 using refrain::worldgen::feature::feature_registry;
@@ -744,6 +745,63 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
             feature.place(context, random, block_pos{.x = 0, .y = 0, .z = 0}));
         expect(chunk.state_at(0, 4, 0) == *ice);
         expect(chunk.state_at(0, 5, 0) == *snow);
+    };
+
+    "a delta writes lava into a flat cave floor"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false, .blocks_motion = true});
+        auto lava =
+            registry.intern("minecraft:lava", {.air = false, .fluid = true});
+        auto magma = registry.intern("minecraft:magma_block",
+                                     {.air = false, .blocks_motion = true});
+        expect(stone.has_value() && lava.has_value() && magma.has_value());
+        if (!stone || !lava || !magma) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::biomes);
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint y = 0; y < 16; ++y) {
+                    expect(chunk.set_state(x, y, z, *stone));
+                }
+            }
+        }
+        chunk_region region{chunk, 0};
+        placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &registry,
+            .generation =
+                generation_context{.min_y = 0, .height = 32, .sea_level = 8},
+        };
+        feature_context context{.placement = placement};
+        auto size =
+            refrain::worldgen::provider::int_provider::decode(parse("3"));
+        auto rim =
+            refrain::worldgen::provider::int_provider::decode(parse("1"));
+        expect(size.has_value() && rim.has_value());
+        if (!size || !rim) {
+            return;
+        }
+        const delta_feature feature{*lava, *magma, std::move(*size),
+                                    std::move(*rim)};
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(29)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 15, .z = 8}));
+        jint lava_count = 0;
+        for (jint y = 0; y < 16; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    if (chunk.state_at(x, y, z) == *lava) {
+                        ++lava_count;
+                    }
+                }
+            }
+        }
+        expect(lava_count > 0);
     };
 };
 

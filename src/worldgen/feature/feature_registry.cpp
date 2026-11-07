@@ -620,6 +620,36 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 id, std::make_unique<geode_feature>(std::move(parameters)));
             continue;
         }
+        if (*type == "minecraft:delta_feature") {
+            const auto *contents = document.document.find("contents");
+            const auto *rim = document.document.find("rim");
+            const auto *size = document.document.find("size");
+            const auto *rim_size = document.document.find("rim_size");
+            if (contents == nullptr || rim == nullptr || size == nullptr ||
+                rim_size == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "delta feature is incomplete")};
+            }
+            const auto contents_key = decode_state_key(*contents);
+            const auto rim_key = decode_state_key(*rim);
+            auto size_provider = provider::int_provider::decode(*size);
+            auto rim_provider = provider::int_provider::decode(*rim_size);
+            if (!contents_key || !rim_key || !size_provider || !rim_provider) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "delta feature is invalid")};
+            }
+            const auto contents_state = resolve_state(*states_, *contents_key);
+            const auto rim_state = resolve_state(*states_, *rim_key);
+            if (!contents_state || !rim_state) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "delta states are invalid")};
+            }
+            features_.emplace(
+                id, std::make_unique<delta_feature>(*contents_state, *rim_state,
+                                                    std::move(*size_provider),
+                                                    std::move(*rim_provider)));
+            continue;
+        }
         if (*type == "minecraft:freeze_top_layer") {
             const auto ice = resolve_state(*states_, "minecraft:ice");
             const auto snow =

@@ -464,6 +464,30 @@ class freeze_top_layer_feature final : public feature {
     block_state_id snow_{no_block_state};
 };
 
+/// `DeltaFeature`: a lava pool with a magma rim on a flat cave floor.
+class delta_feature final : public feature {
+  public:
+    delta_feature(block_state_id contents, block_state_id rim,
+                  std::unique_ptr<provider::int_provider> size,
+                  std::unique_ptr<provider::int_provider> rim_size)
+        : contents_{contents}, rim_{rim}, size_{std::move(size)},
+          rim_size_{std::move(rim_size)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    [[nodiscard]] auto is_clear(feature_context &context,
+                                const block_pos &pos) const -> bool;
+    void write(feature_context &context, const block_pos &pos,
+               block_state_id state) const;
+
+    block_state_id contents_{no_block_state};
+    block_state_id rim_{no_block_state};
+    std::unique_ptr<provider::int_provider> size_{};
+    std::unique_ptr<provider::int_provider> rim_size_{};
+};
+
 /// `SpringFeature`: a fluid source surrounded by a fixed rock/hole pattern.
 class spring_feature final : public feature {
   public:

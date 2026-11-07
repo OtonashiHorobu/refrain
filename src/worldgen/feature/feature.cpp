@@ -1462,6 +1462,82 @@ auto freeze_top_layer_feature::place(feature_context &context,
     return true;
 }
 
+auto delta_feature::is_clear(feature_context &context,
+                             const block_pos &pos) const -> bool {
+    const auto state = context.placement.region->state_at(pos.x, pos.y, pos.z);
+    const auto name = block_name(context, state);
+    if (name == block_name(context, contents_) || name == "minecraft:bedrock" ||
+        name == "minecraft:nether_bricks" ||
+        name == "minecraft:nether_brick_fence" ||
+        name == "minecraft:nether_brick_stairs" ||
+        name == "minecraft:nether_wart" || name == "minecraft:chest" ||
+        name == "minecraft:spawner") {
+        return false;
+    }
+    for (const auto &direction : all_directions) {
+        const bool air = context.placement.states
+                             ->traits(context.placement.region->state_at(
+                                 pos.x + direction.dx, pos.y + direction.dy,
+                                 pos.z + direction.dz))
+                             .air;
+        if ((air && direction.dy != 1) || (!air && direction.dy == 1)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void delta_feature::write(feature_context &context, const block_pos &pos,
+                          block_state_id state) const {
+    (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z, state);
+}
+
+auto delta_feature::place(feature_context &context, worldgen_random &random,
+                          const block_pos &origin) const -> bool {
+    bool any = false;
+    const bool spawn_rim = random.next_double() < 0.9;
+    const jint rim_x = spawn_rim ? rim_size_->sample(random) : 0;
+    const jint rim_z = spawn_rim ? rim_size_->sample(random) : 0;
+    const bool has_rim = spawn_rim && rim_x != 0 && rim_z != 0;
+    const jint radius_x = size_->sample(random);
+    const jint radius_z = size_->sample(random);
+    const jint radius_limit = std::max(radius_x, radius_z);
+    for (jint depth = 0; depth <= radius_limit; ++depth) {
+        const jint max_x = std::min(radius_x, depth);
+        for (jint x = -max_x; x <= max_x; ++x) {
+            const jint z = depth - std::abs(x);
+            if (z < 0 || z > radius_z) {
+                continue;
+            }
+            const std::array<jint, 2> z_values{z, -z};
+            for (const jint dz : z_values) {
+                if (dz != z && z == 0) {
+                    continue;
+                }
+                const block_pos pos{
+                    .x = origin.x + x, .y = origin.y, .z = origin.z + dz};
+                if (std::abs(x) + std::abs(dz) > radius_limit) {
+                    return any;
+                }
+                if (!is_clear(context, pos)) {
+                    continue;
+                }
+                if (has_rim) {
+                    any = true;
+                    write(context, pos, rim_);
+                }
+                const block_pos offset{
+                    .x = pos.x + rim_x, .y = pos.y, .z = pos.z + rim_z};
+                if (is_clear(context, offset)) {
+                    any = true;
+                    write(context, offset, contents_);
+                }
+            }
+        }
+    }
+    return any;
+}
+
 auto sequence_feature::place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool {
     for (const auto &id : features_) {
