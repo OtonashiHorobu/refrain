@@ -23,6 +23,13 @@ auto structure_bbox::is_close_to(const chunk_pos &chunk, jint radius) const
            max_z >= chunk_min_z - radius && min_z <= chunk_min_z + 15 + radius;
 }
 
+auto structure_bbox::intersects_chunk(const chunk_pos &chunk) const -> bool {
+    const jint chunk_min_x = chunk.x * 16;
+    const jint chunk_min_z = chunk.z * 16;
+    return max_x >= chunk_min_x && min_x <= chunk_min_x + 15 &&
+           max_z >= chunk_min_z && min_z <= chunk_min_z + 15;
+}
+
 auto starts_for_chunk(const std::vector<structure_start> &starts,
                       const chunk_pos &chunk, jint radius)
     -> std::vector<const structure_start *> {
@@ -36,7 +43,7 @@ auto starts_for_chunk(const std::vector<structure_start> &starts,
 }
 
 auto collect_references(std::vector<structure_start> &starts,
-                        const chunk_pos &chunk, jint radius)
+                        const chunk_pos &chunk, jint /*radius*/)
     -> std::vector<structure_reference> {
     std::vector<structure_reference> result;
     const auto add = [&](std::string_view structure, const chunk_pos &source) {
@@ -55,7 +62,7 @@ auto collect_references(std::vector<structure_start> &starts,
                                 .count = 1});
     };
     for (auto &start : starts) {
-        if (!start.bounds.is_close_to(chunk, radius) ||
+        if (!start.bounds.intersects_chunk(chunk) ||
             !start.can_add_reference()) {
             continue;
         }

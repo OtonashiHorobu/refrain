@@ -236,10 +236,37 @@ suite<"worldgen/structure-stage"> structure_stage_tests = [] {
         expect(result.starts.size() == 289U);
         expect(!result.starts.empty());
         expect(result.starts.front().structure == "oracle:buried");
-        expect(!result.references.empty());
+        expect(result.references.size() == 1U);
         expect(result.references.front().structure == "oracle:buried");
         expect(result.references.front().count >= 1);
     };
+
+    "references are counted only for starts overlapping the target chunk"_test =
+        [] {
+            std::vector<structure::structure_start> starts{
+                {.structure = "oracle:buried",
+                 .chunk = {.x = 6, .z = -2},
+                 .bounds = {.min_x = 105,
+                            .min_y = 90,
+                            .min_z = -23,
+                            .max_x = 105,
+                            .max_y = 90,
+                            .max_z = -23}},
+                {.structure = "oracle:buried",
+                 .chunk = {.x = 5, .z = -2},
+                 .bounds = {.min_x = 89,
+                            .min_y = 90,
+                            .min_z = -23,
+                            .max_x = 89,
+                            .max_y = 90,
+                            .max_z = -23}},
+            };
+            const auto references = structure::collect_references(
+                starts, chunk_pos{.x = 6, .z = -2}, 8);
+            expect(references.size() == 1U);
+            expect(references.front().chunk_x == 6);
+            expect(references.front().count == 1);
+        };
 
     "the write stage keeps only starts owned by the chunk"_test = [] {
         const std::vector<structure::selected_structure> structures{{

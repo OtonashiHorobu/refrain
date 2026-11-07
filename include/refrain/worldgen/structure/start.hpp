@@ -26,6 +26,7 @@ struct structure_bbox {
     [[nodiscard]] auto intersects(const structure_bbox &other) const -> bool;
     [[nodiscard]] auto is_close_to(const chunk_pos &chunk, jint radius) const
         -> bool;
+    [[nodiscard]] auto intersects_chunk(const chunk_pos &chunk) const -> bool;
 };
 
 struct structure_piece {
@@ -56,7 +57,10 @@ struct structure_start {
                                     const chunk_pos &chunk, jint radius)
     -> std::vector<const structure_start *>;
 
-/// Adds one reference from `chunk` to every nearby start with a free slot.
+/// Adds one reference from `chunk` to every start whose bounding box overlaps
+/// the chunk and which still has a free reference slot. `radius` names the
+/// source-chunk search radius the caller scanned; the reference test itself is
+/// the exact block-box overlap.
 [[nodiscard]] auto collect_references(std::vector<structure_start> &starts,
                                       const chunk_pos &chunk, jint radius)
     -> std::vector<structure_reference>;
