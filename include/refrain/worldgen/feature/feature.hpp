@@ -488,6 +488,89 @@ class delta_feature final : public feature {
     std::unique_ptr<provider::int_provider> rim_size_{};
 };
 
+/// `LargeDripstoneFeature`: a stalactite/stalagmite pair in a cave column.
+class large_dripstone_feature final : public feature {
+  public:
+    large_dripstone_feature(
+        std::string replaceable_tag, jint floor_to_ceiling_range,
+        std::unique_ptr<provider::int_provider> radius, jint radius_min,
+        jint radius_max, std::unique_ptr<provider::float_provider> height_scale,
+        float radius_to_height_ratio,
+        std::unique_ptr<provider::float_provider> stalactite_bluntness,
+        std::unique_ptr<provider::float_provider> stalagmite_bluntness,
+        std::unique_ptr<provider::float_provider> wind_speed,
+        jint min_radius_for_wind, float min_bluntness_for_wind)
+        : replaceable_tag_{std::move(replaceable_tag)},
+          floor_to_ceiling_range_{floor_to_ceiling_range},
+          radius_{std::move(radius)}, radius_min_{radius_min},
+          radius_max_{radius_max}, height_scale_{std::move(height_scale)},
+          radius_to_height_ratio_{radius_to_height_ratio},
+          stalactite_bluntness_{std::move(stalactite_bluntness)},
+          stalagmite_bluntness_{std::move(stalagmite_bluntness)},
+          wind_speed_{std::move(wind_speed)},
+          min_radius_for_wind_{min_radius_for_wind},
+          min_bluntness_for_wind_{min_bluntness_for_wind} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    struct column_range {
+        jint floor{0};
+        jint ceiling{0};
+    };
+    struct dripstone {
+        block_pos root{};
+        bool pointing_up{false};
+        jint radius{0};
+        double bluntness{0.0};
+        double scale{0.0};
+    };
+    struct wind_offsetter {
+        jint origin_y{0};
+        double x{0.0};
+        double z{0.0};
+        jint max_offset{0};
+        bool active{false};
+
+        [[nodiscard]] auto offset(const block_pos &pos) const -> block_pos;
+    };
+
+    [[nodiscard]] auto scan(feature_context &context,
+                            const block_pos &origin) const
+        -> std::optional<column_range>;
+    [[nodiscard]] auto height(const dripstone &stone) const -> jint;
+    [[nodiscard]] auto height_at(const dripstone &stone, float radius) const
+        -> jint;
+    [[nodiscard]] auto embedded(feature_context &context,
+                                const block_pos &center, jint radius) const
+        -> bool;
+    [[nodiscard]] auto empty_or_water(feature_context &context,
+                                      const block_pos &pos) const -> bool;
+    [[nodiscard]] auto empty_or_water_or_lava(feature_context &context,
+                                              const block_pos &pos) const
+        -> bool;
+    [[nodiscard]] auto is_base_or_lava(feature_context &context,
+                                       const block_pos &pos) const -> bool;
+    auto move_back(feature_context &context, dripstone &stone,
+                   const wind_offsetter &wind) const -> bool;
+    void place_blocks(feature_context &context, worldgen_random &random,
+                      const dripstone &stone, const wind_offsetter &wind) const;
+
+    std::string replaceable_tag_{};
+    jint floor_to_ceiling_range_{30};
+    std::unique_ptr<provider::int_provider> radius_{};
+    jint radius_min_{1};
+    jint radius_max_{16};
+    std::unique_ptr<provider::float_provider> height_scale_{};
+    float radius_to_height_ratio_{0.33F};
+    std::unique_ptr<provider::float_provider> stalactite_bluntness_{};
+    std::unique_ptr<provider::float_provider> stalagmite_bluntness_{};
+    std::unique_ptr<provider::float_provider> wind_speed_{};
+    jint min_radius_for_wind_{4};
+    float min_bluntness_for_wind_{0.6F};
+};
+
 /// `SpringFeature`: a fluid source surrounded by a fixed rock/hole pattern.
 class spring_feature final : public feature {
   public:

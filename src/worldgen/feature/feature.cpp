@@ -1539,6 +1539,257 @@ auto delta_feature::place(feature_context &context, worldgen_random &random,
     return any;
 }
 
+auto large_dripstone_feature::empty_or_water(feature_context &context,
+                                             const block_pos &pos) const
+    -> bool {
+    const auto traits = context.placement.states->traits(
+        context.placement.region->state_at(pos.x, pos.y, pos.z));
+    return traits.air || traits.water;
+}
+
+auto large_dripstone_feature::empty_or_water_or_lava(feature_context &context,
+                                                     const block_pos &pos) const
+    -> bool {
+    const auto traits = context.placement.states->traits(
+        context.placement.region->state_at(pos.x, pos.y, pos.z));
+    return traits.air || traits.water || (traits.fluid && !traits.water);
+}
+
+auto large_dripstone_feature::is_base_or_lava(feature_context &context,
+                                              const block_pos &pos) const
+    -> bool {
+    const auto state = context.placement.region->state_at(pos.x, pos.y, pos.z);
+    const auto name = block_name(context, state);
+    return name == "minecraft:dripstone_block" ||
+           context.placement.states->in_tag(state, replaceable_tag_) ||
+           name == "minecraft:lava";
+}
+
+auto large_dripstone_feature::scan(feature_context &context,
+                                   const block_pos &origin) const
+    -> std::optional<column_range> {
+    if (!empty_or_water(context, origin)) {
+        return std::nullopt;
+    }
+    const auto scan_direction = [&](jint direction) -> std::optional<jint> {
+        jint y = origin.y;
+        for (jint i = 1; i < floor_to_ceiling_range_; ++i) {
+            if (!empty_or_water(
+                    context, block_pos{.x = origin.x, .y = y, .z = origin.z})) {
+                break;
+            }
+            y += direction;
+        }
+        if (is_base_or_lava(context,
+                            block_pos{.x = origin.x, .y = y, .z = origin.z})) {
+            return y;
+        }
+        return std::nullopt;
+    };
+    const auto ceiling = scan_direction(1);
+    const auto floor = scan_direction(-1);
+    if (!ceiling || !floor) {
+        return std::nullopt;
+    }
+    return column_range{.floor = *floor, .ceiling = *ceiling};
+}
+
+auto large_dripstone_feature::height(const dripstone &stone) const -> jint {
+    return height_at(stone, 0.0F);
+}
+
+auto large_dripstone_feature::height_at(const dripstone &stone,
+                                        float radius) const -> jint {
+    double x = static_cast<double>(radius);
+    if (x < stone.bluntness) {
+        x = stone.bluntness;
+    }
+    const double cutoff = 0.384;
+    const double r = x / static_cast<double>(stone.radius) * 0.384;
+    const double part1 = 0.75 * std::pow(r, 1.3333333333333333);
+    const double part2 = std::pow(r, 0.6666666666666666);
+    const double part3 = 0.3333333333333333 * std::log(r);
+    double relative = stone.scale * (part1 - part2 - part3);
+    relative = std::max(relative, 0.0);
+    return static_cast<jint>(relative / cutoff *
+                             static_cast<double>(stone.radius));
+}
+
+auto large_dripstone_feature::embedded(feature_context &context,
+                                       const block_pos &center,
+                                       jint radius) const -> bool {
+    if (empty_or_water_or_lava(context, center)) {
+        return false;
+    }
+    const float increment = 6.0F / static_cast<float>(radius);
+    for (float angle = 0.0F; angle < static_cast<float>(pi * 2.0);
+         angle += increment) {
+        const auto dx =
+            static_cast<jint>(mth::cos(angle) * static_cast<float>(radius));
+        const auto dz =
+            static_cast<jint>(mth::sin(angle) * static_cast<float>(radius));
+        if (empty_or_water_or_lava(context, block_pos{.x = center.x + dx,
+                                                      .y = center.y,
+                                                      .z = center.z + dz})) {
+            return false;
+        }
+    }
+    return true;
+}
+
+auto large_dripstone_feature::move_back(feature_context &context,
+                                        dripstone &stone,
+                                        const wind_offsetter &wind) const
+    -> bool {
+    while (stone.radius > 1) {
+        block_pos root = stone.root;
+        const jint tries = std::min(10, height(stone));
+        for (jint i = 0; i < tries; ++i) {
+            if (block_name(context, context.placement.region->state_at(
+                                        root.x, root.y, root.z)) ==
+                "minecraft:lava") {
+                return false;
+            }
+            if (embedded(context, wind.offset(root), stone.radius)) {
+                stone.root = root;
+                return true;
+            }
+            root.y += stone.pointing_up ? -1 : 1;
+        }
+        stone.radius /= 2;
+    }
+    return false;
+}
+
+auto large_dripstone_feature::wind_offsetter::offset(const block_pos &pos) const
+    -> block_pos {
+    if (!active) {
+        return pos;
+    }
+    const jint dy = origin_y - pos.y;
+    const auto dx = static_cast<jint>(std::floor(x * static_cast<double>(dy)));
+    const auto dz = static_cast<jint>(std::floor(z * static_cast<double>(dy)));
+    return {.x = pos.x + std::clamp(dx, -max_offset, max_offset),
+            .y = pos.y,
+            .z = pos.z + std::clamp(dz, -max_offset, max_offset)};
+}
+
+void large_dripstone_feature::place_blocks(feature_context &context,
+                                           worldgen_random &random,
+                                           const dripstone &stone,
+                                           const wind_offsetter &wind) const {
+    for (jint dx = -stone.radius; dx <= stone.radius; ++dx) {
+        for (jint dz = -stone.radius; dz <= stone.radius; ++dz) {
+            const float current =
+                mth::sqrt(static_cast<float>(dx * dx + dz * dz));
+            if (current > static_cast<float>(stone.radius)) {
+                continue;
+            }
+            jint column_height = height_at(stone, current);
+            if (column_height <= 0) {
+                continue;
+            }
+            if (random.next_float() < 0.2F) {
+                const float factor = 0.8F + random.next_float() * (1.0F - 0.8F);
+                column_height = static_cast<jint>(
+                    static_cast<float>(column_height) * factor);
+            }
+            block_pos pos{.x = stone.root.x + dx,
+                          .y = stone.root.y,
+                          .z = stone.root.z + dz};
+            bool out_of_stone = false;
+            const jint max_y =
+                stone.pointing_up
+                    ? (context.placement.height
+                           ? context.placement.height(
+                                 heightmap_kind::world_surface_wg, pos.x, pos.z)
+                           : context.placement.chunk->min_y() +
+                                 context.placement.chunk->height())
+                    : std::numeric_limits<jint>::max();
+            for (jint i = 0; i < column_height && pos.y < max_y; ++i) {
+                const auto adjusted = wind.offset(pos);
+                if (empty_or_water_or_lava(context, adjusted)) {
+                    out_of_stone = true;
+                    const auto state = context.placement.resolve_state
+                                           ? context.placement.resolve_state(
+                                                 "minecraft:dripstone_block")
+                                           : no_block_state;
+                    std::fprintf(stderr, "set drip %d,%d,%d id=%d\n",
+                                 (int)adjusted.x, (int)adjusted.y,
+                                 (int)adjusted.z, (int)state);
+                    (void)context.placement.region->set_block_state(
+                        adjusted.x, adjusted.y, adjusted.z, state);
+                } else if (out_of_stone &&
+                           context.placement.states->in_tag(
+                               context.placement.region->state_at(
+                                   adjusted.x, adjusted.y, adjusted.z),
+                               "minecraft:base_stone_overworld")) {
+                    break;
+                }
+                pos.y += stone.pointing_up ? 1 : -1;
+            }
+        }
+    }
+}
+
+auto large_dripstone_feature::place(feature_context &context,
+                                    worldgen_random &random,
+                                    const block_pos &origin) const -> bool {
+    if (!empty_or_water(context, origin)) {
+        return false;
+    }
+    const auto column = scan(context, origin);
+    if (!column || column->ceiling - column->floor < 4) {
+        return false;
+    }
+    const jint column_height = column->ceiling - column->floor;
+    const jint max_radius =
+        std::clamp(static_cast<jint>(static_cast<float>(column_height) *
+                                     radius_to_height_ratio_),
+                   radius_min_, radius_max_);
+    const jint radius =
+        radius_min_ + random.next_int(max_radius - radius_min_ + 1);
+    auto make = [&](const block_pos &root, bool up,
+                    const provider::float_provider &bluntness) {
+        return dripstone{
+            .root = root,
+            .pointing_up = up,
+            .radius = radius,
+            .bluntness = static_cast<double>(bluntness.sample(random)),
+            .scale = static_cast<double>(height_scale_->sample(random)),
+        };
+    };
+    dripstone stalactite =
+        make(block_pos{.x = origin.x, .y = column->ceiling - 1, .z = origin.z},
+             false, *stalactite_bluntness_);
+    dripstone stalagmite =
+        make(block_pos{.x = origin.x, .y = column->floor + 1, .z = origin.z},
+             true, *stalagmite_bluntness_);
+    wind_offsetter wind;
+    if (radius >= min_radius_for_wind_ &&
+        stalactite.bluntness >= static_cast<double>(min_bluntness_for_wind_) &&
+        stalagmite.bluntness >= static_cast<double>(min_bluntness_for_wind_)) {
+        wind.active = true;
+        wind.origin_y = origin.y;
+        wind.max_offset = 16 - radius;
+        const float speed = wind_speed_->sample(random);
+        const float direction = random.next_float() * static_cast<float>(pi);
+        wind.x = static_cast<double>(mth::cos(direction)) *
+                 static_cast<double>(speed);
+        wind.z = static_cast<double>(mth::sin(direction)) *
+                 static_cast<double>(speed);
+    }
+    const bool stalactite_ok = move_back(context, stalactite, wind);
+    const bool stalagmite_ok = move_back(context, stalagmite, wind);
+    if (stalactite_ok) {
+        place_blocks(context, random, stalactite, wind);
+    }
+    if (stalagmite_ok) {
+        place_blocks(context, random, stalagmite, wind);
+    }
+    return true;
+}
+
 auto sequence_feature::place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool {
     for (const auto &id : features_) {

@@ -440,6 +440,81 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       static_cast<jint>(*size_value), discard));
             continue;
         }
+        if (*type == "minecraft:large_dripstone") {
+            const auto *replaceable =
+                document.document.find("replaceable_blocks");
+            const auto *radius = document.document.find("column_radius");
+            const auto *height_scale = document.document.find("height_scale");
+            const auto *stalactite =
+                document.document.find("stalactite_bluntness");
+            const auto *stalagmite =
+                document.document.find("stalagmite_bluntness");
+            const auto *wind = document.document.find("wind_speed");
+            if (replaceable == nullptr || radius == nullptr ||
+                height_scale == nullptr || stalactite == nullptr ||
+                stalagmite == nullptr || wind == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "large dripstone is incomplete")};
+            }
+            const auto tag = replaceable->as_string();
+            auto radius_provider = provider::int_provider::decode(*radius);
+            auto height_provider =
+                provider::float_provider::decode(*height_scale);
+            auto stalactite_provider =
+                provider::float_provider::decode(*stalactite);
+            auto stalagmite_provider =
+                provider::float_provider::decode(*stalagmite);
+            auto wind_provider = provider::float_provider::decode(*wind);
+            if (!tag || !radius_provider || !height_provider ||
+                !stalactite_provider || !stalagmite_provider ||
+                !wind_provider) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "large dripstone is invalid")};
+            }
+            jint radius_min = 1;
+            jint radius_max = 16;
+            if (const auto *value = radius->find("min_inclusive");
+                value != nullptr) {
+                if (const auto parsed = value->as_int64(); parsed) {
+                    radius_min = static_cast<jint>(*parsed);
+                }
+            }
+            if (const auto *value = radius->find("max_inclusive");
+                value != nullptr) {
+                if (const auto parsed = value->as_int64(); parsed) {
+                    radius_max = static_cast<jint>(*parsed);
+                }
+            }
+            const auto read_float = [&](std::string_view name, float fallback) {
+                const auto *field = document.document.find(name);
+                if (field == nullptr) {
+                    return fallback;
+                }
+                const auto value = field->as_double();
+                return value ? static_cast<float>(*value) : fallback;
+            };
+            const auto read_int = [&](std::string_view name, jint fallback) {
+                const auto *field = document.document.find(name);
+                if (field == nullptr) {
+                    return fallback;
+                }
+                const auto value = field->as_int64();
+                return value ? static_cast<jint>(*value) : fallback;
+            };
+            features_.emplace(
+                id,
+                std::make_unique<large_dripstone_feature>(
+                    std::string{tag->starts_with('#') ? tag->substr(1) : *tag},
+                    read_int("floor_to_ceiling_search_range", 30),
+                    std::move(*radius_provider), radius_min, radius_max,
+                    std::move(*height_provider),
+                    read_float("max_column_radius_to_cave_height_ratio", 0.33F),
+                    std::move(*stalactite_provider),
+                    std::move(*stalagmite_provider), std::move(*wind_provider),
+                    read_int("min_radius_for_wind", 4),
+                    read_float("min_bluntness_for_wind", 0.6F)));
+            continue;
+        }
         if (*type == "minecraft:geode") {
             const auto *blocks = document.document.find("blocks");
             const auto *layers = document.document.find("layers");

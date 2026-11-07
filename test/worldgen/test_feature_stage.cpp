@@ -47,6 +47,7 @@ using refrain::worldgen::feature::geode_parameters;
 using refrain::worldgen::feature::huge_fungus_feature;
 using refrain::worldgen::feature::huge_mushroom_feature;
 using refrain::worldgen::feature::iceberg_feature;
+using refrain::worldgen::feature::large_dripstone_feature;
 using refrain::worldgen::feature::leave_vine_decorator;
 using refrain::worldgen::feature::place_on_ground_decorator;
 using refrain::worldgen::feature::placed_feature_document;
@@ -802,6 +803,89 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
             }
         }
         expect(lava_count > 0);
+    };
+
+    "large dripstone grows between a cave floor and ceiling"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false, .blocks_motion = true});
+        auto dripstone = registry.intern("minecraft:dripstone_block",
+                                         {.air = false, .blocks_motion = true});
+        expect(stone.has_value() && dripstone.has_value());
+        if (!stone || !dripstone) {
+            return;
+        }
+        const std::array<block_state_id, 1> stone_tag{*stone};
+        registry.add_tag("minecraft:base_stone_overworld", stone_tag);
+        registry.add_tag("minecraft:dripstone_replaceable_blocks", stone_tag);
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::biomes);
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint y = 0; y < 32; ++y) {
+                    expect(chunk.set_state(x, y, z, *stone));
+                }
+            }
+        }
+        for (jint y = 10; y <= 18; ++y) {
+            expect(chunk.set_state(8, y, 8, registry.air()));
+        }
+        chunk_region region{chunk, 0};
+        placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &registry,
+            .generation =
+                generation_context{.min_y = 0, .height = 32, .sea_level = 8},
+            .resolve_state =
+                [&registry](std::string_view key) {
+                    return registry.find(key).value_or(no_block_state);
+                },
+        };
+        feature_context context{.placement = placement};
+        auto radius = refrain::worldgen::provider::int_provider::decode(parse(
+            R"({"type":"minecraft:uniform","min_inclusive":4,"max_inclusive":8})"));
+        auto scale = refrain::worldgen::provider::float_provider::decode(parse(
+            R"({"type":"minecraft:uniform","min_inclusive":1.0,"max_exclusive":2.0})"));
+        auto blunt = refrain::worldgen::provider::float_provider::decode(parse(
+            R"({"type":"minecraft:uniform","min_inclusive":0.3,"max_exclusive":0.9})"));
+        auto blunt2 = refrain::worldgen::provider::float_provider::decode(parse(
+            R"({"type":"minecraft:uniform","min_inclusive":0.3,"max_exclusive":0.9})"));
+        auto wind = refrain::worldgen::provider::float_provider::decode(parse(
+            R"({"type":"minecraft:uniform","min_inclusive":0.0,"max_exclusive":0.3})"));
+        expect(radius.has_value() && scale.has_value() && blunt.has_value() &&
+               blunt2.has_value() && wind.has_value());
+        if (!radius || !scale || !blunt || !blunt2 || !wind) {
+            return;
+        }
+        const large_dripstone_feature feature{
+            "minecraft:dripstone_replaceable_blocks",
+            30,
+            std::move(*radius),
+            4,
+            8,
+            std::move(*scale),
+            0.33F,
+            std::move(*blunt),
+            std::move(*blunt2),
+            std::move(*wind),
+            4,
+            0.6F};
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(31)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 14, .z = 8}));
+        jint dripstone_count = 0;
+        for (jint y = 0; y < 32; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    if (chunk.state_at(x, y, z) == *dripstone) {
+                        ++dripstone_count;
+                    }
+                }
+            }
+        }
+        expect(dripstone_count > 0);
     };
 };
 
