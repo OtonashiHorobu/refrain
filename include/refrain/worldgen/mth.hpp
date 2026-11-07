@@ -11,7 +11,9 @@
 
 #include <refrain/worldgen/java_compat.hpp>
 
+#include <bit>
 #include <cmath>
+#include <cstdint>
 
 namespace refrain::worldgen::mth {
 
@@ -75,6 +77,25 @@ namespace refrain::worldgen::mth {
 }
 
 /// `Mth.map`: linear remap without clamping.
+/// `Mth.lengthSquared(float, float, float)`.
+[[nodiscard]] inline auto length_squared(float x, float y, float z) -> float {
+    return x * x + y * y + z * z;
+}
+
+/// `Mth.sqrt(float)`: the double square root narrowed back to float.
+[[nodiscard]] inline auto sqrt(float value) -> float {
+    return static_cast<float>(std::sqrt(static_cast<double>(value)));
+}
+
+/// `Mth.fastInvSqrt(double)`: the bit-hack reciprocal square root.
+[[nodiscard]] inline auto fast_inv_sqrt(double value) -> double {
+    const double half = 0.5 * value;
+    std::int64_t bits = std::bit_cast<std::int64_t>(value);
+    bits = 6910469410427058090LL - (bits >> 1);
+    value = std::bit_cast<double>(bits);
+    return value * (1.5 - half * value * value);
+}
+
 [[nodiscard]] inline auto map(double value, double from_min, double from_max,
                               double to_min, double to_max) -> double {
     return lerp(inverse_lerp(value, from_min, from_max), to_min, to_max);
