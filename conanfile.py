@@ -127,6 +127,13 @@ class RefrainConan(ConanFile):
         # `include/refrain/data/signature.hpp` keeps the header out of our
         # public API; the CCI recipe builds a static library on Linux.
         self.requires("libsodium/1.0.22")
+        # Online-mode login needs RSA-1024 PKCS#1 v1.5, AES-128-CFB8 and
+        # SHA-1/MD5, and the session server is reached over HTTPS. OpenSSL is
+        # the vetted primitive provider; libcurl is rebuilt with its OpenSSL
+        # TLS backend so both share one crypto stack. OpenSSL stays on the 3.x
+        # line because the libcurl recipe requires `>=3 <4`.
+        self.requires("openssl/3.6.5")
+        self.requires("libcurl/8.23.0", options={"with_ssl": "openssl"})
         # Zip archive reader/writer for `refrain-tools extract` (jar/asset
         # import into the user-local cooked cache); the archive reader is an
         # implementation detail of refrain-data. ConanCenter has current

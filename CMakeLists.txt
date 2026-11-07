@@ -122,6 +122,10 @@ find_package(Crc32c CONFIG REQUIRED)
 # ASIO_STANDALONE, so no Boost headers are needed. Asio is a kernel
 # implementation detail: only src/core/async.cpp includes it, and no public
 # header may.
+find_package(Threads REQUIRED)
+set(OpenSSL_DIR "${CMAKE_BINARY_DIR}/generators" CACHE PATH "" FORCE)
+find_package(OpenSSL CONFIG REQUIRED)
+find_package(CURL REQUIRED)
 find_package(asio CONFIG REQUIRED)
 # Optional Linux io_uring backend for Asio's file classes. liburing is
 # Linux-only, so the option is forced OFF by the Conan toolchain elsewhere;
@@ -373,6 +377,24 @@ target_link_libraries(refrain-sim PUBLIC refrain-kernel refrain-world
                                        refrain-data refrain-contracts)
 add_library(Refrain::Sim ALIAS refrain-sim)
 
+# --- network protocol: wire codec, frame, transport, sessions --------------
+# New src/net files are picked up without editing this file. OpenSSL is linked
+# privately by the online-mode crypto unit; it never appears in a public header.
+file(GLOB_RECURSE REFRAIN_NET_SOURCES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/net/*.cpp")
+refrain_add_library(refrain-net ${REFRAIN_NET_SOURCES})
+target_include_directories(refrain-net PUBLIC
+                           $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/sdk/generated/cpp>)
+target_link_libraries(refrain-net PUBLIC refrain-kernel refrain-data
+                                       PRIVATE ZLIB::ZLIB asio::asio
+                                               Threads::Threads openssl::openssl
+                                               CURL::libcurl)
+target_compile_definitions(refrain-net PRIVATE ASIO_NO_DEPRECATED=1
+                                              ASIO_NO_TYPEID=1
+                                              REFRAIN_WITH_OPENSSL=1
+                                              REFRAIN_WITH_CURL=1)
+add_library(Refrain::Net ALIAS refrain-net)
+
 # --- mod host: loads built-in mods against the embedded archive ------------
 # The host needs the data layer (RFSI/RFBT reader), so it is a separate library
 # on top of kernel; the kernel itself stays data-free.
@@ -459,12 +481,12 @@ add_library(Refrain::App ALIAS refrain-app)
 file(GLOB REFRAIN_SERVER_RUNTIME_SOURCES CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/server/*.cpp")
 refrain_add_library(refrain-server-runtime ${REFRAIN_SERVER_RUNTIME_SOURCES})
-target_link_libraries(refrain-server-runtime PUBLIC refrain-app)
+target_link_libraries(refrain-server-runtime PUBLIC refrain-app refrain-net)
 add_library(Refrain::ServerRuntime ALIAS refrain-server-runtime)
 
 # --- tools -----------------------------------------------------------------
 add_executable(refrain-tools src/main/tools.cpp)
-target_link_libraries(refrain-tools PRIVATE refrain-app
+target_link_libraries(refrain-tools PRIVATE refrain-app refrain-net
                                         refrain-first-party-mods CLI11::CLI11)
 refrain_apply_warnings(refrain-tools)
 
@@ -534,7 +556,8 @@ if(REFRAIN_BUILD_TESTS)
                                               refrain-schema refrain-contracts
                                               refrain-archive refrain-data
                                               refrain-world refrain-sim
-                                              refrain-worldgen refrain-builtin
+                                              refrain-net refrain-worldgen
+                                              refrain-builtin
                                               refrain-mod-host
                                               refrain-first-party-mods
                                               refrain-script-wasm libzip::zip
