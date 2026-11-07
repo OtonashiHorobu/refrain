@@ -489,8 +489,30 @@ void place_jungle_temple(const structure_place_context &context,
     if (context.region == nullptr || context.states == nullptr) {
         return;
     }
-    const jint base_y =
-        piece.height_position >= 0 ? piece.height_position : piece.min_y;
+    jint base_y = piece.height_position;
+    if (base_y < 0) {
+        jint total = 0;
+        jint count = 0;
+        for (jint z = piece.min_z; z <= piece.max_z; ++z) {
+            for (jint x = piece.min_x; x <= piece.max_x; ++x) {
+                if ((x >> 4) != context.chunk->chunk_x() ||
+                    (z >> 4) != context.chunk->chunk_z()) {
+                    continue;
+                }
+                auto *column = context.region->find(x >> 4, z >> 4);
+                if (column == nullptr) {
+                    continue;
+                }
+                total += column->first_available(
+                    heightmap_kind::motion_blocking_no_leaves, x & 15, z & 15);
+                ++count;
+            }
+        }
+        if (count == 0) {
+            return;
+        }
+        base_y = total / count;
+    }
     const auto local = [&](jint x, jint y, jint z) {
         return piece_local_to_world(piece, base_y, x, y, z);
     };
