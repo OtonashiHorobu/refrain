@@ -910,10 +910,9 @@ auto iceberg_feature::height_radius_round(worldgen_random &random, jint y,
                                           jint height, jint width) const
     -> jint {
     const float k = 3.5F - random.next_float();
-    float scale = (1.0F - static_cast<float>(static_cast<double>(y * y) /
-                                             static_cast<double>(height) /
-                                             static_cast<double>(k))) *
-                  static_cast<float>(width);
+    float scale =
+        (1.0F - static_cast<float>(y * y) / (static_cast<float>(height) * k)) *
+        static_cast<float>(width);
     if (height > 15 + random.next_int(5)) {
         const jint temp = y < 3 + random.next_int(6) ? y / 2 : y;
         scale = (1.0F - static_cast<float>(temp) /
@@ -966,8 +965,8 @@ void iceberg_feature::set_iceberg_block(feature_context &context,
                                         bool snow_on_top) const {
     const auto current =
         context.placement.region->state_at(pos.x, pos.y, pos.z);
-    if (current != context.placement.states->air() && current != snow_block_ &&
-        current != ice_ && current != water_) {
+    if (!context.placement.states->traits(current).air &&
+        current != snow_block_ && current != ice_ && current != water_) {
         return;
     }
     const bool randomness = !ellipse || random.next_double() > 0.05;
@@ -1027,7 +1026,7 @@ void iceberg_feature::smooth(feature_context &context, const block_pos &origin,
                 }
                 const auto below =
                     context.placement.region->state_at(pos.x, pos.y - 1, pos.z);
-                if (below == context.placement.states->air()) {
+                if (context.placement.states->traits(below).air) {
                     (void)context.placement.region->set_block_state(
                         pos.x, pos.y, pos.z, context.placement.states->air());
                     (void)context.placement.region->set_block_state(
@@ -1539,7 +1538,6 @@ auto lake_feature::place(feature_context &context, worldgen_random &random,
                                    (yy < 7 && at(xx, zz, yy + 1)) ||
                                    (yy > 0 && at(xx, zz, yy - 1)));
     };
-
     for (jint xx = 0; xx < 16; ++xx) {
         for (jint zz = 0; zz < 16; ++zz) {
             for (jint yy = 0; yy < 8; ++yy) {
