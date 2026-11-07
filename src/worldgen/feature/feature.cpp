@@ -1519,6 +1519,78 @@ struct speleothem_column {
 
 } // namespace
 
+auto void_start_platform_feature::place(feature_context &context,
+                                        worldgen_random &random,
+                                        const block_pos &origin) const -> bool {
+    (void)random;
+    auto &region = *context.placement.region;
+    const auto &chunk = *context.placement.chunk;
+    const jint chunk_x = origin.x >> 4;
+    const jint chunk_z = origin.z >> 4;
+    if (std::max(std::abs(chunk_x), std::abs(chunk_z)) > 1) {
+        return true;
+    }
+    const jint platform_y = origin.y + 3;
+    const auto cobblestone =
+        context.placement.resolve_state
+            ? context.placement.resolve_state("minecraft:cobblestone")
+            : no_block_state;
+    const auto stone = context.placement.resolve_state
+                           ? context.placement.resolve_state("minecraft:stone")
+                           : no_block_state;
+    if (cobblestone == no_block_state || stone == no_block_state) {
+        return false;
+    }
+    for (jint z = chunk.chunk_z() * 16; z <= chunk.chunk_z() * 16 + 15; ++z) {
+        for (jint x = chunk.chunk_x() * 16; x <= chunk.chunk_x() * 16 + 15;
+             ++x) {
+            if (std::max(std::abs(8 - x), std::abs(8 - z)) <= 16) {
+                const auto state = (x == 8 && z == 8) ? cobblestone : stone;
+                (void)region.set_block_state(x, platform_y, z, state);
+            }
+        }
+    }
+    return true;
+}
+
+auto end_platform_feature::place(feature_context &context,
+                                 worldgen_random &random,
+                                 const block_pos &origin) const -> bool {
+    (void)random;
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
+    const auto obsidian =
+        context.placement.resolve_state
+            ? context.placement.resolve_state("minecraft:obsidian")
+            : no_block_state;
+    const auto air = context.placement.resolve_state
+                         ? context.placement.resolve_state("minecraft:air")
+                         : no_block_state;
+    if (obsidian == no_block_state || air == no_block_state) {
+        return false;
+    }
+    for (jint dz = -2; dz <= 2; ++dz) {
+        for (jint dx = -2; dx <= 2; ++dx) {
+            for (jint dy = -1; dy < 3; ++dy) {
+                const auto state = dy == -1 ? obsidian : air;
+                const auto current = region.state_at(
+                    origin.x + dx, origin.y + dy, origin.z + dz);
+                const auto name = state_block_name(states.name(current));
+                if (dy == -1) {
+                    if (name == "minecraft:obsidian") {
+                        continue;
+                    }
+                } else if (name == "minecraft:air") {
+                    continue;
+                }
+                (void)region.set_block_state(origin.x + dx, origin.y + dy,
+                                             origin.z + dz, state);
+            }
+        }
+    }
+    return true;
+}
+
 auto fossil_feature::place(feature_context &context, worldgen_random &random,
                            const block_pos &origin) const -> bool {
     if (context.templates == nullptr || context.registry == nullptr ||

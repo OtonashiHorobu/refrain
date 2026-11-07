@@ -763,6 +763,15 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                                     std::move(*rim_provider)));
             continue;
         }
+        if (*type == "minecraft:void_start_platform") {
+            features_.emplace(id,
+                              std::make_unique<void_start_platform_feature>());
+            continue;
+        }
+        if (*type == "minecraft:end_platform") {
+            features_.emplace(id, std::make_unique<end_platform_feature>());
+            continue;
+        }
         if (*type == "minecraft:fossil") {
             const auto *fossils = document.document.find("fossil_structures");
             const auto *overlays = document.document.find("overlay_structures");

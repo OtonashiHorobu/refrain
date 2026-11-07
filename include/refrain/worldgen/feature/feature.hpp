@@ -476,6 +476,21 @@ class freeze_top_layer_feature final : public feature {
     block_state_id snow_{no_block_state};
 };
 
+/// `VoidStartPlatformFeature`: a stone platform around (8, 3, 8) in the
+/// origin chunk and its neighbours.
+class void_start_platform_feature final : public feature {
+  public:
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+};
+
+/// `EndPlatformFeature`: the obsidian platform at the end spawn point.
+class end_platform_feature final : public feature {
+  public:
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+};
+
 /// `FossilFeature`: places a fossil template below the surface, then the
 /// matching coal overlay template.
 class fossil_feature final : public feature {

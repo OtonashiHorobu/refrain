@@ -36,6 +36,7 @@ using refrain::worldgen::feature::decode_placement;
 using refrain::worldgen::feature::decode_state_provider;
 using refrain::worldgen::feature::decorate;
 using refrain::worldgen::feature::delta_feature;
+using refrain::worldgen::feature::end_platform_feature;
 using refrain::worldgen::feature::feature_context;
 using refrain::worldgen::feature::feature_data_set;
 using refrain::worldgen::feature::feature_registry;
@@ -69,6 +70,7 @@ using refrain::worldgen::feature::trunk_kind;
 using refrain::worldgen::feature::trunk_vine_decorator;
 using refrain::worldgen::feature::underwater_magma_feature;
 using refrain::worldgen::feature::vines_feature;
+using refrain::worldgen::feature::void_start_platform_feature;
 using refrain::worldgen::provider::generation_context;
 
 auto parse(std::string_view text) -> refrain::data::json::value {
@@ -1258,6 +1260,112 @@ suite<"worldgen/speleothem"> speleothem_tests = [] {
         }
         expect(pointed_count > 0);
         expect(base_count > 0);
+    };
+};
+
+suite<"worldgen/platform"> platform_tests = [] {
+    "the void platform fills the origin chunk and skips far chunks"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto cobblestone = registry.intern("minecraft:cobblestone",
+                                           {.air = false,
+                                            .blocks_motion = true,
+                                            .blocks_motion_no_leaves = true});
+        expect(stone && cobblestone);
+        if (!stone || !cobblestone) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 128};
+        chunk_region region{chunk, 0};
+        const auto resolve = [&](std::string_view key) -> block_state_id {
+            if (const auto found = registry.find(key); found.has_value()) {
+                return *found;
+            }
+            const auto block = state_block_name(key);
+            const bool air = is_air_block_name(block);
+            const auto inserted =
+                registry.intern(key, {.air = air, .blocks_motion = !air});
+            return inserted.has_value() ? *inserted : no_block_state;
+        };
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .resolve_state = resolve,
+                                }};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(7)};
+        void_start_platform_feature platform;
+        expect(platform.place(context, random,
+                              block_pos{.x = 8, .y = 50, .z = 8}));
+        expect(chunk.state_at(0, 53, 0) == *stone);
+        expect(chunk.state_at(8, 53, 8) == *cobblestone);
+        expect(chunk.state_at(15, 53, 15) == *stone);
+
+        proto_chunk far_chunk{registry, 2, 0, 0, 128};
+        chunk_region far_region{far_chunk, 0};
+        feature_context far_context{.placement = placement_context{
+                                        .region = &far_region,
+                                        .chunk = &far_chunk,
+                                        .states = &registry,
+                                        .resolve_state = resolve,
+                                    }};
+        expect(platform.place(far_context, random,
+                              block_pos{.x = 40, .y = 50, .z = 8}));
+        expect(far_chunk.state_at(0, 53, 0) == registry.air());
+    };
+
+    "the end platform clears the interior and lays obsidian"_test = [] {
+        block_state_registry registry;
+        auto obsidian = registry.intern("minecraft:obsidian",
+                                        {.air = false,
+                                         .blocks_motion = true,
+                                         .blocks_motion_no_leaves = true});
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(obsidian && stone);
+        if (!obsidian || !stone) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 64};
+        for (jint z = 4; z <= 12; ++z) {
+            for (jint x = 4; x <= 12; ++x) {
+                for (jint y = 8; y <= 12; ++y) {
+                    chunk.set_state(x, y, z, *stone);
+                }
+            }
+        }
+        chunk_region region{chunk, 0};
+        const auto resolve = [&](std::string_view key) -> block_state_id {
+            if (const auto found = registry.find(key); found.has_value()) {
+                return *found;
+            }
+            const auto block = state_block_name(key);
+            const bool is_air = is_air_block_name(block);
+            const auto inserted =
+                registry.intern(key, {.air = is_air, .blocks_motion = !is_air});
+            return inserted.has_value() ? *inserted : no_block_state;
+        };
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .resolve_state = resolve,
+                                }};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(7)};
+        end_platform_feature platform;
+        expect(platform.place(context, random,
+                              block_pos{.x = 8, .y = 10, .z = 8}));
+        expect(chunk.state_at(8, 9, 8) == *obsidian);
+        expect(registry.name(chunk.state_at(8, 10, 8)) == "minecraft:air");
+        expect(chunk.state_at(6, 9, 6) == *obsidian);
+        expect(registry.name(chunk.state_at(3, 9, 3)) == "minecraft:air");
     };
 };
 
