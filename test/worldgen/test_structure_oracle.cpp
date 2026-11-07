@@ -1525,4 +1525,138 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             }
         }
     };
+
+    "a real mineshaft start reproduces the recursive piece tree"_test = [] {
+        if (std::getenv("REFRAIN_VANILLA_MINE_REAL") == nullptr) {
+            return;
+        }
+        const char *region = std::getenv("REFRAIN_VANILLA_MINE_REGION");
+        if (region == nullptr) {
+            return;
+        }
+        const jint chunk_x = -4;
+        const jint chunk_z = 0;
+        const jlong seed = 1;
+        const auto start = refrain::worldgen::structure::mineshaft_start(
+            chunk_pos{.x = chunk_x, .z = chunk_z}, seed, -64, 63, false);
+        const auto reference = read_chunk(region, chunk_x, chunk_z);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        const auto *structures = child(reference->as_compound(), "structures");
+        const auto *starts_value =
+            structures == nullptr ? nullptr
+                                  : child(structures->as_compound(), "starts");
+        const auto *expected =
+            starts_value == nullptr
+                ? nullptr
+                : child(starts_value->as_compound(), "minecraft:mineshaft");
+        expect(expected != nullptr);
+        if (expected == nullptr) {
+            return;
+        }
+        const auto *children = child(expected->as_compound(), "Children");
+        const auto *pieces =
+            children == nullptr ? nullptr : children->as_list();
+        expect(pieces != nullptr);
+        if (pieces == nullptr) {
+            return;
+        }
+        expect(start.pieces.size() == pieces->items.size());
+        if (start.pieces.size() != pieces->items.size()) {
+            std::fprintf(stderr, "mineshaft pieces ours=%zu ref=%zu\n",
+                         start.pieces.size(), pieces->items.size());
+            const auto print =
+                [](const char *tag, std::size_t index, std::string_view id,
+                   jint o,
+                   const refrain::worldgen::structure::structure_bbox &b) {
+                    std::fprintf(
+                        stderr, "%s %zu %.*s O=%d BB=[%d,%d,%d,%d,%d,%d]\n",
+                        tag, index, static_cast<int>(id.size()), id.data(),
+                        static_cast<int>(o), static_cast<int>(b.min_x),
+                        static_cast<int>(b.min_y), static_cast<int>(b.min_z),
+                        static_cast<int>(b.max_x), static_cast<int>(b.max_y),
+                        static_cast<int>(b.max_z));
+                };
+            for (std::size_t i = 0;
+                 i < std::min<std::size_t>(10, start.pieces.size()); ++i) {
+                print("ours", i, start.pieces[i].type,
+                      start.pieces[i].orientation, start.pieces[i].bounds);
+            }
+            for (std::size_t i = 0;
+                 i < std::min<std::size_t>(10, pieces->items.size()); ++i) {
+                const auto *p = pieces->items[i].as_compound();
+                const auto *id = child(p, "id");
+                const auto *bb = child(p, "BB");
+                const auto *o = child(p, "O");
+                const auto vals =
+                    bb == nullptr ? std::nullopt : bb->as_int_array();
+                if (id == nullptr || bb == nullptr || o == nullptr || !vals ||
+                    vals->size() != 6U) {
+                    continue;
+                }
+                refrain::worldgen::structure::structure_bbox b{
+                    .min_x = (*vals)[0],
+                    .min_y = (*vals)[1],
+                    .min_z = (*vals)[2],
+                    .max_x = (*vals)[3],
+                    .max_y = (*vals)[4],
+                    .max_z = (*vals)[5]};
+                print("ref ", i, id->as_string().value_or("?"),
+                      o->as_int().value_or(0), b);
+            }
+            return;
+        }
+        for (std::size_t index = 0; index < pieces->items.size(); ++index) {
+            const auto *piece = pieces->items[index].as_compound();
+            const auto &actual = start.pieces[index];
+            const auto *id = child(piece, "id");
+            const auto *bb = child(piece, "BB");
+            const auto *orientation = child(piece, "O");
+            const auto values =
+                bb == nullptr ? std::nullopt : bb->as_int_array();
+            expect(id != nullptr && bb != nullptr && orientation != nullptr);
+            if (id == nullptr || bb == nullptr || orientation == nullptr ||
+                !values || values->size() != 6U) {
+                continue;
+            }
+            const bool mismatch =
+                id->as_string() != actual.type ||
+                orientation->as_int().value_or(0) != actual.orientation ||
+                actual.bounds.min_x != (*values)[0] ||
+                actual.bounds.min_y != (*values)[1] ||
+                actual.bounds.min_z != (*values)[2] ||
+                actual.bounds.max_x != (*values)[3] ||
+                actual.bounds.max_y != (*values)[4] ||
+                actual.bounds.max_z != (*values)[5];
+            if (mismatch && index < 60) {
+                std::fprintf(
+                    stderr,
+                    "mine %zu ours %s O=%d [%d,%d,%d,%d,%d,%d] ref %.*s O=%d "
+                    "[%d,%d,%d,%d,%d,%d]\n",
+                    index, actual.type.c_str(),
+                    static_cast<int>(actual.orientation),
+                    static_cast<int>(actual.bounds.min_x),
+                    static_cast<int>(actual.bounds.min_y),
+                    static_cast<int>(actual.bounds.min_z),
+                    static_cast<int>(actual.bounds.max_x),
+                    static_cast<int>(actual.bounds.max_y),
+                    static_cast<int>(actual.bounds.max_z),
+                    static_cast<int>(id->as_string().value_or("").size()),
+                    id->as_string().value_or("").data(),
+                    orientation->as_int().value_or(0), (*values)[0],
+                    (*values)[1], (*values)[2], (*values)[3], (*values)[4],
+                    (*values)[5]);
+            }
+            expect(id->as_string() == actual.type);
+            expect(orientation->as_int() == actual.orientation);
+            expect(actual.bounds.min_x == (*values)[0]);
+            expect(actual.bounds.min_y == (*values)[1]);
+            expect(actual.bounds.min_z == (*values)[2]);
+            expect(actual.bounds.max_x == (*values)[3]);
+            expect(actual.bounds.max_y == (*values)[4]);
+            expect(actual.bounds.max_z == (*values)[5]);
+        }
+    };
 };
