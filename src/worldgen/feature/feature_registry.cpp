@@ -33,9 +33,20 @@ auto type_of(const data::json::value &input) -> result<std::string_view> {
 
 auto resolve_state(block_state_registry &states, std::string_view key)
     -> result<block_state_id> {
-    if (const auto found = states.find(key); found.has_value()) {
+    // Fluid JSON spells out the default level. The registry keys states by
+    // their data spelling, so fold it to the plain block name that terrain
+    // fluids use; the two are the same state in the reference.
+    std::string canonical{key};
+    for (const std::string_view fluid : {"minecraft:water", "minecraft:lava"}) {
+        if (key == std::string{fluid} + "[level=0]") {
+            canonical = std::string{fluid};
+            break;
+        }
+    }
+    if (const auto found = states.find(canonical); found.has_value()) {
         return *found;
     }
+    key = canonical;
     const auto block = state_block_name(key);
     const bool air = is_air_block_name(block);
     const bool water = block == "minecraft:water" ||
