@@ -326,4 +326,44 @@ auto spring_feature::place(feature_context &context, worldgen_random &,
                                                      origin.z, state_);
 }
 
+auto block_blob_feature::place(feature_context &context,
+                               worldgen_random &random,
+                               const block_pos &initial) const -> bool {
+    block_pos origin = initial;
+    while (origin.y > context.placement.chunk->min_y() + 3 &&
+           !can_place_on_->test(
+               *context.placement.region, *context.placement.states,
+               block_pos{.x = origin.x, .y = origin.y - 1, .z = origin.z})) {
+        --origin.y;
+    }
+    if (origin.y <= context.placement.chunk->min_y() + 3) {
+        return false;
+    }
+
+    for (jint c = 0; c < 3; ++c) {
+        const jint xr = random.next_int(2);
+        const jint yr = random.next_int(2);
+        const jint zr = random.next_int(2);
+        const float radius = static_cast<float>(xr + yr + zr) * 0.333F + 0.5F;
+        for (jint x = origin.x - xr; x <= origin.x + xr; ++x) {
+            for (jint y = origin.y - yr; y <= origin.y + yr; ++y) {
+                for (jint z = origin.z - zr; z <= origin.z + zr; ++z) {
+                    const double dx = x - origin.x;
+                    const double dy = y - origin.y;
+                    const double dz = z - origin.z;
+                    if (dx * dx + dy * dy + dz * dz <=
+                        static_cast<double>(radius) * radius) {
+                        (void)context.placement.region->set_block_state(x, y, z,
+                                                                        state_);
+                    }
+                }
+            }
+        }
+        origin.x += -1 + random.next_int(2);
+        origin.y += -random.next_int(2);
+        origin.z += -1 + random.next_int(2);
+    }
+    return true;
+}
+
 } // namespace refrain::worldgen::feature

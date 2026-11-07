@@ -128,4 +128,19 @@ class spring_feature final : public feature {
     std::vector<std::string> valid_blocks_{};
 };
 
+/// `BlockBlobFeature`: three random blobs anchored on a placeable block.
+class block_blob_feature final : public feature {
+  public:
+    block_blob_feature(block_state_id state,
+                       std::unique_ptr<block_predicate> can_place_on)
+        : state_{state}, can_place_on_{std::move(can_place_on)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    block_state_id state_{no_block_state};
+    std::unique_ptr<block_predicate> can_place_on_{};
+};
+
 } // namespace refrain::worldgen::feature

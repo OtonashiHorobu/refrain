@@ -257,6 +257,28 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       std::move(valid)));
             continue;
         }
+        if (*type == "minecraft:block_blob") {
+            const auto *state_value = document.document.find("state");
+            const auto *predicate_value =
+                document.document.find("can_place_on");
+            if (state_value == nullptr || predicate_value == nullptr) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "block blob is incomplete")};
+            }
+            const auto key = decode_state_key(*state_value);
+            if (!key) {
+                return std::unexpected{key.error()};
+            }
+            const auto state = resolve_state(*states_, *key);
+            auto predicate = decode_block_predicate(*predicate_value, *states_);
+            if (!state || !predicate) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "block blob is invalid")};
+            }
+            features_.emplace(id, std::make_unique<block_blob_feature>(
+                                      *state, std::move(*predicate)));
+            continue;
+        }
         return std::unexpected{
             make_error(error_code::unsupported, "unsupported feature type")};
     }

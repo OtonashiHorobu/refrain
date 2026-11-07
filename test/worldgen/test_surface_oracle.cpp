@@ -396,6 +396,11 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 "minecraft:sand", {.air = false,
                                    .blocks_motion = true,
                                    .blocks_motion_no_leaves = true});
+            auto moss_state =
+                block_registry.intern("minecraft:mossy_cobblestone",
+                                      {.air = false,
+                                       .blocks_motion = true,
+                                       .blocks_motion_no_leaves = true});
             expect(air_state.has_value());
             expect(stone_state.has_value());
             expect(water_state.has_value());
