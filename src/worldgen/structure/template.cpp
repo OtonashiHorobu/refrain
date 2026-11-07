@@ -748,6 +748,12 @@ auto opposite_direction(std::string_view direction) -> std::string_view {
     return direction;
 }
 
+auto is_shape_sensitive(const block_state_registry &states,
+                        block_state_id state) -> bool {
+    const auto block = state_block_name(states.name(state));
+    return block.ends_with("_fence") || block.ends_with("_stairs");
+}
+
 auto update_template_block(block_state_registry &states, chunk_region &region,
                            const block_pos &pos) -> bool {
     const auto current = region.state_at(pos.x, pos.y, pos.z);
@@ -896,6 +902,7 @@ auto place_template(chunk_region &region, block_state_registry &states,
         barrier = *found;
     }
     bool whole_piece = false;
+    bool any_shape = false;
     for (const auto *processor : settings.processors) {
         if (processor->evaluates_entire_piece_state()) {
             whole_piece = true;
@@ -929,6 +936,9 @@ auto place_template(chunk_region &region, block_state_registry &states,
         }
         if (dropped) {
             continue;
+        }
+        if (is_shape_sensitive(states, processed.state)) {
+            any_shape = true;
         }
         processed_blocks.push_back(std::move(processed));
         processed_positions.push_back(world);
@@ -998,6 +1008,9 @@ auto place_template(chunk_region &region, block_state_registry &states,
                                           std::move(entity));
         }
     }
+    if (!any_shape) {
+        return placed;
+    }
     std::set<std::tuple<jint, jint, jint>> placed_set;
     for (const auto &pos : placed_positions) {
         placed_set.emplace(pos.x, pos.y, pos.z);
@@ -1010,12 +1023,20 @@ auto place_template(chunk_region &region, block_state_registry &states,
                     target.x, target.y, target.z})) {
                 continue;
             }
-            (void)update_template_block(states, region, pos);
-            (void)update_template_block(states, region, target);
+            if (is_shape_sensitive(states,
+                                   region.state_at(pos.x, pos.y, pos.z))) {
+                (void)update_template_block(states, region, pos);
+            }
+            if (is_shape_sensitive(
+                    states, region.state_at(target.x, target.y, target.z))) {
+                (void)update_template_block(states, region, target);
+            }
         }
     }
     for (const auto &pos : placed_positions) {
-        (void)update_template_block(states, region, pos);
+        if (is_shape_sensitive(states, region.state_at(pos.x, pos.y, pos.z))) {
+            (void)update_template_block(states, region, pos);
+        }
     }
     return placed;
 }
