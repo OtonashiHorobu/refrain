@@ -6,7 +6,7 @@
 // lookup. The resolver records the chosen quart coordinate and returns a fixed
 // id, so no biome registry is involved.
 
-#include <refrain/worldgen/biome_manager.hpp>
+#include <refrain/worldgen/biome/biome_manager.hpp>
 
 #include <boost/ut.hpp>
 

@@ -5,9 +5,9 @@
 // Gradient-noise vectors generated from the real 26.3 classes with
 // `tools/worldgen/vectors/run.sh <server.jar> NoiseVectors`.
 
-#include <refrain/worldgen/density_buffer.hpp>
-#include <refrain/worldgen/noise.hpp>
-#include <refrain/worldgen/rng.hpp>
+#include <refrain/worldgen/core/rng.hpp>
+#include <refrain/worldgen/density/density_buffer.hpp>
+#include <refrain/worldgen/noise/noise.hpp>
 
 #include <boost/ut.hpp>
 

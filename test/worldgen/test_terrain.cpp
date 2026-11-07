@@ -2,8 +2,8 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/worldgen/density.hpp>
-#include <refrain/worldgen/terrain.hpp>
+#include <refrain/worldgen/density/density.hpp>
+#include <refrain/worldgen/terrain/terrain.hpp>
 
 #include <boost/ut.hpp>
 

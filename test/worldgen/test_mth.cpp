@@ -5,7 +5,7 @@
 // Vectors generated from the real 26.3 class with
 // `tools/worldgen/vectors/run.sh <server.jar> MthVectors`.
 
-#include <refrain/worldgen/mth.hpp>
+#include <refrain/worldgen/core/mth.hpp>
 
 #include <boost/ut.hpp>
 

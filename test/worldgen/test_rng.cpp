@@ -10,8 +10,8 @@
 // `RandomSupport` and `Mth` and prints the draws. Regenerate with
 // `tools/worldgen/vectors/run.sh` after a version bump and review the diff.
 
-#include <refrain/worldgen/md5.hpp>
-#include <refrain/worldgen/rng.hpp>
+#include <refrain/worldgen/core/md5.hpp>
+#include <refrain/worldgen/core/rng.hpp>
 
 #include <boost/ut.hpp>
 

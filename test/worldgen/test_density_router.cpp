@@ -5,9 +5,9 @@
 // Synthetic datapack: the documents below are written for this test only.
 
 #include <refrain/core/io.hpp>
-#include <refrain/worldgen/density.hpp>
-#include <refrain/worldgen/density_router.hpp>
-#include <refrain/worldgen/noise.hpp>
+#include <refrain/worldgen/density/density.hpp>
+#include <refrain/worldgen/density/density_router.hpp>
+#include <refrain/worldgen/noise/noise.hpp>
 
 #include <boost/ut.hpp>
 

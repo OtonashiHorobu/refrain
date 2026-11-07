@@ -8,7 +8,7 @@
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/json.hpp>
-#include <refrain/worldgen/climate.hpp>
+#include <refrain/worldgen/biome/climate.hpp>
 
 #include <boost/ut.hpp>
 

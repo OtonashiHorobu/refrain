@@ -5,11 +5,11 @@
 // The documents below are synthetic: they exercise every decoder path but are
 // not copied from the game.
 
-#include <refrain/worldgen/density.hpp>
-#include <refrain/worldgen/density_buffer.hpp>
-#include <refrain/worldgen/density_json.hpp>
-#include <refrain/worldgen/noise.hpp>
-#include <refrain/worldgen/rng.hpp>
+#include <refrain/worldgen/core/rng.hpp>
+#include <refrain/worldgen/density/density.hpp>
+#include <refrain/worldgen/density/density_buffer.hpp>
+#include <refrain/worldgen/density/density_json.hpp>
+#include <refrain/worldgen/noise/noise.hpp>
 
 #include <boost/ut.hpp>
 
