@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: db66f0c829a44af5
+// Schema hash: d5b1a43efe750e10
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
@@ -216,6 +216,26 @@ struct chat_ack {
 
     // attributes: #[varint]
     std::int32_t offset;
+};
+
+struct chat_command_signed {
+    static constexpr std::uint16_t packet_id = 0x8;
+    static constexpr std::string_view packet_name = "chat_command_signed";
+
+    // attributes: #[max(32767)]
+    std::string command;
+    std::int64_t time_stamp;
+    std::int64_t salt;
+    ::refrain::protocol::v777::wire::wire_argument_signatures argument_signatures;
+    ::refrain::protocol::v777::wire::wire_update last_seen_messages;
+};
+
+struct chat_session_update {
+    static constexpr std::uint16_t packet_id = 0xA;
+    static constexpr std::string_view packet_name = "chat_session_update";
+
+    ::refrain::net::uuid session_id;
+    ::refrain::protocol::v777::wire::wire_data profile_public_key;
 };
 
 struct client_command {
@@ -1315,6 +1335,96 @@ struct custom_click_action {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.offset = static_cast<decltype(value.offset)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_chat_command_signed(::refrain::net::writer &out, const chat_command_signed &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_string(value.command, 32767); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.time_stamp));
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.salt));
+  }
+  {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_argument_signatures(out, value.argument_signatures); !written) {
+      return written;
+    }
+  }
+  {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_update(out, value.last_seen_messages); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_chat_command_signed(::refrain::net::reader &in, chat_command_signed &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_string(32767);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.command = std::move(*value_0);
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.time_stamp = static_cast<decltype(value.time_stamp)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.salt = static_cast<decltype(value.salt)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_argument_signatures(in, value.argument_signatures); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_update(in, value.last_seen_messages); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_chat_session_update(::refrain::net::writer &out, const chat_session_update &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_uuid(value.session_id); !written) {
+      return written;
+    }
+  }
+  {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_data(out, value.profile_public_key); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_chat_session_update(::refrain::net::reader &in, chat_session_update &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_uuid();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.session_id = *value_0;
+  }
+  {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_data(in, value.profile_public_key); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }

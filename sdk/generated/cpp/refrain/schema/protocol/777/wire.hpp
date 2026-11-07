@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: db66f0c829a44af5
+// Schema hash: d5b1a43efe750e10
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -26,6 +26,43 @@ namespace refrain::protocol::v777::wire {
 struct wire_entries_entry {
     std::int8_t field_0;
     ::refrain::net::item_stack field_1;
+};
+
+struct wire_message_signature {
+    // attributes: #[fixed_bytes(256)]
+    std::vector<std::byte> field_0;
+};
+
+struct wire_optional_payload {
+    double field_0;
+    double field_1;
+    double field_2;
+};
+
+struct wire_entry_3 {
+    // attributes: #[max(16)]
+    std::string name;
+    ::refrain::protocol::v777::wire::wire_message_signature signature;
+};
+
+struct wire_argument_signatures {
+    std::vector<::refrain::protocol::v777::wire::wire_entry_3> entries;
+};
+
+struct wire_update {
+    // attributes: #[varint]
+    std::int32_t offset;
+    // attributes: #[fixed_bytes(20)]
+    std::vector<std::byte> acknowledged;
+    std::int8_t checksum;
+};
+
+struct wire_data {
+    std::int64_t expires_at;
+    // attributes: #[max(512)]
+    std::vector<std::byte> key;
+    // attributes: #[max(4096)]
+    std::vector<std::byte> key_signature;
 };
 
 struct wire_entry_4 {
@@ -164,6 +201,222 @@ struct wire_position_move_rotation {
     if (auto decoded = ::refrain::net::decode_item_stack(in, value.field_1); !decoded) {
       return std::unexpected{std::move(decoded.error())};
     }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_message_signature(::refrain::net::writer &out, const wire_message_signature &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (value.field_0.size() != 256) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'field_0' must be exactly 256 byte(s)")};
+    }
+    out.write_bytes(std::span<const std::byte>{value.field_0 });
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_message_signature(::refrain::net::reader &in, wire_message_signature &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_bytes(256);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.field_0 = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_optional_payload(::refrain::net::writer &out, const wire_optional_payload &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_f64(value.field_0);
+  }
+  {
+    out.write_f64(value.field_1);
+  }
+  {
+    out.write_f64(value.field_2);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_optional_payload(::refrain::net::reader &in, wire_optional_payload &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_f64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.field_0 = *value_0;
+  }
+  {
+    auto value_0 = in.read_f64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.field_1 = *value_0;
+  }
+  {
+    auto value_0 = in.read_f64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.field_2 = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_entry_3(::refrain::net::writer &out, const wire_entry_3 &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_string(value.name, 16); !written) {
+      return written;
+    }
+  }
+  {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_message_signature(out, value.signature); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_entry_3(::refrain::net::reader &in, wire_entry_3 &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_string(16);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.name = std::move(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_message_signature(in, value.signature); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_argument_signatures(::refrain::net::writer &out, const wire_argument_signatures &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.entries.size()));
+    for (const auto &item_0 : value.entries) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_entry_3(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_argument_signatures(::refrain::net::reader &in, wire_argument_signatures &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.entries.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::protocol::v777::wire::wire_entry_3 value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_entry_3(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.entries.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_update(::refrain::net::writer &out, const wire_update &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.offset));
+  }
+  {
+    if (value.acknowledged.size() != 20) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'acknowledged' must be exactly 20 byte(s)")};
+    }
+    out.write_bytes(std::span<const std::byte>{value.acknowledged });
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.checksum));
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_update(::refrain::net::reader &in, wire_update &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.offset = static_cast<decltype(value.offset)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_bytes(20);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.acknowledged = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.checksum = static_cast<decltype(value.checksum)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_data(::refrain::net::writer &out, const wire_data &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_i64(static_cast<std::int64_t>(value.expires_at));
+  }
+  {
+    if (value.key.size() > 512) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'key' exceeds its declared maximum")};
+    }
+    out.write_varint(static_cast<std::uint32_t>(value.key.size()));
+    out.write_bytes(std::span<const std::byte>{value.key });
+  }
+  {
+    if (value.key_signature.size() > 4096) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'key_signature' exceeds its declared maximum")};
+    }
+    out.write_varint(static_cast<std::uint32_t>(value.key_signature.size()));
+    out.write_bytes(std::span<const std::byte>{value.key_signature });
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_data(::refrain::net::reader &in, wire_data &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.expires_at = static_cast<decltype(value.expires_at)>(*value_0);
+  }
+  {
+    auto length_0 = in.read_varint();
+    if (!length_0) return std::unexpected{std::move(length_0.error())};
+    if (*length_0 > 512) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::parse_error, "field 'key' exceeds its declared maximum")};
+    }
+    auto value_0 = in.read_bytes(*length_0);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.key = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  {
+    auto length_0 = in.read_varint();
+    if (!length_0) return std::unexpected{std::move(length_0.error())};
+    if (*length_0 > 4096) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::parse_error, "field 'key_signature' exceeds its declared maximum")};
+    }
+    auto value_0 = in.read_bytes(*length_0);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.key_signature = std::vector<std::byte>{value_0->begin(), value_0->end()};
   }
   return ::refrain::status_ok();
 }

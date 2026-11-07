@@ -125,6 +125,19 @@ packet chat_ack = 6 {
     #[varint] offset: i32;
 }
 
+packet chat_command_signed = 8 {
+    #[max(32767)] command: string;
+    time_stamp: i64;
+    salt: i64;
+    argument_signatures: wire_argument_signatures;
+    last_seen_messages: wire_update;
+}
+
+packet chat_session_update = 10 {
+    session_id: uuid;
+    profile_public_key: wire_data;
+}
+
 packet client_command = 12 {
     #[varint] action: u32;
 }

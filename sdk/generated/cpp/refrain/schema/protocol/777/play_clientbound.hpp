@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: db66f0c829a44af5
+// Schema hash: d5b1a43efe750e10
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -410,6 +410,21 @@ struct custom_payload {
     std::vector<std::byte> data;
 };
 
+struct damage_event {
+    static constexpr std::uint16_t packet_id = 0x19;
+    static constexpr std::string_view packet_name = "damage_event";
+
+    // attributes: #[varint]
+    std::int32_t entity_id;
+    // attributes: #[varint]
+    std::uint32_t source_type;
+    // attributes: #[optional_varint]
+    std::optional<std::int32_t> field_2;
+    // attributes: #[optional_varint]
+    std::optional<std::int32_t> field_3;
+    std::optional<::refrain::protocol::v777::wire::wire_optional_payload> source_position;
+};
+
 struct debug_sample {
     static constexpr std::uint16_t packet_id = 0x1E;
     static constexpr std::string_view packet_name = "debug_sample";
@@ -637,6 +652,15 @@ struct remove_mob_effect {
     std::int32_t effect;
 };
 
+struct reset_score {
+    static constexpr std::uint16_t packet_id = 0x50;
+    static constexpr std::string_view packet_name = "reset_score";
+
+    // attributes: #[max(32767)]
+    std::string owner;
+    std::optional<std::string> objective_name;
+};
+
 struct resource_pack_pop {
     static constexpr std::uint16_t packet_id = 0x51;
     static constexpr std::string_view packet_name = "resource_pack_pop";
@@ -688,6 +712,13 @@ struct section_blocks_update {
     std::int64_t section_pos;
     // attributes: #[varlong]
     std::vector<std::int64_t> positions;
+};
+
+struct select_advancements_tab {
+    static constexpr std::uint16_t packet_id = 0x57;
+    static constexpr std::string_view packet_name = "select_advancements_tab";
+
+    std::optional<::refrain::data::resource_location> tab;
 };
 
 struct server_data {
@@ -2523,6 +2554,79 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_damage_event(::refrain::net::writer &out, const damage_event &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.entity_id));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.source_type));
+  }
+  {
+    out.write_varint(value.field_2.has_value() ? static_cast<std::uint32_t>(value.field_2.value()) + 1U : 0U);
+  }
+  {
+    out.write_varint(value.field_3.has_value() ? static_cast<std::uint32_t>(value.field_3.value()) + 1U : 0U);
+  }
+  {
+    out.write_bool(value.source_position.has_value());
+    if (value.source_position.has_value()) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_optional_payload(out, value.source_position.value()); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_damage_event(::refrain::net::reader &in, damage_event &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.entity_id = static_cast<decltype(value.entity_id)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.source_type = static_cast<decltype(value.source_type)>(*value_0);
+  }
+  {
+    auto present_0 = in.read_varint();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0 != 0) {
+      value.field_2 = static_cast<std::int32_t>(*present_0 - 1U);
+    } else {
+      value.field_2.reset();
+    }
+  }
+  {
+    auto present_0 = in.read_varint();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0 != 0) {
+      value.field_3 = static_cast<std::int32_t>(*present_0 - 1U);
+    } else {
+      value.field_3.reset();
+    }
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::protocol::v777::wire::wire_optional_payload value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_optional_payload(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.source_position = std::move(value_0);
+    } else {
+      value.source_position.reset();
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_debug_sample(::refrain::net::writer &out, const debug_sample &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -3284,6 +3388,49 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_reset_score(::refrain::net::writer &out, const reset_score &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_string(value.owner, 32767); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.objective_name.has_value());
+    if (value.objective_name.has_value()) {
+      if (auto written = out.write_string(value.objective_name.value(), 32767); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_reset_score(::refrain::net::reader &in, reset_score &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_string(32767);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.owner = std::move(*value_0);
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      std::string value_0{};
+      auto value_1 = in.read_string(32767);
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = std::move(*value_1);
+      value.objective_name = std::move(value_0);
+    } else {
+      value.objective_name.reset();
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_resource_pack_pop(::refrain::net::writer &out, const resource_pack_pop &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -3511,6 +3658,39 @@ struct clear_dialog {
       if (!value_1) return std::unexpected{std::move(value_1.error())};
       value_0 = static_cast<decltype(value_0)>(*value_1);
       value.positions.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_select_advancements_tab(::refrain::net::writer &out, const select_advancements_tab &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_bool(value.tab.has_value());
+    if (value.tab.has_value()) {
+      if (auto written = out.write_identifier(value.tab.value()); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_select_advancements_tab(::refrain::net::reader &in, select_advancements_tab &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::data::resource_location value_0{};
+      auto value_1 = in.read_identifier();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = std::move(*value_1);
+      value.tab = std::move(value_0);
+    } else {
+      value.tab.reset();
     }
   }
   return ::refrain::status_ok();

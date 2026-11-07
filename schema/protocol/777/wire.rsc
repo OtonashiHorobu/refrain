@@ -14,6 +14,37 @@ struct wire_entries_entry {
     field_1: item_stack;
 }
 
+struct wire_message_signature {
+    #[fixed_bytes(256)] field_0: bytes;
+}
+
+struct wire_optional_payload {
+    field_0: f64;
+    field_1: f64;
+    field_2: f64;
+}
+
+struct wire_entry_3 {
+    #[max(16)] name: string;
+    signature: wire_message_signature;
+}
+
+struct wire_argument_signatures {
+    entries: array<wire_entry_3>;
+}
+
+struct wire_update {
+    #[varint] offset: i32;
+    #[fixed_bytes(20)] acknowledged: bytes;
+    checksum: i8;
+}
+
+struct wire_data {
+    expires_at: i64;
+    #[max(512)] key: bytes;
+    #[max(4096)] key_signature: bytes;
+}
+
 struct wire_entry_4 {
     game_rule_key: identifier;
     #[max(32767)] value: string;

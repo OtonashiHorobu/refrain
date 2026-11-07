@@ -243,6 +243,14 @@ packet custom_payload = 24 {
     #[rest] data: bytes;
 }
 
+packet damage_event = 25 {
+    #[varint] entity_id: i32;
+    #[varint] source_type: u32;
+    #[optional_varint] field_2: optional<i32>;
+    #[optional_varint] field_3: optional<i32>;
+    source_position: optional<wire_optional_payload>;
+}
+
 packet debug_sample = 30 {
     sample: array<i64>;
     #[varint] debug_sample_type: u32;
@@ -368,6 +376,11 @@ packet remove_mob_effect = 79 {
     #[varint] effect: i32;
 }
 
+packet reset_score = 80 {
+    #[max(32767)] owner: string;
+    objective_name: optional<string>;
+}
+
 packet resource_pack_pop = 81 {
     id: optional<uuid>;
 }
@@ -397,6 +410,10 @@ packet rotate_head = 85 {
 packet section_blocks_update = 86 {
     section_pos: i64;
     #[varlong] positions: array<i64>;
+}
+
+packet select_advancements_tab = 87 {
+    tab: optional<identifier>;
 }
 
 packet server_data = 88 {
