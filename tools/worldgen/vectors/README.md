@@ -13,6 +13,7 @@ on. Their output is the source of truth for the constants frozen in the tests:
 | `AquiferVectors.java` | `test/worldgen/test_aquifer.cpp` | aquifer grid conversions, cell centers, similarity |
 | `ClimateVectors.java` | `test/worldgen/test_climate.cpp` | `Climate.ParameterList` R-tree and brute-force selection |
 | `BiomeVectors.java` | `test/worldgen/test_overworld_biomes.cpp` | overworld parameter table fingerprint and selections |
+| `BiomeManagerVectors.java` | `test/worldgen/test_biome_manager.cpp` | seed obfuscation and fuzzy quart-corner selection |
 
 ```bash
 tools/worldgen/vectors/run.sh /path/to/server.jar [class]
