@@ -244,6 +244,11 @@ void tree_feature::place_leaves_row(feature_context &context,
                     static_cast<float>(radius) * static_cast<float>(radius)) {
                     skip = true;
                 }
+            } else if (foliage_ == foliage_kind::mega_pine) {
+                if (min_dx + min_dz >= 7 ||
+                    min_dx * min_dx + min_dz * min_dz > radius * radius) {
+                    skip = true;
+                }
             } else if (min_dx == radius && min_dz == radius && radius > 0) {
                 skip = true;
             }
@@ -329,6 +334,26 @@ void tree_feature::place_foliage(feature_context &context,
                              leaves, placed);
             place_leaves_row(context, random, pos, leaf_radius + 1, 0, false,
                              leaves, placed);
+        }
+        return;
+    }
+    if (foliage_ == foliage_kind::mega_pine) {
+        jint previous = 0;
+        for (jint yy = attachment.y - foliage_height + offset;
+             yy <= attachment.y + offset; ++yy) {
+            const jint yo = attachment.y - yy;
+            const jint smooth = leaf_radius + radius_offset +
+                                static_cast<jint>(std::floor(
+                                    static_cast<float>(yo) /
+                                    static_cast<float>(foliage_height) * 3.5F));
+            const jint jagged = (yo > 0 && smooth == previous && (yy & 1) == 0)
+                                    ? smooth + 1
+                                    : smooth;
+            place_leaves_row(
+                context, random,
+                block_pos{.x = attachment.x, .y = yy, .z = attachment.z},
+                jagged, 0, double_trunk, leaves, placed);
+            previous = smooth;
         }
         return;
     }
@@ -484,6 +509,11 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
         }
         foliage_height =
             std::max(4, tree_height - spruce_trunk_height_->sample(random));
+    } else if (foliage_ == foliage_kind::mega_pine) {
+        if (!mega_pine_crown_) {
+            return false;
+        }
+        foliage_height = mega_pine_crown_->sample(random);
     }
     const jint leaf_radius = foliage_radius_->sample(random);
     const jint min_y = origin.y;
@@ -768,7 +798,7 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
                 attachments.push_back(tree_attachment{.pos = attachment});
             }
         }
-    } else {
+    } else if (kind_ == trunk_kind::dark_oak) {
         const auto is_air_or_leaves = [&](const block_pos &pos) {
             const auto state =
                 context.placement.region->state_at(pos.x, pos.y, pos.z);
@@ -847,6 +877,49 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
                 }
             }
         }
+    } else {
+        const std::array<std::array<jint, 2>, 4> below_offsets{{
+            {0, 0},
+            {1, 0},
+            {0, 1},
+            {1, 1},
+        }};
+        for (const auto &offset : below_offsets) {
+            const block_pos below{.x = origin.x + offset[0],
+                                  .y = origin.y - 1,
+                                  .z = origin.z + offset[1]};
+            if (below_trunk_provider_) {
+                const auto state = below_trunk_provider_->get(context.placement,
+                                                              random, below);
+                (void)context.placement.region->set_block_state(
+                    below.x, below.y, below.z, state);
+            }
+        }
+        for (jint hh = 0; hh < clipped; ++hh) {
+            const auto place_if_free = [&](jint x, jint y, jint z) {
+                const block_pos pos{.x = x, .y = y, .z = z};
+                if (!is_free(context, pos)) {
+                    return;
+                }
+                const auto state =
+                    trunk_provider_->get(context.placement, random, pos);
+                if (context.placement.region->set_block_state(pos.x, pos.y,
+                                                              pos.z, state)) {
+                    logs.push_back(pos);
+                }
+            };
+            place_if_free(origin.x, origin.y + hh, origin.z);
+            if (hh < clipped - 1) {
+                place_if_free(origin.x + 1, origin.y + hh, origin.z);
+                place_if_free(origin.x + 1, origin.y + hh, origin.z + 1);
+                place_if_free(origin.x, origin.y + hh, origin.z + 1);
+            }
+        }
+        attachments.push_back(
+            tree_attachment{.pos = block_pos{.x = origin.x,
+                                             .y = origin.y + clipped,
+                                             .z = origin.z},
+                            .double_trunk = true});
     }
 
     std::vector<block_pos> leaves;

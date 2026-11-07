@@ -669,6 +669,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 kind = trunk_kind::fancy;
             } else if (*trunk_name == "minecraft:dark_oak_trunk_placer") {
                 kind = trunk_kind::dark_oak;
+            } else if (*trunk_name == "minecraft:giant_trunk_placer") {
+                kind = trunk_kind::giant;
             } else if (*trunk_name != "minecraft:straight_trunk_placer") {
                 return std::unexpected{make_error(error_code::unsupported,
                                                   "unsupported trunk placer")};
@@ -684,6 +686,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 foliage_type_kind = foliage_kind::acacia;
             } else if (foliage_name == "minecraft:spruce_foliage_placer") {
                 foliage_type_kind = foliage_kind::spruce;
+            } else if (foliage_name == "minecraft:mega_pine_foliage_placer") {
+                foliage_type_kind = foliage_kind::mega_pine;
             } else if (foliage_name == "minecraft:fancy_foliage_placer") {
                 foliage_type_kind = foliage_kind::fancy;
             } else if (foliage_name == "minecraft:dark_oak_foliage_placer") {
@@ -735,6 +739,20 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             }
             auto radius_provider = provider::int_provider::decode(*radius);
             auto offset_provider = provider::int_provider::decode(*offset);
+            std::unique_ptr<provider::int_provider> mega_pine_crown;
+            if (foliage_type_kind == foliage_kind::mega_pine) {
+                const auto *crown_height = foliage_placer->find("crown_height");
+                if (crown_height == nullptr) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "mega pine foliage has no crown_height")};
+                }
+                auto decoded = provider::int_provider::decode(*crown_height);
+                if (!decoded) {
+                    return std::unexpected{decoded.error()};
+                }
+                mega_pine_crown = std::move(*decoded);
+            }
             std::unique_ptr<provider::int_provider> spruce_trunk_height;
             if (foliage_type_kind == foliage_kind::spruce) {
                 const auto *trunk_height = foliage_placer->find("trunk_height");
@@ -831,9 +849,10 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                     static_cast<jint>(*rand_a_value),
                     static_cast<jint>(*rand_b_value),
                     std::move(*radius_provider), std::move(*offset_provider),
-                    std::move(spruce_trunk_height), height_value, limit, lower,
-                    upper, three_layers, upper_limit, middle, has_min_clipped,
-                    min_clipped, ignore_vines));
+                    std::move(spruce_trunk_height), std::move(mega_pine_crown),
+                    height_value, limit, lower, upper, three_layers,
+                    upper_limit, middle, has_min_clipped, min_clipped,
+                    ignore_vines));
             continue;
         }
         return std::unexpected{

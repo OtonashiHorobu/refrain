@@ -16,7 +16,13 @@
 
 namespace refrain::worldgen::feature {
 
-enum class trunk_kind : std::uint8_t { straight, forking, fancy, dark_oak };
+enum class trunk_kind : std::uint8_t {
+    straight,
+    forking,
+    fancy,
+    dark_oak,
+    giant
+};
 
 class tree_feature;
 
@@ -62,7 +68,8 @@ enum class foliage_kind : std::uint8_t {
     acacia,
     spruce,
     fancy,
-    dark_oak
+    dark_oak,
+    mega_pine
 };
 
 class tree_feature final : public feature {
@@ -76,6 +83,7 @@ class tree_feature final : public feature {
                  std::unique_ptr<provider::int_provider> foliage_radius,
                  std::unique_ptr<provider::int_provider> foliage_offset,
                  std::unique_ptr<provider::int_provider> spruce_trunk_height,
+                 std::unique_ptr<provider::int_provider> mega_pine_crown,
                  jint foliage_height, jint size_limit, jint lower_size,
                  jint upper_size, bool three_layers, jint upper_limit,
                  jint middle_size, bool has_min_clipped, jint min_clipped,
@@ -90,6 +98,7 @@ class tree_feature final : public feature {
           foliage_radius_{std::move(foliage_radius)},
           foliage_offset_{std::move(foliage_offset)},
           spruce_trunk_height_{std::move(spruce_trunk_height)},
+          mega_pine_crown_{std::move(mega_pine_crown)},
           foliage_height_{foliage_height}, size_limit_{size_limit},
           lower_size_{lower_size}, upper_size_{upper_size},
           three_layers_{three_layers}, upper_limit_{upper_limit},
@@ -134,6 +143,7 @@ class tree_feature final : public feature {
     std::unique_ptr<provider::int_provider> foliage_radius_{};
     std::unique_ptr<provider::int_provider> foliage_offset_{};
     std::unique_ptr<provider::int_provider> spruce_trunk_height_{};
+    std::unique_ptr<provider::int_provider> mega_pine_crown_{};
     jint foliage_height_{0};
     jint size_limit_{1};
     jint lower_size_{0};
