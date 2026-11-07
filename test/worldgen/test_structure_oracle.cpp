@@ -489,4 +489,124 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             }
         }
     };
+
+    "a real swamp hut start reproduces its piece geometry"_test = [] {
+        if (std::getenv("REFRAIN_VANILLA_SWAMP_REAL") == nullptr) {
+            return;
+        }
+        const char *region = std::getenv("REFRAIN_VANILLA_SWAMP_REGION");
+        const char *root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+        if (region == nullptr || root == nullptr) {
+            return;
+        }
+        jint chunk_x = 9;
+        jint chunk_z = 2;
+        jlong seed = 1;
+        if (const char *value = std::getenv("REFRAIN_VANILLA_SWAMP_CHUNK_X");
+            value != nullptr) {
+            chunk_x = std::atoi(value);
+        }
+        if (const char *value = std::getenv("REFRAIN_VANILLA_SWAMP_CHUNK_Z");
+            value != nullptr) {
+            chunk_z = std::atoi(value);
+        }
+        if (const char *value = std::getenv("REFRAIN_VANILLA_SWAMP_SEED");
+            value != nullptr) {
+            seed = std::strtoll(value, nullptr, 10);
+        }
+        const auto data =
+            refrain::worldgen::structure::load_structure_data(root);
+        expect(data.has_value());
+        if (!data) {
+            return;
+        }
+        const refrain::worldgen::structure::structure_start_context context{
+            .seed = seed,
+            .data = &*data,
+            .min_y = -64,
+            .world_height = 384,
+            .sea_level = 63,
+            .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+            .biome_name = [](std::uint16_t) -> std::string_view {
+                return "minecraft:swamp";
+            },
+            .height_at =
+                [](jint, jint, refrain::worldgen::heightmap_kind) {
+                    return jint{90};
+                },
+        };
+        const auto generated =
+            refrain::worldgen::structure::generate_structure_starts(
+                chunk_pos{.x = chunk_x, .z = chunk_z}, context);
+        const refrain::worldgen::structure::structure_start *hut = nullptr;
+        for (const auto &start : generated) {
+            if (start.structure == "minecraft:swamp_hut") {
+                hut = &start;
+            }
+        }
+        expect(hut != nullptr) << "swamp hut start missing";
+        if (hut == nullptr) {
+            return;
+        }
+        expect(hut->pieces.size() == 1U);
+        if (hut->pieces.empty()) {
+            return;
+        }
+        const auto &piece = hut->pieces.front();
+        expect(piece.type == "minecraft:tesh");
+
+        const auto reference = read_chunk(region, chunk_x, chunk_z);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        const auto *structures = child(reference->as_compound(), "structures");
+        const auto *starts = structures == nullptr
+                                 ? nullptr
+                                 : child(structures->as_compound(), "starts");
+        const auto *hut_start =
+            starts == nullptr
+                ? nullptr
+                : child(starts->as_compound(), "minecraft:swamp_hut");
+        expect(hut_start != nullptr);
+        if (hut_start == nullptr) {
+            return;
+        }
+        const auto *children = child(hut_start->as_compound(), "Children");
+        const auto *pieces =
+            children == nullptr ? nullptr : children->as_list();
+        expect(pieces != nullptr && pieces->items.size() == 1U);
+        if (pieces == nullptr || pieces->items.empty()) {
+            return;
+        }
+        const auto *expected = pieces->items.front().as_compound();
+        const auto *bb = child(expected, "BB");
+        const auto values = bb == nullptr ? std::nullopt : bb->as_int_array();
+        expect(values.has_value() && values->size() == 6U);
+        if (!values || values->size() != 6U) {
+            return;
+        }
+        const auto *orientation = child(expected, "O");
+        const auto orientation_value =
+            orientation == nullptr ? std::nullopt : orientation->as_int();
+        expect(orientation_value.has_value());
+        if (!orientation_value) {
+            return;
+        }
+        expect(piece.orientation == *orientation_value);
+        expect(piece.bounds.min_x == (*values)[0]);
+        expect(piece.bounds.min_z == (*values)[2]);
+        expect(piece.bounds.max_x == (*values)[3]);
+        expect(piece.bounds.max_z == (*values)[5]);
+        expect(piece.bounds.max_y - piece.bounds.min_y == 6);
+
+        const auto *hpos = child(expected, "HPos");
+        const auto hpos_value = hpos == nullptr ? std::nullopt : hpos->as_int();
+        expect(hpos_value.has_value());
+        if (!hpos_value) {
+            return;
+        }
+        expect(piece.bounds.min_y + (*hpos_value - 64) == (*values)[1]);
+        expect(piece.bounds.max_y + (*hpos_value - 64) == (*values)[4]);
+    };
 };
