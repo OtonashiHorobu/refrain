@@ -324,6 +324,44 @@ suite<"worldgen/block-predicate"> block_predicate_tests = [] {
                                block_pos{.x = 2, .y = 2, .z = 3}));
         expect((*fluid)->test(region, registry,
                               block_pos{.x = 2, .y = 2, .z = 3}));
+
+        auto sturdy = decode_block_predicate(
+            parse(
+                R"({"type":"minecraft:has_sturdy_face","direction":"up","offset":[0,-1,0]})"),
+            registry);
+        expect(sturdy.has_value());
+        if (sturdy) {
+            expect((*sturdy)->test(region, registry,
+                                   block_pos{.x = 1, .y = 3, .z = 3}));
+        }
+    };
+
+    "random chance keeps positions by probability"_test = [] {
+        block_state_registry registry;
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk_region region{chunk, 1};
+        const placement_context context{
+            .region = &region, .chunk = &chunk, .states = &registry};
+        auto always = decode_placement(
+            parse(R"({"type":"minecraft:random_chance","chance":1.0})"),
+            registry);
+        auto never = decode_placement(
+            parse(R"({"type":"minecraft:random_chance","chance":0.0})"),
+            registry);
+        expect(always.has_value() && never.has_value());
+        if (!always || !never) {
+            return;
+        }
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        std::vector<block_pos> out;
+        (*always)->modify(context, random, block_pos{.x = 0, .y = 0, .z = 0},
+                          out);
+        expect(out.size() == 1U);
+        out.clear();
+        (*never)->modify(context, random, block_pos{.x = 0, .y = 0, .z = 0},
+                         out);
+        expect(out.empty());
     };
 };
 
