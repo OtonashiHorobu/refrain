@@ -1491,6 +1491,144 @@ auto freeze_top_layer_feature::place(feature_context &context,
     return true;
 }
 
+auto lake_feature::place(feature_context &context, worldgen_random &random,
+                         const block_pos &initial) const -> bool {
+    if (initial.y <= context.placement.chunk->min_y() + 4) {
+        return false;
+    }
+    const block_pos origin{
+        .x = initial.x - 8, .y = initial.y - 4, .z = initial.z - 8};
+    std::array<bool, 2048> grid{};
+    const jint spots = random.next_int(4) + 4;
+    for (jint spot = 0; spot < spots; ++spot) {
+        const double xr = random.next_double() * 6.0 + 3.0;
+        const double yr = random.next_double() * 4.0 + 2.0;
+        const double zr = random.next_double() * 6.0 + 3.0;
+        const double xp =
+            random.next_double() * (16.0 - xr - 2.0) + 1.0 + xr / 2.0;
+        const double yp =
+            random.next_double() * (8.0 - yr - 4.0) + 2.0 + yr / 2.0;
+        const double zp =
+            random.next_double() * (16.0 - zr - 2.0) + 1.0 + zr / 2.0;
+        for (jint xx = 1; xx < 15; ++xx) {
+            for (jint zz = 1; zz < 15; ++zz) {
+                for (jint yy = 1; yy < 7; ++yy) {
+                    const double xd = (xx - xp) / (xr / 2.0);
+                    const double yd = (yy - yp) / (yr / 2.0);
+                    const double zd = (zz - zp) / (zr / 2.0);
+                    if (xd * xd + yd * yd + zd * zd < 1.0) {
+                        grid[static_cast<std::size_t>((xx * 16 + zz) * 8 +
+                                                      yy)] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    const auto fluid = fluid_->get(context.placement, random, origin);
+    const auto &states = *context.placement.states;
+    auto &region = *context.placement.region;
+    const auto boundary = [&grid](jint xx, jint zz, jint yy) {
+        const auto at = [&grid](jint x, jint z, jint y) {
+            return grid[static_cast<std::size_t>((x * 16 + z) * 8 + y)];
+        };
+        return !at(xx, zz, yy) && ((xx < 15 && at(xx + 1, zz, yy)) ||
+                                   (xx > 0 && at(xx - 1, zz, yy)) ||
+                                   (zz < 15 && at(xx, zz + 1, yy)) ||
+                                   (zz > 0 && at(xx, zz - 1, yy)) ||
+                                   (yy < 7 && at(xx, zz, yy + 1)) ||
+                                   (yy > 0 && at(xx, zz, yy - 1)));
+    };
+
+    for (jint xx = 0; xx < 16; ++xx) {
+        for (jint zz = 0; zz < 16; ++zz) {
+            for (jint yy = 0; yy < 8; ++yy) {
+                if (!boundary(xx, zz, yy)) {
+                    continue;
+                }
+                const block_pos pos{
+                    .x = origin.x + xx, .y = origin.y + yy, .z = origin.z + zz};
+                const auto state = region.state_at(pos.x, pos.y, pos.z);
+                const auto traits = states.traits(state);
+                if (yy >= 4 && traits.fluid) {
+                    return false;
+                }
+                if (yy < 4 && !traits.blocks_motion && state != fluid) {
+                    return false;
+                }
+                if (!can_place_feature_->test(region, states, pos)) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    for (jint xx = 0; xx < 16; ++xx) {
+        for (jint zz = 0; zz < 16; ++zz) {
+            for (jint yy = 0; yy < 8; ++yy) {
+                if (!grid[static_cast<std::size_t>((xx * 16 + zz) * 8 + yy)]) {
+                    continue;
+                }
+                const block_pos pos{
+                    .x = origin.x + xx, .y = origin.y + yy, .z = origin.z + zz};
+                if (!can_replace_with_air_or_fluid_->test(region, states,
+                                                          pos)) {
+                    continue;
+                }
+                const bool place_air = yy >= 4;
+                (void)region.set_block_state(pos.x, pos.y, pos.z,
+                                             place_air ? cave_air_ : fluid);
+                if (place_air) {
+                    mark_above_for_post_processing(context, pos);
+                }
+            }
+        }
+    }
+
+    const auto barrier = barrier_->get(context.placement, random, origin);
+    if (!states.traits(barrier).air) {
+        for (jint xx = 0; xx < 16; ++xx) {
+            for (jint zz = 0; zz < 16; ++zz) {
+                for (jint yy = 0; yy < 8; ++yy) {
+                    if (!boundary(xx, zz, yy)) {
+                        continue;
+                    }
+                    if (yy >= 4 && random.next_int(2) == 0) {
+                        continue;
+                    }
+                    const block_pos pos{.x = origin.x + xx,
+                                        .y = origin.y + yy,
+                                        .z = origin.z + zz};
+                    if (!states.traits(region.state_at(pos.x, pos.y, pos.z))
+                             .blocks_motion) {
+                        continue;
+                    }
+                    if (!can_replace_with_barrier_->test(region, states, pos)) {
+                        continue;
+                    }
+                    (void)region.set_block_state(pos.x, pos.y, pos.z, barrier);
+                    mark_above_for_post_processing(context, pos);
+                }
+            }
+        }
+    }
+
+    if (states.traits(fluid).water) {
+        for (jint xx = 0; xx < 16; ++xx) {
+            for (jint zz = 0; zz < 16; ++zz) {
+                const block_pos pos{
+                    .x = origin.x + xx, .y = origin.y + 4, .z = origin.z + zz};
+                if (context.placement.should_freeze &&
+                    context.placement.should_freeze(pos) &&
+                    can_replace_with_air_or_fluid_->test(region, states, pos)) {
+                    (void)region.set_block_state(pos.x, pos.y, pos.z, ice_);
+                }
+            }
+        }
+    }
+    return true;
+}
+
 auto delta_feature::is_clear(feature_context &context,
                              const block_pos &pos) const -> bool {
     const auto state = context.placement.region->state_at(pos.x, pos.y, pos.z);

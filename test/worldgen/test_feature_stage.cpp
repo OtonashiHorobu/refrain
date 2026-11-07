@@ -47,6 +47,7 @@ using refrain::worldgen::feature::geode_parameters;
 using refrain::worldgen::feature::huge_fungus_feature;
 using refrain::worldgen::feature::huge_mushroom_feature;
 using refrain::worldgen::feature::iceberg_feature;
+using refrain::worldgen::feature::lake_feature;
 using refrain::worldgen::feature::large_dripstone_feature;
 using refrain::worldgen::feature::leave_vine_decorator;
 using refrain::worldgen::feature::place_on_ground_decorator;
@@ -1063,6 +1064,90 @@ suite<"worldgen/tree"> tree_tests = [] {
             }
         }
         expect(leaf_blocks > 0U);
+    };
+};
+
+suite<"worldgen/lake"> lake_tests = [] {
+    "a lava lake carves a cavity in stone"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto lava = registry.intern("minecraft:lava[level=0]",
+                                    {.air = false, .fluid = true});
+        auto cave_air = registry.intern("minecraft:cave_air", {.air = true});
+        auto ice =
+            registry.intern("minecraft:ice", {.air = false,
+                                              .blocks_motion = true,
+                                              .blocks_motion_no_leaves = true});
+        expect(stone && lava && cave_air && ice);
+        if (!stone || !lava || !cave_air || !ice) {
+            return;
+        }
+
+        const auto decode = [&](std::string_view text) {
+            auto document = parse(text);
+            return decode_block_predicate(document, registry);
+        };
+        auto can_place = decode(R"({"type":"minecraft:true"})");
+        auto can_replace = decode(
+            R"({"type":"minecraft:not","predicate":{"type":"minecraft:matching_block_tag","tag":"minecraft:features_cannot_replace"}})");
+        auto can_replace_barrier = decode(
+            R"({"type":"minecraft:not","predicate":{"type":"minecraft:matching_block_tag","tag":"minecraft:lava_pool_stone_cannot_replace"}})");
+        expect(can_place.has_value() && can_replace.has_value() &&
+               can_replace_barrier.has_value());
+        if (!can_place || !can_replace || !can_replace_barrier) {
+            return;
+        }
+
+        proto_chunk chunk{registry, 0, 0, 0, 64};
+        chunk.set_status(chunk_status::terrain);
+        for (jint y = 0; y < 64; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    chunk.set_state(x, y, z, *stone);
+                }
+            }
+        }
+        chunk_region region{chunk, 0};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 64,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        lake_feature lake{simple_state(*lava),
+                          simple_state(*stone),
+                          std::move(*can_place),
+                          std::move(*can_replace),
+                          std::move(*can_replace_barrier),
+                          *cave_air,
+                          *ice};
+
+        expect(!lake.place(context, random, block_pos{.x = 8, .y = 3, .z = 8}));
+        expect(lake.place(context, random, block_pos{.x = 8, .y = 20, .z = 8}));
+
+        std::size_t lava_blocks = 0;
+        std::size_t air_blocks = 0;
+        for (jint y = 0; y < 64; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    const auto state = chunk.state_at(x, y, z);
+                    lava_blocks += state == *lava;
+                    air_blocks += state == *cave_air;
+                }
+            }
+        }
+        expect(lava_blocks > 0U);
+        expect(air_blocks > 0U);
     };
 };
 

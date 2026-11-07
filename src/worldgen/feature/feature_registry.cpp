@@ -748,6 +748,42 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                                     std::move(*rim_provider)));
             continue;
         }
+        if (*type == "minecraft:lake") {
+            const auto *fluid = document.document.find("fluid");
+            const auto *barrier = document.document.find("barrier");
+            const auto *can_place = document.document.find("can_place_feature");
+            const auto *can_replace_air =
+                document.document.find("can_replace_with_air_or_fluid");
+            const auto *can_replace_barrier =
+                document.document.find("can_replace_with_barrier");
+            if (fluid == nullptr || barrier == nullptr ||
+                can_place == nullptr || can_replace_air == nullptr ||
+                can_replace_barrier == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "lake feature is incomplete")};
+            }
+            auto fluid_provider = decode_provider(*fluid);
+            auto barrier_provider = decode_provider(*barrier);
+            auto place_predicate = decode_block_predicate(*can_place, *states_);
+            auto air_predicate =
+                decode_block_predicate(*can_replace_air, *states_);
+            auto barrier_predicate =
+                decode_block_predicate(*can_replace_barrier, *states_);
+            const auto cave_air = resolve_state(*states_, "minecraft:cave_air");
+            const auto ice = resolve_state(*states_, "minecraft:ice");
+            if (!fluid_provider || !barrier_provider || !place_predicate ||
+                !air_predicate || !barrier_predicate || !cave_air || !ice) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "lake feature is invalid")};
+            }
+            features_.emplace(
+                id,
+                std::make_unique<lake_feature>(
+                    std::move(*fluid_provider), std::move(*barrier_provider),
+                    std::move(*place_predicate), std::move(*air_predicate),
+                    std::move(*barrier_predicate), *cave_air, *ice));
+            continue;
+        }
         if (*type == "minecraft:freeze_top_layer") {
             const auto ice = resolve_state(*states_, "minecraft:ice");
             const auto snow =

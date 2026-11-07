@@ -467,6 +467,36 @@ class freeze_top_layer_feature final : public feature {
     block_state_id snow_{no_block_state};
 };
 
+/// `LakeFeature`: an ellipsoid lake carved into solid ground, lined with a
+/// barrier block and filled with the fluid (the deprecated lava/water lake).
+class lake_feature final : public feature {
+  public:
+    lake_feature(std::unique_ptr<state_provider> fluid,
+                 std::unique_ptr<state_provider> barrier,
+                 std::unique_ptr<block_predicate> can_place_feature,
+                 std::unique_ptr<block_predicate> can_replace_with_air_or_fluid,
+                 std::unique_ptr<block_predicate> can_replace_with_barrier,
+                 block_state_id cave_air, block_state_id ice)
+        : fluid_{std::move(fluid)}, barrier_{std::move(barrier)},
+          can_place_feature_{std::move(can_place_feature)},
+          can_replace_with_air_or_fluid_{
+              std::move(can_replace_with_air_or_fluid)},
+          can_replace_with_barrier_{std::move(can_replace_with_barrier)},
+          cave_air_{cave_air}, ice_{ice} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::unique_ptr<state_provider> fluid_{};
+    std::unique_ptr<state_provider> barrier_{};
+    std::unique_ptr<block_predicate> can_place_feature_{};
+    std::unique_ptr<block_predicate> can_replace_with_air_or_fluid_{};
+    std::unique_ptr<block_predicate> can_replace_with_barrier_{};
+    block_state_id cave_air_{no_block_state};
+    block_state_id ice_{no_block_state};
+};
+
 /// `DeltaFeature`: a lava pool with a magma rim on a flat cave floor.
 class delta_feature final : public feature {
   public:

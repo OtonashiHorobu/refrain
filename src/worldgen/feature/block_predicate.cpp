@@ -50,6 +50,14 @@ auto names(const data::json::value &input) -> result<std::vector<std::string>> {
     return out;
 }
 
+class true_predicate final : public block_predicate {
+  public:
+    [[nodiscard]] auto test(const chunk_region &, const block_state_table &,
+                            const block_pos &) const -> bool override {
+        return true;
+    }
+};
+
 class matching_blocks final : public block_predicate {
   public:
     explicit matching_blocks(std::vector<std::string> blocks)
@@ -177,6 +185,10 @@ auto decode_block_predicate(const data::json::value &document,
     const auto type = type_of(document);
     if (!type) {
         return std::unexpected{type.error()};
+    }
+    if (*type == "minecraft:true") {
+        return std::unique_ptr<block_predicate>{
+            std::make_unique<true_predicate>()};
     }
     if (*type == "minecraft:matching_blocks" ||
         *type == "minecraft:matching_block_tag") {
