@@ -5,6 +5,8 @@
 #include <refrain/data/nbt.hpp>
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/core/rng.hpp>
+#include <refrain/worldgen/feature/feature.hpp>
 #include <refrain/worldgen/structure/generation.hpp>
 #include <refrain/worldgen/structure/placement_stage.hpp>
 #include <refrain/worldgen/structure/template.hpp>
@@ -213,9 +215,15 @@ auto decode_chunk(const data::nbt::value &root, decoded_chunk &out) -> bool {
             } else {
                 return false;
             }
+            const auto block_name = state_block_name(name);
+            const bool air = is_air_block_name(block_name);
+            const bool fluid = name.starts_with("minecraft:water") ||
+                               name.starts_with("minecraft:lava");
             const auto interned = out.registry.intern(
-                name, {.air = name == "minecraft:air",
-                       .blocks_motion = name != "minecraft:air"});
+                name, {.air = air,
+                       .fluid = fluid,
+                       .water = name.starts_with("minecraft:water"),
+                       .blocks_motion = !air && !fluid});
             if (!interned) {
                 return false;
             }
