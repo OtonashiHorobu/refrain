@@ -23,4 +23,16 @@ auto structure_bbox::is_close_to(const chunk_pos &chunk, jint radius) const
            max_z >= chunk_min_z - radius && min_z <= chunk_min_z + 15 + radius;
 }
 
+auto starts_for_chunk(const std::vector<structure_start> &starts,
+                      const chunk_pos &chunk, jint radius)
+    -> std::vector<const structure_start *> {
+    std::vector<const structure_start *> result;
+    for (const auto &start : starts) {
+        if (start.bounds.is_close_to(chunk, radius)) {
+            result.push_back(&start);
+        }
+    }
+    return result;
+}
+
 } // namespace refrain::worldgen::structure
