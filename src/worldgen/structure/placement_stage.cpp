@@ -789,6 +789,28 @@ void place_desert_pyramid(const structure_place_context &context,
     place(air, 10, -10, 12);
     place(chiseled, 10, -10, 13);
     place(cut, 10, -11, 13);
+    std::vector<block_pos> sand_positions;
+    const auto record_sand = [&](jint x, jint y, jint z) {
+        sand_positions.push_back(local(x, y, z));
+    };
+    for (jint x = 14; x <= 18; ++x) {
+        for (jint y = -3; y <= -1; ++y) {
+            for (jint z = 11; z <= 15; ++z) {
+                record_sand(x, y, z);
+            }
+        }
+    }
+    for (const auto &[x, y, z] :
+         std::array<std::tuple<jint, jint, jint>, 8>{{{19, -3, 13},
+                                                      {19, -2, 13},
+                                                      {13, -3, 13},
+                                                      {13, -2, 13},
+                                                      {16, -3, 16},
+                                                      {16, -2, 16},
+                                                      {16, -3, 10},
+                                                      {16, -2, 10}}}) {
+        record_sand(x, y, z);
+    }
     const std::array<std::pair<jint, jint>, 4> chests{
         {{10, 8}, {12, 10}, {10, 12}, {8, 10}}};
     for (const auto &[x, z] : chests) {
@@ -843,6 +865,95 @@ void place_desert_pyramid(const structure_place_context &context,
     place(chiseled, 16, -2, 17);
     place(cut, 16, -3, 9);
     place(chiseled, 16, -2, 9);
+    if (context.level_random != nullptr) {
+        const bool variant = context.level_random->next_boolean();
+        place(variant ? sand : sandstone, 15, -1, 17);
+        place(variant ? sandstone : sand, 16, -1, 17);
+        for (jint x = 14; x <= 18; ++x) {
+            for (jint z = 11; z <= 15; ++z) {
+                if (context.level_random->next_float() < 0.33F) {
+                    place(sandstone, x, 0, z);
+                } else {
+                    place(sand, x, 0, z);
+                }
+            }
+        }
+    }
+    if (context.seed != 0) {
+        legacy_random_source base{context.seed};
+        const jlong factory = base.next_long();
+        const auto bbox_min = local(0, 0, 0);
+        const auto bbox_max = local(20, 14, 20);
+        const block_pos center{.x = (bbox_min.x + bbox_max.x) / 2,
+                               .y = (bbox_min.y + bbox_max.y) / 2,
+                               .z = (bbox_min.z + bbox_max.z) / 2};
+        legacy_random_source after{mth_get_seed(center.x, center.y, center.z) ^
+                                   factory};
+        std::vector<block_pos> unique;
+        for (const auto &pos : sand_positions) {
+            const bool seen = std::any_of(
+                unique.begin(), unique.end(), [&](const block_pos &value) {
+                    return value.x == pos.x && value.y == pos.y &&
+                           value.z == pos.z;
+                });
+            if (!seen) {
+                unique.push_back(pos);
+            }
+        }
+        std::sort(unique.begin(), unique.end(),
+                  [](const block_pos &left, const block_pos &right) {
+                      return std::tie(left.y, left.z, left.x) <
+                             std::tie(right.y, right.z, right.x);
+                  });
+        for (std::size_t i = unique.size(); i > 1; --i) {
+            const auto swap_to =
+                static_cast<std::size_t>(after.next_int(static_cast<jint>(i)));
+            std::swap(unique[i - 1], unique[swap_to]);
+        }
+        jint suspicious =
+            std::min(static_cast<jint>(unique.size()), 5 + after.next_int(3));
+        const auto suspicious_sand = resolve("minecraft:suspicious_sand");
+        const auto inside_chunk = [&](const block_pos &pos) {
+            return pos.x >> 4 == context.chunk->chunk_x() &&
+                   pos.z >> 4 == context.chunk->chunk_z();
+        };
+        for (const auto &pos : unique) {
+            if (suspicious > 0) {
+                --suspicious;
+                if (!inside_chunk(pos)) {
+                    continue;
+                }
+                if (suspicious_sand != no_block_state) {
+                    (void)region.set_block_state(pos.x, pos.y, pos.z,
+                                                 suspicious_sand);
+                }
+                data::nbt::compound entity;
+                entity["id"] =
+                    data::nbt::value{std::string{"minecraft:brushable_block"}};
+                entity["LootTable"] = data::nbt::value{
+                    std::string{"minecraft:archaeology/desert_pyramid"}};
+                entity["LootTableSeed"] = data::nbt::value{
+                    (static_cast<jlong>(pos.x & 0x3FFFFFF) << 38) |
+                    (static_cast<jlong>(pos.z & 0x3FFFFFF) << 12) |
+                    static_cast<jlong>(pos.y & 0xFFF)};
+                (void)region.set_block_entity(pos.x, pos.y, pos.z,
+                                              std::move(entity));
+            } else if (inside_chunk(pos)) {
+                (void)region.set_block_state(pos.x, pos.y, pos.z,
+                                             resolve(sand));
+            }
+        }
+        const auto roof_local = local(14, 0, 11);
+        legacy_random_source roof_random{
+            mth_get_seed(roof_local.x, roof_local.y, roof_local.z) ^ factory};
+        const jint roof_x = 14 + roof_random.next_int(5);
+        const jint roof_z = 11 + roof_random.next_int(5);
+        const auto roof_pos = local(roof_x, 0, roof_z);
+        if (inside_chunk(roof_pos) && suspicious_sand != no_block_state) {
+            (void)region.set_block_state(roof_pos.x, roof_pos.y, roof_pos.z,
+                                         suspicious_sand);
+        }
+    }
     (void)base_y;
 }
 

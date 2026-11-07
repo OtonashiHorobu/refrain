@@ -27,6 +27,10 @@ struct structure_place_context {
     /// present for `minecraft:igl` to place anything.
     const structure_template_manager *templates{nullptr};
     block_state_registry *registry{nullptr};
+    jlong seed{0};
+    /// The chunk's `worldgen_region_random` stream, consumed by pieces that
+    /// read `level.getRandom()`.
+    worldgen_random *level_random{nullptr};
 };
 
 /// Maps a procedural piece's local coordinates to world coordinates using
