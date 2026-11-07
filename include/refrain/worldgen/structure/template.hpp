@@ -12,6 +12,8 @@
 #include <refrain/data/nbt.hpp>
 #include <refrain/worldgen/chunk/block_state.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/chunk/chunk_region.hpp>
+#include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/core/java_compat.hpp>
 
 #include <cstdint>
@@ -67,6 +69,38 @@ struct structure_template {
     std::vector<std::vector<template_block_info>> palettes{};
     std::vector<template_entity_info> entities{};
 };
+
+/// Mirror/rotation/pivot of one placement.
+struct template_transform {
+    template_mirror mirror{template_mirror::none};
+    template_rotation rotation{template_rotation::none};
+    block_pos pivot{};
+};
+
+/// `StructureTemplate.transform(BlockPos, Mirror, Rotation, pivot)`. Mirroring
+/// is applied to the local position first, then the rotation; the pivot only
+/// participates in the rotated branches.
+[[nodiscard]] auto transform_position(const block_pos &pos,
+                                      const template_transform &transform)
+    -> block_pos;
+
+/// `BlockState.mirror(mirror).rotate(rotation)` for the direction, axis,
+/// 0-15 rotation and face-boolean properties; other properties survive
+/// unchanged. The transformed key is resolved against `states` and interned
+/// with the source state's traits when it is new.
+[[nodiscard]] auto transform_state(block_state_registry &states,
+                                   block_state_id state,
+                                   const template_transform &transform)
+    -> block_state_id;
+
+/// Places palette 0 (or the palette chosen from the template position) into
+/// `region`. Blocks are mirrored then rotated, block entities are written after
+/// their block, and writes outside the writable region are dropped. Returns
+/// the number of blocks that were written.
+[[nodiscard]] auto
+place_template(chunk_region &region, block_state_registry &states,
+               const structure_template &templ, const block_pos &origin,
+               const template_transform &transform) -> std::size_t;
 
 /// `StructureTemplate.load`: resolves the palette against `states` (unknown or
 /// malformed states become air) and keeps only entities that carry an NBT

@@ -5,15 +5,28 @@
 #include <refrain/worldgen/structure/template.hpp>
 
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
+#include <refrain/worldgen/core/rng.hpp>
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <string>
 #include <utility>
 
 namespace refrain::worldgen::structure {
 
 namespace {
+
+struct parsed_state {
+    std::string_view name{};
+    std::vector<std::pair<std::string, std::string>> properties{};
+};
+
+auto parse_state(std::string_view key) -> parsed_state;
+auto find_state(
+    const block_state_registry &states, std::string_view name,
+    const std::vector<std::pair<std::string, std::string>> &properties)
+    -> block_state_id;
 
 auto child(const data::nbt::compound *entries, std::string_view key)
     -> const data::nbt::value * {
@@ -128,10 +141,15 @@ auto resolve_palette_state(const block_state_registry &states,
     if (const auto found = states.find(*key); found.has_value()) {
         return *found;
     }
+    const auto parsed = parse_state(*key);
+    const auto by_properties =
+        find_state(states, parsed.name, parsed.properties);
+    if (by_properties != no_block_state) {
+        return by_properties;
+    }
     // Unknown properties are ignored by the reference; fall back to the
     // block's plain key when the full state is not known.
-    const auto name = state_block_name(*key);
-    if (const auto found = states.find(name); found.has_value()) {
+    if (const auto found = states.find(parsed.name); found.has_value()) {
         return *found;
     }
     return states.air();
@@ -211,6 +229,174 @@ auto load_palette(const block_state_registry &states,
     return full;
 }
 
+auto parse_state(std::string_view key) -> parsed_state {
+    parsed_state out;
+    const auto open = key.find('[');
+    if (open == std::string_view::npos) {
+        out.name = key;
+        return out;
+    }
+    out.name = key.substr(0, open);
+    const auto close = key.rfind(']');
+    if (close == std::string_view::npos || close < open) {
+        return out;
+    }
+    std::string_view body = key.substr(open + 1, close - open - 1);
+    while (!body.empty()) {
+        const auto comma = body.find(',');
+        const auto entry = body.substr(0, comma);
+        const auto equals = entry.find('=');
+        if (equals != std::string_view::npos) {
+            out.properties.emplace_back(std::string{entry.substr(0, equals)},
+                                        std::string{entry.substr(equals + 1)});
+        }
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        body = body.substr(comma + 1);
+    }
+    return out;
+}
+
+auto find_state(
+    const block_state_registry &states, std::string_view name,
+    const std::vector<std::pair<std::string, std::string>> &properties)
+    -> block_state_id {
+    for (std::size_t id = 0; id < states.size(); ++id) {
+        const auto key = states.name(static_cast<block_state_id>(id));
+        const auto parsed = parse_state(key);
+        if (parsed.name != name) {
+            continue;
+        }
+        bool matches = true;
+        for (const auto &[property, value] : properties) {
+            const auto found = std::find_if(
+                parsed.properties.begin(), parsed.properties.end(),
+                [&](const auto &entry) { return entry.first == property; });
+            if (found == parsed.properties.end() || found->second != value) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) {
+            return static_cast<block_state_id>(id);
+        }
+    }
+    return no_block_state;
+}
+
+auto direction_opposite(std::string_view direction) -> std::string_view {
+    if (direction == "north") {
+        return "south";
+    }
+    if (direction == "south") {
+        return "north";
+    }
+    if (direction == "east") {
+        return "west";
+    }
+    if (direction == "west") {
+        return "east";
+    }
+    return direction;
+}
+
+auto mirror_direction(std::string_view direction, template_mirror mirror)
+    -> std::string_view {
+    if (mirror == template_mirror::left_right &&
+        (direction == "north" || direction == "south")) {
+        return direction_opposite(direction);
+    }
+    if (mirror == template_mirror::front_back &&
+        (direction == "east" || direction == "west")) {
+        return direction_opposite(direction);
+    }
+    return direction;
+}
+
+auto rotate_direction(std::string_view direction, template_rotation rotation)
+    -> std::string_view {
+    if (rotation == template_rotation::none || direction == "up" ||
+        direction == "down") {
+        return direction;
+    }
+    auto clockwise = [](std::string_view value) -> std::string_view {
+        if (value == "north") {
+            return "east";
+        }
+        if (value == "east") {
+            return "south";
+        }
+        if (value == "south") {
+            return "west";
+        }
+        return "north";
+    };
+    if (rotation == template_rotation::clockwise_90) {
+        return clockwise(direction);
+    }
+    if (rotation == template_rotation::clockwise_180) {
+        return direction_opposite(direction);
+    }
+    return clockwise(clockwise(clockwise(direction)));
+}
+
+auto transform_rotation_value(std::string_view value, template_mirror mirror,
+                              template_rotation rotation) -> std::string {
+    jint parsed = 0;
+    const auto *begin = value.data();
+    const auto *end = begin + value.size();
+    const auto result = std::from_chars(begin, end, parsed);
+    if (result.ec != std::errc{}) {
+        return std::string{value};
+    }
+    jint steps = ((parsed % 16) + 16) % 16;
+    if (mirror == template_mirror::left_right) {
+        const jint centered = steps > 8 ? steps - 16 : steps;
+        steps = ((8 - centered) % 16 + 16) % 16;
+    } else if (mirror == template_mirror::front_back) {
+        const jint centered = steps > 8 ? steps - 16 : steps;
+        steps = ((-centered) % 16 + 16) % 16;
+    }
+    switch (rotation) {
+    case template_rotation::clockwise_90:
+        steps = (steps + 4) % 16;
+        break;
+    case template_rotation::clockwise_180:
+        steps = (steps + 8) % 16;
+        break;
+    case template_rotation::counterclockwise_90:
+        steps = (steps + 12) % 16;
+        break;
+    case template_rotation::none:
+        break;
+    }
+    return std::to_string(steps);
+}
+
+auto build_state_key(
+    std::string_view name,
+    const std::vector<std::pair<std::string, std::string>> &properties)
+    -> std::string {
+    std::string key{name};
+    if (properties.empty()) {
+        return key;
+    }
+    key.push_back('[');
+    bool first = true;
+    for (const auto &[property, value] : properties) {
+        if (!first) {
+            key.push_back(',');
+        }
+        first = false;
+        key.append(property);
+        key.push_back('=');
+        key.append(value);
+    }
+    key.push_back(']');
+    return key;
+}
+
 } // namespace
 
 auto load_structure_template(const block_state_registry &states,
@@ -269,6 +455,129 @@ auto load_structure_template(const block_state_registry &states,
         }
     }
     return out;
+}
+
+auto place_template(chunk_region &region, block_state_registry &states,
+                    const structure_template &templ, const block_pos &origin,
+                    const template_transform &transform) -> std::size_t {
+    if (templ.palettes.empty()) {
+        return 0;
+    }
+    std::size_t palette_index = 0;
+    if (templ.palettes.size() > 1) {
+        legacy_random_source random{mth_get_seed(origin.x, origin.y, origin.z)};
+        palette_index = static_cast<std::size_t>(
+            random.next_int(static_cast<jint>(templ.palettes.size())));
+    }
+    const auto &palette = templ.palettes[palette_index];
+    block_state_id barrier = states.air();
+    if (const auto found = states.find("minecraft:barrier");
+        found.has_value()) {
+        barrier = *found;
+    }
+    std::size_t placed = 0;
+    for (const auto &block : palette) {
+        const auto relative = transform_position(
+            block_pos{.x = block.x, .y = block.y, .z = block.z}, transform);
+        const block_pos world{.x = origin.x + relative.x,
+                              .y = origin.y + relative.y,
+                              .z = origin.z + relative.z};
+        const auto state = transform_state(states, block.state, transform);
+        if (block.nbt != nullptr) {
+            (void)region.set_block_state(world.x, world.y, world.z, barrier);
+        }
+        if (!region.set_block_state(world.x, world.y, world.z, state)) {
+            continue;
+        }
+        ++placed;
+        if (block.nbt != nullptr) {
+            auto entity = *block.nbt;
+            entity["x"] = data::nbt::value{world.x};
+            entity["y"] = data::nbt::value{world.y};
+            entity["z"] = data::nbt::value{world.z};
+            (void)region.set_block_entity(world.x, world.y, world.z,
+                                          std::move(entity));
+        }
+    }
+    return placed;
+}
+
+auto transform_position(const block_pos &pos,
+                        const template_transform &transform) -> block_pos {
+    jint x = pos.x;
+    jint z = pos.z;
+    switch (transform.mirror) {
+    case template_mirror::left_right:
+        z = -z;
+        break;
+    case template_mirror::front_back:
+        x = -x;
+        break;
+    case template_mirror::none:
+        break;
+    }
+    const jint pivot_x = transform.pivot.x;
+    const jint pivot_z = transform.pivot.z;
+    switch (transform.rotation) {
+    case template_rotation::counterclockwise_90:
+        return {
+            .x = pivot_x - pivot_z + z, .y = pos.y, .z = pivot_x + pivot_z - x};
+    case template_rotation::clockwise_90:
+        return {
+            .x = pivot_x + pivot_z - z, .y = pos.y, .z = pivot_z - pivot_x + x};
+    case template_rotation::clockwise_180:
+        return {
+            .x = pivot_x + pivot_x - x, .y = pos.y, .z = pivot_z + pivot_z - z};
+    case template_rotation::none:
+        break;
+    }
+    return {.x = x, .y = pos.y, .z = z};
+}
+
+auto transform_state(block_state_registry &states, block_state_id state,
+                     const template_transform &transform) -> block_state_id {
+    const auto parsed = parse_state(states.name(state));
+    const auto is_face = [](std::string_view name) {
+        return name == "north" || name == "south" || name == "east" ||
+               name == "west" || name == "up" || name == "down";
+    };
+    std::vector<std::pair<std::string, std::string>> properties;
+    properties.reserve(parsed.properties.size());
+    for (const auto &[property, value] : parsed.properties) {
+        if (property == "facing") {
+            properties.emplace_back(
+                property, std::string{rotate_direction(
+                              mirror_direction(value, transform.mirror),
+                              transform.rotation)});
+        } else if (property == "axis") {
+            if (transform.rotation == template_rotation::clockwise_90 ||
+                transform.rotation == template_rotation::counterclockwise_90) {
+                properties.emplace_back(property, value == "x"   ? "z"
+                                                  : value == "z" ? "x"
+                                                                 : value);
+            } else {
+                properties.emplace_back(property, value);
+            }
+        } else if (property == "rotation") {
+            properties.emplace_back(
+                property, transform_rotation_value(value, transform.mirror,
+                                                   transform.rotation));
+        } else if (is_face(property)) {
+            const auto target =
+                rotate_direction(mirror_direction(property, transform.mirror),
+                                 transform.rotation);
+            properties.emplace_back(std::string{target}, value);
+        } else {
+            properties.emplace_back(property, value);
+        }
+    }
+    const auto found = find_state(states, parsed.name, properties);
+    if (found != no_block_state) {
+        return found;
+    }
+    const auto key = build_state_key(parsed.name, properties);
+    const auto interned = states.intern(key, states.traits(state));
+    return interned.has_value() ? *interned : state;
 }
 
 } // namespace refrain::worldgen::structure
