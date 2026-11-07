@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// Structure-set documents: weighted structure entries and their placement.
+
+#pragma once
+
+#include <refrain/core/error.hpp>
+#include <refrain/worldgen/structure/placement.hpp>
+
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace refrain::data::json {
+class value;
+} // namespace refrain::data::json
+
+namespace refrain::worldgen::structure {
+
+struct weighted_structure {
+    std::string structure{};
+    jint weight{1};
+};
+
+struct structure_set {
+    std::string id{};
+    std::vector<weighted_structure> structures{};
+    std::optional<random_spread_placement> random_spread{};
+};
+
+[[nodiscard]] auto decode_structure_set(std::string_view id,
+                                        const data::json::value &document)
+    -> result<structure_set>;
+
+} // namespace refrain::worldgen::structure
