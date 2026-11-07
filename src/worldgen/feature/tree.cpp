@@ -92,8 +92,18 @@ void tree_feature::place_leaves_row(feature_context &context,
         const jint abs_dx = std::abs(dx);
         for (jint dz = -radius; dz <= radius; ++dz) {
             const jint abs_dz = std::abs(dz);
-            if (abs_dx == radius && abs_dz == radius &&
-                (random.next_int(2) == 0 || y == 0)) {
+            if (foliage_ == foliage_kind::blob) {
+                if (abs_dx == radius && abs_dz == radius &&
+                    (random.next_int(2) == 0 || y == 0)) {
+                    continue;
+                }
+            } else if (foliage_ == foliage_kind::acacia) {
+                if (y == 0
+                        ? (abs_dx > 1 || abs_dz > 1) && dx != 0 && dz != 0
+                        : abs_dx == radius && abs_dz == radius && radius > 0) {
+                    continue;
+                }
+            } else if (abs_dx == radius && abs_dz == radius && radius > 0) {
                 continue;
             }
             const block_pos pos{
@@ -142,16 +152,34 @@ void tree_feature::place_leaves_row(feature_context &context,
 void tree_feature::place_foliage(feature_context &context,
                                  worldgen_random &random,
                                  const block_pos &attachment, jint leaf_radius,
-                                 jint radius_offset,
+                                 jint radius_offset, jint foliage_height,
                                  std::vector<block_pos> &leaves,
                                  bool &placed) const {
     const jint offset = foliage_offset_->sample(random);
     if (foliage_ == foliage_kind::blob) {
-        for (jint yo = offset; yo >= offset - foliage_height_; --yo) {
+        for (jint yo = offset; yo >= offset - foliage_height; --yo) {
             const jint current =
                 std::max(leaf_radius + radius_offset - 1 - yo / 2, 0);
             place_leaves_row(context, random, attachment, current, yo, leaves,
                              placed);
+        }
+        return;
+    }
+    if (foliage_ == foliage_kind::spruce) {
+        jint current = random.next_int(2);
+        jint max_radius = 1;
+        jint min_radius = 0;
+        for (jint yo = offset; yo >= -foliage_height; --yo) {
+            place_leaves_row(context, random, attachment, current, yo, leaves,
+                             placed);
+            if (current >= max_radius) {
+                current = min_radius;
+                min_radius = 1;
+                max_radius =
+                    std::min(max_radius + 1, leaf_radius + radius_offset);
+            } else {
+                ++current;
+            }
         }
         return;
     }
@@ -272,8 +300,14 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
     const jint tree_height = base_height_ +
                              random.next_int(height_rand_a_ + 1) +
                              random.next_int(height_rand_b_ + 1);
-    const jint foliage_height = foliage_height_;
-    (void)foliage_height;
+    jint foliage_height = foliage_height_;
+    if (foliage_ == foliage_kind::spruce) {
+        if (!spruce_trunk_height_) {
+            return false;
+        }
+        foliage_height =
+            std::max(4, tree_height - spruce_trunk_height_->sample(random));
+    }
     const jint leaf_radius = foliage_radius_->sample(random);
     const jint min_y = origin.y;
     const jint max_y = origin.y + tree_height + 1;
@@ -409,7 +443,7 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
     bool placed = false;
     for (const auto &[attachment, radius_offset] : attachments) {
         place_foliage(context, random, attachment, leaf_radius, radius_offset,
-                      leaves, placed);
+                      foliage_height, leaves, placed);
     }
     if (logs.empty() || leaves.empty()) {
         return false;
