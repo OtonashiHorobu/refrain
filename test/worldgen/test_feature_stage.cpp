@@ -23,6 +23,7 @@ using refrain::worldgen::chunk_status;
 using refrain::worldgen::heightmap_kind;
 using refrain::worldgen::proto_chunk;
 using refrain::worldgen::feature::attached_to_leaves_decorator;
+using refrain::worldgen::feature::attached_to_logs_decorator;
 using refrain::worldgen::feature::biome_feature_list;
 using refrain::worldgen::feature::block_blob_feature;
 using refrain::worldgen::feature::boolean_selector_feature;
@@ -556,6 +557,48 @@ suite<"worldgen/placement-water"> placement_water_tests = [] {
                                block_pos{.x = 0, .y = 0, .z = 0}, out);
             expect(out.empty());
         }
+    };
+};
+
+suite<"worldgen/attached-logs-decorator"> attached_logs_tests = [] {
+    "attached_to_logs places blocks beside logs"_test = [] {
+        block_state_registry registry;
+        auto litter = registry.intern("minecraft:leaf_litter",
+                                      {.air = false,
+                                       .blocks_motion = true,
+                                       .blocks_motion_no_leaves = true});
+        expect(litter.has_value());
+        if (!litter) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 1};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 32,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        const std::vector<block_pos> logs{{.x = 8, .y = 5, .z = 8}};
+        const std::vector<block_pos> leaves{};
+        attached_to_logs_decorator decorator{
+            1.0F, simple_state(*litter), {"down"}};
+        const tree_decorator_context decorator_context{.context = context,
+                                                       .states = registry,
+                                                       .random = random,
+                                                       .logs = logs,
+                                                       .leaves = leaves};
+        decorator.place(decorator_context);
+        expect(registry.name(chunk.state_at(8, 4, 8)) ==
+               "minecraft:leaf_litter");
     };
 };
 

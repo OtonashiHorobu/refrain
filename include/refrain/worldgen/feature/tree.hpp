@@ -54,6 +54,21 @@ class trunk_vine_decorator final : public tree_decorator {
     void place(const tree_decorator_context &context) const override;
 };
 
+class attached_to_logs_decorator final : public tree_decorator {
+  public:
+    attached_to_logs_decorator(float probability,
+                               std::unique_ptr<state_provider> provider,
+                               std::vector<std::string> directions)
+        : probability_{probability}, provider_{std::move(provider)},
+          directions_{std::move(directions)} {}
+    void place(const tree_decorator_context &context) const override;
+
+  private:
+    float probability_{0.0F};
+    std::unique_ptr<state_provider> provider_;
+    std::vector<std::string> directions_{};
+};
+
 class attached_to_leaves_decorator final : public tree_decorator {
   public:
     attached_to_leaves_decorator(float probability, jint exclusion_radius_xz,
