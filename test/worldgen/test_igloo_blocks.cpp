@@ -906,50 +906,27 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
                 key, {.air = air, .blocks_motion = !air});
             return inserted.has_value() ? *inserted : no_block_state;
         };
+        xoroshiro_random_source random_state{seed};
+        const auto random_state_factory = random_state.fork_positional();
+        const auto name_random = random_state_factory->from_hash_of(
+            "minecraft:worldgen_region_random");
+        const auto region_factory = name_random->fork_positional();
+        auto level_random =
+            worldgen_random{region_factory->at(chunk_x * 16, 0, chunk_z * 16)};
         const structure::structure_place_context context{
             .region = &region_view,
             .chunk = &chunk,
             .states = &decoded.registry,
             .state = resolve,
             .registry = &decoded.registry,
+            .seed = seed,
+            .level_random = &level_random,
         };
         auto random =
             worldgen_random{std::make_unique<legacy_random_source>(7)};
         structure::place_structures(chunk, context, "surface_structures",
                                     random);
 
-        std::set<std::tuple<jint, jint, jint>> excluded;
-        const auto &piece = piece_record;
-        const auto exclude_local = [&](jint x, jint y, jint z) {
-            const auto pos =
-                structure::piece_local_to_world(piece, 75, x, y, z);
-            excluded.emplace(pos.x, pos.y, pos.z);
-        };
-        for (jint x = 14; x <= 18; ++x) {
-            for (jint z = 11; z <= 15; ++z) {
-                exclude_local(x, 0, z); // collapsed roof
-            }
-        }
-        for (jint x = 14; x <= 18; ++x) {
-            for (jint y = -3; y <= -1; ++y) {
-                for (jint z = 11; z <= 15; ++z) {
-                    exclude_local(x, y, z); // sand / suspicious sand
-                }
-            }
-        }
-        for (const auto &[x, y, z] :
-             std::array<std::tuple<jint, jint, jint>, 10>{{{19, -3, 13},
-                                                           {19, -2, 13},
-                                                           {13, -3, 13},
-                                                           {13, -2, 13},
-                                                           {16, -3, 16},
-                                                           {16, -2, 16},
-                                                           {16, -3, 10},
-                                                           {16, -2, 10},
-                                                           {15, -1, 17},
-                                                           {16, -1, 17}}}) {
-            exclude_local(x, y, z);
-        }
         const auto canonical = [](std::string name) -> std::string {
             const auto open = name.find('[');
             if (open == std::string::npos) {
@@ -1007,10 +984,6 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
         for (jint y = -64; y < 320; ++y) {
             for (jint z = chunk_z * 16; z < chunk_z * 16 + 16; ++z) {
                 for (jint x = chunk_x * 16; x < chunk_x * 16 + 16; ++x) {
-                    if (excluded.contains(
-                            std::tuple<jint, jint, jint>{x, y, z})) {
-                        continue;
-                    }
                     const auto index =
                         static_cast<std::size_t>(y + 64) * 256U +
                         static_cast<std::size_t>((z & 15) * 16 + (x & 15));
