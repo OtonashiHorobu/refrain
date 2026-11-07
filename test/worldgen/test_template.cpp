@@ -6,6 +6,7 @@
 #include <refrain/data/nbt.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/structure/generation.hpp>
+#include <refrain/worldgen/structure/placement_stage.hpp>
 #include <refrain/worldgen/structure/template.hpp>
 
 #include <boost/ut.hpp>
@@ -864,5 +865,88 @@ suite<"worldgen/template"> template_tests = [] {
         const auto east =
             std::string{registry.name(fence_region.state_at(15, 0, 0))};
         expect(east.find("east=true") != std::string::npos);
+    };
+
+    "an ocean ruin piece places and rots its template"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false, .blocks_motion = true});
+        auto stairs =
+            registry.intern("minecraft:oak_stairs[facing=north,half=bottom,"
+                            "shape=straight,waterlogged=false]",
+                            {.air = false, .blocks_motion = true});
+        auto water = registry.intern(
+            "minecraft:water", {.air = false, .fluid = true, .water = true});
+        expect(stone && stairs && water);
+        if (!stone || !stairs || !water) {
+            return;
+        }
+        const auto directory =
+            std::filesystem::temp_directory_path() / "refrain-ocean-ruin-test";
+        std::filesystem::remove_all(directory);
+        std::filesystem::create_directories(directory / "test" / "structure");
+        data::nbt::compound root;
+        root["size"] = ints({2, 1, 1});
+        auto palette = data::nbt::make_list(data::nbt::tag_type::compound);
+        (void)palette.push(data::nbt::value{palette_entry("minecraft:stone")});
+        data::nbt::compound stair_properties;
+        stair_properties["facing"] = data::nbt::value{std::string{"north"}};
+        stair_properties["half"] = data::nbt::value{std::string{"bottom"}};
+        stair_properties["shape"] = data::nbt::value{std::string{"straight"}};
+        stair_properties["waterlogged"] =
+            data::nbt::value{std::string{"false"}};
+        (void)palette.push(data::nbt::value{palette_entry(
+            "minecraft:oak_stairs", std::move(stair_properties))});
+        root["palette"] = std::move(palette);
+        auto blocks = data::nbt::make_list(data::nbt::tag_type::compound);
+        (void)blocks.push(data::nbt::value{block_entry({0, 0, 0}, 0)});
+        (void)blocks.push(data::nbt::value{block_entry({1, 0, 0}, 1)});
+        root["blocks"] = std::move(blocks);
+        const auto written = data::nbt::write_file(
+            (directory / "test" / "structure" / "ruin.nbt").string(),
+            data::nbt::value{root}, "", data::nbt::compression::gzip);
+        expect(written.has_value());
+        structure_template_manager manager{directory.string(), registry};
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_state(1, 10, 0, *water);
+        chunk_region region{chunk, 0};
+        const auto resolve = [&registry](std::string_view key) {
+            return registry.find(key).value_or(no_block_state);
+        };
+        const structure_place_context context{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &registry,
+            .state = resolve,
+            .templates = &manager,
+            .registry = &registry,
+        };
+        structure_piece_record piece{
+            .type = "minecraft:ocean_ruin",
+            .template_id = "test:ruin",
+            .template_x = 0,
+            .template_y = 10,
+            .template_z = 0,
+            .height_position = 10,
+            .integrity = 1.0F,
+        };
+        piece.orientation = 2;
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(1)};
+        place_structure_piece(context, piece, random);
+        expect(chunk.state_at(0, 10, 0) == *stone);
+        const auto placed =
+            std::string{registry.name(chunk.state_at(1, 10, 0))};
+        expect(placed.starts_with("minecraft:oak_stairs"));
+        expect(placed.find("waterlogged=true") != std::string::npos);
+
+        piece.template_x = 4;
+        piece.height_position = 10;
+        piece.integrity = 0.0F;
+        auto rot_random =
+            worldgen_random{std::make_unique<legacy_random_source>(1)};
+        place_structure_piece(context, piece, rot_random);
+        expect(chunk.state_at(4, 10, 0) != *stone);
+        std::filesystem::remove_all(directory);
     };
 };
