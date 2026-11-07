@@ -138,6 +138,9 @@ auto canonical_state_name(std::string_view name) -> std::string {
             return std::string{base};
         }
     }
+    if (name == "minecraft:snow[layers=1]") {
+        return "minecraft:snow";
+    }
     constexpr std::string_view fluid_default = "[level=0]";
     if (name.ends_with(fluid_default) &&
         (name.starts_with("minecraft:lava") ||
@@ -371,6 +374,13 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
         const material_documents &documents = *documents_result;
         biome_climates climates;
         expect(climates.load(data_root).has_value());
+        if (feature_mode) {
+            if (const char *feature_root =
+                    std::getenv("REFRAIN_VANILLA_FEATURE_DATA");
+                feature_root != nullptr) {
+                expect(climates.load(feature_root).has_value());
+            }
+        }
         const biome_temperatures temperatures;
         const std::string *overworld_text = nullptr;
         for (const auto &[id, text] : documents.rules) {
@@ -843,6 +853,78 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                         return chunk.min_y();
                     }
                     return chunk.first_available(kind, local_x, local_z);
+                };
+                const auto biome_temperature =
+                    [&climates, &temperatures, &manager, &source, &fixed_biome,
+                     real_biomes, sea_level = settings->sea_level](
+                        const block_pos &pos) -> std::optional<float> {
+                    const std::string_view biome =
+                        real_biomes ? source.biome(manager.get_biome(
+                                          pos.x, pos.y, pos.z))
+                                    : std::string_view{fixed_biome};
+                    const auto *climate = climates.get(biome);
+                    if (climate == nullptr) {
+                        return std::nullopt;
+                    }
+                    return temperatures.temperature_at(*climate, pos.x, pos.y,
+                                                       pos.z, sea_level);
+                };
+                const auto world_state =
+                    [&chunk, &block_registry](const block_pos &pos) {
+                        const jint local_x = pos.x - chunk.chunk_x() * 16;
+                        const jint local_z = pos.z - chunk.chunk_z() * 16;
+                        if (local_x < 0 || local_x > 15 || local_z < 0 ||
+                            local_z > 15) {
+                            return block_registry.air();
+                        }
+                        return chunk.state_at(local_x, pos.y, local_z);
+                    };
+                feature_placement.should_freeze =
+                    [&biome_temperature, &world_state, &block_registry,
+                     &manager, &source, &climates](const block_pos &pos) {
+                        const auto temperature = biome_temperature(
+                            block_pos{.x = pos.x, .y = pos.y + 1, .z = pos.z});
+                        if (!temperature || *temperature >= 0.15F) {
+                            return false;
+                        }
+                        return block_registry.traits(world_state(pos)).water;
+                    };
+                feature_placement.should_snow = [&biome_temperature,
+                                                 &world_state, &block_registry](
+                                                    const block_pos &pos) {
+                    const auto temperature = biome_temperature(pos);
+                    if (!temperature || *temperature >= 0.15F) {
+                        return false;
+                    }
+                    const auto state = world_state(pos);
+                    const auto name = block_registry.name(state);
+                    if (!block_registry.traits(state).air &&
+                        !name.starts_with("minecraft:snow")) {
+                        return false;
+                    }
+                    const block_pos below{
+                        .x = pos.x, .y = pos.y - 1, .z = pos.z};
+                    const auto below_state = world_state(below);
+                    if (block_registry.in_tag(
+                            below_state,
+                            "minecraft:cannot_support_snow_layer")) {
+                        return false;
+                    }
+                    if (block_registry.in_tag(
+                            below_state,
+                            "minecraft:support_override_snow_layer")) {
+                        return true;
+                    }
+                    const auto below_name = block_registry.name(below_state);
+                    // Collision shapes are not part of the block table yet;
+                    // exclude the non-full shapes this pack can place.
+                    if (below_name.ends_with("_leaves") ||
+                        below_name.starts_with("minecraft:bamboo") ||
+                        below_name.starts_with("minecraft:vine") ||
+                        below_name.starts_with("minecraft:snow")) {
+                        return false;
+                    }
+                    return block_registry.traits(below_state).blocks_motion;
                 };
                 feature_placement.resolve_state =
                     [&block_registry](std::string_view key) -> block_state_id {

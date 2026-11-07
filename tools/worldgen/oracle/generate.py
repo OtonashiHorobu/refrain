@@ -382,6 +382,8 @@ def main() -> int:
         )
         biome["carvers"] = []
         biome["features"] = [[] for _ in range(11)]
+        biome["temperature"] = -0.5
+        biome["has_precipitation"] = True
         biome["features"][9] = [
             "oracle:stone_patch",
             "oracle:sand_disk",
@@ -436,6 +438,7 @@ def main() -> int:
                 "oracle:lava_lake",
                 "oracle:water_lake",
                 "oracle:iceberg_blue",
+                "oracle:freeze",
             ]
         )
         (biome_dir / "feature.json").write_text(
@@ -583,6 +586,24 @@ def main() -> int:
                         {
                             "type": "minecraft:fixed_placement",
                             "positions": [[8, 63, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (feature_dir / "freeze.json").write_text(
+            json.dumps({"type": "minecraft:freeze_top_layer"}, indent=2) + "\n"
+        )
+        (placed_dir / "freeze.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:freeze",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[0, 0, 0]],
                         }
                     ],
                 },
