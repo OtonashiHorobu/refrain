@@ -173,6 +173,144 @@ void leave_vine_decorator::place(const tree_decorator_context &context) const {
     }
 }
 
+void shelf_mushroom_decorator::place(
+    const tree_decorator_context &context) const {
+    if (context.logs.empty() || context.random.next_float() >= probability_) {
+        return;
+    }
+    const auto is_shelf = [&](const block_pos &pos) {
+        return context.context.placement.states
+            ->name(
+                context.context.placement.region->state_at(pos.x, pos.y, pos.z))
+            .starts_with("minecraft:shelf_mushroom");
+    };
+    const auto is_replaceable = [&](const block_pos &pos) {
+        return context.is_air(pos);
+    };
+    const auto water_nearby = [&](const block_pos &pos) {
+        constexpr std::array<std::array<jint, 3>, 5> checks{{
+            {0, 0, 0},
+            {1, 0, 0},
+            {-1, 0, 0},
+            {0, 0, 1},
+            {0, 0, -1},
+        }};
+        for (const auto &offset : checks) {
+            const block_pos check{.x = pos.x + offset[0],
+                                  .y = pos.y + offset[1],
+                                  .z = pos.z + offset[2]};
+            if (context.context.placement.states
+                    ->name(context.context.placement.region->state_at(
+                        check.x, check.y, check.z))
+                    .starts_with("minecraft:water")) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const auto horizontal = [](jint index) {
+        switch (index) {
+        case 0:
+            return std::array<jint, 3>{0, 0, -1};
+        case 1:
+            return std::array<jint, 3>{1, 0, 0};
+        case 2:
+            return std::array<jint, 3>{0, 0, 1};
+        default:
+            return std::array<jint, 3>{-1, 0, 0};
+        }
+    };
+    const auto place_mushroom = [&](const block_pos &pos,
+                                    const std::array<jint, 3> &direction) {
+        const std::array<std::string_view, 4> names{"north", "east", "south",
+                                                    "west"};
+        jint index = 0;
+        for (jint i = 0; i < 4; ++i) {
+            if (horizontal(i) == direction) {
+                index = i;
+            }
+        }
+        auto key = std::string{"minecraft:shelf_mushroom[age="};
+        key.append(std::to_string(context.random.next_int(2)));
+        key.append(",facing=");
+        key.append(names[static_cast<std::size_t>(index)]);
+        key.push_back(']');
+        auto found = context.states.find(key);
+        if (!found) {
+            const auto interned = context.states.intern(
+                key, state_traits{.air = false,
+                                  .blocks_motion = true,
+                                  .blocks_motion_no_leaves = true});
+            if (!interned) {
+                return;
+            }
+            found = *interned;
+        }
+        context.set_block(pos, *found);
+    };
+    const bool fallen = context.logs.front().y == context.logs.back().y;
+    if (fallen) {
+        const bool x_axis = context.logs.front().x != context.logs.back().x;
+        const std::array<std::array<jint, 3>, 2> directions =
+            x_axis
+                ? std::array<std::array<jint, 3>, 2>{{{0, 0, -1}, {0, 0, 1}}}
+                : std::array<std::array<jint, 3>, 2>{{{1, 0, 0}, {-1, 0, 0}}};
+        for (const auto &log : context.logs) {
+            for (const auto &direction : directions) {
+                if (context.random.next_float() > 0.25F) {
+                    continue;
+                }
+                const block_pos pos{.x = log.x + direction[0],
+                                    .y = log.y,
+                                    .z = log.z + direction[2]};
+                if (!is_replaceable(pos) || water_nearby(pos)) {
+                    continue;
+                }
+                constexpr std::array<std::array<jint, 3>, 4> around{{
+                    {1, 0, 0},
+                    {-1, 0, 0},
+                    {0, 0, 1},
+                    {0, 0, -1},
+                }};
+                bool adjacent = false;
+                for (const auto &offset : around) {
+                    if (is_shelf(block_pos{.x = pos.x + offset[0],
+                                           .y = pos.y,
+                                           .z = pos.z + offset[2]})) {
+                        adjacent = true;
+                    }
+                }
+                if (!adjacent) {
+                    place_mushroom(pos, direction);
+                }
+            }
+        }
+        return;
+    }
+    const jint tree_base = context.logs.front().y;
+    const jint first = context.random.next_int(4);
+    const std::array<std::array<jint, 3>, 2> directions{
+        horizontal(first), horizontal((first + 1) % 4)};
+    for (const auto &log : context.logs) {
+        if (log.y - tree_base < 1 || log.y - tree_base > 4) {
+            continue;
+        }
+        for (const auto &direction : directions) {
+            if (context.random.next_float() > 0.25F) {
+                continue;
+            }
+            const block_pos pos{.x = log.x + direction[0],
+                                .y = log.y,
+                                .z = log.z + direction[2]};
+            const block_pos below{.x = pos.x, .y = pos.y - 1, .z = pos.z};
+            if (is_replaceable(pos) && !water_nearby(pos) && !is_shelf(below)) {
+                place_mushroom(pos, direction);
+                break;
+            }
+        }
+    }
+}
+
 void attached_to_logs_decorator::place(
     const tree_decorator_context &context) const {
     auto shuffled = context.logs;

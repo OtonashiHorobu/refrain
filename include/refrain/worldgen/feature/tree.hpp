@@ -54,6 +54,16 @@ class trunk_vine_decorator final : public tree_decorator {
     void place(const tree_decorator_context &context) const override;
 };
 
+class shelf_mushroom_decorator final : public tree_decorator {
+  public:
+    explicit shelf_mushroom_decorator(float probability)
+        : probability_{probability} {}
+    void place(const tree_decorator_context &context) const override;
+
+  private:
+    float probability_{0.0F};
+};
+
 class attached_to_logs_decorator final : public tree_decorator {
   public:
     attached_to_logs_decorator(float probability,
