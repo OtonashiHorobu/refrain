@@ -1481,8 +1481,12 @@ auto freeze_top_layer_feature::place(feature_context &context,
             const auto below_state =
                 context.placement.region->state_at(below.x, below.y, below.z);
             auto key = context.placement.states->name(below_state);
-            if (state_property(key, "snowy").has_value() &&
-                context.placement.resolve_state) {
+            const auto block = state_block_name(key);
+            const bool snowy_block = block == "minecraft:grass_block" ||
+                                     block == "minecraft:podzol" ||
+                                     block == "minecraft:mycelium" ||
+                                     state_property(key, "snowy").has_value();
+            if (snowy_block && context.placement.resolve_state) {
                 const auto variant = with_state_property(key, "snowy", "true");
                 const auto resolved = context.placement.resolve_state(variant);
                 if (resolved != no_block_state) {
