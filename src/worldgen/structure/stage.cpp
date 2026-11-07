@@ -196,6 +196,23 @@ auto try_generate(const structure_start_context &context,
         start.step = structure.step;
         return start;
     }
+    if (structure.type == "minecraft:mineshaft") {
+        bool mesa = false;
+        if (const auto *value = structure.config.find("mineshaft_type");
+            value != nullptr) {
+            mesa = value->as_string().value_or("normal") == "mesa";
+        }
+        const jint stub_x = chunk.x * 16 + 8;
+        const jint stub_z = chunk.z * 16;
+        if (!biome_allowed(context, structure, stub_x, 50, stub_z)) {
+            return std::nullopt;
+        }
+        auto start = mineshaft_start(chunk, context.seed, context.min_y,
+                                     context.sea_level, mesa);
+        start.structure = structure.id;
+        start.step = structure.step;
+        return start;
+    }
     if (structure.type == "minecraft:shipwreck") {
         if (context.templates == nullptr) {
             return std::nullopt;

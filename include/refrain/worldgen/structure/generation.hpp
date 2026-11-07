@@ -29,6 +29,12 @@ class structure_template_manager;
     const std::function<jint(jint, jint, heightmap_kind)> &height_at)
     -> structure_start;
 
+/// `MineshaftStructure`: the recursive room/corridor/crossing/stairs set,
+/// moved below sea level after generation.
+[[nodiscard]] auto mineshaft_start(const chunk_pos &chunk, jlong seed,
+                                   jint min_y, jint sea_level, bool mesa)
+    -> structure_start;
+
 /// `OceanRuinStructure`: the main ruin piece plus an optional cluster of
 /// small ruins. `warm` selects the warm or cold template pools.
 [[nodiscard]] auto ocean_ruin_start(const chunk_pos &chunk, jlong seed,
