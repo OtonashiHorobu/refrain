@@ -72,4 +72,41 @@ auto fill_chunk(const fill_options &options,
     return chunk;
 }
 
+void fill_proto_chunk(proto_chunk &chunk, const proto_fill_options &options,
+                      const density::sampler &final_density,
+                      const density::sampler_context &context,
+                      aquifer &aquifer) {
+    const jint min_y = chunk.min_y();
+    const jint height = chunk.height();
+    const volume vol{chunk_width,          height, chunk_depth,
+                     chunk.chunk_x() * 16, min_y,  chunk.chunk_z() * 16};
+    buffer density_buffer{vol.size()};
+    final_density.sample_volume(context, density_buffer, vol);
+
+    for (jint z = 0; z < vol.size_z(); ++z) {
+        const jint block_z = vol.block_z(z);
+        for (jint x = 0; x < vol.size_x(); ++x) {
+            const jint block_x = vol.block_x(x);
+            for (jint y = vol.size_y() - 1; y >= 0; --y) {
+                const jint block_y = vol.block_y(y);
+                const float density =
+                    density_buffer.get(vol.index_unchecked(x, y, z));
+                auto state = aquifer.compute_substance(
+                    block_x, block_y, block_z, static_cast<double>(density));
+                if (!state.has_value()) {
+                    state = options.default_block;
+                }
+                if (*state == options.air) {
+                    continue;
+                }
+                chunk.set_state(x, block_y, z, *state);
+                if (aquifer.should_schedule_fluid_update() &&
+                    chunk.table().traits(*state).fluid) {
+                    chunk.mark_post_processing(x, block_y, z);
+                }
+            }
+        }
+    }
+}
+
 } // namespace refrain::worldgen::terrain

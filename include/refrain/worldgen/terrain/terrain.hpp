@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/core/java_compat.hpp>
 #include <refrain/worldgen/density/density.hpp>
 #include <refrain/worldgen/density/density_buffer.hpp>
@@ -152,5 +153,21 @@ struct fill_options {
                               const density::sampler_context &context,
                               jint chunk_x, jint chunk_z, aquifer &aquifer)
     -> chunk_blocks;
+
+/// `doFill` into a generation chunk. The chunk must be at `biomes` status so
+/// the writes update the two worldgen heightmaps; completing `terrain` primes
+/// the final heightmaps. Fluid writes the aquifer asks to schedule are marked
+/// for post-processing.
+struct proto_fill_options {
+    block_state_id air{0};
+    block_state_id default_block{1};
+    block_state_id default_fluid{2};
+    block_state_id lava{3};
+};
+
+void fill_proto_chunk(proto_chunk &chunk, const proto_fill_options &options,
+                      const density::sampler &final_density,
+                      const density::sampler_context &context,
+                      aquifer &aquifer);
 
 } // namespace refrain::worldgen::terrain
