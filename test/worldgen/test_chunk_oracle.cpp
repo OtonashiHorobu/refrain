@@ -13,6 +13,8 @@
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
+#include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
 #include <refrain/worldgen/terrain/aquifer.hpp>
 #include <refrain/worldgen/terrain/terrain.hpp>
@@ -381,10 +383,18 @@ suite<"worldgen/chunk-oracle"> chunk_oracle_tests = [] {
                                            .default_fluid = id_water,
                                            .lava = id_lava,
                                            .air = id_air};
-        const terrain::fill_options options{.min_y = oracle_min_y,
-                                            .height = oracle_height,
-                                            .sea_level = settings->sea_level,
-                                            .blocks = blocks};
+        block_state_registry states;
+        expect(states
+                   .intern("minecraft:stone", {.air = false,
+                                               .blocks_motion = true,
+                                               .blocks_motion_no_leaves = true})
+                   .value_or(no_block_state) == id_stone);
+        expect(states
+                   .intern("minecraft:water",
+                           {.air = false, .fluid = true, .water = true})
+                   .value_or(no_block_state) == id_water);
+        expect(states.intern("minecraft:lava", {.air = false, .fluid = true})
+                   .value_or(no_block_state) == id_lava);
         auto random = new_positional_factory(algorithm::xoroshiro, seed);
         auto aquifer_random = random->from_hash_of("minecraft:aquifer");
         auto factory = aquifer_random->fork_positional();
@@ -429,15 +439,24 @@ suite<"worldgen/chunk-oracle"> chunk_oracle_tests = [] {
                                            picker,
                                            blocks,
                                            context};
-            const auto chunk =
-                terrain::fill_chunk(options, *settings->router.final_density,
-                                    context, chunk_x, chunk_z, aquifer);
+            proto_chunk chunk{states, chunk_x, chunk_z, oracle_min_y,
+                              oracle_height};
+            chunk.set_status(chunk_status::biomes);
+            const terrain::proto_fill_options fill_options{
+                .air = id_air,
+                .default_block = id_stone,
+                .default_fluid = id_water,
+                .lava = id_lava,
+            };
+            terrain::fill_proto_chunk(chunk, fill_options,
+                                      *settings->router.final_density, context,
+                                      aquifer);
 
             std::size_t mismatches = 0;
             for (jint y = oracle_min_y; y < oracle_min_y + oracle_height; ++y) {
                 for (jint z = 0; z < 16; ++z) {
                     for (jint x = 0; x < 16; ++x) {
-                        if (chunk.at(x, y, z) == vanilla->at(x, y, z)) {
+                        if (chunk.state_at(x, y, z) == vanilla->at(x, y, z)) {
                             continue;
                         }
                         if (mismatches < 8) {
@@ -449,7 +468,7 @@ suite<"worldgen/chunk-oracle"> chunk_oracle_tests = [] {
                                 static_cast<int>(chunk_x),
                                 static_cast<int>(chunk_z), static_cast<int>(x),
                                 static_cast<int>(y), static_cast<int>(z),
-                                static_cast<unsigned>(chunk.at(x, y, z)),
+                                static_cast<unsigned>(chunk.state_at(x, y, z)),
                                 static_cast<unsigned>(vanilla->at(x, y, z)));
                         }
                         ++mismatches;
@@ -461,10 +480,14 @@ suite<"worldgen/chunk-oracle"> chunk_oracle_tests = [] {
 
             std::size_t heightmap_mismatches = 0;
             for (std::size_t i = 0; i < 256U; ++i) {
-                const auto expected_surface = chunk.world_surface[i] + 1;
-                const auto expected_floor = chunk.ocean_floor[i] + 1;
-                if (vanilla->world_surface[i] != expected_surface ||
-                    vanilla->ocean_floor[i] != expected_floor) {
+                const jint x = static_cast<jint>(i % 16U);
+                const jint z = static_cast<jint>(i / 16U);
+                if (vanilla->world_surface[i] !=
+                        chunk.first_available(heightmap_kind::world_surface_wg,
+                                              x, z) ||
+                    vanilla->ocean_floor[i] !=
+                        chunk.first_available(heightmap_kind::ocean_floor_wg, x,
+                                              z)) {
                     ++heightmap_mismatches;
                 }
             }
