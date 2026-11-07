@@ -57,7 +57,8 @@ void decorate(
     feature_context &context, const std::vector<step_features> &plan,
     const std::unordered_map<std::string, placed_feature_runtime> &placed,
     const std::vector<std::string> &biomes,
-    const std::vector<biome_feature_list> &lists, jlong seed) {
+    const std::vector<biome_feature_list> &lists, jlong seed,
+    const structure_placer &structures) {
     std::unordered_map<std::string, const biome_feature_list *> by_biome;
     for (const auto &list : lists) {
         by_biome.emplace(list.biome, &list);
@@ -81,6 +82,15 @@ void decorate(
         random.set_decoration_seed(seed, origin.x, origin.z);
 
     for (std::size_t step = 0; step < plan.size(); ++step) {
+        if (structures) {
+            for (jint index = 0;; ++index) {
+                random.set_feature_seed(decoration_seed, index,
+                                        static_cast<jint>(step));
+                if (!structures(static_cast<jint>(step), index, random)) {
+                    break;
+                }
+            }
+        }
         std::set<jint> candidates;
         for (const auto &biome : biomes) {
             const auto found = by_biome.find(biome);
