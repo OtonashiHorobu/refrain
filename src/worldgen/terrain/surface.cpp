@@ -989,6 +989,24 @@ auto surface_system::build_surface(
                          world_surface);
 }
 
+auto surface_system::top_material(
+    material_context &context, const rule_evaluator &rule, jint block_x,
+    jint block_y, jint block_z, bool under_fluid,
+    const std::function<jint(jint, jint)> &world_surface)
+    -> std::optional<state_id> {
+    const jint local_x = block_x - bounds_.chunk_min_x;
+    const jint local_z = block_z - bounds_.chunk_min_z;
+    const jint gradient_x = world_surface(std::min(local_x + 1, 15), local_z) -
+                            world_surface(std::max(local_x - 1, 0), local_z);
+    const jint gradient_z = world_surface(local_x, std::min(local_z + 1, 15)) -
+                            world_surface(local_x, std::max(local_z - 1, 0));
+    context.update_xz(block_x, block_z, gradient_x, gradient_z);
+    context.update_y(
+        1, 1, under_fluid ? block_y + 1 : std::numeric_limits<jint>::min(),
+        block_y);
+    return rule(block_x, block_y, block_z);
+}
+
 auto surface_system::build_surface(
     material_context &context, const rule_evaluator &rule,
     const biome_climates &climates, const biome_temperatures &temperatures,

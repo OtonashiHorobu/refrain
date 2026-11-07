@@ -297,6 +297,15 @@ class surface_system {
         const std::function<std::string_view(jint, jint, jint)> &biome)
         -> status;
 
+    /// `MaterialSystem.topMaterial`: the single-position repair the carver
+    /// applies under a carved grass or mycelium column. `world_surface` is the
+    /// chunk's worldgen heightmap at local `(x, z)`.
+    [[nodiscard]] auto
+    top_material(material_context &context, const rule_evaluator &rule,
+                 jint block_x, jint block_y, jint block_z, bool under_fluid,
+                 const std::function<jint(jint, jint)> &world_surface)
+        -> std::optional<state_id>;
+
   private:
     void frozen_ocean_extension(
         std::string_view biome, const biome_climate &climate,
