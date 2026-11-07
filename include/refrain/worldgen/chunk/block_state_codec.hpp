@@ -24,6 +24,12 @@ namespace refrain::worldgen {
 [[nodiscard]] auto decode_state_key(const data::json::value &value)
     -> result<std::string>;
 
+/// Replaces one property in a canonical key (leaves it unchanged when the
+/// property is absent).
+[[nodiscard]] auto with_state_property(std::string_view key,
+                                       std::string_view property,
+                                       std::string_view value) -> std::string;
+
 /// The block part of a canonical state key (before `[`).
 [[nodiscard]] auto state_block_name(std::string_view key) -> std::string_view;
 

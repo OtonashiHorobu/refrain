@@ -166,6 +166,45 @@ suite<"worldgen/state-provider"> state_provider_tests = [] {
         }
         expect(seen[0] && seen[1]);
     };
+
+    "rotated and randomized providers edit the state key"_test = [] {
+        block_state_registry registry;
+        (void)registry.intern("minecraft:oak_log[axis=y]",
+                              {.air = false,
+                               .blocks_motion = true,
+                               .blocks_motion_no_leaves = true});
+        (void)registry.intern("minecraft:water[level=0]",
+                              {.air = false, .fluid = true, .water = true});
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk_region region{chunk, 1};
+        const placement_context context{
+            .region = &region, .chunk = &chunk, .states = &registry};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+
+        auto rotated = decode_state_provider(
+            parse(
+                R"({"type":"minecraft:rotated","state":{"id":"minecraft:oak_log","properties":{"axis":"y"}},"direction":"east"})"),
+            registry);
+        expect(rotated.has_value());
+        if (rotated) {
+            const auto state = (*rotated)->get(
+                context, random, block_pos{.x = 0, .y = 0, .z = 0});
+            expect(registry.name(state) == "minecraft:oak_log[axis=x]");
+        }
+
+        auto randomized = decode_state_provider(
+            parse(
+                R"({"type":"minecraft:randomized_int","source":{"id":"minecraft:water","properties":{"level":"0"}},"property":"level","values":2})"),
+            registry);
+        expect(randomized.has_value());
+        if (randomized) {
+            const auto state =
+                (*randomized)
+                    ->get(context, random, block_pos{.x = 0, .y = 0, .z = 0});
+            expect(registry.name(state) == "minecraft:water[level=2]");
+        }
+    };
 };
 
 suite<"worldgen/boolean-selector"> boolean_selector_tests = [] {
