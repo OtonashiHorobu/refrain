@@ -904,7 +904,11 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
         if (std::getenv("REFRAIN_VANILLA_IGLOO_BASEMENT_REAL") == nullptr) {
             return;
         }
-        const char *region = std::getenv("REFRAIN_VANILLA_IGLOO_REGION");
+        const char *region =
+            std::getenv("REFRAIN_VANILLA_IGLOO_BASEMENT_REGION");
+        if (region == nullptr) {
+            region = std::getenv("REFRAIN_VANILLA_IGLOO_REGION");
+        }
         const char *root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
         const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
         if (region == nullptr || root == nullptr || templates_root == nullptr) {
