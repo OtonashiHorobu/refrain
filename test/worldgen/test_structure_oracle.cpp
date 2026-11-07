@@ -321,9 +321,9 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             if (packed && packed->size() == 1U) {
                 expect(buried_references == 1);
                 expect((static_cast<std::uint64_t>((*packed)[0]) >> 32U) ==
-                       static_cast<std::uint64_t>(chunk_x));
+                       static_cast<std::uint64_t>(chunk_z));
                 expect((static_cast<std::uint64_t>((*packed)[0]) &
-                        0xFFFFFFFFU) == static_cast<std::uint64_t>(chunk_z));
+                        0xFFFFFFFFU) == static_cast<std::uint64_t>(chunk_x));
             }
         }
         if (buried == nullptr) {
