@@ -3,8 +3,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/data/json.hpp>
+#include <refrain/worldgen/chunk/block_state_codec.hpp>
+#include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/structure/generation.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
+#include <refrain/worldgen/structure/placement_stage.hpp>
 #include <refrain/worldgen/structure/stage.hpp>
 #include <refrain/worldgen/structure/start.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
@@ -262,6 +265,83 @@ suite<"worldgen/buried-treasure"> buried_treasure_tests = [] {
         expect(start.max_references == 1);
     };
 };
+
+suite<"worldgen/structure-piece-placement"> structure_piece_placement_tests =
+    [] {
+        "buried treasure writes a chest into the ocean floor"_test = [] {
+            block_state_registry registry;
+            auto stone = registry.intern("minecraft:stone",
+                                         {.air = false, .blocks_motion = true});
+            auto sand = registry.intern("minecraft:sand",
+                                        {.air = false, .blocks_motion = true});
+            expect(stone.has_value() && sand.has_value());
+            if (!stone || !sand) {
+                return;
+            }
+            proto_chunk chunk{registry, 0, 0, 0, 32};
+            chunk.set_status(chunk_status::biomes);
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    for (jint y = 0; y < 4; ++y) {
+                        expect(chunk.set_state(x, y, z, *stone));
+                    }
+                    expect(chunk.set_state(x, 4, z, *sand));
+                }
+            }
+            chunk.set_status(chunk_status::terrain);
+            chunk.add_structure_start(::refrain::worldgen::structure_start{
+                .structure = "minecraft:buried_treasure",
+                .step = "underground_structures",
+                .chunk_x = 0,
+                .chunk_z = 0,
+                .min_x = 9,
+                .min_y = 90,
+                .min_z = 9,
+                .max_x = 9,
+                .max_y = 90,
+                .max_z = 9,
+                .pieces = {{.type = "minecraft:btp",
+                            .min_x = 9,
+                            .min_y = 90,
+                            .min_z = 9,
+                            .max_x = 9,
+                            .max_y = 90,
+                            .max_z = 9,
+                            .orientation = -1}}});
+            chunk.add_structure_reference("minecraft:buried_treasure", 0, 0);
+            chunk_region region{chunk, 0};
+            const auto resolve = [&](std::string_view key) {
+                if (const auto found = registry.find(key); found.has_value()) {
+                    return *found;
+                }
+                const auto block = state_block_name(key);
+                const bool air = is_air_block_name(block);
+                const auto inserted =
+                    registry.intern(key, {.air = air, .blocks_motion = !air});
+                return inserted.value_or(no_block_state);
+            };
+            const structure::structure_place_context context{
+                .region = &region,
+                .chunk = &chunk,
+                .states = &registry,
+                .state = resolve,
+            };
+            auto random =
+                worldgen_random{std::make_unique<legacy_random_source>(7)};
+            structure::place_structures(chunk, context,
+                                        "underground_structures", random);
+            bool found_chest = false;
+            for (jint y = 0; y < 32; ++y) {
+                if (registry.name(chunk.state_at(9, y, 9))
+                        .starts_with("minecraft:chest")) {
+                    found_chest = true;
+                }
+            }
+            expect(found_chest);
+            expect(chunk.block_entity_at(block_pos{.x = 9, .y = 4, .z = 9}) !=
+                   nullptr);
+        };
+    };
 
 suite<"worldgen/structure-stage"> structure_stage_tests = [] {
     "buried starts are assembled around the target chunk"_test = [] {
