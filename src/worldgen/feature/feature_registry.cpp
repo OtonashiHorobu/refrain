@@ -763,6 +763,75 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                                     std::move(*rim_provider)));
             continue;
         }
+        if (*type == "minecraft:speleothem_cluster") {
+            const auto *base = document.document.find("base_block");
+            const auto *pointed = document.document.find("pointed_block");
+            const auto *replaceable =
+                document.document.find("replaceable_blocks");
+            const auto *search =
+                document.document.find("floor_to_ceiling_search_range");
+            const auto *height = document.document.find("height");
+            const auto *radius = document.document.find("radius");
+            const auto *max_diff =
+                document.document.find("max_stalagmite_stalactite_height_diff");
+            const auto *deviation = document.document.find("height_deviation");
+            const auto *layer =
+                document.document.find("speleothem_block_layer_thickness");
+            const auto *density = document.document.find("density");
+            const auto *wetness = document.document.find("wetness");
+            const auto *chance = document.document.find(
+                "chance_of_speleothem_at_max_distance_from_center");
+            const auto *edge = document.document.find(
+                "max_distance_from_edge_affecting_chance_of_speleothem");
+            const auto *center = document.document.find(
+                "max_distance_from_center_affecting_height_bias");
+            if (base == nullptr || pointed == nullptr ||
+                replaceable == nullptr || search == nullptr ||
+                height == nullptr || radius == nullptr || max_diff == nullptr ||
+                deviation == nullptr || layer == nullptr ||
+                density == nullptr || wetness == nullptr || chance == nullptr ||
+                edge == nullptr || center == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "speleothem cluster is incomplete")};
+            }
+            const auto base_state = decode_simple_state(*base, *states_);
+            const auto pointed_state = decode_simple_state(*pointed, *states_);
+            const auto replaceable_text = replaceable->as_string();
+            const auto search_value = search->as_int64();
+            const auto max_diff_value = max_diff->as_int64();
+            const auto deviation_value = deviation->as_int64();
+            const auto chance_value = chance->as_double();
+            const auto edge_value = edge->as_int64();
+            const auto center_value = center->as_int64();
+            auto height_provider = provider::int_provider::decode(*height);
+            auto radius_provider = provider::int_provider::decode(*radius);
+            auto layer_provider = provider::int_provider::decode(*layer);
+            auto density_provider = provider::float_provider::decode(*density);
+            auto wetness_provider = provider::float_provider::decode(*wetness);
+            if (!base_state || !pointed_state || !replaceable_text ||
+                !search_value || !max_diff_value || !deviation_value ||
+                !chance_value || !edge_value || !center_value ||
+                !height_provider || !radius_provider || !layer_provider ||
+                !density_provider || !wetness_provider) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "speleothem cluster is invalid")};
+            }
+            features_.emplace(
+                id,
+                std::make_unique<speleothem_cluster_feature>(
+                    *base_state, *pointed_state, std::string{*replaceable_text},
+                    static_cast<jint>(*search_value),
+                    std::move(*height_provider), std::move(*radius_provider),
+                    static_cast<jint>(*max_diff_value),
+                    static_cast<jint>(*deviation_value),
+                    std::move(*layer_provider), std::move(*density_provider),
+                    std::move(*wetness_provider),
+                    static_cast<float>(*chance_value),
+                    static_cast<jint>(*edge_value),
+                    static_cast<jint>(*center_value)));
+            continue;
+        }
         if (*type == "minecraft:monster_room") {
             features_.emplace(id, std::make_unique<monster_room_feature>());
             continue;

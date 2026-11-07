@@ -13,6 +13,7 @@
 #include <refrain/worldgen/feature/placement.hpp>
 #include <refrain/worldgen/feature/rule_test.hpp>
 #include <refrain/worldgen/feature/state_provider.hpp>
+#include <refrain/worldgen/provider.hpp>
 
 #include <array>
 
@@ -465,6 +466,53 @@ class freeze_top_layer_feature final : public feature {
   private:
     block_state_id ice_{no_block_state};
     block_state_id snow_{no_block_state};
+};
+
+/// `SpeleothemClusterFeature`: a field of pointed dripstone columns grown
+/// between a cave floor and ceiling, optionally with water pools.
+class speleothem_cluster_feature final : public feature {
+  public:
+    speleothem_cluster_feature(
+        block_state_id base_block, block_state_id pointed_block,
+        std::string replaceable_tag, jint floor_to_ceiling_search_range,
+        std::unique_ptr<provider::int_provider> height,
+        std::unique_ptr<provider::int_provider> radius, jint max_height_diff,
+        jint height_deviation,
+        std::unique_ptr<provider::int_provider> layer_thickness,
+        std::unique_ptr<provider::float_provider> density,
+        std::unique_ptr<provider::float_provider> wetness,
+        float chance_at_max_distance, jint max_distance_from_edge,
+        jint max_distance_from_center)
+        : base_block_{base_block}, pointed_block_{pointed_block},
+          replaceable_tag_{std::move(replaceable_tag)},
+          search_range_{floor_to_ceiling_search_range},
+          height_{std::move(height)}, radius_{std::move(radius)},
+          max_height_diff_{max_height_diff},
+          height_deviation_{height_deviation},
+          layer_thickness_{std::move(layer_thickness)},
+          density_{std::move(density)}, wetness_{std::move(wetness)},
+          chance_at_max_distance_{chance_at_max_distance},
+          max_distance_from_edge_{max_distance_from_edge},
+          max_distance_from_center_{max_distance_from_center} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    block_state_id base_block_{no_block_state};
+    block_state_id pointed_block_{no_block_state};
+    std::string replaceable_tag_{};
+    jint search_range_{12};
+    std::unique_ptr<provider::int_provider> height_{};
+    std::unique_ptr<provider::int_provider> radius_{};
+    jint max_height_diff_{0};
+    jint height_deviation_{1};
+    std::unique_ptr<provider::int_provider> layer_thickness_{};
+    std::unique_ptr<provider::float_provider> density_{};
+    std::unique_ptr<provider::float_provider> wetness_{};
+    float chance_at_max_distance_{0.1F};
+    jint max_distance_from_edge_{1};
+    jint max_distance_from_center_{1};
 };
 
 /// `MonsterRoomFeature`: a cobblestone dungeon room with a spawner and up to

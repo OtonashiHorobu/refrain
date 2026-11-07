@@ -5,6 +5,7 @@
 #include <refrain/worldgen/feature/feature.hpp>
 
 #include <array>
+#include <cmath>
 #include <tuple>
 
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
@@ -1487,6 +1488,293 @@ auto freeze_top_layer_feature::place(feature_context &context,
                     (void)context.placement.region->set_block_state(
                         below.x, below.y, below.z, resolved);
                 }
+            }
+        }
+    }
+    return true;
+}
+
+namespace {
+
+auto clamped_map(float value, float from_min, float from_max, float to_min,
+                 float to_max) -> float {
+    if (from_max == from_min) {
+        return to_min;
+    }
+    const float t =
+        std::clamp((value - from_min) / (from_max - from_min), 0.0F, 1.0F);
+    return to_min + t * (to_max - to_min);
+}
+
+struct speleothem_column {
+    std::optional<jint> floor{};
+    std::optional<jint> ceiling{};
+    [[nodiscard]] auto height() const -> std::optional<jint> {
+        if (floor && ceiling) {
+            return *ceiling - *floor - 1;
+        }
+        return std::nullopt;
+    }
+};
+
+} // namespace
+
+auto speleothem_cluster_feature::place(feature_context &context,
+                                       worldgen_random &random,
+                                       const block_pos &origin) const -> bool {
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
+    const auto resolve = [&](std::string_view key) -> block_state_id {
+        if (!context.placement.resolve_state) {
+            return no_block_state;
+        }
+        return context.placement.resolve_state(key);
+    };
+    const auto state_at = [&](const block_pos &pos) {
+        return region.state_at(pos.x, pos.y, pos.z);
+    };
+    const auto is_water = [&](block_state_id state) {
+        const auto traits = states.traits(state);
+        return traits.water && !traits.air;
+    };
+    const auto is_empty_or_water = [&](block_state_id state) {
+        return states.traits(state).air || is_water(state);
+    };
+    const auto is_neither = [&](block_state_id state) {
+        return !is_empty_or_water(state);
+    };
+    const auto in_replaceable = [&](block_state_id state) {
+        return states.in_tag(state, replaceable_tag_);
+    };
+    const auto is_base = [&](block_state_id state) {
+        return state == base_block_ || in_replaceable(state);
+    };
+    if (!is_empty_or_water(state_at(origin))) {
+        return false;
+    }
+    const jint cluster_height = height_->sample(random);
+    const float wetness = wetness_->sample(random);
+    const float density = density_->sample(random);
+    const jint x_radius = radius_->sample(random);
+    const jint z_radius = radius_->sample(random);
+
+    const auto scan_column =
+        [&](const block_pos &pos) -> std::optional<speleothem_column> {
+        if (!is_empty_or_water(state_at(pos))) {
+            return std::nullopt;
+        }
+        const auto scan = [&](jint direction) -> std::optional<jint> {
+            jint y = pos.y;
+            for (jint i = 1; i < search_range_; ++i) {
+                if (!is_empty_or_water(
+                        state_at(block_pos{.x = pos.x, .y = y, .z = pos.z}))) {
+                    break;
+                }
+                y += direction;
+            }
+            if (is_neither(
+                    state_at(block_pos{.x = pos.x, .y = y, .z = pos.z}))) {
+                return y;
+            }
+            return std::nullopt;
+        };
+        const auto ceiling = scan(1);
+        const auto floor = scan(-1);
+        if (floor && ceiling && *ceiling - *floor - 1 < 0) {
+            return std::nullopt;
+        }
+        return speleothem_column{.floor = floor, .ceiling = ceiling};
+    };
+    const auto can_be_adjacent_to_water = [&](const block_pos &pos) {
+        return states.in_tag(state_at(pos), "minecraft:base_stone_overworld") ||
+               is_water(state_at(pos));
+    };
+    const auto can_place_pool = [&](const block_pos &pos) {
+        const auto state = state_at(pos);
+        if (is_water(state) || state == base_block_ ||
+            state == pointed_block_) {
+            return false;
+        }
+        if (is_water(
+                state_at(block_pos{.x = pos.x, .y = pos.y + 1, .z = pos.z}))) {
+            return false;
+        }
+        for (const auto &[dx, dz] : std::array<std::pair<jint, jint>, 4>{
+                 {{0, -1}, {1, 0}, {0, 1}, {-1, 0}}}) {
+            if (!can_be_adjacent_to_water(
+                    block_pos{.x = pos.x + dx, .y = pos.y, .z = pos.z + dz})) {
+                return false;
+            }
+        }
+        return can_be_adjacent_to_water(
+            block_pos{.x = pos.x, .y = pos.y - 1, .z = pos.z});
+    };
+    const auto pointed_state = [&](std::string_view thickness,
+                                   std::string_view direction,
+                                   bool waterlogged) -> block_state_id {
+        std::string key = std::string{states.name(pointed_block_)};
+        key = with_state_property(key, "thickness", thickness);
+        key = with_state_property(key, "tip_direction", direction);
+        key = with_state_property(key, "waterlogged",
+                                  waterlogged ? "true" : "false");
+        const auto resolved = resolve(key);
+        if (resolved != no_block_state) {
+            return resolved;
+        }
+        return pointed_block_;
+    };
+    const auto grow = [&](const block_pos &start, bool up, jint length,
+                          bool merged) {
+        if (length <= 0) {
+            return;
+        }
+        const auto opposite_y = up ? -1 : 1;
+        if (!is_base(state_at(block_pos{
+                .x = start.x, .y = start.y + opposite_y, .z = start.z}))) {
+            return;
+        }
+        const std::string_view direction = up ? "up" : "down";
+        std::vector<std::pair<std::string_view, bool>> layers;
+        if (length >= 3) {
+            layers.emplace_back("base", false);
+            for (jint i = 0; i < length - 3; ++i) {
+                layers.emplace_back("middle", false);
+            }
+        }
+        if (length >= 2) {
+            layers.emplace_back("frustum", false);
+        }
+        layers.emplace_back(merged ? "tip_merge" : "tip", true);
+        jint y = start.y;
+        for (const auto &[thickness, tip] : layers) {
+            const auto pos = block_pos{.x = start.x, .y = y, .z = start.z};
+            const auto state =
+                pointed_state(thickness, direction, is_water(state_at(pos)));
+            if (state != no_block_state) {
+                (void)region.set_block_state(pos.x, pos.y, pos.z, state);
+            }
+            y += up ? 1 : -1;
+        }
+    };
+    const auto get_height = [&](jint dx, jint dz, jint max_height) -> jint {
+        if (random.next_float() > density) {
+            return 0;
+        }
+        const jint distance = std::abs(dx) + std::abs(dz);
+        const float mean =
+            clamped_map(static_cast<float>(distance), 0.0F,
+                        static_cast<float>(max_distance_from_center_),
+                        static_cast<float>(max_height) / 2.0F, 0.0F);
+        const float normal = mean + static_cast<float>(random.next_gaussian()) *
+                                        static_cast<float>(height_deviation_);
+        return static_cast<jint>(
+            std::clamp(normal, 0.0F, static_cast<float>(max_height)));
+    };
+
+    for (jint dx = -x_radius; dx <= x_radius; ++dx) {
+        for (jint dz = -z_radius; dz <= z_radius; ++dz) {
+            const jint edge =
+                std::min(x_radius - std::abs(dx), z_radius - std::abs(dz));
+            const double chance =
+                clamped_map(static_cast<float>(edge), 0.0F,
+                            static_cast<float>(max_distance_from_edge_),
+                            chance_at_max_distance_, 1.0F);
+            const block_pos pos{
+                .x = origin.x + dx, .y = origin.y, .z = origin.z + dz};
+            auto column = scan_column(pos);
+            if (!column) {
+                continue;
+            }
+            if (!column->ceiling && !column->floor) {
+                continue;
+            }
+            const bool want_pool = random.next_float() < wetness;
+            if (want_pool && column->floor &&
+                can_place_pool(
+                    block_pos{.x = pos.x, .y = *column->floor, .z = pos.z})) {
+                const jint floor_y = *column->floor;
+                column->floor = floor_y - 1;
+                const auto water = resolve("minecraft:water");
+                if (water != no_block_state) {
+                    (void)region.set_block_state(pos.x, floor_y, pos.z, water);
+                }
+            }
+            const bool want_stalactite = random.next_double() < chance;
+            jint stalactite_height = 0;
+            if (column->ceiling && want_stalactite &&
+                state_at(
+                    block_pos{.x = pos.x, .y = *column->ceiling, .z = pos.z}) !=
+                    resolve("minecraft:lava")) {
+                const jint thickness = layer_thickness_->sample(random);
+                for (jint i = 0; i < thickness; ++i) {
+                    const auto target = block_pos{
+                        .x = pos.x, .y = *column->ceiling + i, .z = pos.z};
+                    if (!in_replaceable(state_at(target))) {
+                        break;
+                    }
+                    (void)region.set_block_state(target.x, target.y, target.z,
+                                                 base_block_);
+                }
+                const jint max_height =
+                    column->floor ? std::min(cluster_height,
+                                             *column->ceiling - *column->floor)
+                                  : cluster_height;
+                stalactite_height = get_height(dx, dz, max_height);
+            }
+            const bool want_stalagmite = random.next_double() < chance;
+            jint stalagmite_height = 0;
+            if (column->floor && want_stalagmite &&
+                state_at(
+                    block_pos{.x = pos.x, .y = *column->floor, .z = pos.z}) !=
+                    resolve("minecraft:lava")) {
+                const jint thickness = layer_thickness_->sample(random);
+                for (jint i = 0; i < thickness; ++i) {
+                    const auto target = block_pos{
+                        .x = pos.x, .y = *column->floor - i, .z = pos.z};
+                    if (!in_replaceable(state_at(target))) {
+                        break;
+                    }
+                    (void)region.set_block_state(target.x, target.y, target.z,
+                                                 base_block_);
+                }
+                if (column->ceiling) {
+                    const jint delta =
+                        random.next_int(max_height_diff_ * 2 + 1);
+                    stalagmite_height = std::max(0, stalactite_height + delta -
+                                                        max_height_diff_);
+                } else {
+                    stalagmite_height = get_height(dx, dz, cluster_height);
+                }
+            }
+            jint actual_stalactite = stalactite_height;
+            jint actual_stalagmite = stalagmite_height;
+            if (column->ceiling && column->floor &&
+                *column->ceiling - stalactite_height <=
+                    *column->floor + stalagmite_height) {
+                const jint floor_y = *column->floor;
+                const jint ceiling_y = *column->ceiling;
+                const jint lowest =
+                    std::max(ceiling_y - stalactite_height, floor_y + 1);
+                const jint highest =
+                    std::min(floor_y + stalagmite_height, ceiling_y - 1);
+                const jint bottom =
+                    lowest + random.next_int(highest + 1 - lowest + 1);
+                actual_stalactite = ceiling_y - bottom;
+                actual_stalagmite = bottom - 1 - floor_y;
+            }
+            const bool merge =
+                random.next_boolean() && actual_stalactite > 0 &&
+                actual_stalagmite > 0 && column->height().has_value() &&
+                actual_stalactite + actual_stalagmite == *column->height();
+            if (column->ceiling && actual_stalactite > 0) {
+                grow(block_pos{.x = pos.x,
+                               .y = *column->ceiling - 1,
+                               .z = pos.z},
+                     false, actual_stalactite, merge);
+            }
+            if (column->floor && actual_stalagmite > 0) {
+                grow(block_pos{.x = pos.x, .y = *column->floor + 1, .z = pos.z},
+                     true, actual_stalagmite, merge);
             }
         }
     }

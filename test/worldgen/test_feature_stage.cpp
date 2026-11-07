@@ -61,6 +61,7 @@ using refrain::worldgen::feature::sequence_feature;
 using refrain::worldgen::feature::shelf_mushroom_decorator;
 using refrain::worldgen::feature::simple_block_feature;
 using refrain::worldgen::feature::simple_state;
+using refrain::worldgen::feature::speleothem_cluster_feature;
 using refrain::worldgen::feature::spring_feature;
 using refrain::worldgen::feature::tree_decorator_context;
 using refrain::worldgen::feature::tree_feature;
@@ -1141,6 +1142,122 @@ suite<"worldgen/underwater-magma"> underwater_magma_tests = [] {
         expect(
             feature.place(context, random, block_pos{.x = 8, .y = 23, .z = 8}));
         expect(chunk.state_at(8, 19, 8) == *magma);
+    };
+};
+
+suite<"worldgen/speleothem"> speleothem_tests = [] {
+    "a cave floor and ceiling grow pointed dripstone columns"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto dripstone = registry.intern("minecraft:dripstone_block",
+                                         {.air = false,
+                                          .blocks_motion = true,
+                                          .blocks_motion_no_leaves = true});
+        auto pointed =
+            registry.intern("minecraft:pointed_dripstone[thickness=tip,tip_"
+                            "direction=up,waterlogged=false]",
+                            {.air = false,
+                             .blocks_motion = false,
+                             .blocks_motion_no_leaves = false});
+        auto cave_air = registry.intern("minecraft:cave_air", {.air = true});
+        auto water =
+            registry.intern("minecraft:water", {.fluid = true, .water = true});
+        expect(stone && dripstone && pointed && cave_air && water);
+        if (!stone || !dripstone || !pointed || !cave_air || !water) {
+            return;
+        }
+        registry.add_tag("minecraft:dripstone_replaceable_blocks",
+                         std::span<const block_state_id>{&*stone, 1});
+        registry.add_tag("minecraft:base_stone_overworld",
+                         std::span<const block_state_id>{&*stone, 1});
+        proto_chunk chunk{registry, 0, 0, 0, 64};
+        for (jint y = 0; y < 64; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    chunk.set_state(x, y, z, *stone);
+                }
+            }
+        }
+        for (jint y = 30; y <= 33; ++y) {
+            for (jint z = 2; z <= 14; ++z) {
+                for (jint x = 2; x <= 14; ++x) {
+                    chunk.set_state(x, y, z, *cave_air);
+                }
+            }
+        }
+        chunk_region region{chunk, 0};
+        const auto resolve = [&](std::string_view key) -> block_state_id {
+            if (const auto found = registry.find(key); found.has_value()) {
+                return *found;
+            }
+            const auto block = state_block_name(key);
+            const bool air = is_air_block_name(block);
+            const auto inserted =
+                registry.intern(key, {.air = air, .blocks_motion = !air});
+            return inserted.has_value() ? *inserted : no_block_state;
+        };
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 64,
+                                            .sea_level = 8,
+                                        },
+                                    .resolve_state = resolve,
+                                }};
+        auto height = provider::int_provider::decode(
+            *refrain::data::json::value::parse("3"));
+        auto radius = provider::int_provider::decode(
+            *refrain::data::json::value::parse("2"));
+        auto layer = provider::int_provider::decode(
+            *refrain::data::json::value::parse("2"));
+        expect(height && radius && layer);
+        if (!height || !radius || !layer) {
+            return;
+        }
+        speleothem_cluster_feature feature{
+            *dripstone,
+            *pointed,
+            "minecraft:dripstone_replaceable_blocks",
+            12,
+            std::move(*height),
+            std::move(*radius),
+            1,
+            3,
+            std::move(*layer),
+            provider::make_constant_float(1.0F),
+            provider::make_constant_float(0.0F),
+            1.0F,
+            3,
+            8,
+        };
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 31, .z = 8}));
+        jint pointed_count = 0;
+        jint base_count = 0;
+        for (jint y = 24; y <= 40; ++y) {
+            for (jint z = 4; z <= 12; ++z) {
+                for (jint x = 4; x <= 12; ++x) {
+                    const auto name = registry.name(chunk.state_at(x, y, z));
+                    if (name.starts_with("minecraft:pointed_dripstone")) {
+                        ++pointed_count;
+                    }
+                    if (name == "minecraft:dripstone_block") {
+                        ++base_count;
+                    }
+                }
+            }
+        }
+        expect(pointed_count > 0);
+        expect(base_count > 0);
     };
 };
 
