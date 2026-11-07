@@ -14,6 +14,7 @@
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
+#include <refrain/worldgen/biome_climate.hpp>
 #include <refrain/worldgen/biome_manager.hpp>
 #include <refrain/worldgen/biome_source.hpp>
 #include <refrain/worldgen/density_router.hpp>
@@ -259,6 +260,9 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             return;
         }
         const material_documents &documents = *documents_result;
+        biome_climates climates;
+        expect(climates.load(data_root).has_value());
+        const biome_temperatures temperatures;
         const std::string *overworld_text = nullptr;
         for (const auto &[id, text] : documents.rules) {
             if (id == "minecraft:overworld") {
@@ -272,7 +276,6 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
 
         noise_registry registry{algorithm::xoroshiro, seed};
         expect(registry.load(data_root).has_value());
-
         auto root_factory = new_positional_factory(algorithm::xoroshiro, seed);
         multi_noise_biome_source source{overworld_parameters()};
         const bool real_biomes =
@@ -468,9 +471,9 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 return chunk.world_surface[static_cast<std::size_t>(z) * 16U +
                                            static_cast<std::size_t>(x)];
             };
-            const auto built =
-                system.build_surface(rule_context, *compiled, providers.biome,
-                                     get, set, world_surface);
+            const auto built = system.build_surface(
+                rule_context, *compiled, climates, temperatures,
+                providers.biome, get, set, world_surface);
             if (!built) {
                 std::fprintf(
                     stderr, "surface (%d,%d): %s\n", static_cast<int>(chunk_x),
