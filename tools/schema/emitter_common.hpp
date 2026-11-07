@@ -11,6 +11,7 @@
 #include <schema/sema.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -71,6 +72,24 @@ struct generated_file {
     std::string path; ///< relative to the generated output root, '/'-separated
     std::string content;
 };
+
+/// C++ spelling for a declaration name. Declarations whose schema name is not
+/// a C++ identifier (quoted packet names such as `debug/block_value`) map to a
+/// sanitized identifier while the schema/name string keeps its original form.
+[[nodiscard]] inline auto cpp_identifier(std::string_view name) -> std::string {
+    std::string result;
+    result.reserve(name.size() + 1);
+    for (const char character : name) {
+        const auto byte{static_cast<unsigned char>(character)};
+        result.push_back(std::isalnum(byte) != 0 || character == '_' ? character
+                                                                     : '_');
+    }
+    if (result.empty() ||
+        std::isdigit(static_cast<unsigned char>(result.front())) != 0) {
+        result.insert(result.begin(), '_');
+    }
+    return result;
+}
 
 [[nodiscard]] inline auto split_module(std::string_view module)
     -> std::vector<std::string> {

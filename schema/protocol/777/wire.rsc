@@ -29,18 +29,6 @@ struct wire_optional_payload {
     field_2: f64;
 }
 
-struct wire_attribute_snapshot {
-    id: identifier;
-    amount: f64;
-    operation: varint_id;
-}
-
-struct wire_get_values {
-    attribute: varint_id;
-    base: f64;
-    modifiers: array<wire_attribute_snapshot>;
-}
-
 struct wire_entry_3 {
     #[max(16)] name: string;
     signature: wire_message_signature;
@@ -62,7 +50,7 @@ struct wire_data {
     #[max(4096)] key_signature: bytes;
 }
 
-struct wire_type_82 {
+struct wire_type_75 {
     added_components: map<varint_id, i32>;
     removed_components: array<varint_id>;
 }
@@ -70,7 +58,7 @@ struct wire_type_82 {
 struct wire_actual_item {
     item: varint_id;
     #[varint] count: i32;
-    components: wire_type_82;
+    components: wire_type_75;
 }
 
 struct wire_entry_4 {
@@ -119,16 +107,6 @@ struct wire_bound {
     target_name: optional<text_component>;
 }
 
-struct wire_packed_registry_entry {
-    id: identifier;
-    data: optional<nbt>;
-}
-
-struct wire_sound_event {
-    location: identifier;
-    fixed_range: optional<f32>;
-}
-
 struct wire_block_entities_data {
     packed_xz: i8;
     #[fixed] y: i16;
@@ -149,6 +127,11 @@ struct wire_light_data {
     #[max(32767)] empty_block_y_mask: bytes;
     sky_updates: array<bytes>;
     block_updates: array<bytes>;
+}
+
+struct wire_packed_registry_entry {
+    id: identifier;
+    data: optional<nbt>;
 }
 
 struct wire_global_pos {
@@ -217,13 +200,18 @@ struct wire_book_settings {
     smoker: wire_type_settings;
 }
 
-struct wire_network_payload {
-    tags: map<identifier, array<varint_id>>;
+struct wire_sound_event {
+    location: identifier;
+    fixed_range: optional<f32>;
 }
 
 struct wire_swing_animation {
     type_: varint_id;
     #[varint] duration: i32;
+}
+
+struct wire_network_payload {
+    tags: map<identifier, array<varint_id>>;
 }
 
 struct wire_advancement_holder {
@@ -235,6 +223,18 @@ struct wire_added {
     advancement: wire_advancement_holder;
     x: f32;
     y: f32;
+}
+
+struct wire_attribute_snapshot {
+    id: identifier;
+    amount: f64;
+    operation: varint_id;
+}
+
+struct wire_get_values {
+    attribute: varint_id;
+    base: f64;
+    modifiers: array<wire_attribute_snapshot>;
 }
 
 struct wire_position_and_rotation {

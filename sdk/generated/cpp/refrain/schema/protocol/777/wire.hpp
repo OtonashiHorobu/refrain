@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: f7862869b1a7d874
+// Schema hash: cb9f94f5f5f38b0c
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -48,18 +48,6 @@ struct wire_optional_payload {
     double field_2;
 };
 
-struct wire_attribute_snapshot {
-    ::refrain::data::resource_location id;
-    double amount;
-    std::uint32_t operation;
-};
-
-struct wire_get_values {
-    std::uint32_t attribute;
-    double base;
-    std::vector<::refrain::protocol::v777::wire::wire_attribute_snapshot> modifiers;
-};
-
 struct wire_entry_3 {
     // attributes: #[max(16)]
     std::string name;
@@ -86,7 +74,7 @@ struct wire_data {
     std::vector<std::byte> key_signature;
 };
 
-struct wire_type_82 {
+struct wire_type_75 {
     std::map<std::uint32_t, std::int32_t> added_components;
     std::vector<std::uint32_t> removed_components;
 };
@@ -95,7 +83,7 @@ struct wire_actual_item {
     std::uint32_t item;
     // attributes: #[varint]
     std::int32_t count;
-    ::refrain::protocol::v777::wire::wire_type_82 components;
+    ::refrain::protocol::v777::wire::wire_type_75 components;
 };
 
 struct wire_entry_4 {
@@ -158,16 +146,6 @@ struct wire_bound {
     std::optional<::refrain::net::text_component> target_name;
 };
 
-struct wire_packed_registry_entry {
-    ::refrain::data::resource_location id;
-    std::optional<::refrain::net::nbt_blob> data;
-};
-
-struct wire_sound_event {
-    ::refrain::data::resource_location location;
-    std::optional<float> fixed_range;
-};
-
 struct wire_block_entities_data {
     std::int8_t packed_xz;
     // attributes: #[fixed]
@@ -194,6 +172,11 @@ struct wire_light_data {
     std::vector<std::byte> empty_block_y_mask;
     std::vector<std::vector<std::byte>> sky_updates;
     std::vector<std::vector<std::byte>> block_updates;
+};
+
+struct wire_packed_registry_entry {
+    ::refrain::data::resource_location id;
+    std::optional<::refrain::net::nbt_blob> data;
 };
 
 struct wire_global_pos {
@@ -272,14 +255,19 @@ struct wire_book_settings {
     ::refrain::protocol::v777::wire::wire_type_settings smoker;
 };
 
-struct wire_network_payload {
-    std::map<::refrain::data::resource_location, std::vector<std::uint32_t>> tags;
+struct wire_sound_event {
+    ::refrain::data::resource_location location;
+    std::optional<float> fixed_range;
 };
 
 struct wire_swing_animation {
     std::uint32_t type_;
     // attributes: #[varint]
     std::int32_t duration;
+};
+
+struct wire_network_payload {
+    std::map<::refrain::data::resource_location, std::vector<std::uint32_t>> tags;
 };
 
 struct wire_advancement_holder {
@@ -291,6 +279,18 @@ struct wire_added {
     ::refrain::protocol::v777::wire::wire_advancement_holder advancement;
     float x;
     float y;
+};
+
+struct wire_attribute_snapshot {
+    ::refrain::data::resource_location id;
+    double amount;
+    std::uint32_t operation;
+};
+
+struct wire_get_values {
+    std::uint32_t attribute;
+    double base;
+    std::vector<::refrain::protocol::v777::wire::wire_attribute_snapshot> modifiers;
 };
 
 struct wire_position_and_rotation {
@@ -418,92 +418,6 @@ struct wire_position_move_rotation {
     auto value_0 = in.read_f64();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.field_2 = *value_0;
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto encode_wire_attribute_snapshot(::refrain::net::writer &out, const wire_attribute_snapshot &value) -> ::refrain::status {
-  static_cast<void>(out);
-  static_cast<void>(value);
-  {
-    if (auto written = out.write_identifier(value.id); !written) {
-      return written;
-    }
-  }
-  {
-    out.write_f64(value.amount);
-  }
-  {
-    out.write_varint(value.operation);
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto decode_wire_attribute_snapshot(::refrain::net::reader &in, wire_attribute_snapshot &value) -> ::refrain::status {
-  static_cast<void>(in);
-  static_cast<void>(value);
-  {
-    auto value_0 = in.read_identifier();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.id = std::move(*value_0);
-  }
-  {
-    auto value_0 = in.read_f64();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.amount = *value_0;
-  }
-  {
-    auto value_0 = in.read_varint();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.operation = *value_0;
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto encode_wire_get_values(::refrain::net::writer &out, const wire_get_values &value) -> ::refrain::status {
-  static_cast<void>(out);
-  static_cast<void>(value);
-  {
-    out.write_varint(value.attribute);
-  }
-  {
-    out.write_f64(value.base);
-  }
-  {
-    out.write_varint(static_cast<std::uint32_t>(value.modifiers.size()));
-    for (const auto &item_0 : value.modifiers) {
-      if (auto written = ::refrain::protocol::v777::wire::encode_wire_attribute_snapshot(out, item_0); !written) {
-        return written;
-      }
-    }
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto decode_wire_get_values(::refrain::net::reader &in, wire_get_values &value) -> ::refrain::status {
-  static_cast<void>(in);
-  static_cast<void>(value);
-  {
-    auto value_0 = in.read_varint();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.attribute = *value_0;
-  }
-  {
-    auto value_0 = in.read_f64();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.base = *value_0;
-  }
-  {
-    value.modifiers.clear();
-    auto count_0 = in.read_varint();
-    if (!count_0) return std::unexpected{std::move(count_0.error())};
-    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
-      ::refrain::protocol::v777::wire::wire_attribute_snapshot value_0{};
-      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_attribute_snapshot(in, value_0); !decoded) {
-        return std::unexpected{std::move(decoded.error())};
-      }
-      value.modifiers.push_back(std::move(value_0));
-    }
   }
   return ::refrain::status_ok();
 }
@@ -665,7 +579,7 @@ struct wire_position_move_rotation {
   return ::refrain::status_ok();
 }
 
-[[nodiscard]] inline auto encode_wire_type_82(::refrain::net::writer &out, const wire_type_82 &value) -> ::refrain::status {
+[[nodiscard]] inline auto encode_wire_type_75(::refrain::net::writer &out, const wire_type_75 &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
   {
@@ -684,7 +598,7 @@ struct wire_position_move_rotation {
   return ::refrain::status_ok();
 }
 
-[[nodiscard]] inline auto decode_wire_type_82(::refrain::net::reader &in, wire_type_82 &value) -> ::refrain::status {
+[[nodiscard]] inline auto decode_wire_type_75(::refrain::net::reader &in, wire_type_75 &value) -> ::refrain::status {
   static_cast<void>(in);
   static_cast<void>(value);
   {
@@ -728,7 +642,7 @@ struct wire_position_move_rotation {
     out.write_varint(static_cast<std::uint32_t>(value.count));
   }
   {
-    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_82(out, value.components); !written) {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_75(out, value.components); !written) {
       return written;
     }
   }
@@ -749,7 +663,7 @@ struct wire_position_move_rotation {
     value.count = static_cast<decltype(value.count)>(*value_0);
   }
   {
-    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_82(in, value.components); !decoded) {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_75(in, value.components); !decoded) {
       return std::unexpected{std::move(decoded.error())};
     }
   }
@@ -1189,90 +1103,6 @@ struct wire_position_move_rotation {
   return ::refrain::status_ok();
 }
 
-[[nodiscard]] inline auto encode_wire_packed_registry_entry(::refrain::net::writer &out, const wire_packed_registry_entry &value) -> ::refrain::status {
-  static_cast<void>(out);
-  static_cast<void>(value);
-  {
-    if (auto written = out.write_identifier(value.id); !written) {
-      return written;
-    }
-  }
-  {
-    out.write_bool(value.data.has_value());
-    if (value.data.has_value()) {
-      if (auto written = ::refrain::net::encode_nbt(out, value.data.value()); !written) {
-        return written;
-      }
-    }
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto decode_wire_packed_registry_entry(::refrain::net::reader &in, wire_packed_registry_entry &value) -> ::refrain::status {
-  static_cast<void>(in);
-  static_cast<void>(value);
-  {
-    auto value_0 = in.read_identifier();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.id = std::move(*value_0);
-  }
-  {
-    auto present_0 = in.read_bool();
-    if (!present_0) return std::unexpected{std::move(present_0.error())};
-    if (*present_0) {
-      ::refrain::net::nbt_blob value_0{};
-      if (auto decoded = ::refrain::net::decode_nbt(in, value_0); !decoded) {
-        return std::unexpected{std::move(decoded.error())};
-      }
-      value.data = std::move(value_0);
-    } else {
-      value.data.reset();
-    }
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto encode_wire_sound_event(::refrain::net::writer &out, const wire_sound_event &value) -> ::refrain::status {
-  static_cast<void>(out);
-  static_cast<void>(value);
-  {
-    if (auto written = out.write_identifier(value.location); !written) {
-      return written;
-    }
-  }
-  {
-    out.write_bool(value.fixed_range.has_value());
-    if (value.fixed_range.has_value()) {
-      out.write_f32(value.fixed_range.value());
-    }
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto decode_wire_sound_event(::refrain::net::reader &in, wire_sound_event &value) -> ::refrain::status {
-  static_cast<void>(in);
-  static_cast<void>(value);
-  {
-    auto value_0 = in.read_identifier();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.location = std::move(*value_0);
-  }
-  {
-    auto present_0 = in.read_bool();
-    if (!present_0) return std::unexpected{std::move(present_0.error())};
-    if (*present_0) {
-      float value_0{};
-      auto value_1 = in.read_f32();
-      if (!value_1) return std::unexpected{std::move(value_1.error())};
-      value_0 = *value_1;
-      value.fixed_range = std::move(value_0);
-    } else {
-      value.fixed_range.reset();
-    }
-  }
-  return ::refrain::status_ok();
-}
-
 [[nodiscard]] inline auto encode_wire_block_entities_data(::refrain::net::writer &out, const wire_block_entities_data &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -1518,6 +1348,49 @@ struct wire_position_move_rotation {
       if (!value_1) return std::unexpected{std::move(value_1.error())};
       value_0 = std::vector<std::byte>{value_1->begin(), value_1->end()};
       value.block_updates.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_packed_registry_entry(::refrain::net::writer &out, const wire_packed_registry_entry &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.id); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.data.has_value());
+    if (value.data.has_value()) {
+      if (auto written = ::refrain::net::encode_nbt(out, value.data.value()); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_packed_registry_entry(::refrain::net::reader &in, wire_packed_registry_entry &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.id = std::move(*value_0);
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::net::nbt_blob value_0{};
+      if (auto decoded = ::refrain::net::decode_nbt(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.data = std::move(value_0);
+    } else {
+      value.data.reset();
     }
   }
   return ::refrain::status_ok();
@@ -2038,6 +1911,75 @@ struct wire_position_move_rotation {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_wire_sound_event(::refrain::net::writer &out, const wire_sound_event &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.location); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.fixed_range.has_value());
+    if (value.fixed_range.has_value()) {
+      out.write_f32(value.fixed_range.value());
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_sound_event(::refrain::net::reader &in, wire_sound_event &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.location = std::move(*value_0);
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      float value_0{};
+      auto value_1 = in.read_f32();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = *value_1;
+      value.fixed_range = std::move(value_0);
+    } else {
+      value.fixed_range.reset();
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_swing_animation(::refrain::net::writer &out, const wire_swing_animation &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(value.type_);
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.duration));
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_swing_animation(::refrain::net::reader &in, wire_swing_animation &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.type_ = *value_0;
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.duration = static_cast<decltype(value.duration)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_wire_network_payload(::refrain::net::writer &out, const wire_network_payload &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -2081,34 +2023,6 @@ struct wire_position_move_rotation {
       }
       value.tags.emplace(std::move(map_key_0), std::move(map_value_0));
     }
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto encode_wire_swing_animation(::refrain::net::writer &out, const wire_swing_animation &value) -> ::refrain::status {
-  static_cast<void>(out);
-  static_cast<void>(value);
-  {
-    out.write_varint(value.type_);
-  }
-  {
-    out.write_varint(static_cast<std::uint32_t>(value.duration));
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto decode_wire_swing_animation(::refrain::net::reader &in, wire_swing_animation &value) -> ::refrain::status {
-  static_cast<void>(in);
-  static_cast<void>(value);
-  {
-    auto value_0 = in.read_varint();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.type_ = *value_0;
-  }
-  {
-    auto value_0 = in.read_varint();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.duration = static_cast<decltype(value.duration)>(*value_0);
   }
   return ::refrain::status_ok();
 }
@@ -2179,6 +2093,92 @@ struct wire_position_move_rotation {
     auto value_0 = in.read_f32();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.y = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_attribute_snapshot(::refrain::net::writer &out, const wire_attribute_snapshot &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.id); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_f64(value.amount);
+  }
+  {
+    out.write_varint(value.operation);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_attribute_snapshot(::refrain::net::reader &in, wire_attribute_snapshot &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.id = std::move(*value_0);
+  }
+  {
+    auto value_0 = in.read_f64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.amount = *value_0;
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.operation = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_get_values(::refrain::net::writer &out, const wire_get_values &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(value.attribute);
+  }
+  {
+    out.write_f64(value.base);
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.modifiers.size()));
+    for (const auto &item_0 : value.modifiers) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_attribute_snapshot(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_get_values(::refrain::net::reader &in, wire_get_values &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.attribute = *value_0;
+  }
+  {
+    auto value_0 = in.read_f64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.base = *value_0;
+  }
+  {
+    value.modifiers.clear();
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::protocol::v777::wire::wire_attribute_snapshot value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_attribute_snapshot(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.modifiers.push_back(std::move(value_0));
+    }
   }
   return ::refrain::status_ok();
 }

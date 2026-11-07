@@ -356,7 +356,12 @@ class parser_impl {
         decl.location = location();
         decl.documentation = std::move(documentation);
         advance(); // 'packet'
-        decl.name = expect_identifier("packet name").text;
+        if (at(token_kind::string)) {
+            decl.name = current_.text;
+            advance();
+        } else {
+            decl.name = expect_identifier("packet name").text;
+        }
         expect(token_kind::equals, "'=' before the packet id");
         if (at(token_kind::integer)) {
             decl.packet_id = current_.integer;

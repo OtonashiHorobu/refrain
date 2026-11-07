@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: f7862869b1a7d874
+// Schema hash: cb9f94f5f5f38b0c
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_HPP
@@ -22,7 +22,7 @@
 namespace refrain::protocol::v777 {
 
 /// Packets declared for this stage, ordered by flow and id.
-inline constexpr std::array<packet_descriptor, 206> play_packets{{
+inline constexpr std::array<packet_descriptor, 213> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x0, "bundle_delimiter"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x1, "add_entity"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x2, "animate"},
@@ -39,6 +39,7 @@ inline constexpr std::array<packet_descriptor, 206> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0xD, "chunks_biomes"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0xE, "clear_titles"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0xF, "command_suggestions"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x10, "commands"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x11, "container_close"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x12, "container_set_content"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x13, "container_set_data"},
@@ -48,12 +49,17 @@ inline constexpr std::array<packet_descriptor, 206> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x17, "custom_chat_completions"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x18, "custom_payload"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x19, "damage_event"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x1A, "debug/block_value"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x1B, "debug/chunk_value"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x1C, "debug/entity_value"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x1D, "debug/event"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x1E, "debug_sample"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x1F, "delete_chat"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x20, "disconnect"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x21, "disguised_chat"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x22, "entity_event"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x23, "entity_position_sync"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x24, "explode"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x25, "add_transient_block"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x26, "forget_level_chunk"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x27, "game_event"},
@@ -65,6 +71,7 @@ inline constexpr std::array<packet_descriptor, 206> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x2D, "keep_alive"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x2E, "level_chunk_with_light"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x2F, "level_event"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x30, "level_particles"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x31, "light_update"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x32, "login"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x33, "low_disk_space_warning"},

@@ -51,7 +51,7 @@ struct ridl_context {
                                  std::uint32_t module_index,
                                  const decl_model &decl) -> std::string {
     return emit::cpp_namespace(module_name(program, module_index)) +
-           "::" + decl.name;
+           "::" + emit::cpp_identifier(decl.name);
 }
 
 [[nodiscard]] auto cpp_decl_name(const model &program,

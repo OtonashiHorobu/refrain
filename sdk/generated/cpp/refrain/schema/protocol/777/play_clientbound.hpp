@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: f7862869b1a7d874
+// Schema hash: cb9f94f5f5f38b0c
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -336,6 +336,14 @@ struct command_suggestions {
     std::vector<::refrain::protocol::v777::wire::wire_entry> suggestions;
 };
 
+struct commands {
+    static constexpr std::uint16_t packet_id = 0x10;
+    static constexpr std::string_view packet_name = "commands";
+
+    // attributes: #[rest]
+    std::vector<std::byte> payload;
+};
+
 struct container_close {
     static constexpr std::uint16_t packet_id = 0x11;
     static constexpr std::string_view packet_name = "container_close";
@@ -429,6 +437,38 @@ struct damage_event {
     std::optional<::refrain::protocol::v777::wire::wire_optional_payload> source_position;
 };
 
+struct debug_block_value {
+    static constexpr std::uint16_t packet_id = 0x1A;
+    static constexpr std::string_view packet_name = "debug/block_value";
+
+    // attributes: #[rest]
+    std::vector<std::byte> payload;
+};
+
+struct debug_chunk_value {
+    static constexpr std::uint16_t packet_id = 0x1B;
+    static constexpr std::string_view packet_name = "debug/chunk_value";
+
+    // attributes: #[rest]
+    std::vector<std::byte> payload;
+};
+
+struct debug_entity_value {
+    static constexpr std::uint16_t packet_id = 0x1C;
+    static constexpr std::string_view packet_name = "debug/entity_value";
+
+    // attributes: #[rest]
+    std::vector<std::byte> payload;
+};
+
+struct debug_event {
+    static constexpr std::uint16_t packet_id = 0x1D;
+    static constexpr std::string_view packet_name = "debug/event";
+
+    // attributes: #[rest]
+    std::vector<std::byte> payload;
+};
+
 struct debug_sample {
     static constexpr std::uint16_t packet_id = 0x1E;
     static constexpr std::string_view packet_name = "debug_sample";
@@ -469,6 +509,14 @@ struct entity_position_sync {
     float y_rot;
     float x_rot;
     bool on_ground;
+};
+
+struct explode {
+    static constexpr std::uint16_t packet_id = 0x24;
+    static constexpr std::string_view packet_name = "explode";
+
+    // attributes: #[rest]
+    std::vector<std::byte> payload;
 };
 
 struct add_transient_block {
@@ -544,6 +592,14 @@ struct level_event {
     // attributes: #[fixed]
     std::int32_t data;
     bool global_event;
+};
+
+struct level_particles {
+    static constexpr std::uint16_t packet_id = 0x30;
+    static constexpr std::string_view packet_name = "level_particles";
+
+    // attributes: #[rest]
+    std::vector<std::byte> payload;
 };
 
 struct light_update {
@@ -2570,6 +2626,26 @@ struct show_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_commands(::refrain::net::writer &out, const commands &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_bytes(value.payload);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_commands(::refrain::net::reader &in, commands &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_bytes(in.remaining());
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_container_close(::refrain::net::writer &out, const container_close &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -2925,6 +3001,86 @@ struct show_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_debug_block_value(::refrain::net::writer &out, const debug_block_value &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_bytes(value.payload);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_debug_block_value(::refrain::net::reader &in, debug_block_value &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_bytes(in.remaining());
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_debug_chunk_value(::refrain::net::writer &out, const debug_chunk_value &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_bytes(value.payload);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_debug_chunk_value(::refrain::net::reader &in, debug_chunk_value &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_bytes(in.remaining());
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_debug_entity_value(::refrain::net::writer &out, const debug_entity_value &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_bytes(value.payload);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_debug_entity_value(::refrain::net::reader &in, debug_entity_value &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_bytes(in.remaining());
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_debug_event(::refrain::net::writer &out, const debug_event &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_bytes(value.payload);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_debug_event(::refrain::net::reader &in, debug_event &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_bytes(in.remaining());
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_debug_sample(::refrain::net::writer &out, const debug_sample &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -3089,6 +3245,26 @@ struct show_dialog {
     auto value_0 = in.read_bool();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.on_ground = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_explode(::refrain::net::writer &out, const explode &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_bytes(value.payload);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_explode(::refrain::net::reader &in, explode &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_bytes(in.remaining());
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
   }
   return ::refrain::status_ok();
 }
@@ -3360,6 +3536,26 @@ struct show_dialog {
     auto value_0 = in.read_bool();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.global_event = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_level_particles(::refrain::net::writer &out, const level_particles &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_bytes(value.payload);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_level_particles(::refrain::net::reader &in, level_particles &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_bytes(in.remaining());
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
   }
   return ::refrain::status_ok();
 }

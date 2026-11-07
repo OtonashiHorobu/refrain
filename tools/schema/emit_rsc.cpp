@@ -270,7 +270,7 @@ ordered_declarations(const model &program,
     code_writer writer;
     writer.raw(emit::doc_block(decl.documentation, "/// "));
     writer.raw(emit::attribute_comment(decl.attributes));
-    writer.line("struct {} {{", decl.name);
+    writer.line("struct {} {{", emit::cpp_identifier(decl.name));
     if (decl.kind == declaration_kind::packet && decl.packet_id.has_value()) {
         writer.line("    static constexpr std::uint16_t packet_id = 0x{:X};",
                     static_cast<std::uint64_t>(*decl.packet_id));
@@ -309,9 +309,8 @@ ordered_declarations(const model &program,
 
 [[nodiscard]] auto declaration_name(const model &program,
                                     const resolved_type &type) -> std::string {
-    return program.modules[type.module_index]
-        .declarations[type.decl_index]
-        .name;
+    return emit::cpp_identifier(
+        program.modules[type.module_index].declarations[type.decl_index].name);
 }
 
 [[nodiscard]] auto declaration_namespace(const model &program,
@@ -829,25 +828,28 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.line("}}");
             return;
         case primitive_kind::slot_display:
-            writer.line("if (auto written = ::refrain::net::encode_slot_display("
-                        "out, {}); !written) {{",
-                        expression);
+            writer.line(
+                "if (auto written = ::refrain::net::encode_slot_display("
+                "out, {}); !written) {{",
+                expression);
             writer.indent();
             writer.line("return written;");
             writer.dedent();
             writer.line("}}");
             return;
         case primitive_kind::recipe_display:
-            writer.line("if (auto written = ::refrain::net::encode_recipe_display("
-                        "out, {}); !written) {{",
-                        expression);
+            writer.line(
+                "if (auto written = ::refrain::net::encode_recipe_display("
+                "out, {}); !written) {{",
+                expression);
             writer.indent();
             writer.line("return written;");
             writer.dedent();
             writer.line("}}");
             return;
         case primitive_kind::recipe_display_entry:
-            writer.line("if (auto written = ::refrain::net::encode_recipe_display_entry("
+            writer.line("if (auto written = "
+                        "::refrain::net::encode_recipe_display_entry("
                         "out, {}); !written) {{",
                         expression);
             writer.indent();
@@ -856,9 +858,10 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.line("}}");
             return;
         case primitive_kind::single_input_set:
-            writer.line("if (auto written = ::refrain::net::encode_single_input_set("
-                        "out, {}); !written) {{",
-                        expression);
+            writer.line(
+                "if (auto written = ::refrain::net::encode_single_input_set("
+                "out, {}); !written) {{",
+                expression);
             writer.indent();
             writer.line("return written;");
             writer.dedent();
@@ -1389,9 +1392,10 @@ void emit_decode_value(code_writer &writer, const model &program,
             writer.line("}}");
             return;
         case primitive_kind::slot_display:
-            writer.line("if (auto decoded = ::refrain::net::decode_slot_display("
-                        "in, {}); !decoded) {{",
-                        target);
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_slot_display("
+                "in, {}); !decoded) {{",
+                target);
             writer.indent();
             writer.line(
                 "return std::unexpected{{std::move(decoded.error())}};");
@@ -1399,9 +1403,10 @@ void emit_decode_value(code_writer &writer, const model &program,
             writer.line("}}");
             return;
         case primitive_kind::recipe_display:
-            writer.line("if (auto decoded = ::refrain::net::decode_recipe_display("
-                        "in, {}); !decoded) {{",
-                        target);
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_recipe_display("
+                "in, {}); !decoded) {{",
+                target);
             writer.indent();
             writer.line(
                 "return std::unexpected{{std::move(decoded.error())}};");
@@ -1409,7 +1414,8 @@ void emit_decode_value(code_writer &writer, const model &program,
             writer.line("}}");
             return;
         case primitive_kind::recipe_display_entry:
-            writer.line("if (auto decoded = ::refrain::net::decode_recipe_display_entry("
+            writer.line("if (auto decoded = "
+                        "::refrain::net::decode_recipe_display_entry("
                         "in, {}); !decoded) {{",
                         target);
             writer.indent();
@@ -1419,9 +1425,10 @@ void emit_decode_value(code_writer &writer, const model &program,
             writer.line("}}");
             return;
         case primitive_kind::single_input_set:
-            writer.line("if (auto decoded = ::refrain::net::decode_single_input_set("
-                        "in, {}); !decoded) {{",
-                        target);
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_single_input_set("
+                "in, {}); !decoded) {{",
+                target);
             writer.indent();
             writer.line(
                 "return std::unexpected{{std::move(decoded.error())}};");
@@ -1633,7 +1640,7 @@ void emit_decode_value(code_writer &writer, const model &program,
         writer.line(
             "[[nodiscard]] inline auto encode_{}(::refrain::net::writer &out, "
             "const {} &value) -> ::refrain::status {{",
-            decl->name, decl->name);
+            emit::cpp_identifier(decl->name), emit::cpp_identifier(decl->name));
         writer.indent();
         writer.line("static_cast<void>(out);");
         writer.line("static_cast<void>(value);");
@@ -1653,7 +1660,7 @@ void emit_decode_value(code_writer &writer, const model &program,
         writer.line(
             "[[nodiscard]] inline auto decode_{}(::refrain::net::reader &in, "
             "{} &value) -> ::refrain::status {{",
-            decl->name, decl->name);
+            emit::cpp_identifier(decl->name), emit::cpp_identifier(decl->name));
         writer.indent();
         writer.line("static_cast<void>(in);");
         writer.line("static_cast<void>(value);");

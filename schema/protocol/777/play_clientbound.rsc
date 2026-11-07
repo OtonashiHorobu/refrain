@@ -204,6 +204,10 @@ packet command_suggestions = 15 {
     suggestions: array<wire_entry>;
 }
 
+packet commands = 16 {
+    #[rest] payload: bytes;
+}
+
 packet container_close = 17 {
     #[varint] container_id: i32;
 }
@@ -255,6 +259,22 @@ packet damage_event = 25 {
     source_position: optional<wire_optional_payload>;
 }
 
+packet "debug/block_value" = 26 {
+    #[rest] payload: bytes;
+}
+
+packet "debug/chunk_value" = 27 {
+    #[rest] payload: bytes;
+}
+
+packet "debug/entity_value" = 28 {
+    #[rest] payload: bytes;
+}
+
+packet "debug/event" = 29 {
+    #[rest] payload: bytes;
+}
+
 packet debug_sample = 30 {
     sample: array<i64>;
     debug_sample_type: varint_id;
@@ -279,6 +299,10 @@ packet entity_position_sync = 35 {
     y_rot: f32;
     x_rot: f32;
     on_ground: bool;
+}
+
+packet explode = 36 {
+    #[rest] payload: bytes;
 }
 
 packet add_transient_block = 37 {
@@ -322,6 +346,10 @@ packet level_event = 47 {
     pos: i64;
     #[fixed] data: i32;
     global_event: bool;
+}
+
+packet level_particles = 48 {
+    #[rest] payload: bytes;
 }
 
 packet light_update = 49 {

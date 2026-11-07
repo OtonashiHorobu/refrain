@@ -242,7 +242,8 @@ const suite tests = [] {
             expect(by_name->id == 41);
         }
         expect(v777::find_packet(net::connection_state::play,
-                                 net::packet_flow::clientbound, 28) == nullptr);
+                                 net::packet_flow::clientbound,
+                                 300) == nullptr);
         expect(v777::find_packet(net::connection_state::play,
                                  net::packet_flow::serverbound,
                                  "not_a_packet") == nullptr);
