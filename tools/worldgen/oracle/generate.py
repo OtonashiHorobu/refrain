@@ -1637,6 +1637,7 @@ def main() -> int:
         write_pack(preset, biome, root / "world/datapacks/t2oracle",
                    empty_material_rule=not args.surface,
                    fixed_biome=args.fixed_biome, biome_override=override)
+    root.mkdir(parents=True, exist_ok=True)
     write_server_files(root, args.seed, args.port,
                        generate_structures=args.structures)
     # Spawn chunks generated before the world's game rules take effect would
@@ -1648,6 +1649,9 @@ def main() -> int:
     if args.structures:
         # forceload accepts at most 256 chunks; this 16x16 box covers the
         # structure candidates around the origin.
+        run_server(root, args.server_jar, args.settle, force_load=True,
+                   force_load_box=(-64, -64, 191, 191))
+    elif args.plain:
         run_server(root, args.server_jar, args.settle, force_load=True,
                    force_load_box=(-64, -64, 191, 191))
     else:
