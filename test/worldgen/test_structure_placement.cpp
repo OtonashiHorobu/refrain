@@ -233,6 +233,19 @@ suite<"worldgen/structure-data"> structure_data_tests = [] {
             << "snowy beach missing";
         expect(!data->allows_biome(buried->second, "minecraft:plains"))
             << "plains accepted";
+        const auto set = data->sets.find("minecraft:buried_treasures");
+        expect(set != data->sets.end());
+        if (set != data->sets.end()) {
+            expect(set->second.random_spread.has_value());
+            if (set->second.random_spread) {
+                expect(set->second.random_spread->frequency_method ==
+                       structure::frequency_reduction_method::legacy_type_2);
+                expect(
+                    !set->second.random_spread->is_structure_chunk(5086, 0, 2));
+                expect(
+                    set->second.random_spread->is_structure_chunk(5086, 3, 13));
+            }
+        }
     };
 };
 

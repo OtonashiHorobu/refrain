@@ -116,13 +116,15 @@ auto decode_random_spread(const data::json::value &document)
         if (!name) {
             return std::unexpected{name.error()};
         }
-        if (*name == "minecraft:legacy_type_1") {
+        if (*name == "minecraft:legacy_type_1" || *name == "legacy_type_1") {
             placement.frequency_method =
                 frequency_reduction_method::legacy_type_1;
-        } else if (*name == "minecraft:legacy_type_2") {
+        } else if (*name == "minecraft:legacy_type_2" ||
+                   *name == "legacy_type_2") {
             placement.frequency_method =
                 frequency_reduction_method::legacy_type_2;
-        } else if (*name == "minecraft:legacy_type_3") {
+        } else if (*name == "minecraft:legacy_type_3" ||
+                   *name == "legacy_type_3") {
             placement.frequency_method =
                 frequency_reduction_method::legacy_type_3;
         }

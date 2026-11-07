@@ -18,8 +18,8 @@ auto buried_treasure_start(const chunk_pos &chunk) -> structure_start {
                           .references = 0,
                           .max_references = 1,
                           .bounds = bounds};
-    start.pieces.push_back(structure_piece{
-        .type = "minecraft:buried_treasure_piece", .bounds = bounds});
+    start.pieces.push_back(
+        structure_piece{.type = "minecraft:btp", .bounds = bounds});
     return start;
 }
 

@@ -107,7 +107,8 @@ def write_pack(preset: dict, biome: dict, pack: pathlib.Path,
         )
 
 
-def write_server_files(root: pathlib.Path, seed: int, port: int) -> None:
+def write_server_files(root: pathlib.Path, seed: int, port: int,
+                       generate_structures: bool = False) -> None:
     (root / "server.properties").write_text(
         f"""level-name=world
 level-seed={seed}
@@ -119,7 +120,7 @@ simulation-distance=1
 spawn-protection=0
 max-players=1
 pause-when-empty-seconds=0
-generate-structures=false
+generate-structures={'true' if generate_structures else 'false'}
 allow-nether=false
 max-tick-time=-1
 region-file-compression=deflate
@@ -221,6 +222,12 @@ def main() -> int:
         "replace every biome's feature lists with two curated placed features",
     )
     parser.add_argument(
+        "--structures",
+        action="store_true",
+        help="structure oracle: fixed biome (default minecraft:beach), real "
+        "structure generation, no carvers or features, empty surface rules",
+    )
+    parser.add_argument(
         "--fixed-biome",
         default="oracle:terrain",
         help="biome of the fixed source used by --surface (default "
@@ -230,6 +237,12 @@ def main() -> int:
 
     root = args.output.resolve()
     shutil.rmtree(root, ignore_errors=True)
+    if args.structures:
+        args.fixed_biome = (
+            args.fixed_biome
+            if args.fixed_biome != "oracle:terrain"
+            else "minecraft:beach"
+        )
     if args.features_real:
         pack = root / "world/datapacks/t2oracle"
         write_meta(pack)
@@ -1105,6 +1118,22 @@ def main() -> int:
             )
             + "\n"
         )
+    elif args.structures:
+        preset = read_pack_data(
+            args.server_jar, "data/minecraft/worldgen/world_preset/normal.json"
+        )
+        biome = read_pack_data(
+            args.server_jar, "data/minecraft/worldgen/biome/plains.json"
+        )
+        namespace, path = args.fixed_biome.split(":", 1)
+        override = read_pack_data(
+            args.server_jar, f"data/{namespace}/worldgen/biome/{path}.json"
+        )
+        override["carvers"] = []
+        override["features"] = []
+        write_pack(preset, biome, root / "world/datapacks/t2oracle",
+                   empty_material_rule=True, fixed_biome=args.fixed_biome,
+                   biome_override=override)
     elif not args.plain:
         preset = read_pack_data(
             args.server_jar, "data/minecraft/worldgen/world_preset/normal.json"
@@ -1124,7 +1153,8 @@ def main() -> int:
         write_pack(preset, biome, root / "world/datapacks/t2oracle",
                    empty_material_rule=not args.surface,
                    fixed_biome=args.fixed_biome, biome_override=override)
-    write_server_files(root, args.seed, args.port)
+    write_server_files(root, args.seed, args.port,
+                       generate_structures=args.structures)
     run_server(root, args.server_jar, args.settle)
 
     region = root / "world/dimensions/minecraft/overworld/region/r.0.0.mca"

@@ -5,6 +5,7 @@
 #include <refrain/data/nbt.hpp>
 #include <refrain/worldgen/structure/generation.hpp>
 #include <refrain/worldgen/structure/stage.hpp>
+#include <refrain/worldgen/structure/structure_data.hpp>
 
 #include <boost/ut.hpp>
 
@@ -87,6 +88,9 @@ using namespace boost::ut;
 
 suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
     "buried starts and references match the reference chunk"_test = [] {
+        if (std::getenv("REFRAIN_VANILLA_STRUCTURE_REAL") != nullptr) {
+            return;
+        }
         const char *region = std::getenv("REFRAIN_VANILLA_STRUCTURE_REGION");
         if (region == nullptr) {
             return;
@@ -210,6 +214,108 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             (void)count;
             expect(actual_references.contains(id))
                 << id << " reference missing";
+        }
+    };
+
+    "real structure data reproduces the buried start"_test = [] {
+        if (std::getenv("REFRAIN_VANILLA_STRUCTURE_REAL") == nullptr) {
+            return;
+        }
+        const char *region = std::getenv("REFRAIN_VANILLA_STRUCTURE_REGION");
+        const char *root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+        if (region == nullptr || root == nullptr) {
+            return;
+        }
+        jint chunk_x = 3;
+        jint chunk_z = 13;
+        if (const char *value =
+                std::getenv("REFRAIN_VANILLA_STRUCTURE_CHUNK_X");
+            value != nullptr) {
+            chunk_x = std::atoi(value);
+        }
+        if (const char *value =
+                std::getenv("REFRAIN_VANILLA_STRUCTURE_CHUNK_Z");
+            value != nullptr) {
+            chunk_z = std::atoi(value);
+        }
+        jlong seed = 5086;
+        if (const char *value = std::getenv("REFRAIN_VANILLA_ORACLE_SEED");
+            value != nullptr) {
+            seed = std::strtoll(value, nullptr, 10);
+        }
+        const auto data =
+            refrain::worldgen::structure::load_structure_data(root);
+        expect(data.has_value()) << "cannot load real structure data";
+        if (!data) {
+            return;
+        }
+        const refrain::worldgen::structure::structure_start_context context{
+            .seed = seed,
+            .data = &*data,
+            .min_y = -64,
+            .world_height = 384,
+            .sea_level = 63,
+            .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+            .biome_name = [](std::uint16_t) -> std::string_view {
+                return "minecraft:beach";
+            },
+            .height_at =
+                [](jint, jint, refrain::worldgen::heightmap_kind) {
+                    return jint{90};
+                },
+        };
+        const auto generated =
+            refrain::worldgen::structure::generate_structure_starts(
+                chunk_pos{.x = chunk_x, .z = chunk_z}, context);
+        expect(generated.size() == 1U);
+        if (generated.empty()) {
+            return;
+        }
+        expect(generated.front().structure == "minecraft:buried_treasure");
+        expect(generated.front().chunk.x == chunk_x);
+        expect(generated.front().chunk.z == chunk_z);
+        expect(generated.front().pieces.size() == 1U);
+        if (!generated.front().pieces.empty()) {
+            expect(generated.front().pieces.front().type == "minecraft:btp");
+            expect(generated.front().pieces.front().orientation == -1);
+        }
+
+        const auto reference = read_chunk(region, chunk_x, chunk_z);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        const auto *structures = child(reference->as_compound(), "structures");
+        const auto *starts = structures == nullptr
+                                 ? nullptr
+                                 : child(structures->as_compound(), "starts");
+        expect(starts != nullptr);
+        if (starts == nullptr) {
+            return;
+        }
+        const auto *buried =
+            child(starts->as_compound(), "minecraft:buried_treasure");
+        expect(buried != nullptr);
+        if (buried == nullptr) {
+            return;
+        }
+        const auto *children = child(buried->as_compound(), "Children");
+        expect(children != nullptr && children->as_list() != nullptr);
+        if (children == nullptr || children->as_list() == nullptr ||
+            children->as_list()->items.empty()) {
+            return;
+        }
+        const auto *bb =
+            child(children->as_list()->items[0].as_compound(), "BB");
+        const auto values = bb == nullptr ? std::nullopt : bb->as_int_array();
+        expect(values.has_value() && values->size() == 6U);
+        if (values && values->size() == 6U) {
+            expect(generated.front().bounds.min_x == (*values)[0]);
+            expect(generated.front().bounds.min_y == (*values)[1]);
+            expect(generated.front().bounds.min_z == (*values)[2]);
+            expect(generated.front().bounds.max_x == (*values)[3]);
+            expect(generated.front().bounds.max_y == (*values)[4]);
+            expect(generated.front().bounds.max_z == (*values)[5]);
         }
     };
 };
