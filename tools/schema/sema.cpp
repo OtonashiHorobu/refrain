@@ -54,6 +54,10 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "string";
     case primitive_kind::bytes:
         return "bytes";
+    case primitive_kind::identifier:
+        return "identifier";
+    case primitive_kind::uuid:
+        return "uuid";
     case primitive_kind::void_type:
         return "void";
     }
@@ -76,6 +80,8 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"bool", primitive_kind::boolean},
         std::pair{"string", primitive_kind::string},
         std::pair{"bytes", primitive_kind::bytes},
+        std::pair{"identifier", primitive_kind::identifier},
+        std::pair{"uuid", primitive_kind::uuid},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -164,6 +170,7 @@ struct integer_info {
     static constexpr std::array names{
         "since",        "deprecated", "removed",      "breaking",
         "default",      "unit",       "max",          "varint",
+        "varlong",      "fixed",      "fixed_bytes",  "optional_varint",
         "zigzag",       "bits",       "sidecar",      "side",
         "thread",       "borrow",     "owned",        "caller_provided",
         "can_fail",     "hot_path",   "sandbox_safe", "network_sync",
@@ -212,6 +219,33 @@ enum class attribute_scope : std::uint8_t {
         return true;
     case primitive_kind::string:
     case primitive_kind::bytes:
+    case primitive_kind::identifier:
+    case primitive_kind::uuid:
+    case primitive_kind::void_type:
+        return false;
+    }
+    return false;
+}
+
+[[nodiscard]] constexpr auto is_integer_primitive(primitive_kind kind) noexcept
+    -> bool {
+    switch (kind) {
+    case primitive_kind::u8:
+    case primitive_kind::u16:
+    case primitive_kind::u32:
+    case primitive_kind::u64:
+    case primitive_kind::i8:
+    case primitive_kind::i16:
+    case primitive_kind::i32:
+    case primitive_kind::i64:
+        return true;
+    case primitive_kind::f32:
+    case primitive_kind::f64:
+    case primitive_kind::boolean:
+    case primitive_kind::string:
+    case primitive_kind::bytes:
+    case primitive_kind::identifier:
+    case primitive_kind::uuid:
     case primitive_kind::void_type:
         return false;
     }
@@ -565,6 +599,7 @@ class analyzer {
             resolve_struct_fields(module_index, decl);
             if (decl.kind == declaration_kind::packet) {
                 validate_packet(module_index, decl);
+                validate_packet_module(module_index, decl);
             }
             break;
         case declaration_kind::enumeration:
@@ -806,6 +841,46 @@ class analyzer {
         return 0;
     }
 
+    /// Protocol schemas are organised as
+    /// `refrain::protocol::v<version>::<stage>::<flow>`: the module name is
+    /// the only place the stage and direction are declared, so the generated
+    /// packet table can be derived without repeating metadata on every packet.
+    void validate_packet_module(std::uint32_t module_index,
+                                const decl_model &decl) {
+        static constexpr std::array stages{"handshake", "status", "login",
+                                           "configuration", "play"};
+        static constexpr std::array flows{"serverbound", "clientbound"};
+        std::vector<std::string_view> parts;
+        const std::string_view name{module_at(module_index).name};
+        std::size_t begin{0};
+        while (begin <= name.size()) {
+            const auto end{name.find("::", begin)};
+            if (end == std::string_view::npos) {
+                parts.emplace_back(name.substr(begin));
+                break;
+            }
+            parts.emplace_back(name.substr(begin, end - begin));
+            begin = end + 2;
+        }
+        const bool valid{parts.size() == 5 && parts[0] == "refrain" &&
+                         parts[1] == "protocol" && parts[2].starts_with("v") &&
+                         all_digits(parts[2].substr(1)) &&
+                         std::ranges::any_of(stages,
+                                             [&](std::string_view stage) {
+                                                 return stage == parts[3];
+                                             }) &&
+                         std::ranges::any_of(flows, [&](std::string_view flow) {
+                             return flow == parts[4];
+                         })};
+        if (!valid) {
+            error(
+                decl.location,
+                std::format("packet '{}' must live in module "
+                            "'refrain::protocol::v<version>::<stage>::<flow>'",
+                            decl.name));
+        }
+    }
+
     void validate_packet(std::uint32_t module_index, decl_model &decl) {
         auto &ids{packet_ids_[module_index]};
         if (!decl.packet_id.has_value()) {
@@ -847,7 +922,141 @@ class analyzer {
         field.type = std::move(*type);
         validate_attributes(field.attributes, source.location,
                             attribute_scope::field);
+        apply_wire_attributes(field, module_at(current_module).kind);
         return field;
+    }
+
+    /// Resolve `#[varint]`/`#[varlong]`/`#[fixed]`/`#[max]` into the wire
+    /// hints consumed by the RSC emitter. These attributes only describe bytes
+    /// on the wire, so they are rejected outside RSC schemas and on field types
+    /// the selected encoding cannot represent.
+    void apply_wire_attributes(field_model &field, dialect kind) {
+        const auto *varint{find_attribute(field.attributes, "varint")};
+        const auto *varlong{find_attribute(field.attributes, "varlong")};
+        const auto *fixed{find_attribute(field.attributes, "fixed")};
+        const auto selected{static_cast<int>(varint != nullptr) +
+                            static_cast<int>(varlong != nullptr) +
+                            static_cast<int>(fixed != nullptr)};
+        const auto *max{find_attribute(field.attributes, "max")};
+        const auto *fixed_bytes{
+            find_attribute(field.attributes, "fixed_bytes")};
+        const auto *optional_varint{
+            find_attribute(field.attributes, "optional_varint")};
+        if (selected == 0 && max == nullptr && fixed_bytes == nullptr &&
+            optional_varint == nullptr) {
+            return;
+        }
+        if (kind != dialect::rsc) {
+            error(field.location,
+                  "wire encoding attributes are only valid in RSC schemas");
+            return;
+        }
+        if (selected > 1) {
+            error(field.location,
+                  "'#[varint]', '#[varlong]' and '#[fixed]' are mutually "
+                  "exclusive");
+            return;
+        }
+        if (selected == 1) {
+            integer_wire wire{integer_wire::natural};
+            if (varint != nullptr) {
+                wire = integer_wire::varint;
+            } else if (varlong != nullptr) {
+                wire = integer_wire::varlong;
+            } else {
+                wire = integer_wire::fixed;
+            }
+            const auto element{
+                field.type.kind == resolved_type::category::array ||
+                        field.type.kind == resolved_type::category::slice ||
+                        field.type.kind == resolved_type::category::repeated
+                    ? &field.type.arguments.front()
+                    : &field.type};
+            if (element->kind != resolved_type::category::primitive ||
+                !is_integer_primitive(element->primitive)) {
+                error(field.location,
+                      std::format("'#[{}]' requires an integer field",
+                                  varint != nullptr    ? "varint"
+                                  : varlong != nullptr ? "varlong"
+                                                       : "fixed"));
+                return;
+            }
+            if (wire == integer_wire::varlong &&
+                element->primitive != primitive_kind::u64 &&
+                element->primitive != primitive_kind::i64) {
+                error(field.location,
+                      "'#[varlong]' requires a 64-bit integer field");
+                return;
+            }
+            field.wire = wire;
+        }
+        if (fixed_bytes != nullptr) {
+            const auto is_bytes = [](const resolved_type &type) {
+                return type.kind == resolved_type::category::primitive &&
+                       type.primitive == primitive_kind::bytes;
+            };
+            const auto bytes_field =
+                is_bytes(field.type) ||
+                (field.type.kind == resolved_type::category::optional &&
+                 is_bytes(field.type.arguments.front()));
+            if (!bytes_field) {
+                error(field.location,
+                      "'#[fixed_bytes]' is only valid on a 'bytes' field or "
+                      "'optional<bytes>'");
+            } else if (fixed_bytes->arguments.size() == 1 &&
+                       fixed_bytes->arguments.front().kind ==
+                           attribute_argument_kind::integer) {
+                std::uint64_t length{0};
+                const auto &text{fixed_bytes->arguments.front().text};
+                const auto parsed{std::from_chars(
+                    text.data(), text.data() + text.size(), length)};
+                if (parsed.ec != std::errc{} || length == 0) {
+                    error(field.location,
+                          "'#[fixed_bytes]' expects a positive integer");
+                } else {
+                    field.wire_fixed_bytes = length;
+                }
+            }
+        }
+        if (optional_varint != nullptr) {
+            const auto element{field.type.kind ==
+                                       resolved_type::category::optional
+                                   ? &field.type.arguments.front()
+                                   : nullptr};
+            if (element == nullptr ||
+                element->kind != resolved_type::category::primitive ||
+                !is_integer_primitive(element->primitive)) {
+                error(field.location, "'#[optional_varint]' is only valid on "
+                                      "'optional<integer>' fields");
+            } else {
+                field.wire_optional_varint = true;
+            }
+        }
+        if (max != nullptr && max->arguments.size() == 1 &&
+            max->arguments.front().kind == attribute_argument_kind::integer) {
+            std::uint64_t limit{0};
+            const auto &text{max->arguments.front().text};
+            const auto parsed{
+                std::from_chars(text.data(), text.data() + text.size(), limit)};
+            if (parsed.ec == std::errc{} && limit > 0) {
+                const auto bounded{
+                    field.type.kind == resolved_type::category::primitive
+                        ? field.type.primitive == primitive_kind::string ||
+                              field.type.primitive == primitive_kind::bytes
+                        : field.type.kind == resolved_type::category::array ||
+                              field.type.kind ==
+                                  resolved_type::category::slice ||
+                              field.type.kind ==
+                                  resolved_type::category::repeated};
+                if (!bounded) {
+                    error(field.location,
+                          "'#[max]' is only valid on strings, bytes and "
+                          "arrays");
+                } else {
+                    field.wire_max = limit;
+                }
+            }
+        }
     }
 
     [[nodiscard]] auto resolve_type(const type_ref &source,
@@ -925,6 +1134,15 @@ class analyzer {
                 if (*primitive == primitive_kind::void_type && !allow_void) {
                     error(source.location,
                           "'void' is only valid as a method result type");
+                    return std::nullopt;
+                }
+                if (current_kind == dialect::ridl &&
+                    (*primitive == primitive_kind::identifier ||
+                     *primitive == primitive_kind::uuid)) {
+                    error(source.location,
+                          std::format("'{}' is only valid in RSC wire "
+                                      "schemas",
+                                      primitive_name(*primitive)));
                     return std::nullopt;
                 }
                 resolved_type type;
@@ -1610,6 +1828,45 @@ class analyzer {
                                   attribute.name));
                 continue;
             }
+            if (attribute.name == "varint" || attribute.name == "varlong" ||
+                attribute.name == "fixed" ||
+                attribute.name == "optional_varint" ||
+                attribute.name == "zigzag") {
+                if (!attribute.arguments.empty()) {
+                    error(attribute.location,
+                          std::format("'#[{}]' takes no arguments",
+                                      attribute.name));
+                }
+                continue;
+            }
+            if (attribute.name == "fixed_bytes" || attribute.name == "max") {
+                const auto name{attribute.name};
+                if (attribute.arguments.size() != 1) {
+                    error(attribute.location,
+                          std::format("'#[{}]' expects exactly one integer "
+                                      "argument",
+                                      name));
+                } else if (attribute.arguments.front().kind !=
+                           attribute_argument_kind::integer) {
+                    error(attribute.location,
+                          std::format("'#[{}]' expects an integer argument",
+                                      name));
+                } else {
+                    std::uint64_t limit{0};
+                    const auto &text{attribute.arguments.front().text};
+                    const auto *first{text.data()};
+                    const auto *last{first + text.size()};
+                    const auto parsed{std::from_chars(first, last, limit)};
+                    if (parsed.ec != std::errc{} || parsed.ptr != last ||
+                        limit == 0) {
+                        error(attribute.location,
+                              std::format("'#[{}]' expects a positive "
+                                          "integer",
+                                          name));
+                    }
+                }
+                continue;
+            }
             if (attribute.arguments.empty()) {
                 if (attribute.name == "since" || attribute.name == "bits" ||
                     attribute.name == "max") {
@@ -1763,6 +2020,11 @@ class analyzer {
             case primitive_kind::string:
             case primitive_kind::bytes:
                 return size_align{16, 8};
+            case primitive_kind::identifier:
+            case primitive_kind::uuid:
+                // Rejected for RIDL in resolve_type(); a wire-only primitive
+                // has no in-process ABI layout.
+                return std::nullopt;
             case primitive_kind::void_type:
                 return std::nullopt;
             }

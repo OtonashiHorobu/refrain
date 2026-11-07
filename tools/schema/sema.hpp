@@ -34,7 +34,21 @@ enum class primitive_kind : std::uint8_t {
     boolean,
     string,
     bytes,
+    /// Protocol resource location (`namespace:path`); RSC wire schemas only.
+    identifier,
+    /// Protocol 128-bit identifier in wire order; RSC wire schemas only.
+    uuid,
     void_type,
+};
+
+/// Wire encoding of an integer field. RSC storage defaults preserve the
+/// original compact encoding; `#[varint]`, `#[varlong]` and `#[fixed]` select
+/// the protocol encoding explicitly.
+enum class integer_wire : std::uint8_t {
+    natural,
+    varint,
+    varlong,
+    fixed,
 };
 
 [[nodiscard]] auto primitive_name(primitive_kind value) noexcept
@@ -75,6 +89,17 @@ struct field_model {
     bool out{false};
     std::optional<std::string> default_value;
     source_location location;
+
+    /// Wire encoding selected by `#[varint]`/`#[varlong]`/`#[fixed]`.
+    integer_wire wire{integer_wire::natural};
+    /// `#[max(N)]`: maximum character count for strings, byte count for
+    /// `bytes`, element count for arrays. Unset means the codec default.
+    std::optional<std::uint64_t> wire_max;
+    /// `#[fixed_bytes(N)]`: a `bytes` field encoded without a length prefix.
+    std::optional<std::uint64_t> wire_fixed_bytes;
+    /// `#[optional_varint]`: an optional integer encoded as one VarInt where
+    /// zero means absent and a stored value `v` is encoded as `v + 1`.
+    bool wire_optional_varint{false};
 
     // Computed for RIDL contract structs only.
     std::uint32_t abi_offset{0};
