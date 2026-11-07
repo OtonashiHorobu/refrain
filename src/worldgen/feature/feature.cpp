@@ -39,6 +39,22 @@ constexpr std::array<direction_offset, 6> all_directions{{
     {.dx = 1, .dy = 0, .dz = 0},
 }};
 
+/// `Feature.markAboveForPostProcessing`: mark up to two non-air blocks above a
+/// placement, stopping at the first air block.
+void mark_above_for_post_processing(const feature_context &context,
+                                    const block_pos &pos) {
+    for (jint offset = 1; offset <= 2; ++offset) {
+        const block_pos above{.x = pos.x, .y = pos.y + offset, .z = pos.z};
+        const auto state =
+            context.placement.region->state_at(above.x, above.y, above.z);
+        if (context.placement.states->traits(state).air) {
+            return;
+        }
+        (void)context.placement.region->mark_post_processing(above.x, above.y,
+                                                             above.z);
+    }
+}
+
 } // namespace
 
 auto simple_block_feature::place(feature_context &context,
@@ -86,7 +102,8 @@ auto disk_feature::place(feature_context &context, worldgen_random &random,
                     continue;
                 }
                 if (!placed_above) {
-                    context.placement.chunk->mark_post_processing(x, y + 1, z);
+                    mark_above_for_post_processing(
+                        context, block_pos{.x = x, .y = y, .z = z});
                 }
                 placed_any = true;
                 placed_above = true;

@@ -112,6 +112,24 @@ suite<"worldgen/chunk-region"> chunk_region_tests = [] {
         expect(far.block_entity_at({.x = 0, .y = 1, .z = 0}) == nullptr);
     };
 
+    "post processing marks loaded chunks regardless of the write radius"_test =
+        [] {
+            const test_table table;
+            proto_chunk center{table, 0, 0, 0, 32};
+            proto_chunk east{table, 1, 0, 0, 32};
+            chunk_region region{center, 0};
+            region.attach(east);
+
+            expect(region.mark_post_processing(3, 5, 7));
+            expect(region.mark_post_processing(16, 6, 7));
+            expect(!region.mark_post_processing(32, 7, 7));
+            expect(center.post_processing()[0].size() == 1U);
+            expect(center.post_processing()[0][0] == 1875);
+            expect(east.post_processing()[0].size() == 1U);
+            expect(east.post_processing()[0][0] ==
+                   static_cast<std::uint16_t>(0 | (6 << 4) | (7 << 8)));
+        };
+
     "a zero write radius only writes the centre"_test = [] {
         const test_table table;
         proto_chunk center{table, 0, 0, 0, 32};

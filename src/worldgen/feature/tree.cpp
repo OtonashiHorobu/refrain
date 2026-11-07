@@ -683,7 +683,6 @@ auto fallen_tree_feature::place(feature_context &context,
         }
         (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
                                                         state);
-        context.placement.chunk->mark_post_processing(pos.x, pos.y + 1, pos.z);
         return pos;
     };
     const auto decorate =

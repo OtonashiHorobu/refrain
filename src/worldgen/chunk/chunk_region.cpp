@@ -55,6 +55,16 @@ auto chunk_region::set_block_state(jint x, jint y, jint z, block_state_id state)
     return chunk->set_state(x - pos.x * 16, y, z - pos.z * 16, state);
 }
 
+auto chunk_region::mark_post_processing(jint x, jint y, jint z) -> bool {
+    const chunk_pos pos{.x = floor_div16(x), .z = floor_div16(z)};
+    auto *chunk = find(pos);
+    if (chunk == nullptr) {
+        return false;
+    }
+    chunk->mark_post_processing(x - pos.x * 16, y, z - pos.z * 16);
+    return true;
+}
+
 auto chunk_region::set_block_entity(jint x, jint y, jint z,
                                     data::nbt::compound entity) -> bool {
     const chunk_pos pos{.x = floor_div16(x), .z = floor_div16(z)};
