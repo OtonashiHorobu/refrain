@@ -692,4 +692,138 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
         }
         expect(mismatches == 0);
     };
+
+    "the buried treasure placement matches the reference"_test = [] {
+        if (std::getenv("REFRAIN_VANILLA_STRUCTURE_REAL") == nullptr) {
+            return;
+        }
+        const char *region = std::getenv("REFRAIN_VANILLA_STRUCTURE_REGION");
+        if (region == nullptr) {
+            return;
+        }
+        jint chunk_x = 3;
+        jint chunk_z = 13;
+        if (const char *value = std::getenv("REFRAIN_VANILLA_BURIED_CHUNK_X");
+            value != nullptr) {
+            chunk_x = std::atoi(value);
+        }
+        if (const char *value = std::getenv("REFRAIN_VANILLA_BURIED_CHUNK_Z");
+            value != nullptr) {
+            chunk_z = std::atoi(value);
+        }
+        const auto reference = read_chunk(region, chunk_x, chunk_z);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        decoded_chunk decoded;
+        expect(decode_chunk(*reference, decoded));
+        if (decoded.blocks.empty()) {
+            return;
+        }
+        block_pos chest{};
+        bool found = false;
+        for (jint y = -64; y < 320 && !found; ++y) {
+            for (jint z = 0; z < 16 && !found; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    const auto index = static_cast<std::size_t>(y + 64) * 256U +
+                                       static_cast<std::size_t>(z * 16 + x);
+                    if (decoded.registry.name(decoded.blocks[index])
+                            .starts_with("minecraft:chest")) {
+                        chest = block_pos{.x = chunk_x * 16 + x,
+                                          .y = y,
+                                          .z = chunk_z * 16 + z};
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+        expect(found) << "no chest in the reference chunk";
+        if (!found) {
+            return;
+        }
+        proto_chunk chunk{decoded.registry, chunk_x, chunk_z, -64, 384};
+        for (jint y = -64; y < 320; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    const auto index = static_cast<std::size_t>(y + 64) * 256U +
+                                       static_cast<std::size_t>(z * 16 + x);
+                    chunk.set_state(x, y, z, decoded.blocks[index]);
+                }
+            }
+        }
+        auto start = structure::buried_treasure_start(
+            chunk_pos{.x = chunk_x, .z = chunk_z});
+        structure_start record{
+            .structure = start.structure,
+            .step = "underground_structures",
+            .chunk_x = chunk_x,
+            .chunk_z = chunk_z,
+            .min_x = start.bounds.min_x,
+            .min_y = start.bounds.min_y,
+            .min_z = start.bounds.min_z,
+            .max_x = start.bounds.max_x,
+            .max_y = start.bounds.max_y,
+            .max_z = start.bounds.max_z,
+        };
+        record.pieces.push_back(structure_piece_record{
+            .type = "minecraft:btp",
+            .min_x = start.bounds.min_x,
+            .min_y = start.bounds.min_y,
+            .min_z = start.bounds.min_z,
+            .max_x = start.bounds.max_x,
+            .max_y = start.bounds.max_y,
+            .max_z = start.bounds.max_z,
+        });
+        chunk.add_structure_start(std::move(record));
+        chunk_region region_view{chunk, 1};
+        const auto resolve = [&](std::string_view key) -> block_state_id {
+            if (const auto value = decoded.registry.find(key);
+                value.has_value()) {
+                return *value;
+            }
+            const auto block = state_block_name(key);
+            const bool air = is_air_block_name(block);
+            const auto inserted = decoded.registry.intern(
+                key, {.air = air, .blocks_motion = !air});
+            return inserted.has_value() ? *inserted : no_block_state;
+        };
+        const structure::structure_place_context context{
+            .region = &region_view,
+            .chunk = &chunk,
+            .states = &decoded.registry,
+            .state = resolve,
+        };
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(7)};
+        structure::place_structures(chunk, context, "underground_structures",
+                                    random);
+        jint mismatches = 0;
+        for (jint y = chest.y - 2; y <= chest.y + 2; ++y) {
+            for (jint z = chest.z - 2; z <= chest.z + 2; ++z) {
+                for (jint x = chest.x - 2; x <= chest.x + 2; ++x) {
+                    const auto index =
+                        static_cast<std::size_t>(y + 64) * 256U +
+                        static_cast<std::size_t>((z & 15) * 16 + (x & 15));
+                    const auto expected = std::string{
+                        decoded.registry.name(decoded.blocks[index])};
+                    const auto actual = std::string{decoded.registry.name(
+                        chunk.state_at(x & 15, y, z & 15))};
+                    if (expected != actual) {
+                        if (mismatches < 6) {
+                            std::fprintf(
+                                stderr,
+                                "buried mismatch (%d,%d,%d): got %s want %s\n",
+                                static_cast<int>(x), static_cast<int>(y),
+                                static_cast<int>(z), actual.c_str(),
+                                expected.c_str());
+                        }
+                        ++mismatches;
+                    }
+                }
+            }
+        }
+        expect(mismatches == 0);
+    };
 };

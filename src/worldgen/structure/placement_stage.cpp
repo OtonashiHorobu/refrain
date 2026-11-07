@@ -490,16 +490,8 @@ void place_structures(proto_chunk &chunk,
         context.states == nullptr) {
         return;
     }
-    for (const auto &reference : chunk.structure_references()) {
-        auto *source =
-            context.region->find(reference.chunk_x, reference.chunk_z);
-        if (source == nullptr) {
-            continue;
-        }
-        for (const auto &start : source->structure_starts()) {
-            if (start.structure != reference.structure || start.step != step) {
-                continue;
-            }
+    const auto place_pieces =
+        [&](const ::refrain::worldgen::structure_start &start) {
             for (const auto &piece : start.pieces) {
                 if (piece.type == "minecraft:btp") {
                     place_buried_treasure(context, piece, random);
@@ -509,6 +501,29 @@ void place_structures(proto_chunk &chunk,
                     place_swamp_hut(context, piece);
                 }
             }
+        };
+    // The chunk owns its starts; references only point at starts owned by
+    // other chunks.
+    for (const auto &start : chunk.structure_starts()) {
+        if (start.step == step) {
+            place_pieces(start);
+        }
+    }
+    for (const auto &reference : chunk.structure_references()) {
+        if (reference.chunk_x == chunk.chunk_x() &&
+            reference.chunk_z == chunk.chunk_z()) {
+            continue;
+        }
+        auto *source =
+            context.region->find(reference.chunk_x, reference.chunk_z);
+        if (source == nullptr) {
+            continue;
+        }
+        for (const auto &start : source->structure_starts()) {
+            if (start.structure != reference.structure || start.step != step) {
+                continue;
+            }
+            place_pieces(start);
         }
     }
 }
