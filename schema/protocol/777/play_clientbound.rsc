@@ -714,6 +714,14 @@ packet transfer = 132 {
     #[varint] port: i32;
 }
 
+packet update_advancements = 133 {
+    should_reset: bool;
+    added: array<wire_added>;
+    removed: array<identifier>;
+    progress: map<identifier, advancement_progress>;
+    show_advancements: bool;
+}
+
 packet update_attributes = 134 {
     #[varint] get_entity_id: i32;
     get_values: array<wire_get_values>;

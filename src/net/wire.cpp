@@ -1286,6 +1286,249 @@ auto decode_map_patch(reader &in, map_patch &value) -> status {
     return status_ok();
 }
 
+auto encode_item_stack_template(writer &out, const item_stack_template &value)
+    -> status {
+    out.write_varint(value.item_id);
+    out.write_varint(value.count);
+    out.write_varint(0); // empty component patch
+    return status_ok();
+}
+
+auto decode_item_stack_template(reader &in, item_stack_template &value)
+    -> status {
+    auto item{in.read_varint()};
+    auto count{in.read_varint()};
+    auto patch{in.read_varint()};
+    if (!item || !count || !patch) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "item_stack_template: truncated")};
+    }
+    if (*patch != 0U) {
+        return std::unexpected{make_error(
+            error_code::unsupported,
+            "item_stack_template: non-empty patches are not implemented")};
+    }
+    value.item_id = *item;
+    value.count = *count;
+    return status_ok();
+}
+
+auto encode_advancement_display(writer &out, const advancement_display &value)
+    -> status {
+    for (const auto *component : {&value.title, &value.description}) {
+        if (auto written{encode_text_component(out, *component)}; !written) {
+            return written;
+        }
+    }
+    if (auto written{encode_item_stack_template(out, value.icon)}; !written) {
+        return written;
+    }
+    out.write_varint(value.frame);
+    out.write_i32(value.flags);
+    if ((value.flags & 1) != 0) {
+        if (!value.background.has_value()) {
+            return std::unexpected{make_error(
+                error_code::invalid_argument,
+                "advancement_display: background flag without a background")};
+        }
+        return out.write_identifier(*value.background);
+    }
+    return status_ok();
+}
+
+auto decode_advancement_display(reader &in, advancement_display &value)
+    -> status {
+    for (auto *component : {&value.title, &value.description}) {
+        if (auto decoded{decode_text_component(in, *component)}; !decoded) {
+            return decoded;
+        }
+    }
+    if (auto status{decode_item_stack_template(in, value.icon)}; !status) {
+        return status;
+    }
+    auto frame{in.read_varint()};
+    auto flags{in.read_i32()};
+    if (!frame || !flags) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "advancement_display: truncated")};
+    }
+    value.frame = *frame;
+    value.flags = *flags;
+    value.background.reset();
+    if ((*flags & 1) != 0) {
+        auto background{in.read_identifier()};
+        if (!background) {
+            return std::unexpected{std::move(background.error())};
+        }
+        value.background = std::move(*background);
+    }
+    return status_ok();
+}
+
+auto encode_advancement_requirements(writer &out,
+                                     const advancement_requirements &value)
+    -> status {
+    out.write_varint(static_cast<std::uint32_t>(value.groups.size()));
+    for (const auto &group : value.groups) {
+        out.write_varint(static_cast<std::uint32_t>(group.size()));
+        for (const auto &criterion : group) {
+            if (auto written{out.write_string(criterion)}; !written) {
+                return written;
+            }
+        }
+    }
+    return status_ok();
+}
+
+auto decode_advancement_requirements(reader &in,
+                                     advancement_requirements &value)
+    -> status {
+    auto group_count{in.read_varint()};
+    if (!group_count) {
+        return std::unexpected{std::move(group_count.error())};
+    }
+    if (*group_count > in.remaining()) {
+        return std::unexpected{make_error(
+            error_code::parse_error,
+            "advancement_requirements: group list exceeds the payload")};
+    }
+    value.groups.clear();
+    value.groups.reserve(*group_count);
+    for (std::uint32_t group_index{0}; group_index < *group_count;
+         ++group_index) {
+        auto count{in.read_varint()};
+        if (!count) {
+            return std::unexpected{std::move(count.error())};
+        }
+        if (*count > in.remaining()) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                "advancement_requirements: criterion list exceeds the "
+                "payload")};
+        }
+        std::vector<std::string> group;
+        group.reserve(*count);
+        for (std::uint32_t criterion_index{0}; criterion_index < *count;
+             ++criterion_index) {
+            auto criterion{in.read_string()};
+            if (!criterion) {
+                return std::unexpected{std::move(criterion.error())};
+            }
+            group.push_back(std::move(*criterion));
+        }
+        value.groups.push_back(std::move(group));
+    }
+    return status_ok();
+}
+
+auto encode_advancement(writer &out, const advancement &value) -> status {
+    out.write_bool(value.parent.has_value());
+    if (value.parent.has_value()) {
+        if (auto written{out.write_identifier(*value.parent)}; !written) {
+            return written;
+        }
+    }
+    out.write_bool(value.has_display);
+    if (value.has_display) {
+        if (auto written{encode_advancement_display(out, value.display)};
+            !written) {
+            return written;
+        }
+    }
+    if (auto written{encode_advancement_requirements(out, value.requirements)};
+        !written) {
+        return written;
+    }
+    out.write_bool(value.sends_telemetry);
+    return status_ok();
+}
+
+auto decode_advancement(reader &in, advancement &value) -> status {
+    value.parent.reset();
+    auto has_parent{in.read_bool()};
+    if (!has_parent) {
+        return std::unexpected{std::move(has_parent.error())};
+    }
+    if (*has_parent) {
+        auto parent{in.read_identifier()};
+        if (!parent) {
+            return std::unexpected{std::move(parent.error())};
+        }
+        value.parent = std::move(*parent);
+    }
+    auto has_display{in.read_bool()};
+    if (!has_display) {
+        return std::unexpected{std::move(has_display.error())};
+    }
+    value.has_display = *has_display;
+    if (*has_display) {
+        if (auto status{decode_advancement_display(in, value.display)};
+            !status) {
+            return status;
+        }
+    }
+    if (auto status{decode_advancement_requirements(in, value.requirements)};
+        !status) {
+        return status;
+    }
+    auto telemetry{in.read_bool()};
+    if (!telemetry) {
+        return std::unexpected{std::move(telemetry.error())};
+    }
+    value.sends_telemetry = *telemetry;
+    return status_ok();
+}
+
+auto encode_advancement_progress(writer &out, const advancement_progress &value)
+    -> status {
+    out.write_varint(static_cast<std::uint32_t>(value.criteria.size()));
+    for (const auto &entry : value.criteria) {
+        if (auto written{out.write_string(entry.criterion)}; !written) {
+            return written;
+        }
+        out.write_bool(entry.obtained.has_value());
+        if (entry.obtained.has_value()) {
+            out.write_i64(*entry.obtained);
+        }
+    }
+    return status_ok();
+}
+
+auto decode_advancement_progress(reader &in, advancement_progress &value)
+    -> status {
+    auto count{in.read_varint()};
+    if (!count) {
+        return std::unexpected{std::move(count.error())};
+    }
+    if (*count > in.remaining()) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "advancement_progress: entry list exceeds the payload")};
+    }
+    value.criteria.clear();
+    value.criteria.reserve(*count);
+    for (std::uint32_t index{0}; index < *count; ++index) {
+        criterion_progress entry{};
+        auto criterion{in.read_string()};
+        auto present{in.read_bool()};
+        if (!criterion || !present) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "advancement_progress: truncated entry")};
+        }
+        entry.criterion = std::move(*criterion);
+        if (*present) {
+            auto obtained{in.read_i64()};
+            if (!obtained) {
+                return std::unexpected{std::move(obtained.error())};
+            }
+            entry.obtained = *obtained;
+        }
+        value.criteria.push_back(std::move(entry));
+    }
+    return status_ok();
+}
+
 namespace {
 
 [[nodiscard]] auto write_metadata_value(writer &out,

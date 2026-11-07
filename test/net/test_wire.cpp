@@ -70,6 +70,59 @@ const suite tests = [] {
         }
     };
 
+    "advancement round trips display, requirements and progress"_test = [] {
+        const auto background{refrain::data::resource_location::parse(
+            "minecraft:textures/block/stone.png")};
+        expect(background.has_value());
+        if (!background) {
+            return;
+        }
+        net::advancement value{};
+        value.parent.reset();
+        value.has_display = true;
+        value.display.title.text = "Title";
+        value.display.description.text = "Description";
+        value.display.icon = {.item_id = 5U, .count = 1U};
+        value.display.frame = 1U;
+        value.display.flags = 1;
+        value.display.background = *background;
+        value.requirements.groups = {{"criterion_a"},
+                                     {"criterion_b", "criterion_c"}};
+        value.sends_telemetry = true;
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_advancement(out, value)));
+        net::reader in{bytes};
+        net::advancement decoded{};
+        expect(static_cast<bool>(net::decode_advancement(in, decoded)));
+        expect(decoded.has_display);
+        expect(decoded.display.title.text == "Title");
+        expect(decoded.display.background.has_value());
+        expect(decoded.requirements.groups.size() == 2U);
+        expect(decoded.sends_telemetry);
+        expect(in.empty());
+
+        net::advancement_progress progress{};
+        progress.criteria.push_back(
+            {.criterion = "a", .obtained = std::int64_t{42}});
+        progress.criteria.push_back(
+            {.criterion = "b", .obtained = std::nullopt});
+        bytes.clear();
+        net::writer progress_out{bytes};
+        expect(static_cast<bool>(
+            net::encode_advancement_progress(progress_out, progress)));
+        net::reader progress_in{bytes};
+        net::advancement_progress progress_decoded{};
+        expect(static_cast<bool>(
+            net::decode_advancement_progress(progress_in, progress_decoded)));
+        expect(progress_decoded.criteria.size() == 2U);
+        if (progress_decoded.criteria.size() == 2U) {
+            expect(progress_decoded.criteria[0].obtained == std::int64_t{42});
+            expect(!progress_decoded.criteria[1].obtained.has_value());
+        }
+        expect(progress_in.empty());
+    };
+
     "entity metadata round trips common serializers"_test = [] {
         net::entity_metadata metadata{};
         net::metadata_value byte_value{};

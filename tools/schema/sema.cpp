@@ -98,6 +98,16 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "merchant_offer";
     case primitive_kind::entity_metadata:
         return "entity_metadata";
+    case primitive_kind::item_stack_template:
+        return "item_stack_template";
+    case primitive_kind::advancement_display:
+        return "advancement_display";
+    case primitive_kind::advancement_requirements:
+        return "advancement_requirements";
+    case primitive_kind::advancement:
+        return "advancement";
+    case primitive_kind::advancement_progress:
+        return "advancement_progress";
     case primitive_kind::void_type:
         return "void";
     }
@@ -143,6 +153,11 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"component_predicate", primitive_kind::component_predicate},
         std::pair{"merchant_offer", primitive_kind::merchant_offer},
         std::pair{"entity_metadata", primitive_kind::entity_metadata},
+        std::pair{"item_stack_template", primitive_kind::item_stack_template},
+        std::pair{"advancement_display", primitive_kind::advancement_display},
+        std::pair{"advancement_requirements", primitive_kind::advancement_requirements},
+        std::pair{"advancement", primitive_kind::advancement},
+        std::pair{"advancement_progress", primitive_kind::advancement_progress},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -310,6 +325,12 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::component_predicate:
     case primitive_kind::merchant_offer:
     case primitive_kind::entity_metadata:
+
+    case primitive_kind::item_stack_template:
+    case primitive_kind::advancement_display:
+    case primitive_kind::advancement_requirements:
+    case primitive_kind::advancement:
+    case primitive_kind::advancement_progress:
     case primitive_kind::void_type:
         return false;
     }
@@ -355,6 +376,12 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::component_predicate:
     case primitive_kind::merchant_offer:
     case primitive_kind::entity_metadata:
+
+    case primitive_kind::item_stack_template:
+    case primitive_kind::advancement_display:
+    case primitive_kind::advancement_requirements:
+    case primitive_kind::advancement:
+    case primitive_kind::advancement_progress:
     case primitive_kind::void_type:
         return false;
     }
@@ -2293,6 +2320,11 @@ class analyzer {
             case primitive_kind::component_predicate:
             case primitive_kind::merchant_offer:
             case primitive_kind::entity_metadata:
+            case primitive_kind::item_stack_template:
+            case primitive_kind::advancement_display:
+            case primitive_kind::advancement_requirements:
+            case primitive_kind::advancement:
+            case primitive_kind::advancement_progress:
                 // Rejected for RIDL in resolve_type(); a wire-only primitive
                 // has no in-process ABI layout.
                 return std::nullopt;

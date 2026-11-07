@@ -401,6 +401,98 @@ struct merchant_offer {
 [[nodiscard]] auto decode_merchant_offer(reader &in, merchant_offer &value)
     -> status;
 
+/// An item with a count and an empty component patch, used by advancement
+/// icons.
+struct item_stack_template {
+    std::uint32_t item_id{0};
+    std::uint32_t count{1};
+
+    friend auto operator==(const item_stack_template &,
+                           const item_stack_template &) -> bool = default;
+};
+
+[[nodiscard]] auto encode_item_stack_template(writer &out,
+                                              const item_stack_template &value)
+    -> status;
+[[nodiscard]] auto decode_item_stack_template(reader &in,
+                                              item_stack_template &value)
+    -> status;
+
+/// An advancement display: title, description, icon, frame, flags and an
+/// optional background.
+struct advancement_display {
+    text_component title{};
+    text_component description{};
+    item_stack_template icon{};
+    std::uint32_t frame{0};
+    std::int32_t flags{0};
+    std::optional<data::resource_location> background{};
+
+    friend auto operator==(const advancement_display &,
+                           const advancement_display &) -> bool = default;
+};
+
+[[nodiscard]] auto encode_advancement_display(writer &out,
+                                              const advancement_display &value)
+    -> status;
+[[nodiscard]] auto decode_advancement_display(reader &in,
+                                              advancement_display &value)
+    -> status;
+
+/// Requirement groups; the outer list holds alternative groups of criteria.
+struct advancement_requirements {
+    std::vector<std::vector<std::string>> groups{};
+
+    friend auto operator==(const advancement_requirements &,
+                           const advancement_requirements &) -> bool = default;
+};
+
+[[nodiscard]] auto encode_advancement_requirements(
+    writer &out, const advancement_requirements &value) -> status;
+[[nodiscard]] auto
+decode_advancement_requirements(reader &in, advancement_requirements &value)
+    -> status;
+
+/// One advancement: parent, display, requirements and telemetry flag.
+struct advancement {
+    std::optional<data::resource_location> parent{};
+    bool has_display{false};
+    advancement_display display{};
+    advancement_requirements requirements{};
+    bool sends_telemetry{false};
+
+    friend auto operator==(const advancement &, const advancement &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_advancement(writer &out, const advancement &value)
+    -> status;
+[[nodiscard]] auto decode_advancement(reader &in, advancement &value) -> status;
+
+/// One criterion's completion state.
+struct criterion_progress {
+    std::string criterion{};
+    std::optional<std::int64_t> obtained{};
+
+    friend auto operator==(const criterion_progress &,
+                           const criterion_progress &) -> bool = default;
+};
+
+/// Progress for one advancement.
+struct advancement_progress {
+    std::vector<criterion_progress> criteria{};
+
+    friend auto operator==(const advancement_progress &,
+                           const advancement_progress &) -> bool = default;
+};
+
+[[nodiscard]] auto
+encode_advancement_progress(writer &out, const advancement_progress &value)
+    -> status;
+[[nodiscard]] auto decode_advancement_progress(reader &in,
+                                               advancement_progress &value)
+    -> status;
+
 /// One entity metadata entry. The active representation is selected by the
 /// serializer id; unused fields keep their defaults.
 struct metadata_value {

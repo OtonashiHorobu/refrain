@@ -62,7 +62,7 @@ struct wire_data {
     #[max(4096)] key_signature: bytes;
 }
 
-struct wire_type_84 {
+struct wire_type_83 {
     added_components: map<varint_id, i32>;
     removed_components: array<varint_id>;
 }
@@ -70,7 +70,7 @@ struct wire_type_84 {
 struct wire_actual_item {
     item: varint_id;
     #[varint] count: i32;
-    components: wire_type_84;
+    components: wire_type_83;
 }
 
 struct wire_entry_4 {
@@ -219,6 +219,17 @@ struct wire_network_payload {
 struct wire_swing_animation {
     type_: varint_id;
     #[varint] duration: i32;
+}
+
+struct wire_advancement_holder {
+    id: identifier;
+    value: advancement;
+}
+
+struct wire_added {
+    advancement: wire_advancement_holder;
+    x: f32;
+    y: f32;
 }
 
 struct wire_position_and_rotation {

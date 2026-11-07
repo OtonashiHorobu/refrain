@@ -103,6 +103,16 @@ namespace {
             return "::refrain::net::merchant_offer";
         case primitive_kind::entity_metadata:
             return "::refrain::net::entity_metadata";
+        case primitive_kind::item_stack_template:
+            return "::refrain::net::item_stack_template";
+        case primitive_kind::advancement_display:
+            return "::refrain::net::advancement_display";
+        case primitive_kind::advancement_requirements:
+            return "::refrain::net::advancement_requirements";
+        case primitive_kind::advancement:
+            return "::refrain::net::advancement";
+        case primitive_kind::advancement_progress:
+            return "::refrain::net::advancement_progress";
         case primitive_kind::void_type:
             return "void";
         }
@@ -750,6 +760,55 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::item_stack_template:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_item_stack_template("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_display:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_advancement_display("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_requirements:
+            writer.line("if (auto written = "
+                        "::refrain::net::encode_advancement_requirements("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement:
+            writer.line("if (auto written = ::refrain::net::encode_advancement("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_progress:
+            writer.line("if (auto written = "
+                        "::refrain::net::encode_advancement_progress("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -1204,6 +1263,60 @@ void emit_decode_value(code_writer &writer, const model &program,
                 "if (auto decoded = ::refrain::net::decode_entity_metadata("
                 "in, {}); !decoded) {{",
                 target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::item_stack_template:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_item_stack_template("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_display:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_advancement_display("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_requirements:
+            writer.line("if (auto decoded = "
+                        "::refrain::net::decode_advancement_requirements("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement:
+            writer.line("if (auto decoded = ::refrain::net::decode_advancement("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_progress:
+            writer.line("if (auto decoded = "
+                        "::refrain::net::decode_advancement_progress("
+                        "in, {}); !decoded) {{",
+                        target);
             writer.indent();
             writer.line(
                 "return std::unexpected{{std::move(decoded.error())}};");

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 959e5112fb541051
+// Schema hash: 9bb4ea8b311a2c96
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -1215,6 +1215,17 @@ struct transfer {
     std::string host;
     // attributes: #[varint]
     std::int32_t port;
+};
+
+struct update_advancements {
+    static constexpr std::uint16_t packet_id = 0x85;
+    static constexpr std::string_view packet_name = "update_advancements";
+
+    bool should_reset;
+    std::vector<::refrain::protocol::v777::wire::wire_added> added;
+    std::vector<::refrain::data::resource_location> removed;
+    std::map<::refrain::data::resource_location, ::refrain::net::advancement_progress> progress;
+    bool show_advancements;
 };
 
 struct update_attributes {
@@ -5943,6 +5954,101 @@ struct show_dialog {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.port = static_cast<decltype(value.port)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_update_advancements(::refrain::net::writer &out, const update_advancements &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_bool(value.should_reset);
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.added.size()));
+    for (const auto &item_0 : value.added) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_added(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.removed.size()));
+    for (const auto &item_0 : value.removed) {
+      if (auto written = out.write_identifier(item_0); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.progress.size()));
+    for (const auto &entry_0 : value.progress) {
+      if (auto written = out.write_identifier(entry_0.first); !written) {
+        return written;
+      }
+      if (auto written = ::refrain::net::encode_advancement_progress(out, entry_0.second); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    out.write_bool(value.show_advancements);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_update_advancements(::refrain::net::reader &in, update_advancements &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.should_reset = *value_0;
+  }
+  {
+    value.added.clear();
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::protocol::v777::wire::wire_added value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_added(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.added.push_back(std::move(value_0));
+    }
+  }
+  {
+    value.removed.clear();
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::data::resource_location value_0{};
+      auto value_1 = in.read_identifier();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = std::move(*value_1);
+      value.removed.push_back(std::move(value_0));
+    }
+  }
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.progress.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::data::resource_location map_key_0{};
+      auto value_1 = in.read_identifier();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      map_key_0 = std::move(*value_1);
+      ::refrain::net::advancement_progress map_value_0{};
+      if (auto decoded = ::refrain::net::decode_advancement_progress(in, map_value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.progress.emplace(std::move(map_key_0), std::move(map_value_0));
+    }
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.show_advancements = *value_0;
   }
   return ::refrain::status_ok();
 }

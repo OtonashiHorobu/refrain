@@ -79,6 +79,16 @@ enum class primitive_kind : std::uint8_t {
     merchant_offer,
     /// Entity metadata list terminated by the 255 marker.
     entity_metadata,
+    /// Hand-written wire payload: item_stack_template.
+    item_stack_template,
+    /// Hand-written wire payload: advancement_display.
+    advancement_display,
+    /// Hand-written wire payload: advancement_requirements.
+    advancement_requirements,
+    /// Hand-written wire payload: advancement.
+    advancement,
+    /// Hand-written wire payload: advancement_progress.
+    advancement_progress,
     void_type,
 };
 

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 959e5112fb541051
+// Schema hash: 9bb4ea8b311a2c96
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -86,7 +86,7 @@ struct wire_data {
     std::vector<std::byte> key_signature;
 };
 
-struct wire_type_84 {
+struct wire_type_83 {
     std::map<std::uint32_t, std::int32_t> added_components;
     std::vector<std::uint32_t> removed_components;
 };
@@ -95,7 +95,7 @@ struct wire_actual_item {
     std::uint32_t item;
     // attributes: #[varint]
     std::int32_t count;
-    ::refrain::protocol::v777::wire::wire_type_84 components;
+    ::refrain::protocol::v777::wire::wire_type_83 components;
 };
 
 struct wire_entry_4 {
@@ -275,6 +275,17 @@ struct wire_swing_animation {
     std::uint32_t type_;
     // attributes: #[varint]
     std::int32_t duration;
+};
+
+struct wire_advancement_holder {
+    ::refrain::data::resource_location id;
+    ::refrain::net::advancement value;
+};
+
+struct wire_added {
+    ::refrain::protocol::v777::wire::wire_advancement_holder advancement;
+    float x;
+    float y;
 };
 
 struct wire_position_and_rotation {
@@ -649,7 +660,7 @@ struct wire_position_move_rotation {
   return ::refrain::status_ok();
 }
 
-[[nodiscard]] inline auto encode_wire_type_84(::refrain::net::writer &out, const wire_type_84 &value) -> ::refrain::status {
+[[nodiscard]] inline auto encode_wire_type_83(::refrain::net::writer &out, const wire_type_83 &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
   {
@@ -668,7 +679,7 @@ struct wire_position_move_rotation {
   return ::refrain::status_ok();
 }
 
-[[nodiscard]] inline auto decode_wire_type_84(::refrain::net::reader &in, wire_type_84 &value) -> ::refrain::status {
+[[nodiscard]] inline auto decode_wire_type_83(::refrain::net::reader &in, wire_type_83 &value) -> ::refrain::status {
   static_cast<void>(in);
   static_cast<void>(value);
   {
@@ -712,7 +723,7 @@ struct wire_position_move_rotation {
     out.write_varint(static_cast<std::uint32_t>(value.count));
   }
   {
-    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_84(out, value.components); !written) {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_83(out, value.components); !written) {
       return written;
     }
   }
@@ -733,7 +744,7 @@ struct wire_position_move_rotation {
     value.count = static_cast<decltype(value.count)>(*value_0);
   }
   {
-    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_84(in, value.components); !decoded) {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_83(in, value.components); !decoded) {
       return std::unexpected{std::move(decoded.error())};
     }
   }
@@ -2063,6 +2074,76 @@ struct wire_position_move_rotation {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.duration = static_cast<decltype(value.duration)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_advancement_holder(::refrain::net::writer &out, const wire_advancement_holder &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.id); !written) {
+      return written;
+    }
+  }
+  {
+    if (auto written = ::refrain::net::encode_advancement(out, value.value); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_advancement_holder(::refrain::net::reader &in, wire_advancement_holder &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.id = std::move(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_advancement(in, value.value); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_added(::refrain::net::writer &out, const wire_added &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_advancement_holder(out, value.advancement); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_f32(value.x);
+  }
+  {
+    out.write_f32(value.y);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_added(::refrain::net::reader &in, wire_added &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_advancement_holder(in, value.advancement); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto value_0 = in.read_f32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.x = *value_0;
+  }
+  {
+    auto value_0 = in.read_f32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.y = *value_0;
   }
   return ::refrain::status_ok();
 }
