@@ -434,6 +434,8 @@ def main() -> int:
                 "oracle:cave_blob_8",
                 "oracle:large_dripstone",
                 "oracle:lava_lake",
+                "oracle:water_lake",
+                "oracle:iceberg_blue",
             ]
         )
         (biome_dir / "feature.json").write_text(
@@ -555,6 +557,57 @@ def main() -> int:
                         {
                             "type": "minecraft:fixed_placement",
                             "positions": [[8, -40, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        water_lake = read_pack_data(
+            args.server_jar,
+            "data/minecraft/worldgen/feature/lake_lava.json",
+        )
+        water_lake["fluid"] = {
+            "id": "minecraft:water",
+            "properties": {"level": "0"},
+        }
+        (feature_dir / "water_lake.json").write_text(
+            json.dumps(water_lake, indent=2) + "\n"
+        )
+        (placed_dir / "water_lake.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:water_lake",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 63, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (feature_dir / "iceberg_blue.json").write_text(
+            json.dumps(
+                read_pack_data(
+                    args.server_jar,
+                    "data/minecraft/worldgen/feature/iceberg_blue.json",
+                ),
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "iceberg_blue.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:iceberg_blue",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 63, 8]],
                         }
                     ],
                 },
