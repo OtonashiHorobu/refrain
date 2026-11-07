@@ -70,6 +70,71 @@ const suite tests = [] {
         }
     };
 
+    "command tree round trips nodes, arguments and suggestions"_test = [] {
+        const auto suggestions{
+            refrain::data::resource_location::parse("minecraft:ask_server")};
+        const auto registry{
+            refrain::data::resource_location::parse("minecraft:item")};
+        expect(suggestions.has_value() && registry.has_value());
+        if (!suggestions || !registry) {
+            return;
+        }
+        net::command_tree tree{};
+        net::command_node root{};
+        root.flags = 0U;
+        root.children = {1U, 2U};
+        net::command_node literal{};
+        literal.flags = static_cast<std::uint8_t>(1U | 4U);
+        literal.name = "help";
+        net::command_node argument{};
+        argument.flags = static_cast<std::uint8_t>(2U | 16U);
+        argument.name = "target";
+        argument.parser_id = 6U;
+        argument.entity_flags = 1U;
+        argument.has_suggestions = true;
+        argument.suggestions = *suggestions;
+        net::command_node numeric{};
+        numeric.flags = 2U;
+        numeric.name = "count";
+        numeric.parser_id = 3U;
+        numeric.number_flags = 3U;
+        numeric.integer_min = 1;
+        numeric.integer_max = 10;
+        tree.nodes = {root, literal, argument, numeric};
+        tree.root_index = 0U;
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_command_tree(out, tree)));
+        net::reader in{bytes};
+        net::command_tree decoded{};
+        expect(static_cast<bool>(net::decode_command_tree(in, decoded)));
+        expect(in.empty());
+        expect(decoded.root_index == 0U);
+        expect(decoded.nodes.size() == 4U);
+        if (decoded.nodes.size() == 4U) {
+            expect(decoded.nodes[0].children.size() == 2U);
+            expect(decoded.nodes[1].name == "help");
+            expect(decoded.nodes[2].parser_id == 6U);
+            expect(decoded.nodes[2].has_suggestions);
+            expect(decoded.nodes[2].suggestions.to_string() ==
+                   suggestions->to_string());
+            expect(decoded.nodes[3].parser_id == 3U);
+            expect(decoded.nodes[3].integer_min == 1);
+            expect(decoded.nodes[3].integer_max == 10);
+        }
+
+        net::command_tree invalid{};
+        net::command_node bad{};
+        bad.flags = 2U;
+        bad.parser_id = 200U;
+        invalid.nodes = {bad};
+        bytes.clear();
+        net::writer bad_out{bytes};
+        const auto status{net::encode_command_tree(bad_out, invalid)};
+        expect(!status);
+        expect(status.error().code == refrain::error_code::invalid_argument);
+    };
+
     "debug subscription updates and events round trip"_test = [] {
         net::debug_subscription_update update{};
         update.subscription = 1U;

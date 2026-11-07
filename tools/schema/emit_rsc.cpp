@@ -129,6 +129,8 @@ namespace {
             return "::refrain::net::debug_subscription_update";
         case primitive_kind::debug_subscription_event:
             return "::refrain::net::debug_subscription_event";
+        case primitive_kind::command_tree:
+            return "::refrain::net::command_tree";
         case primitive_kind::void_type:
             return "void";
         }
@@ -903,6 +905,16 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::command_tree:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_command_tree("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -1498,6 +1510,17 @@ void emit_decode_value(code_writer &writer, const model &program,
                         "::refrain::net::decode_debug_subscription_event("
                         "in, {}); !decoded) {{",
                         target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::command_tree:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_command_tree("
+                "in, {}); !decoded) {{",
+                target);
             writer.indent();
             writer.line(
                 "return std::unexpected{{std::move(decoded.error())}};");

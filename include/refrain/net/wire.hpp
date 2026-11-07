@@ -730,6 +730,43 @@ decode_debug_subscription_update(reader &in, debug_subscription_update &value)
 decode_debug_subscription_event(reader &in, debug_subscription_event &value)
     -> status;
 
+/// One node of the clientbound command tree.
+struct command_node {
+    std::uint8_t flags{0};
+    std::vector<std::uint32_t> children{};
+    std::uint32_t redirect{0};
+    std::string name{};
+    std::uint32_t parser_id{0};
+    std::uint8_t number_flags{0};
+    double number_min{0.0};
+    double number_max{0.0};
+    std::int64_t integer_min{0};
+    std::int64_t integer_max{0};
+    std::uint32_t string_type{0};
+    std::uint8_t entity_flags{0};
+    std::int32_t time_min{0};
+    data::resource_location registry_key{};
+    bool has_suggestions{false};
+    data::resource_location suggestions{};
+
+    friend auto operator==(const command_node &, const command_node &)
+        -> bool = default;
+};
+
+/// The clientbound command tree.
+struct command_tree {
+    std::vector<command_node> nodes{};
+    std::uint32_t root_index{0};
+
+    friend auto operator==(const command_tree &, const command_tree &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_command_tree(writer &out, const command_tree &value)
+    -> status;
+[[nodiscard]] auto decode_command_tree(reader &in, command_tree &value)
+    -> status;
+
 /// One entity metadata entry. The active representation is selected by the
 /// serializer id; unused fields keep their defaults.
 struct metadata_value {

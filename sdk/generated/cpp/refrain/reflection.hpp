@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: fcc4e99d514b6390
+// Schema hash: e32a57ccfdfa1ff7
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -746,7 +746,7 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::c
 template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::commands> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::commands";
     static constexpr auto fields = std::make_tuple(
-        refrain::reflect::custom_field{"payload", &::refrain::protocol::v777::play::clientbound::commands::payload});
+        refrain::reflect::custom_field{"tree", &::refrain::protocol::v777::play::clientbound::commands::tree});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::container_close'.

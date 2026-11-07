@@ -205,7 +205,7 @@ packet command_suggestions = 15 {
 }
 
 packet commands = 16 {
-    #[rest] payload: bytes;
+    tree: command_tree;
 }
 
 packet container_close = 17 {

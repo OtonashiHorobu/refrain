@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: fcc4e99d514b6390
+// Schema hash: e32a57ccfdfa1ff7
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -340,8 +340,7 @@ struct commands {
     static constexpr std::uint16_t packet_id = 0x10;
     static constexpr std::string_view packet_name = "commands";
 
-    // attributes: #[rest]
-    std::vector<std::byte> payload;
+    ::refrain::net::command_tree tree;
 };
 
 struct container_close {
@@ -2650,7 +2649,9 @@ struct show_dialog {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_bytes(value.payload);
+    if (auto written = ::refrain::net::encode_command_tree(out, value.tree); !written) {
+      return written;
+    }
   }
   return ::refrain::status_ok();
 }
@@ -2659,9 +2660,9 @@ struct show_dialog {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto value_0 = in.read_bytes(in.remaining());
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
+    if (auto decoded = ::refrain::net::decode_command_tree(in, value.tree); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }

@@ -386,6 +386,7 @@ attribute_comment(const std::vector<attribute> &attributes,
     case primitive_kind::particle_options:
     case primitive_kind::debug_subscription_update:
     case primitive_kind::debug_subscription_event:
+    case primitive_kind::command_tree:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";
@@ -457,6 +458,7 @@ attribute_comment(const std::vector<attribute> &attributes,
     case primitive_kind::particle_options:
     case primitive_kind::debug_subscription_update:
     case primitive_kind::debug_subscription_event:
+    case primitive_kind::command_tree:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";

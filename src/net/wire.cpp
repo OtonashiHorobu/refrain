@@ -2408,6 +2408,472 @@ namespace {
 
 } // namespace
 
+namespace {
+
+[[nodiscard]] auto write_command_properties(writer &out,
+                                            const command_node &node)
+    -> status {
+    switch (node.parser_id) {
+    case 0:
+    case 7:
+    case 8:
+    case 9:
+    case 10:
+    case 11:
+    case 12:
+    case 13:
+    case 14:
+    case 15:
+    case 16:
+    case 17:
+    case 18:
+    case 19:
+    case 20:
+    case 21:
+    case 22:
+    case 23:
+    case 24:
+    case 25:
+    case 26:
+    case 27:
+    case 28:
+    case 29:
+    case 30:
+    case 32:
+    case 33:
+    case 34:
+    case 35:
+    case 36:
+    case 37:
+    case 38:
+    case 39:
+    case 40:
+    case 41:
+    case 42:
+    case 49:
+    case 50:
+    case 51:
+    case 52:
+    case 53:
+    case 54:
+    case 55:
+    case 56:
+    case 57:
+    case 58:
+    case 59:
+    case 60:
+    case 61:
+    case 62:
+    case 63:
+        return status_ok();
+    case 1: { // brigadier:float
+        const auto has_min{(node.number_flags & 1U) != 0U};
+        const auto has_max{(node.number_flags & 2U) != 0U};
+        out.write_u8(static_cast<std::uint8_t>((has_min ? 1U : 0U) |
+                                               (has_max ? 2U : 0U)));
+        if (has_min) {
+            out.write_f32(static_cast<float>(node.number_min));
+        }
+        if (has_max) {
+            out.write_f32(static_cast<float>(node.number_max));
+        }
+        return status_ok();
+    }
+    case 2: { // brigadier:double
+        const auto has_min{(node.number_flags & 1U) != 0U};
+        const auto has_max{(node.number_flags & 2U) != 0U};
+        out.write_u8(static_cast<std::uint8_t>((has_min ? 1U : 0U) |
+                                               (has_max ? 2U : 0U)));
+        if (has_min) {
+            out.write_f64(node.number_min);
+        }
+        if (has_max) {
+            out.write_f64(node.number_max);
+        }
+        return status_ok();
+    }
+    case 3: { // brigadier:integer
+        const auto has_min{(node.number_flags & 1U) != 0U};
+        const auto has_max{(node.number_flags & 2U) != 0U};
+        out.write_u8(static_cast<std::uint8_t>((has_min ? 1U : 0U) |
+                                               (has_max ? 2U : 0U)));
+        if (has_min) {
+            out.write_i32(static_cast<std::int32_t>(node.integer_min));
+        }
+        if (has_max) {
+            out.write_i32(static_cast<std::int32_t>(node.integer_max));
+        }
+        return status_ok();
+    }
+    case 4: { // brigadier:long
+        const auto has_min{(node.number_flags & 1U) != 0U};
+        const auto has_max{(node.number_flags & 2U) != 0U};
+        out.write_u8(static_cast<std::uint8_t>((has_min ? 1U : 0U) |
+                                               (has_max ? 2U : 0U)));
+        if (has_min) {
+            out.write_i64(node.integer_min);
+        }
+        if (has_max) {
+            out.write_i64(node.integer_max);
+        }
+        return status_ok();
+    }
+    case 5: // brigadier:string
+        out.write_varint(node.string_type);
+        return status_ok();
+    case 6:  // entity
+    case 31: // score_holder
+        out.write_u8(node.entity_flags);
+        return status_ok();
+    case 43: // time
+        out.write_i32(node.time_min);
+        return status_ok();
+    case 44: // resource_or_tag
+    case 45: // resource_or_tag_key
+    case 46: // resource
+    case 47: // resource_key
+    case 48: // resource_selector
+        return out.write_identifier(node.registry_key);
+    default:
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "command_tree: unknown argument parser id")};
+    }
+}
+
+[[nodiscard]] auto read_command_properties(reader &in, command_node &node)
+    -> status {
+    switch (node.parser_id) {
+    case 0:
+    case 7:
+    case 8:
+    case 9:
+    case 10:
+    case 11:
+    case 12:
+    case 13:
+    case 14:
+    case 15:
+    case 16:
+    case 17:
+    case 18:
+    case 19:
+    case 20:
+    case 21:
+    case 22:
+    case 23:
+    case 24:
+    case 25:
+    case 26:
+    case 27:
+    case 28:
+    case 29:
+    case 30:
+    case 32:
+    case 33:
+    case 34:
+    case 35:
+    case 36:
+    case 37:
+    case 38:
+    case 39:
+    case 40:
+    case 41:
+    case 42:
+    case 49:
+    case 50:
+    case 51:
+    case 52:
+    case 53:
+    case 54:
+    case 55:
+    case 56:
+    case 57:
+    case 58:
+    case 59:
+    case 60:
+    case 61:
+    case 62:
+    case 63:
+        return status_ok();
+    case 1: {
+        auto flags{in.read_u8()};
+        if (!flags || (*flags & ~3U) != 0U) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "command_tree: invalid float flags")};
+        }
+        node.number_flags = *flags;
+        if ((*flags & 1U) != 0U) {
+            auto value{in.read_f32()};
+            if (!value) {
+                return std::unexpected{std::move(value.error())};
+            }
+            node.number_min = *value;
+        }
+        if ((*flags & 2U) != 0U) {
+            auto value{in.read_f32()};
+            if (!value) {
+                return std::unexpected{std::move(value.error())};
+            }
+            node.number_max = *value;
+        }
+        return status_ok();
+    }
+    case 2: {
+        auto flags{in.read_u8()};
+        if (!flags || (*flags & ~3U) != 0U) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "command_tree: invalid double flags")};
+        }
+        node.number_flags = *flags;
+        if ((*flags & 1U) != 0U) {
+            auto value{in.read_f64()};
+            if (!value) {
+                return std::unexpected{std::move(value.error())};
+            }
+            node.number_min = *value;
+        }
+        if ((*flags & 2U) != 0U) {
+            auto value{in.read_f64()};
+            if (!value) {
+                return std::unexpected{std::move(value.error())};
+            }
+            node.number_max = *value;
+        }
+        return status_ok();
+    }
+    case 3: {
+        auto flags{in.read_u8()};
+        if (!flags || (*flags & ~3U) != 0U) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "command_tree: invalid integer flags")};
+        }
+        node.number_flags = *flags;
+        if ((*flags & 1U) != 0U) {
+            auto value{in.read_i32()};
+            if (!value) {
+                return std::unexpected{std::move(value.error())};
+            }
+            node.integer_min = *value;
+        }
+        if ((*flags & 2U) != 0U) {
+            auto value{in.read_i32()};
+            if (!value) {
+                return std::unexpected{std::move(value.error())};
+            }
+            node.integer_max = *value;
+        }
+        return status_ok();
+    }
+    case 4: {
+        auto flags{in.read_u8()};
+        if (!flags || (*flags & ~3U) != 0U) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "command_tree: invalid long flags")};
+        }
+        node.number_flags = *flags;
+        if ((*flags & 1U) != 0U) {
+            auto value{in.read_i64()};
+            if (!value) {
+                return std::unexpected{std::move(value.error())};
+            }
+            node.integer_min = *value;
+        }
+        if ((*flags & 2U) != 0U) {
+            auto value{in.read_i64()};
+            if (!value) {
+                return std::unexpected{std::move(value.error())};
+            }
+            node.integer_max = *value;
+        }
+        return status_ok();
+    }
+    case 5: {
+        auto type{in.read_varint()};
+        if (!type) {
+            return std::unexpected{std::move(type.error())};
+        }
+        node.string_type = *type;
+        return status_ok();
+    }
+    case 6:
+    case 31: {
+        auto flags{in.read_u8()};
+        if (!flags) {
+            return std::unexpected{std::move(flags.error())};
+        }
+        node.entity_flags = *flags;
+        return status_ok();
+    }
+    case 43: {
+        auto value{in.read_i32()};
+        if (!value) {
+            return std::unexpected{std::move(value.error())};
+        }
+        node.time_min = *value;
+        return status_ok();
+    }
+    case 44:
+    case 45:
+    case 46:
+    case 47:
+    case 48: {
+        auto key{in.read_identifier()};
+        if (!key) {
+            return std::unexpected{std::move(key.error())};
+        }
+        node.registry_key = std::move(*key);
+        return status_ok();
+    }
+    default:
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "command_tree: unknown argument parser id")};
+    }
+}
+
+} // namespace
+
+auto encode_command_tree(writer &out, const command_tree &value) -> status {
+    out.write_varint(static_cast<std::uint32_t>(value.nodes.size()));
+    for (const auto &node : value.nodes) {
+        if (node.flags & ~0x3FU) {
+            return std::unexpected{
+                make_error(error_code::invalid_argument,
+                           "command_tree: flags are out of range")};
+        }
+        out.write_u8(node.flags);
+        out.write_varint(static_cast<std::uint32_t>(node.children.size()));
+        for (const auto child : node.children) {
+            out.write_varint(child);
+        }
+        if ((node.flags & 8U) != 0U) {
+            out.write_varint(node.redirect);
+        }
+        const auto type{static_cast<std::uint8_t>(node.flags & 3U)};
+        if (type == 1U) {
+            if (auto written{out.write_string(node.name)}; !written) {
+                return written;
+            }
+        } else if (type == 2U) {
+            if (auto written{out.write_string(node.name)}; !written) {
+                return written;
+            }
+            out.write_varint(node.parser_id);
+            if (auto status{write_command_properties(out, node)}; !status) {
+                return status;
+            }
+            if ((node.flags & 16U) != 0U) {
+                if (!node.has_suggestions) {
+                    return std::unexpected{make_error(
+                        error_code::invalid_argument,
+                        "command_tree: suggestion flag without a value")};
+                }
+                if (auto written{out.write_identifier(node.suggestions)};
+                    !written) {
+                    return written;
+                }
+            }
+        }
+    }
+    out.write_varint(value.root_index);
+    return status_ok();
+}
+
+auto decode_command_tree(reader &in, command_tree &value) -> status {
+    auto count{in.read_varint()};
+    if (!count) {
+        return std::unexpected{std::move(count.error())};
+    }
+    if (*count > in.remaining()) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "command_tree: node list exceeds the payload")};
+    }
+    value.nodes.clear();
+    value.nodes.reserve(*count);
+    for (std::uint32_t index{0}; index < *count; ++index) {
+        command_node node{};
+        auto flags{in.read_u8()};
+        if (!flags || (*flags & ~0x3FU) != 0U) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "command_tree: flags are out of range")};
+        }
+        node.flags = *flags;
+        auto child_count{in.read_varint()};
+        if (!child_count) {
+            return std::unexpected{std::move(child_count.error())};
+        }
+        if (*child_count > in.remaining()) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "command_tree: child list exceeds the payload")};
+        }
+        node.children.reserve(*child_count);
+        for (std::uint32_t child_index{0}; child_index < *child_count;
+             ++child_index) {
+            auto child{in.read_varint()};
+            if (!child) {
+                return std::unexpected{std::move(child.error())};
+            }
+            node.children.push_back(*child);
+        }
+        if ((*flags & 8U) != 0U) {
+            auto redirect{in.read_varint()};
+            if (!redirect) {
+                return std::unexpected{std::move(redirect.error())};
+            }
+            node.redirect = *redirect;
+        }
+        const auto type{static_cast<std::uint8_t>(*flags & 3U)};
+        if (type == 1U) {
+            auto name{in.read_string()};
+            if (!name) {
+                return std::unexpected{std::move(name.error())};
+            }
+            node.name = std::move(*name);
+        } else if (type == 2U) {
+            auto name{in.read_string()};
+            auto parser{in.read_varint()};
+            if (!name || !parser) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "command_tree: truncated argument node")};
+            }
+            node.name = std::move(*name);
+            node.parser_id = *parser;
+            if (auto status{read_command_properties(in, node)}; !status) {
+                return status;
+            }
+            if ((*flags & 16U) != 0U) {
+                auto suggestions{in.read_identifier()};
+                if (!suggestions) {
+                    return std::unexpected{std::move(suggestions.error())};
+                }
+                node.has_suggestions = true;
+                node.suggestions = std::move(*suggestions);
+            }
+        } else if (type == 3U) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "command_tree: unknown node type")};
+        }
+        value.nodes.push_back(std::move(node));
+    }
+    auto root{in.read_varint()};
+    if (!root) {
+        return std::unexpected{std::move(root.error())};
+    }
+    if (*root >= value.nodes.size()) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "command_tree: root index is out of range")};
+    }
+    value.root_index = *root;
+    return status_ok();
+}
+
 auto encode_debug_subscription_update(writer &out,
                                       const debug_subscription_update &value)
     -> status {

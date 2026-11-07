@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: fcc4e99d514b6390
+// Schema hash: e32a57ccfdfa1ff7
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_WORLDGEN_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_WORLDGEN_ABI_H
