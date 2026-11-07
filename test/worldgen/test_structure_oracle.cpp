@@ -899,4 +899,92 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             expect(checked > 0);
             expect(mismatches == 0);
         };
+
+    "a real basement igloo start reproduces every piece"_test = [] {
+        if (std::getenv("REFRAIN_VANILLA_IGLOO_BASEMENT_REAL") == nullptr) {
+            return;
+        }
+        const char *region = std::getenv("REFRAIN_VANILLA_IGLOO_REGION");
+        const char *root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+        const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
+        if (region == nullptr || root == nullptr || templates_root == nullptr) {
+            return;
+        }
+        const jint chunk_x = 9;
+        const jint chunk_z = 2;
+        const jlong seed = 3;
+        refrain::worldgen::block_state_registry registry;
+        refrain::worldgen::structure::structure_template_manager manager{
+            templates_root, registry};
+        const auto start = refrain::worldgen::structure::igloo_start(
+            chunk_pos{.x = chunk_x, .z = chunk_z}, seed, manager);
+        const auto reference = read_chunk(region, chunk_x, chunk_z);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        const auto *structures = child(reference->as_compound(), "structures");
+        const auto *starts = structures == nullptr
+                                 ? nullptr
+                                 : child(structures->as_compound(), "starts");
+        const auto *igloo_start =
+            starts == nullptr ? nullptr
+                              : child(starts->as_compound(), "minecraft:igloo");
+        expect(igloo_start != nullptr);
+        if (igloo_start == nullptr) {
+            return;
+        }
+        const auto *children = child(igloo_start->as_compound(), "Children");
+        const auto *pieces =
+            children == nullptr ? nullptr : children->as_list();
+        expect(pieces != nullptr);
+        if (pieces == nullptr) {
+            return;
+        }
+        expect(start.pieces.size() == pieces->items.size());
+        if (start.pieces.size() != pieces->items.size()) {
+            return;
+        }
+        for (std::size_t index = 0; index < pieces->items.size(); ++index) {
+            const auto *expected = pieces->items[index].as_compound();
+            const auto &actual = start.pieces[index];
+            const auto *template_id = child(expected, "Template");
+            const auto *template_x = child(expected, "TPX");
+            const auto *template_y = child(expected, "TPY");
+            const auto *template_z = child(expected, "TPZ");
+            const auto *rotation = child(expected, "Rot");
+            const auto *bb = child(expected, "BB");
+            const auto values =
+                bb == nullptr ? std::nullopt : bb->as_int_array();
+            expect(template_id != nullptr && template_x != nullptr &&
+                   template_y != nullptr && template_z != nullptr &&
+                   rotation != nullptr);
+            if (template_id == nullptr || template_x == nullptr ||
+                template_y == nullptr || template_z == nullptr ||
+                rotation == nullptr || !values || values->size() != 6U) {
+                continue;
+            }
+            expect(template_id->as_string() == actual.template_id);
+            expect(template_x->as_int() == actual.template_origin.x);
+            expect(template_y->as_int() == actual.template_origin.y);
+            expect(template_z->as_int() == actual.template_origin.z);
+            expect(values->size() == 6U);
+            if (values->size() == 6U) {
+                expect(actual.bounds.min_x == (*values)[0]);
+                expect(actual.bounds.min_z == (*values)[2]);
+                expect(actual.bounds.max_x == (*values)[3]);
+                expect(actual.bounds.max_z == (*values)[5]);
+            }
+            const auto rot_text = rotation->as_string();
+            expect(rot_text.has_value());
+            if (rot_text) {
+                const jint expected_rotation =
+                    *rot_text == "CLOCKWISE_180"         ? 2
+                    : *rot_text == "CLOCKWISE_90"        ? 1
+                    : *rot_text == "COUNTERCLOCKWISE_90" ? 3
+                                                         : 0;
+                expect(actual.template_rotation == expected_rotation);
+            }
+        }
+    };
 };
