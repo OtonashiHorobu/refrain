@@ -803,25 +803,40 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 }
             }
 
-            if (const auto expected_ws =
-                    decode_expected_heightmap(*document, "WORLD_SURFACE")) {
+            constexpr std::array<std::pair<std::string_view, heightmap_kind>, 4>
+                maps{{
+                    {"WORLD_SURFACE", heightmap_kind::world_surface},
+                    {"OCEAN_FLOOR", heightmap_kind::ocean_floor},
+                    {"MOTION_BLOCKING", heightmap_kind::motion_blocking},
+                    {"MOTION_BLOCKING_NO_LEAVES",
+                     heightmap_kind::motion_blocking_no_leaves},
+                }};
+            for (const auto &[name, kind] : maps) {
+                const auto expected_map =
+                    decode_expected_heightmap(*document, name);
+                if (!expected_map) {
+                    continue;
+                }
                 for (jint z = 0; z < 16; ++z) {
                     for (jint x = 0; x < 16; ++x) {
-                        const auto actual_height = chunk.first_available(
-                            heightmap_kind::world_surface, x, z);
+                        const auto actual_height =
+                            chunk.first_available(kind, x, z);
                         const auto expected_height =
-                            (*expected_ws)[static_cast<std::size_t>(z * 16 +
-                                                                    x)] +
+                            (*expected_map)[static_cast<std::size_t>(z * 16 +
+                                                                     x)] +
                             oracle_min_y;
                         if (actual_height != expected_height) {
-                            if (map_mismatches < 4) {
-                                std::fprintf(stderr,
-                                             "heightmap %d,%d: got %d want "
-                                             "%d\n",
-                                             static_cast<int>(x),
-                                             static_cast<int>(z),
-                                             static_cast<int>(actual_height),
-                                             static_cast<int>(expected_height));
+                            if (map_mismatches < 12) {
+                                std::fprintf(
+                                    stderr,
+                                    "map %.*s chunk %d,%d %d,%d: got %d want "
+                                    "%d\n",
+                                    static_cast<int>(name.size()), name.data(),
+                                    static_cast<int>(chunk_x),
+                                    static_cast<int>(chunk_z),
+                                    static_cast<int>(x), static_cast<int>(z),
+                                    static_cast<int>(actual_height),
+                                    static_cast<int>(expected_height));
                             }
                             ++map_mismatches;
                         }
