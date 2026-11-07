@@ -546,6 +546,45 @@ def main() -> int:
             )
             + "\n"
         )
+        (feature_dir / "oak_tree.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:tree",
+                    "trunk_provider": {
+                        "id": "minecraft:oak_log",
+                        "properties": {"axis": "y"},
+                    },
+                    "trunk_placer": {
+                        "type": "minecraft:straight_trunk_placer",
+                        "base_height": 4,
+                        "height_rand_a": 2,
+                        "height_rand_b": 0,
+                    },
+                    "foliage_provider": {
+                        "id": "minecraft:oak_leaves",
+                        "properties": {
+                            "distance": "7",
+                            "persistent": "false",
+                            "waterlogged": "false",
+                        },
+                    },
+                    "foliage_placer": {
+                        "type": "minecraft:blob_foliage_placer",
+                        "radius": 2,
+                        "offset": 0,
+                        "height": 3,
+                    },
+                    "minimum_size": {
+                        "type": "minecraft:two_layers_feature_size"
+                    },
+                    "decorators": [],
+                    "ignore_vines": True,
+                    "below_trunk_provider": {"id": "minecraft:dirt"},
+                },
+                indent=2,
+            )
+            + "\n"
+        )
         (placed_dir / "moss_pile.json").write_text(
             json.dumps(
                 {
@@ -554,6 +593,21 @@ def main() -> int:
                         {
                             "type": "minecraft:fixed_placement",
                             "positions": [[8, 83, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "oak_tree.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:oak_tree",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 100, 8]],
                         }
                     ],
                 },

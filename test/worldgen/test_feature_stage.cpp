@@ -7,6 +7,7 @@
 #include <refrain/worldgen/feature/feature_data.hpp>
 #include <refrain/worldgen/feature/feature_registry.hpp>
 #include <refrain/worldgen/feature/feature_stage.hpp>
+#include <refrain/worldgen/feature/tree.hpp>
 
 #include <boost/ut.hpp>
 
@@ -37,7 +38,9 @@ using refrain::worldgen::feature::placed_feature_document;
 using refrain::worldgen::feature::placed_feature_runtime;
 using refrain::worldgen::feature::placement_context;
 using refrain::worldgen::feature::simple_block_feature;
+using refrain::worldgen::feature::simple_state;
 using refrain::worldgen::feature::spring_feature;
+using refrain::worldgen::feature::tree_feature;
 using refrain::worldgen::provider::generation_context;
 
 auto parse(std::string_view text) -> refrain::data::json::value {
@@ -126,6 +129,82 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
             }
             expect(placed_count == 2U);
         };
+};
+
+suite<"worldgen/tree"> tree_tests = [] {
+    "a straight tree places logs, leaves and the below-trunk block"_test = [] {
+        block_state_registry registry;
+        auto dirt = registry.intern("minecraft:dirt",
+                                    {.air = false,
+                                     .blocks_motion = true,
+                                     .blocks_motion_no_leaves = true});
+        auto log = registry.intern("minecraft:oak_log[axis=y]",
+                                   {.air = false,
+                                    .blocks_motion = true,
+                                    .blocks_motion_no_leaves = true});
+        auto leaves = registry.intern("minecraft:oak_leaves[distance=7,"
+                                      "persistent=false,waterlogged=false]",
+                                      {.air = false,
+                                       .blocks_motion = true,
+                                       .blocks_motion_no_leaves = true});
+        expect(dirt.has_value() && log.has_value() && leaves.has_value());
+        if (!dirt || !log || !leaves) {
+            return;
+        }
+        auto radius = provider::int_provider::decode(parse("2"));
+        auto offset = provider::int_provider::decode(parse("0"));
+        expect(radius.has_value() && offset.has_value());
+        if (!radius || !offset) {
+            return;
+        }
+        tree_feature tree{registry,
+                          simple_state(*log),
+                          simple_state(*leaves),
+                          simple_state(*dirt),
+                          4,
+                          2,
+                          0,
+                          std::move(*radius),
+                          std::move(*offset),
+                          3,
+                          1,
+                          0,
+                          1,
+                          false,
+                          0,
+                          true};
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 1};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 32,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        expect(tree.place(context, random, block_pos{.x = 8, .y = 10, .z = 8}));
+        expect(chunk.state_at(8, 9, 8) == *dirt);
+        std::size_t logs = 0;
+        std::size_t leaf_blocks = 0;
+        for (jint y = 0; y < 32; ++y) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint z = 0; z < 16; ++z) {
+                    const auto name = registry.name(chunk.state_at(x, y, z));
+                    logs += name.starts_with("minecraft:oak_log");
+                    leaf_blocks += name.starts_with("minecraft:oak_leaves");
+                }
+            }
+        }
+        expect(logs > 0U);
+        expect(leaf_blocks > 0U);
+    };
 };
 
 suite<"worldgen/state-provider"> state_provider_tests = [] {

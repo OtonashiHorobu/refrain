@@ -31,6 +31,31 @@ auto property_text(const data::json::value &value) -> result<std::string> {
 
 } // namespace
 
+auto state_property(std::string_view key, std::string_view property)
+    -> std::optional<std::string_view> {
+    const auto open = key.find('[');
+    const auto close = key.rfind(']');
+    if (open == std::string_view::npos || close == std::string_view::npos ||
+        close < open) {
+        return std::nullopt;
+    }
+    auto body = key.substr(open + 1, close - open - 1);
+    while (!body.empty()) {
+        const auto comma = body.find(',');
+        const auto entry = body.substr(0, comma);
+        const auto equals = entry.find('=');
+        if (equals != std::string_view::npos &&
+            entry.substr(0, equals) == property) {
+            return entry.substr(equals + 1);
+        }
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        body = body.substr(comma + 1);
+    }
+    return std::nullopt;
+}
+
 auto with_state_property(std::string_view key, std::string_view property,
                          std::string_view value) -> std::string {
     const auto open = key.find('[');
