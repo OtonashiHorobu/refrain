@@ -137,6 +137,23 @@ suite<"worldgen/structure-start"> structure_start_tests = [] {
         start.add_reference();
         expect(!start.can_add_reference());
         expect(start.references == 1);
+
+        std::vector<structure::structure_start> starts;
+        starts.push_back(start);
+        structure::structure_start far{.structure = "minecraft:far",
+                                       .chunk = {.x = 20, .z = 20},
+                                       .max_references = 1,
+                                       .bounds = {.min_x = 3000,
+                                                  .min_y = 0,
+                                                  .min_z = 3000,
+                                                  .max_x = 3000,
+                                                  .max_y = 0,
+                                                  .max_z = 3000}};
+        starts.push_back(std::move(far));
+        const auto nearby =
+            structure::starts_for_chunk(starts, chunk_pos{.x = 0, .z = 1}, 16);
+        expect(nearby.size() == 1U);
+        expect(nearby[0]->structure == "minecraft:test");
     };
 };
 

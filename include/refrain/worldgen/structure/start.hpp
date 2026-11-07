@@ -50,4 +50,10 @@ struct structure_start {
     }
 };
 
+/// The starts whose pieces can reach `chunk` within `radius` blocks; the
+/// target chunk references these during the starts stage.
+[[nodiscard]] auto starts_for_chunk(const std::vector<structure_start> &starts,
+                                    const chunk_pos &chunk, jint radius)
+    -> std::vector<const structure_start *>;
+
 } // namespace refrain::worldgen::structure
