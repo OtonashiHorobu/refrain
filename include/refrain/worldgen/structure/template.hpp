@@ -186,13 +186,13 @@ class structure_template_manager {
                                const block_state_registry &states)
         : root_{std::move(root)}, states_{&states} {}
 
-    [[nodiscard]] auto get_or_create(std::string_view id)
+    [[nodiscard]] auto get_or_create(std::string_view id) const
         -> const structure_template &;
 
   private:
     std::string root_{};
     const block_state_registry *states_{nullptr};
-    std::unordered_map<std::string, structure_template> cache_{};
+    mutable std::unordered_map<std::string, structure_template> cache_{};
 };
 
 /// `StructureTemplate.load`: resolves the palette against `states` (unknown or

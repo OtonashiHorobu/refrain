@@ -520,6 +520,36 @@ suite<"worldgen/template"> template_tests = [] {
         std::filesystem::remove_all(directory);
     };
 
+    "the lowercase palette keys of the current format resolve"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(stone.has_value());
+        if (!stone) {
+            return;
+        }
+        data::nbt::compound root;
+        root["size"] = ints({1, 1, 1});
+        auto palette = data::nbt::make_list(data::nbt::tag_type::compound);
+        data::nbt::compound entry;
+        entry["id"] = data::nbt::value{std::string{"minecraft:stone"}};
+        (void)palette.push(data::nbt::value{entry});
+        root["palette"] = std::move(palette);
+        auto blocks = data::nbt::make_list(data::nbt::tag_type::compound);
+        (void)blocks.push(data::nbt::value{block_entry({0, 0, 0}, 0)});
+        root["blocks"] = std::move(blocks);
+        const auto loaded =
+            load_structure_template(registry, data::nbt::value{root});
+        expect(loaded.has_value());
+        if (!loaded || loaded->palettes.empty() ||
+            loaded->palettes.front().empty()) {
+            return;
+        }
+        expect(loaded->palettes.front().front().state == *stone);
+    };
+
     "unknown palette names and indices resolve to air"_test = [] {
         block_state_registry registry;
         data::nbt::compound root;

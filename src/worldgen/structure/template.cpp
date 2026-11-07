@@ -95,10 +95,13 @@ auto child_list(const data::nbt::compound *entries, std::string_view key)
 }
 
 auto block_state_key(const data::nbt::compound &entry) -> result<std::string> {
-    const auto *name_value = child(&entry, "Name");
+    const auto *name_value = child(&entry, "id");
     if (name_value == nullptr) {
-        return std::unexpected{make_error(error_code::parse_error,
-                                          "template palette has no Name")};
+        name_value = child(&entry, "Name");
+    }
+    if (name_value == nullptr) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "template palette has no id")};
     }
     const auto name = name_value->as_string();
     if (!name) {
@@ -106,7 +109,10 @@ auto block_state_key(const data::nbt::compound &entry) -> result<std::string> {
                                           "template palette Name is invalid")};
     }
     std::string key{*name};
-    const auto *properties = child(&entry, "Properties");
+    const auto *properties = child(&entry, "properties");
+    if (properties == nullptr) {
+        properties = child(&entry, "Properties");
+    }
     if (properties == nullptr) {
         return key;
     }
@@ -458,7 +464,7 @@ auto load_structure_template(const block_state_registry &states,
     return out;
 }
 
-auto structure_template_manager::get_or_create(std::string_view id)
+auto structure_template_manager::get_or_create(std::string_view id) const
     -> const structure_template & {
     const std::string key{id};
     if (const auto found = cache_.find(key); found != cache_.end()) {
