@@ -185,6 +185,60 @@ auto parse_server_properties(std::string_view text)
                                            "enable-status '{}'",
                                            line_number, value))};
             }
+        } else if (key == "server-ip") {
+            properties.server_ip = value;
+        } else if (key == "server-port") {
+            if (!parse_int(value, properties.server_port) ||
+                properties.server_port < 0 || properties.server_port > 65535) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               fmt::format("server.properties line {}: invalid "
+                                           "server-port '{}'",
+                                           line_number, value))};
+            }
+        } else if (key == "network-compression-threshold") {
+            if (!parse_int(value, properties.network_compression_threshold) ||
+                properties.network_compression_threshold < -1) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               fmt::format("server.properties line {}: invalid "
+                                           "network-compression-threshold '{}'",
+                                           line_number, value))};
+            }
+        } else if (key == "enforce-secure-profile") {
+            if (!parse_bool(value, properties.enforce_secure_profile)) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               fmt::format("server.properties line {}: invalid "
+                                           "enforce-secure-profile '{}'",
+                                           line_number, value))};
+            }
+        } else if (key == "prevent-proxy-connections") {
+            if (!parse_bool(value, properties.prevent_proxy_connections)) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               fmt::format("server.properties line {}: invalid "
+                                           "prevent-proxy-connections '{}'",
+                                           line_number, value))};
+            }
+        } else if (key == "rate-limit") {
+            if (!parse_int(value, properties.rate_limit) ||
+                properties.rate_limit < 0) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               fmt::format("server.properties line {}: invalid "
+                                           "rate-limit '{}'",
+                                           line_number, value))};
+            }
+        } else if (key == "player-idle-timeout") {
+            if (!parse_int(value, properties.player_idle_timeout) ||
+                properties.player_idle_timeout < 0) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               fmt::format("server.properties line {}: invalid "
+                                           "player-idle-timeout '{}'",
+                                           line_number, value))};
+            }
         }
     }
     return properties;

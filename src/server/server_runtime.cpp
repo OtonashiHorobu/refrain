@@ -10,7 +10,11 @@
 #include <refrain/core/schedule.hpp>
 #include <refrain/core/time.hpp>
 #include <refrain/data/content_maintenance.hpp>
+#include <refrain/data/vanilla.hpp>
 #include <refrain/mod/rfmod.hpp>
+#include <refrain/net/registry.hpp>
+#include <refrain/net/server.hpp>
+#include <refrain/server/chunk_packet.hpp>
 #include <refrain/server/server_properties.hpp>
 #include <refrain/sim/replay.hpp>
 #include <refrain/sim/world.hpp>
@@ -869,6 +873,108 @@ auto run_server(const server_run_options &options) -> int {
     refrain::log::info("spawn: {} chunks {} tickets", store->loaded_chunks(),
                        store->ticket_count(spawn_chunk));
 
+    std::optional<refrain::data::vanilla_tables> tables{};
+    auto table_bytes{
+        refrain::core::io::read_file("content/vanilla/26.3/tables.rvtb")};
+    if (!table_bytes) {
+        refrain::log::warn("network: vanilla tables unavailable: {}",
+                           table_bytes.error().message);
+    } else {
+        auto opened{refrain::data::vanilla_tables::open(*table_bytes)};
+        if (!opened) {
+            refrain::log::warn("network: vanilla tables invalid: {}",
+                               opened.error().message);
+        } else {
+            tables = std::move(*opened);
+        }
+    }
+    std::optional<refrain::net::registry_catalog> registries{};
+    auto loaded_registries{refrain::net::registry_catalog::load(
+        "content/vanilla/26.3/protocol_registry.json")};
+    if (!loaded_registries) {
+        refrain::log::warn("network: registry catalog unavailable: {}",
+                           loaded_registries.error().message);
+    } else {
+        registries = std::move(*loaded_registries);
+    }
+    std::vector<std::vector<std::byte>> spawn_chunks{};
+    if (tables && registries) {
+        refrain::server::chunk_packet_source source{
+            .world = &*store,
+            .tables = &*tables,
+            .registries = &*registries,
+        };
+        auto built{refrain::server::build_spawn_chunks(source, spawn_chunk, 3)};
+        if (!built) {
+            refrain::log::error("network: spawn chunks failed: {}",
+                                built.error().message);
+        } else {
+            spawn_chunks = std::move(*built);
+            refrain::log::info("network: encoded {} spawn chunk(s)",
+                               spawn_chunks.size());
+        }
+    }
+    refrain::net::server_config network_config{};
+    network_config.bind.host = properties.server_ip;
+    network_config.bind.port =
+        static_cast<std::uint16_t>(properties.server_port);
+    network_config.compression_threshold =
+        properties.network_compression_threshold;
+    network_config.status.description = properties.motd;
+    network_config.status.max_players = properties.max_players;
+    network_config.status.online_players = 0;
+    network_config.status.enforces_secure_chat =
+        properties.enforce_secure_profile;
+    network_config.status.replies_to_status = properties.enable_status;
+    network_config.view_distance = properties.view_distance;
+    network_config.simulation_distance = properties.simulation_distance;
+    network_config.online_mode = properties.online_mode;
+    network_config.seed = level->seed;
+    network_config.spawn_x = static_cast<double>(level->spawn_x) + 0.5;
+    network_config.spawn_y = static_cast<double>(level->spawn_y);
+    network_config.spawn_z = static_cast<double>(level->spawn_z) + 0.5;
+    network_config.registry_catalog_path =
+        "content/vanilla/26.3/protocol_registry.json";
+    network_config.spawn_chunks =
+        std::make_shared<const std::vector<std::vector<std::byte>>>(
+            std::move(spawn_chunks));
+    network_config.break_block =
+        [world = &*store](std::int32_t x, std::int32_t y, std::int32_t z) {
+            if (y < std::numeric_limits<std::int16_t>::min() ||
+                y > std::numeric_limits<std::int16_t>::max()) {
+                return false;
+            }
+            return world
+                ->set_block(
+                    refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z},
+                    refrain::sim::air_block)
+                .has_value();
+        };
+    network_config.place_block =
+        [world = &*store](std::int32_t x, std::int32_t y, std::int32_t z) {
+            if (y < std::numeric_limits<std::int16_t>::min() ||
+                y > std::numeric_limits<std::int16_t>::max()) {
+                return false;
+            }
+            const auto stone{
+                world->registry().intern(std::string{"minecraft:stone"})};
+            return world
+                ->set_block(
+                    refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z},
+                    stone)
+                .has_value();
+        };
+    auto network{refrain::net::server::start(network_config)};
+    std::unique_ptr<refrain::net::server> listener{};
+    if (!network) {
+        refrain::log::error("network: listener failed: {}",
+                            network.error().message);
+    } else {
+        listener = std::move(*network);
+        refrain::log::info("network: listening on {}:{}", properties.server_ip,
+                           listener->local_port());
+    }
+
     snapshot_writer writer{*store};
     // One background deleter, only for an applying GC policy. `--content-gc
     // off|dry-run` must never delete: no worker is started and a queue left by
@@ -1025,6 +1131,9 @@ auto run_server(const server_run_options &options) -> int {
             ++replay_index;
         }
         scheduler.run(refrain::core::schedule::phase::pre_tick, ticks_run);
+        if (listener) {
+            listener->tick();
+        }
         store->tick();
         ++ticks_run;
         scheduler.run(refrain::core::schedule::phase::post_tick, ticks_run);
@@ -1051,6 +1160,12 @@ auto run_server(const server_run_options &options) -> int {
     state->stop.store(true, std::memory_order_release);
     if (watchdog.joinable()) {
         watchdog.join();
+    }
+    // Stop accepting connections before the world teardown so no handler can
+    // observe a half-destroyed store.
+    if (listener) {
+        listener->stop();
+        listener.reset();
     }
     // Tasks borrow the store/writer/GC worker; drop them before teardown.
     scheduler.clear();

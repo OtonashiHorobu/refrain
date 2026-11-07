@@ -29,6 +29,7 @@
 #include <refrain/mod/manifest.hpp>
 #include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
+#include <refrain/net/ping.hpp>
 #include <refrain/script/wasm.hpp>
 
 #include <schema/schema.hpp>
@@ -41,6 +42,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <compare>
 #include <cstddef>
@@ -447,6 +449,18 @@ int main(int argc, char **argv) {
         ->add_option("--handler", crash_handler,
                      "crashpad_handler executable path")
         ->required();
+    std::string protocol_target{};
+    int protocol_timeout_ms{5000};
+    auto *protocol_cmd =
+        app.add_subcommand("protocol", "Protocol 777 client tools");
+    auto *protocol_ping_cmd = protocol_cmd->add_subcommand(
+        "ping", "Status-list ping (handshake, status, pong)");
+    protocol_ping_cmd
+        ->add_option("target", protocol_target, "host:port (required)")
+        ->required();
+    protocol_ping_cmd->add_option("--timeout-ms", protocol_timeout_ms,
+                                  "Whole exchange timeout in milliseconds");
+
     auto *wasm_cmd = app.add_subcommand("wasm", "WASM runtime smoke tests");
     auto *wasm_smoke_cmd =
         wasm_cmd->add_subcommand("smoke", "Compile and run a WAT module");
@@ -675,6 +689,39 @@ int main(int argc, char **argv) {
     }
     if (crash_smoke_cmd->parsed()) {
         return app_services::run_crash_smoke(crash_out, crash_handler);
+    }
+    if (protocol_ping_cmd->parsed()) {
+        const auto separator{protocol_target.rfind(':')};
+        if (separator == std::string::npos || separator == 0 ||
+            separator + 1 >= protocol_target.size()) {
+            fmt::print(stderr, "protocol ping: expected host:port\n");
+            return 1;
+        }
+        refrain::net::endpoint endpoint{};
+        endpoint.host = protocol_target.substr(0, separator);
+        std::uint16_t port{0};
+        const auto port_text{protocol_target.substr(separator + 1)};
+        const auto parsed{std::from_chars(
+            port_text.data(), port_text.data() + port_text.size(), port)};
+        if (parsed.ec != std::errc{} ||
+            parsed.ptr != port_text.data() + port_text.size()) {
+            fmt::print(stderr, "protocol ping: invalid port '{}'\n", port_text);
+            return 1;
+        }
+        endpoint.port = port;
+        auto result{refrain::net::ping(
+            endpoint, std::chrono::milliseconds{protocol_timeout_ms})};
+        if (!result) {
+            fmt::print(stderr, "protocol ping: {}\n", result.error().message);
+            return 1;
+        }
+        std::cout << "protocol: " << result->status.protocol << '\n';
+        std::cout << "version: " << result->status.version_name << '\n';
+        std::cout << "motd: " << result->status.description << '\n';
+        std::cout << "players: " << result->status.online_players << '/'
+                  << result->status.max_players << '\n';
+        std::cout << "latency_ms: " << result->latency.count() << '\n';
+        return 0;
     }
 
     std::cout << app.help();

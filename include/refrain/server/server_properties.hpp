@@ -26,6 +26,13 @@ struct server_properties {
     bool online_mode{true};
     bool allow_nether{true};
     bool enable_status{true};
+    std::string server_ip{"0.0.0.0"};
+    std::int32_t server_port{25565};
+    std::int32_t network_compression_threshold{256};
+    bool enforce_secure_profile{true};
+    bool prevent_proxy_connections{false};
+    std::int32_t rate_limit{0};
+    std::int32_t player_idle_timeout{0};
 };
 
 /// Parse `server.properties` text.
