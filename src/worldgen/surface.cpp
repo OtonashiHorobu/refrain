@@ -215,6 +215,10 @@ auto material_context::random_factory(std::string_view name)
     return providers_.random_factory(name);
 }
 
+auto material_context::cold_enough_to_snow(std::string_view biome) -> bool {
+    return providers_.cold_enough_to_snow(biome, block_x_, block_y_, block_z_);
+}
+
 auto material_context::noise_sampler(std::string_view id, bool is_3d)
     -> result<std::function<double()>> {
     std::string key{id};
@@ -530,7 +534,9 @@ auto rule_compiler::compile_condition(const condition &value)
             return context->block_y() >= context->min_surface_level();
         }};
     case temperature:
-        return std::unexpected{fail("temperature condition is not supported")};
+        return condition_evaluator{[context = &context_]() {
+            return context->cold_enough_to_snow(context->biome());
+        }};
     case not_: {
         if (value.target == nullptr) {
             return std::unexpected{fail("not condition has no target")};

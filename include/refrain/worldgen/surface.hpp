@@ -92,6 +92,9 @@ struct material_providers {
     std::function<result<density::sampler_ptr>(std::string_view)> density{};
     std::function<positional_random_factory &(std::string_view)>
         random_factory{};
+    /// `Biome.coldEnoughToSnow(pos, seaLevel)` for the current biome.
+    std::function<bool(std::string_view, jint, jint, jint)>
+        cold_enough_to_snow{};
     const std::set<std::string> *possible_biomes{nullptr};
 };
 
@@ -160,6 +163,7 @@ class material_context {
         -> jint;
     [[nodiscard]] auto random_factory(std::string_view name)
         -> positional_random_factory &;
+    [[nodiscard]] auto cold_enough_to_snow(std::string_view biome) -> bool;
 
     /// Java `getNoiseSampler`: the returned callable reads the current position
     /// once per update.
