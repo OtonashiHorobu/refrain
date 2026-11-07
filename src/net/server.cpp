@@ -150,14 +150,13 @@ inline constexpr std::uint16_t raw_system_chat_id = 124;
            (static_cast<std::int64_t>(y) & 0xFFF);
 }
 
-[[nodiscard]] auto bytes_of(std::string_view text) -> std::vector<std::byte> {
-    std::vector<std::byte> result;
-    result.reserve(text.size());
-    for (const char character : text) {
-        result.push_back(
-            static_cast<std::byte>(static_cast<unsigned char>(character)));
-    }
-    return result;
+[[nodiscard]] auto brand_payload() -> std::vector<std::byte> {
+    constexpr std::string_view name{"refrain"};
+    std::vector<std::byte> bytes;
+    writer out{bytes};
+    out.write_varint(static_cast<std::uint32_t>(name.size()));
+    out.write_bytes(std::as_bytes(std::span{name}));
+    return bytes;
 }
 
 /// Encode one generated packet with its wire id in front. The body is what the
@@ -861,7 +860,7 @@ auto server::impl::build_configuration() -> status {
     };
     {
         config_cb::custom_payload packet{.channel = brand_channel(),
-                                         .data = bytes_of("refrain")};
+                                         .data = brand_payload()};
         auto built{encode_packet(config_cb::custom_payload::packet_id, packet,
                                  config_cb::encode_custom_payload)};
         if (!built) {
