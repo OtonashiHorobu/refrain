@@ -724,7 +724,7 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
         expect((*values)[4] - (*values)[1] == 14);
     };
 
-    "the igloo set selects the same chunks across a generated region"_test =
+    "a structure set selects the same chunks across a generated region"_test =
         [] {
             if (std::getenv("REFRAIN_VANILLA_IGLOO_GRID") == nullptr) {
                 return;
@@ -733,9 +733,24 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             const char *root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
             const char *templates_root =
                 std::getenv("REFRAIN_VANILLA_STRUCTURES");
-            if (region == nullptr || root == nullptr ||
-                templates_root == nullptr) {
+            if (region == nullptr || root == nullptr) {
                 return;
+            }
+            std::string structure_id = "minecraft:igloo";
+            if (const char *value =
+                    std::getenv("REFRAIN_VANILLA_GRID_STRUCTURE");
+                value != nullptr) {
+                structure_id = value;
+            }
+            std::string biome_name = "minecraft:snowy_taiga";
+            if (const char *value = std::getenv("REFRAIN_VANILLA_GRID_BIOME");
+                value != nullptr) {
+                biome_name = value;
+            }
+            jlong seed = 1;
+            if (const char *value = std::getenv("REFRAIN_VANILLA_GRID_SEED");
+                value != nullptr) {
+                seed = std::strtoll(value, nullptr, 10);
             }
             const auto data =
                 refrain::worldgen::structure::load_structure_data(root);
@@ -744,23 +759,27 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
                 return;
             }
             refrain::worldgen::block_state_registry registry;
-            refrain::worldgen::structure::structure_template_manager manager{
-                templates_root, registry};
+            std::optional<
+                refrain::worldgen::structure::structure_template_manager>
+                manager;
+            if (templates_root != nullptr) {
+                manager.emplace(templates_root, registry);
+            }
             const refrain::worldgen::structure::structure_start_context context{
-                .seed = 1,
+                .seed = seed,
                 .data = &*data,
                 .min_y = -64,
                 .world_height = 384,
                 .sea_level = 63,
                 .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
-                .biome_name = [](std::uint16_t) -> std::string_view {
-                    return "minecraft:snowy_taiga";
+                .biome_name = [&biome_name](std::uint16_t) -> std::string_view {
+                    return biome_name;
                 },
                 .height_at =
                     [](jint, jint, refrain::worldgen::heightmap_kind) {
                         return jint{90};
                     },
-                .templates = &manager,
+                .templates = manager ? &*manager : nullptr,
             };
             std::vector<refrain::worldgen::structure::structure_start> starts;
             for (jint chunk_x = -12; chunk_x <= 19; ++chunk_x) {
@@ -787,40 +806,36 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
                         structures == nullptr
                             ? nullptr
                             : child(structures->as_compound(), "starts");
-                    const auto *igloo = starts_value == nullptr
-                                            ? nullptr
-                                            : child(starts_value->as_compound(),
-                                                    "minecraft:igloo");
-                    const auto *our = static_cast<
-                        const refrain::worldgen::structure::structure_start *>(
-                        nullptr);
-                    (void)our;
+                    const auto *expected_start =
+                        starts_value == nullptr
+                            ? nullptr
+                            : child(starts_value->as_compound(), structure_id);
                     const refrain::worldgen::structure::structure_start *mine =
                         nullptr;
                     for (const auto &start : starts) {
-                        if (start.structure == "minecraft:igloo" &&
+                        if (start.structure == structure_id &&
                             start.chunk.x == chunk_x &&
                             start.chunk.z == chunk_z) {
                             mine = &start;
                         }
                     }
-                    const bool expected = igloo != nullptr;
+                    const bool expected = expected_start != nullptr;
                     if (expected != (mine != nullptr)) {
                         ++mismatches;
                         if (mismatches < 6) {
-                            std::fprintf(stderr,
-                                         "igloo presence mismatch chunk "
-                                         "(%d,%d): expected=%d ours=%d\n",
-                                         static_cast<int>(chunk_x),
-                                         static_cast<int>(chunk_z),
-                                         expected ? 1 : 0,
-                                         mine != nullptr ? 1 : 0);
+                            std::fprintf(
+                                stderr,
+                                "%s presence mismatch chunk (%d,%d): "
+                                "expected=%d ours=%d\n",
+                                structure_id.c_str(), static_cast<int>(chunk_x),
+                                static_cast<int>(chunk_z), expected ? 1 : 0,
+                                mine != nullptr ? 1 : 0);
                         }
                         continue;
                     }
                     if (expected && mine != nullptr) {
                         const auto *children =
-                            child(igloo->as_compound(), "Children");
+                            child(expected_start->as_compound(), "Children");
                         const auto *pieces =
                             children == nullptr ? nullptr : children->as_list();
                         if (pieces == nullptr || pieces->items.empty() ||
@@ -830,23 +845,56 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
                         }
                         const auto *expected_piece =
                             pieces->items.front().as_compound();
+                        const auto &actual = mine->pieces.front();
+                        const auto *bb = child(expected_piece, "BB");
+                        const auto values =
+                            bb == nullptr ? std::nullopt : bb->as_int_array();
+                        const auto *orientation = child(expected_piece, "O");
+                        const auto orientation_value =
+                            orientation == nullptr ? std::nullopt
+                                                   : orientation->as_int();
+                        bool piece_mismatch = false;
+                        if (!values || values->size() != 6U) {
+                            piece_mismatch = true;
+                        } else {
+                            piece_mismatch =
+                                actual.bounds.min_x != (*values)[0] ||
+                                actual.bounds.min_z != (*values)[2] ||
+                                actual.bounds.max_x != (*values)[3] ||
+                                actual.bounds.max_z != (*values)[5];
+                        }
+                        if (!orientation_value ||
+                            actual.orientation != *orientation_value) {
+                            piece_mismatch = true;
+                        }
                         const auto *template_id =
                             child(expected_piece, "Template");
-                        const auto *template_x = child(expected_piece, "TPX");
-                        const auto *template_y = child(expected_piece, "TPY");
-                        const auto *template_z = child(expected_piece, "TPZ");
-                        const auto &actual = mine->pieces.front();
-                        if (template_id == nullptr || template_x == nullptr ||
-                            template_y == nullptr || template_z == nullptr ||
-                            template_id->as_string() != actual.template_id ||
-                            template_x->as_int() != actual.template_origin.x ||
-                            template_y->as_int() != actual.template_origin.y ||
-                            template_z->as_int() != actual.template_origin.z) {
+                        if (template_id != nullptr) {
+                            const auto *template_x =
+                                child(expected_piece, "TPX");
+                            const auto *template_y =
+                                child(expected_piece, "TPY");
+                            const auto *template_z =
+                                child(expected_piece, "TPZ");
+                            const auto template_text = template_id->as_string();
+                            if (!template_text ||
+                                *template_text != actual.template_id ||
+                                !template_x || !template_y || !template_z ||
+                                template_x->as_int() !=
+                                    actual.template_origin.x ||
+                                template_y->as_int() !=
+                                    actual.template_origin.y ||
+                                template_z->as_int() !=
+                                    actual.template_origin.z) {
+                                piece_mismatch = true;
+                            }
+                        }
+                        if (piece_mismatch) {
                             ++mismatches;
                             if (mismatches < 6) {
                                 std::fprintf(
-                                    stderr,
-                                    "igloo piece mismatch chunk (%d,%d)\n",
+                                    stderr, "%s piece mismatch chunk (%d,%d)\n",
+                                    structure_id.c_str(),
                                     static_cast<int>(chunk_x),
                                     static_cast<int>(chunk_z));
                             }
@@ -856,24 +904,23 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
                         structures == nullptr
                             ? nullptr
                             : child(structures->as_compound(), "References");
-                    const auto *igloo_reference =
-                        references == nullptr ? nullptr
-                                              : child(references->as_compound(),
-                                                      "minecraft:igloo");
+                    const auto *structure_reference =
+                        references == nullptr
+                            ? nullptr
+                            : child(references->as_compound(), structure_id);
                     jint expected_references = 0;
-                    if (igloo_reference != nullptr) {
-                        const auto packed = igloo_reference->as_long_array();
-                        if (!packed || packed->empty()) {
+                    if (structure_reference != nullptr) {
+                        const auto packed =
+                            structure_reference->as_long_array();
+                        if (!packed) {
                             ++mismatches;
                             continue;
                         }
-                        expected_references = static_cast<jint>((*packed)[0]);
+                        expected_references = static_cast<jint>(packed->size());
                     }
                     jint actual_references = 0;
                     for (const auto &start : starts) {
-                        if (start.structure == "minecraft:igloo" &&
-                            (start.chunk.x != chunk_x ||
-                             start.chunk.z != chunk_z) &&
+                        if (start.structure == structure_id &&
                             start.bounds.intersects_chunk(
                                 chunk_pos{.x = chunk_x, .z = chunk_z})) {
                             ++actual_references;
@@ -883,8 +930,9 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
                         ++mismatches;
                         if (mismatches < 6) {
                             std::fprintf(stderr,
-                                         "igloo reference mismatch chunk "
-                                         "(%d,%d): expected=%d ours=%d\n",
+                                         "%s reference mismatch chunk (%d,%d): "
+                                         "expected=%d ours=%d\n",
+                                         structure_id.c_str(),
                                          static_cast<int>(chunk_x),
                                          static_cast<int>(chunk_z),
                                          static_cast<int>(expected_references),
@@ -894,8 +942,8 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
                     ++checked;
                 }
             }
-            std::fprintf(stderr, "igloo grid checked %d chunks\n",
-                         static_cast<int>(checked));
+            std::fprintf(stderr, "%s grid checked %d chunks\n",
+                         structure_id.c_str(), static_cast<int>(checked));
             expect(checked > 0);
             expect(mismatches == 0);
         };
