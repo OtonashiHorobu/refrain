@@ -1055,6 +1055,22 @@ auto piece_local_to_world(const structure_piece_record &piece, jint base_y,
     return block_pos{.x = wx, .y = base_y + local_y, .z = wz};
 }
 
+void place_structure_piece(const structure_place_context &context,
+                           const structure_piece_record &piece,
+                           worldgen_random &random) {
+    if (piece.type == "minecraft:btp") {
+        place_buried_treasure(context, piece, random);
+    } else if (piece.type == "minecraft:igl") {
+        place_igloo_piece(context, piece, random);
+    } else if (piece.type == "minecraft:tesh") {
+        place_swamp_hut(context, piece);
+    } else if (piece.type == "minecraft:tedp") {
+        place_desert_pyramid(context, piece, random);
+    } else if (piece.type == "minecraft:shipwreck") {
+        place_shipwreck_piece(context, piece, random);
+    }
+}
+
 void place_structures(proto_chunk &chunk,
                       const structure_place_context &context,
                       std::string_view step, worldgen_random &random) {
@@ -1065,17 +1081,7 @@ void place_structures(proto_chunk &chunk,
     const auto place_pieces =
         [&](const ::refrain::worldgen::structure_start &start) {
             for (const auto &piece : start.pieces) {
-                if (piece.type == "minecraft:btp") {
-                    place_buried_treasure(context, piece, random);
-                } else if (piece.type == "minecraft:igl") {
-                    place_igloo_piece(context, piece, random);
-                } else if (piece.type == "minecraft:tesh") {
-                    place_swamp_hut(context, piece);
-                } else if (piece.type == "minecraft:tedp") {
-                    place_desert_pyramid(context, piece, random);
-                } else if (piece.type == "minecraft:shipwreck") {
-                    place_shipwreck_piece(context, piece, random);
-                }
+                place_structure_piece(context, piece, random);
             }
         };
     // The chunk owns its starts; references only point at starts owned by
