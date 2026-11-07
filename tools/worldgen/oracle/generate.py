@@ -449,6 +449,8 @@ def main() -> int:
                 "oracle:ice_spike",
                 "oracle:dripstone_cluster",
                 "oracle:fossil",
+                "oracle:void_start_platform",
+                "oracle:end_platform",
             ]
         )
         (biome_dir / "feature.json").write_text(
@@ -596,6 +598,45 @@ def main() -> int:
                         {
                             "type": "minecraft:fixed_placement",
                             "positions": [[8, 63, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (feature_dir / "void_start_platform.json").write_text(
+            json.dumps(
+                {"type": "minecraft:void_start_platform"}, indent=2
+            )
+            + "\n"
+        )
+        (placed_dir / "void_start_platform.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:void_start_platform",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 50, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (feature_dir / "end_platform.json").write_text(
+            json.dumps({"type": "minecraft:end_platform"}, indent=2) + "\n"
+        )
+        (placed_dir / "end_platform.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:end_platform",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 80, 8]],
                         }
                     ],
                 },
