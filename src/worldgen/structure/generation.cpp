@@ -98,6 +98,108 @@ auto igloo_start(const chunk_pos &chunk, jlong seed,
     return start;
 }
 
+auto shipwreck_start(
+    const chunk_pos &chunk, jlong seed, structure_template_manager &templates,
+    bool beached,
+    const std::function<jint(jint, jint, heightmap_kind)> &height_at)
+    -> structure_start {
+    static constexpr std::array<const char *, 11> beached_ids{
+        "minecraft:shipwreck/with_mast",
+        "minecraft:shipwreck/sideways_full",
+        "minecraft:shipwreck/sideways_fronthalf",
+        "minecraft:shipwreck/sideways_backhalf",
+        "minecraft:shipwreck/rightsideup_full",
+        "minecraft:shipwreck/rightsideup_fronthalf",
+        "minecraft:shipwreck/rightsideup_backhalf",
+        "minecraft:shipwreck/with_mast_degraded",
+        "minecraft:shipwreck/rightsideup_full_degraded",
+        "minecraft:shipwreck/rightsideup_fronthalf_degraded",
+        "minecraft:shipwreck/rightsideup_backhalf_degraded"};
+    static constexpr std::array<const char *, 20> ocean_ids{
+        "minecraft:shipwreck/with_mast",
+        "minecraft:shipwreck/upsidedown_full",
+        "minecraft:shipwreck/upsidedown_fronthalf",
+        "minecraft:shipwreck/upsidedown_backhalf",
+        "minecraft:shipwreck/sideways_full",
+        "minecraft:shipwreck/sideways_fronthalf",
+        "minecraft:shipwreck/sideways_backhalf",
+        "minecraft:shipwreck/rightsideup_full",
+        "minecraft:shipwreck/rightsideup_fronthalf",
+        "minecraft:shipwreck/rightsideup_backhalf",
+        "minecraft:shipwreck/with_mast_degraded",
+        "minecraft:shipwreck/upsidedown_full_degraded",
+        "minecraft:shipwreck/upsidedown_fronthalf_degraded",
+        "minecraft:shipwreck/upsidedown_backhalf_degraded",
+        "minecraft:shipwreck/sideways_full_degraded",
+        "minecraft:shipwreck/sideways_fronthalf_degraded",
+        "minecraft:shipwreck/sideways_backhalf_degraded",
+        "minecraft:shipwreck/rightsideup_full_degraded",
+        "minecraft:shipwreck/rightsideup_fronthalf_degraded",
+        "minecraft:shipwreck/rightsideup_backhalf_degraded"};
+    worldgen_random random{std::make_unique<legacy_random_source>(0)};
+    random.set_large_feature_seed(seed, chunk.x, chunk.z);
+    const jint rotation_index = random.next_int(4);
+    const auto rotation = static_cast<template_rotation>(rotation_index);
+    const char *const *ids = beached ? beached_ids.data() : ocean_ids.data();
+    const std::size_t id_count =
+        beached ? beached_ids.size() : ocean_ids.size();
+    const auto index =
+        static_cast<std::size_t>(random.next_int(static_cast<jint>(id_count)));
+    const auto &templ = templates.get_or_create(ids[index]);
+    const template_transform transform{
+        .mirror = template_mirror::none,
+        .rotation = rotation,
+        .pivot = block_pos{.x = 4, .y = 0, .z = 15},
+    };
+    block_pos origin{.x = chunk.x * 16, .y = 90, .z = chunk.z * 16};
+    auto bounds = template_bounding_box(templ, transform, origin);
+    const heightmap_kind kind = beached ? heightmap_kind::world_surface_wg
+                                        : heightmap_kind::ocean_floor_wg;
+    if (templ.size_x > 32 || templ.size_y > 32) {
+        const std::array<std::pair<jint, jint>, 4> corners{{
+            {bounds.min_x, bounds.min_z},
+            {bounds.min_x, bounds.max_z + 1},
+            {bounds.max_x + 1, bounds.min_z},
+            {bounds.max_x + 1, bounds.max_z + 1},
+        }};
+        if (beached) {
+            jint lowest = 1 << 30;
+            for (const auto &[x, z] : corners) {
+                lowest = std::min(lowest, height_at(x, z, kind));
+            }
+            origin.y = lowest - templ.size_y / 2 - random.next_int(3);
+        } else {
+            jint total = 0;
+            for (const auto &[x, z] : corners) {
+                total += height_at(x, z, kind);
+            }
+            origin.y = total / 4;
+        }
+        bounds = template_bounding_box(templ, transform, origin);
+    }
+    structure_start start{.structure = "minecraft:shipwreck",
+                          .chunk = chunk,
+                          .references = 0,
+                          .max_references = 1,
+                          .bounds = {.min_x = bounds.min_x,
+                                     .min_y = bounds.min_y,
+                                     .min_z = bounds.min_z,
+                                     .max_x = bounds.max_x,
+                                     .max_y = bounds.max_y,
+                                     .max_z = bounds.max_z}};
+    start.pieces.push_back(structure_piece{
+        .type = "minecraft:shipwreck",
+        .bounds = start.bounds,
+        .orientation = 2,
+        .template_id = std::string{ids[index]},
+        .template_origin = origin,
+        .template_rotation = rotation_index,
+        .template_mirror = 0,
+        .template_pivot = block_pos{.x = 4, .y = 0, .z = 15},
+    });
+    return start;
+}
+
 auto desert_pyramid_start(const chunk_pos &chunk, jlong seed)
     -> structure_start {
     worldgen_random random{std::make_unique<legacy_random_source>(0)};

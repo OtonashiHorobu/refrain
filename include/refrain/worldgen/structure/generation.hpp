@@ -10,6 +10,8 @@
 #include <refrain/worldgen/structure/start.hpp>
 #include <refrain/worldgen/structure/template.hpp>
 
+#include <functional>
+
 namespace refrain::worldgen::structure {
 
 /// `BuriedTreasureStructure.findGenerationPoint`: a single 1x1x1 piece at the
@@ -18,6 +20,14 @@ namespace refrain::worldgen::structure {
     -> structure_start;
 
 class structure_template_manager;
+
+/// `ShipwreckStructure`: one shipwreck template piece, rotated, optionally
+/// moved to the beached/ocean floor height when the template is too large.
+[[nodiscard]] auto shipwreck_start(
+    const chunk_pos &chunk, jlong seed, structure_template_manager &templates,
+    bool beached,
+    const std::function<jint(jint, jint, heightmap_kind)> &height_at)
+    -> structure_start;
 
 /// `DesertPyramidStructure`: one 21x21x15 single piece at generation height
 /// 64, below the lowest surface corner of the plot.

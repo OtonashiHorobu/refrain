@@ -196,6 +196,27 @@ auto try_generate(const structure_start_context &context,
         start.step = structure.step;
         return start;
     }
+    if (structure.type == "minecraft:shipwreck") {
+        if (context.templates == nullptr) {
+            return std::nullopt;
+        }
+        const auto *beached_value = structure.config.find("is_beached");
+        const bool beached = beached_value != nullptr &&
+                             beached_value->as_bool().value_or(false);
+        const auto kind = beached ? heightmap_kind::world_surface_wg
+                                  : heightmap_kind::ocean_floor_wg;
+        const jint middle_x = chunk.x * 16 + 8;
+        const jint middle_z = chunk.z * 16 + 8;
+        const jint y = context.height_at(middle_x, middle_z, kind);
+        if (!biome_allowed(context, structure, middle_x, y, middle_z)) {
+            return std::nullopt;
+        }
+        auto start = shipwreck_start(chunk, context.seed, *context.templates,
+                                     beached, context.height_at);
+        start.structure = structure.id;
+        start.step = structure.step;
+        return start;
+    }
     if (structure.type == "minecraft:desert_pyramid") {
         if (!biome_column_allowed(context, structure, chunk.x * 16 + 8,
                                   chunk.z * 16 + 8)) {
