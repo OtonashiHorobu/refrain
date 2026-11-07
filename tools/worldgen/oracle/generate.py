@@ -439,6 +439,7 @@ def main() -> int:
                 "oracle:water_lake",
                 "oracle:iceberg_blue",
                 "oracle:freeze",
+                "oracle:ice_spike",
             ]
         )
         (biome_dir / "feature.json").write_text(
@@ -586,6 +587,33 @@ def main() -> int:
                         {
                             "type": "minecraft:fixed_placement",
                             "positions": [[8, 63, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (feature_dir / "ice_spike.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:spike",
+                    "state": "minecraft:packed_ice",
+                    "can_place_on": {"type": "minecraft:true"},
+                    "can_replace": {"type": "minecraft:true"},
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "ice_spike.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:ice_spike",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[40, 80, 40]],
                         }
                     ],
                 },
