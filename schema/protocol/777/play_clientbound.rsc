@@ -144,6 +144,20 @@ packet set_time = 115 {
 packet bundle_delimiter = 0 {
 }
 
+packet add_entity = 1 {
+    #[varint] id: i32;
+    uuid: uuid;
+    #[varint] type_: i32;
+    x: f64;
+    y: f64;
+    z: f64;
+    movement: lp_vec3;
+    x_rot: i8;
+    y_rot: i8;
+    y_head_rot: i8;
+    #[varint] data: i32;
+}
+
 packet animate = 2 {
     #[varint] id: i32;
     action: i8;
@@ -404,6 +418,11 @@ packet set_display_objective = 100 {
 packet set_entity_link = 102 {
     #[fixed] source_id: i32;
     #[fixed] dest_id: i32;
+}
+
+packet set_entity_motion = 103 {
+    #[varint] id: i32;
+    movement: lp_vec3;
 }
 
 packet set_experience = 105 {

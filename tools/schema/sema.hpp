@@ -43,6 +43,8 @@ enum class primitive_kind : std::uint8_t {
     /// Item stack; RSC wire schemas only. The current codec encodes empty
     /// stacks and rejects non-empty payloads.
     item_stack,
+    /// Quantized low-precision vector; RSC wire schemas only.
+    lp_vec3,
     void_type,
 };
 

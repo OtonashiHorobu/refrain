@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: eeff21779bc06c61
+// Schema hash: 9a599b420958d5d3
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_HPP
@@ -22,8 +22,9 @@
 namespace refrain::protocol::v777 {
 
 /// Packets declared for this stage, ordered by flow and id.
-inline constexpr std::array<packet_descriptor, 153> play_packets{{
+inline constexpr std::array<packet_descriptor, 156> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x0, "bundle_delimiter"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x1, "add_entity"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x2, "animate"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x4, "block_changed_ack"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x5, "block_destruction"},
@@ -93,6 +94,7 @@ inline constexpr std::array<packet_descriptor, 153> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x63, "set_default_spawn_position"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x64, "set_display_objective"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x66, "set_entity_link"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x67, "set_entity_motion"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x69, "set_experience"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x6A, "set_health"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x6B, "set_held_slot"},
@@ -138,6 +140,7 @@ inline constexpr std::array<packet_descriptor, 153> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::serverbound, 0x17, "debug_subscription_request"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::serverbound, 0x18, "edit_book"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::serverbound, 0x19, "entity_tag_query"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::serverbound, 0x1A, "interact"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::serverbound, 0x1B, "jigsaw_generate"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::serverbound, 0x1C, "keep_alive"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::serverbound, 0x1D, "lock_difficulty"},

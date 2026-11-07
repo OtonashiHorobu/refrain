@@ -7,6 +7,7 @@
 #include <boost/ut.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -67,6 +68,47 @@ const suite tests = [] {
             expect(status.error().code ==
                    refrain::error_code::invalid_argument);
         }
+    };
+
+    "lp vec3 encodes the zero vector as one byte"_test = [] {
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_lp_vec3(out, net::lp_vec3{})));
+        expect(bytes.size() == 1U);
+        if (bytes.size() == 1U) {
+            expect(bytes[0] == std::byte{0});
+        }
+        net::reader in{bytes};
+        net::lp_vec3 decoded{.x = 1.0};
+        expect(static_cast<bool>(net::decode_lp_vec3(in, decoded)));
+        expect(decoded == net::lp_vec3{});
+        expect(in.empty());
+    };
+
+    "lp vec3 round trips within its quantization step"_test = [] {
+        const net::lp_vec3 value{.x = 0.5, .y = -0.25, .z = 0.125};
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_lp_vec3(out, value)));
+        net::reader in{bytes};
+        net::lp_vec3 decoded{};
+        expect(static_cast<bool>(net::decode_lp_vec3(in, decoded)));
+        expect(in.empty());
+        const auto close = [](double a, double b) {
+            return std::abs(a - b) <= 0.01;
+        };
+        expect(close(decoded.x, value.x));
+        expect(close(decoded.y, value.y));
+        expect(close(decoded.z, value.z));
+    };
+
+    "lp vec3 rejects truncated input"_test = [] {
+        const std::array<std::byte, 2> bytes{std::byte{1}, std::byte{2}};
+        net::reader in{bytes};
+        net::lp_vec3 decoded{};
+        const auto status{net::decode_lp_vec3(in, decoded)};
+        expect(!status);
+        expect(status.error().code == refrain::error_code::parse_error);
     };
 
     "empty item stack round trips"_test = [] {

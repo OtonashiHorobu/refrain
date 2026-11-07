@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: eeff21779bc06c61
+// Schema hash: 9a599b420958d5d3
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -588,6 +588,23 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::b
     static constexpr auto fields = std::make_tuple();
 };
 
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::add_entity'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::add_entity> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::add_entity";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"id", &::refrain::protocol::v777::play::clientbound::add_entity::id},
+        refrain::reflect::custom_field{"uuid", &::refrain::protocol::v777::play::clientbound::add_entity::uuid},
+        refrain::reflect::custom_field{"type_", &::refrain::protocol::v777::play::clientbound::add_entity::type_},
+        refrain::reflect::custom_field{"x", &::refrain::protocol::v777::play::clientbound::add_entity::x},
+        refrain::reflect::custom_field{"y", &::refrain::protocol::v777::play::clientbound::add_entity::y},
+        refrain::reflect::custom_field{"z", &::refrain::protocol::v777::play::clientbound::add_entity::z},
+        refrain::reflect::custom_field{"movement", &::refrain::protocol::v777::play::clientbound::add_entity::movement},
+        refrain::reflect::custom_field{"x_rot", &::refrain::protocol::v777::play::clientbound::add_entity::x_rot},
+        refrain::reflect::custom_field{"y_rot", &::refrain::protocol::v777::play::clientbound::add_entity::y_rot},
+        refrain::reflect::custom_field{"y_head_rot", &::refrain::protocol::v777::play::clientbound::add_entity::y_head_rot},
+        refrain::reflect::custom_field{"data", &::refrain::protocol::v777::play::clientbound::add_entity::data});
+};
+
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::animate'.
 template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::animate> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::animate";
@@ -1012,6 +1029,14 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::s
         refrain::reflect::custom_field{"dest_id", &::refrain::protocol::v777::play::clientbound::set_entity_link::dest_id});
 };
 
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::set_entity_motion'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::set_entity_motion> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::set_entity_motion";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"id", &::refrain::protocol::v777::play::clientbound::set_entity_motion::id},
+        refrain::reflect::custom_field{"movement", &::refrain::protocol::v777::play::clientbound::set_entity_motion::movement});
+};
+
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::set_experience'.
 template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::set_experience> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::set_experience";
@@ -1434,6 +1459,16 @@ template <> struct custom_traits<::refrain::protocol::v777::play::serverbound::e
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"transaction_id", &::refrain::protocol::v777::play::serverbound::entity_tag_query::transaction_id},
         refrain::reflect::custom_field{"entity_id", &::refrain::protocol::v777::play::serverbound::entity_tag_query::entity_id});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::serverbound::interact'.
+template <> struct custom_traits<::refrain::protocol::v777::play::serverbound::interact> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::serverbound::interact";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"entity_id", &::refrain::protocol::v777::play::serverbound::interact::entity_id},
+        refrain::reflect::custom_field{"hand", &::refrain::protocol::v777::play::serverbound::interact::hand},
+        refrain::reflect::custom_field{"location", &::refrain::protocol::v777::play::serverbound::interact::location},
+        refrain::reflect::custom_field{"using_secondary_action", &::refrain::protocol::v777::play::serverbound::interact::using_secondary_action});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::serverbound::jigsaw_generate'.

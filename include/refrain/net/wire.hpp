@@ -21,6 +21,25 @@ struct text_component {
         -> bool = default;
 };
 
+/// A quantized vector. The wire form stores a shared exponent and three
+/// 15-bit normalized components, or a single zero byte for the zero vector.
+/// Decoding reproduces the quantized value, so it is not bit-identical to the
+/// value that was encoded.
+struct lp_vec3 {
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+
+    friend auto operator==(const lp_vec3 &, const lp_vec3 &) -> bool = default;
+};
+
+/// Writes the quantized vector encoding, clamping components to the protocol
+/// range.
+[[nodiscard]] auto encode_lp_vec3(writer &out, const lp_vec3 &value) -> status;
+
+/// Reads a quantized vector; truncated input is a parse error.
+[[nodiscard]] auto decode_lp_vec3(reader &in, lp_vec3 &value) -> status;
+
 /// An item stack on the wire. Only the empty stack is implemented: the codec
 /// writes and accepts a zero item count and reports `error_code::unsupported`
 /// for any item payload, which requires the data-component graph.

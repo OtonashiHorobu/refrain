@@ -67,6 +67,8 @@ namespace {
             return "::refrain::net::text_component";
         case primitive_kind::item_stack:
             return "::refrain::net::item_stack";
+        case primitive_kind::lp_vec3:
+            return "::refrain::net::lp_vec3";
         case primitive_kind::void_type:
             return "void";
         }
@@ -534,6 +536,15 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::lp_vec3:
+            writer.line("if (auto written = ::refrain::net::encode_lp_vec3("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -737,6 +748,16 @@ void emit_decode_value(code_writer &writer, const model &program,
             return;
         case primitive_kind::item_stack:
             writer.line("if (auto decoded = ::refrain::net::decode_item_stack("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::lp_vec3:
+            writer.line("if (auto decoded = ::refrain::net::decode_lp_vec3("
                         "in, {}); !decoded) {{",
                         target);
             writer.indent();
@@ -969,7 +990,8 @@ void emit_decode_value(code_writer &writer, const model &program,
                                const resolved_type &type) -> bool {
         if (type.kind == resolved_type::category::primitive) {
             return type.primitive == primitive_kind::text_component ||
-                   type.primitive == primitive_kind::item_stack;
+                   type.primitive == primitive_kind::item_stack ||
+                   type.primitive == primitive_kind::lp_vec3;
         }
         return std::ranges::any_of(type.arguments, [&](const auto &argument) {
             return self(self, argument);

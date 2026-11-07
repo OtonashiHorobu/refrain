@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: eeff21779bc06c61
+// Schema hash: 9a599b420958d5d3
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
@@ -293,6 +293,18 @@ struct entity_tag_query {
     std::int32_t transaction_id;
     // attributes: #[varint]
     std::int32_t entity_id;
+};
+
+struct interact {
+    static constexpr std::uint16_t packet_id = 0x1A;
+    static constexpr std::string_view packet_name = "interact";
+
+    // attributes: #[varint]
+    std::int32_t entity_id;
+    // attributes: #[varint]
+    std::uint32_t hand;
+    ::refrain::net::lp_vec3 location;
+    bool using_secondary_action;
 };
 
 struct jigsaw_generate {
@@ -1498,6 +1510,52 @@ struct use_item {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.entity_id = static_cast<decltype(value.entity_id)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_interact(::refrain::net::writer &out, const interact &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.entity_id));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.hand));
+  }
+  {
+    if (auto written = ::refrain::net::encode_lp_vec3(out, value.location); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.using_secondary_action);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_interact(::refrain::net::reader &in, interact &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.entity_id = static_cast<decltype(value.entity_id)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.hand = static_cast<decltype(value.hand)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_lp_vec3(in, value.location); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.using_secondary_action = *value_0;
   }
   return ::refrain::status_ok();
 }

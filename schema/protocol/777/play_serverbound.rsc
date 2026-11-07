@@ -165,6 +165,13 @@ packet entity_tag_query = 25 {
     #[varint] entity_id: i32;
 }
 
+packet interact = 26 {
+    #[varint] entity_id: i32;
+    #[varint] hand: u32;
+    location: lp_vec3;
+    using_secondary_action: bool;
+}
+
 packet jigsaw_generate = 27 {
     pos: i64;
     #[varint] levels: i32;
