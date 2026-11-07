@@ -176,6 +176,31 @@ class offset_placement final : public placement_modifier {
     jint z_{0};
 };
 
+class surface_water_depth_filter final : public placement_modifier {
+  public:
+    explicit surface_water_depth_filter(jint max_depth)
+        : max_depth_{max_depth} {}
+    void modify(const placement_context &context, worldgen_random &,
+                const block_pos &position,
+                std::vector<block_pos> &out) const override {
+        const jint local_x = position.x - context.chunk->chunk_x() * 16;
+        const jint local_z = position.z - context.chunk->chunk_z() * 16;
+        if (local_x < 0 || local_x > 15 || local_z < 0 || local_z > 15) {
+            return;
+        }
+        const jint surface = context.chunk->first_available(
+            heightmap_kind::world_surface, local_x, local_z);
+        const jint floor = context.chunk->first_available(
+            heightmap_kind::ocean_floor, local_x, local_z);
+        if (surface - floor <= max_depth_) {
+            out.push_back(position);
+        }
+    }
+
+  private:
+    jint max_depth_{0};
+};
+
 class block_predicate_filter final : public placement_modifier {
   public:
     explicit block_predicate_filter(std::unique_ptr<block_predicate> predicate)
@@ -299,6 +324,21 @@ auto decode_placement(const data::json::value &document,
         }
         return std::unique_ptr<placement_modifier>{
             std::make_unique<offset_placement>(x, y, z)};
+    }
+    if (*type == "minecraft:surface_water_depth_filter") {
+        const auto *depth = document.find("max_water_depth");
+        if (depth == nullptr) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                "surface_water_depth_filter has no max_water_depth")};
+        }
+        const auto value = depth->as_int64();
+        if (!value) {
+            return std::unexpected{value.error()};
+        }
+        return std::unique_ptr<placement_modifier>{
+            std::make_unique<surface_water_depth_filter>(
+                static_cast<jint>(*value))};
     }
     if (*type == "minecraft:block_predicate_filter") {
         const auto *predicate_field = document.find("predicate");
