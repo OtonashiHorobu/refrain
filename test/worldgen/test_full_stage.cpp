@@ -1,0 +1,355 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+// Fill-stage oracle for a world generated with an empty material rule and no
+// carvers or features. Inputs: REFRAIN_VANILLA_JUNGLE_REGION and
+// REFRAIN_VANILLA_WORLDGEN.
+
+#include <refrain/core/io.hpp>
+#include <refrain/data/nbt.hpp>
+#include <refrain/worldgen/chunk/block_state_codec.hpp>
+#include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/chunk/proto_chunk.hpp>
+#include <refrain/worldgen/density/density_router.hpp>
+#include <refrain/worldgen/terrain/aquifer.hpp>
+#include <refrain/worldgen/terrain/terrain.hpp>
+
+#include <boost/ut.hpp>
+
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace {
+
+using namespace boost::ut;
+using namespace refrain;
+using namespace refrain::worldgen;
+
+constexpr jint oracle_min_y = -64;
+constexpr jint oracle_height = 384;
+
+auto child(const data::nbt::compound *root, std::string_view key)
+    -> const data::nbt::value * {
+    if (root == nullptr) {
+        return nullptr;
+    }
+    const auto found = root->find(key);
+    return found == root->end() ? nullptr : &found->second;
+}
+
+auto chunk_payload(std::span<const std::byte> region, jint chunk_x,
+                   jint chunk_z) -> std::optional<std::span<const std::byte>> {
+    if (region.size() < 8192) {
+        return std::nullopt;
+    }
+    const auto index =
+        static_cast<std::size_t>((chunk_x & 31) + (chunk_z & 31) * 32);
+    const auto *entry = region.data() + index * 4U;
+    const auto offset = (static_cast<std::size_t>(entry[0]) << 16U) |
+                        (static_cast<std::size_t>(entry[1]) << 8U) |
+                        static_cast<std::size_t>(entry[2]);
+    if (offset == 0) {
+        return std::nullopt;
+    }
+    const auto start = offset * 4096U;
+    if (start + 5U > region.size()) {
+        return std::nullopt;
+    }
+    const auto length = (static_cast<std::size_t>(region[start]) << 24U) |
+                        (static_cast<std::size_t>(region[start + 1]) << 16U) |
+                        (static_cast<std::size_t>(region[start + 2]) << 8U) |
+                        static_cast<std::size_t>(region[start + 3]);
+    if (length < 1U || start + 4U + length > region.size()) {
+        return std::nullopt;
+    }
+    if (static_cast<std::uint8_t>(region[start + 4U]) != 2U) {
+        return std::nullopt;
+    }
+    return region.subspan(start + 5U, length - 1U);
+}
+
+struct decoded {
+    block_state_registry registry{};
+    std::vector<block_state_id> blocks{};
+};
+
+auto canonical(std::string name) -> std::string {
+    const auto open = name.find('[');
+    if (open == std::string::npos) {
+        return name;
+    }
+    const auto close = name.rfind(']');
+    if (close == std::string::npos) {
+        return name;
+    }
+    std::vector<std::string> parts;
+    std::string_view body{name.data() + open + 1, close - open - 1};
+    while (!body.empty()) {
+        const auto comma = body.find(',');
+        parts.emplace_back(body.substr(0, comma));
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        body = body.substr(comma + 1);
+    }
+    std::sort(parts.begin(), parts.end());
+    std::string rebuilt = name.substr(0, open);
+    rebuilt.push_back('[');
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        if (i != 0) {
+            rebuilt.push_back(',');
+        }
+        rebuilt.append(parts[i]);
+    }
+    rebuilt.push_back(']');
+    if (rebuilt.starts_with("minecraft:chest[")) {
+        return "minecraft:chest";
+    }
+    if (rebuilt == "minecraft:cobblestone_stairs[facing=north,half=bottom,"
+                   "shape=straight,waterlogged=false]") {
+        return "minecraft:cobblestone_stairs";
+    }
+    return rebuilt;
+}
+
+auto decode(const data::nbt::value &document) -> std::optional<decoded> {
+    const auto *sections = child(document.as_compound(), "sections");
+    if (sections == nullptr || sections->as_list() == nullptr) {
+        return std::nullopt;
+    }
+    decoded out;
+    out.blocks.assign(static_cast<std::size_t>(oracle_height) * 256U,
+                      out.registry.air());
+    for (const auto &section_value : sections->as_list()->items) {
+        const auto *section = section_value.as_compound();
+        const auto *y_value = child(section, "Y");
+        const auto *states_value = child(section, "block_states");
+        if (y_value == nullptr || states_value == nullptr) {
+            continue;
+        }
+        auto section_y = y_value->as_byte();
+        if (!section_y) {
+            section_y = y_value->as_short();
+        }
+        if (!section_y) {
+            section_y = y_value->as_int();
+        }
+        const auto *states = states_value->as_compound();
+        const auto *palette_value = child(states, "palette");
+        const auto *palette =
+            palette_value == nullptr ? nullptr : palette_value->as_list();
+        if (!section_y || palette == nullptr || palette->items.empty()) {
+            continue;
+        }
+        std::vector<block_state_id> ids;
+        for (const auto &entry : palette->items) {
+            std::string name;
+            const auto text = entry.as_string();
+            if (text) {
+                name = *text;
+            } else if (const auto *compound = entry.as_compound()) {
+                const auto *id = child(compound, "id");
+                const auto *legacy = child(compound, "Name");
+                const auto *name_value = id != nullptr ? id : legacy;
+                if (name_value == nullptr) {
+                    continue;
+                }
+                name = name_value->as_string().value_or("minecraft:air");
+                const auto *properties = child(compound, "properties");
+                if (properties == nullptr) {
+                    properties = child(compound, "Properties");
+                }
+                if (properties != nullptr &&
+                    properties->as_compound() != nullptr) {
+                    std::vector<std::pair<std::string, std::string>> pairs;
+                    for (const auto &[property, value] :
+                         *properties->as_compound()) {
+                        pairs.emplace_back(property,
+                                           value.as_string().value_or(""));
+                    }
+                    std::sort(pairs.begin(), pairs.end());
+                    name.push_back('[');
+                    for (std::size_t i = 0; i < pairs.size(); ++i) {
+                        if (i != 0) {
+                            name.push_back(',');
+                        }
+                        name.append(pairs[i].first);
+                        name.push_back('=');
+                        name.append(pairs[i].second);
+                    }
+                    name.push_back(']');
+                }
+            }
+            const auto block = state_block_name(name);
+            const bool air = is_air_block_name(block);
+            const auto interned =
+                out.registry.intern(name, {.air = air, .blocks_motion = !air});
+            if (!interned) {
+                return std::nullopt;
+            }
+            ids.push_back(*interned);
+        }
+        std::array<block_state_id, 4096> section_ids{};
+        if (ids.size() == 1) {
+            section_ids.fill(ids[0]);
+        } else {
+            const auto *data_value = child(states, "data");
+            const auto data = data_value == nullptr
+                                  ? std::nullopt
+                                  : data_value->as_long_array();
+            if (!data) {
+                return std::nullopt;
+            }
+            const int bits =
+                std::max(4, static_cast<int>(std::bit_width(
+                                std::max<std::size_t>(1U, ids.size() - 1U))));
+            const auto per_long = static_cast<std::size_t>(64 / bits);
+            const auto mask = (std::uint64_t{1} << bits) - 1U;
+            for (std::size_t i = 0; i < section_ids.size(); ++i) {
+                if (i / per_long >= data->size()) {
+                    return std::nullopt;
+                }
+                const auto raw =
+                    static_cast<std::uint64_t>((*data)[i / per_long]) >>
+                    ((i % per_long) * static_cast<std::size_t>(bits));
+                section_ids[i] = ids[raw & mask];
+            }
+        }
+        for (std::size_t i = 0; i < section_ids.size(); ++i) {
+            const auto block_y = static_cast<jint>(*section_y) * 16 +
+                                 static_cast<jint>(i / 256U);
+            const auto local_y = block_y - oracle_min_y;
+            if (local_y < 0 || local_y >= oracle_height) {
+                continue;
+            }
+            const auto local_x = static_cast<jint>(i % 16U);
+            const auto local_z = static_cast<jint>((i % 256U) / 16U);
+            out.blocks[static_cast<std::size_t>(local_y) * 256U +
+                       static_cast<std::size_t>(local_z) * 16U +
+                       static_cast<std::size_t>(local_x)] = section_ids[i];
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+suite<"worldgen/full-stage"> full_stage_tests = [] {
+    "the fill stage matches a world with an empty material rule"_test = [] {
+        const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+        const char *region_path = std::getenv("REFRAIN_VANILLA_JUNGLE_REGION");
+        const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
+        if (data_root == nullptr || region_path == nullptr ||
+            templates_root == nullptr) {
+            return;
+        }
+        constexpr jint chunk_x = 9;
+        constexpr jint chunk_z = 2;
+        constexpr jlong seed = 2;
+        const auto region = core::io::read_file(region_path);
+        expect(region.has_value()) << region.error().message;
+        if (!region) {
+            return;
+        }
+        const auto payload = chunk_payload(*region, chunk_x, chunk_z);
+        expect(payload.has_value());
+        if (!payload) {
+            return;
+        }
+        const auto document =
+            data::nbt::read(*payload, data::nbt::compression::zlib);
+        expect(document.has_value()) << document.error().message;
+        if (!document) {
+            return;
+        }
+        const auto reference = decode(*document);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        auto settings = density::load_noise_settings(
+            data_root, "minecraft/overworld", algorithm::xoroshiro, seed);
+        expect(settings.has_value()) << settings.error().message;
+        if (!settings) {
+            return;
+        }
+        block_state_registry states;
+        expect(states.intern("minecraft:air", {.air = true})
+                   .value_or(no_block_state) == 0);
+        expect(states
+                   .intern("minecraft:stone", {.air = false,
+                                               .blocks_motion = true,
+                                               .blocks_motion_no_leaves = true})
+                   .value_or(no_block_state) == 1);
+        expect(states
+                   .intern("minecraft:water",
+                           {.air = false, .fluid = true, .water = true})
+                   .value_or(no_block_state) == 2);
+        expect(states.intern("minecraft:lava", {.air = false, .fluid = true})
+                   .value_or(no_block_state) == 3);
+        const terrain::block_ids ids{
+            .air = 0, .default_block = 1, .default_fluid = 2, .lava = 3};
+        const terrain::fluid_picker picker{.sea_level = settings->sea_level,
+                                           .default_fluid = 2,
+                                           .lava = 3,
+                                           .air = 0};
+        auto random = new_positional_factory(algorithm::xoroshiro, seed);
+        auto aquifer_random = random->from_hash_of("minecraft:aquifer");
+        auto factory = aquifer_random->fork_positional();
+        const density::sampler_context sampler_context;
+        const volume chunk_volume{16,           oracle_height, 16,
+                                  chunk_x * 16, oracle_min_y,  chunk_z * 16};
+        terrain::noise_aquifer aquifer{
+            settings->aquifer, *factory, chunk_volume, picker, ids,
+            sampler_context};
+        proto_chunk chunk{states, chunk_x, chunk_z, oracle_min_y,
+                          oracle_height};
+        chunk.set_status(chunk_status::biomes);
+        const terrain::proto_fill_options fill_options{
+            .air = 0, .default_block = 1, .default_fluid = 2, .lava = 3};
+        terrain::fill_proto_chunk(chunk, fill_options,
+                                  *settings->router.final_density,
+                                  sampler_context, aquifer);
+        chunk.set_status(chunk_status::terrain);
+
+        std::size_t mismatches = 0;
+        for (jint y = oracle_min_y; y < oracle_min_y + oracle_height; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    const auto index =
+                        static_cast<std::size_t>(y - oracle_min_y) * 256U +
+                        static_cast<std::size_t>(z) * 16U +
+                        static_cast<std::size_t>(x);
+                    const auto expected = canonical(std::string{
+                        reference->registry.name(reference->blocks[index])});
+                    const auto actual = canonical(
+                        std::string{states.name(chunk.state_at(x, y, z))});
+                    if (expected == actual) {
+                        continue;
+                    }
+                    if (mismatches < 10) {
+                        std::fprintf(
+                            stderr,
+                            "full-stage mismatch (%d,%d,%d): got %s want %s\n",
+                            static_cast<int>(x), static_cast<int>(y),
+                            static_cast<int>(z), actual.c_str(),
+                            expected.c_str());
+                    }
+                    ++mismatches;
+                }
+            }
+        }
+        expect(mismatches == 0);
+    };
+};
