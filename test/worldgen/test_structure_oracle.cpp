@@ -168,13 +168,38 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
                 continue;
             }
             bool found = false;
+            const refrain::worldgen::structure::structure_start *matched =
+                nullptr;
             for (const auto &start : generated.starts) {
                 if (start.structure == id && start.chunk.x == *expected_x &&
                     start.chunk.z == *expected_z) {
                     found = true;
+                    matched = &start;
                 }
             }
             expect(found) << id << " start missing";
+            if (matched == nullptr) {
+                continue;
+            }
+            const auto *children = child(value.as_compound(), "Children");
+            const auto *child_list =
+                children == nullptr ? nullptr : children->as_list();
+            expect(child_list != nullptr && child_list->items.size() == 1U);
+            if (child_list == nullptr || child_list->items.empty()) {
+                continue;
+            }
+            const auto *bb = child(child_list->items[0].as_compound(), "BB");
+            const auto values =
+                bb == nullptr ? std::nullopt : bb->as_int_array();
+            expect(values.has_value() && values->size() == 6U);
+            if (values && values->size() == 6U) {
+                expect(matched->bounds.min_x == (*values)[0]);
+                expect(matched->bounds.min_y == (*values)[1]);
+                expect(matched->bounds.min_z == (*values)[2]);
+                expect(matched->bounds.max_x == (*values)[3]);
+                expect(matched->bounds.max_y == (*values)[4]);
+                expect(matched->bounds.max_z == (*values)[5]);
+            }
         }
 
         std::map<std::string, jint> actual_references;
