@@ -4,6 +4,7 @@
 
 #include <refrain/worldgen/feature/feature.hpp>
 
+#include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/core/mth.hpp>
 
 namespace refrain::worldgen::feature {
@@ -271,6 +272,58 @@ auto ore_feature::place_ore(feature_context &context, worldgen_random &random,
         }
     }
     return placed > 0;
+}
+
+auto spring_feature::valid(feature_context &context, const block_pos &pos) const
+    -> bool {
+    const auto name = state_block_name(context.placement.states->name(
+        context.placement.region->state_at(pos.x, pos.y, pos.z)));
+    return std::find(valid_blocks_.begin(), valid_blocks_.end(), name) !=
+           valid_blocks_.end();
+}
+
+auto spring_feature::place(feature_context &context, worldgen_random &,
+                           const block_pos &origin) const -> bool {
+    const block_pos above{.x = origin.x, .y = origin.y + 1, .z = origin.z};
+    if (!valid(context, above)) {
+        return false;
+    }
+    const block_pos below{.x = origin.x, .y = origin.y - 1, .z = origin.z};
+    if (requires_block_below_ && !valid(context, below)) {
+        return false;
+    }
+    const auto current =
+        context.placement.region->state_at(origin.x, origin.y, origin.z);
+    const auto current_name = context.placement.states->name(current);
+    if (!is_air_block_name(current_name) && !valid(context, origin)) {
+        return false;
+    }
+    jint rocks = 0;
+    jint holes = 0;
+    constexpr std::array<block_pos, 5> relative{{
+        {.x = -1, .y = 0, .z = 0},
+        {.x = 1, .y = 0, .z = 0},
+        {.x = 0, .y = 0, .z = -1},
+        {.x = 0, .y = 0, .z = 1},
+        {.x = 0, .y = -1, .z = 0},
+    }};
+    for (const auto &offset : relative) {
+        const block_pos pos{.x = origin.x + offset.x,
+                            .y = origin.y + offset.y,
+                            .z = origin.z + offset.z};
+        if (valid(context, pos)) {
+            ++rocks;
+        }
+        if (is_air_block_name(context.placement.states->name(
+                context.placement.region->state_at(pos.x, pos.y, pos.z)))) {
+            ++holes;
+        }
+    }
+    if (rocks != rock_count_ || holes != hole_count_) {
+        return false;
+    }
+    return context.placement.region->set_block_state(origin.x, origin.y,
+                                                     origin.z, state_);
 }
 
 } // namespace refrain::worldgen::feature

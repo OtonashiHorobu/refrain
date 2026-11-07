@@ -4,6 +4,7 @@
 
 #include <refrain/worldgen/feature/feature_registry.hpp>
 
+#include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/feature/rule_test.hpp>
 
 #include <string>
@@ -29,8 +30,27 @@ auto type_of(const data::json::value &input) -> result<std::string_view> {
     return *text;
 }
 
+auto resolve_state(block_state_registry &states, std::string_view key)
+    -> result<block_state_id> {
+    if (const auto found = states.find(key); found.has_value()) {
+        return *found;
+    }
+    const auto block = state_block_name(key);
+    const bool air = is_air_block_name(block);
+    const bool water = block == "minecraft:water" ||
+                       key.find("waterlogged=true") != std::string_view::npos;
+    const bool fluid = water || block == "minecraft:lava" ||
+                       block == "minecraft:bubble_column";
+    return states.intern(
+        key, state_traits{.air = air,
+                          .fluid = fluid,
+                          .water = water,
+                          .blocks_motion = !air && !fluid,
+                          .blocks_motion_no_leaves = !air && !fluid});
+}
+
 auto decode_simple_state(const data::json::value &provider,
-                         const block_state_registry &states)
+                         block_state_registry &states)
     -> result<block_state_id> {
     const data::json::value *state = &provider;
     if (const auto *type = provider.find("type"); type != nullptr) {
@@ -47,25 +67,11 @@ auto decode_simple_state(const data::json::value &provider,
                                               "state provider has no state")};
         }
     }
-    const auto *name = state->find("id");
-    if (name == nullptr) {
-        name = state->find("Name");
+    const auto key = decode_state_key(*state);
+    if (!key) {
+        return std::unexpected{key.error()};
     }
-    if (name == nullptr) {
-        return std::unexpected{
-            make_error(error_code::parse_error, "state has no id")};
-    }
-    const auto text = name->as_string();
-    if (!text) {
-        return std::unexpected{
-            make_error(error_code::parse_error, "state id is not a string")};
-    }
-    const auto id = states.find(*text);
-    if (!id) {
-        return std::unexpected{make_error(
-            error_code::not_found, "state provider names an unknown state")};
-    }
-    return *id;
+    return resolve_state(states, *key);
 }
 
 } // namespace
@@ -169,10 +175,9 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                     return std::unexpected{make_error(error_code::parse_error,
                                                       "ore state is invalid")};
                 }
-                const auto state_id = states_->find(name);
+                const auto state_id = resolve_state(*states_, name);
                 if (!state_id) {
-                    return std::unexpected{make_error(error_code::not_found,
-                                                      "ore state is unknown")};
+                    return std::unexpected{state_id.error()};
                 }
                 auto rule = decode_rule_test(*target, *states_);
                 if (!rule) {
@@ -184,6 +189,72 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             features_.emplace(id, std::make_unique<ore_feature>(
                                       std::move(replacements),
                                       static_cast<jint>(*size_value), discard));
+            continue;
+        }
+        if (*type == "minecraft:spring_feature") {
+            const auto *state_value = document.document.find("state");
+            const auto *valid_value = document.document.find("valid_blocks");
+            if (state_value == nullptr || valid_value == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "spring feature is incomplete")};
+            }
+            const auto state_key = decode_state_key(*state_value);
+            if (!state_key) {
+                return std::unexpected{state_key.error()};
+            }
+            const auto state = resolve_state(*states_, *state_key);
+            if (!state) {
+                return std::unexpected{state.error()};
+            }
+            std::vector<std::string> valid;
+            if (const auto single = valid_value->as_string();
+                single.has_value()) {
+                valid.emplace_back(*single);
+            } else if (valid_value->is_array()) {
+                for (const auto &entry : *valid_value->as_array()) {
+                    const auto name = entry.as_string();
+                    if (!name) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "spring valid block is not an id")};
+                    }
+                    valid.emplace_back(*name);
+                }
+            } else {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "spring valid_blocks is invalid")};
+            }
+            bool requires_below = true;
+            if (const auto *field =
+                    document.document.find("requires_block_below");
+                field != nullptr) {
+                const auto value = field->as_bool();
+                if (!value) {
+                    return std::unexpected{value.error()};
+                }
+                requires_below = *value;
+            }
+            jint rocks = 4;
+            jint holes = 1;
+            if (const auto *field = document.document.find("rock_count");
+                field != nullptr) {
+                const auto value = field->as_int64();
+                if (!value) {
+                    return std::unexpected{value.error()};
+                }
+                rocks = static_cast<jint>(*value);
+            }
+            if (const auto *field = document.document.find("hole_count");
+                field != nullptr) {
+                const auto value = field->as_int64();
+                if (!value) {
+                    return std::unexpected{value.error()};
+                }
+                holes = static_cast<jint>(*value);
+            }
+            features_.emplace(id, std::make_unique<spring_feature>(
+                                      *state, requires_below, rocks, holes,
+                                      std::move(valid)));
             continue;
         }
         return std::unexpected{
