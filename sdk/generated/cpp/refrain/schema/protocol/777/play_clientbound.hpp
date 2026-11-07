@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9bb4ea8b311a2c96
+// Schema hash: f7862869b1a7d874
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -680,7 +680,7 @@ struct place_ghost_recipe {
 
     // attributes: #[varint]
     std::int32_t container_id;
-    std::uint32_t recipe_display;
+    ::refrain::net::recipe_display recipe_display;
 };
 
 struct player_chat {
@@ -755,6 +755,14 @@ struct player_rotation {
     bool relative_y;
     float x_rot;
     bool relative_x;
+};
+
+struct recipe_book_add {
+    static constexpr std::uint16_t packet_id = 0x4B;
+    static constexpr std::string_view packet_name = "recipe_book_add";
+
+    std::vector<::refrain::protocol::v777::wire::wire_entry_2> entries;
+    bool replace;
 };
 
 struct recipe_book_remove {
@@ -1249,6 +1257,14 @@ struct update_mob_effect {
     // attributes: #[varint]
     std::int32_t effect_duration_ticks;
     std::int8_t flags_;
+};
+
+struct update_recipes {
+    static constexpr std::uint16_t packet_id = 0x88;
+    static constexpr std::string_view packet_name = "update_recipes";
+
+    std::map<::refrain::data::resource_location, std::vector<std::uint32_t>> item_sets;
+    ::refrain::net::single_input_set stonecutter_recipes;
 };
 
 struct update_tags {
@@ -3862,7 +3878,9 @@ struct show_dialog {
     out.write_varint(static_cast<std::uint32_t>(value.container_id));
   }
   {
-    out.write_varint(value.recipe_display);
+    if (auto written = ::refrain::net::encode_recipe_display(out, value.recipe_display); !written) {
+      return written;
+    }
   }
   return ::refrain::status_ok();
 }
@@ -3876,9 +3894,9 @@ struct show_dialog {
     value.container_id = static_cast<decltype(value.container_id)>(*value_0);
   }
   {
-    auto value_0 = in.read_varint();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.recipe_display = *value_0;
+    if (auto decoded = ::refrain::net::decode_recipe_display(in, value.recipe_display); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }
@@ -4214,6 +4232,46 @@ struct show_dialog {
     auto value_0 = in.read_bool();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.relative_x = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_recipe_book_add(::refrain::net::writer &out, const recipe_book_add &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.entries.size()));
+    for (const auto &item_0 : value.entries) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_entry_2(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    out.write_bool(value.replace);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_recipe_book_add(::refrain::net::reader &in, recipe_book_add &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    value.entries.clear();
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::protocol::v777::wire::wire_entry_2 value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_entry_2(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.entries.push_back(std::move(value_0));
+    }
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.replace = *value_0;
   }
   return ::refrain::status_ok();
 }
@@ -6141,6 +6199,63 @@ struct show_dialog {
     auto value_0 = in.read_i64();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.flags_ = static_cast<decltype(value.flags_)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_update_recipes(::refrain::net::writer &out, const update_recipes &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.item_sets.size()));
+    for (const auto &entry_0 : value.item_sets) {
+      if (auto written = out.write_identifier(entry_0.first); !written) {
+        return written;
+      }
+      out.write_varint(static_cast<std::uint32_t>(entry_0.second.size()));
+      for (const auto &item_1 : entry_0.second) {
+        out.write_varint(item_1);
+      }
+    }
+  }
+  {
+    if (auto written = ::refrain::net::encode_single_input_set(out, value.stonecutter_recipes); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_update_recipes(::refrain::net::reader &in, update_recipes &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.item_sets.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::data::resource_location map_key_0{};
+      auto value_1 = in.read_identifier();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      map_key_0 = std::move(*value_1);
+      std::vector<std::uint32_t> map_value_0{};
+      map_value_0.clear();
+      auto count_2 = in.read_varint();
+      if (!count_2) return std::unexpected{std::move(count_2.error())};
+      for (std::uint32_t index_2 = 0; index_2 < *count_2; ++index_2) {
+        std::uint32_t value_2{};
+        auto value_3 = in.read_varint();
+        if (!value_3) return std::unexpected{std::move(value_3.error())};
+        value_2 = *value_3;
+        map_value_0.push_back(std::move(value_2));
+      }
+      value.item_sets.emplace(std::move(map_key_0), std::move(map_value_0));
+    }
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_single_input_set(in, value.stonecutter_recipes); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }

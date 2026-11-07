@@ -89,6 +89,16 @@ enum class primitive_kind : std::uint8_t {
     advancement,
     /// Hand-written wire payload: advancement_progress.
     advancement_progress,
+    /// Hand-written wire payload: holder_set.
+    holder_set,
+    /// Hand-written wire payload: slot_display.
+    slot_display,
+    /// Hand-written wire payload: recipe_display.
+    recipe_display,
+    /// Hand-written wire payload: recipe_display_entry.
+    recipe_display_entry,
+    /// Hand-written wire payload: single_input_set.
+    single_input_set,
     void_type,
 };
 

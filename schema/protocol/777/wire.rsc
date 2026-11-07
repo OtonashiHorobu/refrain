@@ -62,7 +62,7 @@ struct wire_data {
     #[max(4096)] key_signature: bytes;
 }
 
-struct wire_type_83 {
+struct wire_type_82 {
     added_components: map<varint_id, i32>;
     removed_components: array<varint_id>;
 }
@@ -70,7 +70,7 @@ struct wire_type_83 {
 struct wire_actual_item {
     item: varint_id;
     #[varint] count: i32;
-    components: wire_type_83;
+    components: wire_type_82;
 }
 
 struct wire_entry_4 {
@@ -194,6 +194,11 @@ struct wire_body {
     time_stamp: i64;
     salt: i64;
     last_seen: wire_packed;
+}
+
+struct wire_entry_2 {
+    contents: recipe_display_entry;
+    flags_: i8;
 }
 
 struct wire_recipe_display_id {

@@ -113,6 +113,16 @@ namespace {
             return "::refrain::net::advancement";
         case primitive_kind::advancement_progress:
             return "::refrain::net::advancement_progress";
+        case primitive_kind::holder_set:
+            return "::refrain::net::holder_set";
+        case primitive_kind::slot_display:
+            return "::refrain::net::slot_display";
+        case primitive_kind::recipe_display:
+            return "::refrain::net::recipe_display";
+        case primitive_kind::recipe_display_entry:
+            return "::refrain::net::recipe_display_entry";
+        case primitive_kind::single_input_set:
+            return "::refrain::net::single_input_set";
         case primitive_kind::void_type:
             return "void";
         }
@@ -809,6 +819,51 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::holder_set:
+            writer.line("if (auto written = ::refrain::net::encode_holder_set("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::slot_display:
+            writer.line("if (auto written = ::refrain::net::encode_slot_display("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::recipe_display:
+            writer.line("if (auto written = ::refrain::net::encode_recipe_display("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::recipe_display_entry:
+            writer.line("if (auto written = ::refrain::net::encode_recipe_display_entry("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::single_input_set:
+            writer.line("if (auto written = ::refrain::net::encode_single_input_set("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -1323,6 +1378,56 @@ void emit_decode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::holder_set:
+            writer.line("if (auto decoded = ::refrain::net::decode_holder_set("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::slot_display:
+            writer.line("if (auto decoded = ::refrain::net::decode_slot_display("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::recipe_display:
+            writer.line("if (auto decoded = ::refrain::net::decode_recipe_display("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::recipe_display_entry:
+            writer.line("if (auto decoded = ::refrain::net::decode_recipe_display_entry("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::single_input_set:
+            writer.line("if (auto decoded = ::refrain::net::decode_single_input_set("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -1614,11 +1719,28 @@ void emit_decode_value(code_writer &writer, const model &program,
     const auto uses_wire = [&](const auto &self,
                                const resolved_type &type) -> bool {
         if (type.kind == resolved_type::category::primitive) {
-            return type.primitive == primitive_kind::text_component ||
-                   type.primitive == primitive_kind::item_stack ||
-                   type.primitive == primitive_kind::lp_vec3 ||
-                   type.primitive == primitive_kind::nbt ||
-                   type.primitive == primitive_kind::message_signature_packed;
+            switch (type.primitive) {
+            case primitive_kind::u8:
+            case primitive_kind::u16:
+            case primitive_kind::u32:
+            case primitive_kind::u64:
+            case primitive_kind::i8:
+            case primitive_kind::i16:
+            case primitive_kind::i32:
+            case primitive_kind::i64:
+            case primitive_kind::f32:
+            case primitive_kind::f64:
+            case primitive_kind::boolean:
+            case primitive_kind::string:
+            case primitive_kind::bytes:
+            case primitive_kind::identifier:
+            case primitive_kind::uuid:
+            case primitive_kind::void_type:
+                return false;
+            default:
+                // Hand-written wire types live in the network wire header.
+                return true;
+            }
         }
         return std::ranges::any_of(type.arguments, [&](const auto &argument) {
             return self(self, argument);

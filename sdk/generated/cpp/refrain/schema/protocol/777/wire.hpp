@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9bb4ea8b311a2c96
+// Schema hash: f7862869b1a7d874
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -86,7 +86,7 @@ struct wire_data {
     std::vector<std::byte> key_signature;
 };
 
-struct wire_type_83 {
+struct wire_type_82 {
     std::map<std::uint32_t, std::int32_t> added_components;
     std::vector<std::uint32_t> removed_components;
 };
@@ -95,7 +95,7 @@ struct wire_actual_item {
     std::uint32_t item;
     // attributes: #[varint]
     std::int32_t count;
-    ::refrain::protocol::v777::wire::wire_type_83 components;
+    ::refrain::protocol::v777::wire::wire_type_82 components;
 };
 
 struct wire_entry_4 {
@@ -248,6 +248,11 @@ struct wire_body {
     std::int64_t time_stamp;
     std::int64_t salt;
     ::refrain::protocol::v777::wire::wire_packed last_seen;
+};
+
+struct wire_entry_2 {
+    ::refrain::net::recipe_display_entry contents;
+    std::int8_t flags_;
 };
 
 struct wire_recipe_display_id {
@@ -660,7 +665,7 @@ struct wire_position_move_rotation {
   return ::refrain::status_ok();
 }
 
-[[nodiscard]] inline auto encode_wire_type_83(::refrain::net::writer &out, const wire_type_83 &value) -> ::refrain::status {
+[[nodiscard]] inline auto encode_wire_type_82(::refrain::net::writer &out, const wire_type_82 &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
   {
@@ -679,7 +684,7 @@ struct wire_position_move_rotation {
   return ::refrain::status_ok();
 }
 
-[[nodiscard]] inline auto decode_wire_type_83(::refrain::net::reader &in, wire_type_83 &value) -> ::refrain::status {
+[[nodiscard]] inline auto decode_wire_type_82(::refrain::net::reader &in, wire_type_82 &value) -> ::refrain::status {
   static_cast<void>(in);
   static_cast<void>(value);
   {
@@ -723,7 +728,7 @@ struct wire_position_move_rotation {
     out.write_varint(static_cast<std::uint32_t>(value.count));
   }
   {
-    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_83(out, value.components); !written) {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_82(out, value.components); !written) {
       return written;
     }
   }
@@ -744,7 +749,7 @@ struct wire_position_move_rotation {
     value.count = static_cast<decltype(value.count)>(*value_0);
   }
   {
-    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_83(in, value.components); !decoded) {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_82(in, value.components); !decoded) {
       return std::unexpected{std::move(decoded.error())};
     }
   }
@@ -1899,6 +1904,36 @@ struct wire_position_move_rotation {
     if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_packed(in, value.last_seen); !decoded) {
       return std::unexpected{std::move(decoded.error())};
     }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_entry_2(::refrain::net::writer &out, const wire_entry_2 &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::net::encode_recipe_display_entry(out, value.contents); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.flags_));
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_entry_2(::refrain::net::reader &in, wire_entry_2 &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::net::decode_recipe_display_entry(in, value.contents); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.flags_ = static_cast<decltype(value.flags_)>(*value_0);
   }
   return ::refrain::status_ok();
 }

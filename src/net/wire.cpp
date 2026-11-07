@@ -1286,6 +1286,540 @@ auto decode_map_patch(reader &in, map_patch &value) -> status {
     return status_ok();
 }
 
+namespace {
+
+constexpr std::uint32_t recipe_max_depth{64};
+
+[[nodiscard]] auto encode_slot_display_at(writer &out,
+                                          const slot_display &value,
+                                          std::uint32_t depth) -> status;
+[[nodiscard]] auto decode_slot_display_at(reader &in, slot_display &value,
+                                          std::uint32_t depth) -> status;
+
+[[nodiscard]] auto encode_slot_children(writer &out,
+                                        const std::vector<slot_display> &children,
+                                        std::uint32_t expected,
+                                        std::uint32_t depth) -> status {
+    if (children.size() != expected) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument,
+            "slot_display: unexpected child count")};
+    }
+    for (const auto &child : children) {
+        if (auto status{encode_slot_display_at(out, child, depth + 1)};
+            !status) {
+            return status;
+        }
+    }
+    return status_ok();
+}
+
+[[nodiscard]] auto encode_slot_display_at(writer &out,
+                                          const slot_display &value,
+                                          std::uint32_t depth) -> status {
+    if (depth > recipe_max_depth) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument, "slot_display: nesting is too deep")};
+    }
+    if (value.type > 10U) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument,
+            "slot_display: type is out of range")};
+    }
+    out.write_varint(value.type);
+    switch (value.type) {
+    case 0:
+    case 1:
+        return status_ok();
+    case 2:
+        return encode_slot_children(out, value.children, 1, depth);
+    case 3:
+        if (auto status{encode_slot_children(out, value.children, 1, depth)};
+            !status) {
+            return status;
+        }
+        out.write_varint(value.component_type);
+        return status_ok();
+    case 4:
+        out.write_varint(value.item_id);
+        return status_ok();
+    case 5:
+        return encode_item_stack_template(out, value.stack);
+    case 6:
+        return encode_holder_set(out, value.tag);
+    case 7:
+    case 9:
+        return encode_slot_children(out, value.children, 2, depth);
+    case 8:
+        if (auto status{encode_slot_children(out, value.children, 2, depth)};
+            !status) {
+            return status;
+        }
+        out.write_varint(value.pattern_id);
+        return status_ok();
+    case 10:
+        out.write_varint(static_cast<std::uint32_t>(value.children.size()));
+        for (const auto &child : value.children) {
+            if (auto status{encode_slot_display_at(out, child, depth + 1)};
+                !status) {
+                return status;
+            }
+        }
+        return status_ok();
+    default:
+        return std::unexpected{make_error(error_code::invalid_argument,
+                                          "slot_display: type is out of range")};
+    }
+}
+
+[[nodiscard]] auto decode_slot_children(reader &in,
+                                        std::vector<slot_display> &children,
+                                        std::uint32_t count,
+                                        std::uint32_t depth) -> status {
+    children.clear();
+    children.reserve(count);
+    for (std::uint32_t index{0}; index < count; ++index) {
+        slot_display child{};
+        if (auto status{decode_slot_display_at(in, child, depth + 1)};
+            !status) {
+            return status;
+        }
+        children.push_back(std::move(child));
+    }
+    return status_ok();
+}
+
+[[nodiscard]] auto decode_slot_display_at(reader &in, slot_display &value,
+                                          std::uint32_t depth) -> status {
+    if (depth > recipe_max_depth) {
+        return std::unexpected{make_error(
+            error_code::parse_error, "slot_display: nesting is too deep")};
+    }
+    value = slot_display{};
+    auto type{in.read_varint()};
+    if (!type) {
+        return std::unexpected{std::move(type.error())};
+    }
+    if (*type > 10U) {
+        return std::unexpected{make_error(
+            error_code::parse_error, "slot_display: type is out of range")};
+    }
+    value.type = *type;
+    switch (*type) {
+    case 0:
+    case 1:
+        return status_ok();
+    case 2:
+        return decode_slot_children(in, value.children, 1, depth);
+    case 3: {
+        if (auto status{decode_slot_children(in, value.children, 1, depth)};
+            !status) {
+            return status;
+        }
+        auto component{in.read_varint()};
+        if (!component) {
+            return std::unexpected{std::move(component.error())};
+        }
+        value.component_type = *component;
+        return status_ok();
+    }
+    case 4: {
+        auto item{in.read_varint()};
+        if (!item) {
+            return std::unexpected{std::move(item.error())};
+        }
+        value.item_id = *item;
+        return status_ok();
+    }
+    case 5:
+        return decode_item_stack_template(in, value.stack);
+    case 6:
+        return decode_holder_set(in, value.tag);
+    case 7:
+    case 9:
+        return decode_slot_children(in, value.children, 2, depth);
+    case 8: {
+        if (auto status{decode_slot_children(in, value.children, 2, depth)};
+            !status) {
+            return status;
+        }
+        auto pattern{in.read_varint()};
+        if (!pattern) {
+            return std::unexpected{std::move(pattern.error())};
+        }
+        value.pattern_id = *pattern;
+        return status_ok();
+    }
+    case 10: {
+        auto count{in.read_varint()};
+        if (!count) {
+            return std::unexpected{std::move(count.error())};
+        }
+        if (*count > in.remaining()) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                "slot_display: composite list exceeds the payload")};
+        }
+        return decode_slot_children(in, value.children, *count, depth);
+    }
+    default:
+        return status_ok();
+    }
+}
+
+[[nodiscard]] auto encode_recipe_slots(writer &out,
+                                       const std::vector<slot_display> &slots,
+                                       std::uint32_t expected,
+                                       std::uint32_t depth) -> status {
+    if (slots.size() != expected) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument,
+            "recipe_display: unexpected slot count")};
+    }
+    for (const auto &slot : slots) {
+        if (auto status{encode_slot_display_at(out, slot, depth + 1)};
+            !status) {
+            return status;
+        }
+    }
+    return status_ok();
+}
+
+[[nodiscard]] auto decode_recipe_slots(reader &in,
+                                       std::vector<slot_display> &slots,
+                                       std::uint32_t count,
+                                       std::uint32_t depth) -> status {
+    slots.clear();
+    slots.reserve(count);
+    for (std::uint32_t index{0}; index < count; ++index) {
+        slot_display slot{};
+        if (auto status{decode_slot_display_at(in, slot, depth + 1)};
+            !status) {
+            return status;
+        }
+        slots.push_back(std::move(slot));
+    }
+    return status_ok();
+}
+
+} // namespace
+
+auto encode_holder_set(writer &out, const item_holder_set &value) -> status {
+    if (value.named) {
+        out.write_varint(0);
+        return out.write_identifier(value.tag);
+    }
+    out.write_varint(static_cast<std::uint32_t>(value.ids.size()) + 1U);
+    for (const auto id : value.ids) {
+        out.write_varint(id);
+    }
+    return status_ok();
+}
+
+auto decode_holder_set(reader &in, item_holder_set &value) -> status {
+    auto header{in.read_varint()};
+    if (!header) {
+        return std::unexpected{std::move(header.error())};
+    }
+    value = item_holder_set{};
+    if (*header == 0U) {
+        auto tag{in.read_identifier()};
+        if (!tag) {
+            return std::unexpected{std::move(tag.error())};
+        }
+        value.named = true;
+        value.tag = std::move(*tag);
+        return status_ok();
+    }
+    const auto count{*header - 1U};
+    if (count > in.remaining()) {
+        return std::unexpected{make_error(
+            error_code::parse_error,
+            "holder_set: id list exceeds the payload")};
+    }
+    value.ids.reserve(count);
+    for (std::uint32_t index{0}; index < count; ++index) {
+        auto id{in.read_varint()};
+        if (!id) {
+            return std::unexpected{std::move(id.error())};
+        }
+        value.ids.push_back(*id);
+    }
+    return status_ok();
+}
+
+auto encode_slot_display(writer &out, const slot_display &value) -> status {
+    return encode_slot_display_at(out, value, 0);
+}
+
+auto decode_slot_display(reader &in, slot_display &value) -> status {
+    return decode_slot_display_at(in, value, 0);
+}
+
+auto encode_recipe_display(writer &out, const recipe_display &value)
+    -> status {
+    if (value.type > 4U) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument,
+            "recipe_display: type is out of range")};
+    }
+    out.write_varint(value.type);
+    switch (value.type) {
+    case 0: {
+        out.write_varint(static_cast<std::uint32_t>(value.slots.size()));
+        for (const auto &slot : value.slots) {
+            if (auto status{encode_slot_display_at(out, slot, 1)}; !status) {
+                return status;
+            }
+        }
+        break;
+    }
+    case 1: {
+        out.write_varint(value.width);
+        out.write_varint(value.height);
+        out.write_varint(static_cast<std::uint32_t>(value.slots.size()));
+        for (const auto &slot : value.slots) {
+            if (auto status{encode_slot_display_at(out, slot, 1)}; !status) {
+                return status;
+            }
+        }
+        break;
+    }
+    case 2: {
+        if (auto status{encode_recipe_slots(out, value.slots, 2, 1)};
+            !status) {
+            return status;
+        }
+        break;
+    }
+    case 3: {
+        if (auto status{encode_recipe_slots(out, value.slots, 1, 1)};
+            !status) {
+            return status;
+        }
+        break;
+    }
+    case 4: {
+        if (auto status{encode_recipe_slots(out, value.slots, 3, 1)};
+            !status) {
+            return status;
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    if (auto status{encode_slot_display_at(out, value.result, 1)}; !status) {
+        return status;
+    }
+    if (auto status{encode_slot_display_at(out, value.station, 1)}; !status) {
+        return status;
+    }
+    if (value.type == 2U) {
+        out.write_varint(value.duration);
+        out.write_f32(value.experience);
+    }
+    return status_ok();
+}
+
+auto decode_recipe_display(reader &in, recipe_display &value) -> status {
+    value = recipe_display{};
+    auto type{in.read_varint()};
+    if (!type) {
+        return std::unexpected{std::move(type.error())};
+    }
+    if (*type > 4U) {
+        return std::unexpected{make_error(
+            error_code::parse_error, "recipe_display: type is out of range")};
+    }
+    value.type = *type;
+    switch (*type) {
+    case 0: {
+        auto count{in.read_varint()};
+        if (!count) {
+            return std::unexpected{std::move(count.error())};
+        }
+        if (*count > in.remaining()) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                "recipe_display: ingredient list exceeds the payload")};
+        }
+        if (auto status{decode_recipe_slots(in, value.slots, *count, 1)};
+            !status) {
+            return status;
+        }
+        break;
+    }
+    case 1: {
+        auto width{in.read_varint()};
+        auto height{in.read_varint()};
+        auto count{in.read_varint()};
+        if (!width || !height || !count) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "recipe_display: truncated shaped")};
+        }
+        if (*count > in.remaining()) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                "recipe_display: ingredient list exceeds the payload")};
+        }
+        value.width = *width;
+        value.height = *height;
+        if (auto status{decode_recipe_slots(in, value.slots, *count, 1)};
+            !status) {
+            return status;
+        }
+        break;
+    }
+    case 2:
+        if (auto status{decode_recipe_slots(in, value.slots, 2, 1)}; !status) {
+            return status;
+        }
+        break;
+    case 3:
+        if (auto status{decode_recipe_slots(in, value.slots, 1, 1)}; !status) {
+            return status;
+        }
+        break;
+    case 4:
+        if (auto status{decode_recipe_slots(in, value.slots, 3, 1)}; !status) {
+            return status;
+        }
+        break;
+    default:
+        break;
+    }
+    if (auto status{decode_slot_display_at(in, value.result, 1)}; !status) {
+        return status;
+    }
+    if (auto status{decode_slot_display_at(in, value.station, 1)}; !status) {
+        return status;
+    }
+    if (*type == 2U) {
+        auto duration{in.read_varint()};
+        auto experience{in.read_f32()};
+        if (!duration || !experience) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                "recipe_display: truncated furnace fields")};
+        }
+        value.duration = *duration;
+        value.experience = *experience;
+    }
+    return status_ok();
+}
+
+auto encode_recipe_display_entry(writer &out,
+                                 const recipe_display_entry &value) -> status {
+    out.write_varint(value.id);
+    if (auto status{encode_recipe_display(out, value.display)}; !status) {
+        return status;
+    }
+    out.write_varint(value.group.has_value() ? *value.group + 1U : 0U);
+    out.write_varint(value.category);
+    out.write_bool(value.has_requirements);
+    if (value.has_requirements) {
+        out.write_varint(
+            static_cast<std::uint32_t>(value.requirements.size()));
+        for (const auto &requirement : value.requirements) {
+            if (auto status{encode_holder_set(out, requirement)}; !status) {
+                return status;
+            }
+        }
+    }
+    return status_ok();
+}
+
+auto decode_recipe_display_entry(reader &in, recipe_display_entry &value)
+    -> status {
+    auto id{in.read_varint()};
+    if (!id) {
+        return std::unexpected{std::move(id.error())};
+    }
+    value.id = *id;
+    if (auto status{decode_recipe_display(in, value.display)}; !status) {
+        return status;
+    }
+    auto group{in.read_varint()};
+    if (!group) {
+        return std::unexpected{std::move(group.error())};
+    }
+    value.group.reset();
+    if (*group != 0U) {
+        value.group = *group - 1U;
+    }
+    auto category{in.read_varint()};
+    if (!category) {
+        return std::unexpected{std::move(category.error())};
+    }
+    value.category = *category;
+    auto has_requirements{in.read_bool()};
+    if (!has_requirements) {
+        return std::unexpected{std::move(has_requirements.error())};
+    }
+    value.has_requirements = *has_requirements;
+    value.requirements.clear();
+    if (*has_requirements) {
+        auto count{in.read_varint()};
+        if (!count) {
+            return std::unexpected{std::move(count.error())};
+        }
+        if (*count > in.remaining()) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                "recipe_display_entry: requirement list exceeds the payload")};
+        }
+        value.requirements.reserve(*count);
+        for (std::uint32_t index{0}; index < *count; ++index) {
+            item_holder_set requirement{};
+            if (auto status{decode_holder_set(in, requirement)}; !status) {
+                return status;
+            }
+            value.requirements.push_back(std::move(requirement));
+        }
+    }
+    return status_ok();
+}
+
+auto encode_single_input_set(writer &out, const single_input_set &value)
+    -> status {
+    out.write_varint(static_cast<std::uint32_t>(value.entries.size()));
+    for (const auto &entry : value.entries) {
+        if (auto status{encode_holder_set(out, entry.input)}; !status) {
+            return status;
+        }
+        if (auto status{encode_slot_display(out, entry.display)}; !status) {
+            return status;
+        }
+    }
+    return status_ok();
+}
+
+auto decode_single_input_set(reader &in, single_input_set &value) -> status {
+    auto count{in.read_varint()};
+    if (!count) {
+        return std::unexpected{std::move(count.error())};
+    }
+    if (*count > in.remaining()) {
+        return std::unexpected{make_error(
+            error_code::parse_error,
+            "single_input_set: entry list exceeds the payload")};
+    }
+    value.entries.clear();
+    value.entries.reserve(*count);
+    for (std::uint32_t index{0}; index < *count; ++index) {
+        selectable_recipe_entry entry{};
+        if (auto status{decode_holder_set(in, entry.input)}; !status) {
+            return status;
+        }
+        if (auto status{decode_slot_display(in, entry.display)}; !status) {
+            return status;
+        }
+        value.entries.push_back(std::move(entry));
+    }
+    return status_ok();
+}
+
 auto encode_item_stack_template(writer &out, const item_stack_template &value)
     -> status {
     out.write_varint(value.item_id);

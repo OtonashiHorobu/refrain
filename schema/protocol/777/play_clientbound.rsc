@@ -403,7 +403,7 @@ packet pong_response = 63 {
 
 packet place_ghost_recipe = 64 {
     #[varint] container_id: i32;
-    recipe_display: varint_id;
+    recipe_display: recipe_display;
 }
 
 packet player_chat = 66 {
@@ -450,6 +450,11 @@ packet player_rotation = 74 {
     relative_y: bool;
     x_rot: f32;
     relative_x: bool;
+}
+
+packet recipe_book_add = 75 {
+    entries: array<wire_entry_2>;
+    replace: bool;
 }
 
 packet recipe_book_remove = 76 {
@@ -733,6 +738,11 @@ packet update_mob_effect = 135 {
     #[varint] effect_amplifier: i32;
     #[varint] effect_duration_ticks: i32;
     flags_: i8;
+}
+
+packet update_recipes = 136 {
+    item_sets: map<identifier, array<varint_id>>;
+    stonecutter_recipes: single_input_set;
 }
 
 packet update_tags = 137 {

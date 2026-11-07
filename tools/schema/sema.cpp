@@ -108,6 +108,16 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "advancement";
     case primitive_kind::advancement_progress:
         return "advancement_progress";
+    case primitive_kind::holder_set:
+        return "holder_set";
+    case primitive_kind::slot_display:
+        return "slot_display";
+    case primitive_kind::recipe_display:
+        return "recipe_display";
+    case primitive_kind::recipe_display_entry:
+        return "recipe_display_entry";
+    case primitive_kind::single_input_set:
+        return "single_input_set";
     case primitive_kind::void_type:
         return "void";
     }
@@ -158,6 +168,11 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"advancement_requirements", primitive_kind::advancement_requirements},
         std::pair{"advancement", primitive_kind::advancement},
         std::pair{"advancement_progress", primitive_kind::advancement_progress},
+        std::pair{"holder_set", primitive_kind::holder_set},
+        std::pair{"slot_display", primitive_kind::slot_display},
+        std::pair{"recipe_display", primitive_kind::recipe_display},
+        std::pair{"recipe_display_entry", primitive_kind::recipe_display_entry},
+        std::pair{"single_input_set", primitive_kind::single_input_set},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -331,6 +346,11 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::advancement_requirements:
     case primitive_kind::advancement:
     case primitive_kind::advancement_progress:
+    case primitive_kind::holder_set:
+    case primitive_kind::slot_display:
+    case primitive_kind::recipe_display:
+    case primitive_kind::recipe_display_entry:
+    case primitive_kind::single_input_set:
     case primitive_kind::void_type:
         return false;
     }
@@ -382,6 +402,11 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::advancement_requirements:
     case primitive_kind::advancement:
     case primitive_kind::advancement_progress:
+    case primitive_kind::holder_set:
+    case primitive_kind::slot_display:
+    case primitive_kind::recipe_display:
+    case primitive_kind::recipe_display_entry:
+    case primitive_kind::single_input_set:
     case primitive_kind::void_type:
         return false;
     }
@@ -2325,6 +2350,11 @@ class analyzer {
             case primitive_kind::advancement_requirements:
             case primitive_kind::advancement:
             case primitive_kind::advancement_progress:
+            case primitive_kind::holder_set:
+            case primitive_kind::slot_display:
+            case primitive_kind::recipe_display:
+            case primitive_kind::recipe_display_entry:
+            case primitive_kind::single_input_set:
                 // Rejected for RIDL in resolve_type(); a wire-only primitive
                 // has no in-process ABI layout.
                 return std::nullopt;

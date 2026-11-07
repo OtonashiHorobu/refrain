@@ -70,6 +70,89 @@ const suite tests = [] {
         }
     };
 
+    "recipe slots and displays round trip"_test = [] {
+        const auto tag{
+            refrain::data::resource_location::parse("minecraft:planks")};
+        expect(tag.has_value());
+        if (!tag) {
+            return;
+        }
+        net::item_holder_set named{};
+        named.named = true;
+        named.tag = *tag;
+        net::item_holder_set direct{};
+        direct.ids = {4U, 5U};
+        for (const auto &set : {named, direct}) {
+            std::vector<std::byte> bytes;
+            net::writer out{bytes};
+            expect(static_cast<bool>(net::encode_holder_set(out, set)));
+            net::reader in{bytes};
+            net::item_holder_set decoded{};
+            expect(static_cast<bool>(net::decode_holder_set(in, decoded)));
+            const bool same{decoded == set};
+            expect(same);
+            expect(in.empty());
+        }
+
+        net::slot_display item{};
+        item.type = 4U;
+        item.item_id = 7U;
+        net::slot_display composite{};
+        composite.type = 10U;
+        composite.children = {item, item};
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_slot_display(out, composite)));
+        net::reader in{bytes};
+        net::slot_display decoded{};
+        expect(static_cast<bool>(net::decode_slot_display(in, decoded)));
+        expect(decoded.type == 10U);
+        expect(decoded.children.size() == 2U);
+        if (decoded.children.size() == 2U) {
+            expect(decoded.children[0].type == 4U);
+            expect(decoded.children[0].item_id == 7U);
+        }
+        expect(in.empty());
+
+        net::recipe_display display{};
+        display.type = 0U;
+        display.slots = {item, item};
+        display.result = item;
+        display.station = item;
+        bytes.clear();
+        net::writer display_out{bytes};
+        expect(static_cast<bool>(
+            net::encode_recipe_display(display_out, display)));
+        net::reader display_in{bytes};
+        net::recipe_display display_decoded{};
+        expect(static_cast<bool>(
+            net::decode_recipe_display(display_in, display_decoded)));
+        expect(display_decoded.type == 0U);
+        expect(display_decoded.slots.size() == 2U);
+        expect(display_decoded.result.item_id == 7U);
+        expect(display_in.empty());
+
+        net::recipe_display_entry entry{};
+        entry.id = 9U;
+        entry.display = display;
+        entry.group = 3U;
+        entry.category = 1U;
+        entry.has_requirements = true;
+        entry.requirements = {direct};
+        bytes.clear();
+        net::writer entry_out{bytes};
+        expect(static_cast<bool>(
+            net::encode_recipe_display_entry(entry_out, entry)));
+        net::reader entry_in{bytes};
+        net::recipe_display_entry entry_decoded{};
+        expect(static_cast<bool>(
+            net::decode_recipe_display_entry(entry_in, entry_decoded)));
+        expect(entry_decoded.id == 9U);
+        expect(entry_decoded.group == 3U);
+        expect(entry_decoded.requirements.size() == 1U);
+        expect(entry_in.empty());
+    };
+
     "advancement round trips display, requirements and progress"_test = [] {
         const auto background{refrain::data::resource_location::parse(
             "minecraft:textures/block/stone.png")};

@@ -359,6 +359,11 @@ attribute_comment(const std::vector<attribute> &attributes,
     case primitive_kind::advancement_requirements:
     case primitive_kind::advancement:
     case primitive_kind::advancement_progress:
+    case primitive_kind::holder_set:
+    case primitive_kind::slot_display:
+    case primitive_kind::recipe_display:
+    case primitive_kind::recipe_display_entry:
+    case primitive_kind::single_input_set:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";
@@ -422,6 +427,11 @@ attribute_comment(const std::vector<attribute> &attributes,
     case primitive_kind::advancement_requirements:
     case primitive_kind::advancement:
     case primitive_kind::advancement_progress:
+    case primitive_kind::holder_set:
+    case primitive_kind::slot_display:
+    case primitive_kind::recipe_display:
+    case primitive_kind::recipe_display_entry:
+    case primitive_kind::single_input_set:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";

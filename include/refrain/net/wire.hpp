@@ -493,6 +493,105 @@ encode_advancement_progress(writer &out, const advancement_progress &value)
                                                advancement_progress &value)
     -> status;
 
+/// A set of item holders: either a named tag or a direct id list.
+struct item_holder_set {
+    bool named{false};
+    data::resource_location tag{};
+    std::vector<std::uint32_t> ids{};
+
+    friend auto operator==(const item_holder_set &,
+                           const item_holder_set &) -> bool = default;
+};
+
+[[nodiscard]] auto encode_holder_set(writer &out,
+                                     const item_holder_set &value) -> status;
+[[nodiscard]] auto decode_holder_set(reader &in, item_holder_set &value)
+    -> status;
+
+/// A recipe slot display; the type selects which fields are present.
+struct slot_display {
+    std::uint32_t type{0};
+    std::uint32_t item_id{0};
+    item_stack_template stack{};
+    item_holder_set tag{};
+    std::uint32_t component_type{0};
+    std::uint32_t pattern_id{0};
+    std::vector<slot_display> children{};
+
+    friend auto operator==(const slot_display &, const slot_display &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_slot_display(writer &out,
+                                       const slot_display &value) -> status;
+[[nodiscard]] auto decode_slot_display(reader &in, slot_display &value)
+    -> status;
+
+/// A recipe display: type 0 shapeless, 1 shaped, 2 furnace, 3 stonecutter,
+/// 4 smithing.
+struct recipe_display {
+    std::uint32_t type{0};
+    std::uint32_t width{0};
+    std::uint32_t height{0};
+    std::uint32_t duration{0};
+    float experience{0.0F};
+    std::vector<slot_display> slots{};
+    slot_display result{};
+    slot_display station{};
+
+    friend auto operator==(const recipe_display &, const recipe_display &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_recipe_display(writer &out,
+                                         const recipe_display &value)
+    -> status;
+[[nodiscard]] auto decode_recipe_display(reader &in, recipe_display &value)
+    -> status;
+
+/// One recipe book entry.
+struct recipe_display_entry {
+    std::uint32_t id{0};
+    recipe_display display{};
+    std::optional<std::uint32_t> group{};
+    std::uint32_t category{0};
+    bool has_requirements{false};
+    std::vector<item_holder_set> requirements{};
+
+    friend auto operator==(const recipe_display_entry &,
+                           const recipe_display_entry &) -> bool = default;
+};
+
+[[nodiscard]] auto encode_recipe_display_entry(writer &out,
+                                               const recipe_display_entry &value)
+    -> status;
+[[nodiscard]] auto decode_recipe_display_entry(reader &in,
+                                               recipe_display_entry &value)
+    -> status;
+
+/// One selectable stonecutter recipe: an input set and its display.
+struct selectable_recipe_entry {
+    item_holder_set input{};
+    slot_display display{};
+
+    friend auto operator==(const selectable_recipe_entry &,
+                           const selectable_recipe_entry &) -> bool = default;
+};
+
+/// The selectable recipe list sent with recipe updates.
+struct single_input_set {
+    std::vector<selectable_recipe_entry> entries{};
+
+    friend auto operator==(const single_input_set &, const single_input_set &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_single_input_set(writer &out,
+                                           const single_input_set &value)
+    -> status;
+[[nodiscard]] auto decode_single_input_set(reader &in,
+                                           single_input_set &value) -> status;
+
 /// One entity metadata entry. The active representation is selected by the
 /// serializer id; unused fields keep their defaults.
 struct metadata_value {
