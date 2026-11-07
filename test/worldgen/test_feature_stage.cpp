@@ -11,6 +11,7 @@
 
 #include <boost/ut.hpp>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -24,6 +25,7 @@ using refrain::worldgen::heightmap_kind;
 using refrain::worldgen::proto_chunk;
 using refrain::worldgen::feature::attached_to_leaves_decorator;
 using refrain::worldgen::feature::attached_to_logs_decorator;
+using refrain::worldgen::feature::bamboo_feature;
 using refrain::worldgen::feature::biome_feature_list;
 using refrain::worldgen::feature::block_blob_feature;
 using refrain::worldgen::feature::boolean_selector_feature;
@@ -290,6 +292,65 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
             }
         }
         expect(count > 1U);
+    };
+
+    "bamboo grows a stalk and replaces podzol beneath it"_test = [] {
+        block_state_registry registry;
+        auto dirt = registry.intern("minecraft:dirt", {.air = false});
+        auto bamboo = registry.intern(
+            "minecraft:bamboo[age=1,leaves=none,stage=0]", {.air = false});
+        auto bamboo_large = registry.intern(
+            "minecraft:bamboo[age=1,leaves=large,stage=1]", {.air = false});
+        auto bamboo_top = registry.intern(
+            "minecraft:bamboo[age=1,leaves=large,stage=0]", {.air = false});
+        auto bamboo_small = registry.intern(
+            "minecraft:bamboo[age=1,leaves=small,stage=0]", {.air = false});
+        auto podzol = registry.intern("minecraft:podzol", {.air = false});
+        expect(dirt.has_value() && bamboo.has_value() &&
+               bamboo_large.has_value() && bamboo_top.has_value() &&
+               bamboo_small.has_value() && podzol.has_value());
+        if (!dirt || !bamboo || !bamboo_large || !bamboo_top || !bamboo_small ||
+            !podzol) {
+            return;
+        }
+        const std::array<block_state_id, 1> dirt_tag{*dirt};
+        registry.add_tag("minecraft:supports_bamboo", dirt_tag);
+        registry.add_tag("minecraft:beneath_bamboo_podzol_replaceable",
+                         dirt_tag);
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::biomes);
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                expect(chunk.set_state(x, 4, z, *dirt));
+            }
+        }
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 0};
+        placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &registry,
+            .generation =
+                generation_context{.min_y = 0, .height = 32, .sea_level = 8},
+        };
+        feature_context context{.placement = placement};
+        const bamboo_feature feature{1.0F,        *bamboo,       *bamboo_large,
+                                     *bamboo_top, *bamboo_small, *podzol};
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(3)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 5, .z = 8}));
+        expect(chunk.state_at(8, 5, 8) == *bamboo);
+        expect(chunk.state_at(8, 4, 8) == *podzol);
+        jint bamboo_count = 0;
+        for (jint y = 5; y < 32; ++y) {
+            const auto state = chunk.state_at(8, y, 8);
+            if (state == *bamboo || state == *bamboo_large ||
+                state == *bamboo_top || state == *bamboo_small) {
+                ++bamboo_count;
+            }
+        }
+        expect(bamboo_count >= 5);
     };
 };
 

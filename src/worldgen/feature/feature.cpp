@@ -422,6 +422,73 @@ auto random_neighbor_spread_feature::place(feature_context &context,
     return true;
 }
 
+auto bamboo_feature::place(feature_context &context, worldgen_random &random,
+                           const block_pos &origin) const -> bool {
+    const auto air = context.placement.states->air();
+    if (context.placement.region->state_at(origin.x, origin.y, origin.z) !=
+        air) {
+        return false;
+    }
+    if (!context.placement.states->in_tag(context.placement.region->state_at(
+                                              origin.x, origin.y - 1, origin.z),
+                                          "minecraft:supports_bamboo")) {
+        return false;
+    }
+    const auto surface_height = [&](jint x, jint z) {
+        if (context.placement.height) {
+            return context.placement.height(heightmap_kind::world_surface, x,
+                                            z);
+        }
+        const auto *chunk = context.placement.chunk;
+        const jint local_x = x - chunk->chunk_x() * 16;
+        const jint local_z = z - chunk->chunk_z() * 16;
+        if (local_x < 0 || local_x > 15 || local_z < 0 || local_z > 15) {
+            return chunk->min_y();
+        }
+        return chunk->first_available(heightmap_kind::world_surface, local_x,
+                                      local_z);
+    };
+    const jint height = random.next_int(12) + 5;
+    if (random.next_float() < probability_) {
+        const jint radius = random.next_int(4) + 1;
+        for (jint x = origin.x - radius; x <= origin.x + radius; ++x) {
+            for (jint z = origin.z - radius; z <= origin.z + radius; ++z) {
+                const jint dx = x - origin.x;
+                const jint dz = z - origin.z;
+                if (dx * dx + dz * dz > radius * radius) {
+                    continue;
+                }
+                const jint y = surface_height(x, z) - 1;
+                if (context.placement.states->in_tag(
+                        context.placement.region->state_at(x, y, z),
+                        "minecraft:beneath_bamboo_podzol_replaceable")) {
+                    (void)context.placement.region->set_block_state(x, y, z,
+                                                                    podzol_);
+                }
+            }
+        }
+    }
+    block_pos pos = origin;
+    for (jint i = 0; i < height && context.placement.region->state_at(
+                                       pos.x, pos.y, pos.z) == air;
+         ++i) {
+        (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                        trunk_);
+        ++pos.y;
+    }
+    if (pos.y - origin.y >= 3) {
+        (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                        final_large_);
+        --pos.y;
+        (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                        top_large_);
+        --pos.y;
+        (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                        top_small_);
+    }
+    return true;
+}
+
 auto sequence_feature::place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool {
     for (const auto &id : features_) {

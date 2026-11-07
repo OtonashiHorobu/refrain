@@ -226,6 +226,28 @@ class random_neighbor_spread_feature final : public feature {
     std::unique_ptr<provider::int_provider> y_offset_{};
 };
 
+/// `BambooFeature`: a bamboo stalk with a random height and optional podzol
+/// patch below it.
+class bamboo_feature final : public feature {
+  public:
+    bamboo_feature(float probability, block_state_id trunk,
+                   block_state_id final_large, block_state_id top_large,
+                   block_state_id top_small, block_state_id podzol)
+        : probability_{probability}, trunk_{trunk}, final_large_{final_large},
+          top_large_{top_large}, top_small_{top_small}, podzol_{podzol} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    float probability_{0.0F};
+    block_state_id trunk_{no_block_state};
+    block_state_id final_large_{no_block_state};
+    block_state_id top_large_{no_block_state};
+    block_state_id top_small_{no_block_state};
+    block_state_id podzol_{no_block_state};
+};
+
 /// `SpringFeature`: a fluid source surrounded by a fixed rock/hole pattern.
 class spring_feature final : public feature {
   public:

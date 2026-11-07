@@ -439,6 +439,35 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       static_cast<jint>(*size_value), discard));
             continue;
         }
+        if (*type == "minecraft:bamboo") {
+            const auto *probability = document.document.find("probability");
+            if (probability == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "bamboo probability is missing")};
+            }
+            const auto value = probability->as_double();
+            if (!value) {
+                return std::unexpected{value.error()};
+            }
+            const auto trunk = resolve_state(
+                *states_, "minecraft:bamboo[age=1,leaves=none,stage=0]");
+            const auto final_large = resolve_state(
+                *states_, "minecraft:bamboo[age=1,leaves=large,stage=1]");
+            const auto top_large = resolve_state(
+                *states_, "minecraft:bamboo[age=1,leaves=large,stage=0]");
+            const auto top_small = resolve_state(
+                *states_, "minecraft:bamboo[age=1,leaves=small,stage=0]");
+            const auto podzol = resolve_state(*states_, "minecraft:podzol");
+            if (!trunk || !final_large || !top_large || !top_small || !podzol) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "bamboo states are invalid")};
+            }
+            features_.emplace(id, std::make_unique<bamboo_feature>(
+                                      static_cast<float>(*value), *trunk,
+                                      *final_large, *top_large, *top_small,
+                                      *podzol));
+            continue;
+        }
         if (*type == "minecraft:random_neighbor_spread") {
             const auto *block = document.document.find("block");
             const auto *accepted = document.document.find("accepted_neighbors");
