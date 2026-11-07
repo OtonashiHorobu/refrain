@@ -260,6 +260,11 @@ packet disconnect = 32 {
     payload: text_component;
 }
 
+packet disguised_chat = 33 {
+    message: text_component;
+    chat_type: wire_bound;
+}
+
 packet add_transient_block = 37 {
     pos: i64;
     block_state: varint_id;
@@ -381,7 +386,7 @@ packet recipe_book_settings = 77 {
 }
 
 packet remove_entities = 78 {
-    #[varint] entity_ids: array<i32>;
+    entity_ids: array<varint_id>;
 }
 
 packet remove_mob_effect = 79 {
@@ -510,6 +515,14 @@ packet set_player_inventory = 110 {
     contents: item_stack;
 }
 
+packet set_score = 112 {
+    #[max(32767)] owner: string;
+    #[max(32767)] objective_name: string;
+    #[varint] score: i32;
+    display: optional<text_component>;
+    number_format: optional<nbt>;
+}
+
 packet set_simulation_distance = 113 {
     #[varint] simulation_distance: i32;
 }
@@ -631,4 +644,8 @@ packet server_links = 140 {
 }
 
 packet clear_dialog = 142 {
+}
+
+packet show_dialog = 143 {
+    dialog: holder<nbt>;
 }

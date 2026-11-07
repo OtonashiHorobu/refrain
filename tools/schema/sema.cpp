@@ -183,15 +183,20 @@ struct integer_info {
 
 [[nodiscard]] auto is_known_attribute(std::string_view name) noexcept -> bool {
     static constexpr std::array names{
-        "since",        "deprecated",   "removed",
-        "breaking",     "default",      "unit",
-        "max",          "varint",       "varlong",
-        "fixed",        "fixed_bytes",  "optional_varint",
-        "rest",         "zigzag",       "bits",
-        "sidecar",      "side",         "thread",
-        "borrow",       "owned",        "caller_provided",
-        "can_fail",     "hot_path",     "sandbox_safe",
-        "network_sync", "on_load_only", "batch",
+        "since",        "deprecated",
+        "removed",      "breaking",
+        "default",      "unit",
+        "max",          "varint",
+        "varlong",      "fixed",
+        "fixed_bytes",  "optional_varint",
+        "rest",         "fixed_count",
+        "zigzag",       "bits",
+        "sidecar",      "side",
+        "thread",       "borrow",
+        "owned",        "caller_provided",
+        "can_fail",     "hot_path",
+        "sandbox_safe", "network_sync",
+        "on_load_only", "batch",
         "cancellable",  "schedule",
     };
     return std::ranges::any_of(names, [name](std::string_view candidate) {
@@ -986,8 +991,11 @@ class analyzer {
         const auto *optional_varint{
             find_attribute(field.attributes, "optional_varint")};
         const auto *rest{find_attribute(field.attributes, "rest")};
+        const auto *fixed_count{
+            find_attribute(field.attributes, "fixed_count")};
         if (selected == 0 && max == nullptr && fixed_bytes == nullptr &&
-            optional_varint == nullptr && rest == nullptr) {
+            optional_varint == nullptr && rest == nullptr &&
+            fixed_count == nullptr) {
             return;
         }
         if (kind != dialect::rsc) {
@@ -1033,6 +1041,32 @@ class analyzer {
                 return;
             }
             field.wire = wire;
+        }
+        if (fixed_count != nullptr) {
+            const auto is_array = [](const resolved_type &type) {
+                return type.kind == resolved_type::category::array;
+            };
+            if (!is_array(field.type)) {
+                error(field.location,
+                      "'#[fixed_count]' is only valid on an 'array<T>' field");
+            } else if (fixed_count->arguments.size() != 1 ||
+                       fixed_count->arguments.front().kind !=
+                           attribute_argument_kind::integer) {
+                error(field.location,
+                      "'#[fixed_count]' expects exactly one integer argument");
+            } else {
+                std::uint64_t count{0};
+                const auto &text{fixed_count->arguments.front().text};
+                const auto parsed{std::from_chars(
+                    text.data(), text.data() + text.size(), count)};
+                if (parsed.ec != std::errc{} || count == 0) {
+                    error(field.location,
+                          "'#[fixed_count]' expects a positive integer");
+                } else {
+                    field.wire_fixed_count = count;
+                }
+            }
+            return;
         }
         if (rest != nullptr) {
             const auto is_bytes = [](const resolved_type &type) {
@@ -1978,7 +2012,8 @@ class analyzer {
                 }
                 continue;
             }
-            if (attribute.name == "fixed_bytes" || attribute.name == "max") {
+            if (attribute.name == "fixed_bytes" || attribute.name == "max" ||
+                attribute.name == "fixed_count") {
                 const auto name{attribute.name};
                 if (attribute.arguments.size() != 1) {
                     error(attribute.location,

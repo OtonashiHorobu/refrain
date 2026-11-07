@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 4e63c511eed40c8b
+// Schema hash: 4cc80e4fd118f796
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_LOGIN_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_LOGIN_CLIENTBOUND_HPP
@@ -250,9 +250,9 @@ struct cookie_request {
     value.name = std::move(*value_0);
   }
   {
+    value.properties.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.properties.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       ::refrain::protocol::v777::login::clientbound::profile_property value_0{};
       if (auto decoded = ::refrain::protocol::v777::login::clientbound::decode_profile_property(in, value_0); !decoded) {

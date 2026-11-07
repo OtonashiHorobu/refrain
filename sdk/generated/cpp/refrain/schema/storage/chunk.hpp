@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 4e63c511eed40c8b
+// Schema hash: 4cc80e4fd118f796
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_STORAGE_CHUNK_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_STORAGE_CHUNK_HPP
@@ -316,9 +316,9 @@ struct chunk {
     value.bits_per_entry = static_cast<decltype(value.bits_per_entry)>(*value_0);
   }
   {
+    value.palette.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.palette.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       ::refrain::storage::palette_entry value_0{};
       if (auto decoded = ::refrain::storage::decode_palette_entry(in, value_0); !decoded) {
@@ -328,9 +328,9 @@ struct chunk {
     }
   }
   {
+    value.data.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.data.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       std::uint64_t value_0{};
       auto value_1 = in.read_varint();
@@ -350,9 +350,9 @@ struct chunk {
     value.biome_bits_per_entry = static_cast<decltype(value.biome_bits_per_entry)>(*value_0);
   }
   {
+    value.biome_palette.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.biome_palette.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       std::string value_0{};
       auto value_1 = in.read_string(32767);
@@ -362,9 +362,9 @@ struct chunk {
     }
   }
   {
+    value.biome_data.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.biome_data.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       std::uint64_t value_0{};
       auto value_1 = in.read_varint();
@@ -452,9 +452,9 @@ struct chunk {
     value.bits_per_entry = static_cast<decltype(value.bits_per_entry)>(*value_0);
   }
   {
+    value.data.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.data.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       std::uint64_t value_0{};
       auto value_1 = in.read_varint();
@@ -642,9 +642,9 @@ struct chunk {
     value.inhabited_time = static_cast<decltype(value.inhabited_time)>(*value_0);
   }
   {
+    value.sections.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.sections.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       ::refrain::storage::section_record value_0{};
       if (auto decoded = ::refrain::storage::decode_section_record(in, value_0); !decoded) {
@@ -654,9 +654,9 @@ struct chunk {
     }
   }
   {
+    value.heightmaps.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.heightmaps.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       ::refrain::storage::heightmap_record value_0{};
       if (auto decoded = ::refrain::storage::decode_heightmap_record(in, value_0); !decoded) {
@@ -666,9 +666,9 @@ struct chunk {
     }
   }
   {
+    value.block_ticks.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.block_ticks.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       ::refrain::storage::saved_tick value_0{};
       if (auto decoded = ::refrain::storage::decode_saved_tick(in, value_0); !decoded) {
@@ -678,9 +678,9 @@ struct chunk {
     }
   }
   {
+    value.fluid_ticks.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.fluid_ticks.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       ::refrain::storage::saved_tick value_0{};
       if (auto decoded = ::refrain::storage::decode_saved_tick(in, value_0); !decoded) {
@@ -690,9 +690,9 @@ struct chunk {
     }
   }
   {
+    value.block_entities.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.block_entities.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       std::vector<std::byte> value_0{};
       auto length_1 = in.read_varint();
@@ -711,14 +711,14 @@ struct chunk {
     value.structures = std::vector<std::byte>{value_0->begin(), value_0->end()};
   }
   {
+    value.post_processing.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.post_processing.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       std::vector<std::int16_t> value_0{};
+      value_0.clear();
       auto count_1 = in.read_varint();
       if (!count_1) return std::unexpected{std::move(count_1.error())};
-      value_0.clear();
       for (std::uint32_t index_1 = 0; index_1 < *count_1; ++index_1) {
         std::int16_t value_1{};
         auto value_2 = in.read_i64();
@@ -744,9 +744,9 @@ struct chunk {
     value.extra = std::vector<std::byte>{value_0->begin(), value_0->end()};
   }
   {
+    value.extensions.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.extensions.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       std::vector<std::byte> value_0{};
       auto length_1 = in.read_varint();
@@ -763,9 +763,9 @@ struct chunk {
     value.y_pos = static_cast<decltype(value.y_pos)>(*value_0);
   }
   {
+    value.light_sections.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.light_sections.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       ::refrain::storage::light_section value_0{};
       if (auto decoded = ::refrain::storage::decode_light_section(in, value_0); !decoded) {

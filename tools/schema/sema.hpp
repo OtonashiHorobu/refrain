@@ -113,6 +113,9 @@ struct field_model {
     std::optional<std::uint64_t> wire_fixed_bytes;
     /// `#[rest]`: a `bytes` field that consumes the remaining packet body.
     bool wire_rest{false};
+    /// `#[fixed_count(N)]`: an array field with a fixed element count and no
+    /// count prefix.
+    std::optional<std::uint64_t> wire_fixed_count;
     /// `#[optional_varint]`: an optional integer encoded as one VarInt where
     /// zero means absent and a stored value `v` is encoded as `v + 1`.
     bool wire_optional_varint{false};

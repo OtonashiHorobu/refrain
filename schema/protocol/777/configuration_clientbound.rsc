@@ -90,6 +90,10 @@ packet server_links = 17 {
 packet clear_dialog = 18 {
 }
 
+packet show_dialog = 19 {
+    dialog: holder<nbt>;
+}
+
 packet code_of_conduct = 20 {
     #[max(32767)] code_of_conduct: string;
 }

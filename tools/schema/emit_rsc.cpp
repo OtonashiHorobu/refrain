@@ -408,6 +408,7 @@ struct wire_hints {
     integer_wire integer{integer_wire::natural};
     std::optional<std::uint64_t> maximum;
     std::optional<std::uint64_t> fixed_bytes;
+    std::optional<std::uint64_t> fixed_count;
     bool optional_varint{false};
     bool rest{false};
 };
@@ -419,6 +420,7 @@ struct wire_hints {
     hints.fixed_bytes = field.wire_fixed_bytes;
     hints.optional_varint = field.wire_optional_varint;
     hints.rest = field.wire_rest;
+    hints.fixed_count = field.wire_fixed_count;
     return hints;
 }
 
@@ -595,20 +597,36 @@ void emit_encode_value(code_writer &writer, const model &program,
     case resolved_type::category::array:
     case resolved_type::category::slice:
     case resolved_type::category::repeated: {
-        if (hints.maximum.has_value()) {
-            writer.line("if ({}.size() > {}) {{", expression, *hints.maximum);
+        if (hints.fixed_count.has_value()) {
+            writer.line("if ({}.size() != {}) {{", expression,
+                        *hints.fixed_count);
             writer.indent();
             writer.line(
                 "return "
                 "std::unexpected{{::refrain::make_error(::refrain::error_code::"
-                "invalid_argument, \"field '{}' exceeds its declared "
-                "maximum\")}};",
-                label);
+                "invalid_argument, \"field '{}' must have exactly {} "
+                "element(s)\")}};",
+                label, *hints.fixed_count);
             writer.dedent();
             writer.line("}}");
+        } else {
+            if (hints.maximum.has_value()) {
+                writer.line("if ({}.size() > {}) {{", expression,
+                            *hints.maximum);
+                writer.indent();
+                writer.line(
+                    "return "
+                    "std::unexpected{{::refrain::make_error(::refrain::error_"
+                    "code::invalid_argument, \"field '{}' exceeds its "
+                    "declared maximum\")}};",
+                    label);
+                writer.dedent();
+                writer.line("}}");
+            }
+            writer.line(
+                "out.write_varint(static_cast<std::uint32_t>({}.size()));",
+                expression);
         }
-        writer.line("out.write_varint(static_cast<std::uint32_t>({}.size()));",
-                    expression);
         const auto item{"item_" + std::to_string(depth)};
         writer.line("for (const auto &{} : {}) {{", item, expression);
         writer.indent();
@@ -884,26 +902,33 @@ void emit_decode_value(code_writer &writer, const model &program,
     case resolved_type::category::array:
     case resolved_type::category::slice:
     case resolved_type::category::repeated: {
-        writer.line("auto count_{} = in.read_varint();", depth);
-        writer.line("if (!count_{}) return "
-                    "std::unexpected{{std::move(count_{}.error())}};",
-                    depth, depth);
-        if (hints.maximum.has_value()) {
-            writer.line("if (*count_{} > {}) {{", depth, *hints.maximum);
-            writer.indent();
-            writer.line(
-                "return "
-                "std::unexpected{{::refrain::make_error(::refrain::error_code::"
-                "parse_error, \"field '{}' exceeds its declared maximum\")}};",
-                label);
-            writer.dedent();
-            writer.line("}}");
-        }
         writer.line("{}.clear();", target);
         const auto index{"index_" + std::to_string(depth)};
         const auto item{"item_" + std::to_string(depth)};
-        writer.line("for (std::uint32_t {} = 0; {} < *count_{}; ++{}) {{",
-                    index, index, depth, index);
+        if (hints.fixed_count.has_value()) {
+            writer.line("{}.reserve({});", target, *hints.fixed_count);
+            writer.line("for (std::uint32_t {} = 0; {} < {}; ++{}) {{", index,
+                        index, *hints.fixed_count, index);
+        } else {
+            writer.line("auto count_{} = in.read_varint();", depth);
+            writer.line("if (!count_{}) return "
+                        "std::unexpected{{std::move(count_{}.error())}};",
+                        depth, depth);
+            if (hints.maximum.has_value()) {
+                writer.line("if (*count_{} > {}) {{", depth, *hints.maximum);
+                writer.indent();
+                writer.line(
+                    "return "
+                    "std::unexpected{{::refrain::make_error(::refrain::error_"
+                    "code::parse_error, \"field '{}' exceeds its declared "
+                    "maximum\")}};",
+                    label);
+                writer.dedent();
+                writer.line("}}");
+            }
+            writer.line("for (std::uint32_t {} = 0; {} < *count_{}; ++{}) {{",
+                        index, index, depth, index);
+        }
         writer.indent();
         writer.line("{} value_{}{{}};",
                     rsc_cpp_type(program, type.arguments.front()), depth);

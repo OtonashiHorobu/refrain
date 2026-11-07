@@ -390,6 +390,30 @@ const suite tests = [] {
         expect(std::get<0>(decoded.sound) == 42U);
     };
 
+    "net/protocol round trips a fixed-size line array"_test = [] {
+        v777::play::serverbound::sign_update packet{};
+        packet.pos = 1234;
+        packet.lines = {"line one", "line two", "", "line four"};
+        packet.slot = 2U;
+        std::vector<std::byte> body;
+        net::writer out{body};
+        out.write_varint(packet.packet_id);
+        const auto encoded{
+            v777::play::serverbound::encode_sign_update(out, packet)};
+        expect(encoded.has_value());
+        net::reader in{body};
+        auto id{in.read_varint()};
+        expect(id.has_value());
+        v777::play::serverbound::sign_update decoded{};
+        const auto status{
+            v777::play::serverbound::decode_sign_update(in, decoded)};
+        expect(status.has_value());
+        expect(in.empty());
+        expect(decoded.lines.size() == 4U);
+        const bool same{decoded.lines == packet.lines};
+        expect(same);
+    };
+
     "net/protocol round trips an opaque custom payload"_test = [] {
         v777::configuration::clientbound::custom_payload packet{};
         const auto channel{
@@ -452,7 +476,7 @@ const suite tests = [] {
 
     "net/protocol round trips a varint array payload"_test = [] {
         v777::play::clientbound::remove_entities packet{};
-        packet.entity_ids = {1, 300, -1};
+        packet.entity_ids = {1, 300, 40000};
         std::vector<std::byte> body;
         net::writer out{body};
         out.write_varint(packet.packet_id);

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 4e63c511eed40c8b
+// Schema hash: 4cc80e4fd118f796
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
@@ -22,6 +22,7 @@
 #include <refrain/net/wire.hpp>
 #include <map>
 #include <utility>
+#include <variant>
 #include <refrain/schema/protocol/777/common.hpp>
 #include <refrain/schema/protocol/777/wire.hpp>
 
@@ -165,6 +166,13 @@ struct clear_dialog {
 
 };
 
+struct show_dialog {
+    static constexpr std::uint16_t packet_id = 0x13;
+    static constexpr std::string_view packet_name = "show_dialog";
+
+    std::variant<std::uint32_t, ::refrain::net::nbt_blob> dialog;
+};
+
 struct code_of_conduct {
     static constexpr std::uint16_t packet_id = 0x14;
     static constexpr std::string_view packet_name = "code_of_conduct";
@@ -272,9 +280,9 @@ struct code_of_conduct {
   static_cast<void>(in);
   static_cast<void>(value);
   {
+    value.features.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.features.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       ::refrain::data::resource_location value_0{};
       auto value_1 = in.read_identifier();
@@ -304,9 +312,9 @@ struct code_of_conduct {
   static_cast<void>(in);
   static_cast<void>(value);
   {
+    value.packs.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.packs.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       ::refrain::protocol::v777::common::known_pack value_0{};
       if (auto decoded = ::refrain::protocol::v777::common::decode_known_pack(in, value_0); !decoded) {
@@ -402,9 +410,9 @@ struct code_of_conduct {
     value.registry = std::move(*value_0);
   }
   {
+    value.entries.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.entries.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       ::refrain::protocol::v777::wire::wire_packed_registry_entry value_0{};
       if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_packed_registry_entry(in, value_0); !decoded) {
@@ -538,9 +546,9 @@ struct code_of_conduct {
   static_cast<void>(in);
   static_cast<void>(value);
   {
+    value.post_effects.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.post_effects.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       ::refrain::data::resource_location value_0{};
       auto value_1 = in.read_identifier();
@@ -678,9 +686,9 @@ struct code_of_conduct {
   static_cast<void>(in);
   static_cast<void>(value);
   {
+    value.links.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.links.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       ::refrain::protocol::v777::wire::wire_untrusted_entry value_0{};
       if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_untrusted_entry(in, value_0); !decoded) {
@@ -701,6 +709,41 @@ struct code_of_conduct {
 [[nodiscard]] inline auto decode_clear_dialog(::refrain::net::reader &in, clear_dialog &value) -> ::refrain::status {
   static_cast<void>(in);
   static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_show_dialog(::refrain::net::writer &out, const show_dialog &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (std::holds_alternative<std::uint32_t>(value.dialog)) {
+      out.write_varint(std::get<0>(value.dialog));
+    } else {
+      out.write_varint(0);
+      if (auto written = ::refrain::net::encode_nbt(out, std::get<1>(value.dialog)); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_show_dialog(::refrain::net::reader &in, show_dialog &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto holder_0 = in.read_varint();
+    if (!holder_0) return std::unexpected{std::move(holder_0.error())};
+    if (*holder_0 != 0) {
+      value.dialog.template emplace<0>(*holder_0);
+    } else {
+      ::refrain::net::nbt_blob value_0{};
+      if (auto decoded = ::refrain::net::decode_nbt(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.dialog.template emplace<1>(std::move(value_0));
+    }
+  }
   return ::refrain::status_ok();
 }
 

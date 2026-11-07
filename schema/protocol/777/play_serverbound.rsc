@@ -153,6 +153,16 @@ packet container_button_click = 17 {
     #[varint] button_id: i32;
 }
 
+packet container_click = 18 {
+    #[varint] container_id: i32;
+    #[varint] state_id: i32;
+    #[fixed] slot_num: i16;
+    button_num: i8;
+    container_input: varint_id;
+    changed_slots: map<i16, optional<wire_actual_item>>;
+    carried_item: optional<wire_actual_item>;
+}
+
 packet container_close = 19 {
     #[varint] container_id: i32;
 }
@@ -344,7 +354,7 @@ packet set_test_block = 61 {
 
 packet sign_update = 62 {
     pos: i64;
-    lines: array<string>;
+    #[fixed_count(4)] lines: array<string>;
     slot: varint_id;
 }
 

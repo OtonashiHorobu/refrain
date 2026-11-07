@@ -45,6 +45,17 @@ struct wire_data {
     #[max(4096)] key_signature: bytes;
 }
 
+struct wire_type_84 {
+    added_components: map<varint_id, i32>;
+    removed_components: array<varint_id>;
+}
+
+struct wire_actual_item {
+    item: varint_id;
+    #[varint] count: i32;
+    components: wire_type_84;
+}
+
 struct wire_entry_4 {
     game_rule_key: identifier;
     #[max(32767)] value: string;
@@ -72,6 +83,23 @@ struct wire_chunk_biome_data {
 struct wire_entry {
     #[max(32767)] text: string;
     tooltip: optional<text_component>;
+}
+
+struct wire_chat_type_decoration {
+    #[max(32767)] translation_key: string;
+    parameters: array<varint_id>;
+    style: nbt;
+}
+
+struct wire_chat_type {
+    chat: wire_chat_type_decoration;
+    narration: wire_chat_type_decoration;
+}
+
+struct wire_bound {
+    chat_type: holder<wire_chat_type>;
+    name: text_component;
+    target_name: optional<text_component>;
 }
 
 struct wire_packed_registry_entry {

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 4e63c511eed40c8b
+// Schema hash: 4cc80e4fd118f796
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -68,6 +68,18 @@ struct wire_data {
     std::vector<std::byte> key_signature;
 };
 
+struct wire_type_84 {
+    std::map<std::uint32_t, std::int32_t> added_components;
+    std::vector<std::uint32_t> removed_components;
+};
+
+struct wire_actual_item {
+    std::uint32_t item;
+    // attributes: #[varint]
+    std::int32_t count;
+    ::refrain::protocol::v777::wire::wire_type_84 components;
+};
+
 struct wire_entry_4 {
     ::refrain::data::resource_location game_rule_key;
     // attributes: #[max(32767)]
@@ -108,6 +120,24 @@ struct wire_entry {
     // attributes: #[max(32767)]
     std::string text;
     std::optional<::refrain::net::text_component> tooltip;
+};
+
+struct wire_chat_type_decoration {
+    // attributes: #[max(32767)]
+    std::string translation_key;
+    std::vector<std::uint32_t> parameters;
+    ::refrain::net::nbt_blob style;
+};
+
+struct wire_chat_type {
+    ::refrain::protocol::v777::wire::wire_chat_type_decoration chat;
+    ::refrain::protocol::v777::wire::wire_chat_type_decoration narration;
+};
+
+struct wire_bound {
+    std::variant<std::uint32_t, ::refrain::protocol::v777::wire::wire_chat_type> chat_type;
+    ::refrain::net::text_component name;
+    std::optional<::refrain::net::text_component> target_name;
 };
 
 struct wire_packed_registry_entry {
@@ -356,9 +386,9 @@ struct wire_position_move_rotation {
   static_cast<void>(in);
   static_cast<void>(value);
   {
+    value.entries.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.entries.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       ::refrain::protocol::v777::wire::wire_entry_3 value_0{};
       if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_entry_3(in, value_0); !decoded) {
@@ -459,6 +489,97 @@ struct wire_position_move_rotation {
     auto value_0 = in.read_bytes(*length_0);
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.key_signature = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_type_84(::refrain::net::writer &out, const wire_type_84 &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.added_components.size()));
+    for (const auto &entry_0 : value.added_components) {
+      out.write_varint(entry_0.first);
+      out.write_i64(static_cast<std::int64_t>(entry_0.second));
+    }
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.removed_components.size()));
+    for (const auto &item_0 : value.removed_components) {
+      out.write_varint(item_0);
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_type_84(::refrain::net::reader &in, wire_type_84 &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.added_components.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      std::uint32_t map_key_0{};
+      auto value_1 = in.read_varint();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      map_key_0 = *value_1;
+      std::int32_t map_value_0{};
+      auto value_2 = in.read_i64();
+      if (!value_2) return std::unexpected{std::move(value_2.error())};
+      map_value_0 = static_cast<decltype(map_value_0)>(*value_2);
+      value.added_components.emplace(std::move(map_key_0), std::move(map_value_0));
+    }
+  }
+  {
+    value.removed_components.clear();
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      std::uint32_t value_0{};
+      auto value_1 = in.read_varint();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = *value_1;
+      value.removed_components.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_actual_item(::refrain::net::writer &out, const wire_actual_item &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(value.item);
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.count));
+  }
+  {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_84(out, value.components); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_actual_item(::refrain::net::reader &in, wire_actual_item &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.item = *value_0;
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.count = static_cast<decltype(value.count)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_84(in, value.components); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
   }
   return ::refrain::status_ok();
 }
@@ -748,6 +869,154 @@ struct wire_position_move_rotation {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_wire_chat_type_decoration(::refrain::net::writer &out, const wire_chat_type_decoration &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_string(value.translation_key, 32767); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.parameters.size()));
+    for (const auto &item_0 : value.parameters) {
+      out.write_varint(item_0);
+    }
+  }
+  {
+    if (auto written = ::refrain::net::encode_nbt(out, value.style); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_chat_type_decoration(::refrain::net::reader &in, wire_chat_type_decoration &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_string(32767);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.translation_key = std::move(*value_0);
+  }
+  {
+    value.parameters.clear();
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      std::uint32_t value_0{};
+      auto value_1 = in.read_varint();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = *value_1;
+      value.parameters.push_back(std::move(value_0));
+    }
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_nbt(in, value.style); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_chat_type(::refrain::net::writer &out, const wire_chat_type &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_chat_type_decoration(out, value.chat); !written) {
+      return written;
+    }
+  }
+  {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_chat_type_decoration(out, value.narration); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_chat_type(::refrain::net::reader &in, wire_chat_type &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_chat_type_decoration(in, value.chat); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_chat_type_decoration(in, value.narration); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_bound(::refrain::net::writer &out, const wire_bound &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (std::holds_alternative<std::uint32_t>(value.chat_type)) {
+      out.write_varint(std::get<0>(value.chat_type));
+    } else {
+      out.write_varint(0);
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_chat_type(out, std::get<1>(value.chat_type)); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    if (auto written = ::refrain::net::encode_text_component(out, value.name); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.target_name.has_value());
+    if (value.target_name.has_value()) {
+      if (auto written = ::refrain::net::encode_text_component(out, value.target_name.value()); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_bound(::refrain::net::reader &in, wire_bound &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto holder_0 = in.read_varint();
+    if (!holder_0) return std::unexpected{std::move(holder_0.error())};
+    if (*holder_0 != 0) {
+      value.chat_type.template emplace<0>(*holder_0);
+    } else {
+      ::refrain::protocol::v777::wire::wire_chat_type value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_chat_type(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.chat_type.template emplace<1>(std::move(value_0));
+    }
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_text_component(in, value.name); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::net::text_component value_0{};
+      if (auto decoded = ::refrain::net::decode_text_component(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.target_name = std::move(value_0);
+    } else {
+      value.target_name.reset();
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_wire_packed_registry_entry(::refrain::net::writer &out, const wire_packed_registry_entry &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -922,9 +1191,9 @@ struct wire_position_move_rotation {
       if (!value_1) return std::unexpected{std::move(value_1.error())};
       map_key_0 = *value_1;
       std::vector<std::int64_t> map_value_0{};
+      map_value_0.clear();
       auto count_2 = in.read_varint();
       if (!count_2) return std::unexpected{std::move(count_2.error())};
-      map_value_0.clear();
       for (std::uint32_t index_2 = 0; index_2 < *count_2; ++index_2) {
         std::int64_t value_2{};
         auto value_3 = in.read_i64();
@@ -946,9 +1215,9 @@ struct wire_position_move_rotation {
     value.buffer = std::vector<std::byte>{value_0->begin(), value_0->end()};
   }
   {
+    value.block_entities_data.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.block_entities_data.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       ::refrain::protocol::v777::wire::wire_block_entities_data value_0{};
       if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_block_entities_data(in, value_0); !decoded) {
@@ -1052,9 +1321,9 @@ struct wire_position_move_rotation {
     value.empty_block_y_mask = std::vector<std::byte>{value_0->begin(), value_0->end()};
   }
   {
+    value.sky_updates.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.sky_updates.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       std::vector<std::byte> value_0{};
       auto length_1 = in.read_varint();
@@ -1066,9 +1335,9 @@ struct wire_position_move_rotation {
     }
   }
   {
+    value.block_updates.clear();
     auto count_0 = in.read_varint();
     if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.block_updates.clear();
     for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
       std::vector<std::byte> value_0{};
       auto length_1 = in.read_varint();
