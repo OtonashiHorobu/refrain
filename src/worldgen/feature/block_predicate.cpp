@@ -1,0 +1,154 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+#include <refrain/worldgen/feature/block_predicate.hpp>
+
+#include <refrain/data/json.hpp>
+
+#include <algorithm>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace refrain::worldgen::feature {
+
+namespace {
+
+auto type_of(const data::json::value &input) -> result<std::string_view> {
+    const auto *type = input.find("type");
+    if (type == nullptr) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "block predicate has no type")};
+    }
+    const auto text = type->as_string();
+    if (!text) {
+        return std::unexpected{make_error(
+            error_code::parse_error, "block predicate type is not a string")};
+    }
+    return *text;
+}
+
+auto names(const data::json::value &input) -> result<std::vector<std::string>> {
+    if (const auto single = input.as_string(); single.has_value()) {
+        return std::vector<std::string>{std::string{*single}};
+    }
+    if (!input.is_array()) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "block list is not an array")};
+    }
+    std::vector<std::string> out;
+    for (const auto &entry : *input.as_array()) {
+        const auto name = entry.as_string();
+        if (!name) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "block name is not a string")};
+        }
+        out.emplace_back(*name);
+    }
+    return out;
+}
+
+class matching_blocks final : public block_predicate {
+  public:
+    explicit matching_blocks(std::vector<std::string> blocks)
+        : blocks_{std::move(blocks)} {}
+    [[nodiscard]] auto test(const chunk_region &region,
+                            const block_state_table &states,
+                            const block_pos &pos) const -> bool override {
+        const auto name = states.name(region.state_at(pos.x, pos.y, pos.z));
+        return std::find(blocks_.begin(), blocks_.end(), name) != blocks_.end();
+    }
+
+  private:
+    std::vector<std::string> blocks_;
+};
+
+class matching_tag final : public block_predicate {
+  public:
+    explicit matching_tag(std::string tag) : tag_{std::move(tag)} {}
+    [[nodiscard]] auto test(const chunk_region &region,
+                            const block_state_table &states,
+                            const block_pos &pos) const -> bool override {
+        return states.in_tag(region.state_at(pos.x, pos.y, pos.z), tag_);
+    }
+
+  private:
+    std::string tag_;
+};
+
+class all_of final : public block_predicate {
+  public:
+    explicit all_of(std::vector<std::unique_ptr<block_predicate>> rules)
+        : rules_{std::move(rules)} {}
+    [[nodiscard]] auto test(const chunk_region &region,
+                            const block_state_table &states,
+                            const block_pos &pos) const -> bool override {
+        return std::all_of(rules_.begin(), rules_.end(), [&](const auto &rule) {
+            return rule->test(region, states, pos);
+        });
+    }
+
+  private:
+    std::vector<std::unique_ptr<block_predicate>> rules_;
+};
+
+} // namespace
+
+auto decode_block_predicate(const data::json::value &document,
+                            const block_state_table &states)
+    -> result<std::unique_ptr<block_predicate>> {
+    const auto type = type_of(document);
+    if (!type) {
+        return std::unexpected{type.error()};
+    }
+    if (*type == "minecraft:matching_blocks" ||
+        *type == "minecraft:matching_block_tag") {
+        const bool tag = *type == "minecraft:matching_block_tag";
+        const auto *field = document.find(tag ? "tag" : "blocks");
+        if (field == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "block predicate has no list")};
+        }
+        if (tag) {
+            const auto name = field->as_string();
+            if (!name) {
+                return std::unexpected{
+                    make_error(error_code::parse_error, "tag is not a string")};
+            }
+            return std::unique_ptr<block_predicate>{
+                std::make_unique<matching_tag>(std::string{*name})};
+        }
+        auto list = names(*field);
+        if (!list) {
+            return std::unexpected{list.error()};
+        }
+        return std::unique_ptr<block_predicate>{
+            std::make_unique<matching_blocks>(std::move(*list))};
+    }
+    if (*type == "minecraft:all_of") {
+        const auto *rules = document.find("predicates");
+        if (rules == nullptr) {
+            rules = document.find("rules");
+        }
+        if (rules == nullptr || !rules->is_array()) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "all_of has no predicate list")};
+        }
+        std::vector<std::unique_ptr<block_predicate>> decoded;
+        for (const auto &entry : *rules->as_array()) {
+            auto predicate = decode_block_predicate(entry, states);
+            if (!predicate) {
+                return std::unexpected{predicate.error()};
+            }
+            decoded.push_back(std::move(*predicate));
+        }
+        return std::unique_ptr<block_predicate>{
+            std::make_unique<all_of>(std::move(decoded))};
+    }
+    return std::unexpected{
+        make_error(error_code::unsupported, "unsupported block predicate")};
+}
+
+} // namespace refrain::worldgen::feature

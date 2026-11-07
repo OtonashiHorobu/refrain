@@ -258,7 +258,7 @@ def main() -> int:
         )
         biome["carvers"] = []
         biome["features"] = [[] for _ in range(11)]
-        biome["features"][9] = ["oracle:stone_patch"]
+        biome["features"][9] = ["oracle:stone_patch", "oracle:sand_disk"]
         biome_dir = pack / "data/oracle/worldgen/biome"
         biome_dir.mkdir(parents=True)
         (biome_dir / "feature.json").write_text(
@@ -277,6 +277,22 @@ def main() -> int:
             )
             + "\n"
         )
+        (feature_dir / "sand_disk.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:disk",
+                    "state_provider": {"id": "minecraft:sand"},
+                    "target": {
+                        "type": "minecraft:matching_blocks",
+                        "blocks": ["minecraft:dirt", "minecraft:grass_block"],
+                    },
+                    "radius": {"type": "minecraft:constant", "value": 4},
+                    "half_height": 1,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
         placed_dir = pack / "data/oracle/worldgen/placed_feature"
         placed_dir.mkdir(parents=True)
         (placed_dir / "stone_patch.json").write_text(
@@ -285,6 +301,23 @@ def main() -> int:
                     "feature": "oracle:stone_patch",
                     "placement": [
                         {"type": "minecraft:count", "count": 30},
+                        {"type": "minecraft:in_square"},
+                        {
+                            "type": "minecraft:heightmap",
+                            "heightmap": "WORLD_SURFACE_WG",
+                        },
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "sand_disk.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:sand_disk",
+                    "placement": [
+                        {"type": "minecraft:count", "count": 4},
                         {"type": "minecraft:in_square"},
                         {
                             "type": "minecraft:heightmap",
