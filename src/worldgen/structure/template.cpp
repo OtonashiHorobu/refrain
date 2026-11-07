@@ -657,11 +657,7 @@ auto decode_processor_list(block_state_registry &states,
             const auto *rottable_value = entry.find("rottable_blocks");
             const bool has_rottable = rottable_value != nullptr;
             if (const auto text = string_of(rottable_value); text.has_value()) {
-                std::string tag{*text};
-                if (tag.starts_with('#')) {
-                    tag.erase(0, 1);
-                }
-                rottable.push_back(std::move(tag));
+                rottable.push_back(*text);
             } else if (const auto array = array_of(rottable_value);
                        array.has_value()) {
                 for (const auto &item : *array) {
@@ -1086,8 +1082,13 @@ auto block_rot_processor::process(const block_state_registry &states,
     (void)region;
     if (has_rottable_) {
         const auto name = state_block_name(states.name(info.state));
-        if (std::find(rottable_.begin(), rottable_.end(), name) ==
-            rottable_.end()) {
+        const auto matches = [&](std::string_view entry) {
+            if (entry.starts_with('#')) {
+                return states.in_tag(info.state, entry.substr(1));
+            }
+            return entry == name;
+        };
+        if (std::none_of(rottable_.begin(), rottable_.end(), matches)) {
             return info;
         }
     }
