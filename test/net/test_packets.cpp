@@ -329,6 +329,38 @@ const suite tests = [] {
         check_table(v777::play_packets);
     };
 
+    "net/protocol round trips an opaque custom payload"_test = [] {
+        v777::configuration::clientbound::custom_payload packet{};
+        const auto channel{
+            refrain::data::resource_location::parse("refrain:test")};
+        expect(channel.has_value());
+        if (!channel) {
+            return;
+        }
+        packet.channel = *channel;
+        packet.data = {std::byte{1}, std::byte{2}, std::byte{3}};
+        std::vector<std::byte> body;
+        net::writer out{body};
+        out.write_varint(packet.packet_id);
+        const auto encoded{
+            v777::configuration::clientbound::encode_custom_payload(out,
+                                                                    packet)};
+        expect(encoded.has_value());
+        expect(body.size() == 17U);
+        net::reader in{body};
+        auto id{in.read_varint()};
+        expect(id.has_value());
+        v777::configuration::clientbound::custom_payload decoded{};
+        const auto status{
+            v777::configuration::clientbound::decode_custom_payload(in,
+                                                                    decoded)};
+        expect(status.has_value());
+        expect(in.empty());
+        expect(decoded.channel == packet.channel);
+        const bool same{decoded.data == packet.data};
+        expect(same);
+    };
+
     "net/protocol round trips a map payload"_test = [] {
         v777::configuration::clientbound::custom_report_details packet{};
         packet.payload.emplace("alpha", "one");

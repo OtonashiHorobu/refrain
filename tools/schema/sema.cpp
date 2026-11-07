@@ -177,13 +177,16 @@ struct integer_info {
 
 [[nodiscard]] auto is_known_attribute(std::string_view name) noexcept -> bool {
     static constexpr std::array names{
-        "since",        "deprecated", "removed",      "breaking",
-        "default",      "unit",       "max",          "varint",
-        "varlong",      "fixed",      "fixed_bytes",  "optional_varint",
-        "zigzag",       "bits",       "sidecar",      "side",
-        "thread",       "borrow",     "owned",        "caller_provided",
-        "can_fail",     "hot_path",   "sandbox_safe", "network_sync",
-        "on_load_only", "batch",      "cancellable",  "schedule",
+        "since",        "deprecated",   "removed",
+        "breaking",     "default",      "unit",
+        "max",          "varint",       "varlong",
+        "fixed",        "fixed_bytes",  "optional_varint",
+        "rest",         "zigzag",       "bits",
+        "sidecar",      "side",         "thread",
+        "borrow",       "owned",        "caller_provided",
+        "can_fail",     "hot_path",     "sandbox_safe",
+        "network_sync", "on_load_only", "batch",
+        "cancellable",  "schedule",
     };
     return std::ranges::any_of(names, [name](std::string_view candidate) {
         return candidate == name;
@@ -962,8 +965,9 @@ class analyzer {
             find_attribute(field.attributes, "fixed_bytes")};
         const auto *optional_varint{
             find_attribute(field.attributes, "optional_varint")};
+        const auto *rest{find_attribute(field.attributes, "rest")};
         if (selected == 0 && max == nullptr && fixed_bytes == nullptr &&
-            optional_varint == nullptr) {
+            optional_varint == nullptr && rest == nullptr) {
             return;
         }
         if (kind != dialect::rsc) {
@@ -1009,6 +1013,24 @@ class analyzer {
                 return;
             }
             field.wire = wire;
+        }
+        if (rest != nullptr) {
+            const auto is_bytes = [](const resolved_type &type) {
+                return type.kind == resolved_type::category::primitive &&
+                       type.primitive == primitive_kind::bytes;
+            };
+            if (!is_bytes(field.type)) {
+                error(field.location,
+                      "'#[rest]' is only valid on a 'bytes' field");
+            } else if (max != nullptr || fixed_bytes != nullptr ||
+                       selected != 0 || optional_varint != nullptr) {
+                error(field.location,
+                      "'#[rest]' cannot be combined with a length or integer "
+                      "encoding");
+            } else {
+                field.wire_rest = true;
+            }
+            return;
         }
         if (fixed_bytes != nullptr) {
             const auto is_bytes = [](const resolved_type &type) {
@@ -1886,7 +1908,7 @@ class analyzer {
             if (attribute.name == "varint" || attribute.name == "varlong" ||
                 attribute.name == "fixed" ||
                 attribute.name == "optional_varint" ||
-                attribute.name == "zigzag") {
+                attribute.name == "rest" || attribute.name == "zigzag") {
                 if (!attribute.arguments.empty()) {
                     error(attribute.location,
                           std::format("'#[{}]' takes no arguments",

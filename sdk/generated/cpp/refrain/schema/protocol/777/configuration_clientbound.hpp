@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9a599b420958d5d3
+// Schema hash: 3058078ae94c142f
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
@@ -31,6 +31,7 @@ struct custom_payload {
     static constexpr std::string_view packet_name = "custom_payload";
 
     ::refrain::data::resource_location channel;
+    // attributes: #[rest]
     std::vector<std::byte> data;
 };
 
@@ -162,8 +163,7 @@ struct code_of_conduct {
     }
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.data.size()));
-    out.write_bytes(std::span<const std::byte>{value.data });
+    out.write_bytes(value.data);
   }
   return ::refrain::status_ok();
 }
@@ -177,9 +177,7 @@ struct code_of_conduct {
     value.channel = std::move(*value_0);
   }
   {
-    auto length_0 = in.read_varint();
-    if (!length_0) return std::unexpected{std::move(length_0.error())};
-    auto value_0 = in.read_bytes(*length_0);
+    auto value_0 = in.read_bytes(in.remaining());
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.data = std::vector<std::byte>{value_0->begin(), value_0->end()};
   }

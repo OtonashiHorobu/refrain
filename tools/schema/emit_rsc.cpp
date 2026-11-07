@@ -399,6 +399,7 @@ struct wire_hints {
     std::optional<std::uint64_t> maximum;
     std::optional<std::uint64_t> fixed_bytes;
     bool optional_varint{false};
+    bool rest{false};
 };
 
 [[nodiscard]] auto field_hints(const field_model &field) -> wire_hints {
@@ -407,6 +408,7 @@ struct wire_hints {
     hints.maximum = field.wire_max;
     hints.fixed_bytes = field.wire_fixed_bytes;
     hints.optional_varint = field.wire_optional_varint;
+    hints.rest = field.wire_rest;
     return hints;
 }
 
@@ -463,6 +465,10 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.line("}}");
             return;
         case primitive_kind::bytes:
+            if (hints.rest) {
+                writer.line("out.write_bytes({});", expression);
+                return;
+            }
             if (hints.fixed_bytes.has_value()) {
                 writer.line("if ({}.size() != {}) {{", expression,
                             *hints.fixed_bytes);
@@ -685,6 +691,17 @@ void emit_decode_value(code_writer &writer, const model &program,
             writer.line("{} = std::move(*value_{});", target, depth);
             return;
         case primitive_kind::bytes:
+            if (hints.rest) {
+                writer.line("auto value_{} = in.read_bytes(in.remaining());",
+                            depth);
+                writer.line("if (!value_{}) return "
+                            "std::unexpected{{std::move(value_{}.error())}};",
+                            depth, depth);
+                writer.line("{} = std::vector<std::byte>{{value_{}->begin(), "
+                            "value_{}->end()}};",
+                            target, depth, depth);
+                return;
+            }
             if (hints.fixed_bytes.has_value()) {
                 writer.line("auto value_{} = in.read_bytes({});", depth,
                             *hints.fixed_bytes);

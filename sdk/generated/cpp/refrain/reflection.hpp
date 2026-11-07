@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9a599b420958d5d3
+// Schema hash: 3058078ae94c142f
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -712,6 +712,14 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::c
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"action", &::refrain::protocol::v777::play::clientbound::custom_chat_completions::action},
         refrain::reflect::custom_field{"entries", &::refrain::protocol::v777::play::clientbound::custom_chat_completions::entries});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::custom_payload'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::custom_payload> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::custom_payload";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"channel", &::refrain::protocol::v777::play::clientbound::custom_payload::channel},
+        refrain::reflect::custom_field{"data", &::refrain::protocol::v777::play::clientbound::custom_payload::data});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::debug_sample'.
@@ -1435,6 +1443,14 @@ template <> struct custom_traits<::refrain::protocol::v777::play::serverbound::c
         refrain::reflect::custom_field{"slot_id", &::refrain::protocol::v777::play::serverbound::container_slot_state_changed::slot_id},
         refrain::reflect::custom_field{"container_id", &::refrain::protocol::v777::play::serverbound::container_slot_state_changed::container_id},
         refrain::reflect::custom_field{"new_state", &::refrain::protocol::v777::play::serverbound::container_slot_state_changed::new_state});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::serverbound::custom_payload'.
+template <> struct custom_traits<::refrain::protocol::v777::play::serverbound::custom_payload> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::serverbound::custom_payload";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"channel", &::refrain::protocol::v777::play::serverbound::custom_payload::channel},
+        refrain::reflect::custom_field{"data", &::refrain::protocol::v777::play::serverbound::custom_payload::data});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::serverbound::debug_subscription_request'.

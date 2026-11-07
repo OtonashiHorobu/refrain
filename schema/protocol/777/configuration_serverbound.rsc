@@ -20,7 +20,7 @@ packet cookie_response = 1 {
 
 packet custom_payload = 2 {
     channel: identifier;
-    data: bytes;
+    #[rest] data: bytes;
 }
 
 packet finish_configuration = 3 {

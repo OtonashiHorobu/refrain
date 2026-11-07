@@ -13,7 +13,7 @@ import refrain::protocol::v777::common;
 
 packet custom_payload = 1 {
     channel: identifier;
-    data: bytes;
+    #[rest] data: bytes;
 }
 
 packet finish_configuration = 3 {

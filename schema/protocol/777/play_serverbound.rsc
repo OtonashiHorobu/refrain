@@ -150,6 +150,11 @@ packet container_slot_state_changed = 20 {
     new_state: bool;
 }
 
+packet custom_payload = 22 {
+    channel: identifier;
+    #[rest] data: bytes;
+}
+
 packet debug_subscription_request = 23 {
     #[varint] payload: i32;
 }

@@ -228,6 +228,11 @@ packet custom_chat_completions = 23 {
     entries: array<string>;
 }
 
+packet custom_payload = 24 {
+    channel: identifier;
+    #[rest] data: bytes;
+}
+
 packet debug_sample = 30 {
     sample: array<i64>;
     #[varint] debug_sample_type: u32;
