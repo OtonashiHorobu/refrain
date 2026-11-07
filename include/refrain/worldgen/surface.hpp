@@ -9,6 +9,7 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
+#include <refrain/worldgen/biome_climate.hpp>
 #include <refrain/worldgen/density.hpp>
 #include <refrain/worldgen/java_compat.hpp>
 #include <refrain/worldgen/material.hpp>
@@ -267,12 +268,20 @@ class surface_system {
     /// `world_surface` is the write-time heightmap indexed by `x + z*16`.
     [[nodiscard]] auto build_surface(
         material_context &context, const rule_evaluator &rule,
+        const biome_climates &climates, const biome_temperatures &temperatures,
         const std::function<std::string_view(jint, jint, jint)> &biome,
         const std::function<state_id(jint, jint, jint)> &get,
         const std::function<void(jint, jint, jint, state_id)> &set,
         const std::function<jint(jint, jint)> &world_surface) -> status;
 
   private:
+    void frozen_ocean_extension(
+        std::string_view biome, const biome_climate &climate,
+        const biome_temperatures &temperatures, jint min_surface_level,
+        jint block_x, jint block_z, jint height,
+        const std::function<state_id(jint, jint, jint)> &get,
+        const std::function<void(jint, jint, jint, state_id)> &set);
+
     block_states *states_{nullptr};
     generation_bounds bounds_{};
     noise_registry *noises_{nullptr};
@@ -285,6 +294,11 @@ class surface_system {
     const noise_stack *badlands_surface_noise_{nullptr};
     const noise_stack *badlands_pillar_noise_{nullptr};
     const noise_stack *badlands_pillar_roof_noise_{nullptr};
+    const noise_stack *iceberg_surface_noise_{nullptr};
+    const noise_stack *iceberg_pillar_noise_{nullptr};
+    const noise_stack *iceberg_pillar_roof_noise_{nullptr};
+    state_id snow_block_{no_state};
+    state_id packed_ice_{no_state};
     std::array<state_id, 192> clay_bands_{};
 };
 

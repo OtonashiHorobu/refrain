@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <string>
@@ -790,8 +791,10 @@ surface_system::surface_system(block_states &states, generation_bounds bounds,
       clay_bands_offset_noise_{noises.get("minecraft:clay_bands_offset")},
       badlands_surface_noise_{noises.get("minecraft:badlands_surface")},
       badlands_pillar_noise_{noises.get("minecraft:badlands_pillar")},
-      badlands_pillar_roof_noise_{
-          noises.get("minecraft:badlands_pillar_roof")} {
+      badlands_pillar_roof_noise_{noises.get("minecraft:badlands_pillar_roof")},
+      iceberg_surface_noise_{noises.get("minecraft:iceberg_surface")},
+      iceberg_pillar_noise_{noises.get("minecraft:iceberg_pillar")},
+      iceberg_pillar_roof_noise_{noises.get("minecraft:iceberg_pillar_roof")} {
     const state_id terracotta = states.intern("minecraft:terracotta");
     const state_id orange = states.intern("minecraft:orange_terracotta");
     const state_id yellow = states.intern("minecraft:yellow_terracotta");
@@ -800,6 +803,8 @@ surface_system::surface_system(block_states &states, generation_bounds bounds,
     const state_id white = states.intern("minecraft:white_terracotta");
     const state_id light_gray =
         states.intern("minecraft:light_gray_terracotta");
+    snow_block_ = states.intern("minecraft:snow_block");
+    packed_ice_ = states.intern("minecraft:packed_ice");
     clay_bands_.fill(terracotta);
     auto random = noise_random_->from_hash_of("minecraft:clay_bands");
     for (jint i = 0; i < static_cast<jint>(clay_bands_.size()); ++i) {
@@ -901,17 +906,21 @@ void surface_system::eroded_badlands_extension(
                 return;
             }
         }
+        const jint max_y = bounds_.min_y + bounds_.gen_depth - 1;
         for (jint y = start_y; y >= min_y; --y) {
             if (!states_->properties(get(block_x, y, block_z)).air) {
                 break;
             }
-            set(block_x, y, block_z, default_block_);
+            if (y >= bounds_.min_y && y <= max_y) {
+                set(block_x, y, block_z, default_block_);
+            }
         }
     }
 }
 
 auto surface_system::build_surface(
     material_context &context, const rule_evaluator &rule,
+    const biome_climates &climates, const biome_temperatures &temperatures,
     const std::function<std::string_view(jint, jint, jint)> &biome,
     const std::function<state_id(jint, jint, jint)> &get,
     const std::function<void(jint, jint, jint, state_id)> &set,
@@ -924,11 +933,15 @@ auto surface_system::build_surface(
             const jint block_z = bounds_.chunk_min_z + z;
             const jint starting_height = world_surface(x, z) + 1;
             const auto surface_biome = biome(block_x, starting_height, block_z);
+            const biome_climate *frozen_climate = nullptr;
             if (surface_biome == "minecraft:frozen_ocean" ||
                 surface_biome == "minecraft:deep_frozen_ocean") {
-                return std::unexpected{
-                    make_error(error_code::unsupported,
-                               "surface biome needs an extension")};
+                frozen_climate = climates.get(surface_biome);
+                if (frozen_climate == nullptr) {
+                    return std::unexpected{
+                        make_error(error_code::invalid_argument,
+                                   "frozen biome has no climate settings")};
+                }
             }
             if (surface_biome == "minecraft:eroded_badlands") {
                 eroded_badlands_extension(block_x, block_z, starting_height,
@@ -980,9 +993,82 @@ auto surface_system::build_surface(
                     }
                 }
             }
+            if (frozen_climate != nullptr) {
+                frozen_ocean_extension(surface_biome, *frozen_climate,
+                                       temperatures,
+                                       context.min_surface_level(), block_x,
+                                       block_z, starting_height, get, set);
+            }
         }
     }
     return status_ok();
+}
+
+void surface_system::frozen_ocean_extension(
+    std::string_view /*biome*/, const biome_climate &climate,
+    const biome_temperatures &temperatures, jint min_surface_level,
+    jint block_x, jint block_z, jint height,
+    const std::function<state_id(jint, jint, jint)> &get,
+    const std::function<void(jint, jint, jint, state_id)> &set) {
+    const double iceberg = std::min(
+        std::abs(static_cast<double>(iceberg_surface_noise_->get(
+                     static_cast<double>(block_x), 0.0,
+                     static_cast<double>(block_z))) *
+                 8.25),
+        static_cast<double>(static_cast<float>(iceberg_pillar_noise_->get(
+                                static_cast<double>(block_x) * 1.28, 0.0,
+                                static_cast<double>(block_z) * 1.28)) *
+                            15.0F));
+    if (!(iceberg > 1.8)) {
+        return;
+    }
+    const double iceberg_roof =
+        std::abs(static_cast<double>(iceberg_pillar_roof_noise_->get(
+                     static_cast<double>(block_x) * 1.17, 0.0,
+                     static_cast<double>(block_z) * 1.17)) *
+                 1.5);
+    double top = std::min(iceberg * iceberg * 1.2,
+                          std::ceil(iceberg_roof * 40.0) + 14.0);
+    if (temperatures.should_melt_iceberg(climate, block_x, bounds_.sea_level,
+                                         block_z, bounds_.sea_level)) {
+        top -= 2.0;
+    }
+    if (!(top > 2.0)) {
+        return;
+    }
+    const auto sea_level = static_cast<double>(bounds_.sea_level);
+    const double extension_bottom = sea_level - top - 7.0;
+    top += sea_level;
+    const double extension_top = top;
+    const jint start_y = std::max(height, static_cast<jint>(top) + 1);
+    auto random = noise_random_->at(block_x, 0, block_z);
+    const jint max_snow_depth = 2 + random->next_int(4);
+    const jint min_snow_height = bounds_.sea_level + 18 + random->next_int(10);
+    jint snow_depth = 0;
+    for (jint y = start_y; y >= min_surface_level; --y) {
+        const auto properties = states_->properties(get(block_x, y, block_z));
+        bool place = false;
+        if (properties.air && y < static_cast<jint>(extension_top)) {
+            place = random->next_double() > 0.01;
+        }
+        if (!place && properties.water &&
+            y > static_cast<jint>(extension_bottom) && y < bounds_.sea_level) {
+            place = random->next_double() > 0.15;
+        }
+        if (!place) {
+            continue;
+        }
+        const jint max_y = bounds_.min_y + bounds_.gen_depth - 1;
+        if (y < bounds_.min_y || y > max_y) {
+            continue;
+        }
+        if (snow_depth <= max_snow_depth && y > min_snow_height) {
+            set(block_x, y, block_z, snow_block_);
+            ++snow_depth;
+        } else {
+            set(block_x, y, block_z, packed_ice_);
+        }
+    }
 }
 
 } // namespace refrain::worldgen::surface
