@@ -956,8 +956,9 @@ void iceberg_feature::set_iceberg_block(feature_context &context,
     const bool randomness = !ellipse || random.next_double() > 0.05;
     const jint divisor = ellipse ? 3 : 2;
     if (snow_on_top && current != water_ &&
-        h_diff <= random.next_int(std::max(1, height / divisor)) +
-                      static_cast<jint>(static_cast<double>(height) * 0.6) &&
+        static_cast<double>(h_diff) <= static_cast<double>(random.next_int(
+                                           std::max(1, height / divisor))) +
+                                           static_cast<double>(height) * 0.6 &&
         randomness) {
         (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
                                                         snow_block_);
