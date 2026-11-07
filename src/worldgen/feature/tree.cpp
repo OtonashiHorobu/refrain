@@ -172,6 +172,66 @@ void leave_vine_decorator::place(const tree_decorator_context &context) const {
     }
 }
 
+void alter_ground_decorator::place_block_at(
+    const tree_decorator_context &context, const block_pos &pos) const {
+    for (jint dy = 2; dy >= -3; --dy) {
+        const block_pos cursor{.x = pos.x, .y = pos.y + dy, .z = pos.z};
+        const auto state = provider_->get_optional(context.context.placement,
+                                                   context.random, cursor);
+        if (state.has_value()) {
+            context.set_block(cursor, *state);
+            break;
+        }
+        if (!context.is_air(cursor) && dy < 0) {
+            break;
+        }
+    }
+}
+
+void alter_ground_decorator::place_circle(const tree_decorator_context &context,
+                                          const block_pos &center) const {
+    for (jint dx = -2; dx <= 2; ++dx) {
+        for (jint dz = -2; dz <= 2; ++dz) {
+            if (std::abs(dx) != 2 || std::abs(dz) != 2) {
+                place_block_at(context, block_pos{.x = center.x + dx,
+                                                  .y = center.y,
+                                                  .z = center.z + dz});
+            }
+        }
+    }
+}
+
+void alter_ground_decorator::place(
+    const tree_decorator_context &context) const {
+    if (context.logs.empty()) {
+        return;
+    }
+    const jint min_y = context.logs.front().y;
+    for (const auto &log : context.logs) {
+        if (log.y != min_y) {
+            continue;
+        }
+        place_circle(context,
+                     block_pos{.x = log.x - 1, .y = log.y, .z = log.z - 1});
+        place_circle(context,
+                     block_pos{.x = log.x + 2, .y = log.y, .z = log.z - 1});
+        place_circle(context,
+                     block_pos{.x = log.x - 1, .y = log.y, .z = log.z + 2});
+        place_circle(context,
+                     block_pos{.x = log.x + 2, .y = log.y, .z = log.z + 2});
+        for (jint i = 0; i < 5; ++i) {
+            const jint placement = context.random.next_int(64);
+            const jint xx = placement % 8;
+            const jint zz = placement / 8;
+            if (xx == 0 || xx == 7 || zz == 0 || zz == 7) {
+                place_circle(context, block_pos{.x = log.x - 3 + xx,
+                                                .y = log.y,
+                                                .z = log.z - 3 + zz});
+            }
+        }
+    }
+}
+
 auto tree_feature::valid_tree_pos(feature_context &context,
                                   const block_pos &pos) const -> bool {
     const auto state = context.placement.region->state_at(pos.x, pos.y, pos.z);

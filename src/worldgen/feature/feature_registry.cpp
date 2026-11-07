@@ -634,6 +634,20 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 if (decorator_name == "minecraft:trunk_vine") {
                     decoded_decorators.push_back(
                         std::make_unique<trunk_vine_decorator>());
+                } else if (decorator_name == "minecraft:alter_ground") {
+                    const auto *provider_value = entry.find("provider");
+                    if (provider_value == nullptr) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "alter_ground has no provider")};
+                    }
+                    auto provider = decode_provider(*provider_value);
+                    if (!provider) {
+                        return std::unexpected{provider.error()};
+                    }
+                    decoded_decorators.push_back(
+                        std::make_unique<alter_ground_decorator>(
+                            std::move(*provider)));
                 } else if (decorator_name == "minecraft:leave_vine") {
                     const auto *probability = entry.find("probability");
                     if (probability == nullptr) {

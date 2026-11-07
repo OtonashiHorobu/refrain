@@ -15,6 +15,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 namespace refrain::data::json {
@@ -42,6 +43,12 @@ class state_provider {
                                    worldgen_random &random,
                                    const block_pos &pos) const
         -> block_state_id = 0;
+    [[nodiscard]] virtual auto get_optional(const placement_context &context,
+                                            worldgen_random &random,
+                                            const block_pos &pos) const
+        -> std::optional<block_state_id> {
+        return get(context, random, pos);
+    }
 };
 
 [[nodiscard]] auto simple_state(block_state_id state)

@@ -67,22 +67,29 @@ class rule_based_provider final : public state_provider {
     [[nodiscard]] auto get(const placement_context &context,
                            worldgen_random &random, const block_pos &pos) const
         -> block_state_id override {
+        const auto state = get_optional(context, random, pos);
+        return state.has_value()
+                   ? *state
+                   : context.region->state_at(pos.x, pos.y, pos.z);
+    }
+    [[nodiscard]] auto get_optional(const placement_context &context,
+                                    worldgen_random &random,
+                                    const block_pos &pos) const
+        -> std::optional<block_state_id> override {
         for (const auto &entry : rules_) {
             if (!entry.predicate->test(*context.region, *context.states, pos)) {
                 continue;
             }
-            const auto state = entry.provider->get(context, random, pos);
-            if (state != no_block_state) {
+            const auto state =
+                entry.provider->get_optional(context, random, pos);
+            if (state.has_value()) {
                 return state;
             }
         }
         if (fallback_) {
-            const auto state = fallback_->get(context, random, pos);
-            if (state != no_block_state) {
-                return state;
-            }
+            return fallback_->get_optional(context, random, pos);
         }
-        return context.region->state_at(pos.x, pos.y, pos.z);
+        return std::nullopt;
     }
 
   private:
