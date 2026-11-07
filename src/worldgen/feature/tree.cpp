@@ -173,6 +173,51 @@ void leave_vine_decorator::place(const tree_decorator_context &context) const {
     }
 }
 
+void attached_to_logs_decorator::place(
+    const tree_decorator_context &context) const {
+    auto shuffled = context.logs;
+    for (std::size_t i = shuffled.size(); i > 1; --i) {
+        const auto swap_to = static_cast<std::size_t>(
+            context.random.next_int(static_cast<jint>(i)));
+        std::swap(shuffled[i - 1], shuffled[swap_to]);
+    }
+    const auto direction_vector = [](std::string_view name) {
+        if (name == "down") {
+            return std::array<jint, 3>{0, -1, 0};
+        }
+        if (name == "up") {
+            return std::array<jint, 3>{0, 1, 0};
+        }
+        if (name == "north") {
+            return std::array<jint, 3>{0, 0, -1};
+        }
+        if (name == "south") {
+            return std::array<jint, 3>{0, 0, 1};
+        }
+        if (name == "west") {
+            return std::array<jint, 3>{-1, 0, 0};
+        }
+        return std::array<jint, 3>{1, 0, 0};
+    };
+    for (const auto &log : shuffled) {
+        if (directions_.empty()) {
+            continue;
+        }
+        const auto direction = direction_vector(
+            directions_[static_cast<std::size_t>(context.random.next_int(
+                static_cast<jint>(directions_.size())))]);
+        const block_pos placement{.x = log.x + direction[0],
+                                  .y = log.y + direction[1],
+                                  .z = log.z + direction[2]};
+        if (context.random.next_float() <= probability_ &&
+            context.is_air(placement)) {
+            context.set_block(placement,
+                              provider_->get(context.context.placement,
+                                             context.random, placement));
+        }
+    }
+}
+
 void attached_to_leaves_decorator::place(
     const tree_decorator_context &context) const {
     auto shuffled = context.leaves;
