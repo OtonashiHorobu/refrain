@@ -250,13 +250,20 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             std::getenv("REFRAIN_VANILLA_CARVER_REGION");
         const char *feature_region =
             std::getenv("REFRAIN_VANILLA_FEATURE_REGION");
+        const char *feature_real_region =
+            std::getenv("REFRAIN_VANILLA_FEATURE_REAL_REGION");
         const bool carver_mode = carver_region != nullptr;
-        const bool feature_mode = feature_region != nullptr;
+        const bool feature_real_mode = feature_real_region != nullptr;
+        const bool feature_mode =
+            feature_region != nullptr || feature_real_mode;
         const char *region_path =
-            feature_mode
-                ? feature_region
-                : (carver_mode ? carver_region
-                               : std::getenv("REFRAIN_VANILLA_SURFACE_REGION"));
+            feature_real_mode
+                ? feature_real_region
+                : (feature_mode
+                       ? feature_region
+                       : (carver_mode
+                              ? carver_region
+                              : std::getenv("REFRAIN_VANILLA_SURFACE_REGION")));
         if (data_root == nullptr || region_path == nullptr) {
             return;
         }
@@ -297,7 +304,7 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
         multi_noise_biome_source source{overworld_parameters()};
         const bool real_biomes =
             std::getenv("REFRAIN_VANILLA_SURFACE_BIOMES") != nullptr ||
-            carver_mode;
+            carver_mode || feature_real_mode;
         const char *fixed_biome_raw =
             std::getenv("REFRAIN_VANILLA_SURFACE_FIXED_BIOME");
         const std::string fixed_biome =
@@ -385,14 +392,19 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 "minecraft:coal_ore", {.air = false,
                                        .blocks_motion = true,
                                        .blocks_motion_no_leaves = true});
+            auto sand_state = block_registry.intern(
+                "minecraft:sand", {.air = false,
+                                   .blocks_motion = true,
+                                   .blocks_motion_no_leaves = true});
             expect(air_state.has_value());
             expect(stone_state.has_value());
             expect(water_state.has_value());
             expect(lava_state.has_value());
             expect(bedrock_state.has_value());
             expect(coal_ore_state.has_value());
+            expect(sand_state.has_value());
             if (!air_state || !stone_state || !water_state || !lava_state ||
-                !bedrock_state || !coal_ore_state) {
+                !bedrock_state || !coal_ore_state || !sand_state) {
                 return;
             }
             const std::array<block_state_id, 1> uncarvable{*bedrock_state};
@@ -607,8 +619,42 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 if (!loaded) {
                     continue;
                 }
+                std::vector<std::string> plan_biomes;
+                std::vector<std::string> candidate_biomes;
+                if (feature_real_mode) {
+                    std::set<std::string> seen;
+                    for (const auto &parameter : overworld_parameters()) {
+                        if (seen.insert(parameter.biome).second) {
+                            plan_biomes.push_back(parameter.biome);
+                        }
+                    }
+                    biome_grid grid{source,
+                                    sampler,
+                                    (chunk_x - 1) * 4,
+                                    -16,
+                                    (chunk_z - 1) * 4,
+                                    12,
+                                    96,
+                                    12};
+                    std::set<std::string> candidates;
+                    for (jint qx = (chunk_x - 1) * 4; qx < (chunk_x + 2) * 4;
+                         ++qx) {
+                        for (jint qy = -16; qy < 80; ++qy) {
+                            for (jint qz = (chunk_z - 1) * 4;
+                                 qz < (chunk_z + 2) * 4; ++qz) {
+                                candidates.insert(std::string{
+                                    source.biome(grid.at(qx, qy, qz))});
+                            }
+                        }
+                    }
+                    candidate_biomes.assign(candidates.begin(),
+                                            candidates.end());
+                } else {
+                    plan_biomes = {fixed_biome};
+                    candidate_biomes = {fixed_biome};
+                }
                 const auto plan = feature::feature_sorter::build(
-                    {fixed_biome}, feature_data->biomes);
+                    plan_biomes, feature_data->biomes);
                 expect(plan.has_value()) << "cannot order features";
                 if (!plan) {
                     continue;
@@ -632,7 +678,7 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 chunk_region feature_region_handle{chunk, 1};
                 feature_ctx.placement.region = &feature_region_handle;
                 feature::decorate(feature_ctx, *plan, feature_registry.placed(),
-                                  {fixed_biome}, feature_data->biomes, seed);
+                                  candidate_biomes, feature_data->biomes, seed);
             }
 
             for (jint y = oracle_min_y; y < oracle_min_y + oracle_height; ++y) {

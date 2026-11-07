@@ -211,8 +211,14 @@ def main() -> int:
     parser.add_argument(
         "--features",
         action="store_true",
-        help="feature oracle: fixed oracle:feature biome with one curated "
-        "simple_block placed feature and no carvers",
+        help="feature oracle: fixed oracle:feature biome with curated placed "
+        "features and no carvers",
+    )
+    parser.add_argument(
+        "--features-real",
+        action="store_true",
+        help="feature oracle with real multi-noise biomes: strip carvers and "
+        "replace every biome's feature lists with two curated placed features",
     )
     parser.add_argument(
         "--fixed-biome",
@@ -224,7 +230,89 @@ def main() -> int:
 
     root = args.output.resolve()
     shutil.rmtree(root, ignore_errors=True)
-    if args.biomes or args.carvers:
+    if args.features_real:
+        pack = root / "world/datapacks/t2oracle"
+        write_meta(pack)
+        biome_dir = pack / "data/minecraft/worldgen/biome"
+        biome_dir.mkdir(parents=True)
+        for name, document in read_pack_entries(
+            args.server_jar, "data/minecraft/worldgen/biome/"
+        ).items():
+            document["carvers"] = []
+            document["features"] = [[] for _ in range(11)]
+            short = name.rsplit("/", 1)[-1][:-5]
+            if short in {"plains", "forest", "flower_forest"}:
+                document["features"][9] = ["oracle:stone_patch"]
+            elif short == "desert":
+                document["features"][9] = ["oracle:sand_disk"]
+            (biome_dir / name.rsplit("/", 1)[-1]).write_text(
+                json.dumps(document, indent=2) + "\n"
+            )
+        feature_dir = pack / "data/oracle/worldgen/feature"
+        feature_dir.mkdir(parents=True)
+        (feature_dir / "stone_patch.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:simple_block",
+                    "to_place": {"id": "minecraft:stone"},
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (feature_dir / "sand_disk.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:disk",
+                    "state_provider": {"id": "minecraft:sand"},
+                    "target": {
+                        "type": "minecraft:matching_blocks",
+                        "blocks": ["minecraft:dirt", "minecraft:grass_block"],
+                    },
+                    "radius": {"type": "minecraft:constant", "value": 4},
+                    "half_height": 1,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        placed_dir = pack / "data/oracle/worldgen/placed_feature"
+        placed_dir.mkdir(parents=True)
+        (placed_dir / "stone_patch.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:stone_patch",
+                    "placement": [
+                        {"type": "minecraft:count", "count": 10},
+                        {"type": "minecraft:in_square"},
+                        {
+                            "type": "minecraft:heightmap",
+                            "heightmap": "WORLD_SURFACE_WG",
+                        },
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "sand_disk.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:sand_disk",
+                    "placement": [
+                        {"type": "minecraft:count", "count": 2},
+                        {"type": "minecraft:in_square"},
+                        {
+                            "type": "minecraft:heightmap",
+                            "heightmap": "WORLD_SURFACE_WG",
+                        },
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+    elif args.biomes or args.carvers:
         pack = root / "world/datapacks/t2oracle"
         write_meta(pack)
         biome_dir = pack / "data/minecraft/worldgen/biome"
