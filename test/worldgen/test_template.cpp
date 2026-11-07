@@ -550,6 +550,48 @@ suite<"worldgen/template"> template_tests = [] {
         expect(loaded->palettes.front().front().state == *stone);
     };
 
+    "a known block with an unknown property set keeps its properties"_test =
+        [] {
+            block_state_registry registry;
+            auto stairs =
+                registry.intern("minecraft:oak_stairs[facing=north,half=bottom,"
+                                "shape=straight,waterlogged=false]",
+                                {.air = false,
+                                 .blocks_motion = true,
+                                 .blocks_motion_no_leaves = true});
+            expect(stairs.has_value());
+            if (!stairs) {
+                return;
+            }
+            data::nbt::compound root;
+            root["size"] = ints({1, 1, 1});
+            auto palette = data::nbt::make_list(data::nbt::tag_type::compound);
+            data::nbt::compound entry;
+            entry["id"] = data::nbt::value{std::string{"minecraft:oak_stairs"}};
+            data::nbt::compound properties;
+            properties["facing"] = data::nbt::value{std::string{"south"}};
+            properties["half"] = data::nbt::value{std::string{"bottom"}};
+            properties["shape"] = data::nbt::value{std::string{"straight"}};
+            properties["waterlogged"] = data::nbt::value{std::string{"false"}};
+            entry["properties"] = data::nbt::value{properties};
+            (void)palette.push(data::nbt::value{entry});
+            root["palette"] = std::move(palette);
+            auto blocks = data::nbt::make_list(data::nbt::tag_type::compound);
+            (void)blocks.push(data::nbt::value{block_entry({0, 0, 0}, 0)});
+            root["blocks"] = std::move(blocks);
+            const auto loaded =
+                load_structure_template(registry, data::nbt::value{root});
+            expect(loaded.has_value());
+            if (!loaded || loaded->palettes.empty() ||
+                loaded->palettes.front().empty()) {
+                return;
+            }
+            const auto name =
+                registry.name(loaded->palettes.front().front().state);
+            expect(name.find("facing=south") != std::string_view::npos);
+            expect(name != registry.name(*stairs));
+        };
+
     "unknown palette names and indices resolve to air"_test = [] {
         block_state_registry registry;
         data::nbt::compound root;

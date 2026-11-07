@@ -182,8 +182,7 @@ place_template(chunk_region &region, block_state_registry &states,
 /// reference manager's `getOrCreate`.
 class structure_template_manager {
   public:
-    structure_template_manager(std::string root,
-                               const block_state_registry &states)
+    structure_template_manager(std::string root, block_state_registry &states)
         : root_{std::move(root)}, states_{&states} {}
 
     [[nodiscard]] auto get_or_create(std::string_view id) const
@@ -191,14 +190,14 @@ class structure_template_manager {
 
   private:
     std::string root_{};
-    const block_state_registry *states_{nullptr};
+    block_state_registry *states_{nullptr};
     mutable std::unordered_map<std::string, structure_template> cache_{};
 };
 
 /// `StructureTemplate.load`: resolves the palette against `states` (unknown or
 /// malformed states become air) and keeps only entities that carry an NBT
 /// payload. The root is expected to be a loaded template compound.
-[[nodiscard]] auto load_structure_template(const block_state_registry &states,
+[[nodiscard]] auto load_structure_template(block_state_registry &states,
                                            const data::nbt::value &root)
     -> result<structure_template>;
 

@@ -139,7 +139,7 @@ auto block_state_key(const data::nbt::compound &entry) -> result<std::string> {
     return key;
 }
 
-auto resolve_palette_state(const block_state_registry &states,
+auto resolve_palette_state(block_state_registry &states,
                            const data::nbt::compound &entry) -> block_state_id {
     const auto key = block_state_key(entry);
     if (!key) {
@@ -154,12 +154,27 @@ auto resolve_palette_state(const block_state_registry &states,
     if (by_properties != no_block_state) {
         return by_properties;
     }
-    // Unknown properties are ignored by the reference; fall back to the
-    // block's plain key when the full state is not known.
-    if (const auto found = states.find(parsed.name); found.has_value()) {
-        return *found;
+    bool known_block = false;
+    for (std::size_t id = 0; id < states.size(); ++id) {
+        if (parse_state(states.name(static_cast<block_state_id>(id))).name ==
+            parsed.name) {
+            known_block = true;
+            break;
+        }
     }
-    return states.air();
+    if (!known_block) {
+        return states.air();
+    }
+    // The state table has the block but not this property combination; keep
+    // the template's properties instead of collapsing to the default state.
+    const bool fluid =
+        parsed.name == "minecraft:water" || parsed.name == "minecraft:lava";
+    const auto inserted =
+        states.intern(*key, {.air = false,
+                             .fluid = fluid,
+                             .water = parsed.name == "minecraft:water",
+                             .blocks_motion = !fluid});
+    return inserted.has_value() ? *inserted : states.air();
 }
 
 auto is_full_block(const block_state_registry &states, block_state_id state)
@@ -168,7 +183,7 @@ auto is_full_block(const block_state_registry &states, block_state_id state)
     return !traits.air && !traits.fluid && traits.blocks_motion;
 }
 
-auto load_palette(const block_state_registry &states,
+auto load_palette(block_state_registry &states,
                   const data::nbt::list_value &palette_list,
                   const data::nbt::list_value *blocks)
     -> std::vector<template_block_info> {
@@ -406,7 +421,7 @@ auto build_state_key(
 
 } // namespace
 
-auto load_structure_template(const block_state_registry &states,
+auto load_structure_template(block_state_registry &states,
                              const data::nbt::value &root)
     -> result<structure_template> {
     const auto *entries = root.as_compound();
