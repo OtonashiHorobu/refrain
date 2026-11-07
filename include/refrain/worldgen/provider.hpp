@@ -20,12 +20,17 @@ class value;
 
 namespace refrain::worldgen::provider {
 
+class float_provider;
+
 /// The generation bounds height anchors resolve against.
 struct generation_context {
     jint min_y{-64};
     jint height{384};
     jint sea_level{63};
 };
+
+[[nodiscard]] auto make_constant_float(float value)
+    -> std::unique_ptr<float_provider>;
 
 class int_provider {
   public:
