@@ -22,6 +22,13 @@ struct direction_offset {
     jint dz;
 };
 
+constexpr std::array<std::pair<jint, jint>, 4> horizontal_neighbors{{
+    {0, -1},
+    {0, 1},
+    {-1, 0},
+    {1, 0},
+}};
+
 constexpr std::array<direction_offset, 6> all_directions{{
     {.dx = 0, .dy = -1, .dz = 0},
     {.dx = 0, .dy = 1, .dz = 0},
@@ -875,6 +882,293 @@ void huge_mushroom_feature::place_trunk(feature_context &context,
             context,
             block_pos{.x = origin.x, .y = origin.y + dy, .z = origin.z}, state);
     }
+}
+
+auto iceberg_feature::is_iceberg(block_state_id state) const -> bool {
+    return state == packed_ice_ || state == snow_block_ || state == blue_ice_;
+}
+
+auto iceberg_feature::height_radius_round(worldgen_random &random, jint y,
+                                          jint height, jint width) const
+    -> jint {
+    const float k = 3.5F - random.next_float();
+    float scale = (1.0F - static_cast<float>(static_cast<double>(y * y) /
+                                             static_cast<double>(height) /
+                                             static_cast<double>(k))) *
+                  static_cast<float>(width);
+    if (height > 15 + random.next_int(5)) {
+        const jint temp = y < 3 + random.next_int(6) ? y / 2 : y;
+        scale = (1.0F - static_cast<float>(temp) /
+                            (static_cast<float>(height) * k * 0.4F)) *
+                static_cast<float>(width);
+    }
+    return static_cast<jint>(std::ceil(static_cast<double>(scale / 2.0F)));
+}
+
+auto iceberg_feature::height_radius_ellipse(jint y, jint height,
+                                            jint width) const -> jint {
+    float scale = (1.0F - static_cast<float>(static_cast<double>(y * y) /
+                                             static_cast<double>(height))) *
+                  static_cast<float>(width);
+    return static_cast<jint>(std::ceil(static_cast<double>(scale / 2.0F)));
+}
+
+auto iceberg_feature::height_radius_steep(worldgen_random &random, jint y,
+                                          jint height, jint width) const
+    -> jint {
+    const float k = 1.0F + random.next_float() / 2.0F;
+    const float scale =
+        (1.0F - static_cast<float>(y) / (static_cast<float>(height) * k)) *
+        static_cast<float>(width);
+    return static_cast<jint>(std::ceil(static_cast<double>(scale / 2.0F)));
+}
+
+auto iceberg_feature::signed_distance_circle(worldgen_random &random, jint x,
+                                             jint z, jint radius) -> double {
+    const float offset = 10.0F * std::clamp(random.next_float(), 0.2F, 0.8F) /
+                         static_cast<float>(radius);
+    return static_cast<double>(offset) + static_cast<double>(x * x) +
+           static_cast<double>(z * z) -
+           static_cast<double>(radius) * static_cast<double>(radius);
+}
+
+auto iceberg_feature::signed_distance_ellipse(jint x, jint z, jint a, jint c,
+                                              double angle) -> double {
+    const double cos_angle = std::cos(angle);
+    const double sin_angle = std::sin(angle);
+    const double u = (x * cos_angle - z * sin_angle) / static_cast<double>(a);
+    const double v = (x * sin_angle + z * cos_angle) / static_cast<double>(c);
+    return u * u + v * v - 1.0;
+}
+
+void iceberg_feature::set_iceberg_block(feature_context &context,
+                                        worldgen_random &random,
+                                        const block_pos &pos, jint h_diff,
+                                        jint height, bool ellipse,
+                                        bool snow_on_top) const {
+    const auto current =
+        context.placement.region->state_at(pos.x, pos.y, pos.z);
+    if (current != context.placement.states->air() && current != snow_block_ &&
+        current != ice_ && current != water_) {
+        return;
+    }
+    const bool randomness = !ellipse || random.next_double() > 0.05;
+    const jint divisor = ellipse ? 3 : 2;
+    if (snow_on_top && current != water_ &&
+        h_diff <= random.next_int(std::max(1, height / divisor)) +
+                      static_cast<jint>(static_cast<double>(height) * 0.6) &&
+        randomness) {
+        (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                        snow_block_);
+        return;
+    }
+    (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                    state_);
+}
+
+void iceberg_feature::generate_block(feature_context &context,
+                                     worldgen_random &random,
+                                     const block_pos &origin, jint height,
+                                     jint x, jint y, jint z, jint radius,
+                                     jint a, bool ellipse, jint ellipse_c,
+                                     double angle, bool snow_on_top) const {
+    const double distance =
+        ellipse ? signed_distance_ellipse(x, z, a,
+                                          y > 0 && height - y <= 3
+                                              ? ellipse_c - (4 - (height - y))
+                                              : ellipse_c,
+                                          angle)
+                : signed_distance_circle(random, x, z, radius);
+    if (distance >= 0.0) {
+        return;
+    }
+    const block_pos pos{
+        .x = origin.x + x, .y = origin.y + y, .z = origin.z + z};
+    const double compare = ellipse ? -0.5 : -6 - random.next_int(3);
+    if (distance > compare && random.next_double() > 0.9) {
+        return;
+    }
+    set_iceberg_block(context, random, pos, height - y, height, ellipse,
+                      snow_on_top);
+}
+
+void iceberg_feature::smooth(feature_context &context, const block_pos &origin,
+                             jint width, jint height, bool ellipse,
+                             jint ellipse_a) const {
+    const jint a = ellipse ? ellipse_a : width / 2;
+    for (jint x = -a; x <= a; ++x) {
+        for (jint z = -a; z <= a; ++z) {
+            for (jint y = 0; y <= height; ++y) {
+                const block_pos pos{
+                    .x = origin.x + x, .y = origin.y + y, .z = origin.z + z};
+                const auto current =
+                    context.placement.region->state_at(pos.x, pos.y, pos.z);
+                if (!is_iceberg(current) && current != snow_layer_) {
+                    continue;
+                }
+                const auto below =
+                    context.placement.region->state_at(pos.x, pos.y - 1, pos.z);
+                if (below == context.placement.states->air()) {
+                    (void)context.placement.region->set_block_state(
+                        pos.x, pos.y, pos.z, context.placement.states->air());
+                    (void)context.placement.region->set_block_state(
+                        pos.x, pos.y + 1, pos.z,
+                        context.placement.states->air());
+                    continue;
+                }
+                if (!is_iceberg(current)) {
+                    continue;
+                }
+                jint counter = 0;
+                for (const auto &offset : horizontal_neighbors) {
+                    if (!is_iceberg(context.placement.region->state_at(
+                            pos.x + offset.first, pos.y,
+                            pos.z + offset.second))) {
+                        ++counter;
+                    }
+                }
+                if (counter >= 3) {
+                    (void)context.placement.region->set_block_state(
+                        pos.x, pos.y, pos.z, context.placement.states->air());
+                }
+            }
+        }
+    }
+}
+
+void iceberg_feature::carve(feature_context &context, jint radius, jint y,
+                            const block_pos &origin, bool underwater,
+                            double angle, const block_pos &local_origin,
+                            jint ellipse_a, jint ellipse_c) const {
+    const jint a = radius + 1 + ellipse_a / 3;
+    const jint c = std::min(radius - 3, 3) + ellipse_c / 2 - 1;
+    for (jint x = -a; x < a; ++x) {
+        for (jint z = -a; z < a; ++z) {
+            const double distance = signed_distance_ellipse(
+                x - local_origin.x, z - local_origin.z, a, c, angle);
+            if (distance >= 0.0) {
+                continue;
+            }
+            const block_pos pos{
+                .x = origin.x + x, .y = origin.y + y, .z = origin.z + z};
+            const auto current =
+                context.placement.region->state_at(pos.x, pos.y, pos.z);
+            if (!is_iceberg(current) && current != snow_block_) {
+                continue;
+            }
+            if (underwater) {
+                (void)context.placement.region->set_block_state(pos.x, pos.y,
+                                                                pos.z, water_);
+            } else {
+                (void)context.placement.region->set_block_state(
+                    pos.x, pos.y, pos.z, context.placement.states->air());
+                if (context.placement.region->state_at(pos.x, pos.y + 1,
+                                                       pos.z) == snow_layer_) {
+                    (void)context.placement.region->set_block_state(
+                        pos.x, pos.y + 1, pos.z,
+                        context.placement.states->air());
+                }
+            }
+        }
+    }
+}
+
+void iceberg_feature::generate_cutout(feature_context &context,
+                                      worldgen_random &random, jint width,
+                                      jint height, const block_pos &origin,
+                                      bool ellipse, jint ellipse_a,
+                                      double angle, jint ellipse_c) const {
+    const jint sign_x = random.next_boolean() ? -1 : 1;
+    const jint sign_z = random.next_boolean() ? -1 : 1;
+    jint x_off = random.next_int(std::max(width / 2 - 2, 1));
+    if (random.next_boolean()) {
+        x_off =
+            width / 2 + 1 - random.next_int(std::max(width - width / 2 - 1, 1));
+    }
+    jint z_off = random.next_int(std::max(width / 2 - 2, 1));
+    if (random.next_boolean()) {
+        z_off =
+            width / 2 + 1 - random.next_int(std::max(width - width / 2 - 1, 1));
+    }
+    if (ellipse) {
+        x_off = z_off = random.next_int(std::max(ellipse_a - 5, 1));
+    }
+    const block_pos local{sign_x * x_off, 0, sign_z * z_off};
+    const double cut_angle =
+        ellipse ? angle + pi / 2.0 : random.next_double() * 2.0 * pi;
+    for (jint y = 0; y < height - 3; ++y) {
+        const jint radius = height_radius_round(random, y, height, width);
+        carve(context, radius, y, origin, false, cut_angle, local, ellipse_a,
+              ellipse_c);
+    }
+    for (jint y = -1; y > -height + random.next_int(5); --y) {
+        const jint radius = height_radius_steep(random, -y, height, width);
+        carve(context, radius, y, origin, true, cut_angle, local, ellipse_a,
+              ellipse_c);
+    }
+}
+
+auto iceberg_feature::place(feature_context &context, worldgen_random &random,
+                            const block_pos &origin_in) const -> bool {
+    const block_pos origin{.x = origin_in.x,
+                           .y = context.placement.generation.sea_level,
+                           .z = origin_in.z};
+    const bool snow_on_top = random.next_double() > 0.7;
+    const double angle = random.next_double() * 2.0 * pi;
+    const jint ellipse_a = 11 - random.next_int(5);
+    const jint ellipse_c = 3 + random.next_int(3);
+    const bool ellipse = random.next_double() > 0.7;
+    jint over_water =
+        ellipse ? random.next_int(6) + 6 : random.next_int(15) + 3;
+    if (!ellipse && random.next_double() > 0.9) {
+        over_water += random.next_int(19) + 7;
+    }
+    const jint under_water = std::min(over_water + random.next_int(11), 18);
+    const jint width =
+        std::min(over_water + random.next_int(7) - random.next_int(5), 11);
+    const jint a = ellipse ? ellipse_a : 11;
+    for (jint x = -a; x < a; ++x) {
+        for (jint z = -a; z < a; ++z) {
+            for (jint y = 0; y < over_water; ++y) {
+                const jint radius =
+                    ellipse ? height_radius_ellipse(y, over_water, width)
+                            : height_radius_round(random, y, over_water, width);
+                if (ellipse || x < radius) {
+                    generate_block(context, random, origin, over_water, x, y, z,
+                                   radius, a, ellipse, ellipse_c, angle,
+                                   snow_on_top);
+                }
+            }
+        }
+    }
+    smooth(context, origin, width, over_water, ellipse, ellipse_a);
+    for (jint x = -a; x < a; ++x) {
+        for (jint z = -a; z < a; ++z) {
+            for (jint y = -1; y > -under_water; --y) {
+                const jint new_a =
+                    ellipse ? static_cast<jint>(std::ceil(
+                                  static_cast<double>(a) *
+                                  (1.0 - static_cast<double>(y * y) /
+                                             (static_cast<double>(under_water) *
+                                              8.0))))
+                            : a;
+                const jint radius =
+                    height_radius_steep(random, -y, under_water, width);
+                if (x < radius) {
+                    generate_block(context, random, origin, under_water, x, y,
+                                   z, radius, new_a, ellipse, ellipse_c, angle,
+                                   snow_on_top);
+                }
+            }
+        }
+    }
+    const bool cutout =
+        ellipse ? random.next_double() > 0.1 : random.next_double() > 0.7;
+    if (cutout) {
+        generate_cutout(context, random, width, over_water, origin, ellipse,
+                        ellipse_a, angle, ellipse_c);
+    }
+    return true;
 }
 
 auto sequence_feature::place(feature_context &context, worldgen_random &random,

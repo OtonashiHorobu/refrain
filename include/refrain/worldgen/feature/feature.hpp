@@ -343,6 +343,63 @@ class huge_mushroom_feature final : public feature {
     std::unique_ptr<block_predicate> can_place_on_{};
 };
 
+/// `IcebergFeature`: an ellipse/circle iceberg centred on sea level.
+class iceberg_feature final : public feature {
+  public:
+    iceberg_feature(block_state_id state, block_state_id snow_block,
+                    block_state_id snow_layer, block_state_id ice,
+                    block_state_id packed_ice, block_state_id blue_ice,
+                    block_state_id water)
+        : state_{state}, snow_block_{snow_block}, snow_layer_{snow_layer},
+          ice_{ice}, packed_ice_{packed_ice}, blue_ice_{blue_ice},
+          water_{water} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    [[nodiscard]] auto is_iceberg(block_state_id state) const -> bool;
+    [[nodiscard]] auto height_radius_round(worldgen_random &random, jint y,
+                                           jint height, jint width) const
+        -> jint;
+    [[nodiscard]] auto height_radius_ellipse(jint y, jint height,
+                                             jint width) const -> jint;
+    [[nodiscard]] auto height_radius_steep(worldgen_random &random, jint y,
+                                           jint height, jint width) const
+        -> jint;
+    [[nodiscard]] static auto signed_distance_circle(worldgen_random &random,
+                                                     jint x, jint z,
+                                                     jint radius) -> double;
+    [[nodiscard]] static auto signed_distance_ellipse(jint x, jint z, jint a,
+                                                      jint c, double angle)
+        -> double;
+    void generate_block(feature_context &context, worldgen_random &random,
+                        const block_pos &origin, jint height, jint x, jint y,
+                        jint z, jint radius, jint a, bool ellipse,
+                        jint ellipse_c, double angle, bool snow_on_top) const;
+    void set_iceberg_block(feature_context &context, worldgen_random &random,
+                           const block_pos &pos, jint h_diff, jint height,
+                           bool ellipse, bool snow_on_top) const;
+    void smooth(feature_context &context, const block_pos &origin, jint width,
+                jint height, bool ellipse, jint ellipse_a) const;
+    void carve(feature_context &context, jint radius, jint y,
+               const block_pos &origin, bool underwater, double angle,
+               const block_pos &local_origin, jint ellipse_a,
+               jint ellipse_c) const;
+    void generate_cutout(feature_context &context, worldgen_random &random,
+                         jint width, jint height, const block_pos &origin,
+                         bool ellipse, jint ellipse_a, double angle,
+                         jint ellipse_c) const;
+
+    block_state_id state_{no_block_state};
+    block_state_id snow_block_{no_block_state};
+    block_state_id snow_layer_{no_block_state};
+    block_state_id ice_{no_block_state};
+    block_state_id packed_ice_{no_block_state};
+    block_state_id blue_ice_{no_block_state};
+    block_state_id water_{no_block_state};
+};
+
 /// `SpringFeature`: a fluid source surrounded by a fixed rock/hole pattern.
 class spring_feature final : public feature {
   public:

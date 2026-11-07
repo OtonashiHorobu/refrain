@@ -42,6 +42,7 @@ using refrain::worldgen::feature::feature_sorter;
 using refrain::worldgen::feature::foliage_kind;
 using refrain::worldgen::feature::huge_fungus_feature;
 using refrain::worldgen::feature::huge_mushroom_feature;
+using refrain::worldgen::feature::iceberg_feature;
 using refrain::worldgen::feature::leave_vine_decorator;
 using refrain::worldgen::feature::place_on_ground_decorator;
 using refrain::worldgen::feature::placed_feature_document;
@@ -560,6 +561,65 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
             }
         }
         expect(cap_found);
+    };
+
+    "an iceberg grows ice above and below sea level"_test = [] {
+        block_state_registry registry;
+        auto water = registry.intern(
+            "minecraft:water", {.air = false, .fluid = true, .water = true});
+        auto blue = registry.intern("minecraft:blue_ice",
+                                    {.air = false, .blocks_motion = true});
+        auto packed = registry.intern("minecraft:packed_ice",
+                                      {.air = false, .blocks_motion = true});
+        auto ice = registry.intern("minecraft:ice",
+                                   {.air = false, .blocks_motion = true});
+        auto snow_block = registry.intern(
+            "minecraft:snow_block", {.air = false, .blocks_motion = true});
+        auto snow_layer =
+            registry.intern("minecraft:snow[layers=1]", {.air = false});
+        expect(water.has_value() && blue.has_value() && packed.has_value() &&
+               ice.has_value() && snow_block.has_value() &&
+               snow_layer.has_value());
+        if (!water || !blue || !packed || !ice || !snow_block || !snow_layer) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::biomes);
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint y = 0; y <= 8; ++y) {
+                    expect(chunk.set_state(x, y, z, *water));
+                }
+            }
+        }
+        chunk_region region{chunk, 0};
+        placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &registry,
+            .generation =
+                generation_context{.min_y = 0, .height = 32, .sea_level = 8},
+        };
+        feature_context context{.placement = placement};
+        const iceberg_feature feature{*blue,   *snow_block, *snow_layer, *ice,
+                                      *packed, *blue,       *water};
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(13)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 8, .z = 8}));
+        jint ice_count = 0;
+        for (jint y = 0; y < 32; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    const auto state = chunk.state_at(x, y, z);
+                    if (state == *blue || state == *packed || state == *ice ||
+                        state == *snow_block || state == *snow_layer) {
+                        ++ice_count;
+                    }
+                }
+            }
+        }
+        expect(ice_count > 0);
     };
 };
 

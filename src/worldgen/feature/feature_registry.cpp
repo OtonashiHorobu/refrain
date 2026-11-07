@@ -440,6 +440,35 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       static_cast<jint>(*size_value), discard));
             continue;
         }
+        if (*type == "minecraft:iceberg") {
+            const auto *state = document.document.find("state");
+            if (state == nullptr) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "iceberg state is missing")};
+            }
+            const auto main_key = decode_state_key(*state);
+            const auto snow_block =
+                resolve_state(*states_, "minecraft:snow_block");
+            const auto snow_layer =
+                resolve_state(*states_, "minecraft:snow[layers=1]");
+            const auto ice = resolve_state(*states_, "minecraft:ice");
+            const auto packed = resolve_state(*states_, "minecraft:packed_ice");
+            const auto blue = resolve_state(*states_, "minecraft:blue_ice");
+            const auto water = resolve_state(*states_, "minecraft:water");
+            if (!main_key || !snow_block || !snow_layer || !ice || !packed ||
+                !blue || !water) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "iceberg states are invalid")};
+            }
+            const auto main_state = resolve_state(*states_, *main_key);
+            if (!main_state) {
+                return std::unexpected{main_state.error()};
+            }
+            features_.emplace(id, std::make_unique<iceberg_feature>(
+                                      *main_state, *snow_block, *snow_layer,
+                                      *ice, *packed, *blue, *water));
+            continue;
+        }
         if (*type == "minecraft:huge_red_mushroom" ||
             *type == "minecraft:huge_brown_mushroom") {
             const auto *cap = document.document.find("cap_provider");
