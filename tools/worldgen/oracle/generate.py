@@ -169,6 +169,12 @@ def run_server(root: pathlib.Path, server_jar: pathlib.Path, settle: float,
         process.kill()
         raise SystemExit("the reference server did not start in time")
 
+    if process.poll() is not None:
+        process.wait()
+        raise SystemExit(
+            "the reference server exited during startup:\n" + "".join(lines[-30:])
+        )
+
     assert process.stdin is not None
     process.stdin.write("gamerule random_tick_speed 0\n")
     process.stdin.flush()
@@ -418,6 +424,15 @@ def main() -> int:
                 "oracle:platform_stone_delta",
                 "oracle:delta",
                 "oracle:amethyst_geode",
+                "oracle:cave_blob_1",
+                "oracle:cave_blob_2",
+                "oracle:cave_blob_3",
+                "oracle:cave_blob_4",
+                "oracle:cave_blob_5",
+                "oracle:cave_blob_6",
+                "oracle:cave_blob_7",
+                "oracle:cave_blob_8",
+                "oracle:large_dripstone",
             ]
         )
         (biome_dir / "feature.json").write_text(
@@ -465,6 +480,61 @@ def main() -> int:
         geode["max_gen_offset"] = 6
         (feature_dir / "amethyst_geode.json").write_text(
             json.dumps(geode, indent=2) + "\n"
+        )
+        (feature_dir / "cave_blob.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:block_blob",
+                    "state": "minecraft:air",
+                    "can_place_on": {
+                        "type": "minecraft:matching_blocks",
+                        "blocks": ["minecraft:stone"],
+                    },
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        dripstone = read_pack_data(
+            args.server_jar,
+            "data/minecraft/worldgen/feature/large_dripstone.json",
+        )
+        # Force the wind branch so the test covers the offset columns too.
+        dripstone["min_radius_for_wind"] = 0
+        dripstone["min_bluntness_for_wind"] = 0.0
+        (feature_dir / "large_dripstone.json").write_text(
+            json.dumps(dripstone, indent=2) + "\n"
+        )
+        for index in range(1, 9):
+            (placed_dir / f"cave_blob_{index}.json").write_text(
+                json.dumps(
+                    {
+                        "feature": "oracle:cave_blob",
+                        "placement": [
+                            {
+                                "type": "minecraft:fixed_placement",
+                                "positions": [[4, 30, 4]],
+                            }
+                        ],
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
+        (placed_dir / "large_dripstone.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:large_dripstone",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[4, 25, 4]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
         )
         (placed_dir / "amethyst_geode.json").write_text(
             json.dumps(
