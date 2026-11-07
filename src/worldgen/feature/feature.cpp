@@ -628,11 +628,11 @@ void huge_fungus_feature::try_weeping_vines(feature_context &context,
     for (jint height = 0; height <= goal; ++height) {
         if (context.placement.region->state_at(cursor.x, cursor.y, cursor.z) ==
             context.placement.states->air()) {
-            const bool below_air =
+            const bool at_bottom =
                 height == goal || context.placement.region->state_at(
-                                      cursor.x, cursor.y - 1, cursor.z) ==
+                                      cursor.x, cursor.y - 1, cursor.z) !=
                                       context.placement.states->air();
-            if (below_air) {
+            if (at_bottom) {
                 const auto age = random.next_int(3);
                 (void)context.placement.region->set_block_state(
                     cursor.x, cursor.y, cursor.z,
