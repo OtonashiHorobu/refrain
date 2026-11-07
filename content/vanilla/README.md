@@ -10,7 +10,7 @@ laid out per game version:
 ```text
 content/vanilla/<version>/
   MANIFEST.json        game version, data version, source jar hash, file hashes
-  datapack.tar.zst     extracted data pack
+  datapack.zip         worldgen documents and block/biome tags, deflated
   reports/             compact tables converted from the game's datagen reports
 ```
 
@@ -22,7 +22,8 @@ The contents are not covered by the repository license; see `NOTICE.md` and the
 root `NOTICE.md`. Data is regenerated from a locally owned copy of the game:
 
 ```bash
-refrain-tools content import --jar /path/to/server.jar --out content/vanilla/<version>
+python3 tools/worldgen/pack_content.py --data-root <extracted>/data \
+    --out content/vanilla/<version>
 ```
 
 Removing the directory is supported: the build then requires the user's jar and

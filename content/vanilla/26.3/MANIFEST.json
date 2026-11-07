@@ -1,0 +1,13 @@
+{
+  "game_version": "26.3",
+  "data_version": 5023,
+  "archive": "datapack.zip",
+  "archive_sha256": "94b72cc0d460af95b37a04dc280ba129e36d73aee32bd2d364ec39eff8e72614",
+  "entry_count": 1567,
+  "kinds": [
+    "worldgen",
+    "tags/block",
+    "tags/worldgen"
+  ],
+  "source": "server.jar datapack"
+}
