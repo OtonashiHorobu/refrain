@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9582d232958dd1ff
+// Schema hash: 7cfeb406836d8806
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -247,11 +247,11 @@ template <> struct custom_traits<::refrain::protocol::v777::login::clientbound::
         refrain::reflect::custom_field{"signature", &::refrain::protocol::v777::login::clientbound::profile_property::signature});
 };
 
-/// Generated RSC packet 'refrain::protocol::v777::login::clientbound::disconnect'.
-template <> struct custom_traits<::refrain::protocol::v777::login::clientbound::disconnect> {
-    static constexpr std::string_view type_name = "refrain::protocol::v777::login::clientbound::disconnect";
+/// Generated RSC packet 'refrain::protocol::v777::login::clientbound::login_disconnect'.
+template <> struct custom_traits<::refrain::protocol::v777::login::clientbound::login_disconnect> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::login::clientbound::login_disconnect";
     static constexpr auto fields = std::make_tuple(
-        refrain::reflect::custom_field{"reason", &::refrain::protocol::v777::login::clientbound::disconnect::reason});
+        refrain::reflect::custom_field{"reason", &::refrain::protocol::v777::login::clientbound::login_disconnect::reason});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::login::clientbound::hello'.

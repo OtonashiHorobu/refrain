@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9582d232958dd1ff
+// Schema hash: 7cfeb406836d8806
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_LOGIN_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_LOGIN_CLIENTBOUND_HPP
@@ -27,9 +27,9 @@ struct profile_property {
     std::optional<std::string> signature;
 };
 
-struct disconnect {
+struct login_disconnect {
     static constexpr std::uint16_t packet_id = 0x0;
-    static constexpr std::string_view packet_name = "disconnect";
+    static constexpr std::string_view packet_name = "login_disconnect";
 
     std::string reason;
 };
@@ -118,7 +118,7 @@ struct login_compression {
   return ::refrain::status_ok();
 }
 
-[[nodiscard]] inline auto encode_disconnect(::refrain::net::writer &out, const disconnect &value) -> ::refrain::status {
+[[nodiscard]] inline auto encode_login_disconnect(::refrain::net::writer &out, const login_disconnect &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
   {
@@ -129,7 +129,7 @@ struct login_compression {
   return ::refrain::status_ok();
 }
 
-[[nodiscard]] inline auto decode_disconnect(::refrain::net::reader &in, disconnect &value) -> ::refrain::status {
+[[nodiscard]] inline auto decode_login_disconnect(::refrain::net::reader &in, login_disconnect &value) -> ::refrain::status {
   static_cast<void>(in);
   static_cast<void>(value);
   {

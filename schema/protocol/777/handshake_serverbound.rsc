@@ -9,7 +9,7 @@ version 777;
 
 packet intention = 0 {
     #[varint] protocol: u32;
-    host: string;
+    #[max(255)] host: string;
     port: u16;
     #[varint] next: u32;
 }

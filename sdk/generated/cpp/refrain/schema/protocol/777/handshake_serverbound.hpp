@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9582d232958dd1ff
+// Schema hash: 7cfeb406836d8806
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_HANDSHAKE_SERVERBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_HANDSHAKE_SERVERBOUND_HPP
@@ -27,6 +27,7 @@ struct intention {
 
     // attributes: #[varint]
     std::uint32_t protocol;
+    // attributes: #[max(255)]
     std::string host;
     std::uint16_t port;
     // attributes: #[varint]
@@ -39,7 +40,7 @@ struct intention {
     out.write_varint(static_cast<std::uint32_t>(value.protocol));
   }
   {
-    if (auto written = out.write_string(value.host, 32767); !written) {
+    if (auto written = out.write_string(value.host, 255); !written) {
       return written;
     }
   }
@@ -61,7 +62,7 @@ struct intention {
     value.protocol = static_cast<decltype(value.protocol)>(*value_0);
   }
   {
-    auto value_0 = in.read_string(32767);
+    auto value_0 = in.read_string(255);
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.host = std::move(*value_0);
   }

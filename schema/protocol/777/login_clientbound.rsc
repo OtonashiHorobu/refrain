@@ -13,7 +13,7 @@ struct profile_property {
     signature: optional<string>;
 }
 
-packet disconnect = 0 {
+packet login_disconnect = 0 {
     reason: string;
 }
 
