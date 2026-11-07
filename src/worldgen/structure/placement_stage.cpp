@@ -216,9 +216,9 @@ void place_swamp_hut(const structure_place_context &context,
         }
         height_position = total / count;
     }
+    const jint base_y = height_position + piece.height_offset;
     const auto local_pos = [&](jint x, jint y, jint z) {
-        const auto [wx, wz] = swamp_hut_world_pos(piece, x, z);
-        return block_pos{.x = wx, .y = height_position + y, .z = wz};
+        return piece_local_to_world(piece, base_y, x, y, z);
     };
     const auto place = [&](std::string_view key, jint x, jint y, jint z) {
         auto state = resolve(key);
@@ -482,6 +482,13 @@ void place_buried_treasure(const structure_place_context &context,
 }
 
 } // namespace
+
+auto piece_local_to_world(const structure_piece_record &piece, jint base_y,
+                          jint local_x, jint local_y, jint local_z)
+    -> block_pos {
+    const auto [wx, wz] = swamp_hut_world_pos(piece, local_x, local_z);
+    return block_pos{.x = wx, .y = base_y + local_y, .z = wz};
+}
 
 void place_structures(proto_chunk &chunk,
                       const structure_place_context &context,

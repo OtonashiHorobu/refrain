@@ -316,7 +316,8 @@ void write_structure_stage(proto_chunk &chunk,
                 .template_pivot_x = piece.template_pivot.x,
                 .template_pivot_y = piece.template_pivot.y,
                 .template_pivot_z = piece.template_pivot.z,
-                .height_position = piece.height_position});
+                .height_position = piece.height_position,
+                .height_offset = piece.height_offset});
         }
         chunk.add_structure_start(std::move(record));
     }

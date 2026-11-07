@@ -42,6 +42,7 @@ struct structure_piece {
     jint template_mirror{0};
     block_pos template_pivot{};
     jint height_position{-1};
+    jint height_offset{0};
 };
 
 struct structure_start {

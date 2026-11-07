@@ -831,3 +831,30 @@ suite<"worldgen/swamp-hut"> swamp_hut_tests = [] {
         expect(planks_min_y == 62);
     };
 };
+
+suite<"worldgen/piece-coordinates"> piece_coordinate_tests = [] {
+    "local coordinates follow the piece orientation"_test = [] {
+        using namespace refrain;
+        using namespace refrain::worldgen;
+        structure_piece_record piece{
+            .min_x = 10,
+            .min_y = 64,
+            .min_z = 20,
+            .max_x = 16,
+            .max_y = 78,
+            .max_z = 26,
+        };
+        piece.orientation = 2; // north
+        auto pos = structure::piece_local_to_world(piece, 64, 2, 3, 4);
+        expect(pos.x == 12 && pos.y == 67 && pos.z == 22);
+        piece.orientation = 0; // south
+        pos = structure::piece_local_to_world(piece, 64, 2, 3, 4);
+        expect(pos.x == 12 && pos.y == 67 && pos.z == 24);
+        piece.orientation = 1; // west
+        pos = structure::piece_local_to_world(piece, 64, 2, 3, 4);
+        expect(pos.x == 12 && pos.y == 67 && pos.z == 22);
+        piece.orientation = 3; // east
+        pos = structure::piece_local_to_world(piece, 64, 2, 3, 4);
+        expect(pos.x == 14 && pos.y == 67 && pos.z == 22);
+    };
+};

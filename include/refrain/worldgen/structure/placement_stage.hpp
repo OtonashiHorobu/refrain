@@ -29,6 +29,12 @@ struct structure_place_context {
     block_state_registry *registry{nullptr};
 };
 
+/// Maps a procedural piece's local coordinates to world coordinates using
+/// the piece orientation and `base_y` as the shifted bounding box floor.
+[[nodiscard]] auto piece_local_to_world(const structure_piece_record &piece,
+                                        jint base_y, jint local_x, jint local_y,
+                                        jint local_z) -> block_pos;
+
 /// Places every referenced start of `chunk` whose `step` matches, clipping
 /// pieces to the chunk. The random source is the decoration stream, already
 /// seeded by the caller for structure `structure_index`.

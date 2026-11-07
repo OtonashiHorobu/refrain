@@ -53,6 +53,7 @@ struct structure_piece_record {
     jint template_pivot_y{0};
     jint template_pivot_z{0};
     jint height_position{-1};
+    jint height_offset{0};
 };
 
 struct structure_start {
