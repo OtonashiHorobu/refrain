@@ -381,13 +381,18 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 "minecraft:bedrock", {.air = false,
                                       .blocks_motion = true,
                                       .blocks_motion_no_leaves = true});
+            auto coal_ore_state = block_registry.intern(
+                "minecraft:coal_ore", {.air = false,
+                                       .blocks_motion = true,
+                                       .blocks_motion_no_leaves = true});
             expect(air_state.has_value());
             expect(stone_state.has_value());
             expect(water_state.has_value());
             expect(lava_state.has_value());
             expect(bedrock_state.has_value());
+            expect(coal_ore_state.has_value());
             if (!air_state || !stone_state || !water_state || !lava_state ||
-                !bedrock_state) {
+                !bedrock_state || !coal_ore_state) {
                 return;
             }
             const std::array<block_state_id, 1> uncarvable{*bedrock_state};

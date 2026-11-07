@@ -15,6 +15,7 @@
 #include <refrain/worldgen/core/rng.hpp>
 #include <refrain/worldgen/provider.hpp>
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -29,6 +30,9 @@ struct placement_context {
     proto_chunk *chunk{nullptr};
     const block_state_table *states{nullptr};
     provider::generation_context generation{};
+    /// World-coordinate heightmap lookup; features that probe outside the
+    /// centre chunk use it.
+    std::function<jint(worldgen::heightmap_kind, jint, jint)> height{};
 };
 
 class placement_modifier {
