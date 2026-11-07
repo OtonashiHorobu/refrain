@@ -158,6 +158,29 @@ class leave_vine_decorator final : public tree_decorator {
   private:
     float probability_{0.0F};
 };
+class fallen_tree_feature final : public feature {
+  public:
+    fallen_tree_feature(block_state_registry &states,
+                        std::unique_ptr<state_provider> trunk_provider,
+                        std::unique_ptr<provider::int_provider> log_length,
+                        std::vector<std::unique_ptr<tree_decorator>> stump,
+                        std::vector<std::unique_ptr<tree_decorator>> logs)
+        : states_{&states}, trunk_provider_{std::move(trunk_provider)},
+          log_length_{std::move(log_length)},
+          stump_decorators_{std::move(stump)},
+          log_decorators_{std::move(logs)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    block_state_registry *states_{nullptr};
+    std::unique_ptr<state_provider> trunk_provider_{};
+    std::unique_ptr<provider::int_provider> log_length_{};
+    std::vector<std::unique_ptr<tree_decorator>> stump_decorators_{};
+    std::vector<std::unique_ptr<tree_decorator>> log_decorators_{};
+};
+
 enum class foliage_kind : std::uint8_t {
     blob,
     acacia,

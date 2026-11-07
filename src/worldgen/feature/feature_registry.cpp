@@ -154,6 +154,75 @@ auto feature_registry::nested_reference(const data::json::value &input)
     return id;
 }
 
+auto feature_registry::decode_fallen_decorators(const data::json::value &list)
+    -> result<std::vector<std::unique_ptr<tree_decorator>>> {
+    if (!list.is_array()) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "fallen decorators is not a list")};
+    }
+    std::vector<std::unique_ptr<tree_decorator>> out;
+    for (const auto &entry : *list.as_array()) {
+        const auto *type = entry.find("type");
+        if (type == nullptr || !type->as_string()) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "fallen decorator has no type")};
+        }
+        const auto name = *type->as_string();
+        if (name == "minecraft:trunk_vine") {
+            out.push_back(std::make_unique<trunk_vine_decorator>());
+        } else if (name == "minecraft:shelf_mushroom") {
+            const auto *probability = entry.find("probability");
+            if (probability == nullptr || !probability->as_double()) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "shelf mushroom probability is invalid")};
+            }
+            out.push_back(std::make_unique<shelf_mushroom_decorator>(
+                static_cast<float>(*probability->as_double())));
+        } else if (name == "minecraft:leave_vine") {
+            const auto *probability = entry.find("probability");
+            if (probability == nullptr || !probability->as_double()) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "leave vine probability is invalid")};
+            }
+            out.push_back(std::make_unique<leave_vine_decorator>(
+                static_cast<float>(*probability->as_double())));
+        } else if (name == "minecraft:attached_to_logs") {
+            const auto *probability = entry.find("probability");
+            const auto *provider_value = entry.find("block_provider");
+            const auto *directions = entry.find("directions");
+            if (probability == nullptr || provider_value == nullptr ||
+                directions == nullptr || !directions->is_array() ||
+                !probability->as_double()) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "attached_to_logs is incomplete")};
+            }
+            auto provider = decode_provider(*provider_value);
+            if (!provider) {
+                return std::unexpected{provider.error()};
+            }
+            std::vector<std::string> names;
+            for (const auto &direction : *directions->as_array()) {
+                const auto text = direction.as_string();
+                if (!text) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "attached log direction is invalid")};
+                }
+                names.emplace_back(*text);
+            }
+            out.push_back(std::make_unique<attached_to_logs_decorator>(
+                static_cast<float>(*probability->as_double()),
+                std::move(*provider), std::move(names)));
+        } else {
+            return std::unexpected{make_error(error_code::unsupported,
+                                              "unsupported fallen decorator")};
+        }
+    }
+    return out;
+}
+
 auto feature_registry::load(const feature_data_set &data) -> status {
     nested_placed_.clear();
     next_nested_ = 0;
@@ -594,6 +663,31 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             }
             features_.emplace(
                 id, std::make_unique<block_pile_feature>(std::move(*provider)));
+            continue;
+        }
+        if (*type == "minecraft:fallen_tree") {
+            const auto *trunk_value = document.document.find("trunk_provider");
+            const auto *length_value = document.document.find("log_length");
+            const auto *stump_value =
+                document.document.find("stump_decorators");
+            const auto *log_value = document.document.find("log_decorators");
+            if (trunk_value == nullptr || length_value == nullptr ||
+                stump_value == nullptr || log_value == nullptr) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "fallen tree is incomplete")};
+            }
+            auto trunk = decode_provider(*trunk_value);
+            auto length = provider::int_provider::decode(*length_value);
+            auto stump = decode_fallen_decorators(*stump_value);
+            auto logs = decode_fallen_decorators(*log_value);
+            if (!trunk || !length || !stump || !logs) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "fallen tree is invalid")};
+            }
+            features_.emplace(id, std::make_unique<fallen_tree_feature>(
+                                      *states_, std::move(*trunk),
+                                      std::move(*length), std::move(*stump),
+                                      std::move(*logs)));
             continue;
         }
         if (*type == "minecraft:tree") {
