@@ -9,6 +9,11 @@
 module refrain::protocol::v777::wire;
 version 777;
 
+struct wire_at_entity_payload {
+    #[varint] entity: i32;
+    to_anchor: varint_id;
+}
+
 struct wire_entries_entry {
     field_0: i8;
     field_1: item_stack;
@@ -22,6 +27,18 @@ struct wire_optional_payload {
     field_0: f64;
     field_1: f64;
     field_2: f64;
+}
+
+struct wire_attribute_snapshot {
+    id: identifier;
+    amount: f64;
+    operation: varint_id;
+}
+
+struct wire_get_values {
+    attribute: varint_id;
+    base: f64;
+    modifiers: array<wire_attribute_snapshot>;
 }
 
 struct wire_entry_3 {
@@ -45,7 +62,7 @@ struct wire_data {
     #[max(4096)] key_signature: bytes;
 }
 
-struct wire_type_84 {
+struct wire_type_85 {
     added_components: map<varint_id, i32>;
     removed_components: array<varint_id>;
 }
@@ -53,7 +70,7 @@ struct wire_type_84 {
 struct wire_actual_item {
     item: varint_id;
     #[varint] count: i32;
-    components: wire_type_84;
+    components: wire_type_85;
 }
 
 struct wire_entry_4 {

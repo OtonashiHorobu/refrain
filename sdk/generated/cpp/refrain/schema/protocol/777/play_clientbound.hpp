@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 7500108ecf9f3c10
+// Schema hash: 1ef1cd5557049b38
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -632,6 +632,17 @@ struct player_info_remove {
     std::vector<::refrain::net::uuid> profile_ids;
 };
 
+struct player_look_at {
+    static constexpr std::uint16_t packet_id = 0x48;
+    static constexpr std::string_view packet_name = "player_look_at";
+
+    std::uint32_t from_anchor;
+    double x;
+    double y;
+    double z;
+    std::optional<::refrain::protocol::v777::wire::wire_at_entity_payload> at_entity;
+};
+
 struct player_rotation {
     static constexpr std::uint16_t packet_id = 0x4A;
     static constexpr std::string_view packet_name = "player_rotation";
@@ -1071,6 +1082,15 @@ struct transfer {
     std::string host;
     // attributes: #[varint]
     std::int32_t port;
+};
+
+struct update_attributes {
+    static constexpr std::uint16_t packet_id = 0x86;
+    static constexpr std::string_view packet_name = "update_attributes";
+
+    // attributes: #[varint]
+    std::int32_t get_entity_id;
+    std::vector<::refrain::protocol::v777::wire::wire_get_values> get_values;
 };
 
 struct update_mob_effect {
@@ -3424,6 +3444,71 @@ struct show_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_player_look_at(::refrain::net::writer &out, const player_look_at &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(value.from_anchor);
+  }
+  {
+    out.write_f64(value.x);
+  }
+  {
+    out.write_f64(value.y);
+  }
+  {
+    out.write_f64(value.z);
+  }
+  {
+    out.write_bool(value.at_entity.has_value());
+    if (value.at_entity.has_value()) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_at_entity_payload(out, value.at_entity.value()); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_player_look_at(::refrain::net::reader &in, player_look_at &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.from_anchor = *value_0;
+  }
+  {
+    auto value_0 = in.read_f64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.x = *value_0;
+  }
+  {
+    auto value_0 = in.read_f64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.y = *value_0;
+  }
+  {
+    auto value_0 = in.read_f64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.z = *value_0;
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::protocol::v777::wire::wire_at_entity_payload value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_at_entity_payload(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.at_entity = std::move(value_0);
+    } else {
+      value.at_entity.reset();
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_player_rotation(::refrain::net::writer &out, const player_rotation &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -5108,6 +5193,46 @@ struct show_dialog {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.port = static_cast<decltype(value.port)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_update_attributes(::refrain::net::writer &out, const update_attributes &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.get_entity_id));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.get_values.size()));
+    for (const auto &item_0 : value.get_values) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_get_values(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_update_attributes(::refrain::net::reader &in, update_attributes &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.get_entity_id = static_cast<decltype(value.get_entity_id)>(*value_0);
+  }
+  {
+    value.get_values.clear();
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::protocol::v777::wire::wire_get_values value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_get_values(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.get_values.push_back(std::move(value_0));
+    }
   }
   return ::refrain::status_ok();
 }

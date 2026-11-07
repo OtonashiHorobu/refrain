@@ -370,6 +370,14 @@ packet player_info_remove = 70 {
     profile_ids: array<uuid>;
 }
 
+packet player_look_at = 72 {
+    from_anchor: varint_id;
+    x: f64;
+    y: f64;
+    z: f64;
+    at_entity: optional<wire_at_entity_payload>;
+}
+
 packet player_rotation = 74 {
     y_rot: f32;
     relative_y: bool;
@@ -620,6 +628,11 @@ packet ticking_step = 131 {
 packet transfer = 132 {
     #[max(32767)] host: string;
     #[varint] port: i32;
+}
+
+packet update_attributes = 134 {
+    #[varint] get_entity_id: i32;
+    get_values: array<wire_get_values>;
 }
 
 packet update_mob_effect = 135 {
