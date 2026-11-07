@@ -82,6 +82,10 @@ packet custom_report_details = 16 {
     payload: map<string, string>;
 }
 
+packet server_links = 17 {
+    links: array<wire_untrusted_entry>;
+}
+
 packet clear_dialog = 18 {
 }
 

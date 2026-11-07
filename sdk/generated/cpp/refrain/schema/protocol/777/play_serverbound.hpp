@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: d5b1a43efe750e10
+// Schema hash: 42ffb9d36f8b9f98
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
@@ -198,7 +198,6 @@ struct change_difficulty {
     static constexpr std::uint16_t packet_id = 0x4;
     static constexpr std::string_view packet_name = "change_difficulty";
 
-    // attributes: #[varint]
     std::uint32_t difficulty;
 };
 
@@ -206,7 +205,6 @@ struct change_game_mode {
     static constexpr std::uint16_t packet_id = 0x5;
     static constexpr std::string_view packet_name = "change_game_mode";
 
-    // attributes: #[varint]
     std::uint32_t mode;
 };
 
@@ -242,7 +240,6 @@ struct client_command {
     static constexpr std::uint16_t packet_id = 0xC;
     static constexpr std::string_view packet_name = "client_command";
 
-    // attributes: #[varint]
     std::uint32_t action;
 };
 
@@ -308,8 +305,7 @@ struct debug_subscription_request {
     static constexpr std::uint16_t packet_id = 0x17;
     static constexpr std::string_view packet_name = "debug_subscription_request";
 
-    // attributes: #[varint]
-    std::int32_t payload;
+    std::uint32_t payload;
 };
 
 struct edit_book {
@@ -338,7 +334,6 @@ struct interact {
 
     // attributes: #[varint]
     std::int32_t entity_id;
-    // attributes: #[varint]
     std::uint32_t hand;
     ::refrain::net::lp_vec3 location;
     bool using_secondary_action;
@@ -424,7 +419,6 @@ struct player_command {
 
     // attributes: #[varint]
     std::int32_t id;
-    // attributes: #[varint]
     std::uint32_t action;
     // attributes: #[varint]
     std::int32_t data;
@@ -455,7 +449,6 @@ struct recipe_book_change_settings {
     static constexpr std::uint16_t packet_id = 0x2F;
     static constexpr std::string_view packet_name = "recipe_book_change_settings";
 
-    // attributes: #[varint]
     std::uint32_t book_type;
     bool is_open;
     bool is_filtering;
@@ -481,7 +474,6 @@ struct resource_pack {
     static constexpr std::string_view packet_name = "resource_pack";
 
     ::refrain::net::uuid id;
-    // attributes: #[varint]
     std::uint32_t action;
 };
 
@@ -497,8 +489,10 @@ struct set_beacon {
     static constexpr std::uint16_t packet_id = 0x35;
     static constexpr std::string_view packet_name = "set_beacon";
 
-    std::optional<std::int32_t> primary;
-    std::optional<std::int32_t> secondary;
+    // attributes: #[optional_varint]
+    std::optional<std::uint32_t> primary;
+    // attributes: #[optional_varint]
+    std::optional<std::uint32_t> secondary;
 };
 
 struct set_command_block {
@@ -508,7 +502,6 @@ struct set_command_block {
     std::int64_t pos;
     // attributes: #[max(32767)]
     std::string command;
-    // attributes: #[varint]
     std::uint32_t mode;
     std::int8_t track_output;
 };
@@ -563,9 +556,7 @@ struct set_structure_block {
     static constexpr std::string_view packet_name = "set_structure_block";
 
     std::int64_t pos;
-    // attributes: #[varint]
     std::uint32_t update_type;
-    // attributes: #[varint]
     std::uint32_t mode;
     // attributes: #[max(32767)]
     std::string name;
@@ -575,9 +566,7 @@ struct set_structure_block {
     std::int8_t rotation;
     std::int8_t data;
     std::int8_t integrity;
-    // attributes: #[varint]
     std::uint32_t mirror_2;
-    // attributes: #[varint]
     std::uint32_t rotation_2;
     // attributes: #[max(32767)]
     std::string data_2;
@@ -592,8 +581,7 @@ struct set_test_block {
     static constexpr std::string_view packet_name = "set_test_block";
 
     std::int64_t position;
-    // attributes: #[varint]
-    std::int32_t mode;
+    std::uint32_t mode;
     // attributes: #[max(32767)]
     std::string message;
 };
@@ -604,8 +592,7 @@ struct sign_update {
 
     std::int64_t pos;
     std::vector<std::string> lines;
-    // attributes: #[varint]
-    std::int32_t slot;
+    std::uint32_t slot;
 };
 
 struct spectator_action {
@@ -628,8 +615,7 @@ struct test_instance_block_action {
     static constexpr std::string_view packet_name = "test_instance_block_action";
 
     std::int64_t pos;
-    // attributes: #[varint]
-    std::int32_t action;
+    std::uint32_t action;
     ::refrain::protocol::v777::wire::wire_data_3 data;
 };
 
@@ -637,7 +623,6 @@ struct use_item {
     static constexpr std::uint16_t packet_id = 0x43;
     static constexpr std::string_view packet_name = "use_item";
 
-    // attributes: #[varint]
     std::uint32_t hand;
     // attributes: #[varint]
     std::int32_t sequence;
@@ -1283,7 +1268,7 @@ struct custom_click_action {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_varint(static_cast<std::uint32_t>(value.difficulty));
+    out.write_varint(value.difficulty);
   }
   return ::refrain::status_ok();
 }
@@ -1294,7 +1279,7 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.difficulty = static_cast<decltype(value.difficulty)>(*value_0);
+    value.difficulty = *value_0;
   }
   return ::refrain::status_ok();
 }
@@ -1303,7 +1288,7 @@ struct custom_click_action {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_varint(static_cast<std::uint32_t>(value.mode));
+    out.write_varint(value.mode);
   }
   return ::refrain::status_ok();
 }
@@ -1314,7 +1299,7 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.mode = static_cast<decltype(value.mode)>(*value_0);
+    value.mode = *value_0;
   }
   return ::refrain::status_ok();
 }
@@ -1433,7 +1418,7 @@ struct custom_click_action {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_varint(static_cast<std::uint32_t>(value.action));
+    out.write_varint(value.action);
   }
   return ::refrain::status_ok();
 }
@@ -1444,7 +1429,7 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.action = static_cast<decltype(value.action)>(*value_0);
+    value.action = *value_0;
   }
   return ::refrain::status_ok();
 }
@@ -1635,7 +1620,7 @@ struct custom_click_action {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_varint(static_cast<std::uint32_t>(value.payload));
+    out.write_varint(value.payload);
   }
   return ::refrain::status_ok();
 }
@@ -1646,7 +1631,7 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.payload = static_cast<decltype(value.payload)>(*value_0);
+    value.payload = *value_0;
   }
   return ::refrain::status_ok();
 }
@@ -1747,7 +1732,7 @@ struct custom_click_action {
     out.write_varint(static_cast<std::uint32_t>(value.entity_id));
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.hand));
+    out.write_varint(value.hand);
   }
   {
     if (auto written = ::refrain::net::encode_lp_vec3(out, value.location); !written) {
@@ -1771,7 +1756,7 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.hand = static_cast<decltype(value.hand)>(*value_0);
+    value.hand = *value_0;
   }
   {
     if (auto decoded = ::refrain::net::decode_lp_vec3(in, value.location); !decoded) {
@@ -2041,7 +2026,7 @@ struct custom_click_action {
     out.write_varint(static_cast<std::uint32_t>(value.id));
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.action));
+    out.write_varint(value.action);
   }
   {
     out.write_varint(static_cast<std::uint32_t>(value.data));
@@ -2060,7 +2045,7 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.action = static_cast<decltype(value.action)>(*value_0);
+    value.action = *value_0;
   }
   {
     auto value_0 = in.read_varint();
@@ -2126,7 +2111,7 @@ struct custom_click_action {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_varint(static_cast<std::uint32_t>(value.book_type));
+    out.write_varint(value.book_type);
   }
   {
     out.write_bool(value.is_open);
@@ -2143,7 +2128,7 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.book_type = static_cast<decltype(value.book_type)>(*value_0);
+    value.book_type = *value_0;
   }
   {
     auto value_0 = in.read_bool();
@@ -2211,7 +2196,7 @@ struct custom_click_action {
     }
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.action));
+    out.write_varint(value.action);
   }
   return ::refrain::status_ok();
 }
@@ -2227,7 +2212,7 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.action = static_cast<decltype(value.action)>(*value_0);
+    value.action = *value_0;
   }
   return ::refrain::status_ok();
 }
@@ -2256,16 +2241,10 @@ struct custom_click_action {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_bool(value.primary.has_value());
-    if (value.primary.has_value()) {
-      out.write_i64(static_cast<std::int64_t>(value.primary.value()));
-    }
+    out.write_varint(value.primary.has_value() ? static_cast<std::uint32_t>(value.primary.value()) + 1U : 0U);
   }
   {
-    out.write_bool(value.secondary.has_value());
-    if (value.secondary.has_value()) {
-      out.write_i64(static_cast<std::int64_t>(value.secondary.value()));
-    }
+    out.write_varint(value.secondary.has_value() ? static_cast<std::uint32_t>(value.secondary.value()) + 1U : 0U);
   }
   return ::refrain::status_ok();
 }
@@ -2274,27 +2253,19 @@ struct custom_click_action {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto present_0 = in.read_bool();
+    auto present_0 = in.read_varint();
     if (!present_0) return std::unexpected{std::move(present_0.error())};
-    if (*present_0) {
-      std::int32_t value_0{};
-      auto value_1 = in.read_i64();
-      if (!value_1) return std::unexpected{std::move(value_1.error())};
-      value_0 = static_cast<decltype(value_0)>(*value_1);
-      value.primary = std::move(value_0);
+    if (*present_0 != 0) {
+      value.primary = static_cast<std::uint32_t>(*present_0 - 1U);
     } else {
       value.primary.reset();
     }
   }
   {
-    auto present_0 = in.read_bool();
+    auto present_0 = in.read_varint();
     if (!present_0) return std::unexpected{std::move(present_0.error())};
-    if (*present_0) {
-      std::int32_t value_0{};
-      auto value_1 = in.read_i64();
-      if (!value_1) return std::unexpected{std::move(value_1.error())};
-      value_0 = static_cast<decltype(value_0)>(*value_1);
-      value.secondary = std::move(value_0);
+    if (*present_0 != 0) {
+      value.secondary = static_cast<std::uint32_t>(*present_0 - 1U);
     } else {
       value.secondary.reset();
     }
@@ -2314,7 +2285,7 @@ struct custom_click_action {
     }
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.mode));
+    out.write_varint(value.mode);
   }
   {
     out.write_i64(static_cast<std::int64_t>(value.track_output));
@@ -2338,7 +2309,7 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.mode = static_cast<decltype(value.mode)>(*value_0);
+    value.mode = *value_0;
   }
   {
     auto value_0 = in.read_i64();
@@ -2541,10 +2512,10 @@ struct custom_click_action {
     out.write_i64(static_cast<std::int64_t>(value.pos));
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.update_type));
+    out.write_varint(value.update_type);
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.mode));
+    out.write_varint(value.mode);
   }
   {
     if (auto written = out.write_string(value.name, 32767); !written) {
@@ -2570,10 +2541,10 @@ struct custom_click_action {
     out.write_i64(static_cast<std::int64_t>(value.integrity));
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.mirror_2));
+    out.write_varint(value.mirror_2);
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.rotation_2));
+    out.write_varint(value.rotation_2);
   }
   {
     if (auto written = out.write_string(value.data_2, 32767); !written) {
@@ -2603,12 +2574,12 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.update_type = static_cast<decltype(value.update_type)>(*value_0);
+    value.update_type = *value_0;
   }
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.mode = static_cast<decltype(value.mode)>(*value_0);
+    value.mode = *value_0;
   }
   {
     auto value_0 = in.read_string(32767);
@@ -2648,12 +2619,12 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.mirror_2 = static_cast<decltype(value.mirror_2)>(*value_0);
+    value.mirror_2 = *value_0;
   }
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.rotation_2 = static_cast<decltype(value.rotation_2)>(*value_0);
+    value.rotation_2 = *value_0;
   }
   {
     auto value_0 = in.read_string(32767);
@@ -2685,7 +2656,7 @@ struct custom_click_action {
     out.write_i64(static_cast<std::int64_t>(value.position));
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.mode));
+    out.write_varint(value.mode);
   }
   {
     if (auto written = out.write_string(value.message, 32767); !written) {
@@ -2706,7 +2677,7 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.mode = static_cast<decltype(value.mode)>(*value_0);
+    value.mode = *value_0;
   }
   {
     auto value_0 = in.read_string(32767);
@@ -2731,7 +2702,7 @@ struct custom_click_action {
     }
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.slot));
+    out.write_varint(value.slot);
   }
   return ::refrain::status_ok();
 }
@@ -2759,7 +2730,7 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.slot = static_cast<decltype(value.slot)>(*value_0);
+    value.slot = *value_0;
   }
   return ::refrain::status_ok();
 }
@@ -2817,7 +2788,7 @@ struct custom_click_action {
     out.write_i64(static_cast<std::int64_t>(value.pos));
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.action));
+    out.write_varint(value.action);
   }
   {
     if (auto written = ::refrain::protocol::v777::wire::encode_wire_data_3(out, value.data); !written) {
@@ -2838,7 +2809,7 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.action = static_cast<decltype(value.action)>(*value_0);
+    value.action = *value_0;
   }
   {
     if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_data_3(in, value.data); !decoded) {
@@ -2852,7 +2823,7 @@ struct custom_click_action {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_varint(static_cast<std::uint32_t>(value.hand));
+    out.write_varint(value.hand);
   }
   {
     out.write_varint(static_cast<std::uint32_t>(value.sequence));
@@ -2872,7 +2843,7 @@ struct custom_click_action {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.hand = static_cast<decltype(value.hand)>(*value_0);
+    value.hand = *value_0;
   }
   {
     auto value_0 = in.read_varint();

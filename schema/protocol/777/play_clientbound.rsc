@@ -147,7 +147,7 @@ packet bundle_delimiter = 0 {
 packet add_entity = 1 {
     #[varint] id: i32;
     uuid: uuid;
-    #[varint] type_: i32;
+    type_: varint_id;
     x: f64;
     y: f64;
     z: f64;
@@ -171,7 +171,7 @@ packet block_destruction = 5 {
 
 packet block_entity_data = 6 {
     get_pos: i64;
-    #[varint] get_type: i32;
+    get_type: varint_id;
     get_tag: nbt;
 }
 
@@ -179,7 +179,7 @@ packet block_event = 7 {
     pos: i64;
     b0: i8;
     b1: i8;
-    #[varint] block: i32;
+    block: varint_id;
 }
 
 packet boss_event = 9 {
@@ -234,7 +234,7 @@ packet cooldown = 22 {
 }
 
 packet custom_chat_completions = 23 {
-    #[varint] action: i32;
+    action: varint_id;
     entries: array<string>;
 }
 
@@ -245,7 +245,7 @@ packet custom_payload = 24 {
 
 packet damage_event = 25 {
     #[varint] entity_id: i32;
-    #[varint] source_type: u32;
+    #[varint] source_type: i32;
     #[optional_varint] field_2: optional<i32>;
     #[optional_varint] field_3: optional<i32>;
     source_position: optional<wire_optional_payload>;
@@ -253,7 +253,7 @@ packet damage_event = 25 {
 
 packet debug_sample = 30 {
     sample: array<i64>;
-    #[varint] debug_sample_type: u32;
+    debug_sample_type: varint_id;
 }
 
 packet disconnect = 32 {
@@ -262,7 +262,7 @@ packet disconnect = 32 {
 
 packet add_transient_block = 37 {
     pos: i64;
-    #[varint] block_state: i32;
+    block_state: varint_id;
 }
 
 packet forget_level_chunk = 38 {
@@ -309,18 +309,18 @@ packet move_vehicle = 58 {
 }
 
 packet open_book = 59 {
-    #[varint] hand: u32;
+    hand: varint_id;
 }
 
 packet open_screen = 60 {
     #[varint] get_container_id: i32;
-    #[varint] get_type: i32;
+    get_type: varint_id;
     get_title: text_component;
 }
 
 packet open_sign_editor = 61 {
     pos: i64;
-    #[varint] slot: i32;
+    slot: varint_id;
 }
 
 packet ping = 62 {
@@ -333,7 +333,7 @@ packet pong_response = 63 {
 
 packet place_ghost_recipe = 64 {
     #[varint] container_id: i32;
-    #[varint] recipe_display: i32;
+    recipe_display: varint_id;
 }
 
 packet player_combat_end = 67 {
@@ -373,7 +373,7 @@ packet remove_entities = 78 {
 
 packet remove_mob_effect = 79 {
     #[varint] entity_id: i32;
-    #[varint] effect: i32;
+    effect: varint_id;
 }
 
 packet reset_score = 80 {
@@ -457,7 +457,7 @@ packet set_cursor_item = 98 {
 }
 
 packet set_display_objective = 100 {
-    #[varint] slot: u32;
+    slot: varint_id;
     #[max(32767)] objective_name: string;
 }
 
@@ -519,6 +519,26 @@ packet set_titles_animation = 117 {
     #[fixed] fade_out: i32;
 }
 
+packet sound_entity = 118 {
+    sound: holder<wire_sound_event>;
+    source: varint_id;
+    #[varint] id: i32;
+    volume: f32;
+    pitch: f32;
+    seed: i64;
+}
+
+packet sound = 119 {
+    sound: holder<wire_sound_event>;
+    source: varint_id;
+    #[fixed] x: i32;
+    #[fixed] y: i32;
+    #[fixed] z: i32;
+    volume: f32;
+    pitch: f32;
+    seed: i64;
+}
+
 packet start_configuration = 120 {
 }
 
@@ -529,7 +549,7 @@ packet store_cookie = 122 {
 
 packet swing_animation = 123 {
     #[varint] entity_id: i32;
-    #[varint] hand: u32;
+    hand: varint_id;
     animation: wire_swing_animation;
 }
 
@@ -582,7 +602,7 @@ packet transfer = 132 {
 
 packet update_mob_effect = 135 {
     #[varint] entity_id: i32;
-    #[varint] effect: i32;
+    effect: varint_id;
     #[varint] effect_amplifier: i32;
     #[varint] effect_duration_ticks: i32;
     flags_: i8;
@@ -595,6 +615,10 @@ packet projectile_power = 138 {
 
 packet custom_report_details = 139 {
     payload: map<string, string>;
+}
+
+packet server_links = 140 {
+    links: array<wire_untrusted_entry>;
 }
 
 packet clear_dialog = 142 {

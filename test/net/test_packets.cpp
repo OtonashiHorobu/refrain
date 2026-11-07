@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -327,6 +328,66 @@ const suite tests = [] {
         check_table(v777::login_packets);
         check_table(v777::configuration_packets);
         check_table(v777::play_packets);
+    };
+
+    "net/protocol round trips either branches in server links"_test = [] {
+        v777::play::clientbound::server_links packet{};
+        v777::wire::wire_untrusted_entry known{};
+        known.type_ = std::uint32_t{3};
+        known.link = "https://example.invalid";
+        v777::wire::wire_untrusted_entry custom{};
+        custom.type_ = refrain::net::text_component{.text = "Support"};
+        custom.link = "https://support.invalid";
+        packet.links = {known, custom};
+        std::vector<std::byte> body;
+        net::writer out{body};
+        out.write_varint(packet.packet_id);
+        const auto encoded{
+            v777::play::clientbound::encode_server_links(out, packet)};
+        expect(encoded.has_value());
+        net::reader in{body};
+        auto id{in.read_varint()};
+        expect(id.has_value());
+        v777::play::clientbound::server_links decoded{};
+        const auto status{
+            v777::play::clientbound::decode_server_links(in, decoded)};
+        expect(status.has_value());
+        expect(in.empty());
+        expect(decoded.links.size() == 2U);
+        if (decoded.links.size() == 2U) {
+            expect(
+                std::holds_alternative<std::uint32_t>(decoded.links[0].type_));
+            expect(std::get<0>(decoded.links[0].type_) == 3U);
+            expect(std::holds_alternative<refrain::net::text_component>(
+                decoded.links[1].type_));
+            expect(std::get<1>(decoded.links[1].type_).text == "Support");
+        }
+    };
+
+    "net/protocol round trips a registry holder sound"_test = [] {
+        v777::play::clientbound::sound packet{};
+        packet.sound = std::uint32_t{42};
+        packet.source = 1U;
+        packet.x = 8;
+        packet.y = 64;
+        packet.z = 8;
+        packet.volume = 1.0F;
+        packet.pitch = 1.0F;
+        packet.seed = 7;
+        std::vector<std::byte> body;
+        net::writer out{body};
+        out.write_varint(packet.packet_id);
+        const auto encoded{v777::play::clientbound::encode_sound(out, packet)};
+        expect(encoded.has_value());
+        net::reader in{body};
+        auto id{in.read_varint()};
+        expect(id.has_value());
+        v777::play::clientbound::sound decoded{};
+        const auto status{v777::play::clientbound::decode_sound(in, decoded)};
+        expect(status.has_value());
+        expect(in.empty());
+        expect(std::holds_alternative<std::uint32_t>(decoded.sound));
+        expect(std::get<0>(decoded.sound) == 42U);
     };
 
     "net/protocol round trips an opaque custom payload"_test = [] {

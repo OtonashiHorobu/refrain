@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: d5b1a43efe750e10
+// Schema hash: 42ffb9d36f8b9f98
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
@@ -23,6 +23,7 @@
 #include <map>
 #include <utility>
 #include <refrain/schema/protocol/777/common.hpp>
+#include <refrain/schema/protocol/777/wire.hpp>
 
 namespace refrain::protocol::v777::configuration::clientbound {
 
@@ -148,6 +149,13 @@ struct custom_report_details {
     static constexpr std::string_view packet_name = "custom_report_details";
 
     std::map<std::string, std::string> payload;
+};
+
+struct server_links {
+    static constexpr std::uint16_t packet_id = 0x11;
+    static constexpr std::string_view packet_name = "server_links";
+
+    std::vector<::refrain::protocol::v777::wire::wire_untrusted_entry> links;
 };
 
 struct clear_dialog {
@@ -626,6 +634,38 @@ struct code_of_conduct {
       if (!value_2) return std::unexpected{std::move(value_2.error())};
       map_value_0 = std::move(*value_2);
       value.payload.emplace(std::move(map_key_0), std::move(map_value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_server_links(::refrain::net::writer &out, const server_links &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.links.size()));
+    for (const auto &item_0 : value.links) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_untrusted_entry(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_server_links(::refrain::net::reader &in, server_links &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.links.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::protocol::v777::wire::wire_untrusted_entry value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_untrusted_entry(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.links.push_back(std::move(value_0));
     }
   }
   return ::refrain::status_ok();

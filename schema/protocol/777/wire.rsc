@@ -33,6 +33,11 @@ struct wire_argument_signatures {
     entries: array<wire_entry_3>;
 }
 
+struct wire_untrusted_entry {
+    type_: either<varint_id, text_component>;
+    #[max(32767)] link: string;
+}
+
 struct wire_update {
     #[varint] offset: i32;
     #[fixed_bytes(20)] acknowledged: bytes;
@@ -53,9 +58,9 @@ struct wire_entry_4 {
 struct wire_data_3 {
     test: optional<identifier>;
     size: wire_vec3i;
-    #[varint] rotation: u32;
+    rotation: varint_id;
     ignore_entities: bool;
-    #[varint] status: i32;
+    status: varint_id;
     error_message: optional<text_component>;
 }
 
@@ -69,16 +74,21 @@ struct wire_entry {
     tooltip: optional<text_component>;
 }
 
+struct wire_sound_event {
+    location: identifier;
+    fixed_range: optional<f32>;
+}
+
 struct wire_global_pos {
     dimension: identifier;
     pos: i64;
 }
 
 struct wire_common_player_spawn_info {
-    #[varint] dimension_type: i32;
+    dimension_type: varint_id;
     dimension: identifier;
     seed: i64;
-    #[varint] game_type: u32;
+    game_type: varint_id;
     previous_game_type: optional<u32>;
     is_debug: bool;
     is_flat: bool;
@@ -112,7 +122,7 @@ struct wire_book_settings {
 }
 
 struct wire_swing_animation {
-    #[varint] type_: i32;
+    type_: varint_id;
     #[varint] duration: i32;
 }
 

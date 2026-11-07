@@ -47,6 +47,8 @@ enum class primitive_kind : std::uint8_t {
     lp_vec3,
     /// Network NBT tag; RSC wire schemas only.
     nbt,
+    /// Registry/identifier number encoded as a VarInt; RSC wire schemas only.
+    varint_id,
     void_type,
 };
 
@@ -77,6 +79,8 @@ struct resolved_type {
         optional,
         repeated,
         map,
+        either,
+        holder,
     };
 
     category kind{category::primitive};

@@ -338,6 +338,7 @@ attribute_comment(const std::vector<attribute> &attributes,
     case primitive_kind::item_stack:
     case primitive_kind::lp_vec3:
     case primitive_kind::nbt:
+    case primitive_kind::varint_id:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";
@@ -380,6 +381,7 @@ attribute_comment(const std::vector<attribute> &attributes,
     case primitive_kind::item_stack:
     case primitive_kind::lp_vec3:
     case primitive_kind::nbt:
+    case primitive_kind::varint_id:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";

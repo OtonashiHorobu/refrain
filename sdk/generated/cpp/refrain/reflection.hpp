@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: d5b1a43efe750e10
+// Schema hash: 42ffb9d36f8b9f98
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -238,6 +238,13 @@ template <> struct custom_traits<::refrain::protocol::v777::configuration::clien
     static constexpr std::string_view type_name = "refrain::protocol::v777::configuration::clientbound::custom_report_details";
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"payload", &::refrain::protocol::v777::configuration::clientbound::custom_report_details::payload});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::configuration::clientbound::server_links'.
+template <> struct custom_traits<::refrain::protocol::v777::configuration::clientbound::server_links> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::configuration::clientbound::server_links";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"links", &::refrain::protocol::v777::configuration::clientbound::server_links::links});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::configuration::clientbound::clear_dialog'.
@@ -1212,6 +1219,32 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::s
         refrain::reflect::custom_field{"fade_out", &::refrain::protocol::v777::play::clientbound::set_titles_animation::fade_out});
 };
 
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::sound_entity'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::sound_entity> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::sound_entity";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"sound", &::refrain::protocol::v777::play::clientbound::sound_entity::sound},
+        refrain::reflect::custom_field{"source", &::refrain::protocol::v777::play::clientbound::sound_entity::source},
+        refrain::reflect::custom_field{"id", &::refrain::protocol::v777::play::clientbound::sound_entity::id},
+        refrain::reflect::custom_field{"volume", &::refrain::protocol::v777::play::clientbound::sound_entity::volume},
+        refrain::reflect::custom_field{"pitch", &::refrain::protocol::v777::play::clientbound::sound_entity::pitch},
+        refrain::reflect::custom_field{"seed", &::refrain::protocol::v777::play::clientbound::sound_entity::seed});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::sound'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::sound> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::sound";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"sound", &::refrain::protocol::v777::play::clientbound::sound::sound},
+        refrain::reflect::custom_field{"source", &::refrain::protocol::v777::play::clientbound::sound::source},
+        refrain::reflect::custom_field{"x", &::refrain::protocol::v777::play::clientbound::sound::x},
+        refrain::reflect::custom_field{"y", &::refrain::protocol::v777::play::clientbound::sound::y},
+        refrain::reflect::custom_field{"z", &::refrain::protocol::v777::play::clientbound::sound::z},
+        refrain::reflect::custom_field{"volume", &::refrain::protocol::v777::play::clientbound::sound::volume},
+        refrain::reflect::custom_field{"pitch", &::refrain::protocol::v777::play::clientbound::sound::pitch},
+        refrain::reflect::custom_field{"seed", &::refrain::protocol::v777::play::clientbound::sound::seed});
+};
+
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::start_configuration'.
 template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::start_configuration> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::start_configuration";
@@ -1333,6 +1366,13 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::c
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::custom_report_details";
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"payload", &::refrain::protocol::v777::play::clientbound::custom_report_details::payload});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::server_links'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::server_links> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::server_links";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"links", &::refrain::protocol::v777::play::clientbound::server_links::links});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::clear_dialog'.
@@ -1967,6 +2007,14 @@ template <> struct custom_traits<::refrain::protocol::v777::wire::wire_argument_
         refrain::reflect::custom_field{"entries", &::refrain::protocol::v777::wire::wire_argument_signatures::entries});
 };
 
+/// Generated RSC struct 'refrain::protocol::v777::wire::wire_untrusted_entry'.
+template <> struct custom_traits<::refrain::protocol::v777::wire::wire_untrusted_entry> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::wire::wire_untrusted_entry";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"type_", &::refrain::protocol::v777::wire::wire_untrusted_entry::type_},
+        refrain::reflect::custom_field{"link", &::refrain::protocol::v777::wire::wire_untrusted_entry::link});
+};
+
 /// Generated RSC struct 'refrain::protocol::v777::wire::wire_update'.
 template <> struct custom_traits<::refrain::protocol::v777::wire::wire_update> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::wire::wire_update";
@@ -2019,6 +2067,14 @@ template <> struct custom_traits<::refrain::protocol::v777::wire::wire_entry> {
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"text", &::refrain::protocol::v777::wire::wire_entry::text},
         refrain::reflect::custom_field{"tooltip", &::refrain::protocol::v777::wire::wire_entry::tooltip});
+};
+
+/// Generated RSC struct 'refrain::protocol::v777::wire::wire_sound_event'.
+template <> struct custom_traits<::refrain::protocol::v777::wire::wire_sound_event> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::wire::wire_sound_event";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"location", &::refrain::protocol::v777::wire::wire_sound_event::location},
+        refrain::reflect::custom_field{"fixed_range", &::refrain::protocol::v777::wire::wire_sound_event::fixed_range});
 };
 
 /// Generated RSC struct 'refrain::protocol::v777::wire::wire_global_pos'.

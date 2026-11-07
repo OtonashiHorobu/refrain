@@ -114,11 +114,11 @@ packet bundle_item_selected = 3 {
 }
 
 packet change_difficulty = 4 {
-    #[varint] difficulty: u32;
+    difficulty: varint_id;
 }
 
 packet change_game_mode = 5 {
-    #[varint] mode: u32;
+    mode: varint_id;
 }
 
 packet chat_ack = 6 {
@@ -139,7 +139,7 @@ packet chat_session_update = 10 {
 }
 
 packet client_command = 12 {
-    #[varint] action: u32;
+    action: varint_id;
 }
 
 packet client_tick_end = 13 {
@@ -174,7 +174,7 @@ packet custom_payload = 22 {
 }
 
 packet debug_subscription_request = 23 {
-    #[varint] payload: i32;
+    payload: varint_id;
 }
 
 packet edit_book = 24 {
@@ -190,7 +190,7 @@ packet entity_tag_query = 25 {
 
 packet interact = 26 {
     #[varint] entity_id: i32;
-    #[varint] hand: u32;
+    hand: varint_id;
     location: lp_vec3;
     using_secondary_action: bool;
 }
@@ -241,7 +241,7 @@ packet player_abilities = 40 {
 
 packet player_command = 42 {
     #[varint] id: i32;
-    #[varint] action: u32;
+    action: varint_id;
     #[varint] data: i32;
 }
 
@@ -257,7 +257,7 @@ packet punch = 46 {
 }
 
 packet recipe_book_change_settings = 47 {
-    #[varint] book_type: u32;
+    book_type: varint_id;
     is_open: bool;
     is_filtering: bool;
 }
@@ -272,7 +272,7 @@ packet rename_item = 49 {
 
 packet resource_pack = 50 {
     id: uuid;
-    #[varint] action: u32;
+    action: varint_id;
 }
 
 packet select_trade = 52 {
@@ -280,14 +280,14 @@ packet select_trade = 52 {
 }
 
 packet set_beacon = 53 {
-    primary: optional<i32>;
-    secondary: optional<i32>;
+    #[optional_varint] primary: optional<u32>;
+    #[optional_varint] secondary: optional<u32>;
 }
 
 packet set_command_block = 55 {
     pos: i64;
     #[max(32767)] command: string;
-    #[varint] mode: u32;
+    mode: varint_id;
     track_output: i8;
 }
 
@@ -319,8 +319,8 @@ packet set_jigsaw_block = 59 {
 
 packet set_structure_block = 60 {
     pos: i64;
-    #[varint] update_type: u32;
-    #[varint] mode: u32;
+    update_type: varint_id;
+    mode: varint_id;
     #[max(32767)] name: string;
     offset: i8;
     size: i8;
@@ -328,8 +328,8 @@ packet set_structure_block = 60 {
     rotation: i8;
     data: i8;
     integrity: i8;
-    #[varint] mirror_2: u32;
-    #[varint] rotation_2: u32;
+    mirror_2: varint_id;
+    rotation_2: varint_id;
     #[max(32767)] data_2: string;
     integrity_2: f32;
     #[varlong] seed: i64;
@@ -338,14 +338,14 @@ packet set_structure_block = 60 {
 
 packet set_test_block = 61 {
     position: i64;
-    #[varint] mode: i32;
+    mode: varint_id;
     #[max(32767)] message: string;
 }
 
 packet sign_update = 62 {
     pos: i64;
     lines: array<string>;
-    #[varint] slot: i32;
+    slot: varint_id;
 }
 
 packet spectator_action = 63 {
@@ -358,12 +358,12 @@ packet teleport_to_entity = 64 {
 
 packet test_instance_block_action = 65 {
     pos: i64;
-    #[varint] action: i32;
+    action: varint_id;
     data: wire_data_3;
 }
 
 packet use_item = 67 {
-    #[varint] hand: u32;
+    hand: varint_id;
     #[varint] sequence: i32;
     y_rot: f32;
     x_rot: f32;

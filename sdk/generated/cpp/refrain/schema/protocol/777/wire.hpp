@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: d5b1a43efe750e10
+// Schema hash: 42ffb9d36f8b9f98
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -20,6 +20,7 @@
 #include <refrain/net/base.hpp>
 #include <refrain/data/resource_location.hpp>
 #include <refrain/net/wire.hpp>
+#include <variant>
 
 namespace refrain::protocol::v777::wire {
 
@@ -47,6 +48,12 @@ struct wire_entry_3 {
 
 struct wire_argument_signatures {
     std::vector<::refrain::protocol::v777::wire::wire_entry_3> entries;
+};
+
+struct wire_untrusted_entry {
+    std::variant<std::uint32_t, ::refrain::net::text_component> type_;
+    // attributes: #[max(32767)]
+    std::string link;
 };
 
 struct wire_update {
@@ -83,11 +90,9 @@ struct wire_vec3i {
 struct wire_data_3 {
     std::optional<::refrain::data::resource_location> test;
     ::refrain::protocol::v777::wire::wire_vec3i size;
-    // attributes: #[varint]
     std::uint32_t rotation;
     bool ignore_entities;
-    // attributes: #[varint]
-    std::int32_t status;
+    std::uint32_t status;
     std::optional<::refrain::net::text_component> error_message;
 };
 
@@ -103,17 +108,20 @@ struct wire_entry {
     std::optional<::refrain::net::text_component> tooltip;
 };
 
+struct wire_sound_event {
+    ::refrain::data::resource_location location;
+    std::optional<float> fixed_range;
+};
+
 struct wire_global_pos {
     ::refrain::data::resource_location dimension;
     std::int64_t pos;
 };
 
 struct wire_common_player_spawn_info {
-    // attributes: #[varint]
-    std::int32_t dimension_type;
+    std::uint32_t dimension_type;
     ::refrain::data::resource_location dimension;
     std::int64_t seed;
-    // attributes: #[varint]
     std::uint32_t game_type;
     std::optional<std::uint32_t> previous_game_type;
     bool is_debug;
@@ -157,8 +165,7 @@ struct wire_book_settings {
 };
 
 struct wire_swing_animation {
-    // attributes: #[varint]
-    std::int32_t type_;
+    std::uint32_t type_;
     // attributes: #[varint]
     std::int32_t duration;
 };
@@ -324,6 +331,55 @@ struct wire_position_move_rotation {
       }
       value.entries.push_back(std::move(value_0));
     }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_untrusted_entry(::refrain::net::writer &out, const wire_untrusted_entry &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_bool(std::holds_alternative<std::uint32_t>(value.type_));
+    if (std::holds_alternative<std::uint32_t>(value.type_)) {
+      out.write_varint(std::get<0>(value.type_));
+    } else {
+      if (auto written = ::refrain::net::encode_text_component(out, std::get<1>(value.type_)); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    if (auto written = out.write_string(value.link, 32767); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_untrusted_entry(::refrain::net::reader &in, wire_untrusted_entry &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto left_0 = in.read_bool();
+    if (!left_0) return std::unexpected{std::move(left_0.error())};
+    if (*left_0) {
+      std::uint32_t value_0{};
+      auto value_1 = in.read_varint();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = *value_1;
+      value.type_.template emplace<0>(std::move(value_0));
+    } else {
+      ::refrain::net::text_component value_0{};
+      if (auto decoded = ::refrain::net::decode_text_component(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.type_.template emplace<1>(std::move(value_0));
+    }
+  }
+  {
+    auto value_0 = in.read_string(32767);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.link = std::move(*value_0);
   }
   return ::refrain::status_ok();
 }
@@ -506,13 +562,13 @@ struct wire_position_move_rotation {
     }
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.rotation));
+    out.write_varint(value.rotation);
   }
   {
     out.write_bool(value.ignore_entities);
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.status));
+    out.write_varint(value.status);
   }
   {
     out.write_bool(value.error_message.has_value());
@@ -549,7 +605,7 @@ struct wire_position_move_rotation {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.rotation = static_cast<decltype(value.rotation)>(*value_0);
+    value.rotation = *value_0;
   }
   {
     auto value_0 = in.read_bool();
@@ -559,7 +615,7 @@ struct wire_position_move_rotation {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.status = static_cast<decltype(value.status)>(*value_0);
+    value.status = *value_0;
   }
   {
     auto present_0 = in.read_bool();
@@ -657,6 +713,47 @@ struct wire_position_move_rotation {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_wire_sound_event(::refrain::net::writer &out, const wire_sound_event &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.location); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.fixed_range.has_value());
+    if (value.fixed_range.has_value()) {
+      out.write_f32(value.fixed_range.value());
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_sound_event(::refrain::net::reader &in, wire_sound_event &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.location = std::move(*value_0);
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      float value_0{};
+      auto value_1 = in.read_f32();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = *value_1;
+      value.fixed_range = std::move(value_0);
+    } else {
+      value.fixed_range.reset();
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_wire_global_pos(::refrain::net::writer &out, const wire_global_pos &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -691,7 +788,7 @@ struct wire_position_move_rotation {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_varint(static_cast<std::uint32_t>(value.dimension_type));
+    out.write_varint(value.dimension_type);
   }
   {
     if (auto written = out.write_identifier(value.dimension); !written) {
@@ -702,7 +799,7 @@ struct wire_position_move_rotation {
     out.write_i64(static_cast<std::int64_t>(value.seed));
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.game_type));
+    out.write_varint(value.game_type);
   }
   {
     out.write_bool(value.previous_game_type.has_value());
@@ -739,7 +836,7 @@ struct wire_position_move_rotation {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.dimension_type = static_cast<decltype(value.dimension_type)>(*value_0);
+    value.dimension_type = *value_0;
   }
   {
     auto value_0 = in.read_identifier();
@@ -754,7 +851,7 @@ struct wire_position_move_rotation {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.game_type = static_cast<decltype(value.game_type)>(*value_0);
+    value.game_type = *value_0;
   }
   {
     auto present_0 = in.read_bool();
@@ -1001,7 +1098,7 @@ struct wire_position_move_rotation {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_varint(static_cast<std::uint32_t>(value.type_));
+    out.write_varint(value.type_);
   }
   {
     out.write_varint(static_cast<std::uint32_t>(value.duration));
@@ -1015,7 +1112,7 @@ struct wire_position_move_rotation {
   {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.type_ = static_cast<decltype(value.type_)>(*value_0);
+    value.type_ = *value_0;
   }
   {
     auto value_0 = in.read_varint();

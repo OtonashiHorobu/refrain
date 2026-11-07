@@ -108,6 +108,8 @@ struct ridl_context {
     case resolved_type::category::optional:
     case resolved_type::category::repeated:
     case resolved_type::category::map:
+    case resolved_type::category::either:
+    case resolved_type::category::holder:
         std::unreachable(); // sema rejects container types in the C ABI
     }
     std::unreachable();
@@ -130,6 +132,8 @@ struct ridl_context {
     case resolved_type::category::optional:
     case resolved_type::category::repeated:
     case resolved_type::category::map:
+    case resolved_type::category::either:
+    case resolved_type::category::holder:
         std::unreachable(); // sema rejects container types in the C ABI
     }
     std::unreachable();
@@ -200,6 +204,8 @@ struct ridl_context {
     case resolved_type::category::optional:
     case resolved_type::category::repeated:
     case resolved_type::category::map:
+    case resolved_type::category::either:
+    case resolved_type::category::holder:
         std::unreachable(); // sema rejects these event field types
     }
     std::unreachable();
@@ -712,6 +718,8 @@ void topo_visit(const model &program, std::uint32_t module_index,
     case resolved_type::category::optional:
     case resolved_type::category::repeated:
     case resolved_type::category::map:
+    case resolved_type::category::either:
+    case resolved_type::category::holder:
         std::unreachable(); // sema rejects container return types
     }
     std::unreachable();
@@ -757,6 +765,8 @@ void topo_visit(const model &program, std::uint32_t module_index,
     case resolved_type::category::optional:
     case resolved_type::category::repeated:
     case resolved_type::category::map:
+    case resolved_type::category::either:
+    case resolved_type::category::holder:
         std::unreachable(); // sema rejects container parameter types
     }
     std::unreachable();

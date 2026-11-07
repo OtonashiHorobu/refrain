@@ -66,6 +66,8 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "lp_vec3";
     case primitive_kind::nbt:
         return "nbt";
+    case primitive_kind::varint_id:
+        return "varint_id";
     case primitive_kind::void_type:
         return "void";
     }
@@ -94,6 +96,7 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"item_stack", primitive_kind::item_stack},
         std::pair{"lp_vec3", primitive_kind::lp_vec3},
         std::pair{"nbt", primitive_kind::nbt},
+        std::pair{"varint_id", primitive_kind::varint_id},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -240,6 +243,7 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::item_stack:
     case primitive_kind::lp_vec3:
     case primitive_kind::nbt:
+    case primitive_kind::varint_id:
     case primitive_kind::void_type:
         return false;
     }
@@ -269,6 +273,7 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::item_stack:
     case primitive_kind::lp_vec3:
     case primitive_kind::nbt:
+    case primitive_kind::varint_id:
     case primitive_kind::void_type:
         return false;
     }
@@ -826,6 +831,16 @@ class analyzer {
                 "event field '{}' uses 'map<K, V>', which is not "
                 "representable in an event payload; {}",
                 field_name, allowed);
+        case resolved_type::category::either:
+            return std::format(
+                "event field '{}' uses 'either<A, B>', which is not "
+                "representable in an event payload; {}",
+                field_name, allowed);
+        case resolved_type::category::holder:
+            return std::format(
+                "event field '{}' uses 'holder<A>', which is not "
+                "representable in an event payload; {}",
+                field_name, allowed);
         }
         return std::nullopt;
     }
@@ -1189,7 +1204,8 @@ class analyzer {
                      *primitive == primitive_kind::text_component ||
                      *primitive == primitive_kind::item_stack ||
                      *primitive == primitive_kind::lp_vec3 ||
-                     *primitive == primitive_kind::nbt)) {
+                     *primitive == primitive_kind::nbt ||
+                     *primitive == primitive_kind::varint_id)) {
                     error(source.location,
                           std::format("'{}' is only valid in RSC wire "
                                       "schemas",
@@ -1230,6 +1246,40 @@ class analyzer {
         }
 
         const auto &generic{source.name};
+        if (generic == "holder") {
+            if (source.arguments.size() != 1) {
+                error(source.location,
+                      "'holder<A>' expects exactly one type argument");
+                return std::nullopt;
+            }
+            auto direct{
+                resolve_type(source.arguments[0], current_module, false)};
+            if (!direct.has_value()) {
+                return std::nullopt;
+            }
+            resolved_type type;
+            type.kind = resolved_type::category::holder;
+            type.arguments.push_back(std::move(*direct));
+            return type;
+        }
+        if (generic == "either") {
+            if (source.arguments.size() != 2) {
+                error(source.location,
+                      "'either<A, B>' expects exactly two type arguments");
+                return std::nullopt;
+            }
+            auto left{resolve_type(source.arguments[0], current_module, false)};
+            auto right{
+                resolve_type(source.arguments[1], current_module, false)};
+            if (!left.has_value() || !right.has_value()) {
+                return std::nullopt;
+            }
+            resolved_type type;
+            type.kind = resolved_type::category::either;
+            type.arguments.push_back(std::move(*left));
+            type.arguments.push_back(std::move(*right));
+            return type;
+        }
         if (generic == "map") {
             if (source.arguments.size() != 2) {
                 error(source.location,
@@ -1337,6 +1387,8 @@ class analyzer {
         case resolved_type::category::optional:
         case resolved_type::category::repeated:
         case resolved_type::category::map:
+        case resolved_type::category::either:
+        case resolved_type::category::holder:
             return false;
         }
         return false;
@@ -1358,9 +1410,13 @@ class analyzer {
             return type.arguments.size() == 1 &&
                    is_valid_data_field_type(type.arguments.front());
         case resolved_type::category::map:
+        case resolved_type::category::either:
             return type.arguments.size() == 2 &&
                    is_valid_data_field_type(type.arguments[0]) &&
                    is_valid_data_field_type(type.arguments[1]);
+        case resolved_type::category::holder:
+            return type.arguments.size() == 1 &&
+                   is_valid_data_field_type(type.arguments[0]);
         }
         return false;
     }
@@ -2109,6 +2165,7 @@ class analyzer {
             case primitive_kind::item_stack:
             case primitive_kind::lp_vec3:
             case primitive_kind::nbt:
+            case primitive_kind::varint_id:
                 // Rejected for RIDL in resolve_type(); a wire-only primitive
                 // has no in-process ABI layout.
                 return std::nullopt;
@@ -2140,6 +2197,8 @@ class analyzer {
         case resolved_type::category::optional:
         case resolved_type::category::repeated:
         case resolved_type::category::map:
+        case resolved_type::category::either:
+        case resolved_type::category::holder:
             return std::nullopt;
         }
         return std::nullopt;

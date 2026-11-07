@@ -71,6 +71,8 @@ namespace {
             return "::refrain::net::lp_vec3";
         case primitive_kind::nbt:
             return "::refrain::net::nbt_blob";
+        case primitive_kind::varint_id:
+            return "std::uint32_t";
         case primitive_kind::void_type:
             return "void";
         }
@@ -89,6 +91,12 @@ namespace {
     case resolved_type::category::map:
         return "std::map<" + rsc_cpp_type(program, type.arguments[0]) + ", " +
                rsc_cpp_type(program, type.arguments[1]) + ">";
+    case resolved_type::category::either:
+        return "std::variant<" + rsc_cpp_type(program, type.arguments[0]) +
+               ", " + rsc_cpp_type(program, type.arguments[1]) + ">";
+    case resolved_type::category::holder:
+        return "std::variant<std::uint32_t, " +
+               rsc_cpp_type(program, type.arguments[0]) + ">";
     case resolved_type::category::handle:
         std::unreachable(); // sema rejects handles in RSC data schemas
     }
@@ -562,6 +570,9 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::varint_id:
+            writer.line("out.write_varint({});", expression);
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -629,6 +640,41 @@ void emit_encode_value(code_writer &writer, const model &program,
                           depth + 1, element_hints(hints), label);
         emit_encode_value(writer, program, type.arguments[1], entry + ".second",
                           depth + 1, element_hints(hints), label);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    }
+    case resolved_type::category::holder: {
+        writer.line("if (std::holds_alternative<std::uint32_t>({})) {{",
+                    expression);
+        writer.indent();
+        writer.line("out.write_varint(std::get<0>({}));", expression);
+        writer.dedent();
+        writer.line("}} else {{");
+        writer.indent();
+        writer.line("out.write_varint(0);");
+        emit_encode_value(writer, program, type.arguments[0],
+                          "std::get<1>(" + expression + ")", depth + 1,
+                          element_hints(hints), label);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    }
+    case resolved_type::category::either: {
+        writer.line("out.write_bool(std::holds_alternative<{}>({}));",
+                    rsc_cpp_type(program, type.arguments[0]), expression);
+        writer.line("if (std::holds_alternative<{}>({})) {{",
+                    rsc_cpp_type(program, type.arguments[0]), expression);
+        writer.indent();
+        emit_encode_value(writer, program, type.arguments[0],
+                          "std::get<0>(" + expression + ")", depth + 1,
+                          element_hints(hints), label);
+        writer.dedent();
+        writer.line("}} else {{");
+        writer.indent();
+        emit_encode_value(writer, program, type.arguments[1],
+                          "std::get<1>(" + expression + ")", depth + 1,
+                          element_hints(hints), label);
         writer.dedent();
         writer.line("}}");
         return;
@@ -804,6 +850,13 @@ void emit_decode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::varint_id:
+            writer.line("auto value_{} = in.read_varint();", depth);
+            writer.line("if (!value_{}) return "
+                        "std::unexpected{{std::move(value_{}.error())}};",
+                        depth, depth);
+            writer.line("{} = *value_{};", target, depth);
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -895,6 +948,56 @@ void emit_decode_value(code_writer &writer, const model &program,
                           element_hints(hints), label);
         writer.line("{}.emplace(std::move({}), std::move({}));", target, key,
                     value);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    }
+    case resolved_type::category::holder: {
+        writer.line("auto holder_{} = in.read_varint();", depth);
+        writer.line("if (!holder_{}) return "
+                    "std::unexpected{{std::move(holder_{}.error())}};",
+                    depth, depth);
+        writer.line("if (*holder_{} != 0) {{", depth);
+        writer.indent();
+        writer.line("{}.template emplace<0>(*holder_{});", target, depth);
+        writer.dedent();
+        writer.line("}} else {{");
+        writer.indent();
+        writer.line("{} value_{}{{}};",
+                    rsc_cpp_type(program, type.arguments[0]), depth);
+        emit_decode_value(writer, program, type.arguments[0],
+                          "value_" + std::to_string(depth), depth + 1,
+                          element_hints(hints), label);
+        writer.line("{}.template emplace<1>(std::move(value_{}));", target,
+                    depth);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    }
+    case resolved_type::category::either: {
+        writer.line("auto left_{} = in.read_bool();", depth);
+        writer.line("if (!left_{}) return "
+                    "std::unexpected{{std::move(left_{}.error())}};",
+                    depth, depth);
+        writer.line("if (*left_{}) {{", depth);
+        writer.indent();
+        writer.line("{} value_{}{{}};",
+                    rsc_cpp_type(program, type.arguments[0]), depth);
+        emit_decode_value(writer, program, type.arguments[0],
+                          "value_" + std::to_string(depth), depth + 1,
+                          element_hints(hints), label);
+        writer.line("{}.template emplace<0>(std::move(value_{}));", target,
+                    depth);
+        writer.dedent();
+        writer.line("}} else {{");
+        writer.indent();
+        writer.line("{} value_{}{{}};",
+                    rsc_cpp_type(program, type.arguments[1]), depth);
+        emit_decode_value(writer, program, type.arguments[1],
+                          "value_" + std::to_string(depth), depth + 2,
+                          element_hints(hints), label);
+        writer.line("{}.template emplace<1>(std::move(value_{}));", target,
+                    depth);
         writer.dedent();
         writer.line("}}");
         return;
@@ -1015,6 +1118,17 @@ void emit_decode_value(code_writer &writer, const model &program,
     };
     bool needs_wire{false};
     bool needs_map{false};
+    bool needs_variant{false};
+    const auto uses_variant = [&](const auto &self,
+                                  const resolved_type &type) -> bool {
+        if (type.kind == resolved_type::category::either ||
+            type.kind == resolved_type::category::holder) {
+            return true;
+        }
+        return std::ranges::any_of(type.arguments, [&](const auto &argument) {
+            return self(self, argument);
+        });
+    };
     const auto uses_map = [&](const auto &self,
                               const resolved_type &type) -> bool {
         if (type.kind == resolved_type::category::map) {
@@ -1043,6 +1157,8 @@ void emit_decode_value(code_writer &writer, const model &program,
                                uses_identifier(uses_identifier, field.type);
             needs_wire = needs_wire || uses_wire(uses_wire, field.type);
             needs_map = needs_map || uses_map(uses_map, field.type);
+            needs_variant =
+                needs_variant || uses_variant(uses_variant, field.type);
         }
     }
     includes.erase(emit::rsc_cpp_include(source_path));
@@ -1068,6 +1184,9 @@ void emit_decode_value(code_writer &writer, const model &program,
     if (needs_map) {
         writer.line("#include <map>");
         writer.line("#include <utility>");
+    }
+    if (needs_variant) {
+        writer.line("#include <variant>");
     }
     for (const auto &include : includes) {
         writer.line("#include {}", include);
