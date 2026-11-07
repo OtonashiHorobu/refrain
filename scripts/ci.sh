@@ -519,10 +519,10 @@ JSON
     --content-composition test-gp --datapack "$RUNTIME_PACK" \
     >"$RUNTIME_DIR/server.txt" 2>&1 \
     || die "runtime content: server failed to mount the content layers"
-grep -q 'runtime-content: 2 layer(s), 5 file(s); recipes=2,' \
+grep -q 'runtime-content: layers=2 files=5' \
     "$RUNTIME_DIR/server.txt" \
     || die "runtime content: content composition + datapack did not merge"
-grep -q 'validation 0 error(s), 0 warning(s)' "$RUNTIME_DIR/server.txt" \
+grep -q 'errors=0 warnings=0' "$RUNTIME_DIR/server.txt" \
     || die "runtime content: merged datapack set did not validate"
 # Malformed JSON in a --datapack directory is fail-closed: non-zero exit and a
 # diagnostic naming the offending file.
@@ -855,7 +855,7 @@ echo "  content: 4 file(s) -> 3 blob(s) (2 in segments), deterministic RFRX, whe
     --dump-gamepack | grep -q 'worldgen -> refrain.worldgen.flat@1.0.0' \
     || die "server did not resolve the flat-worldgen preset"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --dump-gamepack 2>&1 | grep -q 'built-in image: 11 file(s)' \
+    --dump-gamepack 2>&1 | grep -q 'builtin image: files=11' \
     || die "server did not load the embedded built-in image"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     2>&1 | grep -q 'mod host: 10 mod(s) loaded' \
@@ -980,12 +980,12 @@ for run in 1 2; do
         --world "$WORLD_ROOT/rwf" --script "$RUNTIME_SCRIPT" \
         --hash-every 5 --ticks 20 >"$WORLD_ROOT/runtime-$run.log" 2>&1 \
         || die "runtime smoke run $run failed"
-    grep -q 'replay: tick 5 hash ' "$WORLD_ROOT/runtime-$run.log" \
+    grep -q 'replay: tick=5 hash=' "$WORLD_ROOT/runtime-$run.log" \
         || die "runtime smoke run $run did not emit its replay hash"
 done
-sed -n 's/.*replay: tick 5 hash //p' "$WORLD_ROOT/runtime-1.log" \
+sed -n 's/.*replay: tick=5 hash=//p' "$WORLD_ROOT/runtime-1.log" \
     >"$WORLD_ROOT/runtime-hash-1.txt"
-sed -n 's/.*replay: tick 5 hash //p' "$WORLD_ROOT/runtime-2.log" \
+sed -n 's/.*replay: tick=5 hash=//p' "$WORLD_ROOT/runtime-2.log" \
     >"$WORLD_ROOT/runtime-hash-2.txt"
 cmp -s "$WORLD_ROOT/runtime-hash-1.txt" "$WORLD_ROOT/runtime-hash-2.txt" \
     || die "runtime replay hash is not deterministic across runs"

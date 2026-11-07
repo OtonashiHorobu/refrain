@@ -67,6 +67,18 @@ reporter smoke and the formatting gate.
 - Run `clang-format` on changed C++ files. Generated headers under
   `sdk/generated/` are never reformatted or edited by hand.
 
+## Logging
+
+Runtime logs record operator-visible facts, not how the code works. Keep
+info/warn/error lines short and self-contained:
+
+- Use `component: fact` and `key=value` for identifiers, counts and paths.
+- Do not add parenthetical asides, rationale or mechanism descriptions; a
+  reader should not need the source to understand the line.
+- Put the cause of a failure in the returned error message instead of a second
+  log line.
+- Debug logs may carry detail; info/warn/error stay terse.
+
 ## Documentation and commits
 
 Public prose and code comments are English and self-contained. State the

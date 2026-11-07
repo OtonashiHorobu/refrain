@@ -800,8 +800,8 @@ const suite startup_content_tests = [] {
                 return;
             }
             expect(std::find(lines.begin(), lines.end(),
-                             "startup-content: index: multiple installed "
-                             "versions of 'mod.alpha'; using 1.0.0 (user)") !=
+                             "startup-content: index: mod.alpha multiple "
+                             "versions, using 1.0.0 origin=user") !=
                    lines.end());
             auto table{read_table(store_root)};
             expect(table.has_value());
@@ -1058,11 +1058,11 @@ const suite startup_content_tests = [] {
                                                 std::string::npos;
                                      });
             };
-            expect(count_containing("declared id(s) have no receipt") == 1);
-            expect(count_containing("selected receipt(s) are not listed") == 1);
+            expect(count_containing("declared id(s) missing") == 1);
+            expect(count_containing("appended:") == 1);
             const auto missing_line{std::find_if(
                 lines.begin(), lines.end(), [](const std::string &line) {
-                    return line.find("declared id(s) have no receipt") !=
+                    return line.find("declared id(s) missing") !=
                            std::string::npos;
                 })};
             expect(missing_line != lines.end());

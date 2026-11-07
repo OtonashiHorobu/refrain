@@ -257,20 +257,13 @@ void reject_package(const startup_content_options &options,
     emit(log, fmt::format("startup-content: install: rejected {}: {}", path,
                           reason));
     if (!options.auto_install) {
-        emit(log, "startup-content: install: scan-only mode; leaving the "
-                  "package in the inbox");
         return;
     }
     auto moved{
         move_package(path, data::join_path(inbox, rejected_directory_name))};
     if (!moved) {
-        emit(log, fmt::format("startup-content: install: warning: could not "
-                              "move '{}' to rejected/: {}",
-                              path, moved.error().message));
-        return;
+        emit(log, moved.error().message);
     }
-    emit(log,
-         fmt::format("startup-content: install: moved {} -> {}", path, *moved));
 }
 
 [[nodiscard]] auto process_package(const startup_content_options &options,
@@ -305,21 +298,19 @@ void reject_package(const startup_content_options &options,
         }
         if (parsed->archive_blake3 == reader->archive_digest()) {
             ++report.skipped;
-            emit(log, fmt::format("startup-content: install: {}@{} already "
-                                  "installed (receipt {})",
-                                  identity->id, identity->version, receipt));
+            emit(log, fmt::format(
+                          "startup-content: install: {}@{} already installed",
+                          identity->id, identity->version));
             return status_ok();
         }
-        emit(log, fmt::format("startup-content: install: {}@{} differs from "
-                              "the installed receipt; updating",
-                              identity->id, identity->version));
     }
 
     if (!options.auto_install) {
         ++report.skipped;
-        emit(log, fmt::format("startup-content: install: {}@{} needs an "
-                              "install (auto-install disabled)",
-                              identity->id, identity->version));
+        emit(log,
+             fmt::format(
+                 "startup-content: install: {}@{} skipped auto_install=off",
+                 identity->id, identity->version));
         return status_ok();
     }
 
@@ -350,43 +341,29 @@ void reject_package(const startup_content_options &options,
     }
 
     ++report.installed;
-    emit(log, fmt::format("startup-content: install: installed {}@{} ({} "
-                          "file(s), receipt {})",
-                          identity->id, identity->version,
-                          installed->files.size(), installed->receipt_path));
+    emit(log,
+         fmt::format("startup-content: install: installed {}@{} files={}",
+                     identity->id, identity->version, installed->files.size()));
     if (options.keep_installed) {
         auto moved{move_package(
             path, data::join_path(inbox, installed_directory_name))};
         if (!moved) {
-            emit(log, fmt::format("startup-content: install: warning: could "
-                                  "not move '{}' to installed/: {}",
-                                  path, moved.error().message));
-        } else {
-            emit(log, fmt::format("startup-content: install: moved {} -> {}",
-                                  path, *moved));
+            emit(log, moved.error().message);
         }
     } else {
         auto removed{remove_package(path)};
         if (!removed) {
-            emit(log, fmt::format("startup-content: install: warning: {}",
-                                  removed.error().message));
-        } else {
-            emit(log,
-                 fmt::format("startup-content: install: removed {}", path));
+            emit(log, removed.error().message);
         }
     }
     return status_ok();
 }
 
 /// Sorted regular `*.rfmod` files in the inbox (a missing inbox is empty).
-[[nodiscard]] auto scan_packages(const startup_content_options &options,
-                                 const log_sink &log)
+[[nodiscard]] auto scan_packages(const startup_content_options &options)
     -> result<std::vector<std::string>> {
     const auto inbox{inbox_directory(options)};
     if (!io::is_directory(inbox)) {
-        emit(log, fmt::format("startup-content: scan: '{}' does not exist "
-                              "(0 package(s))",
-                              inbox));
         return std::vector<std::string>{};
     }
     auto names{io::list_directory(inbox)};
@@ -406,8 +383,6 @@ void reject_package(const startup_content_options &options,
         }
         packages.push_back(path);
     }
-    emit(log, fmt::format("startup-content: scan: {} package(s) in {}",
-                          packages.size(), inbox));
     return packages;
 }
 
@@ -523,10 +498,12 @@ select_receipts(const std::vector<mod_receipt> &receipts,
             }
         }
         if (indices.size() > 1U) {
-            emit(log, fmt::format("startup-content: index: multiple installed "
-                                  "versions of '{}'; using {} ({})",
-                                  id, receipts[best].version,
-                                  to_string(receipts[best].origin)));
+            emit(log,
+                 fmt::format(
+                     "startup-content: index: {} multiple versions, using {} "
+                     "origin={}",
+                     id, receipts[best].version,
+                     to_string(receipts[best].origin)));
         }
         selected.emplace(id, best);
     }
@@ -637,13 +614,11 @@ assign_layer_priorities(const startup_content_options &options,
 
     if (!missing.empty()) {
         emit(log, fmt::format("startup-content: layer-order: {} declared "
-                              "id(s) have no receipt and are ignored: {}",
+                              "id(s) missing: {}",
                               missing.size(), summarize_ids(missing)));
     }
     if (!appended.empty()) {
-        emit(log, fmt::format("startup-content: layer-order: {} selected "
-                              "receipt(s) are not listed and are appended "
-                              "after the listed layers: {}",
+        emit(log, fmt::format("startup-content: layer-order: {} appended: {}",
                               appended.size(), summarize_ids(appended)));
     }
     for (const auto &layer : layers) {
@@ -687,8 +662,6 @@ assign_layer_priorities(const startup_content_options &options,
                                  startup_content_report &report,
                                  const log_sink &log) -> status {
     if (receipts.receipts.empty()) {
-        emit(log, "startup-content: index: no install receipts; nothing "
-                  "published");
         return status_ok();
     }
     auto selected{
@@ -713,11 +686,10 @@ assign_layer_priorities(const startup_content_options &options,
     }
     report.index_published = true;
     report.published_entries = entry_count;
-    emit(log, fmt::format("startup-content: index: published {} ({} "
-                          "entries from {} receipt(s))",
+    emit(log, fmt::format("startup-content: index: published {} entries={}",
                           data::content_resolution_path(options.store_root,
                                                         options.composition),
-                          entry_count, selected->size()));
+                          entry_count));
     return status_ok();
 }
 
@@ -730,13 +702,12 @@ assign_layer_priorities(const startup_content_options &options,
                                    startup_content_report &report,
                                    const log_sink &log) -> status {
     if (options.gc == startup_content_options::gc_mode::off) {
-        emit(log, "startup-content: gc: off (skipped)");
+        emit(log, "startup-content: gc: off");
         return status_ok();
     }
     const auto table_path{data::content_blob_table_path(options.store_root)};
     if (!io::exists(table_path)) {
-        emit(log,
-             fmt::format("startup-content: gc: skipped (no '{}')", table_path));
+        emit(log, "startup-content: gc: skipped");
         return status_ok();
     }
 
@@ -752,12 +723,11 @@ assign_layer_priorities(const startup_content_options &options,
             gc.extra_roots.push_back(file.blake3);
         }
     }
-    emit(log, options.gc_budget_ms == 0
-                  ? std::string{"startup-content: gc: budget unlimited"}
-                  : fmt::format("startup-content: gc: budget {} ms",
-                                options.gc_budget_ms));
     auto collected{data::collect_garbage(
         options.store_root, gc, [&log](std::string_view line) {
+            if (line.find("warning") == std::string_view::npos) {
+                return;
+            }
             emit(log, fmt::format("startup-content: gc: {}", line));
         })};
     if (!collected) {
@@ -771,30 +741,18 @@ assign_layer_priorities(const startup_content_options &options,
     report.gc_deferred_blobs = collected->deferred_blobs;
     report.gc_deferred_segments = collected->deferred_segments;
     emit(log,
-         fmt::format("startup-content: gc: {} ({} unreferenced blob(s), "
-                     "{} orphan segment(s); deferred {} blob(s) / {} "
-                     "segment(s))",
-                     gc.apply ? "applied" : "dry run", report.gc_planned_blobs,
-                     report.gc_planned_segments, report.gc_deferred_blobs,
-                     report.gc_deferred_segments));
+         gc.apply
+             ? fmt::format("startup-content: gc: applied blobs={} segments={}",
+                           report.gc_deleted_blobs, report.gc_deleted_segments)
+             : fmt::format("startup-content: gc: dry run blobs={} segments={}",
+                           report.gc_planned_blobs,
+                           report.gc_planned_segments));
     return status_ok();
 }
 
 // ---------------------------------------------------------------------------
 // pipeline
 // ---------------------------------------------------------------------------
-
-void emit_summary(const startup_content_report &report, const log_sink &log) {
-    emit(log, fmt::format(
-                  "startup-content: done: scanned={} installed={} skipped={} "
-                  "failed={} receipts={} entries={} index={} gc_blobs={} "
-                  "gc_segments={} deferred {} blob(s) / {} segment(s)",
-                  report.scanned, report.installed, report.skipped,
-                  report.failed, report.receipt_files, report.published_entries,
-                  report.index_published ? "published" : "not-published",
-                  report.gc_deleted_blobs, report.gc_deleted_segments,
-                  report.gc_deferred_blobs, report.gc_deferred_segments));
-}
 
 /// Stages 1-4. `writable` is false only for a read-only store with no requested
 /// writes: install moves are skipped (auto_install is already false) and the
@@ -804,7 +762,7 @@ void emit_summary(const startup_content_report &report, const log_sink &log) {
                                 bool writable, startup_content_report &report,
                                 const log_sink &log) -> status {
     const auto inbox{inbox_directory(options)};
-    auto packages{scan_packages(options, log)};
+    auto packages{scan_packages(options)};
     if (!packages) {
         return std::unexpected{std::move(packages.error())};
     }
@@ -819,9 +777,10 @@ void emit_summary(const startup_content_report &report, const log_sink &log) {
         }
     }
     if (!packages->empty()) {
-        emit(log, fmt::format("startup-content: install: {} installed, {} "
-                              "skipped, {} failed",
-                              report.installed, report.skipped, report.failed));
+        emit(log,
+             fmt::format(
+                 "startup-content: install: installed={} skipped={} failed={}",
+                 report.installed, report.skipped, report.failed));
     }
 
     auto receipts{load_receipts(options.store_root)};
@@ -830,11 +789,11 @@ void emit_summary(const startup_content_report &report, const log_sink &log) {
     }
     report.receipt_files = receipts->files;
 
-    if (!writable) {
-        emit(log, "startup-content: index: skipped (read-only store)");
-    } else if (auto published{publish_index(options, *receipts, report, log)};
-               !published) {
-        return std::unexpected{std::move(published.error())};
+    if (writable) {
+        if (auto published{publish_index(options, *receipts, report, log)};
+            !published) {
+            return std::unexpected{std::move(published.error())};
+        }
     }
 
     return collect_garbage(options, *receipts, report, log);
@@ -886,21 +845,18 @@ auto run_startup_content(const startup_content_options &options)
             return std::unexpected{std::move(lock.error())};
         }
         report.read_only = true;
-        emit(log, "startup-content: lock: store is read-only; running "
-                  "scan-only (no install, no index publish)");
+        emit(log, "startup-content: lock: read-only");
         if (auto ran{run_pipeline(options, false, report, log)}; !ran) {
             return std::unexpected{std::move(ran.error())};
         }
-        emit_summary(report, log);
         return report;
     }
 
     report.lock_acquired = lock->held();
-    emit(log, fmt::format("startup-content: lock: acquired {}", lock->path()));
+    emit(log, "startup-content: lock: acquired");
     if (auto ran{run_pipeline(options, true, report, log)}; !ran) {
         return std::unexpected{std::move(ran.error())};
     }
-    emit_summary(report, log);
     return report;
 }
 
