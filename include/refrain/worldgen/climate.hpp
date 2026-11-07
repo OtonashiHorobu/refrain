@@ -91,6 +91,10 @@ class parameter_list {
     [[nodiscard]] auto find_brute_force(const target_point &target) const
         -> std::uint16_t;
 
+    /// The index in `entries()` of the selected point. The R-tree search is
+    /// shared with `find`; values may repeat, indices do not.
+    [[nodiscard]] auto find_index(const target_point &target) -> std::size_t;
+
     [[nodiscard]] auto size() const noexcept -> std::size_t {
         return values_.size();
     }
@@ -105,16 +109,20 @@ class parameter_list {
     struct node {
         std::array<parameter, 7> space{};
         std::uint16_t value{0};
+        std::size_t entry_index{npos};
         std::vector<std::size_t> children{};
     };
 
-    [[nodiscard]] auto make_leaf(const entry &value) -> std::size_t;
+    [[nodiscard]] auto make_leaf(const entry &value, std::size_t index)
+        -> std::size_t;
     [[nodiscard]] auto make_subtree(std::vector<std::size_t> children)
         -> std::size_t;
     [[nodiscard]] auto build(std::vector<std::size_t> children) -> std::size_t;
     [[nodiscard]] auto search(std::size_t index,
                               const std::array<coord, 7> &target,
                               std::size_t candidate) const -> std::size_t;
+
+    [[nodiscard]] auto select(const target_point &target) -> std::size_t;
 
     [[nodiscard]] auto node_distance(std::size_t index,
                                      const std::array<coord, 7> &target) const
