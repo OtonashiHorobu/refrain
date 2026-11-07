@@ -925,3 +925,28 @@ suite<"worldgen/ocean-ruin-height"> ocean_ruin_height_tests = [] {
                    block_pos{.x = 4, .y = 9, .z = 4}) == 9);
     };
 };
+
+suite<"worldgen/structure-data-index"> structure_data_index_tests = [] {
+    "the feature seed index follows the sorted step order"_test = [] {
+        using namespace refrain;
+        using namespace refrain::worldgen;
+        structure::structure_data_set data;
+        for (const auto *id : {"test:b", "test:a", "test:c"}) {
+            data.structures.emplace(id, structure::structure_document{
+                                            .id = id,
+                                            .type = "minecraft:test",
+                                            .step = "surface_structures"});
+        }
+        data.structures.emplace(
+            "test:other",
+            structure::structure_document{.id = "test:other",
+                                          .type = "minecraft:test",
+                                          .step = "underground_structures"});
+        expect(structure::structure_step_index(data, "test:a") == 0);
+        expect(structure::structure_step_index(data, "test:b") == 1);
+        expect(structure::structure_step_index(data, "test:c") == 2);
+        expect(structure::structure_step_index(data, "test:other") == 0);
+        expect(
+            !structure::structure_step_index(data, "test:missing").has_value());
+    };
+};
