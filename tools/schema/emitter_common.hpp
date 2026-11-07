@@ -351,6 +351,8 @@ attribute_comment(const std::vector<attribute> &attributes,
     case primitive_kind::team_update:
     case primitive_kind::player_info_update:
     case primitive_kind::tracked_waypoint:
+    case primitive_kind::component_predicate:
+    case primitive_kind::merchant_offer:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";
@@ -406,6 +408,8 @@ attribute_comment(const std::vector<attribute> &attributes,
     case primitive_kind::team_update:
     case primitive_kind::player_info_update:
     case primitive_kind::tracked_waypoint:
+    case primitive_kind::component_predicate:
+    case primitive_kind::merchant_offer:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";

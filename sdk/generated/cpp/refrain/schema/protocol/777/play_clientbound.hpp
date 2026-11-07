@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: d4cf695ff961cab1
+// Schema hash: 68ab48bc0e01cef4
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -573,6 +573,21 @@ struct map_item_data {
     bool locked;
     std::optional<std::vector<::refrain::protocol::v777::wire::wire_map_decoration>> decorations;
     ::refrain::net::map_patch color_patch;
+};
+
+struct merchant_offers {
+    static constexpr std::uint16_t packet_id = 0x35;
+    static constexpr std::string_view packet_name = "merchant_offers";
+
+    // attributes: #[varint]
+    std::int32_t container_id;
+    std::vector<::refrain::net::merchant_offer> offers;
+    // attributes: #[varint]
+    std::int32_t villager_level;
+    // attributes: #[varint]
+    std::int32_t villager_xp;
+    bool show_progress;
+    bool can_restock;
 };
 
 struct move_entity_pos {
@@ -3437,6 +3452,78 @@ struct show_dialog {
     if (auto decoded = ::refrain::net::decode_map_patch(in, value.color_patch); !decoded) {
       return std::unexpected{std::move(decoded.error())};
     }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_merchant_offers(::refrain::net::writer &out, const merchant_offers &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.container_id));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.offers.size()));
+    for (const auto &item_0 : value.offers) {
+      if (auto written = ::refrain::net::encode_merchant_offer(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.villager_level));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.villager_xp));
+  }
+  {
+    out.write_bool(value.show_progress);
+  }
+  {
+    out.write_bool(value.can_restock);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_merchant_offers(::refrain::net::reader &in, merchant_offers &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.container_id = static_cast<decltype(value.container_id)>(*value_0);
+  }
+  {
+    value.offers.clear();
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::net::merchant_offer value_0{};
+      if (auto decoded = ::refrain::net::decode_merchant_offer(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.offers.push_back(std::move(value_0));
+    }
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.villager_level = static_cast<decltype(value.villager_level)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.villager_xp = static_cast<decltype(value.villager_xp)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.show_progress = *value_0;
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.can_restock = *value_0;
   }
   return ::refrain::status_ok();
 }

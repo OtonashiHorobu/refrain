@@ -594,20 +594,56 @@ const suite tests = [] {
         expect(in.empty());
     };
 
-    "non-empty item stacks are rejected"_test = [] {
+    "item stacks round trip without component patches"_test = [] {
+        const net::item_stack value{.count = 1U, .item_id = 5U};
         std::vector<std::byte> bytes;
         net::writer out{bytes};
-        const auto status{
-            net::encode_item_stack(out, net::item_stack{.count = 1})};
+        expect(static_cast<bool>(net::encode_item_stack(out, value)));
+        expect(bytes.size() == 3U);
+        net::reader in{bytes};
+        net::item_stack decoded{};
+        expect(static_cast<bool>(net::decode_item_stack(in, decoded)));
+        const bool same{decoded == value};
+        expect(same);
+        expect(in.empty());
+
+        const std::array encoded{std::byte{1}, std::byte{5}, std::byte{1}};
+        net::reader patch_in{encoded};
+        net::item_stack patched{};
+        const auto status{net::decode_item_stack(patch_in, patched)};
         expect(!status);
         expect(status.error().code == refrain::error_code::unsupported);
+    };
 
-        const std::array encoded{std::byte{1}};
-        net::reader in{encoded};
-        net::item_stack decoded{};
-        const auto decode{net::decode_item_stack(in, decoded)};
-        expect(!decode);
-        expect(decode.error().code == refrain::error_code::unsupported);
+    "merchant offer round trips costs and result"_test = [] {
+        net::merchant_offer offer{};
+        offer.cost_a = {.item_id = 5U, .count = 2U};
+        offer.result = {.count = 1U, .item_id = 7U};
+        offer.cost_b = net::item_cost{.item_id = 9U, .count = 1U};
+        offer.out_of_stock = true;
+        offer.uses = 3;
+        offer.max_uses = 12;
+        offer.xp = 5;
+        offer.special_price_diff = -2;
+        offer.price_multiplier = 0.05F;
+        offer.demand = 4;
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_merchant_offer(out, offer)));
+        net::reader in{bytes};
+        net::merchant_offer decoded{};
+        expect(static_cast<bool>(net::decode_merchant_offer(in, decoded)));
+        expect(decoded.cost_a.item_id == 5U && decoded.cost_a.count == 2U);
+        expect(decoded.result.count == 1U && decoded.result.item_id == 7U);
+        expect(decoded.cost_b.has_value());
+        if (decoded.cost_b) {
+            expect(decoded.cost_b->item_id == 9U);
+        }
+        expect(decoded.out_of_stock);
+        expect(decoded.uses == 3 && decoded.max_uses == 12);
+        expect(decoded.special_price_diff == -2);
+        expect(decoded.demand == 4);
+        expect(in.empty());
     };
 
     "text component rejects invalid utf8"_test = [] {

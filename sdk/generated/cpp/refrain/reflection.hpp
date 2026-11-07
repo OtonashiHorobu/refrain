@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: d4cf695ff961cab1
+// Schema hash: 68ab48bc0e01cef4
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -952,6 +952,18 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::m
         refrain::reflect::custom_field{"locked", &::refrain::protocol::v777::play::clientbound::map_item_data::locked},
         refrain::reflect::custom_field{"decorations", &::refrain::protocol::v777::play::clientbound::map_item_data::decorations},
         refrain::reflect::custom_field{"color_patch", &::refrain::protocol::v777::play::clientbound::map_item_data::color_patch});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::merchant_offers'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::merchant_offers> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::merchant_offers";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"container_id", &::refrain::protocol::v777::play::clientbound::merchant_offers::container_id},
+        refrain::reflect::custom_field{"offers", &::refrain::protocol::v777::play::clientbound::merchant_offers::offers},
+        refrain::reflect::custom_field{"villager_level", &::refrain::protocol::v777::play::clientbound::merchant_offers::villager_level},
+        refrain::reflect::custom_field{"villager_xp", &::refrain::protocol::v777::play::clientbound::merchant_offers::villager_xp},
+        refrain::reflect::custom_field{"show_progress", &::refrain::protocol::v777::play::clientbound::merchant_offers::show_progress},
+        refrain::reflect::custom_field{"can_restock", &::refrain::protocol::v777::play::clientbound::merchant_offers::can_restock});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::move_entity_pos'.
@@ -2314,14 +2326,6 @@ template <> struct custom_traits<::refrain::protocol::v777::wire::wire_entry_4> 
         refrain::reflect::custom_field{"value", &::refrain::protocol::v777::wire::wire_entry_4::value});
 };
 
-/// Generated RSC struct 'refrain::protocol::v777::wire::wire_untrusted_entry'.
-template <> struct custom_traits<::refrain::protocol::v777::wire::wire_untrusted_entry> {
-    static constexpr std::string_view type_name = "refrain::protocol::v777::wire::wire_untrusted_entry";
-    static constexpr auto fields = std::make_tuple(
-        refrain::reflect::custom_field{"type_", &::refrain::protocol::v777::wire::wire_untrusted_entry::type_},
-        refrain::reflect::custom_field{"link", &::refrain::protocol::v777::wire::wire_untrusted_entry::link});
-};
-
 /// Generated RSC struct 'refrain::protocol::v777::wire::wire_data_3'.
 template <> struct custom_traits<::refrain::protocol::v777::wire::wire_data_3> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::wire::wire_data_3";
@@ -2332,6 +2336,14 @@ template <> struct custom_traits<::refrain::protocol::v777::wire::wire_data_3> {
         refrain::reflect::custom_field{"ignore_entities", &::refrain::protocol::v777::wire::wire_data_3::ignore_entities},
         refrain::reflect::custom_field{"status", &::refrain::protocol::v777::wire::wire_data_3::status},
         refrain::reflect::custom_field{"error_message", &::refrain::protocol::v777::wire::wire_data_3::error_message});
+};
+
+/// Generated RSC struct 'refrain::protocol::v777::wire::wire_untrusted_entry'.
+template <> struct custom_traits<::refrain::protocol::v777::wire::wire_untrusted_entry> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::wire::wire_untrusted_entry";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"type_", &::refrain::protocol::v777::wire::wire_untrusted_entry::type_},
+        refrain::reflect::custom_field{"link", &::refrain::protocol::v777::wire::wire_untrusted_entry::link});
 };
 
 /// Generated RSC struct 'refrain::protocol::v777::wire::wire_chunk_biome_data'.

@@ -1286,6 +1286,113 @@ auto decode_map_patch(reader &in, map_patch &value) -> status {
     return status_ok();
 }
 
+auto encode_component_predicate(writer &out, const component_predicate &)
+    -> status {
+    out.write_varint(0); // empty predicate
+    return status_ok();
+}
+
+auto decode_component_predicate(reader &in, component_predicate &) -> status {
+    auto count{in.read_varint()};
+    if (!count) {
+        return std::unexpected{std::move(count.error())};
+    }
+    if (*count != 0U) {
+        return std::unexpected{make_error(
+            error_code::unsupported,
+            "component_predicate: non-empty predicates are not implemented")};
+    }
+    return status_ok();
+}
+
+namespace {
+
+void write_item_cost(writer &out, const item_cost &cost) {
+    out.write_varint(cost.item_id);
+    out.write_varint(cost.count);
+    out.write_varint(0); // empty predicate
+}
+
+[[nodiscard]] auto read_item_cost(reader &in, item_cost &cost) -> status {
+    auto item{in.read_varint()};
+    auto count{in.read_varint()};
+    auto predicate{in.read_varint()};
+    if (!item || !count || !predicate) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "item_cost: truncated")};
+    }
+    if (*predicate != 0U) {
+        return std::unexpected{
+            make_error(error_code::unsupported,
+                       "item_cost: non-empty predicates are not implemented")};
+    }
+    cost.item_id = *item;
+    cost.count = *count;
+    return status_ok();
+}
+
+} // namespace
+
+auto encode_merchant_offer(writer &out, const merchant_offer &value) -> status {
+    write_item_cost(out, value.cost_a);
+    if (auto written{encode_item_stack(out, value.result)}; !written) {
+        return written;
+    }
+    out.write_bool(value.cost_b.has_value());
+    if (value.cost_b.has_value()) {
+        write_item_cost(out, *value.cost_b);
+    }
+    out.write_bool(value.out_of_stock);
+    out.write_i32(value.uses);
+    out.write_i32(value.max_uses);
+    out.write_i32(value.xp);
+    out.write_i32(value.special_price_diff);
+    out.write_f32(value.price_multiplier);
+    out.write_i32(value.demand);
+    return status_ok();
+}
+
+auto decode_merchant_offer(reader &in, merchant_offer &value) -> status {
+    if (auto status{read_item_cost(in, value.cost_a)}; !status) {
+        return status;
+    }
+    if (auto status{decode_item_stack(in, value.result)}; !status) {
+        return status;
+    }
+    value.cost_b.reset();
+    auto has_cost_b{in.read_bool()};
+    if (!has_cost_b) {
+        return std::unexpected{std::move(has_cost_b.error())};
+    }
+    if (*has_cost_b) {
+        item_cost cost{};
+        if (auto status{read_item_cost(in, cost)}; !status) {
+            return status;
+        }
+        value.cost_b = cost;
+    }
+    auto out_of_stock{in.read_bool()};
+    auto uses{in.read_i32()};
+    auto max_uses{in.read_i32()};
+    auto xp{in.read_i32()};
+    auto special_price_diff{in.read_i32()};
+    auto price_multiplier{in.read_f32()};
+    auto demand{in.read_i32()};
+    if (!out_of_stock || !uses || !max_uses || !xp || !special_price_diff ||
+        !price_multiplier || !demand) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "merchant_offer: truncated")};
+    }
+    value.out_of_stock = *out_of_stock;
+    value.uses = *uses;
+    value.max_uses = *max_uses;
+    value.xp = *xp;
+    value.special_price_diff = *special_price_diff;
+    value.price_multiplier = *price_multiplier;
+    value.demand = *demand;
+    return status_ok();
+}
+
 auto encode_filter_mask(writer &out, const filter_mask &value) -> status {
     if (value.type > 2U) {
         return std::unexpected{make_error(error_code::invalid_argument,
@@ -1325,12 +1432,12 @@ auto decode_filter_mask(reader &in, filter_mask &value) -> status {
 }
 
 auto encode_item_stack(writer &out, const item_stack &value) -> status {
-    if (value.count != 0) {
-        return std::unexpected{make_error(
-            error_code::unsupported,
-            "item_stack: non-empty stacks need the data-component codec")};
+    out.write_varint(value.count);
+    if (value.count == 0U) {
+        return status_ok();
     }
-    out.write_varint(0);
+    out.write_varint(value.item_id);
+    out.write_varint(0); // empty data-component patch
     return status_ok();
 }
 
@@ -1339,12 +1446,25 @@ auto decode_item_stack(reader &in, item_stack &value) -> status {
     if (!count) {
         return std::unexpected{std::move(count.error())};
     }
-    if (*count != 0) {
+    value.count = *count;
+    value.item_id = 0;
+    if (*count == 0U) {
+        return status_ok();
+    }
+    auto item{in.read_varint()};
+    if (!item) {
+        return std::unexpected{std::move(item.error())};
+    }
+    auto patch_size{in.read_varint()};
+    if (!patch_size) {
+        return std::unexpected{std::move(patch_size.error())};
+    }
+    if (*patch_size != 0U) {
         return std::unexpected{make_error(
             error_code::unsupported,
-            "item_stack: non-empty stacks need the data-component codec")};
+            "item_stack: non-empty component patches are not implemented")};
     }
-    value.count = 0;
+    value.item_id = *item;
     return status_ok();
 }
 

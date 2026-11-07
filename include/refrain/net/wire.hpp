@@ -339,23 +339,67 @@ struct tracked_waypoint {
 [[nodiscard]] auto decode_tracked_waypoint(reader &in, tracked_waypoint &value)
     -> status;
 
-/// An item stack on the wire. Only the empty stack is implemented: the codec
-/// writes and accepts a zero item count and reports `error_code::unsupported`
-/// for any item payload, which requires the data-component graph.
+/// An item stack on the wire. Stacks without a data-component patch are
+/// implemented; a non-empty patch is reported as unsupported because the
+/// component graph is not modelled yet.
 struct item_stack {
     std::uint32_t count{0};
+    std::uint32_t item_id{0};
 
     friend auto operator==(const item_stack &, const item_stack &)
         -> bool = default;
 };
 
-/// Writes the empty item stack encoding (`VarInt 0`).
+/// Writes the count, item id and an empty component patch.
 [[nodiscard]] auto encode_item_stack(writer &out, const item_stack &value)
     -> status;
 
-/// Reads an item count and accepts only zero; a non-empty stack is reported as
-/// unsupported rather than skipped.
+/// Reads a stack; a non-empty component patch is reported as unsupported.
 [[nodiscard]] auto decode_item_stack(reader &in, item_stack &value) -> status;
+
+/// An exact data-component predicate. Only the empty predicate is implemented.
+struct component_predicate {
+    friend auto operator==(const component_predicate &,
+                           const component_predicate &) -> bool = default;
+};
+
+[[nodiscard]] auto encode_component_predicate(writer &out,
+                                              const component_predicate &value)
+    -> status;
+[[nodiscard]] auto decode_component_predicate(reader &in,
+                                              component_predicate &value)
+    -> status;
+
+/// One side of a merchant trade: an item id, count and empty predicate.
+struct item_cost {
+    std::uint32_t item_id{0};
+    std::uint32_t count{0};
+
+    friend auto operator==(const item_cost &, const item_cost &)
+        -> bool = default;
+};
+
+/// A merchant trade offer.
+struct merchant_offer {
+    item_cost cost_a{};
+    item_stack result{};
+    std::optional<item_cost> cost_b{};
+    bool out_of_stock{false};
+    std::int32_t uses{0};
+    std::int32_t max_uses{0};
+    std::int32_t xp{0};
+    std::int32_t special_price_diff{0};
+    float price_multiplier{0.0F};
+    std::int32_t demand{0};
+
+    friend auto operator==(const merchant_offer &, const merchant_offer &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_merchant_offer(writer &out,
+                                         const merchant_offer &value) -> status;
+[[nodiscard]] auto decode_merchant_offer(reader &in, merchant_offer &value)
+    -> status;
 
 /// Writes a network-NBT string tag. The text must be valid UTF-8 without NUL
 /// and within the Basic Multilingual Plane, because Java's modified UTF-8

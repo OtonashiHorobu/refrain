@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: d4cf695ff961cab1
+// Schema hash: 68ab48bc0e01cef4
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -104,12 +104,6 @@ struct wire_entry_4 {
     std::string value;
 };
 
-struct wire_untrusted_entry {
-    std::variant<std::uint32_t, ::refrain::net::text_component> type_;
-    // attributes: #[max(32767)]
-    std::string link;
-};
-
 struct wire_vec3i {
     // attributes: #[varint]
     std::int32_t x;
@@ -126,6 +120,12 @@ struct wire_data_3 {
     bool ignore_entities;
     std::uint32_t status;
     std::optional<::refrain::net::text_component> error_message;
+};
+
+struct wire_untrusted_entry {
+    std::variant<std::uint32_t, ::refrain::net::text_component> type_;
+    // attributes: #[max(32767)]
+    std::string link;
 };
 
 struct wire_chunk_biome_data {
@@ -772,55 +772,6 @@ struct wire_position_move_rotation {
   return ::refrain::status_ok();
 }
 
-[[nodiscard]] inline auto encode_wire_untrusted_entry(::refrain::net::writer &out, const wire_untrusted_entry &value) -> ::refrain::status {
-  static_cast<void>(out);
-  static_cast<void>(value);
-  {
-    out.write_bool(std::holds_alternative<std::uint32_t>(value.type_));
-    if (std::holds_alternative<std::uint32_t>(value.type_)) {
-      out.write_varint(std::get<0>(value.type_));
-    } else {
-      if (auto written = ::refrain::net::encode_text_component(out, std::get<1>(value.type_)); !written) {
-        return written;
-      }
-    }
-  }
-  {
-    if (auto written = out.write_string(value.link, 32767); !written) {
-      return written;
-    }
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto decode_wire_untrusted_entry(::refrain::net::reader &in, wire_untrusted_entry &value) -> ::refrain::status {
-  static_cast<void>(in);
-  static_cast<void>(value);
-  {
-    auto left_0 = in.read_bool();
-    if (!left_0) return std::unexpected{std::move(left_0.error())};
-    if (*left_0) {
-      std::uint32_t value_0{};
-      auto value_1 = in.read_varint();
-      if (!value_1) return std::unexpected{std::move(value_1.error())};
-      value_0 = *value_1;
-      value.type_.template emplace<0>(std::move(value_0));
-    } else {
-      ::refrain::net::text_component value_0{};
-      if (auto decoded = ::refrain::net::decode_text_component(in, value_0); !decoded) {
-        return std::unexpected{std::move(decoded.error())};
-      }
-      value.type_.template emplace<1>(std::move(value_0));
-    }
-  }
-  {
-    auto value_0 = in.read_string(32767);
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.link = std::move(*value_0);
-  }
-  return ::refrain::status_ok();
-}
-
 [[nodiscard]] inline auto encode_wire_vec3i(::refrain::net::writer &out, const wire_vec3i &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -941,6 +892,55 @@ struct wire_position_move_rotation {
     } else {
       value.error_message.reset();
     }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_untrusted_entry(::refrain::net::writer &out, const wire_untrusted_entry &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_bool(std::holds_alternative<std::uint32_t>(value.type_));
+    if (std::holds_alternative<std::uint32_t>(value.type_)) {
+      out.write_varint(std::get<0>(value.type_));
+    } else {
+      if (auto written = ::refrain::net::encode_text_component(out, std::get<1>(value.type_)); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    if (auto written = out.write_string(value.link, 32767); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_untrusted_entry(::refrain::net::reader &in, wire_untrusted_entry &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto left_0 = in.read_bool();
+    if (!left_0) return std::unexpected{std::move(left_0.error())};
+    if (*left_0) {
+      std::uint32_t value_0{};
+      auto value_1 = in.read_varint();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = *value_1;
+      value.type_.template emplace<0>(std::move(value_0));
+    } else {
+      ::refrain::net::text_component value_0{};
+      if (auto decoded = ::refrain::net::decode_text_component(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.type_.template emplace<1>(std::move(value_0));
+    }
+  }
+  {
+    auto value_0 = in.read_string(32767);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.link = std::move(*value_0);
   }
   return ::refrain::status_ok();
 }

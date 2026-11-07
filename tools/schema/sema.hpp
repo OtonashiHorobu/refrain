@@ -73,6 +73,10 @@ enum class primitive_kind : std::uint8_t {
     player_info_update,
     /// Tracked waypoint add/update/remove payload.
     tracked_waypoint,
+    /// Empty exact component predicate.
+    component_predicate,
+    /// Merchant trade offer.
+    merchant_offer,
     void_type,
 };
 

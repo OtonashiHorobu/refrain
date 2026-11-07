@@ -341,6 +341,15 @@ packet map_item_data = 52 {
     color_patch: map_patch;
 }
 
+packet merchant_offers = 53 {
+    #[varint] container_id: i32;
+    offers: array<merchant_offer>;
+    #[varint] villager_level: i32;
+    #[varint] villager_xp: i32;
+    show_progress: bool;
+    can_restock: bool;
+}
+
 packet move_entity_pos = 54 {
     entity_id: varint_id;
     delta: vec_delta;

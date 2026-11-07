@@ -78,11 +78,6 @@ struct wire_entry_4 {
     #[max(32767)] value: string;
 }
 
-struct wire_untrusted_entry {
-    type_: either<varint_id, text_component>;
-    #[max(32767)] link: string;
-}
-
 struct wire_data_3 {
     test: optional<identifier>;
     size: wire_vec3i;
@@ -90,6 +85,11 @@ struct wire_data_3 {
     ignore_entities: bool;
     status: varint_id;
     error_message: optional<text_component>;
+}
+
+struct wire_untrusted_entry {
+    type_: either<varint_id, text_component>;
+    #[max(32767)] link: string;
 }
 
 struct wire_chunk_biome_data {
