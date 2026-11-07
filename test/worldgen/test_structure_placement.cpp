@@ -736,3 +736,98 @@ suite<"worldgen/igloo-piece"> igloo_piece_tests = [] {
             std::filesystem::remove_all(directory);
         };
 };
+
+suite<"worldgen/swamp-hut"> swamp_hut_tests = [] {
+    "the hut moves to the average ground height"_test = [] {
+        using namespace refrain;
+        using namespace refrain::worldgen;
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(stone.has_value());
+        if (!stone) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 128};
+        for (jint y = 0; y <= 60; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    chunk.set_state(x, y, z, *stone);
+                }
+            }
+        }
+        chunk.heightmap_at(heightmap_kind::motion_blocking_no_leaves)
+            .set_first_available(0, 0, 61);
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                chunk.heightmap_at(heightmap_kind::motion_blocking_no_leaves)
+                    .set_first_available(x, z, 61);
+            }
+        }
+        auto start = structure::swamp_hut_start(chunk_pos{.x = 0, .z = 0}, 1);
+        structure_start record{
+            .structure = "minecraft:swamp_hut",
+            .step = "surface_structures",
+            .chunk_x = 0,
+            .chunk_z = 0,
+            .min_x = start.pieces.front().bounds.min_x,
+            .min_y = start.pieces.front().bounds.min_y,
+            .min_z = start.pieces.front().bounds.min_z,
+            .max_x = start.pieces.front().bounds.max_x,
+            .max_y = start.pieces.front().bounds.max_y,
+            .max_z = start.pieces.front().bounds.max_z,
+        };
+        record.pieces.push_back(structure_piece_record{
+            .type = "minecraft:tesh",
+            .min_x = start.pieces.front().bounds.min_x,
+            .min_y = start.pieces.front().bounds.min_y,
+            .min_z = start.pieces.front().bounds.min_z,
+            .max_x = start.pieces.front().bounds.max_x,
+            .max_y = start.pieces.front().bounds.max_y,
+            .max_z = start.pieces.front().bounds.max_z,
+            .orientation = start.pieces.front().orientation,
+            .height_position = -1,
+        });
+        chunk.add_structure_start(std::move(record));
+        chunk.add_structure_reference("minecraft:swamp_hut", 0, 0);
+        chunk_region region{chunk, 0};
+        const auto resolve = [&](std::string_view key) -> block_state_id {
+            if (const auto found = registry.find(key); found.has_value()) {
+                return *found;
+            }
+            const auto block = state_block_name(key);
+            const bool air = is_air_block_name(block);
+            const auto inserted =
+                registry.intern(key, {.air = air, .blocks_motion = !air});
+            return inserted.has_value() ? *inserted : no_block_state;
+        };
+        const structure::structure_place_context context{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &registry,
+            .state = resolve,
+        };
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(7)};
+        structure::place_structures(chunk, context, "surface_structures",
+                                    random);
+        jint planks_min_y = 128;
+        jint planks = 0;
+        for (jint y = 0; y < 128; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    if (registry.name(chunk.state_at(x, y, z)) ==
+                        "minecraft:spruce_planks") {
+                        planks_min_y = std::min(planks_min_y, y);
+                        ++planks;
+                    }
+                }
+            }
+        }
+        expect(planks > 0);
+        // HPos is the average height (61), so the lowest planks land at 62.
+        expect(planks_min_y == 62);
+    };
+};

@@ -145,6 +145,163 @@ auto igloo_offset(std::string_view template_id) -> std::optional<block_pos> {
     return std::nullopt;
 }
 
+auto swamp_hut_world_pos(const structure_piece_record &piece, jint local_x,
+                         jint local_z) -> std::pair<jint, jint> {
+    switch (piece.orientation) {
+    case 2: // north
+        return {piece.min_x + local_x, piece.max_z - local_z};
+    case 0: // south
+        return {piece.min_x + local_x, piece.min_z + local_z};
+    case 1: // west
+        return {piece.max_x - local_z, piece.min_z + local_x};
+    default: // east
+        return {piece.min_x + local_z, piece.min_z + local_x};
+    }
+}
+
+void place_swamp_hut(const structure_place_context &context,
+                     const structure_piece_record &piece) {
+    auto &region = *context.region;
+    const auto resolve = [&](std::string_view key) {
+        return context.state ? context.state(key) : no_block_state;
+    };
+    structure::template_mirror mirror = structure::template_mirror::none;
+    structure::template_rotation rotation = structure::template_rotation::none;
+    switch (piece.orientation) {
+    case 0: // south
+        mirror = structure::template_mirror::left_right;
+        break;
+    case 1: // west
+        mirror = structure::template_mirror::left_right;
+        rotation = structure::template_rotation::clockwise_90;
+        break;
+    case 3: // east
+        rotation = structure::template_rotation::clockwise_90;
+        break;
+    default:
+        break;
+    }
+    const auto orient = [&](block_state_id state) {
+        if (context.registry == nullptr) {
+            return state;
+        }
+        return structure::transform_state(*context.registry, state,
+                                          structure::template_transform{
+                                              .mirror = mirror,
+                                              .rotation = rotation,
+                                              .pivot = block_pos{},
+                                          });
+    };
+    const auto name_of = [&](const block_pos &pos) {
+        return state_block_name(
+            context.states->name(region.state_at(pos.x, pos.y, pos.z)));
+    };
+    jint height_position = piece.height_position;
+    if (height_position < 0) {
+        jint total = 0;
+        jint count = 0;
+        for (jint z = piece.min_z; z <= piece.max_z; ++z) {
+            for (jint x = piece.min_x; x <= piece.max_x; ++x) {
+                if (x >> 4 != context.chunk->chunk_x() ||
+                    z >> 4 != context.chunk->chunk_z()) {
+                    continue;
+                }
+                total += context.chunk->first_available(
+                    heightmap_kind::motion_blocking_no_leaves, x & 15, z & 15);
+                ++count;
+            }
+        }
+        if (count == 0) {
+            return;
+        }
+        height_position = total / count;
+    }
+    const auto local_pos = [&](jint x, jint y, jint z) {
+        const auto [wx, wz] = swamp_hut_world_pos(piece, x, z);
+        return block_pos{.x = wx, .y = height_position + y, .z = wz};
+    };
+    const auto place = [&](std::string_view key, jint x, jint y, jint z) {
+        auto state = resolve(key);
+        if (state == no_block_state) {
+            return;
+        }
+        state = orient(state);
+        const auto pos = local_pos(x, y, z);
+        (void)region.set_block_state(pos.x, pos.y, pos.z, state);
+    };
+    const auto box = [&](jint x0, jint y0, jint z0, jint x1, jint y1, jint z1,
+                         std::string_view state) {
+        for (jint y = y0; y <= y1; ++y) {
+            for (jint x = x0; x <= x1; ++x) {
+                for (jint z = z0; z <= z1; ++z) {
+                    place(state, x, y, z);
+                }
+            }
+        }
+    };
+    constexpr std::string_view spruce = "minecraft:spruce_planks";
+    constexpr std::string_view log = "minecraft:oak_log[axis=y]";
+    box(1, 1, 1, 5, 1, 7, spruce);
+    box(1, 4, 2, 5, 4, 7, spruce);
+    box(2, 1, 0, 4, 1, 0, spruce);
+    box(2, 2, 2, 3, 3, 2, spruce);
+    box(1, 2, 3, 1, 3, 6, spruce);
+    box(5, 2, 3, 5, 3, 6, spruce);
+    box(2, 2, 7, 4, 3, 7, spruce);
+    box(1, 0, 2, 1, 3, 2, log);
+    box(5, 0, 2, 5, 3, 2, log);
+    box(1, 0, 7, 1, 3, 7, log);
+    box(5, 0, 7, 5, 3, 7, log);
+    place("minecraft:oak_fence", 2, 3, 2);
+    place("minecraft:oak_fence", 3, 3, 7);
+    place("minecraft:air", 1, 3, 4);
+    place("minecraft:air", 5, 3, 4);
+    place("minecraft:air", 5, 3, 5);
+    place("minecraft:potted_red_mushroom", 1, 3, 5);
+    place("minecraft:crafting_table", 3, 2, 6);
+    place("minecraft:cauldron", 4, 2, 6);
+    place("minecraft:oak_fence", 1, 2, 1);
+    place("minecraft:oak_fence", 5, 2, 1);
+    const auto stairs = [&](std::string_view facing, std::string_view shape,
+                            jint x, jint y, jint z) {
+        const std::string key =
+            "minecraft:spruce_stairs[facing=" + std::string{facing} +
+            ",half=bottom,shape=" + std::string{shape} + ",waterlogged=false]";
+        place(key, x, y, z);
+    };
+    for (jint x = 0; x <= 6; ++x) {
+        stairs("north", "straight", x, 4, 1);
+    }
+    for (jint z = 2; z <= 7; ++z) {
+        stairs("east", "straight", 0, 4, z);
+        stairs("west", "straight", 6, 4, z);
+    }
+    for (jint x = 0; x <= 6; ++x) {
+        stairs("south", "straight", x, 4, 8);
+    }
+    stairs("north", "outer_right", 0, 4, 1);
+    stairs("north", "outer_left", 6, 4, 1);
+    stairs("south", "outer_left", 0, 4, 8);
+    stairs("south", "outer_right", 6, 4, 8);
+    const auto replaceable = [&](const block_pos &pos) {
+        const auto name = name_of(pos);
+        return name == "minecraft:air" || name == "minecraft:cave_air" ||
+               name == "minecraft:water" || name == "minecraft:lava" ||
+               name == "minecraft:glow_lichen" ||
+               name == "minecraft:seagrass" ||
+               name == "minecraft:tall_seagrass";
+    };
+    for (jint z = 2; z <= 7; z += 5) {
+        for (jint x = 1; x <= 5; x += 4) {
+            auto pos = local_pos(x, -1, z);
+            while (pos.y > context.chunk->min_y() + 1 && replaceable(pos)) {
+                (void)region.set_block_state(pos.x, pos.y, pos.z, resolve(log));
+                --pos.y;
+            }
+        }
+    }
+}
+
 void place_igloo_piece(const structure_place_context &context,
                        const structure_piece_record &piece,
                        worldgen_random &random) {
@@ -348,6 +505,8 @@ void place_structures(proto_chunk &chunk,
                     place_buried_treasure(context, piece, random);
                 } else if (piece.type == "minecraft:igl") {
                     place_igloo_piece(context, piece, random);
+                } else if (piece.type == "minecraft:tesh") {
+                    place_swamp_hut(context, piece);
                 }
             }
         }
