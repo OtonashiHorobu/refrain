@@ -43,6 +43,7 @@ using refrain::worldgen::feature::simple_state;
 using refrain::worldgen::feature::spring_feature;
 using refrain::worldgen::feature::tree_feature;
 using refrain::worldgen::feature::trunk_kind;
+using refrain::worldgen::feature::trunk_vine_decorator;
 using refrain::worldgen::provider::generation_context;
 
 auto parse(std::string_view text) -> refrain::data::json::value {
@@ -159,28 +160,36 @@ suite<"worldgen/tree"> tree_tests = [] {
         if (!radius || !offset) {
             return;
         }
-        tree_feature tree{registry,
-                          trunk_kind::straight,
-                          foliage_kind::blob,
-                          simple_state(*log),
-                          simple_state(*leaves),
-                          simple_state(*dirt),
-                          4,
-                          2,
-                          0,
-                          std::move(*radius),
-                          std::move(*offset),
-                          nullptr,
-                          3,
-                          1,
-                          0,
-                          1,
-                          false,
-                          1,
-                          1,
-                          false,
-                          0,
-                          true};
+        tree_feature tree{
+            registry,
+            trunk_kind::straight,
+            foliage_kind::blob,
+            simple_state(*log),
+            simple_state(*leaves),
+            simple_state(*dirt),
+            4,
+            2,
+            0,
+            std::move(*radius),
+            std::move(*offset),
+            nullptr,
+            3,
+            1,
+            0,
+            1,
+            false,
+            1,
+            1,
+            false,
+            0,
+            true,
+            [] {
+                std::vector<
+                    std::unique_ptr<refrain::worldgen::feature::tree_decorator>>
+                    out;
+                out.push_back(std::make_unique<trunk_vine_decorator>());
+                return out;
+            }()};
         proto_chunk chunk{registry, 0, 0, 0, 32};
         chunk.set_status(chunk_status::terrain);
         chunk_region region{chunk, 1};
@@ -212,6 +221,16 @@ suite<"worldgen/tree"> tree_tests = [] {
         }
         expect(logs > 0U);
         expect(leaf_blocks > 0U);
+        std::size_t vines = 0;
+        for (jint y = 0; y < 32; ++y) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint z = 0; z < 16; ++z) {
+                    vines += registry.name(chunk.state_at(x, y, z))
+                                 .starts_with("minecraft:vine");
+                }
+            }
+        }
+        expect(vines > 0U);
     };
 
     "an acacia foliage placer creates the three flat rows"_test = [] {

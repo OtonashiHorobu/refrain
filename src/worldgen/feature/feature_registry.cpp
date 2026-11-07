@@ -619,10 +619,25 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                     make_error(error_code::unsupported,
                                "tree root placers are not implemented")};
             }
-            if (!decorators->is_array() || !decorators->as_array()->empty()) {
-                return std::unexpected{
-                    make_error(error_code::unsupported,
-                               "tree decorators are not implemented")};
+            if (!decorators->is_array()) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "tree decorators is not a list")};
+            }
+            std::vector<std::unique_ptr<tree_decorator>> decoded_decorators;
+            for (const auto &entry : *decorators->as_array()) {
+                const auto *decorator_type = entry.find("type");
+                if (decorator_type == nullptr || !decorator_type->as_string()) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error, "tree decorator has no type")};
+                }
+                const auto decorator_name = *decorator_type->as_string();
+                if (decorator_name == "minecraft:trunk_vine") {
+                    decoded_decorators.push_back(
+                        std::make_unique<trunk_vine_decorator>());
+                } else {
+                    return std::unexpected{make_error(
+                        error_code::unsupported, "unsupported tree decorator")};
+                }
             }
             const auto *trunk_type = trunk_placer->find("type");
             if (trunk_type == nullptr) {

@@ -17,6 +17,36 @@
 namespace refrain::worldgen::feature {
 
 enum class trunk_kind : std::uint8_t { straight, forking, fancy, dark_oak };
+
+class tree_feature;
+
+struct tree_decorator_context {
+    feature_context &context;
+    block_state_registry &states;
+    worldgen_random &random;
+    const std::vector<block_pos> &logs;
+    const std::vector<block_pos> &leaves;
+
+    void set_block(const block_pos &pos, block_state_id state) const;
+    [[nodiscard]] auto is_air(const block_pos &pos) const -> bool;
+    void place_vine(const block_pos &pos, std::string_view direction) const;
+};
+
+class tree_decorator {
+  public:
+    tree_decorator() = default;
+    tree_decorator(const tree_decorator &) = delete;
+    auto operator=(const tree_decorator &) -> tree_decorator & = delete;
+    tree_decorator(tree_decorator &&) = delete;
+    auto operator=(tree_decorator &&) -> tree_decorator & = delete;
+    virtual ~tree_decorator() = default;
+    virtual void place(const tree_decorator_context &context) const = 0;
+};
+
+class trunk_vine_decorator final : public tree_decorator {
+  public:
+    void place(const tree_decorator_context &context) const override;
+};
 enum class foliage_kind : std::uint8_t {
     blob,
     acacia,
@@ -39,7 +69,8 @@ class tree_feature final : public feature {
                  jint foliage_height, jint size_limit, jint lower_size,
                  jint upper_size, bool three_layers, jint upper_limit,
                  jint middle_size, bool has_min_clipped, jint min_clipped,
-                 bool ignore_vines)
+                 bool ignore_vines,
+                 std::vector<std::unique_ptr<tree_decorator>> decorators = {})
         : states_{&states}, kind_{kind}, foliage_{foliage},
           trunk_provider_{std::move(trunk_provider)},
           foliage_provider_{std::move(foliage_provider)},
@@ -53,7 +84,8 @@ class tree_feature final : public feature {
           lower_size_{lower_size}, upper_size_{upper_size},
           three_layers_{three_layers}, upper_limit_{upper_limit},
           middle_size_{middle_size}, has_min_clipped_{has_min_clipped},
-          min_clipped_{min_clipped}, ignore_vines_{ignore_vines} {}
+          min_clipped_{min_clipped}, ignore_vines_{ignore_vines},
+          decorators_{std::move(decorators)} {}
 
     [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool override;
@@ -102,6 +134,7 @@ class tree_feature final : public feature {
     bool has_min_clipped_{false};
     jint min_clipped_{0};
     bool ignore_vines_{false};
+    std::vector<std::unique_ptr<tree_decorator>> decorators_{};
 };
 
 } // namespace refrain::worldgen::feature
