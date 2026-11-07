@@ -290,6 +290,43 @@ suite<"worldgen/tree"> tree_tests = [] {
     };
 };
 
+suite<"worldgen/block-predicate"> block_predicate_tests = [] {
+    "solid and matching fluids predicates inspect traits"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto water = registry.intern(
+            "minecraft:water", {.air = false, .fluid = true, .water = true});
+        expect(stone.has_value() && water.has_value());
+        if (!stone || !water) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::terrain);
+        (void)chunk.set_state(1, 2, 3, *stone);
+        (void)chunk.set_state(2, 2, 3, *water);
+        chunk_region region{chunk, 1};
+        auto solid = decode_block_predicate(
+            parse(R"({"type":"minecraft:solid"})"), registry);
+        auto fluid = decode_block_predicate(
+            parse(
+                R"({"type":"minecraft:matching_fluids","fluids":["minecraft:water"]})"),
+            registry);
+        expect(solid.has_value() && fluid.has_value());
+        if (!solid || !fluid) {
+            return;
+        }
+        expect((*solid)->test(region, registry,
+                              block_pos{.x = 1, .y = 2, .z = 3}));
+        expect(!(*solid)->test(region, registry,
+                               block_pos{.x = 2, .y = 2, .z = 3}));
+        expect((*fluid)->test(region, registry,
+                              block_pos{.x = 2, .y = 2, .z = 3}));
+    };
+};
+
 suite<"worldgen/placement"> placement_tests = [] {
     "the block predicate filter keeps only matching positions"_test = [] {
         block_state_registry registry;

@@ -108,6 +108,32 @@ class any_of final : public block_predicate {
     std::vector<std::unique_ptr<block_predicate>> rules_;
 };
 
+class solid_predicate final : public block_predicate {
+  public:
+    [[nodiscard]] auto test(const chunk_region &region,
+                            const block_state_table &states,
+                            const block_pos &pos) const -> bool override {
+        return states.traits(region.state_at(pos.x, pos.y, pos.z))
+            .blocks_motion;
+    }
+};
+
+class matching_fluids final : public block_predicate {
+  public:
+    matching_fluids(bool water, bool lava) : water_{water}, lava_{lava} {}
+    [[nodiscard]] auto test(const chunk_region &region,
+                            const block_state_table &states,
+                            const block_pos &pos) const -> bool override {
+        const auto traits = states.traits(region.state_at(pos.x, pos.y, pos.z));
+        return (water_ && traits.water) ||
+               (lava_ && traits.fluid && !traits.water);
+    }
+
+  private:
+    bool water_{false};
+    bool lava_{false};
+};
+
 class all_of final : public block_predicate {
   public:
     explicit all_of(std::vector<std::unique_ptr<block_predicate>> rules)
@@ -156,6 +182,32 @@ auto decode_block_predicate(const data::json::value &document,
         }
         return std::unique_ptr<block_predicate>{
             std::make_unique<matching_blocks>(std::move(*list))};
+    }
+    if (*type == "minecraft:solid") {
+        return std::unique_ptr<block_predicate>{
+            std::make_unique<solid_predicate>()};
+    }
+    if (*type == "minecraft:matching_fluids") {
+        const auto *fluids = document.find("fluids");
+        if (fluids == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "matching_fluids has no fluids")};
+        }
+        auto list = names(*fluids);
+        if (!list) {
+            return std::unexpected{list.error()};
+        }
+        bool water = false;
+        bool lava = false;
+        for (const auto &name : *list) {
+            if (name == "minecraft:water") {
+                water = true;
+            } else if (name == "minecraft:lava") {
+                lava = true;
+            }
+        }
+        return std::unique_ptr<block_predicate>{
+            std::make_unique<matching_fluids>(water, lava)};
     }
     if (*type == "minecraft:not") {
         const auto *predicate = document.find("predicate");
