@@ -1047,4 +1047,29 @@ suite<"worldgen/template"> template_tests = [] {
                              block_pos{.x = 0, .y = 20, .z = 0}, rot_settings);
         expect((rot_chunk.state_at(0, 20, 0) == *stone) == kept);
     };
+
+    "block rot matches rottable tags"_test = [] {
+        block_state_registry registry;
+        const auto stone = registry.intern(
+            "minecraft:stone", {.air = false, .blocks_motion = true});
+        const auto dirt = registry.intern(
+            "minecraft:dirt", {.air = false, .blocks_motion = true});
+        expect(stone && dirt);
+        if (!stone || !dirt) {
+            return;
+        }
+        const std::array<block_state_id, 1> tagged{*stone};
+        registry.add_tag("test:rottable", tagged);
+        block_rot_processor rot{0.0F, {"#test:rottable"}, true};
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk_region region{chunk, 0};
+        const template_block_info stone_info{.state = *stone};
+        const template_block_info dirt_info{.state = *dirt};
+        expect(!rot.process(registry, region, stone_info,
+                            block_pos{.x = 0, .y = 1, .z = 0}, nullptr)
+                    .has_value());
+        expect(rot.process(registry, region, dirt_info,
+                           block_pos{.x = 0, .y = 1, .z = 0}, nullptr)
+                   .has_value());
+    };
 };
