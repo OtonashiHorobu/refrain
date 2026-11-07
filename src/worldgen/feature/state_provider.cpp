@@ -7,6 +7,7 @@
 #include <refrain/data/json.hpp>
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/feature/block_predicate.hpp>
 #include <refrain/worldgen/feature/placement.hpp>
 #include <refrain/worldgen/provider.hpp>
 
@@ -38,6 +39,56 @@ auto resolve_state(block_state_registry &states, std::string_view key)
                           .blocks_motion = !air && !fluid,
                           .blocks_motion_no_leaves = !air && !fluid});
 }
+
+class reference_provider final : public state_provider {
+  public:
+    explicit reference_provider(const state_provider *target)
+        : target_{target} {}
+    [[nodiscard]] auto get(const placement_context &context,
+                           worldgen_random &random, const block_pos &pos) const
+        -> block_state_id override {
+        return target_->get(context, random, pos);
+    }
+
+  private:
+    const state_provider *target_{nullptr};
+};
+
+class rule_based_provider final : public state_provider {
+  public:
+    struct rule {
+        std::unique_ptr<block_predicate> predicate{};
+        std::unique_ptr<state_provider> provider{};
+    };
+
+    rule_based_provider(std::unique_ptr<state_provider> fallback,
+                        std::vector<rule> rules)
+        : fallback_{std::move(fallback)}, rules_{std::move(rules)} {}
+    [[nodiscard]] auto get(const placement_context &context,
+                           worldgen_random &random, const block_pos &pos) const
+        -> block_state_id override {
+        for (const auto &entry : rules_) {
+            if (!entry.predicate->test(*context.region, *context.states, pos)) {
+                continue;
+            }
+            const auto state = entry.provider->get(context, random, pos);
+            if (state != no_block_state) {
+                return state;
+            }
+        }
+        if (fallback_) {
+            const auto state = fallback_->get(context, random, pos);
+            if (state != no_block_state) {
+                return state;
+            }
+        }
+        return context.region->state_at(pos.x, pos.y, pos.z);
+    }
+
+  private:
+    std::unique_ptr<state_provider> fallback_;
+    std::vector<rule> rules_;
+};
 
 class simple_provider final : public state_provider {
   public:
@@ -143,9 +194,17 @@ auto simple_state(block_state_id state) -> std::unique_ptr<state_provider> {
 }
 
 auto decode_state_provider(const data::json::value &document,
-                           block_state_registry &states)
+                           block_state_registry &states,
+                           const state_provider_resolver &resolve)
     -> result<std::unique_ptr<state_provider>> {
     if (!document.is_object()) {
+        const auto text = document.as_string();
+        if (text && resolve) {
+            if (const auto *target = resolve(*text); target != nullptr) {
+                return std::unique_ptr<state_provider>{
+                    std::make_unique<reference_provider>(target)};
+            }
+        }
         const auto key = decode_state_key(document);
         if (!key) {
             return std::unexpected{key.error()};
@@ -230,7 +289,7 @@ auto decode_state_provider(const data::json::value &document,
             return std::unexpected{make_error(error_code::parse_error,
                                               "rotated provider has no state")};
         }
-        auto inner = decode_state_provider(*source, states);
+        auto inner = decode_state_provider(*source, states, resolve);
         if (!inner) {
             return std::unexpected{inner.error()};
         }
@@ -255,7 +314,7 @@ auto decode_state_provider(const data::json::value &document,
             return std::unexpected{make_error(error_code::parse_error,
                                               "randomized_int is incomplete")};
         }
-        auto inner = decode_state_provider(*source, states);
+        auto inner = decode_state_provider(*source, states, resolve);
         auto property_text = property->as_string();
         auto value_provider = provider::int_provider::decode(*values);
         if (!inner || !property_text || !value_provider) {
@@ -266,6 +325,44 @@ auto decode_state_provider(const data::json::value &document,
             std::make_unique<randomized_int_provider>(
                 std::move(*inner), states, std::string{*property_text},
                 std::move(*value_provider))};
+    }
+    if (*type == "minecraft:rule_based") {
+        const auto *fallback_value = document.find("fallback");
+        const auto *rules_value = document.find("rules");
+        if (rules_value == nullptr || !rules_value->is_array()) {
+            return std::unexpected{
+                make_error(error_code::parse_error, "rule_based has no rules")};
+        }
+        std::unique_ptr<state_provider> fallback;
+        if (fallback_value != nullptr) {
+            auto decoded =
+                decode_state_provider(*fallback_value, states, resolve);
+            if (!decoded) {
+                return std::unexpected{decoded.error()};
+            }
+            fallback = std::move(*decoded);
+        }
+        std::vector<rule_based_provider::rule> rules;
+        for (const auto &entry : *rules_value->as_array()) {
+            const auto *predicate_value = entry.find("if_true");
+            const auto *then_value = entry.find("then");
+            if (predicate_value == nullptr || then_value == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "rule_based rule is incomplete")};
+            }
+            auto predicate = decode_block_predicate(*predicate_value, states);
+            auto provider = decode_state_provider(*then_value, states, resolve);
+            if (!predicate || !provider) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "rule_based rule is invalid")};
+            }
+            rules.push_back(
+                rule_based_provider::rule{.predicate = std::move(*predicate),
+                                          .provider = std::move(*provider)});
+        }
+        return std::unique_ptr<state_provider>{
+            std::make_unique<rule_based_provider>(std::move(fallback),
+                                                  std::move(rules))};
     }
     return std::unexpected{
         make_error(error_code::unsupported, "unsupported state provider")};

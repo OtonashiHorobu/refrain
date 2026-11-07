@@ -29,8 +29,14 @@ struct placed_feature_document {
     data::json::value placement{};
 };
 
+struct state_provider_document {
+    std::string id{};
+    data::json::value document{};
+};
+
 struct feature_data_set {
     std::unordered_map<std::string, configured_feature_document> features{};
+    std::unordered_map<std::string, state_provider_document> state_providers{};
     std::unordered_map<std::string, placed_feature_document> placed{};
     std::vector<biome_feature_list> biomes{};
 };

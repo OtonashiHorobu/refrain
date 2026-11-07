@@ -106,7 +106,54 @@ auto reference_id(const data::json::value &input) -> result<std::string> {
 
 } // namespace
 
+auto feature_registry::decode_provider(const data::json::value &document)
+    -> result<std::unique_ptr<state_provider>> {
+    return decode_state_provider(
+        document, *states_,
+        [this](std::string_view id) -> const state_provider * {
+            const auto found = providers_.find(std::string{id});
+            return found == providers_.end() ? nullptr : found->second.get();
+        });
+}
+
 auto feature_registry::load(const feature_data_set &data) -> status {
+    providers_.clear();
+    provider_documents_ = data.state_providers;
+    std::set<std::string> visiting;
+    std::optional<error> provider_failure;
+    std::function<const state_provider *(std::string_view)> resolve =
+        [&](std::string_view id) -> const state_provider * {
+        const auto found = providers_.find(std::string{id});
+        if (found != providers_.end()) {
+            return found->second.get();
+        }
+        const auto document = provider_documents_.find(std::string{id});
+        if (document == provider_documents_.end()) {
+            return nullptr;
+        }
+        if (visiting.contains(std::string{id})) {
+            provider_failure = make_error(error_code::parse_error,
+                                          "state provider reference cycle");
+            return nullptr;
+        }
+        visiting.insert(std::string{id});
+        auto decoded =
+            decode_state_provider(document->second.document, *states_, resolve);
+        visiting.erase(std::string{id});
+        if (!decoded) {
+            provider_failure = decoded.error();
+            return nullptr;
+        }
+        const auto inserted =
+            providers_.emplace(std::string{id}, std::move(*decoded));
+        return inserted.first->second.get();
+    };
+    for (const auto &[id, document] : provider_documents_) {
+        if (resolve(id) == nullptr && provider_failure) {
+            return std::unexpected{*provider_failure};
+        }
+    }
+
     for (const auto &[id, document] : data.features) {
         const auto type = type_of(document.document);
         if (!type) {
@@ -118,7 +165,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 return std::unexpected{make_error(
                     error_code::parse_error, "simple block has no to_place")};
             }
-            auto provider = decode_state_provider(*to_place, *states_);
+            auto provider = decode_provider(*to_place);
             if (!provider) {
                 return std::unexpected{provider.error()};
             }
@@ -354,8 +401,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                         error_code::parse_error, "column layer is incomplete")};
                 }
                 auto height_provider = provider::int_provider::decode(*height);
-                auto layer_provider =
-                    decode_state_provider(*provider, *states_);
+                auto layer_provider = decode_provider(*provider);
                 if (!height_provider || !layer_provider) {
                     return std::unexpected{make_error(
                         error_code::parse_error, "column layer is invalid")};
@@ -484,7 +530,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 return std::unexpected{make_error(
                     error_code::parse_error, "block pile has no provider")};
             }
-            auto provider = decode_state_provider(*provider_value, *states_);
+            auto provider = decode_provider(*provider_value);
             if (!provider) {
                 return std::unexpected{provider.error()};
             }
@@ -552,9 +598,9 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 return std::unexpected{make_error(error_code::unsupported,
                                                   "unsupported feature size")};
             }
-            auto trunk = decode_state_provider(*trunk_value, *states_);
-            auto foliage = decode_state_provider(*foliage_value, *states_);
-            auto below = decode_state_provider(*below_value, *states_);
+            auto trunk = decode_provider(*trunk_value);
+            auto foliage = decode_provider(*foliage_value);
+            auto below = decode_provider(*below_value);
             const auto base_height = trunk_placer->find("base_height");
             const auto rand_a = trunk_placer->find("height_rand_a");
             const auto rand_b = trunk_placer->find("height_rand_b");

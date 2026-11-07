@@ -15,6 +15,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace refrain::worldgen::feature {
@@ -32,7 +33,14 @@ class feature_registry {
     }
 
   private:
+    [[nodiscard]] auto decode_provider(const data::json::value &document)
+        -> result<std::unique_ptr<state_provider>>;
+
     block_state_registry *states_{nullptr};
+    std::unordered_map<std::string, state_provider_document>
+        provider_documents_{};
+    std::unordered_map<std::string, std::unique_ptr<state_provider>>
+        providers_{};
     std::unordered_map<std::string, std::unique_ptr<feature>> features_{};
     std::unordered_map<std::string, placed_feature_runtime> placed_{};
 };
