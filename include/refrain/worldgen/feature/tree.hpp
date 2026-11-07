@@ -17,10 +17,12 @@
 namespace refrain::worldgen::feature {
 
 enum class trunk_kind : std::uint8_t { straight, forking };
+enum class foliage_kind : std::uint8_t { blob, acacia };
 
 class tree_feature final : public feature {
   public:
     tree_feature(block_state_registry &states, trunk_kind kind,
+                 foliage_kind foliage,
                  std::unique_ptr<state_provider> trunk_provider,
                  std::unique_ptr<state_provider> foliage_provider,
                  std::unique_ptr<state_provider> below_trunk_provider,
@@ -30,7 +32,7 @@ class tree_feature final : public feature {
                  jint foliage_height, jint size_limit, jint lower_size,
                  jint upper_size, bool has_min_clipped, jint min_clipped,
                  bool ignore_vines)
-        : states_{&states}, kind_{kind},
+        : states_{&states}, kind_{kind}, foliage_{foliage},
           trunk_provider_{std::move(trunk_provider)},
           foliage_provider_{std::move(foliage_provider)},
           below_trunk_provider_{std::move(below_trunk_provider)},
@@ -66,6 +68,7 @@ class tree_feature final : public feature {
 
     block_state_registry *states_{nullptr};
     trunk_kind kind_{trunk_kind::straight};
+    foliage_kind foliage_{foliage_kind::blob};
     std::unique_ptr<state_provider> trunk_provider_{};
     std::unique_ptr<state_provider> foliage_provider_{};
     std::unique_ptr<state_provider> below_trunk_provider_{};

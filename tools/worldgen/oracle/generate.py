@@ -354,8 +354,8 @@ def main() -> int:
             "oracle:stone_column",
             "oracle:moss_pile",
             "oracle:oak_tree",
-            "oracle:forking_tree",
             "oracle:real_birch",
+            "oracle:real_oak",
         ]
         biome_dir = pack / "data/oracle/worldgen/biome"
         biome_dir.mkdir(parents=True)
@@ -711,6 +711,33 @@ def main() -> int:
                                 },
                             },
                             "then": {"id": "minecraft:dirt"},
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        acacia = read_pack_data(
+            args.server_jar, "data/minecraft/worldgen/feature/acacia.json"
+        )
+        (minecraft_feature / "acacia.json").write_text(
+            json.dumps(acacia, indent=2) + "\n"
+        )
+        oak = read_pack_data(
+            args.server_jar, "data/minecraft/worldgen/feature/oak.json"
+        )
+        (minecraft_feature / "oak.json").write_text(
+            json.dumps(oak, indent=2) + "\n"
+        )
+        (placed_dir / "real_oak.json").write_text(
+            json.dumps(
+                {
+                    "feature": "minecraft:oak",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 200, 8]],
                         }
                     ],
                 },

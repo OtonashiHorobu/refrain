@@ -34,6 +34,7 @@ using refrain::worldgen::feature::feature_context;
 using refrain::worldgen::feature::feature_data_set;
 using refrain::worldgen::feature::feature_registry;
 using refrain::worldgen::feature::feature_sorter;
+using refrain::worldgen::feature::foliage_kind;
 using refrain::worldgen::feature::placed_feature_document;
 using refrain::worldgen::feature::placed_feature_runtime;
 using refrain::worldgen::feature::placement_context;
@@ -160,6 +161,7 @@ suite<"worldgen/tree"> tree_tests = [] {
         }
         tree_feature tree{registry,
                           trunk_kind::straight,
+                          foliage_kind::blob,
                           simple_state(*log),
                           simple_state(*leaves),
                           simple_state(*dirt),
@@ -205,6 +207,77 @@ suite<"worldgen/tree"> tree_tests = [] {
             }
         }
         expect(logs > 0U);
+        expect(leaf_blocks > 0U);
+    };
+
+    "an acacia foliage placer creates the three flat rows"_test = [] {
+        block_state_registry registry;
+        auto dirt = registry.intern("minecraft:dirt",
+                                    {.air = false,
+                                     .blocks_motion = true,
+                                     .blocks_motion_no_leaves = true});
+        auto log = registry.intern("minecraft:acacia_log[axis=y]",
+                                   {.air = false,
+                                    .blocks_motion = true,
+                                    .blocks_motion_no_leaves = true});
+        auto leaves = registry.intern("minecraft:acacia_leaves[distance=7,"
+                                      "persistent=false,waterlogged=false]",
+                                      {.air = false,
+                                       .blocks_motion = true,
+                                       .blocks_motion_no_leaves = true});
+        expect(dirt.has_value() && log.has_value() && leaves.has_value());
+        if (!dirt || !log || !leaves) {
+            return;
+        }
+        auto radius = provider::int_provider::decode(parse("2"));
+        auto offset = provider::int_provider::decode(parse("0"));
+        if (!radius || !offset) {
+            return;
+        }
+        tree_feature tree{registry,
+                          trunk_kind::straight,
+                          foliage_kind::acacia,
+                          simple_state(*log),
+                          simple_state(*leaves),
+                          simple_state(*dirt),
+                          5,
+                          2,
+                          2,
+                          std::move(*radius),
+                          std::move(*offset),
+                          0,
+                          1,
+                          0,
+                          2,
+                          false,
+                          0,
+                          true};
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 1};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 32,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        expect(tree.place(context, random, block_pos{.x = 8, .y = 10, .z = 8}));
+        std::size_t leaf_blocks = 0;
+        for (jint y = 0; y < 32; ++y) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint z = 0; z < 16; ++z) {
+                    leaf_blocks += registry.name(chunk.state_at(x, y, z))
+                                       .starts_with("minecraft:acacia_leaves");
+                }
+            }
+        }
         expect(leaf_blocks > 0U);
     };
 };
