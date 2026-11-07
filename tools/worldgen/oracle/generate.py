@@ -162,6 +162,8 @@ def run_server(root: pathlib.Path, server_jar: pathlib.Path, settle: float) -> N
         raise SystemExit("the reference server did not start in time")
 
     assert process.stdin is not None
+    process.stdin.write("gamerule randomTickSpeed 0\n")
+    process.stdin.flush()
     span = REGION_CHUNKS * 16 - 1
     process.stdin.write(f"forceload add 0 0 {span} {span}\n")
     process.stdin.flush()
@@ -1184,8 +1186,28 @@ def main() -> int:
         ):
             write_doc(feature_dir / f"{name}.json", {
                 "type": f"minecraft:{name}",
-                "cap_provider": {"id": cap},
-                "stem_provider": {"id": "minecraft:mushroom_stem"},
+                "cap_provider": {
+                    "id": cap,
+                    "properties": {
+                        "down": "true",
+                        "east": "true",
+                        "north": "true",
+                        "south": "true",
+                        "up": "true",
+                        "west": "true",
+                    },
+                },
+                "stem_provider": {
+                    "id": "minecraft:mushroom_stem",
+                    "properties": {
+                        "down": "false",
+                        "east": "true",
+                        "north": "true",
+                        "south": "true",
+                        "up": "false",
+                        "west": "true",
+                    },
+                },
                 "can_place_on": {
                     "type": "minecraft:matching_blocks",
                     "blocks": ["minecraft:dirt"],
@@ -1243,8 +1265,8 @@ def main() -> int:
             })
 
         fixed("platform_grass", "oracle:platform_grass", [[2, 99, 2]])
-        fixed("platform_dirt_red", "oracle:platform_dirt", [[10, 99, 2]])
-        fixed("platform_dirt_brown", "oracle:platform_dirt", [[14, 99, 2]])
+        fixed("platform_dirt_red", "oracle:platform_dirt", [[20, 99, 2]])
+        fixed("platform_dirt_brown", "oracle:platform_dirt", [[24, 99, 2]])
         fixed("platform_nylium", "oracle:platform_nylium", [[6, 99, 2]])
         fixed("platform_stone_wall", "oracle:platform_stone", [[3, 100, 6]])
         fixed(
@@ -1259,9 +1281,9 @@ def main() -> int:
         )
         fixed("bamboo", "oracle:bamboo", [[2, 100, 2]])
         fixed("huge_fungus", "oracle:huge_fungus", [[6, 100, 2]])
-        fixed("huge_red_mushroom", "oracle:huge_red_mushroom", [[10, 100, 2]])
+        fixed("huge_red_mushroom", "oracle:huge_red_mushroom", [[20, 100, 2]])
         fixed("huge_brown_mushroom", "oracle:huge_brown_mushroom",
-              [[14, 100, 2]])
+              [[24, 100, 2]])
         fixed("vines", "oracle:vines", [[2, 100, 6]])
         fixed("glowstone_extra", "oracle:glowstone_extra", [[8, 100, 8]])
         fixed("scattered_ore", "oracle:scattered_ore", [[3, 100, 12]])
