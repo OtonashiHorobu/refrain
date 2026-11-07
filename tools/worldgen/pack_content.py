@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Pack the worldgen datapack documents into a deterministic content archive.
+"""Copy the worldgen datapack documents into the content snapshot.
 
-The archive contains only the files world generation reads: every
+The snapshot contains only the files world generation reads: every
 `<namespace>/worldgen/**` document plus the block and biome tag trees. It is
 game-derived data, so the output belongs under `content/vanilla/<version>/`
 and carries the directory notice.
@@ -16,11 +16,10 @@ import argparse
 import hashlib
 import json
 import pathlib
-import zipfile
+import shutil
 
 VERSION = "26.3"
 DATA_VERSION = 5023
-ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 KINDS = ("worldgen", "tags/block", "tags/worldgen")
 
 
@@ -36,8 +35,11 @@ def collect(data_root: pathlib.Path) -> list[tuple[str, pathlib.Path]]:
             for path in sorted(base.rglob("*")):
                 if path.is_file():
                     files.append(
-                        (f"{namespace.name}/{kind}/{path.relative_to(base).as_posix()}",
-                         path)
+                        (
+                            f"{namespace.name}/{kind}/"
+                            f"{path.relative_to(base).as_posix()}",
+                            path,
+                        )
                     )
     return files
 
@@ -54,21 +56,24 @@ def main() -> int:
     if not files:
         raise SystemExit(f"no worldgen documents under {args.data_root}")
 
-    args.out.mkdir(parents=True, exist_ok=True)
-    archive = args.out / "datapack.zip"
-    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
-        for name, path in files:
-            info = zipfile.ZipInfo(name, ZIP_TIMESTAMP)
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o644 << 16
-            output.writestr(info, path.read_bytes())
+    target = args.out / "data"
+    shutil.rmtree(target, ignore_errors=True)
+    digest = hashlib.sha256()
+    for name, path in files:
+        destination = target / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, destination)
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(destination.read_bytes())
+        digest.update(b"\0")
 
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    args.out.mkdir(parents=True, exist_ok=True)
     manifest = {
         "game_version": args.version,
         "data_version": args.data_version,
-        "archive": archive.name,
-        "archive_sha256": digest,
+        "datapack": "data",
+        "content_sha256": digest.hexdigest(),
         "entry_count": len(files),
         "kinds": list(KINDS),
         "source": "server.jar datapack",
@@ -76,7 +81,7 @@ def main() -> int:
     (args.out / "MANIFEST.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
-    print(f"{archive} ({len(files)} entries, {archive.stat().st_size} bytes)")
+    print(f"{target} ({len(files)} files)")
     return 0
 
 

@@ -17,8 +17,8 @@ using namespace refrain::worldgen;
 
 suite<"worldgen/content"> worldgen_content_tests = [] {
     "the shipped snapshot materialises without the game directory"_test = [] {
-        const std::string archive = std::string{REFRAIN_SOURCE_DIR} +
-                                    "/content/vanilla/26.3/datapack.zip";
+        const std::string archive =
+            std::string{REFRAIN_SOURCE_DIR} + "/content/vanilla/26.3/data";
         const auto root = materialize_worldgen_data(archive);
         expect(root.has_value()) << "cannot materialise the snapshot";
         if (!root) {
@@ -57,8 +57,8 @@ suite<"worldgen/content"> worldgen_content_tests = [] {
             return;
         }
         const auto *version = manifest->find("game_version");
-        const auto *archive = manifest->find("archive");
-        const auto *hash = manifest->find("archive_sha256");
+        const auto *archive = manifest->find("datapack");
+        const auto *hash = manifest->find("content_sha256");
         const auto *entries = manifest->find("entry_count");
         expect(version != nullptr && archive != nullptr && hash != nullptr &&
                entries != nullptr);
@@ -67,7 +67,7 @@ suite<"worldgen/content"> worldgen_content_tests = [] {
             return;
         }
         expect(version->as_string() == "26.3");
-        expect(archive->as_string() == "datapack.zip");
+        expect(archive->as_string() == "data");
         expect(hash->as_string()->size() == 64U);
         expect(entries->as_int64().value_or(0) > 1000);
     };

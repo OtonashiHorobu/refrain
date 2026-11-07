@@ -10,7 +10,7 @@ laid out per game version:
 ```text
 content/vanilla/<version>/
   MANIFEST.json        game version, data version, source jar hash, file hashes
-  datapack.zip         worldgen documents and block/biome tags, deflated
+  data/                worldgen documents and block/biome tags
   reports/             compact tables converted from the game's datagen reports
 ```
 
