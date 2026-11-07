@@ -216,8 +216,7 @@ void cave_carver::create_room(const chunk_pos &chunk_pos, double x, double y,
                               carver_output &output,
                               const skip_checker &skip) const {
     const float half_pi = static_cast<float>(pi / 2.0);
-    const double horizontal_radius =
-        1.5 + mth::sin(static_cast<double>(half_pi)) * thickness;
+    const double horizontal_radius = 1.5 + mth::sin(half_pi) * thickness;
     const double vertical_radius = horizontal_radius * y_scale;
     carve_ellipsoid(chunk_pos, x + 1.0, y, z, horizontal_radius,
                     vertical_radius, output, skip);
@@ -239,16 +238,12 @@ void cave_carver::create_tunnel(
         const float angle = static_cast<float>(pi) *
                             static_cast<float>(current_step) /
                             static_cast<float>(distance);
-        const double horizontal_radius =
-            1.5 + mth::sin(static_cast<double>(angle)) * thickness;
+        const double horizontal_radius = 1.5 + mth::sin(angle) * thickness;
         const double vertical_radius = horizontal_radius * y_scale;
-        const float cos_x = mth::cos(static_cast<double>(vertical_rotation));
-        x += static_cast<double>(
-            mth::cos(static_cast<double>(horizontal_rotation)) * cos_x);
-        y += static_cast<double>(
-            mth::sin(static_cast<double>(vertical_rotation)));
-        z += static_cast<double>(
-            mth::sin(static_cast<double>(horizontal_rotation)) * cos_x);
+        const float cos_x = mth::cos(vertical_rotation);
+        x += static_cast<double>(mth::cos(horizontal_rotation) * cos_x);
+        y += static_cast<double>(mth::sin(vertical_rotation));
+        z += static_cast<double>(mth::sin(horizontal_rotation) * cos_x);
         vertical_rotation *= steep ? 0.92F : 0.7F;
         vertical_rotation += x_rota * 0.1F;
         horizontal_rotation += y_rota * 0.1F;
@@ -388,21 +383,18 @@ void canyon_carver::do_carve(const provider::generation_context &context,
         const float angle = static_cast<float>(current_step) *
                             static_cast<float>(pi) /
                             static_cast<float>(distance);
-        double horizontal_radius =
-            1.5 + mth::sin(static_cast<double>(angle)) * thickness;
+        double horizontal_radius = 1.5 + mth::sin(angle) * thickness;
         double vertical_radius = horizontal_radius * y_scale;
         horizontal_radius *= static_cast<double>(
             shape_.horizontal_radius_factor->sample(random));
         vertical_radius = update_vertical_radius(
             random, vertical_radius, static_cast<float>(distance),
             static_cast<float>(current_step), shape_);
-        const float cos_x = mth::cos(static_cast<double>(vertical_rotation));
-        const float sin_x = mth::sin(static_cast<double>(vertical_rotation));
-        x += static_cast<double>(
-            mth::cos(static_cast<double>(horizontal_rotation)) * cos_x);
+        const float cos_x = mth::cos(vertical_rotation);
+        const float sin_x = mth::sin(vertical_rotation);
+        x += static_cast<double>(mth::cos(horizontal_rotation) * cos_x);
         y += static_cast<double>(sin_x);
-        z += static_cast<double>(
-            mth::sin(static_cast<double>(horizontal_rotation)) * cos_x);
+        z += static_cast<double>(mth::sin(horizontal_rotation) * cos_x);
         vertical_rotation *= 0.7F;
         vertical_rotation += x_rota * 0.05F;
         horizontal_rotation += y_rota * 0.05F;
