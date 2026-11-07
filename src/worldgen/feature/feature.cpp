@@ -1221,15 +1221,24 @@ auto geode_feature::place(feature_context &context, worldgen_random &random,
     jint invalid = 0;
     const auto air = context.placement.states->air();
     for (jint i = 0; i < num_points; ++i) {
-        const jint x = parameters_.outer_wall_min +
-                       random.next_int(parameters_.outer_wall_max -
-                                       parameters_.outer_wall_min + 1);
-        const jint y = parameters_.outer_wall_min +
-                       random.next_int(parameters_.outer_wall_max -
-                                       parameters_.outer_wall_min + 1);
-        const jint z = parameters_.outer_wall_min +
-                       random.next_int(parameters_.outer_wall_max -
-                                       parameters_.outer_wall_min + 1);
+        const jint x =
+            parameters_.outer_wall_provider
+                ? parameters_.outer_wall_provider->sample(random)
+                : parameters_.outer_wall_min +
+                      random.next_int(parameters_.outer_wall_max -
+                                      parameters_.outer_wall_min + 1);
+        const jint y =
+            parameters_.outer_wall_provider
+                ? parameters_.outer_wall_provider->sample(random)
+                : parameters_.outer_wall_min +
+                      random.next_int(parameters_.outer_wall_max -
+                                      parameters_.outer_wall_min + 1);
+        const jint z =
+            parameters_.outer_wall_provider
+                ? parameters_.outer_wall_provider->sample(random)
+                : parameters_.outer_wall_min +
+                      random.next_int(parameters_.outer_wall_max -
+                                      parameters_.outer_wall_min + 1);
         const block_pos pos{
             .x = origin.x + x, .y = origin.y + y, .z = origin.z + z};
         const auto state =
@@ -1241,9 +1250,11 @@ auto geode_feature::place(feature_context &context, worldgen_random &random,
             }
         }
         points.emplace_back(
-            pos, parameters_.point_offset_min +
-                     random.next_int(parameters_.point_offset_max -
-                                     parameters_.point_offset_min + 1));
+            pos, parameters_.point_offset_provider
+                     ? parameters_.point_offset_provider->sample(random)
+                     : parameters_.point_offset_min +
+                           random.next_int(parameters_.point_offset_max -
+                                           parameters_.point_offset_min + 1));
     }
     if (should_crack) {
         const jint index = random.next_int(4);

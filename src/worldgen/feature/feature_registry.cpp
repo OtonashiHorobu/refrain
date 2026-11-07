@@ -691,6 +691,29 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                         parameters.distribution_max);
             read_bounds("point_offset", parameters.point_offset_min,
                         parameters.point_offset_max);
+            if (const auto *field =
+                    document.document.find("outer_wall_distance");
+                field != nullptr) {
+                auto decoded = provider::int_provider::decode(*field);
+                if (decoded) {
+                    parameters.outer_wall_provider = std::move(*decoded);
+                }
+            }
+            if (const auto *field =
+                    document.document.find("distribution_points");
+                field != nullptr) {
+                auto decoded = provider::int_provider::decode(*field);
+                if (decoded) {
+                    parameters.distribution_provider = std::move(*decoded);
+                }
+            }
+            if (const auto *field = document.document.find("point_offset");
+                field != nullptr) {
+                auto decoded = provider::int_provider::decode(*field);
+                if (decoded) {
+                    parameters.point_offset_provider = std::move(*decoded);
+                }
+            }
             features_.emplace(
                 id, std::make_unique<geode_feature>(std::move(parameters)));
             continue;

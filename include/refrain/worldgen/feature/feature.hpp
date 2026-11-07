@@ -419,6 +419,9 @@ struct geode_parameters {
     double use_potential_placements_chance{0.35};
     double use_alternate_layer0_chance{0.0};
     bool placements_require_layer0_alternate{true};
+    std::unique_ptr<provider::int_provider> outer_wall_provider{};
+    std::unique_ptr<provider::int_provider> distribution_provider{};
+    std::unique_ptr<provider::int_provider> point_offset_provider{};
     jint outer_wall_min{4};
     jint outer_wall_max{5};
     jint distribution_min{3};
