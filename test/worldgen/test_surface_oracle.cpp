@@ -828,6 +828,16 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                         },
                 };
                 feature_placement.region = nullptr;
+                feature_placement.height =
+                    [&chunk](heightmap_kind kind, jint x, jint z) -> jint {
+                    const jint local_x = x - chunk.chunk_x() * 16;
+                    const jint local_z = z - chunk.chunk_z() * 16;
+                    if (local_x < 0 || local_x > 15 || local_z < 0 ||
+                        local_z > 15) {
+                        return chunk.min_y();
+                    }
+                    return chunk.first_available(kind, local_x, local_z);
+                };
                 feature_placement.resolve_state =
                     [&block_registry](std::string_view key) -> block_state_id {
                     if (const auto found = block_registry.find(key); found) {

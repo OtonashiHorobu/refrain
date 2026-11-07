@@ -1742,9 +1742,6 @@ void large_dripstone_feature::place_blocks(feature_context &context,
                                            ? context.placement.resolve_state(
                                                  "minecraft:dripstone_block")
                                            : no_block_state;
-                    std::fprintf(stderr, "set drip %d,%d,%d id=%d\n",
-                                 (int)adjusted.x, (int)adjusted.y,
-                                 (int)adjusted.z, (int)state);
                     (void)context.placement.region->set_block_state(
                         adjusted.x, adjusted.y, adjusted.z, state);
                 } else if (out_of_stone &&
@@ -1767,10 +1764,10 @@ auto large_dripstone_feature::place(feature_context &context,
         return false;
     }
     const auto column = scan(context, origin);
-    if (!column || column->ceiling - column->floor < 4) {
+    if (!column || column->ceiling - column->floor - 1 < 4) {
         return false;
     }
-    const jint column_height = column->ceiling - column->floor;
+    const jint column_height = column->ceiling - column->floor - 1;
     const jint max_radius =
         std::clamp(static_cast<jint>(static_cast<float>(column_height) *
                                      radius_to_height_ratio_),
