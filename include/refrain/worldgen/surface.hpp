@@ -15,6 +15,7 @@
 #include <refrain/worldgen/noise.hpp>
 #include <refrain/worldgen/rng.hpp>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -211,6 +212,64 @@ class material_context {
         noise_samplers_{};
     std::unordered_map<std::string, std::shared_ptr<density_cache>>
         density_samplers_{};
+};
+
+/// Shared `NormalNoise` instances for the names the surface stage uses.
+class noise_registry {
+  public:
+    noise_registry(algorithm kind, jlong seed);
+    noise_registry(const noise_registry &) = delete;
+    auto operator=(const noise_registry &) -> noise_registry & = delete;
+    noise_registry(noise_registry &&) = delete;
+    auto operator=(noise_registry &&) -> noise_registry & = delete;
+    ~noise_registry() = default;
+
+    /// Instantiates one `worldgen/noise` document.
+    void add(std::string id, std::string_view json);
+
+    /// Walks `<data_root>/<namespace>/worldgen/noise/**`.
+    [[nodiscard]] auto load(std::string_view data_root) -> status;
+
+    [[nodiscard]] auto get(std::string_view id) -> const noise_stack *;
+
+  private:
+    std::unique_ptr<positional_random_factory> factory_{};
+    std::unordered_map<std::string, noise_stack> noises_{};
+};
+
+/// Java `MaterialSystem`: surface depth/secondary, clay bands and the
+/// `buildSurface` loop.
+class surface_system {
+  public:
+    surface_system(block_states &states, generation_bounds bounds,
+                   noise_registry &noises,
+                   positional_random_factory &noise_random,
+                   state_id default_block, state_id air);
+
+    [[nodiscard]] auto surface_depth(jint x, jint z) -> jint;
+    [[nodiscard]] auto surface_secondary(jint x, jint z) -> double;
+    [[nodiscard]] auto band(jint x, jint y, jint z) -> state_id;
+
+    /// Runs one chunk's surface pass. `get`/`set` use absolute coordinates;
+    /// `world_surface` is the write-time heightmap indexed by `x + z*16`.
+    [[nodiscard]] auto build_surface(
+        material_context &context, const rule_evaluator &rule,
+        const std::function<std::string_view(jint, jint, jint)> &biome,
+        const std::function<state_id(jint, jint, jint)> &get,
+        const std::function<void(jint, jint, jint, state_id)> &set,
+        const std::function<jint(jint, jint)> &world_surface) -> status;
+
+  private:
+    block_states *states_{nullptr};
+    generation_bounds bounds_{};
+    noise_registry *noises_{nullptr};
+    positional_random_factory *noise_random_{nullptr};
+    state_id default_block_{no_state};
+    state_id air_{no_state};
+    const noise_stack *surface_noise_{nullptr};
+    const noise_stack *surface_secondary_noise_{nullptr};
+    const noise_stack *clay_bands_offset_noise_{nullptr};
+    std::array<state_id, 192> clay_bands_{};
 };
 
 /// Compiles a decoded tree against one chunk context. References are resolved

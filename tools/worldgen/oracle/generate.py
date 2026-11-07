@@ -45,7 +45,8 @@ def read_pack_data(server_jar: pathlib.Path, path: str) -> dict:
             return json.loads(inner.read(path))
 
 
-def write_pack(preset: dict, biome: dict, pack: pathlib.Path) -> None:
+def write_pack(preset: dict, biome: dict, pack: pathlib.Path,
+               empty_material_rule: bool) -> None:
     pack.mkdir(parents=True, exist_ok=True)
     (pack / "pack.mcmeta").write_text(
         json.dumps(
@@ -67,11 +68,12 @@ def write_pack(preset: dict, biome: dict, pack: pathlib.Path) -> None:
     preset_dir.mkdir(parents=True)
     (preset_dir / "normal.json").write_text(json.dumps(preset, indent=2) + "\n")
 
-    rules = pack / "data/minecraft/worldgen/material_rule"
-    rules.mkdir(parents=True)
-    (rules / "overworld.json").write_text(
-        json.dumps({"type": "minecraft:sequence", "sequence": []}) + "\n"
-    )
+    if empty_material_rule:
+        rules = pack / "data/minecraft/worldgen/material_rule"
+        rules.mkdir(parents=True)
+        (rules / "overworld.json").write_text(
+            json.dumps({"type": "minecraft:sequence", "sequence": []}) + "\n"
+        )
 
     biome["carvers"] = []
     biome["features"] = []
@@ -163,6 +165,12 @@ def main() -> int:
         help="keep the normal multi-noise overworld (biome oracle) instead of "
         "generating a terrain-only world",
     )
+    parser.add_argument(
+        "--surface",
+        action="store_true",
+        help="keep the real material rule (surface oracle): fixed biome without "
+        "carvers/features, but surface materials are generated",
+    )
     args = parser.parse_args()
 
     root = args.output.resolve()
@@ -174,7 +182,8 @@ def main() -> int:
         biome = read_pack_data(
             args.server_jar, "data/minecraft/worldgen/biome/plains.json"
         )
-        write_pack(preset, biome, root / "world/datapacks/t2oracle")
+        write_pack(preset, biome, root / "world/datapacks/t2oracle",
+                   empty_material_rule=not args.surface)
     write_server_files(root, args.seed, args.port)
     run_server(root, args.server_jar, args.settle)
 

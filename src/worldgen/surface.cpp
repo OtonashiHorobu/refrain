@@ -4,10 +4,14 @@
 
 #include <refrain/worldgen/surface.hpp>
 
+#include <refrain/core/io.hpp>
+#include <refrain/data/json.hpp>
 #include <refrain/worldgen/mth.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -642,6 +646,289 @@ auto rule_compiler::compile(const rule &value) -> result<rule_evaluator> {
     }
     }
     return std::unexpected{fail("unknown material rule kind")};
+}
+
+} // namespace refrain::worldgen::surface
+
+namespace refrain::worldgen::surface {
+
+namespace {
+
+using noise_json = data::json::value;
+
+auto noise_double(const noise_json &node, std::string_view key, double fallback)
+    -> double {
+    const noise_json *found = node.find(key);
+    if (found == nullptr) {
+        return fallback;
+    }
+    const auto value = found->as_double();
+    return value ? *value : fallback;
+}
+
+auto noise_int(const noise_json &node, std::string_view key, jint fallback)
+    -> jint {
+    return static_cast<jint>(
+        noise_double(node, key, static_cast<double>(fallback)));
+}
+
+auto noise_bool(const noise_json &node, std::string_view key, bool fallback)
+    -> bool {
+    const noise_json *found = node.find(key);
+    if (found == nullptr) {
+        return fallback;
+    }
+    const auto value = found->as_bool();
+    return value ? *value : fallback;
+}
+
+auto collect_noise_documents(
+    std::string_view data_root,
+    std::vector<std::pair<std::string, std::string>> &out) -> status {
+    auto namespaces = core::io::list_directory(data_root);
+    if (!namespaces) {
+        return std::unexpected{namespaces.error()};
+    }
+    for (const auto &name : *namespaces) {
+        const std::string base =
+            std::string{data_root} + "/" + name + "/worldgen/noise";
+        if (!core::io::is_directory(base)) {
+            continue;
+        }
+        std::vector<std::pair<std::string, std::string>> pending;
+        auto walk = [&](auto &&self, std::string_view path,
+                        std::string_view prefix) -> status {
+            auto entries = core::io::list_directory(path);
+            if (!entries) {
+                return std::unexpected{entries.error()};
+            }
+            for (const auto &entry : *entries) {
+                const std::string child = std::string{path} + "/" + entry;
+                const std::string id_path =
+                    prefix.empty() ? entry : std::string{prefix} + "/" + entry;
+                if (core::io::is_directory(child)) {
+                    if (auto walked = self(self, child, id_path); !walked) {
+                        return walked;
+                    }
+                } else if (entry.ends_with(".json")) {
+                    auto text = core::io::read_text(child);
+                    if (!text) {
+                        return std::unexpected{text.error()};
+                    }
+                    pending.emplace_back(
+                        name + ":" + id_path.substr(0, id_path.size() - 5),
+                        std::move(*text));
+                }
+            }
+            return status_ok();
+        };
+        if (auto walked = walk(walk, base, ""); !walked) {
+            return walked;
+        }
+        std::sort(pending.begin(), pending.end());
+        for (auto &entry : pending) {
+            out.push_back(std::move(entry));
+        }
+    }
+    return status_ok();
+}
+
+} // namespace
+
+noise_registry::noise_registry(algorithm kind, jlong seed)
+    : factory_{new_positional_factory(kind, seed)} {}
+
+void noise_registry::add(std::string id, std::string_view json) {
+    auto parsed = noise_json::parse(json);
+    if (!parsed) {
+        return;
+    }
+    normal_noise_parameters parameters;
+    parameters.base_amplitude = noise_double(*parsed, "base_amplitude", 1.0);
+    parameters.base_octave = noise_int(*parsed, "base_octave", 0);
+    parameters.octave_count = noise_int(*parsed, "octave_count", 1);
+    parameters.normalize = noise_bool(*parsed, "normalize", true);
+    if (const noise_json *modifiers = parsed->find("amplitude_modifiers");
+        modifiers != nullptr && modifiers->is_array()) {
+        for (const auto &entry : *modifiers->as_array()) {
+            if (const auto value = entry.as_double()) {
+                parameters.amplitude_modifiers.push_back(*value);
+            }
+        }
+    }
+    auto source = factory_->from_hash_of(id);
+    noises_.emplace(std::move(id), normal_noise{parameters}.create(*source));
+}
+
+auto noise_registry::load(std::string_view data_root) -> status {
+    std::vector<std::pair<std::string, std::string>> documents;
+    if (auto loaded = collect_noise_documents(data_root, documents); !loaded) {
+        return loaded;
+    }
+    for (auto &[id, text] : documents) {
+        add(id, text);
+    }
+    return status_ok();
+}
+
+auto noise_registry::get(std::string_view id) -> const noise_stack * {
+    const auto found = noises_.find(std::string{id});
+    return found == noises_.end() ? nullptr : &found->second;
+}
+
+surface_system::surface_system(block_states &states, generation_bounds bounds,
+                               noise_registry &noises,
+                               positional_random_factory &noise_random,
+                               state_id default_block, state_id air)
+    : states_{&states}, bounds_{bounds}, noises_{&noises},
+      noise_random_{&noise_random}, default_block_{default_block}, air_{air},
+      surface_noise_{noises.get("minecraft:surface")},
+      surface_secondary_noise_{noises.get("minecraft:surface_secondary")},
+      clay_bands_offset_noise_{noises.get("minecraft:clay_bands_offset")} {
+    const state_id terracotta = states.intern("minecraft:terracotta");
+    const state_id orange = states.intern("minecraft:orange_terracotta");
+    const state_id yellow = states.intern("minecraft:yellow_terracotta");
+    const state_id brown = states.intern("minecraft:brown_terracotta");
+    const state_id red = states.intern("minecraft:red_terracotta");
+    const state_id white = states.intern("minecraft:white_terracotta");
+    const state_id light_gray =
+        states.intern("minecraft:light_gray_terracotta");
+    clay_bands_.fill(terracotta);
+    auto random = noise_random_->from_hash_of("minecraft:clay_bands");
+    for (jint i = 0; i < static_cast<jint>(clay_bands_.size()); ++i) {
+        i += random->next_int(5) + 1;
+        if (i < static_cast<jint>(clay_bands_.size())) {
+            clay_bands_[static_cast<std::size_t>(i)] = orange;
+        }
+    }
+    auto make_bands = [&](jint base_width, state_id state) {
+        const jint count = random->next_int(15 - 6 + 1) + 6;
+        for (jint i = 0; i < count; ++i) {
+            const jint width = base_width + random->next_int(3);
+            const jint start =
+                random->next_int(static_cast<jint>(clay_bands_.size()));
+            for (jint position = 0;
+                 start + position < static_cast<jint>(clay_bands_.size()) &&
+                 position < width;
+                 ++position) {
+                clay_bands_[static_cast<std::size_t>(start + position)] = state;
+            }
+        }
+    };
+    make_bands(1, yellow);
+    make_bands(2, brown);
+    make_bands(1, red);
+    const jint white_bands = random->next_int(15 - 9 + 1) + 9;
+    jint painted = 0;
+    for (jint start = 0;
+         painted < white_bands && start < static_cast<jint>(clay_bands_.size());
+         start += random->next_int(16) + 4) {
+        clay_bands_[static_cast<std::size_t>(start)] = white;
+        if (start - 1 > 0 && random->next_boolean()) {
+            clay_bands_[static_cast<std::size_t>(start - 1)] = light_gray;
+        }
+        if (start + 1 < static_cast<jint>(clay_bands_.size()) &&
+            random->next_boolean()) {
+            clay_bands_[static_cast<std::size_t>(start + 1)] = light_gray;
+        }
+        ++painted;
+    }
+}
+
+auto surface_system::surface_depth(jint x, jint z) -> jint {
+    const double value = static_cast<double>(surface_noise_->get(
+        static_cast<double>(x), 0.0, static_cast<double>(z)));
+    const double draw = noise_random_->at(x, 0, z)->next_double();
+    return static_cast<jint>(value * 2.75 + 3.0 + draw * 0.25);
+}
+
+auto surface_system::surface_secondary(jint x, jint z) -> double {
+    return static_cast<double>(surface_secondary_noise_->get(
+        static_cast<double>(x), 0.0, static_cast<double>(z)));
+}
+
+auto surface_system::band(jint x, jint y, jint z) -> state_id {
+    const float scaled =
+        clay_bands_offset_noise_->get(static_cast<double>(x), 0.0,
+                                      static_cast<double>(z)) *
+        4.0F;
+    const jint offset =
+        static_cast<jint>(std::floor(static_cast<double>(scaled) + 0.5));
+    const auto length = static_cast<jint>(clay_bands_.size());
+    const jint index = floor_mod(y + offset + length, length);
+    return clay_bands_[static_cast<std::size_t>(index)];
+}
+
+auto surface_system::build_surface(
+    material_context &context, const rule_evaluator &rule,
+    const std::function<std::string_view(jint, jint, jint)> &biome,
+    const std::function<state_id(jint, jint, jint)> &get,
+    const std::function<void(jint, jint, jint, state_id)> &set,
+    const std::function<jint(jint, jint)> &world_surface) -> status {
+    const jint min_y = bounds_.min_y;
+    const jint max_y = bounds_.min_y + bounds_.gen_depth - 1;
+    for (jint x = 0; x < 16; ++x) {
+        for (jint z = 0; z < 16; ++z) {
+            const jint block_x = bounds_.chunk_min_x + x;
+            const jint block_z = bounds_.chunk_min_z + z;
+            const jint starting_height = world_surface(x, z) + 1;
+            const auto surface_biome = biome(block_x, starting_height, block_z);
+            if (surface_biome == "minecraft:eroded_badlands" ||
+                surface_biome == "minecraft:frozen_ocean" ||
+                surface_biome == "minecraft:deep_frozen_ocean") {
+                return std::unexpected{
+                    make_error(error_code::unsupported,
+                               "surface biome needs an extension")};
+            }
+            const jint height = world_surface(x, z) + 1;
+            const jint gradient_x = world_surface(std::min(x + 1, 15), z) -
+                                    world_surface(std::max(x - 1, 0), z);
+            const jint gradient_z = world_surface(x, std::min(z + 1, 15)) -
+                                    world_surface(x, std::max(z - 1, 0));
+            context.update_xz(block_x, block_z, gradient_x, gradient_z);
+            jint stone_above = 0;
+            jint water_height = std::numeric_limits<jint>::min();
+            jint next_ceiling_stone_y = std::numeric_limits<jint>::max();
+
+            for (jint y = height; y >= min_y; --y) {
+                const state_id old = get(block_x, y, block_z);
+                const auto old_properties = states_->properties(old);
+                if (old_properties.air) {
+                    stone_above = 0;
+                    water_height = std::numeric_limits<jint>::min();
+                } else if (old_properties.fluid) {
+                    if (water_height == std::numeric_limits<jint>::min()) {
+                        water_height = y + 1;
+                    }
+                } else {
+                    if (next_ceiling_stone_y >= y) {
+                        next_ceiling_stone_y = -1024;
+                        for (jint lookahead = y - 1; lookahead >= min_y - 1;
+                             --lookahead) {
+                            const state_id next =
+                                get(block_x, lookahead, block_z);
+                            const auto next_properties =
+                                states_->properties(next);
+                            if (next_properties.air || next_properties.fluid) {
+                                next_ceiling_stone_y = lookahead + 1;
+                                break;
+                            }
+                        }
+                    }
+                    ++stone_above;
+                    const jint stone_below = y - next_ceiling_stone_y + 1;
+                    context.update_y(stone_above, stone_below, water_height, y);
+                    if (y >= min_y && y <= max_y) {
+                        const auto state = rule(block_x, y, block_z);
+                        if (state.has_value()) {
+                            set(block_x, y, block_z, *state);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return status_ok();
 }
 
 } // namespace refrain::worldgen::surface

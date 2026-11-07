@@ -26,6 +26,18 @@ REFRAIN_VANILLA_REGION=/tmp/t2oracle/world/dimensions/minecraft/overworld/region
 match `--seed`. The test reads chunks `(0,0)`, `(1,0)`, `(0,1)`, `(1,1)` and
 `(2,2)`; `generate.py` force-loads that 3x3 area before saving.
 
+The surface oracle keeps the real material rule but pins the overworld to the
+fixed `oracle:terrain` biome (no carvers or features), so the saved chunk is
+terrain fill plus the real surface pass:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --surface \
+    --server-jar /path/to/server.jar --seed 12345 --output /tmp/t2surface
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_SURFACE_REGION=/tmp/t2surface/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+    ./build/Release/bin/refrain-tests
+```
+
 The biome oracle uses a plain overworld instead: `--plain` skips the data pack,
 so the normal multi-noise biome source writes real biomes (surface rules,
 features and structures still run but do not affect the biome grid):

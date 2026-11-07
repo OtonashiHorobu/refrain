@@ -40,6 +40,9 @@ struct noise_settings {
     jint sea_level{63};
     bool aquifers{false};
     aquifer_config aquifer{}; ///< set when `aquifers` is present
+    /// The loaded documents, so callers can decode further functions (ore vein
+    /// densities, for example) with the same seed and references.
+    density_documents documents{};
 };
 
 /// Loads every density-function and noise document under the datapack's
