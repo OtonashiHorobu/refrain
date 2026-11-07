@@ -132,7 +132,50 @@ auto child(const data::nbt::compound *entries, std::string_view key)
     return found == entries->end() ? nullptr : &found->second;
 }
 
-auto canonical_state_name(std::string_view name) -> std::string {
+auto canonical_state_name(std::string_view input) -> std::string {
+    // Palette strings sort properties by name; normalise both sides before
+    // the state-specific default elisions below.
+    const auto canon_sort = [](std::string text) -> std::string {
+        const auto open = text.find('[');
+        if (open == std::string::npos) {
+            return text;
+        }
+        const auto close = text.rfind(']');
+        if (close == std::string::npos || close < open) {
+            return text;
+        }
+        std::vector<std::pair<std::string, std::string>> properties;
+        std::string_view body{text.data() + open + 1, close - open - 1};
+        while (!body.empty()) {
+            const auto comma = body.find(',');
+            const auto entry = body.substr(0, comma);
+            const auto equals = entry.find('=');
+            if (equals != std::string_view::npos) {
+                properties.emplace_back(std::string{entry.substr(0, equals)},
+                                        std::string{entry.substr(equals + 1)});
+            }
+            if (comma == std::string_view::npos) {
+                break;
+            }
+            body = body.substr(comma + 1);
+        }
+        std::sort(properties.begin(), properties.end());
+        std::string rebuilt = text.substr(0, open);
+        rebuilt.push_back('[');
+        for (std::size_t i = 0; i < properties.size(); ++i) {
+            if (i != 0) {
+                rebuilt.push_back(',');
+            }
+            rebuilt.append(properties[i].first);
+            rebuilt.push_back('=');
+            rebuilt.append(properties[i].second);
+        }
+        rebuilt.push_back(']');
+        return rebuilt;
+    };
+    const std::string owned = canon_sort(std::string{input});
+    std::string_view name{owned};
+
     if (name.size() > 8 && name.ends_with("[axis=y]")) {
         const auto base = name.substr(0, name.size() - 8);
         if (base.ends_with("_log") || base.ends_with("_stem") ||
@@ -942,13 +985,16 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                     const bool fluid = water || block == "minecraft:lava" ||
                                        block == "minecraft:bubble_column";
                     const bool leaves = block.ends_with("_leaves");
+                    const bool non_solid = block == "minecraft:glow_lichen" ||
+                                           block == "minecraft:sculk_vein";
                     return block_registry
-                        .intern(key, {.air = air,
-                                      .fluid = fluid,
-                                      .water = water,
-                                      .blocks_motion = !air && !fluid,
-                                      .blocks_motion_no_leaves =
-                                          !air && !fluid && !leaves})
+                        .intern(key,
+                                {.air = air,
+                                 .fluid = fluid,
+                                 .water = water,
+                                 .blocks_motion = !air && !fluid && !non_solid,
+                                 .blocks_motion_no_leaves =
+                                     !air && !fluid && !leaves && !non_solid})
                         .value_or(no_block_state);
                 };
                 feature::feature_context feature_ctx{.placement =

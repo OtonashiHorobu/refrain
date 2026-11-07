@@ -451,6 +451,7 @@ def main() -> int:
                 "oracle:fossil",
                 "oracle:void_start_platform",
                 "oracle:end_platform",
+                "oracle:glow_lichen",
             ]
         )
         (biome_dir / "feature.json").write_text(
@@ -619,6 +620,28 @@ def main() -> int:
                         {
                             "type": "minecraft:fixed_placement",
                             "positions": [[8, 50, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        glow_lichen = read_pack_data(
+            args.server_jar, "data/minecraft/worldgen/feature/glow_lichen.json"
+        )
+        glow_lichen["chance_of_spreading"] = 1.0
+        (feature_dir / "glow_lichen.json").write_text(
+            json.dumps(glow_lichen, indent=2) + "\n"
+        )
+        (placed_dir / "glow_lichen.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:glow_lichen",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[9, 63, 1]],
                         }
                     ],
                 },
