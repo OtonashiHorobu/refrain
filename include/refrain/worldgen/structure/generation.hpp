@@ -8,12 +8,23 @@
 #pragma once
 
 #include <refrain/worldgen/structure/start.hpp>
+#include <refrain/worldgen/structure/template.hpp>
 
 namespace refrain::worldgen::structure {
 
 /// `BuriedTreasureStructure.findGenerationPoint`: a single 1x1x1 piece at the
 /// chunk centre column, y=90.
 [[nodiscard]] auto buried_treasure_start(const chunk_pos &chunk)
+    -> structure_start;
+
+class structure_template_manager;
+
+/// `IglooPieces.addPieces`: the top template at y=90 and, for half the start
+/// seeds, a ladder column and a basement below it. The pieces carry the
+/// template id, rotation and pivot; their final y is resolved when the piece
+/// is placed in a chunk.
+[[nodiscard]] auto igloo_start(const chunk_pos &chunk, jlong seed,
+                               structure_template_manager &templates)
     -> structure_start;
 
 } // namespace refrain::worldgen::structure

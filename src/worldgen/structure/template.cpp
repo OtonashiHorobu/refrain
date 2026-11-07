@@ -485,6 +485,14 @@ auto structure_template_manager::get_or_create(std::string_view id)
 auto place_template(chunk_region &region, block_state_registry &states,
                     const structure_template &templ, const block_pos &origin,
                     const template_transform &transform) -> std::size_t {
+    return place_template(region, states, templ, origin,
+                          template_place_settings{.transform = transform});
+}
+
+auto place_template(chunk_region &region, block_state_registry &states,
+                    const structure_template &templ, const block_pos &origin,
+                    const template_place_settings &settings) -> std::size_t {
+    const auto &transform = settings.transform;
     if (templ.palettes.empty()) {
         return 0;
     }
@@ -507,16 +515,32 @@ auto place_template(chunk_region &region, block_state_registry &states,
         const block_pos world{.x = origin.x + relative.x,
                               .y = origin.y + relative.y,
                               .z = origin.z + relative.z};
-        const auto state = transform_state(states, block.state, transform);
-        if (block.nbt != nullptr) {
+        if (settings.bounds.has_value() && !settings.bounds->contains(world)) {
+            continue;
+        }
+        auto processed = block;
+        bool dropped = false;
+        for (const auto *processor : settings.processors) {
+            const auto result = processor->process(states, processed, world);
+            if (!result) {
+                dropped = true;
+                break;
+            }
+            processed = *result;
+        }
+        if (dropped) {
+            continue;
+        }
+        const auto state = transform_state(states, processed.state, transform);
+        if (processed.nbt != nullptr) {
             (void)region.set_block_state(world.x, world.y, world.z, barrier);
         }
         if (!region.set_block_state(world.x, world.y, world.z, state)) {
             continue;
         }
         ++placed;
-        if (block.nbt != nullptr) {
-            auto entity = *block.nbt;
+        if (processed.nbt != nullptr) {
+            auto entity = *processed.nbt;
             entity["x"] = data::nbt::value{world.x};
             entity["y"] = data::nbt::value{world.y};
             entity["z"] = data::nbt::value{world.z};
@@ -525,6 +549,38 @@ auto place_template(chunk_region &region, block_state_registry &states,
         }
     }
     return placed;
+}
+
+auto template_bounding_box(const structure_template &templ,
+                           const template_transform &transform,
+                           const block_pos &origin) -> template_bounds {
+    const auto low =
+        transform_position(block_pos{.x = 0, .y = 0, .z = 0}, transform);
+    const auto high = transform_position(block_pos{.x = templ.size_x - 1,
+                                                   .y = templ.size_y - 1,
+                                                   .z = templ.size_z - 1},
+                                         transform);
+    template_bounds bounds{
+        .min_x = origin.x + std::min(low.x, high.x),
+        .min_y = origin.y + std::min(low.y, high.y),
+        .min_z = origin.z + std::min(low.z, high.z),
+        .max_x = origin.x + std::max(low.x, high.x),
+        .max_y = origin.y + std::max(low.y, high.y),
+        .max_z = origin.z + std::max(low.z, high.z),
+    };
+    return bounds;
+}
+
+auto block_ignore_processor::process(const block_state_registry &states,
+                                     const template_block_info &info,
+                                     const block_pos &world) const
+    -> std::optional<template_block_info> {
+    (void)world;
+    const auto name = state_block_name(states.name(info.state));
+    if (std::find(blocks_.begin(), blocks_.end(), name) != blocks_.end()) {
+        return std::nullopt;
+    }
+    return info;
 }
 
 auto transform_position(const block_pos &pos,

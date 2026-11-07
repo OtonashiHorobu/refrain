@@ -43,6 +43,15 @@ struct structure_piece_record {
     jint max_y{0};
     jint max_z{0};
     jint orientation{-1};
+    std::string template_id{};
+    jint template_x{0};
+    jint template_y{0};
+    jint template_z{0};
+    jint template_rotation{0};
+    jint template_mirror{0};
+    jint template_pivot_x{0};
+    jint template_pivot_y{0};
+    jint template_pivot_z{0};
 };
 
 struct structure_start {

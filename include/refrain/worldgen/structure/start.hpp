@@ -33,6 +33,14 @@ struct structure_piece {
     std::string type{};
     structure_bbox bounds{};
     jint orientation{-1}; ///< `Direction.get2DDataValue`, -1 when unset
+
+    /// Template pieces (`minecraft:igl`) carry the template id and the
+    /// placement transform; procedural pieces leave these empty.
+    std::string template_id{};
+    block_pos template_origin{};
+    jint template_rotation{0}; ///< 0 none, 1 clockwise 90, 2 180, 3 ccw 90
+    jint template_mirror{0};
+    block_pos template_pivot{};
 };
 
 struct structure_start {

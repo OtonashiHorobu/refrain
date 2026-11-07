@@ -256,7 +256,16 @@ void write_structure_stage(proto_chunk &chunk,
                 .max_x = piece.bounds.max_x,
                 .max_y = piece.bounds.max_y,
                 .max_z = piece.bounds.max_z,
-                .orientation = piece.orientation});
+                .orientation = piece.orientation,
+                .template_id = piece.template_id,
+                .template_x = piece.template_origin.x,
+                .template_y = piece.template_origin.y,
+                .template_z = piece.template_origin.z,
+                .template_rotation = piece.template_rotation,
+                .template_mirror = piece.template_mirror,
+                .template_pivot_x = piece.template_pivot.x,
+                .template_pivot_y = piece.template_pivot.y,
+                .template_pivot_z = piece.template_pivot.z});
         }
         chunk.add_structure_start(std::move(record));
     }

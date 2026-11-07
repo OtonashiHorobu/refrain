@@ -5,6 +5,7 @@
 #include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/structure/generation.hpp>
 #include <refrain/worldgen/structure/template.hpp>
 
 #include <boost/ut.hpp>
@@ -355,6 +356,168 @@ suite<"worldgen/template"> template_tests = [] {
         expect(turned_chunk.state_at(5, 3, 6) == turned_chest);
         expect(registry.name(turned_chest) ==
                "minecraft:chest[facing=west,type=single,waterlogged=false]");
+    };
+
+    "placement clips to bounds and drops ignored blocks"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto marker = registry.intern("minecraft:structure_block[mode=load]",
+                                      {.air = false,
+                                       .blocks_motion = true,
+                                       .blocks_motion_no_leaves = true});
+        auto chest = registry.intern(
+            "minecraft:chest[facing=north,type=single,waterlogged=false]",
+            {.air = false,
+             .blocks_motion = true,
+             .blocks_motion_no_leaves = true});
+        expect(stone && marker && chest);
+        if (!stone || !marker || !chest) {
+            return;
+        }
+
+        data::nbt::compound root;
+        root["size"] = ints({3, 1, 1});
+        auto palette = data::nbt::make_list(data::nbt::tag_type::compound);
+        (void)palette.push(data::nbt::value{palette_entry("minecraft:stone")});
+        data::nbt::compound marker_properties;
+        marker_properties["mode"] = data::nbt::value{std::string{"load"}};
+        (void)palette.push(data::nbt::value{palette_entry(
+            "minecraft:structure_block", std::move(marker_properties))});
+        data::nbt::compound chest_properties;
+        chest_properties["facing"] = data::nbt::value{std::string{"north"}};
+        (void)palette.push(data::nbt::value{
+            palette_entry("minecraft:chest", std::move(chest_properties))});
+        root["palette"] = std::move(palette);
+        data::nbt::compound chest_nbt;
+        chest_nbt["id"] = data::nbt::value{std::string{"minecraft:chest"}};
+        auto blocks = data::nbt::make_list(data::nbt::tag_type::compound);
+        (void)blocks.push(data::nbt::value{block_entry({0, 0, 0}, 0)});
+        (void)blocks.push(data::nbt::value{block_entry({1, 0, 0}, 1)});
+        (void)blocks.push(
+            data::nbt::value{block_entry({2, 0, 0}, 2, chest_nbt)});
+        root["blocks"] = std::move(blocks);
+
+        const auto loaded =
+            load_structure_template(registry, data::nbt::value{root});
+        expect(loaded.has_value());
+        if (!loaded) {
+            return;
+        }
+
+        block_ignore_processor ignore{
+            std::vector<std::string>{"minecraft:structure_block"}};
+        template_place_settings clipped{};
+        clipped.bounds = template_bounds{.min_x = 0,
+                                         .min_y = 0,
+                                         .min_z = 0,
+                                         .max_x = 1,
+                                         .max_y = 0,
+                                         .max_z = 0};
+        clipped.processors = {&ignore};
+        proto_chunk bounded_chunk{registry, 0, 0, 0, 16};
+        chunk_region bounded_region{bounded_chunk, 0};
+        expect(place_template(bounded_region, registry, *loaded,
+                              block_pos{.x = 0, .y = 0, .z = 0},
+                              clipped) == 1U);
+        expect(bounded_chunk.state_at(0, 0, 0) == *stone);
+        expect(bounded_chunk.state_at(1, 0, 0) == registry.air());
+        expect(bounded_chunk.state_at(2, 0, 0) == registry.air());
+
+        template_place_settings processed{};
+        processed.processors = {&ignore};
+        proto_chunk chunk{registry, 0, 0, 0, 16};
+        chunk_region region{chunk, 0};
+        expect(place_template(region, registry, *loaded,
+                              block_pos{.x = 0, .y = 0, .z = 0},
+                              processed) == 2U);
+        expect(chunk.state_at(0, 0, 0) == *stone);
+        expect(chunk.state_at(1, 0, 0) == registry.air());
+        expect(chunk.state_at(2, 0, 0) == *chest);
+    };
+
+    "an igloo start places the top last and the basement below"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(stone.has_value());
+        if (!stone) {
+            return;
+        }
+        const auto directory =
+            std::filesystem::path{core::io::temp_directory()} /
+            "refrain-igloo-starts";
+        std::filesystem::remove_all(directory);
+        std::filesystem::create_directories(directory / "minecraft" /
+                                            "structure" / "igloo");
+        const auto write_template = [&](std::string_view name, jint size_x,
+                                        jint size_y, jint size_z) {
+            data::nbt::compound root;
+            root["size"] = ints({size_x, size_y, size_z});
+            auto palette = data::nbt::make_list(data::nbt::tag_type::compound);
+            (void)palette.push(
+                data::nbt::value{palette_entry("minecraft:stone")});
+            root["palette"] = std::move(palette);
+            auto blocks = data::nbt::make_list(data::nbt::tag_type::compound);
+            (void)blocks.push(data::nbt::value{block_entry({0, 0, 0}, 0)});
+            root["blocks"] = std::move(blocks);
+            return data::nbt::write_file(
+                (directory / "minecraft" / "structure" / "igloo" /
+                 (std::string{name} + ".nbt"))
+                    .string(),
+                data::nbt::value{root}, "", data::nbt::compression::gzip);
+        };
+        expect(write_template("top", 7, 5, 8).has_value());
+        expect(write_template("middle", 3, 3, 3).has_value());
+        expect(write_template("bottom", 7, 6, 9).has_value());
+
+        structure_template_manager manager{directory.string(), registry};
+        bool saw_plain = false;
+        bool saw_basement = false;
+        for (jint chunk_x = 0; chunk_x < 8; ++chunk_x) {
+            const auto start =
+                igloo_start(chunk_pos{.x = chunk_x, .z = 0}, 12345, manager);
+            expect(start.structure == "minecraft:igloo");
+            expect(!start.pieces.empty());
+            if (start.pieces.empty()) {
+                continue;
+            }
+            const auto &top = start.pieces.back();
+            expect(top.template_id == "minecraft:igloo/top");
+            expect(top.template_origin.x == chunk_x * 16);
+            expect(top.template_origin.y == 90);
+            expect(top.template_origin.z == 0);
+            expect(top.template_rotation >= 0 && top.template_rotation <= 3);
+            if (start.pieces.size() == 1) {
+                saw_plain = true;
+                continue;
+            }
+            saw_basement = true;
+            const auto depth = static_cast<jint>(start.pieces.size()) - 1;
+            expect(depth >= 4 && depth <= 11);
+            const auto &bottom = start.pieces.front();
+            expect(bottom.template_id == "minecraft:igloo/bottom");
+            expect(bottom.template_origin.x == chunk_x * 16);
+            expect(bottom.template_origin.y == 87 - depth * 3);
+            expect(bottom.template_origin.z == -2);
+            for (jint i = 0; i < depth - 1; ++i) {
+                const auto &middle =
+                    start.pieces[static_cast<std::size_t>(i + 1)];
+                expect(middle.template_id == "minecraft:igloo/middle");
+                expect(middle.template_origin.x == chunk_x * 16 + 2);
+                expect(middle.template_origin.y == 87 - i * 3);
+                expect(middle.template_origin.z == 4);
+            }
+            expect(start.bounds.min_y <= bottom.template_origin.y);
+            expect(start.bounds.max_y >= 94);
+        }
+        expect(saw_plain);
+        expect(saw_basement);
+        std::filesystem::remove_all(directory);
     };
 
     "unknown palette names and indices resolve to air"_test = [] {

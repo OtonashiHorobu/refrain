@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -79,6 +80,72 @@ struct template_transform {
     block_pos pivot{};
 };
 
+/// Axis-aligned block box used to clip a placement to a chunk.
+struct template_bounds {
+    jint min_x{0};
+    jint min_y{0};
+    jint min_z{0};
+    jint max_x{0};
+    jint max_y{0};
+    jint max_z{0};
+
+    [[nodiscard]] auto contains(const block_pos &pos) const -> bool {
+        return pos.x >= min_x && pos.x <= max_x && pos.y >= min_y &&
+               pos.y <= max_y && pos.z >= min_z && pos.z <= max_z;
+    }
+};
+
+/// `StructureTemplate.getBoundingBox`: the transformed corners of the template
+/// moved to `origin`, normalised into a box.
+[[nodiscard]] auto template_bounding_box(const structure_template &templ,
+                                         const template_transform &transform,
+                                         const block_pos &origin)
+    -> template_bounds;
+
+/// One block-level processor. `process` returns the replacement entry or
+/// nothing when the block is dropped.
+class template_block_processor {
+  public:
+    template_block_processor() = default;
+    template_block_processor(const template_block_processor &) = delete;
+    auto operator=(const template_block_processor &)
+        -> template_block_processor & = delete;
+    template_block_processor(template_block_processor &&) = delete;
+    auto operator=(template_block_processor &&)
+        -> template_block_processor & = delete;
+    virtual ~template_block_processor() = default;
+
+    [[nodiscard]] virtual auto process(const block_state_registry &states,
+                                       const template_block_info &info,
+                                       const block_pos &world) const
+        -> std::optional<template_block_info> = 0;
+    [[nodiscard]] virtual auto evaluates_entire_piece_state() const -> bool {
+        return false;
+    }
+};
+
+/// `BlockIgnoreProcessor`: drops blocks whose block name is listed.
+class block_ignore_processor final : public template_block_processor {
+  public:
+    explicit block_ignore_processor(std::vector<std::string> blocks)
+        : blocks_{std::move(blocks)} {}
+
+    [[nodiscard]] auto process(const block_state_registry &states,
+                               const template_block_info &info,
+                               const block_pos &world) const
+        -> std::optional<template_block_info> override;
+
+  private:
+    std::vector<std::string> blocks_{};
+};
+
+struct template_place_settings {
+    template_transform transform{};
+    std::optional<template_bounds> bounds{};
+    std::vector<const template_block_processor *> processors{};
+    liquid_settings liquids{liquid_settings::apply_waterlogging};
+};
+
 /// `StructureTemplate.transform(BlockPos, Mirror, Rotation, pivot)`. Mirroring
 /// is applied to the local position first, then the rotation; the pivot only
 /// participates in the rotated branches.
@@ -99,6 +166,12 @@ struct template_transform {
 /// `region`. Blocks are mirrored then rotated, block entities are written after
 /// their block, and writes outside the writable region are dropped. Returns
 /// the number of blocks that were written.
+[[nodiscard]] auto
+place_template(chunk_region &region, block_state_registry &states,
+               const structure_template &templ, const block_pos &origin,
+               const template_place_settings &settings) -> std::size_t;
+
+/// Convenience overload without processors or clipping.
 [[nodiscard]] auto
 place_template(chunk_region &region, block_state_registry &states,
                const structure_template &templ, const block_pos &origin,
