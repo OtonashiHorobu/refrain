@@ -54,6 +54,15 @@ class trunk_vine_decorator final : public tree_decorator {
     void place(const tree_decorator_context &context) const override;
 };
 
+class cocoa_decorator final : public tree_decorator {
+  public:
+    explicit cocoa_decorator(float probability) : probability_{probability} {}
+    void place(const tree_decorator_context &context) const override;
+
+  private:
+    float probability_{0.0F};
+};
+
 class place_on_ground_decorator final : public tree_decorator {
   public:
     place_on_ground_decorator(jint tries, jint radius, jint height,

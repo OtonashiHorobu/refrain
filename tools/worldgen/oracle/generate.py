@@ -907,6 +907,28 @@ def main() -> int:
             )
             + "\n"
         )
+        jungle_tree = read_pack_data(
+            args.server_jar,
+            "data/minecraft/worldgen/feature/jungle_tree.json",
+        )
+        (minecraft_feature / "jungle_tree.json").write_text(
+            json.dumps(jungle_tree, indent=2) + "\n"
+        )
+        (placed_dir / "real_jungle_tree.json").write_text(
+            json.dumps(
+                {
+                    "feature": "minecraft:jungle_tree",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 110, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
         (placed_dir / "real_jungle.json").write_text(
             json.dumps(
                 {
