@@ -279,6 +279,70 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                       *state, std::move(*predicate)));
             continue;
         }
+        if (*type == "minecraft:block_column") {
+            const auto *layers_value = document.document.find("layers");
+            const auto *direction_value = document.document.find("direction");
+            const auto *allowed_value =
+                document.document.find("allowed_placement");
+            const auto *prioritize_value =
+                document.document.find("prioritize_tip");
+            if (layers_value == nullptr || !layers_value->is_array() ||
+                direction_value == nullptr || allowed_value == nullptr ||
+                prioritize_value == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "block column is incomplete")};
+            }
+            const auto direction_name = direction_value->as_string();
+            if (!direction_name) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "column direction is not a string")};
+            }
+            block_direction direction = block_direction::up;
+            if (*direction_name == "up") {
+                direction = block_direction::up;
+            } else if (*direction_name == "down") {
+                direction = block_direction::down;
+            } else if (*direction_name == "north") {
+                direction = block_direction::north;
+            } else if (*direction_name == "south") {
+                direction = block_direction::south;
+            } else if (*direction_name == "west") {
+                direction = block_direction::west;
+            } else if (*direction_name == "east") {
+                direction = block_direction::east;
+            } else {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "unknown column direction")};
+            }
+            std::vector<block_column_feature::layer> layers;
+            for (const auto &entry : *layers_value->as_array()) {
+                const auto *height = entry.find("height");
+                const auto *provider = entry.find("provider");
+                if (height == nullptr || provider == nullptr) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error, "column layer is incomplete")};
+                }
+                auto height_provider = provider::int_provider::decode(*height);
+                auto state = decode_simple_state(*provider, *states_);
+                if (!height_provider || !state) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error, "column layer is invalid")};
+                }
+                layers.push_back(block_column_feature::layer{
+                    .height = std::move(*height_provider), .state = *state});
+            }
+            auto allowed = decode_block_predicate(*allowed_value, *states_);
+            const auto prioritize = prioritize_value->as_bool();
+            if (!allowed || !prioritize) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "block column is invalid")};
+            }
+            features_.emplace(id, std::make_unique<block_column_feature>(
+                                      std::move(layers), direction,
+                                      std::move(*allowed), *prioritize));
+            continue;
+        }
         return std::unexpected{
             make_error(error_code::unsupported, "unsupported feature type")};
     }

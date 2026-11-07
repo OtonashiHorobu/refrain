@@ -143,4 +143,44 @@ class block_blob_feature final : public feature {
     std::unique_ptr<block_predicate> can_place_on_{};
 };
 
+enum class block_direction : std::uint8_t {
+    down = 0,
+    up = 1,
+    north = 2,
+    south = 3,
+    west = 4,
+    east = 5,
+};
+
+[[nodiscard]] auto offset(block_direction direction, const block_pos &pos)
+    -> block_pos;
+
+/// `BlockColumnFeature`: layered columns along one axis.
+class block_column_feature final : public feature {
+  public:
+    struct layer {
+        std::unique_ptr<provider::int_provider> height{};
+        block_state_id state{no_block_state};
+    };
+
+    block_column_feature(std::vector<layer> layers, block_direction direction,
+                         std::unique_ptr<block_predicate> allowed_placement,
+                         bool prioritize_tip)
+        : layers_{std::move(layers)}, direction_{direction},
+          allowed_placement_{std::move(allowed_placement)},
+          prioritize_tip_{prioritize_tip} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    static void truncate(std::vector<jint> &heights, jint total_height,
+                         jint new_height, bool prioritize_tip);
+
+    std::vector<layer> layers_{};
+    block_direction direction_{block_direction::up};
+    std::unique_ptr<block_predicate> allowed_placement_{};
+    bool prioritize_tip_{false};
+};
+
 } // namespace refrain::worldgen::feature
