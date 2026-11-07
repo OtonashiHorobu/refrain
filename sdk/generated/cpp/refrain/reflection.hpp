@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 1ef1cd5557049b38
+// Schema hash: a05c72a592e0c44c
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -1665,6 +1665,14 @@ template <> struct custom_traits<::refrain::protocol::v777::play::serverbound::c
     static constexpr auto fields = std::make_tuple();
 };
 
+/// Generated RSC packet 'refrain::protocol::v777::play::serverbound::command_suggestion'.
+template <> struct custom_traits<::refrain::protocol::v777::play::serverbound::command_suggestion> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::serverbound::command_suggestion";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"id", &::refrain::protocol::v777::play::serverbound::command_suggestion::id},
+        refrain::reflect::custom_field{"command", &::refrain::protocol::v777::play::serverbound::command_suggestion::command});
+};
+
 /// Generated RSC packet 'refrain::protocol::v777::play::serverbound::configuration_acknowledged'.
 template <> struct custom_traits<::refrain::protocol::v777::play::serverbound::configuration_acknowledged> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::serverbound::configuration_acknowledged";
@@ -2143,12 +2151,12 @@ template <> struct custom_traits<::refrain::protocol::v777::wire::wire_data> {
         refrain::reflect::custom_field{"key_signature", &::refrain::protocol::v777::wire::wire_data::key_signature});
 };
 
-/// Generated RSC struct 'refrain::protocol::v777::wire::wire_type_85'.
-template <> struct custom_traits<::refrain::protocol::v777::wire::wire_type_85> {
-    static constexpr std::string_view type_name = "refrain::protocol::v777::wire::wire_type_85";
+/// Generated RSC struct 'refrain::protocol::v777::wire::wire_type_86'.
+template <> struct custom_traits<::refrain::protocol::v777::wire::wire_type_86> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::wire::wire_type_86";
     static constexpr auto fields = std::make_tuple(
-        refrain::reflect::custom_field{"added_components", &::refrain::protocol::v777::wire::wire_type_85::added_components},
-        refrain::reflect::custom_field{"removed_components", &::refrain::protocol::v777::wire::wire_type_85::removed_components});
+        refrain::reflect::custom_field{"added_components", &::refrain::protocol::v777::wire::wire_type_86::added_components},
+        refrain::reflect::custom_field{"removed_components", &::refrain::protocol::v777::wire::wire_type_86::removed_components});
 };
 
 /// Generated RSC struct 'refrain::protocol::v777::wire::wire_actual_item'.

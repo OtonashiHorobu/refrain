@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 1ef1cd5557049b38
+// Schema hash: a05c72a592e0c44c
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_HPP
@@ -22,7 +22,7 @@
 namespace refrain::protocol::v777 {
 
 /// Packets declared for this stage, ordered by flow and id.
-inline constexpr std::array<packet_descriptor, 186> play_packets{{
+inline constexpr std::array<packet_descriptor, 187> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x0, "bundle_delimiter"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x1, "add_entity"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::clientbound, 0x2, "animate"},
@@ -157,6 +157,7 @@ inline constexpr std::array<packet_descriptor, 186> play_packets{{
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::serverbound, 0xC, "client_command"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::serverbound, 0xD, "client_tick_end"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::serverbound, 0xE, "client_information"},
+  packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::serverbound, 0xF, "command_suggestion"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::serverbound, 0x10, "configuration_acknowledged"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::serverbound, 0x11, "container_button_click"},
   packet_descriptor{::refrain::net::connection_state::play, ::refrain::net::packet_flow::serverbound, 0x12, "container_click"},

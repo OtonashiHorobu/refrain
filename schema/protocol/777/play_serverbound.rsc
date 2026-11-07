@@ -145,6 +145,11 @@ packet client_command = 12 {
 packet client_tick_end = 13 {
 }
 
+packet command_suggestion = 15 {
+    #[varint] id: i32;
+    #[max(32500)] command: string;
+}
+
 packet configuration_acknowledged = 16 {
 }
 

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 1ef1cd5557049b38
+// Schema hash: a05c72a592e0c44c
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
@@ -249,6 +249,16 @@ struct client_tick_end {
     static constexpr std::uint16_t packet_id = 0xD;
     static constexpr std::string_view packet_name = "client_tick_end";
 
+};
+
+struct command_suggestion {
+    static constexpr std::uint16_t packet_id = 0xF;
+    static constexpr std::string_view packet_name = "command_suggestion";
+
+    // attributes: #[varint]
+    std::int32_t id;
+    // attributes: #[max(32500)]
+    std::string command;
 };
 
 struct configuration_acknowledged {
@@ -1462,6 +1472,36 @@ struct custom_click_action {
 [[nodiscard]] inline auto decode_client_tick_end(::refrain::net::reader &in, client_tick_end &value) -> ::refrain::status {
   static_cast<void>(in);
   static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_command_suggestion(::refrain::net::writer &out, const command_suggestion &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.id));
+  }
+  {
+    if (auto written = out.write_string(value.command, 32500); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_command_suggestion(::refrain::net::reader &in, command_suggestion &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.id = static_cast<decltype(value.id)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_string(32500);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.command = std::move(*value_0);
+  }
   return ::refrain::status_ok();
 }
 
