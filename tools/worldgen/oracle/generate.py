@@ -353,6 +353,7 @@ def main() -> int:
             "oracle:moss_blob",
             "oracle:stone_column",
             "oracle:moss_pile",
+            "oracle:oak_tree",
         ]
         biome_dir = pack / "data/oracle/worldgen/biome"
         biome_dir.mkdir(parents=True)
