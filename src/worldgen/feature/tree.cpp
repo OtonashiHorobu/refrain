@@ -75,6 +75,64 @@ auto tree_feature::size_at_height(jint tree_height, jint y) const -> jint {
     return upper_size_;
 }
 
+void tree_decorator_context::set_block(const block_pos &pos,
+                                       block_state_id state) const {
+    (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z, state);
+}
+
+auto tree_decorator_context::is_air(const block_pos &pos) const -> bool {
+    return is_air_block_name(context.placement.states->name(
+        context.placement.region->state_at(pos.x, pos.y, pos.z)));
+}
+
+void tree_decorator_context::place_vine(const block_pos &pos,
+                                        std::string_view direction) const {
+    auto key = std::string{"minecraft:vine["};
+    key.append(direction);
+    key.append("=true]");
+    auto found = states.find(key);
+    if (!found) {
+        const auto interned =
+            states.intern(key, state_traits{.air = false,
+                                            .blocks_motion = false,
+                                            .blocks_motion_no_leaves = false});
+        if (!interned) {
+            return;
+        }
+        found = *interned;
+    }
+    set_block(pos, *found);
+}
+
+void trunk_vine_decorator::place(const tree_decorator_context &context) const {
+    for (const auto &log : context.logs) {
+        if (context.random.next_int(3) > 0) {
+            const block_pos pos{.x = log.x - 1, .y = log.y, .z = log.z};
+            if (context.is_air(pos)) {
+                context.place_vine(pos, "east");
+            }
+        }
+        if (context.random.next_int(3) > 0) {
+            const block_pos pos{.x = log.x + 1, .y = log.y, .z = log.z};
+            if (context.is_air(pos)) {
+                context.place_vine(pos, "west");
+            }
+        }
+        if (context.random.next_int(3) > 0) {
+            const block_pos pos{.x = log.x, .y = log.y, .z = log.z - 1};
+            if (context.is_air(pos)) {
+                context.place_vine(pos, "south");
+            }
+        }
+        if (context.random.next_int(3) > 0) {
+            const block_pos pos{.x = log.x, .y = log.y, .z = log.z + 1};
+            if (context.is_air(pos)) {
+                context.place_vine(pos, "north");
+            }
+        }
+    }
+}
+
 auto tree_feature::valid_tree_pos(feature_context &context,
                                   const block_pos &pos) const -> bool {
     const auto state = context.placement.region->state_at(pos.x, pos.y, pos.z);
@@ -761,6 +819,23 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
     }
     if (logs.empty() || leaves.empty()) {
         return false;
+    }
+    if (!decorators_.empty()) {
+        auto sorted_logs = logs;
+        auto sorted_leaves = leaves;
+        const auto by_y = [](const block_pos &left, const block_pos &right) {
+            return left.y < right.y;
+        };
+        std::stable_sort(sorted_logs.begin(), sorted_logs.end(), by_y);
+        std::stable_sort(sorted_leaves.begin(), sorted_leaves.end(), by_y);
+        tree_decorator_context decorator_context{.context = context,
+                                                 .states = *states_,
+                                                 .random = random,
+                                                 .logs = sorted_logs,
+                                                 .leaves = sorted_leaves};
+        for (const auto &decorator : decorators_) {
+            decorator->place(decorator_context);
+        }
     }
     update_leaves(context, logs, leaves);
     return true;
