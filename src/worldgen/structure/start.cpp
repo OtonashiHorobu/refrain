@@ -35,4 +35,34 @@ auto starts_for_chunk(const std::vector<structure_start> &starts,
     return result;
 }
 
+auto collect_references(std::vector<structure_start> &starts,
+                        const chunk_pos &chunk, jint radius)
+    -> std::vector<structure_reference> {
+    std::vector<structure_reference> result;
+    const auto add = [&](std::string_view structure, const chunk_pos &source) {
+        for (auto &reference : result) {
+            if (reference.structure == structure &&
+                reference.chunk_x == source.x &&
+                reference.chunk_z == source.z) {
+                ++reference.count;
+                return;
+            }
+        }
+        result.push_back(
+            structure_reference{.structure = std::string{structure},
+                                .chunk_x = source.x,
+                                .chunk_z = source.z,
+                                .count = 1});
+    };
+    for (auto &start : starts) {
+        if (!start.bounds.is_close_to(chunk, radius) ||
+            !start.can_add_reference()) {
+            continue;
+        }
+        start.add_reference();
+        add(start.structure, start.chunk);
+    }
+    return result;
+}
+
 } // namespace refrain::worldgen::structure

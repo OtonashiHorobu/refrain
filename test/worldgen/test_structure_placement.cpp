@@ -154,6 +154,16 @@ suite<"worldgen/structure-start"> structure_start_tests = [] {
             structure::starts_for_chunk(starts, chunk_pos{.x = 0, .z = 1}, 16);
         expect(nearby.size() == 1U);
         expect(nearby[0]->structure == "minecraft:test");
+
+        const auto references = structure::collect_references(
+            starts, chunk_pos{.x = 0, .z = 1}, 16);
+        expect(references.size() == 1U);
+        expect(references[0].structure == "minecraft:test");
+        expect(references[0].count == 1);
+        expect(starts[0].references == 2);
+        const auto second = structure::collect_references(
+            starts, chunk_pos{.x = 0, .z = 1}, 16);
+        expect(second.empty());
     };
 };
 
