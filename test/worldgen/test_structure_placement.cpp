@@ -5,6 +5,7 @@
 #include <refrain/data/json.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
 #include <refrain/worldgen/structure/start.hpp>
+#include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/structure_set.hpp>
 
 #include <boost/ut.hpp>
@@ -135,5 +136,27 @@ suite<"worldgen/structure-start"> structure_start_tests = [] {
         start.add_reference();
         expect(!start.can_add_reference());
         expect(start.references == 1);
+    };
+};
+
+suite<"worldgen/structure-data"> structure_data_tests = [] {
+    "a structure document decodes its type, step, biomes and adaptation"_test = [] {
+        auto document = refrain::data::json::value::parse(
+            R"({"type":"minecraft:jigsaw","biomes":"#minecraft:has_structure/village_plains","step":"surface_structures","terrain_adaptation":"beard_thin","spawn_overrides":{},"start_pool":"minecraft:village/plains/town_centers"})");
+        expect(document.has_value());
+        if (!document) {
+            return;
+        }
+        const auto decoded = structure::decode_structure_document(
+            "minecraft:village_plains", *document);
+        expect(decoded.has_value());
+        if (!decoded) {
+            return;
+        }
+        expect(decoded->type == "minecraft:jigsaw");
+        expect(decoded->step == "surface_structures");
+        expect(decoded->adaptation ==
+               structure::terrain_adaptation::beard_thin);
+        expect(decoded->biomes.is_string());
     };
 };
