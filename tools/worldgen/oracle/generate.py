@@ -1256,10 +1256,6 @@ def main() -> int:
             "state": "minecraft:gold_block",
             "radius": {"type": "minecraft:constant", "value": 2},
         })
-        write_doc(feature_dir / "platform_air.json", {
-            "type": "minecraft:simple_block",
-            "to_place": {"id": "minecraft:air"},
-        })
         write_doc(feature_dir / "delta.json", {
             "type": "minecraft:delta_feature",
             "contents": "minecraft:lava",
@@ -1278,8 +1274,8 @@ def main() -> int:
             })
 
         fixed("platform_grass", "oracle:platform_grass", [[2, 99, 2]])
-        fixed("platform_dirt_red", "oracle:platform_dirt", [[20, 99, 2]])
-        fixed("platform_dirt_brown", "oracle:platform_dirt", [[24, 99, 2]])
+        fixed("platform_dirt_red", "oracle:platform_dirt", [[36, 99, 2]])
+        fixed("platform_dirt_brown", "oracle:platform_dirt", [[40, 99, 2]])
         fixed("platform_nylium", "oracle:platform_nylium", [[6, 99, 2]])
         fixed("platform_stone_wall", "oracle:platform_stone", [[3, 100, 6]])
         fixed(
@@ -1294,9 +1290,9 @@ def main() -> int:
         )
         fixed("bamboo", "oracle:bamboo", [[2, 100, 2]])
         fixed("huge_fungus", "oracle:huge_fungus", [[6, 100, 2]])
-        fixed("huge_red_mushroom", "oracle:huge_red_mushroom", [[20, 100, 2]])
+        fixed("huge_red_mushroom", "oracle:huge_red_mushroom", [[36, 100, 2]])
         fixed("huge_brown_mushroom", "oracle:huge_brown_mushroom",
-              [[24, 100, 2]])
+              [[40, 100, 2]])
         fixed("vines", "oracle:vines", [[2, 100, 6]])
         fixed("glowstone_extra", "oracle:glowstone_extra", [[8, 100, 8]])
         fixed("scattered_ore", "oracle:scattered_ore", [[3, 100, 12]])

@@ -816,6 +816,7 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                             .min_y = oracle_min_y,
                             .height = oracle_height,
                             .sea_level = settings->sea_level,
+                            .world_seed = seed,
                         },
                 };
                 feature_placement.region = nullptr;
