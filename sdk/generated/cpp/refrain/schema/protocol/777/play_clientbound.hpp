@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 48da152b6e326191
+// Schema hash: eca131f75aa31435
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -575,6 +575,24 @@ struct map_item_data {
     ::refrain::net::map_patch color_patch;
 };
 
+struct move_entity_pos {
+    static constexpr std::uint16_t packet_id = 0x36;
+    static constexpr std::string_view packet_name = "move_entity_pos";
+
+    std::uint32_t entity_id;
+    ::refrain::net::vec_delta delta;
+};
+
+struct move_entity_pos_rot {
+    static constexpr std::uint16_t packet_id = 0x37;
+    static constexpr std::string_view packet_name = "move_entity_pos_rot";
+
+    std::uint32_t entity_id;
+    ::refrain::net::vec_delta delta;
+    std::int8_t y_rot;
+    std::int8_t x_rot;
+};
+
 struct move_minecart_along_track {
     static constexpr std::uint16_t packet_id = 0x38;
     static constexpr std::string_view packet_name = "move_minecart_along_track";
@@ -582,6 +600,16 @@ struct move_minecart_along_track {
     // attributes: #[varint]
     std::int32_t entity_id;
     std::vector<::refrain::protocol::v777::wire::wire_lerp_steps> lerp_steps;
+};
+
+struct move_entity_rot {
+    static constexpr std::uint16_t packet_id = 0x39;
+    static constexpr std::string_view packet_name = "move_entity_rot";
+
+    std::uint32_t entity_id;
+    bool on_ground;
+    std::int8_t y_rot;
+    std::int8_t x_rot;
 };
 
 struct move_vehicle {
@@ -3378,6 +3406,82 @@ struct show_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_move_entity_pos(::refrain::net::writer &out, const move_entity_pos &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(value.entity_id);
+  }
+  {
+    if (auto written = ::refrain::net::encode_vec_delta(out, value.delta); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_move_entity_pos(::refrain::net::reader &in, move_entity_pos &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.entity_id = *value_0;
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_vec_delta(in, value.delta); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_move_entity_pos_rot(::refrain::net::writer &out, const move_entity_pos_rot &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(value.entity_id);
+  }
+  {
+    if (auto written = ::refrain::net::encode_vec_delta(out, value.delta); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.y_rot));
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.x_rot));
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_move_entity_pos_rot(::refrain::net::reader &in, move_entity_pos_rot &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.entity_id = *value_0;
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_vec_delta(in, value.delta); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.y_rot = static_cast<decltype(value.y_rot)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.x_rot = static_cast<decltype(value.x_rot)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_move_minecart_along_track(::refrain::net::writer &out, const move_minecart_along_track &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -3414,6 +3518,50 @@ struct show_dialog {
       }
       value.lerp_steps.push_back(std::move(value_0));
     }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_move_entity_rot(::refrain::net::writer &out, const move_entity_rot &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(value.entity_id);
+  }
+  {
+    out.write_bool(value.on_ground);
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.y_rot));
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.x_rot));
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_move_entity_rot(::refrain::net::reader &in, move_entity_rot &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.entity_id = *value_0;
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.on_ground = *value_0;
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.y_rot = static_cast<decltype(value.y_rot)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.x_rot = static_cast<decltype(value.x_rot)>(*value_0);
   }
   return ::refrain::status_ok();
 }

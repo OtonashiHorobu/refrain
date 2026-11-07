@@ -40,6 +40,12 @@ packet login_compression = 3 {
 
 // Generated protocol layouts.
 
+packet custom_query = 4 {
+    transaction_id: varint_id;
+    channel: identifier;
+    #[rest] data: bytes;
+}
+
 packet cookie_request = 5 {
     key: identifier;
 }

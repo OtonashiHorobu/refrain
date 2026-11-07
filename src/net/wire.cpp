@@ -380,6 +380,78 @@ auto decode_message_signature_packed(reader &in,
     return status_ok();
 }
 
+auto encode_vec_delta(writer &out, const vec_delta &value) -> status {
+    if (value.steps.size() > 0x7FFFFFFFU) {
+        return std::unexpected{make_error(error_code::invalid_argument,
+                                          "vec_delta: too many steps")};
+    }
+    const auto step_count{static_cast<std::uint32_t>(value.steps.size())};
+    out.write_varint((value.on_ground ? 1U : 0U) | (step_count << 1U));
+    if (value.steps.empty()) {
+        out.write_u16(static_cast<std::uint16_t>(value.x));
+        out.write_u16(static_cast<std::uint16_t>(value.y));
+        out.write_u16(static_cast<std::uint16_t>(value.z));
+        return status_ok();
+    }
+    for (const auto &step : value.steps) {
+        out.write_varint(step.ticks);
+        out.write_u16(static_cast<std::uint16_t>(step.x));
+        out.write_u16(static_cast<std::uint16_t>(step.y));
+        out.write_u16(static_cast<std::uint16_t>(step.z));
+    }
+    return status_ok();
+}
+
+auto decode_vec_delta(reader &in, vec_delta &value) -> status {
+    auto properties{in.read_varint()};
+    if (!properties) {
+        return std::unexpected{std::move(properties.error())};
+    }
+    value.on_ground = (*properties & 1U) != 0U;
+    const auto step_count{*properties >> 1U};
+    value.steps.clear();
+    if (step_count == 0U) {
+        auto x{in.read_u16()};
+        auto y{in.read_u16()};
+        auto z{in.read_u16()};
+        if (!x || !y || !z) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "vec_delta: truncated delta")};
+        }
+        value.x = static_cast<std::int16_t>(*x);
+        value.y = static_cast<std::int16_t>(*y);
+        value.z = static_cast<std::int16_t>(*z);
+        return status_ok();
+    }
+    if (step_count > 4096U ||
+        static_cast<std::size_t>(step_count) * 7U > in.remaining()) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "vec_delta: stepped list exceeds the payload")};
+    }
+    value.steps.reserve(step_count);
+    for (std::uint32_t index{0}; index < step_count; ++index) {
+        move_step step{};
+        auto ticks{in.read_varint()};
+        if (!ticks) {
+            return std::unexpected{std::move(ticks.error())};
+        }
+        step.ticks = *ticks;
+        auto x{in.read_u16()};
+        auto y{in.read_u16()};
+        auto z{in.read_u16()};
+        if (!x || !y || !z) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "vec_delta: truncated step")};
+        }
+        step.x = static_cast<std::int16_t>(*x);
+        step.y = static_cast<std::int16_t>(*y);
+        step.z = static_cast<std::int16_t>(*z);
+        value.steps.push_back(step);
+    }
+    return status_ok();
+}
+
 auto encode_advancement_seen(writer &out, const advancement_seen &value)
     -> status {
     if (value.action > 1U) {

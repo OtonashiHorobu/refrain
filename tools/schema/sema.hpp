@@ -61,6 +61,8 @@ enum class primitive_kind : std::uint8_t {
     map_patch,
     /// Advancement screen selection: action id plus an optional tab.
     advancement_seen,
+    /// Entity movement delta: packed flags/step count plus deltas.
+    vec_delta,
     void_type,
 };
 

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 48da152b6e326191
+// Schema hash: eca131f75aa31435
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_LOGIN_SERVERBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_LOGIN_SERVERBOUND_HPP
@@ -44,6 +44,16 @@ struct login_acknowledged {
     static constexpr std::uint16_t packet_id = 0x3;
     static constexpr std::string_view packet_name = "login_acknowledged";
 
+};
+
+struct custom_query_answer {
+    static constexpr std::uint16_t packet_id = 0x2;
+    static constexpr std::string_view packet_name = "custom_query_answer";
+
+    std::uint32_t transaction_id;
+    bool has_payload;
+    // attributes: #[rest]
+    std::vector<std::byte> data;
 };
 
 struct cookie_response {
@@ -134,6 +144,42 @@ struct cookie_response {
 [[nodiscard]] inline auto decode_login_acknowledged(::refrain::net::reader &in, login_acknowledged &value) -> ::refrain::status {
   static_cast<void>(in);
   static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_custom_query_answer(::refrain::net::writer &out, const custom_query_answer &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(value.transaction_id);
+  }
+  {
+    out.write_bool(value.has_payload);
+  }
+  {
+    out.write_bytes(value.data);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_custom_query_answer(::refrain::net::reader &in, custom_query_answer &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.transaction_id = *value_0;
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.has_payload = *value_0;
+  }
+  {
+    auto value_0 = in.read_bytes(in.remaining());
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.data = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
   return ::refrain::status_ok();
 }
 

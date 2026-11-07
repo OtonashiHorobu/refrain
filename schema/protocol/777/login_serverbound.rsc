@@ -24,6 +24,12 @@ packet login_acknowledged = 3 {
 
 // Generated protocol layouts.
 
+packet custom_query_answer = 2 {
+    transaction_id: varint_id;
+    has_payload: bool;
+    #[rest] data: bytes;
+}
+
 packet cookie_response = 4 {
     key: identifier;
     payload: optional<bytes>;

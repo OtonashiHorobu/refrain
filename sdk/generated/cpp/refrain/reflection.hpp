@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 48da152b6e326191
+// Schema hash: eca131f75aa31435
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -402,6 +402,15 @@ template <> struct custom_traits<::refrain::protocol::v777::login::clientbound::
         refrain::reflect::custom_field{"threshold", &::refrain::protocol::v777::login::clientbound::login_compression::threshold});
 };
 
+/// Generated RSC packet 'refrain::protocol::v777::login::clientbound::custom_query'.
+template <> struct custom_traits<::refrain::protocol::v777::login::clientbound::custom_query> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::login::clientbound::custom_query";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"transaction_id", &::refrain::protocol::v777::login::clientbound::custom_query::transaction_id},
+        refrain::reflect::custom_field{"channel", &::refrain::protocol::v777::login::clientbound::custom_query::channel},
+        refrain::reflect::custom_field{"data", &::refrain::protocol::v777::login::clientbound::custom_query::data});
+};
+
 /// Generated RSC packet 'refrain::protocol::v777::login::clientbound::cookie_request'.
 template <> struct custom_traits<::refrain::protocol::v777::login::clientbound::cookie_request> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::login::clientbound::cookie_request";
@@ -430,6 +439,15 @@ template <> struct custom_traits<::refrain::protocol::v777::login::serverbound::
 template <> struct custom_traits<::refrain::protocol::v777::login::serverbound::login_acknowledged> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::login::serverbound::login_acknowledged";
     static constexpr auto fields = std::make_tuple();
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::login::serverbound::custom_query_answer'.
+template <> struct custom_traits<::refrain::protocol::v777::login::serverbound::custom_query_answer> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::login::serverbound::custom_query_answer";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"transaction_id", &::refrain::protocol::v777::login::serverbound::custom_query_answer::transaction_id},
+        refrain::reflect::custom_field{"has_payload", &::refrain::protocol::v777::login::serverbound::custom_query_answer::has_payload},
+        refrain::reflect::custom_field{"data", &::refrain::protocol::v777::login::serverbound::custom_query_answer::data});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::login::serverbound::cookie_response'.
@@ -936,12 +954,40 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::m
         refrain::reflect::custom_field{"color_patch", &::refrain::protocol::v777::play::clientbound::map_item_data::color_patch});
 };
 
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::move_entity_pos'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::move_entity_pos> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::move_entity_pos";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"entity_id", &::refrain::protocol::v777::play::clientbound::move_entity_pos::entity_id},
+        refrain::reflect::custom_field{"delta", &::refrain::protocol::v777::play::clientbound::move_entity_pos::delta});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::move_entity_pos_rot'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::move_entity_pos_rot> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::move_entity_pos_rot";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"entity_id", &::refrain::protocol::v777::play::clientbound::move_entity_pos_rot::entity_id},
+        refrain::reflect::custom_field{"delta", &::refrain::protocol::v777::play::clientbound::move_entity_pos_rot::delta},
+        refrain::reflect::custom_field{"y_rot", &::refrain::protocol::v777::play::clientbound::move_entity_pos_rot::y_rot},
+        refrain::reflect::custom_field{"x_rot", &::refrain::protocol::v777::play::clientbound::move_entity_pos_rot::x_rot});
+};
+
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::move_minecart_along_track'.
 template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::move_minecart_along_track> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::move_minecart_along_track";
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"entity_id", &::refrain::protocol::v777::play::clientbound::move_minecart_along_track::entity_id},
         refrain::reflect::custom_field{"lerp_steps", &::refrain::protocol::v777::play::clientbound::move_minecart_along_track::lerp_steps});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::move_entity_rot'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::move_entity_rot> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::move_entity_rot";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"entity_id", &::refrain::protocol::v777::play::clientbound::move_entity_rot::entity_id},
+        refrain::reflect::custom_field{"on_ground", &::refrain::protocol::v777::play::clientbound::move_entity_rot::on_ground},
+        refrain::reflect::custom_field{"y_rot", &::refrain::protocol::v777::play::clientbound::move_entity_rot::y_rot},
+        refrain::reflect::custom_field{"x_rot", &::refrain::protocol::v777::play::clientbound::move_entity_rot::x_rot});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::move_vehicle'.

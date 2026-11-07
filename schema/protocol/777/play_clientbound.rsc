@@ -341,9 +341,28 @@ packet map_item_data = 52 {
     color_patch: map_patch;
 }
 
+packet move_entity_pos = 54 {
+    entity_id: varint_id;
+    delta: vec_delta;
+}
+
+packet move_entity_pos_rot = 55 {
+    entity_id: varint_id;
+    delta: vec_delta;
+    y_rot: i8;
+    x_rot: i8;
+}
+
 packet move_minecart_along_track = 56 {
     #[varint] entity_id: i32;
     lerp_steps: array<wire_lerp_steps>;
+}
+
+packet move_entity_rot = 57 {
+    entity_id: varint_id;
+    on_ground: bool;
+    y_rot: i8;
+    x_rot: i8;
 }
 
 packet move_vehicle = 58 {

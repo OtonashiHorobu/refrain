@@ -167,6 +167,34 @@ struct advancement_seen {
 [[nodiscard]] auto decode_advancement_seen(reader &in, advancement_seen &value)
     -> status;
 
+/// One step of a stepped entity movement delta.
+struct move_step {
+    std::uint32_t ticks{0};
+    std::int16_t x{0};
+    std::int16_t y{0};
+    std::int16_t z{0};
+
+    friend auto operator==(const move_step &, const move_step &)
+        -> bool = default;
+};
+
+/// An entity movement delta: a packed `on_ground`/step-count header followed
+/// by either three shorts (step count zero) or that many stepped deltas.
+struct vec_delta {
+    bool on_ground{false};
+    std::int16_t x{0};
+    std::int16_t y{0};
+    std::int16_t z{0};
+    std::vector<move_step> steps{};
+
+    friend auto operator==(const vec_delta &, const vec_delta &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_vec_delta(writer &out, const vec_delta &value)
+    -> status;
+[[nodiscard]] auto decode_vec_delta(reader &in, vec_delta &value) -> status;
+
 /// An item stack on the wire. Only the empty stack is implemented: the codec
 /// writes and accepts a zero item count and reports `error_code::unsupported`
 /// for any item payload, which requires the data-component graph.

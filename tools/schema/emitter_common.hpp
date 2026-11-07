@@ -345,6 +345,7 @@ attribute_comment(const std::vector<attribute> &attributes,
     case primitive_kind::position_path:
     case primitive_kind::map_patch:
     case primitive_kind::advancement_seen:
+    case primitive_kind::vec_delta:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";
@@ -394,6 +395,7 @@ attribute_comment(const std::vector<attribute> &attributes,
     case primitive_kind::position_path:
     case primitive_kind::map_patch:
     case primitive_kind::advancement_seen:
+    case primitive_kind::vec_delta:
         std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";

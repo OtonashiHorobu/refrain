@@ -70,6 +70,35 @@ const suite tests = [] {
         }
     };
 
+    "movement delta round trips linear and stepped forms"_test = [] {
+        const net::vec_delta linear{.on_ground = true, .x = 1, .y = -2, .z = 3};
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_vec_delta(out, linear)));
+        expect(bytes.size() == 7U);
+        net::reader in{bytes};
+        net::vec_delta decoded{};
+        expect(static_cast<bool>(net::decode_vec_delta(in, decoded)));
+        expect(decoded.on_ground);
+        expect(decoded.x == 1 && decoded.y == -2 && decoded.z == 3);
+        expect(decoded.steps.empty());
+        expect(in.empty());
+
+        net::vec_delta stepped{};
+        stepped.on_ground = false;
+        stepped.steps = {{5U, 1, 2, 3}, {6U, -1, -2, -3}};
+        bytes.clear();
+        net::writer stepped_out{bytes};
+        expect(static_cast<bool>(net::encode_vec_delta(stepped_out, stepped)));
+        net::reader stepped_in{bytes};
+        net::vec_delta stepped_decoded{};
+        expect(static_cast<bool>(
+            net::decode_vec_delta(stepped_in, stepped_decoded)));
+        const bool same{stepped_decoded.steps == stepped.steps};
+        expect(same);
+        expect(stepped_in.empty());
+    };
+
     "advancement screen selection round trips both actions"_test = [] {
         const auto tab{
             refrain::data::resource_location::parse("minecraft:story/root")};
