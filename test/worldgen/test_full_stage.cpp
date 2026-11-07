@@ -159,13 +159,21 @@ auto decode(const data::nbt::value &document) -> std::optional<decoded> {
             if (text) {
                 name = *text;
             } else if (const auto *compound = entry.as_compound()) {
+                if (compound->size() == 1) {
+                    const auto unnamed = compound->find("");
+                    if (unnamed != compound->end()) {
+                        name = unnamed->second.as_string().value_or("");
+                    }
+                }
                 const auto *id = child(compound, "id");
                 const auto *legacy = child(compound, "Name");
                 const auto *name_value = id != nullptr ? id : legacy;
-                if (name_value == nullptr) {
+                if (name.empty() && name_value != nullptr) {
+                    name = name_value->as_string().value_or("minecraft:air");
+                }
+                if (name.empty()) {
                     continue;
                 }
-                name = name_value->as_string().value_or("minecraft:air");
                 const auto *properties = child(compound, "properties");
                 if (properties == nullptr) {
                     properties = child(compound, "Properties");
