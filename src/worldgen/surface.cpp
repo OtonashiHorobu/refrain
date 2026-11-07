@@ -29,7 +29,10 @@ auto default_properties(std::string_view name) -> state_properties {
         name == "minecraft:void_air") {
         return state_properties{.air = true};
     }
-    if (name == "minecraft:water" || name == "minecraft:lava") {
+    if (name == "minecraft:water") {
+        return state_properties{.fluid = true, .water = true};
+    }
+    if (name == "minecraft:lava") {
         return state_properties{.fluid = true};
     }
     return state_properties{};
@@ -784,7 +787,11 @@ surface_system::surface_system(block_states &states, generation_bounds bounds,
       noise_random_{&noise_random}, default_block_{default_block}, air_{air},
       surface_noise_{noises.get("minecraft:surface")},
       surface_secondary_noise_{noises.get("minecraft:surface_secondary")},
-      clay_bands_offset_noise_{noises.get("minecraft:clay_bands_offset")} {
+      clay_bands_offset_noise_{noises.get("minecraft:clay_bands_offset")},
+      badlands_surface_noise_{noises.get("minecraft:badlands_surface")},
+      badlands_pillar_noise_{noises.get("minecraft:badlands_pillar")},
+      badlands_pillar_roof_noise_{
+          noises.get("minecraft:badlands_pillar_roof")} {
     const state_id terracotta = states.intern("minecraft:terracotta");
     const state_id orange = states.intern("minecraft:orange_terracotta");
     const state_id yellow = states.intern("minecraft:yellow_terracotta");
@@ -859,6 +866,50 @@ auto surface_system::band(jint x, jint y, jint z) -> state_id {
     return clay_bands_[static_cast<std::size_t>(index)];
 }
 
+void surface_system::eroded_badlands_extension(
+    jint block_x, jint block_z, jint height, jint min_y,
+    const std::function<state_id(jint, jint, jint)> &get,
+    const std::function<void(jint, jint, jint, state_id)> &set) {
+    const double pillar_buffer = std::min(
+        std::abs(static_cast<double>(badlands_surface_noise_->get(
+                     static_cast<double>(block_x), 0.0,
+                     static_cast<double>(block_z))) *
+                 8.25),
+        static_cast<double>(static_cast<float>(badlands_pillar_noise_->get(
+                                static_cast<double>(block_x) * 0.2, 0.0,
+                                static_cast<double>(block_z) * 0.2)) *
+                            15.0F));
+    if (!(pillar_buffer > 0.0)) {
+        return;
+    }
+    const double pillar_floor =
+        std::abs(static_cast<double>(badlands_pillar_roof_noise_->get(
+                     static_cast<double>(block_x) * 0.75, 0.0,
+                     static_cast<double>(block_z) * 0.75)) *
+                 1.5);
+    const double extension_top =
+        64.0 + std::min(pillar_buffer * pillar_buffer * 2.5,
+                        std::ceil(pillar_floor * 50.0) + 24.0);
+    const jint start_y = mth::floor(extension_top);
+    if (height <= start_y) {
+        for (jint y = start_y; y >= min_y; --y) {
+            const state_id old = get(block_x, y, block_z);
+            if (old == default_block_) {
+                break;
+            }
+            if (states_->properties(old).water) {
+                return;
+            }
+        }
+        for (jint y = start_y; y >= min_y; --y) {
+            if (!states_->properties(get(block_x, y, block_z)).air) {
+                break;
+            }
+            set(block_x, y, block_z, default_block_);
+        }
+    }
+}
+
 auto surface_system::build_surface(
     material_context &context, const rule_evaluator &rule,
     const std::function<std::string_view(jint, jint, jint)> &biome,
@@ -873,12 +924,15 @@ auto surface_system::build_surface(
             const jint block_z = bounds_.chunk_min_z + z;
             const jint starting_height = world_surface(x, z) + 1;
             const auto surface_biome = biome(block_x, starting_height, block_z);
-            if (surface_biome == "minecraft:eroded_badlands" ||
-                surface_biome == "minecraft:frozen_ocean" ||
+            if (surface_biome == "minecraft:frozen_ocean" ||
                 surface_biome == "minecraft:deep_frozen_ocean") {
                 return std::unexpected{
                     make_error(error_code::unsupported,
                                "surface biome needs an extension")};
+            }
+            if (surface_biome == "minecraft:eroded_badlands") {
+                eroded_badlands_extension(block_x, block_z, starting_height,
+                                          min_y, get, set);
             }
             const jint height = world_surface(x, z) + 1;
             const jint gradient_x = world_surface(std::min(x + 1, 15), z) -

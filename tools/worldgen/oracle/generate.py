@@ -75,12 +75,13 @@ def read_pack_entries(server_jar: pathlib.Path, prefix: str) -> dict[str, dict]:
 
 
 def write_pack(preset: dict, biome: dict, pack: pathlib.Path,
-               empty_material_rule: bool) -> None:
+               empty_material_rule: bool, fixed_biome: str,
+               biome_override: dict | None) -> None:
     write_meta(pack)
 
     preset["dimensions"]["minecraft:overworld"]["generator"][
         "biome_source"
-    ] = {"type": "minecraft:fixed", "biome": "oracle:terrain"}
+    ] = {"type": "minecraft:fixed", "biome": fixed_biome}
     preset_dir = pack / "data/minecraft/worldgen/world_preset"
     preset_dir.mkdir(parents=True)
     (preset_dir / "normal.json").write_text(json.dumps(preset, indent=2) + "\n")
@@ -97,6 +98,13 @@ def write_pack(preset: dict, biome: dict, pack: pathlib.Path,
     biome_dir = pack / "data/oracle/worldgen/biome"
     biome_dir.mkdir(parents=True)
     (biome_dir / "terrain.json").write_text(json.dumps(biome, indent=2) + "\n")
+    if biome_override is not None:
+        namespace, path = fixed_biome.split(":", 1)
+        override_dir = pack / "data" / namespace / "worldgen/biome"
+        override_dir.mkdir(parents=True, exist_ok=True)
+        (override_dir / f"{path.rsplit('/', 1)[-1]}.json").write_text(
+            json.dumps(biome_override, indent=2) + "\n"
+        )
 
 
 def write_server_files(root: pathlib.Path, seed: int, port: int) -> None:
@@ -194,6 +202,12 @@ def main() -> int:
         help="surface oracle with real multi-noise biomes: strip carvers and "
         "features from every biome but keep the normal overworld preset",
     )
+    parser.add_argument(
+        "--fixed-biome",
+        default="oracle:terrain",
+        help="biome of the fixed source used by --surface (default "
+        "oracle:terrain; real keys are overridden without carvers/features)",
+    )
     args = parser.parse_args()
 
     root = args.output.resolve()
@@ -218,8 +232,18 @@ def main() -> int:
         biome = read_pack_data(
             args.server_jar, "data/minecraft/worldgen/biome/plains.json"
         )
+        override = None
+        if args.fixed_biome != "oracle:terrain":
+            namespace, path = args.fixed_biome.split(":", 1)
+            override = read_pack_data(
+                args.server_jar,
+                f"data/{namespace}/worldgen/biome/{path}.json",
+            )
+            override["carvers"] = []
+            override["features"] = []
         write_pack(preset, biome, root / "world/datapacks/t2oracle",
-                   empty_material_rule=not args.surface)
+                   empty_material_rule=not args.surface,
+                   fixed_biome=args.fixed_biome, biome_override=override)
     write_server_files(root, args.seed, args.port)
     run_server(root, args.server_jar, args.settle)
 
