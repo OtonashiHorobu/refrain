@@ -269,8 +269,34 @@ auto decode_placement(const data::json::value &document)
             std::make_unique<offset_placement>(x, y, z)};
     }
     if (*type == "minecraft:fixed_placement") {
+        const auto *positions = document.find("positions");
+        if (positions == nullptr || !positions->is_array()) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "fixed_placement has no positions")};
+        }
+        std::vector<block_pos> decoded;
+        for (const auto &entry : *positions->as_array()) {
+            if (!entry.is_array() || entry.size() != 3) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "fixed position is not xyz")};
+            }
+            const auto values = entry.as_array();
+            if (!values) {
+                return std::unexpected{values.error()};
+            }
+            auto x = (*values)[0].as_int64();
+            auto y = (*values)[1].as_int64();
+            auto z = (*values)[2].as_int64();
+            if (!x || !y || !z) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "fixed position is not integer")};
+            }
+            decoded.push_back(block_pos{.x = static_cast<jint>(*x),
+                                        .y = static_cast<jint>(*y),
+                                        .z = static_cast<jint>(*z)});
+        }
         return std::unique_ptr<placement_modifier>{
-            std::make_unique<fixed_placement>(std::vector<block_pos>{})};
+            std::make_unique<fixed_placement>(std::move(decoded))};
     }
     return std::unexpected{
         make_error(error_code::unsupported, "unsupported placement modifier")};
