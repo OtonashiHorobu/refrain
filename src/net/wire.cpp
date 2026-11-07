@@ -380,6 +380,154 @@ auto decode_message_signature_packed(reader &in,
     return status_ok();
 }
 
+auto encode_stat_entry(writer &out, const stat_entry &value) -> status {
+    out.write_varint(value.type);
+    out.write_varint(value.value);
+    return status_ok();
+}
+
+auto decode_stat_entry(reader &in, stat_entry &value) -> status {
+    auto type{in.read_varint()};
+    if (!type) {
+        return std::unexpected{std::move(type.error())};
+    }
+    auto stat_value{in.read_varint()};
+    if (!stat_value) {
+        return std::unexpected{std::move(stat_value.error())};
+    }
+    value.type = *type;
+    value.value = *stat_value;
+    return status_ok();
+}
+
+auto encode_position_path(writer &out, const position_path &value) -> status {
+    if (value.type == 0U) {
+        out.write_varint(0);
+        out.write_f64(value.end[0]);
+        out.write_f64(value.end[1]);
+        out.write_f64(value.end[2]);
+        return status_ok();
+    }
+    if (value.type != 1U) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "position_path: type is out of range")};
+    }
+    out.write_varint(1);
+    out.write_varint(static_cast<std::uint32_t>(value.steps.size()));
+    for (const auto &step : value.steps) {
+        out.write_f64(step.x);
+        out.write_f64(step.y);
+        out.write_f64(step.z);
+        out.write_varint(step.tick_offset);
+    }
+    return status_ok();
+}
+
+auto decode_position_path(reader &in, position_path &value) -> status {
+    auto type{in.read_varint()};
+    if (!type) {
+        return std::unexpected{std::move(type.error())};
+    }
+    if (*type > 1U) {
+        return std::unexpected{make_error(
+            error_code::parse_error, "position_path: type is out of range")};
+    }
+    value.type = *type;
+    value.steps.clear();
+    if (*type == 0U) {
+        for (auto &axis : value.end) {
+            auto coordinate{in.read_f64()};
+            if (!coordinate) {
+                return std::unexpected{std::move(coordinate.error())};
+            }
+            axis = *coordinate;
+        }
+        return status_ok();
+    }
+    auto count{in.read_varint()};
+    if (!count) {
+        return std::unexpected{std::move(count.error())};
+    }
+    if (*count > 4096U ||
+        static_cast<std::size_t>(*count) * 25U > in.remaining()) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "position_path: stepped list exceeds the payload")};
+    }
+    value.steps.reserve(*count);
+    for (std::uint32_t index{0}; index < *count; ++index) {
+        position_step step{};
+        for (double *axis : {&step.x, &step.y, &step.z}) {
+            auto coordinate{in.read_f64()};
+            if (!coordinate) {
+                return std::unexpected{std::move(coordinate.error())};
+            }
+            *axis = *coordinate;
+        }
+        auto offset{in.read_varint()};
+        if (!offset) {
+            return std::unexpected{std::move(offset.error())};
+        }
+        step.tick_offset = *offset;
+        value.steps.push_back(step);
+    }
+    return status_ok();
+}
+
+auto encode_map_patch(writer &out, const map_patch &value) -> status {
+    out.write_u8(value.width);
+    if (value.width == 0U) {
+        if (!value.colors.empty()) {
+            return std::unexpected{
+                make_error(error_code::invalid_argument,
+                           "map_patch: an empty patch carries no colours")};
+        }
+        return status_ok();
+    }
+    out.write_u8(value.height);
+    out.write_u8(value.start_x);
+    out.write_u8(value.start_y);
+    out.write_varint(static_cast<std::uint32_t>(value.colors.size()));
+    out.write_bytes(value.colors);
+    return status_ok();
+}
+
+auto decode_map_patch(reader &in, map_patch &value) -> status {
+    auto width{in.read_u8()};
+    if (!width) {
+        return std::unexpected{std::move(width.error())};
+    }
+    value.width = *width;
+    value.height = 0;
+    value.start_x = 0;
+    value.start_y = 0;
+    value.colors.clear();
+    if (*width == 0U) {
+        return status_ok();
+    }
+    auto height{in.read_u8()};
+    auto start_x{in.read_u8()};
+    auto start_y{in.read_u8()};
+    if (!height || !start_x || !start_y) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "map_patch: truncated header")};
+    }
+    value.height = *height;
+    value.start_x = *start_x;
+    value.start_y = *start_y;
+    auto length{in.read_varint()};
+    if (!length) {
+        return std::unexpected{std::move(length.error())};
+    }
+    auto colors{in.read_bytes(*length)};
+    if (!colors) {
+        return std::unexpected{std::move(colors.error())};
+    }
+    value.colors.assign(colors->begin(), colors->end());
+    return status_ok();
+}
+
 auto encode_filter_mask(writer &out, const filter_mask &value) -> status {
     if (value.type > 2U) {
         return std::unexpected{make_error(error_code::invalid_argument,

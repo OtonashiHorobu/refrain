@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: a04690b2c21fe519
+// Schema hash: 65507ac10423ea04
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -214,6 +214,14 @@ struct wire_common_player_spawn_info {
     std::int32_t portal_cooldown;
     // attributes: #[varint]
     std::int32_t sea_level;
+};
+
+struct wire_map_decoration {
+    std::uint32_t type_;
+    std::int8_t x;
+    std::int8_t y;
+    std::int8_t rot;
+    std::optional<::refrain::net::nbt_blob> name;
 };
 
 struct wire_vec3 {
@@ -1643,6 +1651,71 @@ struct wire_position_move_rotation {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.sea_level = static_cast<decltype(value.sea_level)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_map_decoration(::refrain::net::writer &out, const wire_map_decoration &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(value.type_);
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.x));
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.y));
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.rot));
+  }
+  {
+    out.write_bool(value.name.has_value());
+    if (value.name.has_value()) {
+      if (auto written = ::refrain::net::encode_nbt(out, value.name.value()); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_map_decoration(::refrain::net::reader &in, wire_map_decoration &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.type_ = *value_0;
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.x = static_cast<decltype(value.x)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.y = static_cast<decltype(value.y)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.rot = static_cast<decltype(value.rot)>(*value_0);
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::net::nbt_blob value_0{};
+      if (auto decoded = ::refrain::net::decode_nbt(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.name = std::move(value_0);
+    } else {
+      value.name.reset();
+    }
   }
   return ::refrain::status_ok();
 }

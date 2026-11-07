@@ -53,6 +53,12 @@ enum class primitive_kind : std::uint8_t {
     message_signature_packed,
     /// Chat filter mask: a type id plus an optional byte mask; RSC wire only.
     filter_mask,
+    /// Statistic identity: type id and value id; RSC wire only.
+    stat_entry,
+    /// Entity position path: linear vector or stepped list; RSC wire only.
+    position_path,
+    /// Map colour patch: optional width/height/origin and colours.
+    map_patch,
     void_type,
 };
 

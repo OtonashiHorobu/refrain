@@ -169,6 +169,14 @@ struct wire_common_player_spawn_info {
     #[varint] sea_level: i32;
 }
 
+struct wire_map_decoration {
+    type_: varint_id;
+    x: i8;
+    y: i8;
+    rot: i8;
+    name: optional<nbt>;
+}
+
 struct wire_lerp_steps {
     position: wire_vec3;
     movement: wire_vec3;

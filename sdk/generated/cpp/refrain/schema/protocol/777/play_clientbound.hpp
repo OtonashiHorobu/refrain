@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: a04690b2c21fe519
+// Schema hash: 65507ac10423ea04
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -267,6 +267,13 @@ struct animate {
     std::int8_t action;
 };
 
+struct award_stats {
+    static constexpr std::uint16_t packet_id = 0x3;
+    static constexpr std::string_view packet_name = "award_stats";
+
+    std::map<::refrain::net::stat_entry, std::uint32_t> payload;
+};
+
 struct block_destruction {
     static constexpr std::uint16_t packet_id = 0x5;
     static constexpr std::string_view packet_name = "block_destruction";
@@ -452,6 +459,18 @@ struct disguised_chat {
     ::refrain::protocol::v777::wire::wire_bound chat_type;
 };
 
+struct entity_position_sync {
+    static constexpr std::uint16_t packet_id = 0x23;
+    static constexpr std::string_view packet_name = "entity_position_sync";
+
+    // attributes: #[varint]
+    std::int32_t id;
+    ::refrain::net::position_path position;
+    float y_rot;
+    float x_rot;
+    bool on_ground;
+};
+
 struct add_transient_block {
     static constexpr std::uint16_t packet_id = 0x25;
     static constexpr std::string_view packet_name = "add_transient_block";
@@ -542,6 +561,18 @@ struct low_disk_space_warning {
     static constexpr std::uint16_t packet_id = 0x33;
     static constexpr std::string_view packet_name = "low_disk_space_warning";
 
+};
+
+struct map_item_data {
+    static constexpr std::uint16_t packet_id = 0x34;
+    static constexpr std::string_view packet_name = "map_item_data";
+
+    // attributes: #[varint]
+    std::int32_t map_id;
+    std::int8_t scale;
+    bool locked;
+    std::optional<std::vector<::refrain::protocol::v777::wire::wire_map_decoration>> decorations;
+    ::refrain::net::map_patch color_patch;
 };
 
 struct move_minecart_along_track {
@@ -2151,6 +2182,43 @@ struct show_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_award_stats(::refrain::net::writer &out, const award_stats &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.payload.size()));
+    for (const auto &entry_0 : value.payload) {
+      if (auto written = ::refrain::net::encode_stat_entry(out, entry_0.first); !written) {
+        return written;
+      }
+      out.write_varint(entry_0.second);
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_award_stats(::refrain::net::reader &in, award_stats &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.payload.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::net::stat_entry map_key_0{};
+      if (auto decoded = ::refrain::net::decode_stat_entry(in, map_key_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      std::uint32_t map_value_0{};
+      auto value_2 = in.read_varint();
+      if (!value_2) return std::unexpected{std::move(value_2.error())};
+      map_value_0 = *value_2;
+      value.payload.emplace(std::move(map_key_0), std::move(map_value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_block_destruction(::refrain::net::writer &out, const block_destruction &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -2858,6 +2926,60 @@ struct show_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_entity_position_sync(::refrain::net::writer &out, const entity_position_sync &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.id));
+  }
+  {
+    if (auto written = ::refrain::net::encode_position_path(out, value.position); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_f32(value.y_rot);
+  }
+  {
+    out.write_f32(value.x_rot);
+  }
+  {
+    out.write_bool(value.on_ground);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_entity_position_sync(::refrain::net::reader &in, entity_position_sync &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.id = static_cast<decltype(value.id)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_position_path(in, value.position); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto value_0 = in.read_f32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.y_rot = *value_0;
+  }
+  {
+    auto value_0 = in.read_f32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.x_rot = *value_0;
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.on_ground = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_add_transient_block(::refrain::net::writer &out, const add_transient_block &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -3176,6 +3298,83 @@ struct show_dialog {
 [[nodiscard]] inline auto decode_low_disk_space_warning(::refrain::net::reader &in, low_disk_space_warning &value) -> ::refrain::status {
   static_cast<void>(in);
   static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_map_item_data(::refrain::net::writer &out, const map_item_data &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.map_id));
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.scale));
+  }
+  {
+    out.write_bool(value.locked);
+  }
+  {
+    out.write_bool(value.decorations.has_value());
+    if (value.decorations.has_value()) {
+      out.write_varint(static_cast<std::uint32_t>(value.decorations.value().size()));
+      for (const auto &item_1 : value.decorations.value()) {
+        if (auto written = ::refrain::protocol::v777::wire::encode_wire_map_decoration(out, item_1); !written) {
+          return written;
+        }
+      }
+    }
+  }
+  {
+    if (auto written = ::refrain::net::encode_map_patch(out, value.color_patch); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_map_item_data(::refrain::net::reader &in, map_item_data &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.map_id = static_cast<decltype(value.map_id)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.scale = static_cast<decltype(value.scale)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.locked = *value_0;
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      std::vector<::refrain::protocol::v777::wire::wire_map_decoration> value_0{};
+      value_0.clear();
+      auto count_1 = in.read_varint();
+      if (!count_1) return std::unexpected{std::move(count_1.error())};
+      for (std::uint32_t index_1 = 0; index_1 < *count_1; ++index_1) {
+        ::refrain::protocol::v777::wire::wire_map_decoration value_1{};
+        if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_map_decoration(in, value_1); !decoded) {
+          return std::unexpected{std::move(decoded.error())};
+        }
+        value_0.push_back(std::move(value_1));
+      }
+      value.decorations = std::move(value_0);
+    } else {
+      value.decorations.reset();
+    }
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_map_patch(in, value.color_patch); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
   return ::refrain::status_ok();
 }
 

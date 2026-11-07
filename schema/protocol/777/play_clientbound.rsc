@@ -163,6 +163,10 @@ packet animate = 2 {
     action: i8;
 }
 
+packet award_stats = 3 {
+    payload: map<stat_entry, varint_id>;
+}
+
 packet block_destruction = 5 {
     #[varint] id: i32;
     pos: i64;
@@ -269,6 +273,14 @@ packet disguised_chat = 33 {
     chat_type: wire_bound;
 }
 
+packet entity_position_sync = 35 {
+    #[varint] id: i32;
+    position: position_path;
+    y_rot: f32;
+    x_rot: f32;
+    on_ground: bool;
+}
+
 packet add_transient_block = 37 {
     pos: i64;
     block_state: varint_id;
@@ -319,6 +331,14 @@ packet light_update = 49 {
 }
 
 packet low_disk_space_warning = 51 {
+}
+
+packet map_item_data = 52 {
+    #[varint] map_id: i32;
+    scale: i8;
+    locked: bool;
+    decorations: optional<array<wire_map_decoration>>;
+    color_patch: map_patch;
 }
 
 packet move_minecart_along_track = 56 {

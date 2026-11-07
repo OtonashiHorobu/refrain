@@ -6,6 +6,7 @@
 
 #include <refrain/net/base.hpp>
 
+#include <compare>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -90,6 +91,65 @@ struct filter_mask {
 [[nodiscard]] auto encode_filter_mask(writer &out, const filter_mask &value)
     -> status;
 [[nodiscard]] auto decode_filter_mask(reader &in, filter_mask &value) -> status;
+
+/// A statistic identity: the stat type id and its value id, both VarInts.
+struct stat_entry {
+    std::uint32_t type{0};
+    std::uint32_t value{0};
+
+    friend auto operator==(const stat_entry &, const stat_entry &)
+        -> bool = default;
+    friend auto operator<=>(const stat_entry &, const stat_entry &)
+        -> std::strong_ordering = default;
+};
+
+[[nodiscard]] auto encode_stat_entry(writer &out, const stat_entry &value)
+    -> status;
+[[nodiscard]] auto decode_stat_entry(reader &in, stat_entry &value) -> status;
+
+/// One step of a stepped position path.
+struct position_step {
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    std::uint32_t tick_offset{0};
+
+    friend auto operator==(const position_step &, const position_step &)
+        -> bool = default;
+};
+
+/// An entity position path: a linear end position (type 0) or a stepped list
+/// (type 1).
+struct position_path {
+    std::uint32_t type{0};
+    std::array<double, 3> end{};
+    std::vector<position_step> steps{};
+
+    friend auto operator==(const position_path &, const position_path &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_position_path(writer &out, const position_path &value)
+    -> status;
+[[nodiscard]] auto decode_position_path(reader &in, position_path &value)
+    -> status;
+
+/// A map colour patch. A zero width means no patch; the remaining fields are
+/// present only for a non-empty patch.
+struct map_patch {
+    std::uint8_t width{0};
+    std::uint8_t height{0};
+    std::uint8_t start_x{0};
+    std::uint8_t start_y{0};
+    std::vector<std::byte> colors{};
+
+    friend auto operator==(const map_patch &, const map_patch &)
+        -> bool = default;
+};
+
+[[nodiscard]] auto encode_map_patch(writer &out, const map_patch &value)
+    -> status;
+[[nodiscard]] auto decode_map_patch(reader &in, map_patch &value) -> status;
 
 /// An item stack on the wire. Only the empty stack is implemented: the codec
 /// writes and accepts a zero item count and reports `error_code::unsupported`

@@ -70,6 +70,87 @@ const suite tests = [] {
         }
     };
 
+    "stat entry round trips two varints"_test = [] {
+        const net::stat_entry value{.type = 3U, .value = 42U};
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_stat_entry(out, value)));
+        expect(bytes.size() == 2U);
+        net::reader in{bytes};
+        net::stat_entry decoded{};
+        expect(static_cast<bool>(net::decode_stat_entry(in, decoded)));
+        const bool same{decoded == value};
+        expect(same);
+        expect(in.empty());
+    };
+
+    "position path round trips linear and stepped forms"_test = [] {
+        const net::position_path linear{
+            .type = 0U, .end = {1.5, -2.0, 3.25}, .steps = {}};
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_position_path(out, linear)));
+        net::reader in{bytes};
+        net::position_path decoded{};
+        expect(static_cast<bool>(net::decode_position_path(in, decoded)));
+        expect(decoded.type == 0U);
+        expect(decoded.end == linear.end);
+        expect(in.empty());
+
+        net::position_path stepped{};
+        stepped.type = 1U;
+        stepped.steps = {{1.0, 2.0, 3.0, 5U}, {4.0, 5.0, 6.0, 7U}};
+        bytes.clear();
+        net::writer stepped_out{bytes};
+        expect(
+            static_cast<bool>(net::encode_position_path(stepped_out, stepped)));
+        net::reader stepped_in{bytes};
+        net::position_path stepped_decoded{};
+        expect(static_cast<bool>(
+            net::decode_position_path(stepped_in, stepped_decoded)));
+        const bool same_steps{stepped_decoded.steps == stepped.steps};
+        expect(same_steps);
+        expect(stepped_in.empty());
+
+        net::position_path invalid{};
+        invalid.type = 5U;
+        std::vector<std::byte> sink;
+        net::writer invalid_out{sink};
+        const auto status{net::encode_position_path(invalid_out, invalid)};
+        expect(!status);
+        expect(status.error().code == refrain::error_code::invalid_argument);
+    };
+
+    "map patch round trips empty and present forms"_test = [] {
+        net::map_patch empty{};
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_map_patch(out, empty)));
+        expect(bytes.size() == 1U);
+        net::reader in{bytes};
+        net::map_patch decoded{};
+        expect(static_cast<bool>(net::decode_map_patch(in, decoded)));
+        expect(decoded.width == 0U);
+        expect(in.empty());
+
+        net::map_patch patch{
+            .width = 2U,
+            .height = 3U,
+            .start_x = 4U,
+            .start_y = 5U,
+            .colors = {std::byte{1}, std::byte{2}, std::byte{3}}};
+        bytes.clear();
+        net::writer patch_out{bytes};
+        expect(static_cast<bool>(net::encode_map_patch(patch_out, patch)));
+        net::reader patch_in{bytes};
+        net::map_patch patch_decoded{};
+        expect(
+            static_cast<bool>(net::decode_map_patch(patch_in, patch_decoded)));
+        const bool same_patch{patch_decoded == patch};
+        expect(same_patch);
+        expect(patch_in.empty());
+    };
+
     "filter mask round trips both short and partial forms"_test = [] {
         for (const std::uint32_t type : {0U, 1U}) {
             net::filter_mask value{.type = type};

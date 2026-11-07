@@ -77,6 +77,12 @@ namespace {
             return "::refrain::net::message_signature_packed";
         case primitive_kind::filter_mask:
             return "::refrain::net::filter_mask";
+        case primitive_kind::stat_entry:
+            return "::refrain::net::stat_entry";
+        case primitive_kind::position_path:
+            return "::refrain::net::position_path";
+        case primitive_kind::map_patch:
+            return "::refrain::net::map_patch";
         case primitive_kind::void_type:
             return "void";
         }
@@ -598,6 +604,34 @@ void emit_encode_value(code_writer &writer, const model &program,
             writer.dedent();
             writer.line("}}");
             return;
+        case primitive_kind::stat_entry:
+            writer.line("if (auto written = ::refrain::net::encode_stat_entry("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::position_path:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_position_path("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::map_patch:
+            writer.line("if (auto written = ::refrain::net::encode_map_patch("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
         case primitive_kind::void_type:
             return;
         }
@@ -911,6 +945,37 @@ void emit_decode_value(code_writer &writer, const model &program,
             return;
         case primitive_kind::filter_mask:
             writer.line("if (auto decoded = ::refrain::net::decode_filter_mask("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::stat_entry:
+            writer.line("if (auto decoded = ::refrain::net::decode_stat_entry("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::position_path:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_position_path("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::map_patch:
+            writer.line("if (auto decoded = ::refrain::net::decode_map_patch("
                         "in, {}); !decoded) {{",
                         target);
             writer.indent();
