@@ -96,22 +96,61 @@ auto feature_registry::nested_reference(const data::json::value &input)
         return std::unexpected{make_error(
             error_code::parse_error, "nested placed reference is invalid")};
     }
-    const auto *feature = input.find("feature");
-    if (feature == nullptr || !feature->is_string()) {
-        return std::unexpected{
-            make_error(error_code::unsupported,
-                       "inline nested feature objects are not implemented")};
-    }
     const auto *placement = input.find("placement");
     if (placement == nullptr || !placement->is_array()) {
         return std::unexpected{
             make_error(error_code::parse_error, "nested placement is missing")};
     }
+    const auto *feature = input.find("feature");
+    if (feature == nullptr) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "nested feature is missing")};
+    }
+    std::string feature_id;
+    if (const auto text = feature->as_string(); text.has_value()) {
+        feature_id = std::string{*text};
+    } else if (feature->is_object()) {
+        const auto *type = feature->find("type");
+        if (type == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "inline feature has no type")};
+        }
+        const auto type_name = type->as_string();
+        if (!type_name) {
+            return std::unexpected{type_name.error()};
+        }
+        if (*type_name != "minecraft:simple_block") {
+            return std::unexpected{make_error(
+                error_code::unsupported, "unsupported inline feature type")};
+        }
+        const auto *to_place = feature->find("to_place");
+        if (to_place == nullptr) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "inline simple block has no state")};
+        }
+        auto provider = decode_provider(*to_place);
+        if (!provider) {
+            return std::unexpected{provider.error()};
+        }
+        bool schedule_tick = false;
+        if (const auto *field = feature->find("schedule_tick");
+            field != nullptr) {
+            const auto value = field->as_bool();
+            if (!value) {
+                return std::unexpected{value.error()};
+            }
+            schedule_tick = *value;
+        }
+        feature_id = "#inline:" + std::to_string(next_nested_++);
+        features_.emplace(feature_id, std::make_unique<simple_block_feature>(
+                                          std::move(*provider), schedule_tick));
+    } else {
+        return std::unexpected{
+            make_error(error_code::parse_error, "nested feature is invalid")};
+    }
     const auto id = "#nested:" + std::to_string(next_nested_++);
-    nested_placed_.push_back(
-        nested_placed_entry{.id = id,
-                            .feature = std::string{*feature->as_string()},
-                            .placement = *placement});
+    nested_placed_.push_back(nested_placed_entry{
+        .id = id, .feature = std::move(feature_id), .placement = *placement});
     return id;
 }
 
@@ -504,6 +543,24 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             }
             features_.emplace(id, std::make_unique<simple_selector_feature>(
                                       std::move(entries)));
+            continue;
+        }
+        if (*type == "minecraft:overlay") {
+            const auto *features = document.document.find("features");
+            if (features == nullptr || !features->is_array()) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "overlay has no features")};
+            }
+            std::vector<std::string> ids;
+            for (const auto &entry : *features->as_array()) {
+                auto reference = nested_reference(entry);
+                if (!reference) {
+                    return std::unexpected{reference.error()};
+                }
+                ids.push_back(std::move(*reference));
+            }
+            features_.emplace(
+                id, std::make_unique<overlay_feature>(std::move(ids)));
             continue;
         }
         if (*type == "minecraft:random_boolean_selector") {

@@ -743,6 +743,68 @@ suite<"worldgen/spring"> spring_tests = [] {
     };
 };
 
+suite<"worldgen/overlay"> overlay_tests = [] {
+    "an overlay places its inline and referenced features"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto moss = registry.intern("minecraft:mossy_cobblestone",
+                                    {.air = false,
+                                     .blocks_motion = true,
+                                     .blocks_motion_no_leaves = true});
+        expect(stone.has_value() && moss.has_value());
+        if (!stone || !moss) {
+            return;
+        }
+        feature_data_set data;
+        data.features.emplace(
+            "oracle:moss",
+            configured_feature_document{
+                .id = "oracle:moss",
+                .document = parse(
+                    R"({"type":"minecraft:overlay","features":[{"feature":{"type":"minecraft:simple_block","to_place":{"id":"minecraft:mossy_cobblestone"}},"placement":[]}]})")});
+        data.placed.emplace(
+            "oracle:p",
+            placed_feature_document{
+                .id = "oracle:p",
+                .feature = "oracle:moss",
+                .placement = parse(
+                    R"([{"type":"minecraft:fixed_placement","positions":[[8,5,8]]}])")});
+        data.biomes.push_back(biome_feature_list{.biome = "oracle:test",
+                                                 .steps = {{"oracle:p"}}});
+        feature_registry features{registry};
+        const auto loaded = features.load(data);
+        expect(loaded.has_value()) << loaded.error().message;
+        if (!loaded) {
+            return;
+        }
+        const auto plan = feature_sorter::build({"oracle:test"}, data.biomes);
+        expect(plan.has_value());
+        if (!plan) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 1};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 32,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        decorate(context, *plan, features.placed(), {"oracle:test"},
+                 data.biomes, 12345);
+        expect(chunk.state_at(8, 5, 8) == *moss);
+    };
+};
+
 suite<"worldgen/selector"> selector_tests = [] {
     "a random selector places the first matching nested feature"_test = [] {
         block_state_registry registry;
