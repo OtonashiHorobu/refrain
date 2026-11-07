@@ -74,6 +74,35 @@ auto decode_simple_state(const data::json::value &provider,
     return resolve_state(states, *key);
 }
 
+auto reference_id(const data::json::value &input) -> result<std::string> {
+    if (const auto text = input.as_string(); text.has_value()) {
+        return std::string{*text};
+    }
+    if (!input.is_object()) {
+        return std::unexpected{make_error(
+            error_code::parse_error, "placed feature reference is invalid")};
+    }
+    const auto *feature = input.find("feature");
+    if (feature == nullptr) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "placed feature has no feature")};
+    }
+    if (!feature->is_string()) {
+        return std::unexpected{
+            make_error(error_code::unsupported,
+                       "inline nested feature objects are not implemented")};
+    }
+    const auto *placement = input.find("placement");
+    if (placement != nullptr) {
+        if (!placement->is_array() || !placement->as_array()->empty()) {
+            return std::unexpected{
+                make_error(error_code::unsupported,
+                           "nested placement lists are not implemented")};
+        }
+    }
+    return std::string{*feature->as_string()};
+}
+
 } // namespace
 
 auto feature_registry::load(const feature_data_set &data) -> status {
@@ -341,6 +370,90 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             features_.emplace(id, std::make_unique<block_column_feature>(
                                       std::move(layers), direction,
                                       std::move(*allowed), *prioritize));
+            continue;
+        }
+        if (*type == "minecraft:random_selector") {
+            const auto *features = document.document.find("features");
+            const auto *default_value = document.document.find("default");
+            if (features == nullptr || !features->is_array() ||
+                default_value == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "random selector is incomplete")};
+            }
+            auto default_id = reference_id(*default_value);
+            if (!default_id) {
+                return std::unexpected{default_id.error()};
+            }
+            std::vector<std::pair<float, std::string>> entries;
+            for (const auto &entry : *features->as_array()) {
+                const auto *chance = entry.find("chance");
+                const auto *feature = entry.find("feature");
+                if (chance == nullptr || feature == nullptr) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "selector entry is incomplete")};
+                }
+                const auto chance_value = chance->as_double();
+                auto reference = reference_id(*feature);
+                if (!chance_value || !reference) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error, "selector entry is invalid")};
+                }
+                entries.emplace_back(static_cast<float>(*chance_value),
+                                     std::move(*reference));
+            }
+            features_.emplace(id,
+                              std::make_unique<random_selector_feature>(
+                                  std::move(entries), std::move(*default_id)));
+            continue;
+        }
+        if (*type == "minecraft:weighted_random_selector") {
+            const auto *features = document.document.find("features");
+            if (features == nullptr || !features->is_array()) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "weighted selector is incomplete")};
+            }
+            std::vector<std::pair<jint, std::string>> entries;
+            jint total = 0;
+            for (const auto &entry : *features->as_array()) {
+                const auto *data_field = entry.find("data");
+                const auto *weight = entry.find("weight");
+                if (data_field == nullptr || weight == nullptr) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "selector entry is incomplete")};
+                }
+                const auto weight_value = weight->as_int64();
+                auto reference = reference_id(*data_field);
+                if (!weight_value || !reference) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error, "selector entry is invalid")};
+                }
+                total += static_cast<jint>(*weight_value);
+                entries.emplace_back(static_cast<jint>(*weight_value),
+                                     std::move(*reference));
+            }
+            features_.emplace(id, std::make_unique<weighted_selector_feature>(
+                                      std::move(entries), total));
+            continue;
+        }
+        if (*type == "minecraft:simple_random_selector") {
+            const auto *features = document.document.find("features");
+            if (features == nullptr || !features->is_array()) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "simple selector is incomplete")};
+            }
+            std::vector<std::string> entries;
+            for (const auto &entry : *features->as_array()) {
+                auto reference = reference_id(entry);
+                if (!reference) {
+                    return std::unexpected{reference.error()};
+                }
+                entries.push_back(std::move(*reference));
+            }
+            features_.emplace(id, std::make_unique<simple_selector_feature>(
+                                      std::move(entries)));
             continue;
         }
         return std::unexpected{

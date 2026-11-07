@@ -507,6 +507,19 @@ def main() -> int:
             )
             + "\n"
         )
+        (feature_dir / "selector.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:random_selector",
+                    "default": "oracle:stone_patch",
+                    "features": [
+                        {"chance": 0.5, "feature": "oracle:sand_disk"}
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
         (placed_dir / "stone_column.json").write_text(
             json.dumps(
                 {
@@ -515,6 +528,21 @@ def main() -> int:
                         {
                             "type": "minecraft:fixed_placement",
                             "positions": [[8, 80, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "selector.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:selector",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 90, 8]],
                         }
                     ],
                 },

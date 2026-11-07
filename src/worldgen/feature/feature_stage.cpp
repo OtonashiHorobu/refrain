@@ -63,6 +63,16 @@ void decorate(
         by_biome.emplace(list.biome, &list);
     }
 
+    context.place_by_id = [&context, &placed](std::string_view id,
+                                              worldgen_random &random,
+                                              const block_pos &position) {
+        const auto found = placed.find(std::string{id});
+        if (found == placed.end()) {
+            return false;
+        }
+        place_placed(context, found->second, random, position);
+        return true;
+    };
     const block_pos origin{.x = context.placement.chunk->chunk_x() * 16,
                            .y = context.placement.chunk->min_y(),
                            .z = context.placement.chunk->chunk_z() * 16};
