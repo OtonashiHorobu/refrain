@@ -129,12 +129,17 @@ auto child(const data::nbt::compound *entries, std::string_view key)
 }
 
 auto canonical_state_name(std::string_view name) -> std::string_view {
-    if (name == "minecraft:oak_log[axis=y]") {
-        return "minecraft:oak_log";
+    if (name.size() > 8 && name.ends_with("[axis=y]")) {
+        const auto base = name.substr(0, name.size() - 8);
+        if (base.ends_with("_log") || base.ends_with("_stem") ||
+            base.ends_with("_wood")) {
+            return base;
+        }
     }
-    if (name ==
-        "minecraft:oak_leaves[distance=7,persistent=false,waterlogged=false]") {
-        return "minecraft:oak_leaves";
+    constexpr std::string_view leaf_defaults =
+        "[distance=7,persistent=false,waterlogged=false]";
+    if (name.size() > leaf_defaults.size() && name.ends_with(leaf_defaults)) {
+        return name.substr(0, name.size() - leaf_defaults.size());
     }
     return name;
 }

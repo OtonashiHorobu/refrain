@@ -355,6 +355,7 @@ def main() -> int:
             "oracle:moss_pile",
             "oracle:oak_tree",
             "oracle:forking_tree",
+            "oracle:real_birch",
         ]
         biome_dir = pack / "data/oracle/worldgen/biome"
         biome_dir.mkdir(parents=True)
@@ -679,6 +680,52 @@ def main() -> int:
                         {
                             "type": "minecraft:fixed_placement",
                             "positions": [[8, 90, 8]],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        birch = read_pack_data(
+            args.server_jar, "data/minecraft/worldgen/feature/birch.json"
+        )
+        minecraft_feature = pack / "data/minecraft/worldgen/feature"
+        minecraft_feature.mkdir(parents=True, exist_ok=True)
+        (minecraft_feature / "birch.json").write_text(
+            json.dumps(birch, indent=2) + "\n"
+        )
+        provider_dir = pack / "data/minecraft/worldgen/block_state_provider"
+        provider_dir.mkdir(parents=True, exist_ok=True)
+        (provider_dir / "soil_beneath_tree.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:rule_based",
+                    "rules": [
+                        {
+                            "if_true": {
+                                "type": "minecraft:not",
+                                "predicate": {
+                                    "type": "minecraft:matching_block_tag",
+                                    "tag": "minecraft:cannot_replace_below_tree_trunk",
+                                },
+                            },
+                            "then": {"id": "minecraft:dirt"},
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (placed_dir / "real_birch.json").write_text(
+            json.dumps(
+                {
+                    "feature": "minecraft:birch",
+                    "placement": [
+                        {
+                            "type": "minecraft:fixed_placement",
+                            "positions": [[8, 140, 8]],
                         }
                     ],
                 },
