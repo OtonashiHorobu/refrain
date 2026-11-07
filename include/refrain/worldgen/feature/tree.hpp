@@ -16,9 +16,11 @@
 
 namespace refrain::worldgen::feature {
 
+enum class trunk_kind : std::uint8_t { straight, forking };
+
 class tree_feature final : public feature {
   public:
-    tree_feature(block_state_registry &states,
+    tree_feature(block_state_registry &states, trunk_kind kind,
                  std::unique_ptr<state_provider> trunk_provider,
                  std::unique_ptr<state_provider> foliage_provider,
                  std::unique_ptr<state_provider> below_trunk_provider,
@@ -28,7 +30,8 @@ class tree_feature final : public feature {
                  jint foliage_height, jint size_limit, jint lower_size,
                  jint upper_size, bool has_min_clipped, jint min_clipped,
                  bool ignore_vines)
-        : states_{&states}, trunk_provider_{std::move(trunk_provider)},
+        : states_{&states}, kind_{kind},
+          trunk_provider_{std::move(trunk_provider)},
           foliage_provider_{std::move(foliage_provider)},
           below_trunk_provider_{std::move(below_trunk_provider)},
           base_height_{base_height}, height_rand_a_{height_rand_a},
@@ -52,7 +55,8 @@ class tree_feature final : public feature {
                                const block_pos &pos) const -> bool;
     void place_foliage(feature_context &context, worldgen_random &random,
                        const block_pos &attachment, jint leaf_radius,
-                       std::vector<block_pos> &leaves, bool &placed) const;
+                       jint radius_offset, std::vector<block_pos> &leaves,
+                       bool &placed) const;
     void place_leaves_row(feature_context &context, worldgen_random &random,
                           const block_pos &origin, jint radius, jint y,
                           std::vector<block_pos> &leaves, bool &placed) const;
@@ -61,6 +65,7 @@ class tree_feature final : public feature {
                        const std::vector<block_pos> &leaves) const;
 
     block_state_registry *states_{nullptr};
+    trunk_kind kind_{trunk_kind::straight};
     std::unique_ptr<state_provider> trunk_provider_{};
     std::unique_ptr<state_provider> foliage_provider_{};
     std::unique_ptr<state_provider> below_trunk_provider_{};

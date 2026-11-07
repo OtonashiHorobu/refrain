@@ -521,10 +521,18 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                "tree decorators are not implemented")};
             }
             const auto *trunk_type = trunk_placer->find("type");
-            if (trunk_type == nullptr ||
-                trunk_type->as_string() !=
-                    std::optional<std::string_view>{
-                        "minecraft:straight_trunk_placer"}) {
+            if (trunk_type == nullptr) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "trunk placer has no type")};
+            }
+            const auto trunk_name = trunk_type->as_string();
+            if (!trunk_name) {
+                return std::unexpected{trunk_name.error()};
+            }
+            trunk_kind kind = trunk_kind::straight;
+            if (*trunk_name == "minecraft:forking_trunk_placer") {
+                kind = trunk_kind::forking;
+            } else if (*trunk_name != "minecraft:straight_trunk_placer") {
                 return std::unexpected{make_error(error_code::unsupported,
                                                   "unsupported trunk placer")};
             }
@@ -621,7 +629,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             features_.emplace(
                 id,
                 std::make_unique<tree_feature>(
-                    *states_, std::move(*trunk), std::move(*foliage),
+                    *states_, kind, std::move(*trunk), std::move(*foliage),
                     std::move(*below), static_cast<jint>(*base_value),
                     static_cast<jint>(*rand_a_value),
                     static_cast<jint>(*rand_b_value),

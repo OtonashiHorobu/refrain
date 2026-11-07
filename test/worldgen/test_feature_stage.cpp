@@ -41,6 +41,7 @@ using refrain::worldgen::feature::simple_block_feature;
 using refrain::worldgen::feature::simple_state;
 using refrain::worldgen::feature::spring_feature;
 using refrain::worldgen::feature::tree_feature;
+using refrain::worldgen::feature::trunk_kind;
 using refrain::worldgen::provider::generation_context;
 
 auto parse(std::string_view text) -> refrain::data::json::value {
@@ -158,6 +159,7 @@ suite<"worldgen/tree"> tree_tests = [] {
             return;
         }
         tree_feature tree{registry,
+                          trunk_kind::straight,
                           simple_state(*log),
                           simple_state(*leaves),
                           simple_state(*dirt),
