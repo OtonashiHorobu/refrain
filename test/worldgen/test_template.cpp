@@ -779,4 +779,90 @@ suite<"worldgen/template"> template_tests = [] {
             expect(&manager.get_or_create("test:demo") == &loaded);
             std::filesystem::remove_all(directory);
         };
+
+    "template shape updates cross the write radius"_test = [] {
+        using namespace refrain;
+        using namespace refrain::worldgen;
+        block_state_registry registry;
+        const auto stair_west =
+            registry.intern("minecraft:jungle_stairs[facing=west,half=top,"
+                            "shape=straight,waterlogged=false]",
+                            {.air = false,
+                             .blocks_motion = true,
+                             .blocks_motion_no_leaves = true});
+        const auto stair_north =
+            registry.intern("minecraft:jungle_stairs[facing=north,half=top,"
+                            "shape=straight,waterlogged=false]",
+                            {.air = false,
+                             .blocks_motion = true,
+                             .blocks_motion_no_leaves = true});
+        const auto fence =
+            registry.intern("minecraft:jungle_fence[east=false,north=false,"
+                            "south=false,waterlogged=false,west=false]",
+                            {.air = false,
+                             .blocks_motion = true,
+                             .blocks_motion_no_leaves = true});
+        expect(stair_west && stair_north && fence);
+        if (!stair_west || !stair_north || !fence) {
+            return;
+        }
+        structure::structure_template templ{};
+        templ.size_x = 17;
+        templ.size_y = 1;
+        templ.size_z = 1;
+        templ.palettes.push_back({
+            structure::template_block_info{
+                .x = 15, .y = 0, .z = 0, .state = *stair_west},
+            structure::template_block_info{
+                .x = 16, .y = 0, .z = 0, .state = *stair_north},
+        });
+        proto_chunk left{registry, 0, 0, 0, 32};
+        proto_chunk right{registry, 1, 0, 0, 32};
+        chunk_region region{left, 1};
+        region.attach(right);
+        auto left_settings = structure::template_place_settings{};
+        left_settings.bounds = structure::template_bounds{.min_x = 0,
+                                                          .min_y = 0,
+                                                          .min_z = 0,
+                                                          .max_x = 15,
+                                                          .max_y = 31,
+                                                          .max_z = 31};
+        auto right_settings = structure::template_place_settings{};
+        right_settings.bounds = structure::template_bounds{.min_x = 16,
+                                                           .min_y = 0,
+                                                           .min_z = 0,
+                                                           .max_x = 31,
+                                                           .max_y = 31,
+                                                           .max_z = 31};
+        (void)structure::place_template(region, registry, templ,
+                                        block_pos{.x = 0, .y = 0, .z = 0},
+                                        left_settings);
+        (void)structure::place_template(region, registry, templ,
+                                        block_pos{.x = 0, .y = 0, .z = 0},
+                                        right_settings);
+        const auto shape =
+            std::string{registry.name(region.state_at(15, 0, 0))};
+        expect(shape.find("shape=inner_right") != std::string::npos);
+
+        templ.palettes.clear();
+        templ.palettes.push_back({
+            structure::template_block_info{
+                .x = 15, .y = 0, .z = 0, .state = *fence},
+            structure::template_block_info{
+                .x = 16, .y = 0, .z = 0, .state = *fence},
+        });
+        proto_chunk left_fence{registry, 0, 0, 0, 32};
+        proto_chunk right_fence{registry, 1, 0, 0, 32};
+        chunk_region fence_region{left_fence, 1};
+        fence_region.attach(right_fence);
+        (void)structure::place_template(fence_region, registry, templ,
+                                        block_pos{.x = 0, .y = 0, .z = 0},
+                                        left_settings);
+        (void)structure::place_template(fence_region, registry, templ,
+                                        block_pos{.x = 0, .y = 0, .z = 0},
+                                        right_settings);
+        const auto east =
+            std::string{registry.name(fence_region.state_at(15, 0, 0))};
+        expect(east.find("east=true") != std::string::npos);
+    };
 };
