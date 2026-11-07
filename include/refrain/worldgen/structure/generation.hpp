@@ -19,6 +19,11 @@ namespace refrain::worldgen::structure {
 
 class structure_template_manager;
 
+/// `SwampHutStructure`: one 7x7x9 scattered hut piece at y=64. The piece keeps
+/// the unshifted box; placement moves it to the average ground height.
+[[nodiscard]] auto swamp_hut_start(const chunk_pos &chunk, jlong seed)
+    -> structure_start;
+
 /// `IglooPieces.addPieces`: the top template at y=90 and, for half the start
 /// seeds, a ladder column and a basement below it. The pieces carry the
 /// template id, rotation and pivot; their final y is resolved when the piece

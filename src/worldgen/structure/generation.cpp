@@ -7,6 +7,8 @@
 #include <refrain/worldgen/core/rng.hpp>
 #include <refrain/worldgen/structure/template.hpp>
 
+#include <array>
+
 #include <algorithm>
 
 namespace refrain::worldgen::structure {
@@ -93,6 +95,34 @@ auto igloo_start(const chunk_pos &chunk, jlong seed,
         start.bounds.max_y = std::max(start.bounds.max_y, piece.bounds.max_y);
         start.bounds.max_z = std::max(start.bounds.max_z, piece.bounds.max_z);
     }
+    return start;
+}
+
+auto swamp_hut_start(const chunk_pos &chunk, jlong seed) -> structure_start {
+    worldgen_random random{std::make_unique<legacy_random_source>(0)};
+    random.set_large_feature_seed(seed, chunk.x, chunk.z);
+    // `Direction.Plane.HORIZONTAL` order: north, east, south, west.
+    static constexpr std::array<jint, 4> orientations{2, 3, 0, 1};
+    const jint direction =
+        orientations[static_cast<std::size_t>(random.next_int(4))];
+    const jint west = chunk.x * 16;
+    const jint north = chunk.z * 16;
+    const bool along_z = direction == 2 || direction == 0;
+    const structure_bbox bounds{
+        .min_x = west,
+        .min_y = 64,
+        .min_z = north,
+        .max_x = west + (along_z ? 6 : 8),
+        .max_y = 64 + 6,
+        .max_z = north + (along_z ? 8 : 6),
+    };
+    structure_start start{.structure = "minecraft:swamp_hut",
+                          .chunk = chunk,
+                          .references = 0,
+                          .max_references = 1,
+                          .bounds = bounds};
+    start.pieces.push_back(structure_piece{
+        .type = "minecraft:tesh", .bounds = bounds, .orientation = direction});
     return start;
 }
 

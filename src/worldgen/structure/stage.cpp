@@ -184,7 +184,17 @@ auto try_generate(const structure_start_context &context,
         return start;
     }
     if (structure.type == "minecraft:swamp_hut") {
-        return surface_start(context, structure, chunk, 7, 7, 9, false);
+        const jint middle_x = chunk.x * 16 + 8;
+        const jint middle_z = chunk.z * 16 + 8;
+        const jint y = context.height_at(middle_x, middle_z,
+                                         heightmap_kind::world_surface_wg);
+        if (!biome_allowed(context, structure, middle_x, y, middle_z)) {
+            return std::nullopt;
+        }
+        auto start = swamp_hut_start(chunk, context.seed);
+        start.structure = structure.id;
+        start.step = structure.step;
+        return start;
     }
     if (structure.type == "minecraft:desert_pyramid") {
         return surface_start(context, structure, chunk, 21, 15, 21, true);
