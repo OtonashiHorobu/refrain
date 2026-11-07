@@ -6,14 +6,42 @@
 
 #pragma once
 
+#include <refrain/worldgen/chunk/heightmap.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
 #include <refrain/worldgen/structure/start.hpp>
+#include <refrain/worldgen/structure/structure_data.hpp>
 
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace refrain::worldgen::structure {
+
+/// The world access a starts stage needs. Biomes are queried at quart
+/// resolution; heights return the first occupied block below the heightmap
+/// top, matching `getFirstOccupiedHeight`.
+struct structure_start_context {
+    jlong seed{0};
+    const structure_data_set *data{nullptr};
+    jint min_y{-64};
+    jint world_height{384};
+    jint sea_level{63};
+    std::function<std::uint16_t(jint quart_x, jint quart_y, jint quart_z)>
+        biome_at{};
+    std::function<std::string_view(std::uint16_t)> biome_name{};
+    std::function<jint(jint block_x, jint block_z, heightmap_kind)> height_at{};
+};
+
+/// Generates every structure start owned by `chunk`, in structure-set order.
+/// Unsupported structure types produce no start; their sets are still advanced
+/// exactly like the reference, so an unsupported candidate does not consume a
+/// weighted draw meant for a later entry.
+[[nodiscard]] auto
+generate_structure_starts(const chunk_pos &chunk,
+                          const structure_start_context &context)
+    -> std::vector<structure_start>;
 
 struct selected_structure {
     std::string id{};

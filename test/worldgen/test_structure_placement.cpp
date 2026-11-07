@@ -273,6 +273,91 @@ suite<"worldgen/structure-stage"> structure_stage_tests = [] {
             expect(references.front().count == 1);
         };
 
+    "structure sets generate a surface start with its rotated piece"_test = [] {
+        structure::structure_data_set data;
+        data.structures.emplace("minecraft:desert_pyramid",
+                                structure::structure_document{
+                                    .id = "minecraft:desert_pyramid",
+                                    .type = "minecraft:desert_pyramid",
+                                    .step = "surface_structures",
+                                    .biome_ids = {"minecraft:desert"},
+                                });
+        structure::structure_set set{
+            .id = "minecraft:desert_pyramids",
+            .structures = {{.structure = "minecraft:desert_pyramid",
+                            .weight = 1}},
+            .random_spread =
+                random_spread_placement{.spacing = 1,
+                                        .separation = 0,
+                                        .salt = 0,
+                                        .spread = spread_type::linear,
+                                        .frequency = 1.0F},
+        };
+        data.sets.emplace("minecraft:desert_pyramids", set);
+        const structure::structure_start_context context{
+            .seed = 12345,
+            .data = &data,
+            .min_y = -64,
+            .world_height = 384,
+            .sea_level = 63,
+            .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+            .biome_name = [](std::uint16_t) { return "minecraft:desert"; },
+            .height_at = [](jint, jint, heightmap_kind) { return 70; },
+        };
+        const auto starts = structure::generate_structure_starts(
+            chunk_pos{.x = 0, .z = 0}, context);
+        expect(starts.size() == 1U);
+        if (starts.empty()) {
+            return;
+        }
+        expect(starts.front().structure == "minecraft:desert_pyramid");
+        expect(starts.front().pieces.size() == 1U);
+        if (starts.front().pieces.empty()) {
+            return;
+        }
+        const auto &piece = starts.front().pieces.front();
+        expect(piece.bounds.min_y == 64 && piece.bounds.max_y == 78);
+        const auto size_x = piece.bounds.max_x - piece.bounds.min_x + 1;
+        const auto size_z = piece.bounds.max_z - piece.bounds.min_z + 1;
+        expect((size_x == 21 && size_z == 21) ||
+               (size_x == 15 && size_z == 21) ||
+               (size_x == 21 && size_z == 15));
+    };
+
+    "a structure set rejects a chunk whose biome is not allowed"_test = [] {
+        structure::structure_data_set data;
+        data.structures.emplace("minecraft:swamp_hut",
+                                structure::structure_document{
+                                    .id = "minecraft:swamp_hut",
+                                    .type = "minecraft:swamp_hut",
+                                    .step = "surface_structures",
+                                    .biome_ids = {"minecraft:swamp"},
+                                });
+        data.sets.emplace(
+            "minecraft:swamp_huts",
+            structure::structure_set{
+                .id = "minecraft:swamp_huts",
+                .structures = {{.structure = "minecraft:swamp_hut",
+                                .weight = 1}},
+                .random_spread =
+                    random_spread_placement{.spacing = 1,
+                                            .separation = 0,
+                                            .salt = 0,
+                                            .spread = spread_type::linear,
+                                            .frequency = 1.0F},
+            });
+        const structure::structure_start_context context{
+            .seed = 12345,
+            .data = &data,
+            .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+            .biome_name = [](std::uint16_t) { return "minecraft:plains"; },
+            .height_at = [](jint, jint, heightmap_kind) { return 70; },
+        };
+        expect(structure::generate_structure_starts(chunk_pos{.x = 0, .z = 0},
+                                                    context)
+                   .empty());
+    };
+
     "the write stage keeps only starts owned by the chunk"_test = [] {
         const std::vector<structure::selected_structure> structures{{
             .id = "oracle:buried",

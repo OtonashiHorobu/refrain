@@ -32,6 +32,7 @@ struct structure_bbox {
 struct structure_piece {
     std::string type{};
     structure_bbox bounds{};
+    jint orientation{-1}; ///< `Direction.get2DDataValue`, -1 when unset
 };
 
 struct structure_start {
