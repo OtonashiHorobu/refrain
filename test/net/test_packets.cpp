@@ -329,6 +329,55 @@ const suite tests = [] {
         check_table(v777::play_packets);
     };
 
+    "net/protocol round trips a map payload"_test = [] {
+        v777::configuration::clientbound::custom_report_details packet{};
+        packet.payload.emplace("alpha", "one");
+        packet.payload.emplace("beta", "two");
+        std::vector<std::byte> body;
+        net::writer out{body};
+        out.write_varint(packet.packet_id);
+        const auto encoded{
+            v777::configuration::clientbound::encode_custom_report_details(
+                out, packet)};
+        expect(encoded.has_value());
+        expect(body.size() >= 2U);
+        if (body.size() >= 2U) {
+            expect(body[1] == std::byte{2});
+        }
+        net::reader in{body};
+        auto id{in.read_varint()};
+        expect(id.has_value());
+        v777::configuration::clientbound::custom_report_details decoded{};
+        const auto status{
+            v777::configuration::clientbound::decode_custom_report_details(
+                in, decoded)};
+        expect(status.has_value());
+        expect(in.empty());
+        const bool same{decoded.payload == packet.payload};
+        expect(same);
+    };
+
+    "net/protocol round trips a varint array payload"_test = [] {
+        v777::play::clientbound::remove_entities packet{};
+        packet.payload = {1, 300, -1};
+        std::vector<std::byte> body;
+        net::writer out{body};
+        out.write_varint(packet.packet_id);
+        const auto encoded{
+            v777::play::clientbound::encode_remove_entities(out, packet)};
+        expect(encoded.has_value());
+        net::reader in{body};
+        auto id{in.read_varint()};
+        expect(id.has_value());
+        v777::play::clientbound::remove_entities decoded{};
+        const auto status{
+            v777::play::clientbound::decode_remove_entities(in, decoded)};
+        expect(status.has_value());
+        expect(in.empty());
+        const bool same{decoded.payload == packet.payload};
+        expect(same);
+    };
+
     "net/protocol rejects an overlong chat message"_test = [] {
         std::vector<std::byte> body;
         net::writer out{body};

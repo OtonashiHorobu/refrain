@@ -72,6 +72,7 @@ struct resolved_type {
         slice,
         optional,
         repeated,
+        map,
     };
 
     category kind{category::primitive};

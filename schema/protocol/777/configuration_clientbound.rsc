@@ -73,6 +73,10 @@ packet transfer = 12 {
     #[varint] port: i32;
 }
 
+packet custom_report_details = 16 {
+    payload: map<string, string>;
+}
+
 packet clear_dialog = 18 {
 }
 

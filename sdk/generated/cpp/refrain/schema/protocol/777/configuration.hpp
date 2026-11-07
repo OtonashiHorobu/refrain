@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: fbc9968bc3817b27
+// Schema hash: eeff21779bc06c61
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_HPP
@@ -22,7 +22,7 @@
 namespace refrain::protocol::v777 {
 
 /// Packets declared for this stage, ordered by flow and id.
-inline constexpr std::array<packet_descriptor, 25> configuration_packets{{
+inline constexpr std::array<packet_descriptor, 26> configuration_packets{{
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0x0, "cookie_request"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0x1, "custom_payload"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0x2, "disconnect"},
@@ -37,6 +37,7 @@ inline constexpr std::array<packet_descriptor, 25> configuration_packets{{
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0xC, "transfer"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0xD, "update_enabled_features"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0xF, "select_known_packs"},
+  packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0x10, "custom_report_details"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0x12, "clear_dialog"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0x14, "code_of_conduct"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::serverbound, 0x0, "client_information"},

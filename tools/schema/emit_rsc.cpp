@@ -82,6 +82,9 @@ namespace {
     case resolved_type::category::optional:
         return "std::optional<" +
                rsc_cpp_type(program, type.arguments.front()) + ">";
+    case resolved_type::category::map:
+        return "std::map<" + rsc_cpp_type(program, type.arguments[0]) + ", " +
+               rsc_cpp_type(program, type.arguments[1]) + ">";
     case resolved_type::category::handle:
         std::unreachable(); // sema rejects handles in RSC data schemas
     }
@@ -576,6 +579,32 @@ void emit_encode_value(code_writer &writer, const model &program,
         writer.line("}}");
         return;
     }
+    case resolved_type::category::map: {
+        if (hints.maximum.has_value()) {
+            writer.line("if ({}.size() > {}) {{", expression, *hints.maximum);
+            writer.indent();
+            writer.line(
+                "return "
+                "std::unexpected{{::refrain::make_error(::refrain::error_code::"
+                "invalid_argument, \"field '{}' exceeds its declared "
+                "maximum\")}};",
+                label);
+            writer.dedent();
+            writer.line("}}");
+        }
+        writer.line("out.write_varint(static_cast<std::uint32_t>({}.size()));",
+                    expression);
+        const auto entry{"entry_" + std::to_string(depth)};
+        writer.line("for (const auto &{} : {}) {{", entry, expression);
+        writer.indent();
+        emit_encode_value(writer, program, type.arguments[0], entry + ".first",
+                          depth + 1, element_hints(hints), label);
+        emit_encode_value(writer, program, type.arguments[1], entry + ".second",
+                          depth + 1, element_hints(hints), label);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    }
     case resolved_type::category::optional:
         if (hints.optional_varint) {
             writer.line("out.write_varint({}.has_value() ? "
@@ -774,6 +803,43 @@ void emit_decode_value(code_writer &writer, const model &program,
         writer.line("}}");
         return;
     }
+    case resolved_type::category::map: {
+        writer.line("auto count_{} = in.read_varint();", depth);
+        writer.line("if (!count_{}) return "
+                    "std::unexpected{{std::move(count_{}.error())}};",
+                    depth, depth);
+        if (hints.maximum.has_value()) {
+            writer.line("if (*count_{} > {}) {{", depth, *hints.maximum);
+            writer.indent();
+            writer.line(
+                "return "
+                "std::unexpected{{::refrain::make_error(::refrain::error_code::"
+                "parse_error, \"field '{}' exceeds its declared maximum\")}};",
+                label);
+            writer.dedent();
+            writer.line("}}");
+        }
+        writer.line("{}.clear();", target);
+        const auto index{"index_" + std::to_string(depth)};
+        const auto key{"map_key_" + std::to_string(depth)};
+        const auto value{"map_value_" + std::to_string(depth)};
+        writer.line("for (std::uint32_t {} = 0; {} < *count_{}; ++{}) {{",
+                    index, index, depth, index);
+        writer.indent();
+        writer.line("{} {}{{}};", rsc_cpp_type(program, type.arguments[0]),
+                    key);
+        emit_decode_value(writer, program, type.arguments[0], key, depth + 1,
+                          element_hints(hints), label);
+        writer.line("{} {}{{}};", rsc_cpp_type(program, type.arguments[1]),
+                    value);
+        emit_decode_value(writer, program, type.arguments[1], value, depth + 2,
+                          element_hints(hints), label);
+        writer.line("{}.emplace(std::move({}), std::move({}));", target, key,
+                    value);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    }
     case resolved_type::category::optional:
         if (hints.optional_varint) {
             writer.line("auto present_{} = in.read_varint();", depth);
@@ -889,6 +955,16 @@ void emit_decode_value(code_writer &writer, const model &program,
         });
     };
     bool needs_wire{false};
+    bool needs_map{false};
+    const auto uses_map = [&](const auto &self,
+                              const resolved_type &type) -> bool {
+        if (type.kind == resolved_type::category::map) {
+            return true;
+        }
+        return std::ranges::any_of(type.arguments, [&](const auto &argument) {
+            return self(self, argument);
+        });
+    };
     const auto uses_wire = [&](const auto &self,
                                const resolved_type &type) -> bool {
         if (type.kind == resolved_type::category::primitive) {
@@ -905,6 +981,7 @@ void emit_decode_value(code_writer &writer, const model &program,
             needs_identifier = needs_identifier ||
                                uses_identifier(uses_identifier, field.type);
             needs_wire = needs_wire || uses_wire(uses_wire, field.type);
+            needs_map = needs_map || uses_map(uses_map, field.type);
         }
     }
     includes.erase(emit::rsc_cpp_include(source_path));
@@ -926,6 +1003,10 @@ void emit_decode_value(code_writer &writer, const model &program,
     }
     if (needs_wire) {
         writer.line("#include <refrain/net/wire.hpp>");
+    }
+    if (needs_map) {
+        writer.line("#include <map>");
+        writer.line("#include <utility>");
     }
     for (const auto &include : includes) {
         writer.line("#include {}", include);

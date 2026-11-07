@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: fbc9968bc3817b27
+// Schema hash: eeff21779bc06c61
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -20,6 +20,8 @@
 #include <refrain/net/base.hpp>
 #include <refrain/data/resource_location.hpp>
 #include <refrain/net/wire.hpp>
+#include <map>
+#include <utility>
 #include <refrain/schema/protocol/777/wire.hpp>
 
 namespace refrain::protocol::v777::play::clientbound {
@@ -564,6 +566,14 @@ struct recipe_book_settings {
     ::refrain::protocol::v777::wire::wire_book_settings book_settings;
 };
 
+struct remove_entities {
+    static constexpr std::uint16_t packet_id = 0x4E;
+    static constexpr std::string_view packet_name = "remove_entities";
+
+    // attributes: #[varint]
+    std::vector<std::int32_t> payload;
+};
+
 struct remove_mob_effect {
     static constexpr std::uint16_t packet_id = 0x4F;
     static constexpr std::string_view packet_name = "remove_mob_effect";
@@ -741,6 +751,14 @@ struct set_player_inventory {
     ::refrain::net::item_stack contents;
 };
 
+struct set_player_team {
+    static constexpr std::uint16_t packet_id = 0x6F;
+    static constexpr std::string_view packet_name = "set_player_team";
+
+    // attributes: #[max(32767)]
+    std::vector<std::string> payload;
+};
+
 struct set_simulation_distance {
     static constexpr std::uint16_t packet_id = 0x71;
     static constexpr std::string_view packet_name = "set_simulation_distance";
@@ -888,6 +906,13 @@ struct projectile_power {
     // attributes: #[varint]
     std::int32_t id;
     double acceleration_power;
+};
+
+struct custom_report_details {
+    static constexpr std::uint16_t packet_id = 0x8B;
+    static constexpr std::string_view packet_name = "custom_report_details";
+
+    std::map<std::string, std::string> payload;
 };
 
 struct clear_dialog {
@@ -2854,6 +2879,36 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_remove_entities(::refrain::net::writer &out, const remove_entities &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.payload.size()));
+    for (const auto &item_0 : value.payload) {
+      out.write_varint(static_cast<std::uint32_t>(item_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_remove_entities(::refrain::net::reader &in, remove_entities &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.payload.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      std::int32_t value_0{};
+      auto value_1 = in.read_varint();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = static_cast<decltype(value_0)>(*value_1);
+      value.payload.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_remove_mob_effect(::refrain::net::writer &out, const remove_mob_effect &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -3476,6 +3531,44 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_set_player_team(::refrain::net::writer &out, const set_player_team &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (value.payload.size() > 32767) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'payload' exceeds its declared maximum")};
+    }
+    out.write_varint(static_cast<std::uint32_t>(value.payload.size()));
+    for (const auto &item_0 : value.payload) {
+      if (auto written = out.write_string(item_0, 32767); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_set_player_team(::refrain::net::reader &in, set_player_team &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    if (*count_0 > 32767) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::parse_error, "field 'payload' exceeds its declared maximum")};
+    }
+    value.payload.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      std::string value_0{};
+      auto value_1 = in.read_string(32767);
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = std::move(*value_1);
+      value.payload.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_set_simulation_distance(::refrain::net::writer &out, const set_simulation_distance &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -3967,6 +4060,45 @@ struct clear_dialog {
     auto value_0 = in.read_f64();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.acceleration_power = *value_0;
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_custom_report_details(::refrain::net::writer &out, const custom_report_details &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.payload.size()));
+    for (const auto &entry_0 : value.payload) {
+      if (auto written = out.write_string(entry_0.first, 32767); !written) {
+        return written;
+      }
+      if (auto written = out.write_string(entry_0.second, 32767); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_custom_report_details(::refrain::net::reader &in, custom_report_details &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.payload.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      std::string map_key_0{};
+      auto value_1 = in.read_string(32767);
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      map_key_0 = std::move(*value_1);
+      std::string map_value_0{};
+      auto value_2 = in.read_string(32767);
+      if (!value_2) return std::unexpected{std::move(value_2.error())};
+      map_value_0 = std::move(*value_2);
+      value.payload.emplace(std::move(map_key_0), std::move(map_value_0));
+    }
   }
   return ::refrain::status_ok();
 }

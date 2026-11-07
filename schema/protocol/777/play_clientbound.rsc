@@ -326,6 +326,10 @@ packet recipe_book_settings = 77 {
     book_settings: wire_book_settings;
 }
 
+packet remove_entities = 78 {
+    #[varint] payload: array<i32>;
+}
+
 packet remove_mob_effect = 79 {
     #[varint] entity_id: i32;
     #[varint] effect: i32;
@@ -424,6 +428,10 @@ packet set_player_inventory = 110 {
     contents: item_stack;
 }
 
+packet set_player_team = 111 {
+    #[max(32767)] payload: array<string>;
+}
+
 packet set_simulation_distance = 113 {
     #[varint] simulation_distance: i32;
 }
@@ -504,6 +512,10 @@ packet update_mob_effect = 135 {
 packet projectile_power = 138 {
     #[varint] id: i32;
     acceleration_power: f64;
+}
+
+packet custom_report_details = 139 {
+    payload: map<string, string>;
 }
 
 packet clear_dialog = 142 {

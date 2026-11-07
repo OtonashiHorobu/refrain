@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: fbc9968bc3817b27
+// Schema hash: eeff21779bc06c61
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
@@ -20,6 +20,8 @@
 #include <refrain/net/base.hpp>
 #include <refrain/data/resource_location.hpp>
 #include <refrain/net/wire.hpp>
+#include <map>
+#include <utility>
 #include <refrain/schema/protocol/777/common.hpp>
 
 namespace refrain::protocol::v777::configuration::clientbound {
@@ -129,6 +131,13 @@ struct transfer {
     std::string host;
     // attributes: #[varint]
     std::int32_t port;
+};
+
+struct custom_report_details {
+    static constexpr std::uint16_t packet_id = 0x10;
+    static constexpr std::string_view packet_name = "custom_report_details";
+
+    std::map<std::string, std::string> payload;
 };
 
 struct clear_dialog {
@@ -533,6 +542,45 @@ struct code_of_conduct {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.port = static_cast<decltype(value.port)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_custom_report_details(::refrain::net::writer &out, const custom_report_details &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.payload.size()));
+    for (const auto &entry_0 : value.payload) {
+      if (auto written = out.write_string(entry_0.first, 32767); !written) {
+        return written;
+      }
+      if (auto written = out.write_string(entry_0.second, 32767); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_custom_report_details(::refrain::net::reader &in, custom_report_details &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.payload.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      std::string map_key_0{};
+      auto value_1 = in.read_string(32767);
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      map_key_0 = std::move(*value_1);
+      std::string map_value_0{};
+      auto value_2 = in.read_string(32767);
+      if (!value_2) return std::unexpected{std::move(value_2.error())};
+      map_value_0 = std::move(*value_2);
+      value.payload.emplace(std::move(map_key_0), std::move(map_value_0));
+    }
   }
   return ::refrain::status_ok();
 }

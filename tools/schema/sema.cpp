@@ -808,6 +808,11 @@ class analyzer {
             return std::format("event field '{}' uses 'repeated<T>', which is "
                                "not representable in an event payload; {}",
                                field_name, allowed);
+        case resolved_type::category::map:
+            return std::format(
+                "event field '{}' uses 'map<K, V>', which is not "
+                "representable in an event payload; {}",
+                field_name, allowed);
         }
         return std::nullopt;
     }
@@ -1191,6 +1196,33 @@ class analyzer {
         }
 
         const auto &generic{source.name};
+        if (generic == "map") {
+            if (source.arguments.size() != 2) {
+                error(source.location,
+                      "'map<K, V>' expects exactly two type arguments");
+                return std::nullopt;
+            }
+            auto key{resolve_type(source.arguments[0], current_module, false)};
+            auto value{
+                resolve_type(source.arguments[1], current_module, false)};
+            if (!key.has_value() || !value.has_value()) {
+                return std::nullopt;
+            }
+            if (key->kind == resolved_type::category::array ||
+                key->kind == resolved_type::category::map ||
+                key->kind == resolved_type::category::optional ||
+                key->kind == resolved_type::category::slice ||
+                key->kind == resolved_type::category::repeated) {
+                error(source.location,
+                      "'map<K, V>' requires a scalar or named key type");
+                return std::nullopt;
+            }
+            resolved_type type;
+            type.kind = resolved_type::category::map;
+            type.arguments.push_back(std::move(*key));
+            type.arguments.push_back(std::move(*value));
+            return type;
+        }
         if (generic == "array" || generic == "slice" || generic == "optional" ||
             generic == "repeated") {
             if (source.arguments.size() != 1) {
@@ -1270,6 +1302,7 @@ class analyzer {
         case resolved_type::category::array:
         case resolved_type::category::optional:
         case resolved_type::category::repeated:
+        case resolved_type::category::map:
             return false;
         }
         return false;
@@ -1290,6 +1323,10 @@ class analyzer {
         case resolved_type::category::repeated:
             return type.arguments.size() == 1 &&
                    is_valid_data_field_type(type.arguments.front());
+        case resolved_type::category::map:
+            return type.arguments.size() == 2 &&
+                   is_valid_data_field_type(type.arguments[0]) &&
+                   is_valid_data_field_type(type.arguments[1]);
         }
         return false;
     }
@@ -2066,6 +2103,7 @@ class analyzer {
         case resolved_type::category::array:
         case resolved_type::category::optional:
         case resolved_type::category::repeated:
+        case resolved_type::category::map:
             return std::nullopt;
         }
         return std::nullopt;

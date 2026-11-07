@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: fbc9968bc3817b27
+// Schema hash: eeff21779bc06c61
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -223,6 +223,13 @@ template <> struct custom_traits<::refrain::protocol::v777::configuration::clien
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"host", &::refrain::protocol::v777::configuration::clientbound::transfer::host},
         refrain::reflect::custom_field{"port", &::refrain::protocol::v777::configuration::clientbound::transfer::port});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::configuration::clientbound::custom_report_details'.
+template <> struct custom_traits<::refrain::protocol::v777::configuration::clientbound::custom_report_details> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::configuration::clientbound::custom_report_details";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"payload", &::refrain::protocol::v777::configuration::clientbound::custom_report_details::payload});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::configuration::clientbound::clear_dialog'.
@@ -874,6 +881,13 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::r
         refrain::reflect::custom_field{"book_settings", &::refrain::protocol::v777::play::clientbound::recipe_book_settings::book_settings});
 };
 
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::remove_entities'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::remove_entities> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::remove_entities";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"payload", &::refrain::protocol::v777::play::clientbound::remove_entities::payload});
+};
+
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::remove_mob_effect'.
 template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::remove_mob_effect> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::remove_mob_effect";
@@ -1032,6 +1046,13 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::s
         refrain::reflect::custom_field{"contents", &::refrain::protocol::v777::play::clientbound::set_player_inventory::contents});
 };
 
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::set_player_team'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::set_player_team> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::set_player_team";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"payload", &::refrain::protocol::v777::play::clientbound::set_player_team::payload});
+};
+
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::set_simulation_distance'.
 template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::set_simulation_distance> {
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::set_simulation_distance";
@@ -1160,6 +1181,13 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::p
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"id", &::refrain::protocol::v777::play::clientbound::projectile_power::id},
         refrain::reflect::custom_field{"acceleration_power", &::refrain::protocol::v777::play::clientbound::projectile_power::acceleration_power});
+};
+
+/// Generated RSC packet 'refrain::protocol::v777::play::clientbound::custom_report_details'.
+template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::custom_report_details> {
+    static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::custom_report_details";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"payload", &::refrain::protocol::v777::play::clientbound::custom_report_details::payload});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::clear_dialog'.
