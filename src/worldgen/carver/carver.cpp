@@ -244,13 +244,11 @@ void cave_carver::create_tunnel(
         const double vertical_radius = horizontal_radius * y_scale;
         const float cos_x = mth::cos(static_cast<double>(vertical_rotation));
         x += static_cast<double>(
-                 mth::cos(static_cast<double>(horizontal_rotation))) *
-             cos_x;
+            mth::cos(static_cast<double>(horizontal_rotation)) * cos_x);
         y += static_cast<double>(
             mth::sin(static_cast<double>(vertical_rotation)));
         z += static_cast<double>(
-                 mth::sin(static_cast<double>(horizontal_rotation))) *
-             cos_x;
+            mth::sin(static_cast<double>(horizontal_rotation)) * cos_x);
         vertical_rotation *= steep ? 0.92F : 0.7F;
         vertical_rotation += x_rota * 0.1F;
         horizontal_rotation += y_rota * 0.1F;
@@ -262,17 +260,19 @@ void cave_carver::create_tunnel(
                   random.next_float() * 4.0F;
 
         if (current_step == split_point && thickness > 1.0F) {
-            create_tunnel(chunk_pos, random.next_long(), x, y, z,
+            const jlong first_seed = random.next_long();
+            const float first_thickness = random.next_float() * 0.5F + 0.5F;
+            create_tunnel(chunk_pos, first_seed, x, y, z,
                           horizontal_radius_multiplier,
-                          vertical_radius_multiplier,
-                          random.next_float() * 0.5F + 0.5F,
+                          vertical_radius_multiplier, first_thickness,
                           horizontal_rotation - static_cast<float>(pi / 2.0),
                           vertical_rotation / 3.0F, current_step, distance, 1.0,
                           output, skip);
-            create_tunnel(chunk_pos, random.next_long(), x, y, z,
+            const jlong second_seed = random.next_long();
+            const float second_thickness = random.next_float() * 0.5F + 0.5F;
+            create_tunnel(chunk_pos, second_seed, x, y, z,
                           horizontal_radius_multiplier,
-                          vertical_radius_multiplier,
-                          random.next_float() * 0.5F + 0.5F,
+                          vertical_radius_multiplier, second_thickness,
                           horizontal_rotation + static_cast<float>(pi / 2.0),
                           vertical_rotation / 3.0F, current_step, distance, 1.0,
                           output, skip);
@@ -399,12 +399,10 @@ void canyon_carver::do_carve(const provider::generation_context &context,
         const float cos_x = mth::cos(static_cast<double>(vertical_rotation));
         const float sin_x = mth::sin(static_cast<double>(vertical_rotation));
         x += static_cast<double>(
-                 mth::cos(static_cast<double>(horizontal_rotation))) *
-             cos_x;
+            mth::cos(static_cast<double>(horizontal_rotation)) * cos_x);
         y += static_cast<double>(sin_x);
         z += static_cast<double>(
-                 mth::sin(static_cast<double>(horizontal_rotation))) *
-             cos_x;
+            mth::sin(static_cast<double>(horizontal_rotation)) * cos_x);
         vertical_rotation *= 0.7F;
         vertical_rotation += x_rota * 0.05F;
         horizontal_rotation += y_rota * 0.05F;
