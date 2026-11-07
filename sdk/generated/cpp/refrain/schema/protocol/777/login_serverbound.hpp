@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 3058078ae94c142f
+// Schema hash: 37ad437ddc6c0e0a
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_LOGIN_SERVERBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_LOGIN_SERVERBOUND_HPP
@@ -18,6 +18,7 @@
 #include <vector>
 #include <refrain/core/error.hpp>
 #include <refrain/net/base.hpp>
+#include <refrain/data/resource_location.hpp>
 
 namespace refrain::protocol::v777::login::serverbound {
 
@@ -43,6 +44,14 @@ struct login_acknowledged {
     static constexpr std::uint16_t packet_id = 0x3;
     static constexpr std::string_view packet_name = "login_acknowledged";
 
+};
+
+struct cookie_response {
+    static constexpr std::uint16_t packet_id = 0x4;
+    static constexpr std::string_view packet_name = "cookie_response";
+
+    ::refrain::data::resource_location key;
+    std::optional<std::vector<std::byte>> payload;
 };
 [[nodiscard]] inline auto encode_hello(::refrain::net::writer &out, const hello &value) -> ::refrain::status {
   static_cast<void>(out);
@@ -125,6 +134,50 @@ struct login_acknowledged {
 [[nodiscard]] inline auto decode_login_acknowledged(::refrain::net::reader &in, login_acknowledged &value) -> ::refrain::status {
   static_cast<void>(in);
   static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_cookie_response(::refrain::net::writer &out, const cookie_response &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.key); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_bool(value.payload.has_value());
+    if (value.payload.has_value()) {
+      out.write_varint(static_cast<std::uint32_t>(value.payload.value().size()));
+      out.write_bytes(std::span<const std::byte>{value.payload.value() });
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_cookie_response(::refrain::net::reader &in, cookie_response &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.key = std::move(*value_0);
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      std::vector<std::byte> value_0{};
+      auto length_1 = in.read_varint();
+      if (!length_1) return std::unexpected{std::move(length_1.error())};
+      auto value_1 = in.read_bytes(*length_1);
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = std::vector<std::byte>{value_1->begin(), value_1->end()};
+      value.payload = std::move(value_0);
+    } else {
+      value.payload.reset();
+    }
+  }
   return ::refrain::status_ok();
 }
 

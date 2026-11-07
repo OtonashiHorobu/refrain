@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 3058078ae94c142f
+// Schema hash: 37ad437ddc6c0e0a
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -18,14 +18,74 @@
 #include <vector>
 #include <refrain/core/error.hpp>
 #include <refrain/net/base.hpp>
+#include <refrain/data/resource_location.hpp>
 #include <refrain/net/wire.hpp>
 
 namespace refrain::protocol::v777::wire {
+
+struct wire_entries_entry {
+    std::int8_t field_0;
+    ::refrain::net::item_stack field_1;
+};
+
+struct wire_entry_4 {
+    ::refrain::data::resource_location game_rule_key;
+    // attributes: #[max(32767)]
+    std::string value;
+};
+
+struct wire_vec3i {
+    // attributes: #[varint]
+    std::int32_t x;
+    // attributes: #[varint]
+    std::int32_t y;
+    // attributes: #[varint]
+    std::int32_t z;
+};
+
+struct wire_data_3 {
+    std::optional<::refrain::data::resource_location> test;
+    ::refrain::protocol::v777::wire::wire_vec3i size;
+    // attributes: #[varint]
+    std::uint32_t rotation;
+    bool ignore_entities;
+    // attributes: #[varint]
+    std::int32_t status;
+    std::optional<::refrain::net::text_component> error_message;
+};
+
+struct wire_chunk_biome_data {
+    std::int64_t pos;
+    // attributes: #[max(2097152)]
+    std::vector<std::byte> buffer;
+};
 
 struct wire_entry {
     // attributes: #[max(32767)]
     std::string text;
     std::optional<::refrain::net::text_component> tooltip;
+};
+
+struct wire_global_pos {
+    ::refrain::data::resource_location dimension;
+    std::int64_t pos;
+};
+
+struct wire_common_player_spawn_info {
+    // attributes: #[varint]
+    std::int32_t dimension_type;
+    ::refrain::data::resource_location dimension;
+    std::int64_t seed;
+    // attributes: #[varint]
+    std::uint32_t game_type;
+    std::optional<std::uint32_t> previous_game_type;
+    bool is_debug;
+    bool is_flat;
+    std::optional<::refrain::protocol::v777::wire::wire_global_pos> last_death_location;
+    // attributes: #[varint]
+    std::int32_t portal_cooldown;
+    // attributes: #[varint]
+    std::int32_t sea_level;
 };
 
 struct wire_vec3 {
@@ -78,15 +138,229 @@ struct wire_position_move_rotation {
     float y_rot;
     float x_rot;
 };
+[[nodiscard]] inline auto encode_wire_entries_entry(::refrain::net::writer &out, const wire_entries_entry &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_i64(static_cast<std::int64_t>(value.field_0));
+  }
+  {
+    if (auto written = ::refrain::net::encode_item_stack(out, value.field_1); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
 
-struct wire_vec3i {
-    // attributes: #[varint]
-    std::int32_t x;
-    // attributes: #[varint]
-    std::int32_t y;
-    // attributes: #[varint]
-    std::int32_t z;
-};
+[[nodiscard]] inline auto decode_wire_entries_entry(::refrain::net::reader &in, wire_entries_entry &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.field_0 = static_cast<decltype(value.field_0)>(*value_0);
+  }
+  {
+    if (auto decoded = ::refrain::net::decode_item_stack(in, value.field_1); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_entry_4(::refrain::net::writer &out, const wire_entry_4 &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.game_rule_key); !written) {
+      return written;
+    }
+  }
+  {
+    if (auto written = out.write_string(value.value, 32767); !written) {
+      return written;
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_entry_4(::refrain::net::reader &in, wire_entry_4 &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.game_rule_key = std::move(*value_0);
+  }
+  {
+    auto value_0 = in.read_string(32767);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.value = std::move(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_vec3i(::refrain::net::writer &out, const wire_vec3i &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.x));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.y));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.z));
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_vec3i(::refrain::net::reader &in, wire_vec3i &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.x = static_cast<decltype(value.x)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.y = static_cast<decltype(value.y)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.z = static_cast<decltype(value.z)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_data_3(::refrain::net::writer &out, const wire_data_3 &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_bool(value.test.has_value());
+    if (value.test.has_value()) {
+      if (auto written = out.write_identifier(value.test.value()); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_vec3i(out, value.size); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.rotation));
+  }
+  {
+    out.write_bool(value.ignore_entities);
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.status));
+  }
+  {
+    out.write_bool(value.error_message.has_value());
+    if (value.error_message.has_value()) {
+      if (auto written = ::refrain::net::encode_text_component(out, value.error_message.value()); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_data_3(::refrain::net::reader &in, wire_data_3 &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::data::resource_location value_0{};
+      auto value_1 = in.read_identifier();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = std::move(*value_1);
+      value.test = std::move(value_0);
+    } else {
+      value.test.reset();
+    }
+  }
+  {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_vec3i(in, value.size); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.rotation = static_cast<decltype(value.rotation)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.ignore_entities = *value_0;
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.status = static_cast<decltype(value.status)>(*value_0);
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::net::text_component value_0{};
+      if (auto decoded = ::refrain::net::decode_text_component(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.error_message = std::move(value_0);
+    } else {
+      value.error_message.reset();
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_chunk_biome_data(::refrain::net::writer &out, const wire_chunk_biome_data &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_i64(static_cast<std::int64_t>(value.pos));
+  }
+  {
+    if (value.buffer.size() > 2097152) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'buffer' exceeds its declared maximum")};
+    }
+    out.write_varint(static_cast<std::uint32_t>(value.buffer.size()));
+    out.write_bytes(std::span<const std::byte>{value.buffer });
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_chunk_biome_data(::refrain::net::reader &in, wire_chunk_biome_data &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.pos = static_cast<decltype(value.pos)>(*value_0);
+  }
+  {
+    auto length_0 = in.read_varint();
+    if (!length_0) return std::unexpected{std::move(length_0.error())};
+    if (*length_0 > 2097152) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::parse_error, "field 'buffer' exceeds its declared maximum")};
+    }
+    auto value_0 = in.read_bytes(*length_0);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.buffer = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_wire_entry(::refrain::net::writer &out, const wire_entry &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -126,6 +400,154 @@ struct wire_vec3i {
     } else {
       value.tooltip.reset();
     }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_global_pos(::refrain::net::writer &out, const wire_global_pos &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.dimension); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.pos));
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_global_pos(::refrain::net::reader &in, wire_global_pos &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.dimension = std::move(*value_0);
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.pos = static_cast<decltype(value.pos)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_wire_common_player_spawn_info(::refrain::net::writer &out, const wire_common_player_spawn_info &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.dimension_type));
+  }
+  {
+    if (auto written = out.write_identifier(value.dimension); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.seed));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.game_type));
+  }
+  {
+    out.write_bool(value.previous_game_type.has_value());
+    if (value.previous_game_type.has_value()) {
+      out.write_varint(static_cast<std::uint32_t>(value.previous_game_type.value()));
+    }
+  }
+  {
+    out.write_bool(value.is_debug);
+  }
+  {
+    out.write_bool(value.is_flat);
+  }
+  {
+    out.write_bool(value.last_death_location.has_value());
+    if (value.last_death_location.has_value()) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_global_pos(out, value.last_death_location.value()); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.portal_cooldown));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.sea_level));
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_wire_common_player_spawn_info(::refrain::net::reader &in, wire_common_player_spawn_info &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.dimension_type = static_cast<decltype(value.dimension_type)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.dimension = std::move(*value_0);
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.seed = static_cast<decltype(value.seed)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.game_type = static_cast<decltype(value.game_type)>(*value_0);
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      std::uint32_t value_0{};
+      auto value_1 = in.read_varint();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = static_cast<decltype(value_0)>(*value_1);
+      value.previous_game_type = std::move(value_0);
+    } else {
+      value.previous_game_type.reset();
+    }
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.is_debug = *value_0;
+  }
+  {
+    auto value_0 = in.read_bool();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.is_flat = *value_0;
+  }
+  {
+    auto present_0 = in.read_bool();
+    if (!present_0) return std::unexpected{std::move(present_0.error())};
+    if (*present_0) {
+      ::refrain::protocol::v777::wire::wire_global_pos value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_global_pos(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.last_death_location = std::move(value_0);
+    } else {
+      value.last_death_location.reset();
+    }
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.portal_cooldown = static_cast<decltype(value.portal_cooldown)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varint();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.sea_level = static_cast<decltype(value.sea_level)>(*value_0);
   }
   return ::refrain::status_ok();
 }
@@ -432,42 +854,6 @@ struct wire_vec3i {
     auto value_0 = in.read_f32();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.x_rot = *value_0;
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto encode_wire_vec3i(::refrain::net::writer &out, const wire_vec3i &value) -> ::refrain::status {
-  static_cast<void>(out);
-  static_cast<void>(value);
-  {
-    out.write_varint(static_cast<std::uint32_t>(value.x));
-  }
-  {
-    out.write_varint(static_cast<std::uint32_t>(value.y));
-  }
-  {
-    out.write_varint(static_cast<std::uint32_t>(value.z));
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto decode_wire_vec3i(::refrain::net::reader &in, wire_vec3i &value) -> ::refrain::status {
-  static_cast<void>(in);
-  static_cast<void>(value);
-  {
-    auto value_0 = in.read_varint();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.x = static_cast<decltype(value.x)>(*value_0);
-  }
-  {
-    auto value_0 = in.read_varint();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.y = static_cast<decltype(value.y)>(*value_0);
-  }
-  {
-    auto value_0 = in.read_varint();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.z = static_cast<decltype(value.z)>(*value_0);
   }
   return ::refrain::status_ok();
 }

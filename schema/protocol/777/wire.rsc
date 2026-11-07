@@ -9,9 +9,51 @@
 module refrain::protocol::v777::wire;
 version 777;
 
+struct wire_entries_entry {
+    field_0: i8;
+    field_1: item_stack;
+}
+
+struct wire_entry_4 {
+    game_rule_key: identifier;
+    #[max(32767)] value: string;
+}
+
+struct wire_data_3 {
+    test: optional<identifier>;
+    size: wire_vec3i;
+    #[varint] rotation: u32;
+    ignore_entities: bool;
+    #[varint] status: i32;
+    error_message: optional<text_component>;
+}
+
+struct wire_chunk_biome_data {
+    pos: i64;
+    #[max(2097152)] buffer: bytes;
+}
+
 struct wire_entry {
     #[max(32767)] text: string;
     tooltip: optional<text_component>;
+}
+
+struct wire_global_pos {
+    dimension: identifier;
+    pos: i64;
+}
+
+struct wire_common_player_spawn_info {
+    #[varint] dimension_type: i32;
+    dimension: identifier;
+    seed: i64;
+    #[varint] game_type: u32;
+    previous_game_type: optional<u32>;
+    is_debug: bool;
+    is_flat: bool;
+    last_death_location: optional<wire_global_pos>;
+    #[varint] portal_cooldown: i32;
+    #[varint] sea_level: i32;
 }
 
 struct wire_lerp_steps {

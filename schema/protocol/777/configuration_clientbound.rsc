@@ -68,6 +68,11 @@ packet post_effects = 10 {
     post_effects: array<identifier>;
 }
 
+packet store_cookie = 11 {
+    key: identifier;
+    #[max(5120)] payload: bytes;
+}
+
 packet transfer = 12 {
     #[max(32767)] host: string;
     #[varint] port: i32;

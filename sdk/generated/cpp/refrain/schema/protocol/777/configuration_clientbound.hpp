@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 3058078ae94c142f
+// Schema hash: 37ad437ddc6c0e0a
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_CLIENTBOUND_HPP
@@ -122,6 +122,15 @@ struct post_effects {
     static constexpr std::string_view packet_name = "post_effects";
 
     std::vector<::refrain::data::resource_location> post_effects;
+};
+
+struct store_cookie {
+    static constexpr std::uint16_t packet_id = 0xB;
+    static constexpr std::string_view packet_name = "store_cookie";
+
+    ::refrain::data::resource_location key;
+    // attributes: #[max(5120)]
+    std::vector<std::byte> payload;
 };
 
 struct transfer {
@@ -510,6 +519,45 @@ struct code_of_conduct {
       value_0 = std::move(*value_1);
       value.post_effects.push_back(std::move(value_0));
     }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_store_cookie(::refrain::net::writer &out, const store_cookie &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.key); !written) {
+      return written;
+    }
+  }
+  {
+    if (value.payload.size() > 5120) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'payload' exceeds its declared maximum")};
+    }
+    out.write_varint(static_cast<std::uint32_t>(value.payload.size()));
+    out.write_bytes(std::span<const std::byte>{value.payload });
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_store_cookie(::refrain::net::reader &in, store_cookie &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.key = std::move(*value_0);
+  }
+  {
+    auto length_0 = in.read_varint();
+    if (!length_0) return std::unexpected{std::move(length_0.error())};
+    if (*length_0 > 5120) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::parse_error, "field 'payload' exceeds its declared maximum")};
+    }
+    auto value_0 = in.read_bytes(*length_0);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
   }
   return ::refrain::status_ok();
 }

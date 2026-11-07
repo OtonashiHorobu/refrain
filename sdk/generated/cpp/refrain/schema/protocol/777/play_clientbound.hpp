@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 3058078ae94c142f
+// Schema hash: 37ad437ddc6c0e0a
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -294,6 +294,13 @@ struct boss_event {
 
 };
 
+struct chunks_biomes {
+    static constexpr std::uint16_t packet_id = 0xD;
+    static constexpr std::string_view packet_name = "chunks_biomes";
+
+    std::vector<::refrain::protocol::v777::wire::wire_chunk_biome_data> chunk_biome_data;
+};
+
 struct clear_titles {
     static constexpr std::uint16_t packet_id = 0xE;
     static constexpr std::string_view packet_name = "clear_titles";
@@ -423,6 +430,13 @@ struct forget_level_chunk {
     static constexpr std::string_view packet_name = "forget_level_chunk";
 
     std::int64_t pos;
+};
+
+struct game_rule_values {
+    static constexpr std::uint16_t packet_id = 0x28;
+    static constexpr std::string_view packet_name = "game_rule_values";
+
+    std::map<::refrain::data::resource_location, std::string> payload;
 };
 
 struct game_test_highlight_pos {
@@ -640,6 +654,14 @@ struct post_effects {
     std::vector<::refrain::data::resource_location> post_effects;
 };
 
+struct respawn {
+    static constexpr std::uint16_t packet_id = 0x54;
+    static constexpr std::string_view packet_name = "respawn";
+
+    ::refrain::protocol::v777::wire::wire_common_player_spawn_info common_player_spawn_info;
+    std::int8_t data_to_keep;
+};
+
 struct rotate_head {
     static constexpr std::uint16_t packet_id = 0x55;
     static constexpr std::string_view packet_name = "rotate_head";
@@ -647,6 +669,15 @@ struct rotate_head {
     // attributes: #[varint]
     std::int32_t entity_id;
     std::int8_t y_head_rot;
+};
+
+struct section_blocks_update {
+    static constexpr std::uint16_t packet_id = 0x56;
+    static constexpr std::string_view packet_name = "section_blocks_update";
+
+    std::int64_t section_pos;
+    // attributes: #[varlong]
+    std::vector<std::int64_t> positions;
 };
 
 struct server_data {
@@ -749,6 +780,13 @@ struct set_entity_motion {
     ::refrain::net::lp_vec3 movement;
 };
 
+struct set_equipment {
+    static constexpr std::uint16_t packet_id = 0x68;
+    static constexpr std::string_view packet_name = "set_equipment";
+
+    std::vector<::refrain::protocol::v777::wire::wire_entries_entry> entries;
+};
+
 struct set_experience {
     static constexpr std::uint16_t packet_id = 0x69;
     static constexpr std::string_view packet_name = "set_experience";
@@ -835,6 +873,15 @@ struct start_configuration {
     static constexpr std::uint16_t packet_id = 0x78;
     static constexpr std::string_view packet_name = "start_configuration";
 
+};
+
+struct store_cookie {
+    static constexpr std::uint16_t packet_id = 0x7A;
+    static constexpr std::string_view packet_name = "store_cookie";
+
+    ::refrain::data::resource_location key;
+    // attributes: #[max(5120)]
+    std::vector<std::byte> payload;
 };
 
 struct swing_animation {
@@ -2029,6 +2076,38 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_chunks_biomes(::refrain::net::writer &out, const chunks_biomes &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.chunk_biome_data.size()));
+    for (const auto &item_0 : value.chunk_biome_data) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_chunk_biome_data(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_chunks_biomes(::refrain::net::reader &in, chunks_biomes &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.chunk_biome_data.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::protocol::v777::wire::wire_chunk_biome_data value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_chunk_biome_data(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.chunk_biome_data.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_clear_titles(::refrain::net::writer &out, const clear_titles &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -2491,6 +2570,45 @@ struct clear_dialog {
     auto value_0 = in.read_i64();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.pos = static_cast<decltype(value.pos)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_game_rule_values(::refrain::net::writer &out, const game_rule_values &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.payload.size()));
+    for (const auto &entry_0 : value.payload) {
+      if (auto written = out.write_identifier(entry_0.first); !written) {
+        return written;
+      }
+      if (auto written = out.write_string(entry_0.second, 32767); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_game_rule_values(::refrain::net::reader &in, game_rule_values &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.payload.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::data::resource_location map_key_0{};
+      auto value_1 = in.read_identifier();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      map_key_0 = std::move(*value_1);
+      std::string map_value_0{};
+      auto value_2 = in.read_string(32767);
+      if (!value_2) return std::unexpected{std::move(value_2.error())};
+      map_value_0 = std::move(*value_2);
+      value.payload.emplace(std::move(map_key_0), std::move(map_value_0));
+    }
   }
   return ::refrain::status_ok();
 }
@@ -3245,6 +3363,36 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_respawn(::refrain::net::writer &out, const respawn &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = ::refrain::protocol::v777::wire::encode_wire_common_player_spawn_info(out, value.common_player_spawn_info); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_i64(static_cast<std::int64_t>(value.data_to_keep));
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_respawn(::refrain::net::reader &in, respawn &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_common_player_spawn_info(in, value.common_player_spawn_info); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.data_to_keep = static_cast<decltype(value.data_to_keep)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_rotate_head(::refrain::net::writer &out, const rotate_head &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -3269,6 +3417,44 @@ struct clear_dialog {
     auto value_0 = in.read_i64();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.y_head_rot = static_cast<decltype(value.y_head_rot)>(*value_0);
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_section_blocks_update(::refrain::net::writer &out, const section_blocks_update &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_i64(static_cast<std::int64_t>(value.section_pos));
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.positions.size()));
+    for (const auto &item_0 : value.positions) {
+      out.write_varlong(static_cast<std::uint64_t>(item_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_section_blocks_update(::refrain::net::reader &in, section_blocks_update &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_i64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.section_pos = static_cast<decltype(value.section_pos)>(*value_0);
+  }
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.positions.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      std::int64_t value_0{};
+      auto value_1 = in.read_varlong();
+      if (!value_1) return std::unexpected{std::move(value_1.error())};
+      value_0 = static_cast<decltype(value_0)>(*value_1);
+      value.positions.push_back(std::move(value_0));
+    }
   }
   return ::refrain::status_ok();
 }
@@ -3593,6 +3779,38 @@ struct clear_dialog {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_set_equipment(::refrain::net::writer &out, const set_equipment &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.entries.size()));
+    for (const auto &item_0 : value.entries) {
+      if (auto written = ::refrain::protocol::v777::wire::encode_wire_entries_entry(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_set_equipment(::refrain::net::reader &in, set_equipment &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    value.entries.clear();
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::protocol::v777::wire::wire_entries_entry value_0{};
+      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_entries_entry(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.entries.push_back(std::move(value_0));
+    }
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_set_experience(::refrain::net::writer &out, const set_experience &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -3880,6 +4098,45 @@ struct clear_dialog {
 [[nodiscard]] inline auto decode_start_configuration(::refrain::net::reader &in, start_configuration &value) -> ::refrain::status {
   static_cast<void>(in);
   static_cast<void>(value);
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto encode_store_cookie(::refrain::net::writer &out, const store_cookie &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_identifier(value.key); !written) {
+      return written;
+    }
+  }
+  {
+    if (value.payload.size() > 5120) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'payload' exceeds its declared maximum")};
+    }
+    out.write_varint(static_cast<std::uint32_t>(value.payload.size()));
+    out.write_bytes(std::span<const std::byte>{value.payload });
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_store_cookie(::refrain::net::reader &in, store_cookie &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_identifier();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.key = std::move(*value_0);
+  }
+  {
+    auto length_0 = in.read_varint();
+    if (!length_0) return std::unexpected{std::move(length_0.error())};
+    if (*length_0 > 5120) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::parse_error, "field 'payload' exceeds its declared maximum")};
+    }
+    auto value_0 = in.read_bytes(*length_0);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.payload = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
   return ::refrain::status_ok();
 }
 

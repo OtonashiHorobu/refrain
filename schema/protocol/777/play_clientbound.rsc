@@ -179,6 +179,10 @@ packet block_event = 7 {
 packet boss_event = 9 {
 }
 
+packet chunks_biomes = 13 {
+    chunk_biome_data: array<wire_chunk_biome_data>;
+}
+
 packet clear_titles = 14 {
     reset_times: bool;
 }
@@ -249,6 +253,10 @@ packet add_transient_block = 37 {
 
 packet forget_level_chunk = 38 {
     pos: i64;
+}
+
+packet game_rule_values = 40 {
+    payload: map<identifier, string>;
 }
 
 packet game_test_highlight_pos = 41 {
@@ -370,9 +378,19 @@ packet post_effects = 83 {
     post_effects: array<identifier>;
 }
 
+packet respawn = 84 {
+    common_player_spawn_info: wire_common_player_spawn_info;
+    data_to_keep: i8;
+}
+
 packet rotate_head = 85 {
     #[varint] entity_id: i32;
     y_head_rot: i8;
+}
+
+packet section_blocks_update = 86 {
+    section_pos: i64;
+    #[varlong] positions: array<i64>;
 }
 
 packet server_data = 88 {
@@ -430,6 +448,10 @@ packet set_entity_motion = 103 {
     movement: lp_vec3;
 }
 
+packet set_equipment = 104 {
+    entries: array<wire_entries_entry>;
+}
+
 packet set_experience = 105 {
     experience_progress: f32;
     #[varint] experience_level: i32;
@@ -475,6 +497,11 @@ packet set_titles_animation = 117 {
 }
 
 packet start_configuration = 120 {
+}
+
+packet store_cookie = 122 {
+    key: identifier;
+    #[max(5120)] payload: bytes;
 }
 
 packet swing_animation = 123 {

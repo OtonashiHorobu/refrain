@@ -150,6 +150,11 @@ packet container_slot_state_changed = 20 {
     new_state: bool;
 }
 
+packet cookie_response = 21 {
+    key: identifier;
+    payload: optional<bytes>;
+}
+
 packet custom_payload = 22 {
     channel: identifier;
     #[rest] data: bytes;
@@ -218,7 +223,7 @@ packet place_recipe = 39 {
 }
 
 packet player_abilities = 40 {
-    field_1: i8;
+    is_flying: i8;
 }
 
 packet player_command = 42 {
@@ -270,7 +275,7 @@ packet set_command_block = 55 {
     pos: i64;
     #[max(32767)] command: string;
     #[varint] mode: u32;
-    conditional: i8;
+    track_output: i8;
 }
 
 packet set_command_minecart = 56 {
@@ -282,6 +287,10 @@ packet set_command_minecart = 56 {
 packet set_creative_mode_slot = 57 {
     #[fixed] slot_num: i16;
     item_stack: item_stack;
+}
+
+packet set_game_rule = 58 {
+    entries: array<wire_entry_4>;
 }
 
 packet set_jigsaw_block = 59 {
@@ -311,7 +320,7 @@ packet set_structure_block = 60 {
     #[max(32767)] data_2: string;
     integrity_2: f32;
     #[varlong] seed: i64;
-    field_16: i8;
+    field_15: i8;
 }
 
 packet set_test_block = 61 {
@@ -332,6 +341,12 @@ packet spectator_action = 63 {
 
 packet teleport_to_entity = 64 {
     uuid: uuid;
+}
+
+packet test_instance_block_action = 65 {
+    pos: i64;
+    #[varint] action: i32;
+    data: wire_data_3;
 }
 
 packet use_item = 67 {

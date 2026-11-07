@@ -6,6 +6,7 @@
 
 module refrain::protocol::v777::login::serverbound;
 version 777;
+import refrain::protocol::v777::wire;
 
 packet hello = 0 {
     #[max(16)] name: string;
@@ -19,4 +20,11 @@ packet key = 1 {
 }
 
 packet login_acknowledged = 3 {
+}
+
+// Generated protocol layouts.
+
+packet cookie_response = 4 {
+    key: identifier;
+    payload: optional<bytes>;
 }

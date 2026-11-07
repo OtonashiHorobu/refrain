@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 3058078ae94c142f
+// Schema hash: 37ad437ddc6c0e0a
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_CONFIGURATION_HPP
@@ -22,7 +22,7 @@
 namespace refrain::protocol::v777 {
 
 /// Packets declared for this stage, ordered by flow and id.
-inline constexpr std::array<packet_descriptor, 26> configuration_packets{{
+inline constexpr std::array<packet_descriptor, 27> configuration_packets{{
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0x0, "cookie_request"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0x1, "custom_payload"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0x2, "disconnect"},
@@ -34,6 +34,7 @@ inline constexpr std::array<packet_descriptor, 26> configuration_packets{{
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0x8, "resource_pack_pop"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0x9, "resource_pack_push"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0xA, "post_effects"},
+  packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0xB, "store_cookie"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0xC, "transfer"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0xD, "update_enabled_features"},
   packet_descriptor{::refrain::net::connection_state::configuration, ::refrain::net::packet_flow::clientbound, 0xF, "select_known_packs"},

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 3058078ae94c142f
+// Schema hash: 37ad437ddc6c0e0a
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_LOGIN_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_LOGIN_HPP
@@ -22,7 +22,7 @@
 namespace refrain::protocol::v777 {
 
 /// Packets declared for this stage, ordered by flow and id.
-inline constexpr std::array<packet_descriptor, 8> login_packets{{
+inline constexpr std::array<packet_descriptor, 9> login_packets{{
   packet_descriptor{::refrain::net::connection_state::login, ::refrain::net::packet_flow::clientbound, 0x0, "login_disconnect"},
   packet_descriptor{::refrain::net::connection_state::login, ::refrain::net::packet_flow::clientbound, 0x1, "hello"},
   packet_descriptor{::refrain::net::connection_state::login, ::refrain::net::packet_flow::clientbound, 0x2, "login_finished"},
@@ -31,6 +31,7 @@ inline constexpr std::array<packet_descriptor, 8> login_packets{{
   packet_descriptor{::refrain::net::connection_state::login, ::refrain::net::packet_flow::serverbound, 0x0, "hello"},
   packet_descriptor{::refrain::net::connection_state::login, ::refrain::net::packet_flow::serverbound, 0x1, "key"},
   packet_descriptor{::refrain::net::connection_state::login, ::refrain::net::packet_flow::serverbound, 0x3, "login_acknowledged"},
+  packet_descriptor{::refrain::net::connection_state::login, ::refrain::net::packet_flow::serverbound, 0x4, "cookie_response"},
 }};
 
 } // namespace refrain::protocol::v777
