@@ -14,13 +14,13 @@
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
-#include <refrain/worldgen/biome_climate.hpp>
-#include <refrain/worldgen/biome_manager.hpp>
-#include <refrain/worldgen/biome_source.hpp>
-#include <refrain/worldgen/density_router.hpp>
-#include <refrain/worldgen/overworld_biome_builder.hpp>
-#include <refrain/worldgen/surface.hpp>
-#include <refrain/worldgen/terrain.hpp>
+#include <refrain/worldgen/biome/biome_climate.hpp>
+#include <refrain/worldgen/biome/biome_manager.hpp>
+#include <refrain/worldgen/biome/biome_source.hpp>
+#include <refrain/worldgen/biome/overworld_biome_builder.hpp>
+#include <refrain/worldgen/density/density_router.hpp>
+#include <refrain/worldgen/terrain/surface.hpp>
+#include <refrain/worldgen/terrain/terrain.hpp>
 
 #include <boost/ut.hpp>
 

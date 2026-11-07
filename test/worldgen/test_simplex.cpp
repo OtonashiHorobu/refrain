@@ -5,7 +5,7 @@
 // Legacy `SimplexNoise` samples and the frozen-temperature / biome-info
 // noises. Expected raw float bits come from `SimplexVectors.java`.
 
-#include <refrain/worldgen/noise.hpp>
+#include <refrain/worldgen/noise/noise.hpp>
 
 #include <boost/ut.hpp>
 

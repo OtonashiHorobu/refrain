@@ -5,8 +5,8 @@
 // Synthetic `Beardifier` samples and kernel entries. The expected raw float
 // bits come from `BeardifierVectors.java`.
 
-#include <refrain/worldgen/beardifier.hpp>
-#include <refrain/worldgen/density.hpp>
+#include <refrain/worldgen/density/density.hpp>
+#include <refrain/worldgen/terrain/beardifier.hpp>
 
 #include <boost/ut.hpp>
 

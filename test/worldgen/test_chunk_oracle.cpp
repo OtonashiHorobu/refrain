@@ -13,9 +13,9 @@
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
-#include <refrain/worldgen/aquifer.hpp>
-#include <refrain/worldgen/density_router.hpp>
-#include <refrain/worldgen/terrain.hpp>
+#include <refrain/worldgen/density/density_router.hpp>
+#include <refrain/worldgen/terrain/aquifer.hpp>
+#include <refrain/worldgen/terrain/terrain.hpp>
 
 #include <boost/ut.hpp>
 

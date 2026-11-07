@@ -8,8 +8,8 @@
 // synthetic targets querying the reference `Climate.ParameterList`. Both are
 // printed by `BiomeVectors.java`.
 
-#include <refrain/worldgen/climate.hpp>
-#include <refrain/worldgen/overworld_biome_builder.hpp>
+#include <refrain/worldgen/biome/climate.hpp>
+#include <refrain/worldgen/biome/overworld_biome_builder.hpp>
 
 #include <boost/ut.hpp>
 

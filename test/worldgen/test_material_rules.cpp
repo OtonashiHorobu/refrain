@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/worldgen/material.hpp>
+#include <refrain/worldgen/terrain/material.hpp>
 
 #include <boost/ut.hpp>
 

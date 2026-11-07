@@ -5,7 +5,7 @@
 // Interval vectors generated from the real 26.3 class with
 // `tools/worldgen/vectors/run.sh <server.jar> IntervalVectors`.
 
-#include <refrain/worldgen/interval.hpp>
+#include <refrain/worldgen/density/interval.hpp>
 
 #include <boost/ut.hpp>
 

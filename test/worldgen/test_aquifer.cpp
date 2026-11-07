@@ -5,8 +5,8 @@
 // Vectors generated from the real 26.3 classes with
 // `tools/worldgen/vectors/run.sh <server.jar> AquiferVectors`.
 
-#include <refrain/worldgen/aquifer.hpp>
-#include <refrain/worldgen/rng.hpp>
+#include <refrain/worldgen/core/rng.hpp>
+#include <refrain/worldgen/terrain/aquifer.hpp>
 
 #include <boost/ut.hpp>
 

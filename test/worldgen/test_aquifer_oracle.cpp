@@ -6,10 +6,10 @@
 // `tools/worldgen/vectors/run.sh <server.jar> AquiferOracle`.
 // Codes: -1 default block, 0 air, 2 water, 3 lava, 8 other.
 
-#include <refrain/worldgen/aquifer.hpp>
-#include <refrain/worldgen/density.hpp>
-#include <refrain/worldgen/rng.hpp>
-#include <refrain/worldgen/terrain.hpp>
+#include <refrain/worldgen/core/rng.hpp>
+#include <refrain/worldgen/density/density.hpp>
+#include <refrain/worldgen/terrain/aquifer.hpp>
+#include <refrain/worldgen/terrain/terrain.hpp>
 
 #include <boost/ut.hpp>
 
