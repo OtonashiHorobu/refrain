@@ -209,6 +209,12 @@ def main() -> int:
         "but strip every biome's features",
     )
     parser.add_argument(
+        "--features",
+        action="store_true",
+        help="feature oracle: fixed oracle:feature biome with one curated "
+        "simple_block placed feature and no carvers",
+    )
+    parser.add_argument(
         "--fixed-biome",
         default="oracle:terrain",
         help="biome of the fixed source used by --surface (default "
@@ -232,6 +238,64 @@ def main() -> int:
             (biome_dir / name.rsplit("/", 1)[-1]).write_text(
                 json.dumps(document, indent=2) + "\n"
             )
+    elif args.features:
+        preset = read_pack_data(
+            args.server_jar, "data/minecraft/worldgen/world_preset/normal.json"
+        )
+        preset["dimensions"]["minecraft:overworld"]["generator"][
+            "biome_source"
+        ] = {"type": "minecraft:fixed", "biome": "oracle:feature"}
+        pack = root / "world/datapacks/t2oracle"
+        write_meta(pack)
+        preset_dir = pack / "data/minecraft/worldgen/world_preset"
+        preset_dir.mkdir(parents=True)
+        (preset_dir / "normal.json").write_text(
+            json.dumps(preset, indent=2) + "\n"
+        )
+
+        biome = read_pack_data(
+            args.server_jar, "data/minecraft/worldgen/biome/plains.json"
+        )
+        biome["carvers"] = []
+        biome["features"] = [[] for _ in range(11)]
+        biome["features"][9] = ["oracle:stone_patch"]
+        biome_dir = pack / "data/oracle/worldgen/biome"
+        biome_dir.mkdir(parents=True)
+        (biome_dir / "feature.json").write_text(
+            json.dumps(biome, indent=2) + "\n"
+        )
+
+        feature_dir = pack / "data/oracle/worldgen/feature"
+        feature_dir.mkdir(parents=True)
+        (feature_dir / "stone_patch.json").write_text(
+            json.dumps(
+                {
+                    "type": "minecraft:simple_block",
+                    "to_place": {"id": "minecraft:stone"},
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        placed_dir = pack / "data/oracle/worldgen/placed_feature"
+        placed_dir.mkdir(parents=True)
+        (placed_dir / "stone_patch.json").write_text(
+            json.dumps(
+                {
+                    "feature": "oracle:stone_patch",
+                    "placement": [
+                        {"type": "minecraft:count", "count": 30},
+                        {"type": "minecraft:in_square"},
+                        {
+                            "type": "minecraft:heightmap",
+                            "heightmap": "WORLD_SURFACE_WG",
+                        },
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
     elif not args.plain:
         preset = read_pack_data(
             args.server_jar, "data/minecraft/worldgen/world_preset/normal.json"
