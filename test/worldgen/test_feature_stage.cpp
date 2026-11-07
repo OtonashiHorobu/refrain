@@ -328,6 +328,43 @@ suite<"worldgen/placement"> placement_tests = [] {
     };
 };
 
+suite<"worldgen/placement-scan"> placement_scan_tests = [] {
+    "environment scan finds the target along a direction"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(stone.has_value());
+        if (!stone) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::terrain);
+        (void)chunk.set_state(0, 5, 0, *stone);
+        chunk_region region{chunk, 1};
+        const placement_context context{
+            .region = &region, .chunk = &chunk, .states = &registry};
+        auto modifier = decode_placement(
+            parse(
+                R"({"type":"minecraft:environment_scan","direction_of_search":"down","target_condition":{"type":"minecraft:matching_blocks","blocks":["minecraft:stone"]},"max_steps":6})"),
+            registry);
+        expect(modifier.has_value());
+        if (!modifier) {
+            return;
+        }
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        std::vector<block_pos> out;
+        (*modifier)->modify(context, random, block_pos{.x = 0, .y = 10, .z = 0},
+                            out);
+        expect(out.size() == 1U);
+        if (!out.empty()) {
+            expect(out[0].y == 5);
+        }
+    };
+};
+
 suite<"worldgen/placement-layers"> placement_layer_tests = [] {
     "count_on_every_layer walks each ground layer"_test = [] {
         block_state_registry registry;
