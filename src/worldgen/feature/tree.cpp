@@ -146,12 +146,23 @@ void tree_feature::place_foliage(feature_context &context,
                                  std::vector<block_pos> &leaves,
                                  bool &placed) const {
     const jint offset = foliage_offset_->sample(random);
-    for (jint yo = offset; yo >= offset - foliage_height_; --yo) {
-        const jint current =
-            std::max(leaf_radius + radius_offset - 1 - yo / 2, 0);
-        place_leaves_row(context, random, attachment, current, yo, leaves,
-                         placed);
+    if (foliage_ == foliage_kind::blob) {
+        for (jint yo = offset; yo >= offset - foliage_height_; --yo) {
+            const jint current =
+                std::max(leaf_radius + radius_offset - 1 - yo / 2, 0);
+            place_leaves_row(context, random, attachment, current, yo, leaves,
+                             placed);
+        }
+        return;
     }
+    const block_pos position{
+        .x = attachment.x, .y = attachment.y + offset, .z = attachment.z};
+    place_leaves_row(context, random, position, leaf_radius + radius_offset,
+                     -1 - foliage_height_, leaves, placed);
+    place_leaves_row(context, random, position, leaf_radius - 1,
+                     -foliage_height_, leaves, placed);
+    place_leaves_row(context, random, position, leaf_radius + radius_offset - 1,
+                     0, leaves, placed);
 }
 
 void tree_feature::update_leaves(feature_context &context,

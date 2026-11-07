@@ -583,10 +583,15 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                                   "unsupported trunk placer")};
             }
             const auto *foliage_type = foliage_placer->find("type");
-            if (foliage_type == nullptr ||
-                foliage_type->as_string() !=
-                    std::optional<std::string_view>{
-                        "minecraft:blob_foliage_placer"}) {
+            if (foliage_type == nullptr || !foliage_type->as_string()) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "foliage placer has no type")};
+            }
+            const auto foliage_name = *foliage_type->as_string();
+            foliage_kind foliage_type_kind = foliage_kind::blob;
+            if (foliage_name == "minecraft:acacia_foliage_placer") {
+                foliage_type_kind = foliage_kind::acacia;
+            } else if (foliage_name != "minecraft:blob_foliage_placer") {
                 return std::unexpected{make_error(
                     error_code::unsupported, "unsupported foliage placer")};
             }
@@ -606,21 +611,30 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             const auto rand_b = trunk_placer->find("height_rand_b");
             const auto radius = foliage_placer->find("radius");
             const auto offset = foliage_placer->find("offset");
-            const auto height = foliage_placer->find("height");
+            const auto *height = foliage_placer->find("height");
             if (!trunk || !foliage || !below || base_height == nullptr ||
                 rand_a == nullptr || rand_b == nullptr || radius == nullptr ||
-                offset == nullptr || height == nullptr) {
+                offset == nullptr ||
+                (height == nullptr &&
+                 foliage_type_kind == foliage_kind::blob)) {
                 return std::unexpected{make_error(error_code::parse_error,
                                                   "tree feature is invalid")};
             }
             const auto base_value = base_height->as_int64();
             const auto rand_a_value = rand_a->as_int64();
             const auto rand_b_value = rand_b->as_int64();
-            const auto height_value = height->as_int64();
+            jint height_value = 0;
+            if (height != nullptr) {
+                const auto parsed_height = height->as_int64();
+                if (!parsed_height) {
+                    return std::unexpected{parsed_height.error()};
+                }
+                height_value = static_cast<jint>(*parsed_height);
+            }
             auto radius_provider = provider::int_provider::decode(*radius);
             auto offset_provider = provider::int_provider::decode(*offset);
             if (!base_value || !rand_a_value || !rand_b_value ||
-                !height_value || !radius_provider || !offset_provider) {
+                !radius_provider || !offset_provider) {
                 return std::unexpected{
                     make_error(error_code::parse_error,
                                "tree feature numbers are invalid")};
@@ -673,15 +687,15 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 ignore_vines = *value;
             }
             features_.emplace(
-                id,
-                std::make_unique<tree_feature>(
-                    *states_, kind, std::move(*trunk), std::move(*foliage),
-                    std::move(*below), static_cast<jint>(*base_value),
-                    static_cast<jint>(*rand_a_value),
-                    static_cast<jint>(*rand_b_value),
-                    std::move(*radius_provider), std::move(*offset_provider),
-                    static_cast<jint>(*height_value), limit, lower, upper,
-                    has_min_clipped, min_clipped, ignore_vines));
+                id, std::make_unique<tree_feature>(
+                        *states_, kind, foliage_type_kind, std::move(*trunk),
+                        std::move(*foliage), std::move(*below),
+                        static_cast<jint>(*base_value),
+                        static_cast<jint>(*rand_a_value),
+                        static_cast<jint>(*rand_b_value),
+                        std::move(*radius_provider),
+                        std::move(*offset_provider), height_value, limit, lower,
+                        upper, has_min_clipped, min_clipped, ignore_vines));
             continue;
         }
         return std::unexpected{
