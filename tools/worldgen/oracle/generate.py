@@ -360,6 +360,7 @@ def main() -> int:
             "oracle:real_acacia",
             "oracle:real_fancy_oak",
             "oracle:real_dark_oak",
+            "oracle:selector",
         ]
         biome_dir = pack / "data/oracle/worldgen/biome"
         biome_dir.mkdir(parents=True)
