@@ -45,8 +45,7 @@ def read_pack_data(server_jar: pathlib.Path, path: str) -> dict:
             return json.loads(inner.read(path))
 
 
-def write_pack(preset: dict, biome: dict, pack: pathlib.Path,
-               empty_material_rule: bool) -> None:
+def write_meta(pack: pathlib.Path) -> None:
     pack.mkdir(parents=True, exist_ok=True)
     (pack / "pack.mcmeta").write_text(
         json.dumps(
@@ -60,6 +59,24 @@ def write_pack(preset: dict, biome: dict, pack: pathlib.Path,
         )
         + "\n"
     )
+
+
+def read_pack_entries(server_jar: pathlib.Path, prefix: str) -> dict[str, dict]:
+    """Read every JSON document under `prefix` from the versioned jar."""
+    entries: dict[str, dict] = {}
+    with zipfile.ZipFile(server_jar) as outer:
+        version = json.loads(outer.read("version.json"))["id"]
+        inner_name = f"META-INF/versions/{version}/server-{version}.jar"
+        with zipfile.ZipFile(io.BytesIO(outer.read(inner_name))) as inner:
+            for name in inner.namelist():
+                if name.startswith(prefix) and name.endswith(".json"):
+                    entries[name] = json.loads(inner.read(name))
+    return entries
+
+
+def write_pack(preset: dict, biome: dict, pack: pathlib.Path,
+               empty_material_rule: bool) -> None:
+    write_meta(pack)
 
     preset["dimensions"]["minecraft:overworld"]["generator"][
         "biome_source"
@@ -171,11 +188,30 @@ def main() -> int:
         help="keep the real material rule (surface oracle): fixed biome without "
         "carvers/features, but surface materials are generated",
     )
+    parser.add_argument(
+        "--biomes",
+        action="store_true",
+        help="surface oracle with real multi-noise biomes: strip carvers and "
+        "features from every biome but keep the normal overworld preset",
+    )
     args = parser.parse_args()
 
     root = args.output.resolve()
     shutil.rmtree(root, ignore_errors=True)
-    if not args.plain:
+    if args.biomes:
+        pack = root / "world/datapacks/t2oracle"
+        write_meta(pack)
+        biome_dir = pack / "data/minecraft/worldgen/biome"
+        biome_dir.mkdir(parents=True)
+        for name, document in read_pack_entries(
+            args.server_jar, "data/minecraft/worldgen/biome/"
+        ).items():
+            document["carvers"] = []
+            document["features"] = []
+            (biome_dir / name.rsplit("/", 1)[-1]).write_text(
+                json.dumps(document, indent=2) + "\n"
+            )
+    elif not args.plain:
         preset = read_pack_data(
             args.server_jar, "data/minecraft/worldgen/world_preset/normal.json"
         )
