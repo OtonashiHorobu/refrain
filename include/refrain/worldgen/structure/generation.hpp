@@ -37,6 +37,14 @@ class structure_template_manager;
                                     float cluster_probability)
     -> structure_start;
 
+/// `OceanRuinPiece.getHeight`: lowers the ruin onto the seabed when the
+/// scanned columns expose a wide enough drop.
+[[nodiscard]] auto ocean_ruin_floor_height(chunk_region &region,
+                                           const block_state_registry &states,
+                                           jint min_y,
+                                           const block_pos &position,
+                                           const block_pos &corner) -> jint;
+
 /// `DesertPyramidStructure`: one 21x21x15 single piece at generation height
 /// 64, below the lowest surface corner of the plot.
 [[nodiscard]] auto desert_pyramid_start(const chunk_pos &chunk, jlong seed)

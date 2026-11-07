@@ -858,3 +858,70 @@ suite<"worldgen/piece-coordinates"> piece_coordinate_tests = [] {
         expect(pos.x == 14 && pos.y == 67 && pos.z == 22);
     };
 };
+
+suite<"worldgen/ocean-ruin-height"> ocean_ruin_height_tests = [] {
+    "the floor scan lowers the ruin onto a wide drop"_test = [] {
+        using namespace refrain;
+        using namespace refrain::worldgen;
+        block_state_registry registry;
+        const auto air = registry.intern("minecraft:air", {.air = true});
+        const auto stone = registry.intern("minecraft:stone",
+                                           {.air = false,
+                                            .blocks_motion = true,
+                                            .blocks_motion_no_leaves = true});
+        const auto water = registry.intern(
+            "minecraft:water", {.air = false, .fluid = true, .water = true});
+        expect(air && stone && water);
+        if (!air || !stone || !water) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        for (jint y = 0; y < 9; ++y) {
+            for (jint x = 0; x < 8; ++x) {
+                for (jint z = 0; z < 8; ++z) {
+                    chunk.set_state(x, y, z, *air);
+                }
+            }
+        }
+        for (jint x = 0; x <= 4; ++x) {
+            for (jint z = 0; z <= 4; ++z) {
+                chunk.set_state(x, 4, z, *stone);
+                for (jint y = 5; y <= 8; ++y) {
+                    chunk.set_state(x, y, z, *water);
+                }
+            }
+        }
+        chunk_region region{chunk, 0};
+        expect(structure::ocean_ruin_floor_height(
+                   region, registry, 0, block_pos{.x = 0, .y = 9, .z = 0},
+                   block_pos{.x = 4, .y = 9, .z = 4}) == 5);
+    };
+
+    "a shallow floor keeps the piece height"_test = [] {
+        using namespace refrain;
+        using namespace refrain::worldgen;
+        block_state_registry registry;
+        const auto air = registry.intern("minecraft:air", {.air = true});
+        const auto stone = registry.intern("minecraft:stone",
+                                           {.air = false,
+                                            .blocks_motion = true,
+                                            .blocks_motion_no_leaves = true});
+        expect(air && stone);
+        if (!air || !stone) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        for (jint x = 0; x < 8; ++x) {
+            for (jint z = 0; z < 8; ++z) {
+                for (jint y = 0; y < 9; ++y) {
+                    chunk.set_state(x, y, z, *air);
+                }
+                chunk.set_state(x, 7, z, *stone);
+            }
+        }
+        chunk_region region{chunk, 0};
+        expect(structure::ocean_ruin_floor_height(
+                   region, registry, 0, block_pos{.x = 0, .y = 9, .z = 0},
+                   block_pos{.x = 4, .y = 9, .z = 4}) == 9);
+    };
+};

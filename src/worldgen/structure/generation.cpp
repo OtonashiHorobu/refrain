@@ -98,6 +98,43 @@ auto igloo_start(const chunk_pos &chunk, jlong seed,
     return start;
 }
 
+auto ocean_ruin_floor_height(chunk_region &region,
+                             const block_state_registry &states, jint min_y,
+                             const block_pos &position, const block_pos &corner)
+    -> jint {
+    const jint top_y = position.y - 1;
+    jint lowest = 512;
+    jint area = 0;
+    const jint x0 = std::min(position.x, corner.x);
+    const jint x1 = std::max(position.x, corner.x);
+    const jint z0 = std::min(position.z, corner.z);
+    const jint z1 = std::max(position.z, corner.z);
+    for (jint x = x0; x <= x1; ++x) {
+        for (jint z = z0; z <= z1; ++z) {
+            jint floor_y = top_y;
+            auto state = region.state_at(x, floor_y, z);
+            const auto is_open = [&](block_state_id id) {
+                const auto name = std::string_view{states.name(id)};
+                return states.traits(id).air || name == "minecraft:water" ||
+                       name == "minecraft:ice";
+            };
+            while (floor_y > min_y + 1 && is_open(state)) {
+                --floor_y;
+                state = region.state_at(x, floor_y, z);
+            }
+            lowest = std::min(lowest, floor_y);
+            if (floor_y < top_y - 2) {
+                ++area;
+            }
+        }
+    }
+    const jint width = std::abs(position.x - corner.x);
+    if (top_y - lowest > 2 && area > width - 2) {
+        return lowest + 1;
+    }
+    return position.y;
+}
+
 auto shipwreck_start(
     const chunk_pos &chunk, jlong seed, structure_template_manager &templates,
     bool beached,
