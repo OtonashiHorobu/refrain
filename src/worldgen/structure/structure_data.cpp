@@ -165,6 +165,28 @@ auto decode_structure_document(std::string_view id,
     return decoded;
 }
 
+auto structure_step_index(const structure_data_set &data,
+                          std::string_view structure_id)
+    -> std::optional<jint> {
+    const auto found = data.structures.find(std::string{structure_id});
+    if (found == data.structures.end()) {
+        return std::nullopt;
+    }
+    std::vector<std::string> ids;
+    for (const auto &[id, document] : data.structures) {
+        if (document.step == found->second.step) {
+            ids.push_back(id);
+        }
+    }
+    std::sort(ids.begin(), ids.end());
+    const auto position =
+        std::lower_bound(ids.begin(), ids.end(), found->first);
+    if (position == ids.end() || *position != found->first) {
+        return std::nullopt;
+    }
+    return static_cast<jint>(position - ids.begin());
+}
+
 auto load_structure_data(std::string_view data_root)
     -> result<structure_data_set> {
     const auto materialized = materialize_worldgen_data(data_root);

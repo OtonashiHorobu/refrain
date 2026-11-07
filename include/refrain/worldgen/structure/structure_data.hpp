@@ -45,6 +45,13 @@ struct structure_data_set {
                                     std::string_view biome) const -> bool;
 };
 
+/// Position of `structure_id` among the structures of the same step, in the
+/// registry order used for `setFeatureSeed(index, step)`. Structure documents
+/// load in identifier order, so the order is the sorted id list.
+[[nodiscard]] auto structure_step_index(const structure_data_set &data,
+                                        std::string_view structure_id)
+    -> std::optional<jint>;
+
 [[nodiscard]] auto decode_structure_document(std::string_view id,
                                              const data::json::value &document)
     -> result<structure_document>;
