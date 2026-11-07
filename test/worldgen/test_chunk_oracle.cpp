@@ -390,12 +390,14 @@ suite<"worldgen/chunk-oracle"> chunk_oracle_tests = [] {
         auto factory = aquifer_random->fork_positional();
         const density::sampler_context context;
 
-        constexpr std::array<std::array<jint, 2>, 5> chunks{{
+        constexpr std::array<std::array<jint, 2>, 7> chunks{{
             {0, 0},
             {1, 0},
             {0, 1},
             {1, 1},
             {2, 2},
+            {2, 0},
+            {2, 1},
         }};
         for (const auto &coordinates : chunks) {
             const jint chunk_x = coordinates[0];
