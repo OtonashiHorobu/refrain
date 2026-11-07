@@ -1068,6 +1068,27 @@ suite<"worldgen/tree"> tree_tests = [] {
     };
 };
 
+suite<"worldgen/snow-layer"> snow_layer_tests = [] {
+    "a one-layer snow block has no collision"_test = [] {
+        block_state_registry registry;
+        auto provider = decode_state_provider(
+            parse(R"({"id":"minecraft:snow","properties":{"layers":"1"}})"),
+            registry);
+        expect(provider.has_value());
+        if (!provider) {
+            return;
+        }
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        const placement_context context{};
+        const auto state = (*provider)->get(context, random,
+                                            block_pos{.x = 0, .y = 0, .z = 0});
+        expect(!registry.traits(state).air);
+        expect(!registry.traits(state).blocks_motion);
+        expect(!registry.traits(state).blocks_motion_no_leaves);
+    };
+};
+
 suite<"worldgen/underwater-magma"> underwater_magma_tests = [] {
     "magma fills buried floor positions under a water column"_test = [] {
         block_state_registry registry;

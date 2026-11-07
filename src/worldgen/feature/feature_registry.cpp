@@ -54,12 +54,16 @@ auto resolve_state(block_state_registry &states, std::string_view key)
     const bool fluid = water || block == "minecraft:lava" ||
                        block == "minecraft:bubble_column";
     const bool leaves = block.ends_with("_leaves");
-    return states.intern(key, state_traits{.air = air,
-                                           .fluid = fluid,
-                                           .water = water,
-                                           .blocks_motion = !air && !fluid,
-                                           .blocks_motion_no_leaves =
-                                               !air && !fluid && !leaves});
+    // A snow layer has no collision shape until it reaches a full block.
+    const bool snow_layer = block == "minecraft:snow" &&
+                            key.find("layers=8") == std::string_view::npos;
+    return states.intern(
+        key, state_traits{.air = air,
+                          .fluid = fluid,
+                          .water = water,
+                          .blocks_motion = !air && !fluid && !snow_layer,
+                          .blocks_motion_no_leaves =
+                              !air && !fluid && !leaves && !snow_layer});
 }
 
 auto decode_simple_state(const data::json::value &provider,
