@@ -43,7 +43,9 @@ auto disk_feature::place(feature_context &context, worldgen_random &random,
                     placed_above = false;
                     continue;
                 }
-                const auto state = state_;
+                const auto state =
+                    provider_->get(context.placement, random,
+                                   block_pos{.x = x, .y = y, .z = z});
                 if (state == no_block_state) {
                     continue;
                 }
@@ -355,8 +357,11 @@ auto block_blob_feature::place(feature_context &context,
                     const double dz = z - origin.z;
                     if (dx * dx + dy * dy + dz * dz <=
                         static_cast<double>(radius) * radius) {
+                        const auto state =
+                            provider_->get(context.placement, random,
+                                           block_pos{.x = x, .y = y, .z = z});
                         (void)context.placement.region->set_block_state(x, y, z,
-                                                                        state_);
+                                                                        state);
                     }
                 }
             }
@@ -428,8 +433,10 @@ auto block_column_feature::place(feature_context &context,
 
     for (std::size_t i = 0; i < layers_.size(); ++i) {
         for (jint y = 0; y < heights[i]; ++y) {
+            const auto state =
+                layers_[i].provider->get(context.placement, random, place_pos);
             (void)context.placement.region->set_block_state(
-                place_pos.x, place_pos.y, place_pos.z, layers_[i].state);
+                place_pos.x, place_pos.y, place_pos.z, state);
             place_pos = offset(direction_, place_pos);
         }
     }

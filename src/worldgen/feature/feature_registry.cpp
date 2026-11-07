@@ -353,13 +353,15 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                         error_code::parse_error, "column layer is incomplete")};
                 }
                 auto height_provider = provider::int_provider::decode(*height);
-                auto state = decode_simple_state(*provider, *states_);
-                if (!height_provider || !state) {
+                auto layer_provider =
+                    decode_state_provider(*provider, *states_);
+                if (!height_provider || !layer_provider) {
                     return std::unexpected{make_error(
                         error_code::parse_error, "column layer is invalid")};
                 }
                 layers.push_back(block_column_feature::layer{
-                    .height = std::move(*height_provider), .state = *state});
+                    .height = std::move(*height_provider),
+                    .provider = std::move(*layer_provider)});
             }
             auto allowed = decode_block_predicate(*allowed_value, *states_);
             const auto prioritize = prioritize_value->as_bool();
