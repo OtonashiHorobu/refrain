@@ -12,6 +12,7 @@
 #include <refrain/worldgen/feature/block_predicate.hpp>
 #include <refrain/worldgen/feature/placement.hpp>
 #include <refrain/worldgen/feature/rule_test.hpp>
+#include <refrain/worldgen/feature/state_provider.hpp>
 
 namespace refrain::worldgen::feature {
 
@@ -41,13 +42,16 @@ class feature {
 class simple_block_feature final : public feature {
   public:
     simple_block_feature(block_state_id state, bool schedule_tick)
-        : state_{state}, schedule_tick_{schedule_tick} {}
+        : provider_{simple_state(state)}, schedule_tick_{schedule_tick} {}
+    simple_block_feature(std::unique_ptr<state_provider> provider,
+                         bool schedule_tick)
+        : provider_{std::move(provider)}, schedule_tick_{schedule_tick} {}
 
     [[nodiscard]] auto place(feature_context &context, worldgen_random &,
                              const block_pos &origin) const -> bool override;
 
   private:
-    block_state_id state_{no_block_state};
+    std::unique_ptr<state_provider> provider_{};
     bool schedule_tick_{false};
 };
 

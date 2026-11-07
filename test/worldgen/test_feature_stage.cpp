@@ -27,6 +27,7 @@ using refrain::worldgen::feature::boolean_selector_feature;
 using refrain::worldgen::feature::configured_feature_document;
 using refrain::worldgen::feature::decode_block_predicate;
 using refrain::worldgen::feature::decode_placement;
+using refrain::worldgen::feature::decode_state_provider;
 using refrain::worldgen::feature::decorate;
 using refrain::worldgen::feature::feature_context;
 using refrain::worldgen::feature::feature_data_set;
@@ -125,6 +126,46 @@ suite<"worldgen/feature-stage"> feature_stage_tests = [] {
             }
             expect(placed_count == 2U);
         };
+};
+
+suite<"worldgen/state-provider"> state_provider_tests = [] {
+    "weighted providers sample both entries"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto moss = registry.intern("minecraft:mossy_cobblestone",
+                                    {.air = false,
+                                     .blocks_motion = true,
+                                     .blocks_motion_no_leaves = true});
+        expect(stone.has_value() && moss.has_value());
+        if (!stone || !moss) {
+            return;
+        }
+        auto provider = decode_state_provider(
+            parse(
+                R"({"type":"minecraft:weighted","entries":[{"data":"minecraft:stone","weight":1},{"data":"minecraft:mossy_cobblestone","weight":1}]})"),
+            registry);
+        expect(provider.has_value());
+        if (!provider) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk_region region{chunk, 1};
+        const placement_context context{
+            .region = &region, .chunk = &chunk, .states = &registry};
+        std::array<bool, 2> seen{};
+        auto random =
+            worldgen_random{std::make_unique<xoroshiro_random_source>(12345)};
+        for (int i = 0; i < 50; ++i) {
+            const auto state = (*provider)->get(
+                context, random, block_pos{.x = 0, .y = 0, .z = 0});
+            expect(state == *stone || state == *moss);
+            seen[state == *stone ? 0 : 1] = true;
+        }
+        expect(seen[0] && seen[1]);
+    };
 };
 
 suite<"worldgen/boolean-selector"> boolean_selector_tests = [] {
