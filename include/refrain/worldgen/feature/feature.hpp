@@ -61,14 +61,20 @@ class disk_feature final : public feature {
     disk_feature(block_state_id state, std::unique_ptr<block_predicate> target,
                  std::unique_ptr<provider::int_provider> radius,
                  jint half_height)
-        : state_{state}, target_{std::move(target)}, radius_{std::move(radius)},
-          half_height_{half_height} {}
+        : provider_{simple_state(state)}, target_{std::move(target)},
+          radius_{std::move(radius)}, half_height_{half_height} {}
+    disk_feature(std::unique_ptr<state_provider> provider,
+                 std::unique_ptr<block_predicate> target,
+                 std::unique_ptr<provider::int_provider> radius,
+                 jint half_height)
+        : provider_{std::move(provider)}, target_{std::move(target)},
+          radius_{std::move(radius)}, half_height_{half_height} {}
 
     [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool override;
 
   private:
-    block_state_id state_{no_block_state};
+    std::unique_ptr<state_provider> provider_{};
     std::unique_ptr<block_predicate> target_{};
     std::unique_ptr<provider::int_provider> radius_{};
     jint half_height_{0};
@@ -141,13 +147,18 @@ class block_blob_feature final : public feature {
   public:
     block_blob_feature(block_state_id state,
                        std::unique_ptr<block_predicate> can_place_on)
-        : state_{state}, can_place_on_{std::move(can_place_on)} {}
+        : provider_{simple_state(state)},
+          can_place_on_{std::move(can_place_on)} {}
+    block_blob_feature(std::unique_ptr<state_provider> provider,
+                       std::unique_ptr<block_predicate> can_place_on)
+        : provider_{std::move(provider)},
+          can_place_on_{std::move(can_place_on)} {}
 
     [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool override;
 
   private:
-    block_state_id state_{no_block_state};
+    std::unique_ptr<state_provider> provider_{};
     std::unique_ptr<block_predicate> can_place_on_{};
 };
 
@@ -168,7 +179,7 @@ class block_column_feature final : public feature {
   public:
     struct layer {
         std::unique_ptr<provider::int_provider> height{};
-        block_state_id state{no_block_state};
+        std::unique_ptr<state_provider> provider{};
     };
 
     block_column_feature(std::vector<layer> layers, block_direction direction,
