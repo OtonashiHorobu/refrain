@@ -152,15 +152,15 @@ packet add_entity = 1 {
     y: f64;
     z: f64;
     movement: lp_vec3;
-    x_rot: i8;
-    y_rot: i8;
-    y_head_rot: i8;
+    #[fixed] x_rot: i8;
+    #[fixed] y_rot: i8;
+    #[fixed] y_head_rot: i8;
     #[varint] data: i32;
 }
 
 packet animate = 2 {
     #[varint] id: i32;
-    action: i8;
+    #[fixed] action: i8;
 }
 
 packet award_stats = 3 {
@@ -170,7 +170,7 @@ packet award_stats = 3 {
 packet block_destruction = 5 {
     #[varint] id: i32;
     pos: i64;
-    progress: i8;
+    #[fixed] progress: i8;
 }
 
 packet block_entity_data = 6 {
@@ -181,8 +181,8 @@ packet block_entity_data = 6 {
 
 packet block_event = 7 {
     pos: i64;
-    b0: i8;
-    b1: i8;
+    #[fixed] b0: i8;
+    #[fixed] b1: i8;
     block: varint_id;
 }
 
@@ -386,7 +386,7 @@ packet low_disk_space_warning = 51 {
 
 packet map_item_data = 52 {
     #[varint] map_id: i32;
-    scale: i8;
+    #[fixed] scale: i8;
     locked: bool;
     decorations: optional<array<wire_map_decoration>>;
     color_patch: map_patch;
@@ -409,8 +409,8 @@ packet move_entity_pos = 54 {
 packet move_entity_pos_rot = 55 {
     entity_id: varint_id;
     delta: vec_delta;
-    y_rot: i8;
-    x_rot: i8;
+    #[fixed] y_rot: i8;
+    #[fixed] x_rot: i8;
 }
 
 packet move_minecart_along_track = 56 {
@@ -421,8 +421,8 @@ packet move_minecart_along_track = 56 {
 packet move_entity_rot = 57 {
     entity_id: varint_id;
     on_ground: bool;
-    y_rot: i8;
-    x_rot: i8;
+    #[fixed] y_rot: i8;
+    #[fixed] x_rot: i8;
 }
 
 packet move_vehicle = 58 {
@@ -548,12 +548,12 @@ packet post_effects = 83 {
 
 packet respawn = 84 {
     common_player_spawn_info: wire_common_player_spawn_info;
-    data_to_keep: i8;
+    #[fixed] data_to_keep: i8;
 }
 
 packet rotate_head = 85 {
     #[varint] entity_id: i32;
-    y_head_rot: i8;
+    #[fixed] y_head_rot: i8;
 }
 
 packet section_blocks_update = 86 {
@@ -788,7 +788,7 @@ packet update_mob_effect = 135 {
     effect: varint_id;
     #[varint] effect_amplifier: i32;
     #[varint] effect_duration_ticks: i32;
-    flags_: i8;
+    #[fixed] flags_: i8;
 }
 
 packet update_recipes = 136 {

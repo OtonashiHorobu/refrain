@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9f887e44356d665e
+// Schema hash: d4f6267a5f946179
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -33,6 +33,7 @@ struct wire_at_entity_payload {
 };
 
 struct wire_entries_entry {
+    // attributes: #[fixed]
     std::int8_t field_0;
     ::refrain::net::item_stack field_1;
 };
@@ -75,6 +76,7 @@ struct wire_update {
     std::int32_t offset;
     // attributes: #[fixed_bytes(20)]
     std::vector<std::byte> acknowledged;
+    // attributes: #[fixed]
     std::int8_t checksum;
 };
 
@@ -163,6 +165,7 @@ struct wire_explosion_particle_info {
 };
 
 struct wire_block_entities_data {
+    // attributes: #[fixed]
     std::int8_t packed_xz;
     // attributes: #[fixed]
     std::int16_t y;
@@ -212,8 +215,11 @@ struct wire_common_player_spawn_info {
 
 struct wire_map_decoration {
     std::uint32_t type_;
+    // attributes: #[fixed]
     std::int8_t x;
+    // attributes: #[fixed]
     std::int8_t y;
+    // attributes: #[fixed]
     std::int8_t rot;
     std::optional<::refrain::net::nbt_blob> name;
 };
@@ -227,7 +233,9 @@ struct wire_vec3 {
 struct wire_lerp_steps {
     ::refrain::protocol::v777::wire::wire_vec3 position;
     ::refrain::protocol::v777::wire::wire_vec3 movement;
+    // attributes: #[fixed]
     std::int8_t y_rot;
+    // attributes: #[fixed]
     std::int8_t x_rot;
     float weight;
 };
@@ -246,6 +254,7 @@ struct wire_body {
 
 struct wire_entry_2 {
     ::refrain::net::recipe_display_entry contents;
+    // attributes: #[fixed]
     std::int8_t flags_;
 };
 
@@ -336,7 +345,7 @@ struct wire_position_move_rotation {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_i64(static_cast<std::int64_t>(value.field_0));
+    out.write_u8(static_cast<std::uint8_t>(value.field_0));
   }
   {
     if (auto written = ::refrain::net::encode_item_stack(out, value.field_1); !written) {
@@ -350,7 +359,7 @@ struct wire_position_move_rotation {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.field_0 = static_cast<decltype(value.field_0)>(*value_0);
   }
@@ -584,7 +593,7 @@ struct wire_position_move_rotation {
     out.write_bytes(std::span<const std::byte>{value.acknowledged });
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.checksum));
+    out.write_u8(static_cast<std::uint8_t>(value.checksum));
   }
   return ::refrain::status_ok();
 }
@@ -603,7 +612,7 @@ struct wire_position_move_rotation {
     value.acknowledged = std::vector<std::byte>{value_0->begin(), value_0->end()};
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.checksum = static_cast<decltype(value.checksum)>(*value_0);
   }
@@ -1223,7 +1232,7 @@ struct wire_position_move_rotation {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_i64(static_cast<std::int64_t>(value.packed_xz));
+    out.write_u8(static_cast<std::uint8_t>(value.packed_xz));
   }
   {
     out.write_u16(static_cast<std::uint16_t>(value.y));
@@ -1243,7 +1252,7 @@ struct wire_position_move_rotation {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.packed_xz = static_cast<decltype(value.packed_xz)>(*value_0);
   }
@@ -1624,13 +1633,13 @@ struct wire_position_move_rotation {
     out.write_varint(value.type_);
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.x));
+    out.write_u8(static_cast<std::uint8_t>(value.x));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.y));
+    out.write_u8(static_cast<std::uint8_t>(value.y));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.rot));
+    out.write_u8(static_cast<std::uint8_t>(value.rot));
   }
   {
     out.write_bool(value.name.has_value());
@@ -1652,17 +1661,17 @@ struct wire_position_move_rotation {
     value.type_ = *value_0;
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.x = static_cast<decltype(value.x)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.y = static_cast<decltype(value.y)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.rot = static_cast<decltype(value.rot)>(*value_0);
   }
@@ -1732,10 +1741,10 @@ struct wire_position_move_rotation {
     }
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.y_rot));
+    out.write_u8(static_cast<std::uint8_t>(value.y_rot));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.x_rot));
+    out.write_u8(static_cast<std::uint8_t>(value.x_rot));
   }
   {
     out.write_f32(value.weight);
@@ -1757,12 +1766,12 @@ struct wire_position_move_rotation {
     }
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.y_rot = static_cast<decltype(value.y_rot)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.x_rot = static_cast<decltype(value.x_rot)>(*value_0);
   }
@@ -1863,7 +1872,7 @@ struct wire_position_move_rotation {
     }
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.flags_));
+    out.write_u8(static_cast<std::uint8_t>(value.flags_));
   }
   return ::refrain::status_ok();
 }
@@ -1877,7 +1886,7 @@ struct wire_position_move_rotation {
     }
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.flags_ = static_cast<decltype(value.flags_)>(*value_0);
   }

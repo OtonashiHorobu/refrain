@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/net/wire.hpp>
+#include <refrain/schema/protocol/777/play_clientbound.hpp>
 
 #include <boost/ut.hpp>
 
@@ -270,6 +271,31 @@ const suite tests = [] {
         const auto status{net::encode_particle_options(unknown_out, unknown)};
         expect(!status);
         expect(status.error().code == refrain::error_code::invalid_argument);
+    };
+
+    "wire add_entity writes rotations as single bytes"_test = [] {
+        refrain::protocol::v777::play::clientbound::add_entity packet{};
+        packet.id = 1;
+        packet.type_ = 159;
+        packet.x = 0.0;
+        packet.y = 0.0;
+        packet.z = 0.0;
+        packet.movement = {};
+        packet.x_rot = -1;
+        packet.y_rot = -1;
+        packet.y_head_rot = -1;
+        packet.data = 0;
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(
+            refrain::protocol::v777::play::clientbound::encode_add_entity(
+                out, packet)));
+        expect(bytes.size() == 48U);
+        if (bytes.size() == 48U) {
+            expect(bytes[44] == std::byte{0xFF});
+            expect(bytes[45] == std::byte{0xFF});
+            expect(bytes[46] == std::byte{0xFF});
+        }
     };
 
     "wire container click payload skips hashed stacks"_test = [] {

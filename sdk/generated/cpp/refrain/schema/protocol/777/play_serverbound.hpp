@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9f887e44356d665e
+// Schema hash: d4f6267a5f946179
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
@@ -427,6 +427,7 @@ struct player_abilities {
     static constexpr std::uint16_t packet_id = 0x28;
     static constexpr std::string_view packet_name = "player_abilities";
 
+    // attributes: #[fixed]
     std::int8_t is_flying;
 };
 
@@ -445,6 +446,7 @@ struct player_input {
     static constexpr std::uint16_t packet_id = 0x2B;
     static constexpr std::string_view packet_name = "player_input";
 
+    // attributes: #[fixed]
     std::int8_t input;
 };
 
@@ -527,6 +529,7 @@ struct set_command_block {
     // attributes: #[max(32767)]
     std::string command;
     std::uint32_t mode;
+    // attributes: #[fixed]
     std::int8_t track_output;
 };
 
@@ -584,11 +587,17 @@ struct set_structure_block {
     std::uint32_t mode;
     // attributes: #[max(32767)]
     std::string name;
+    // attributes: #[fixed]
     std::int8_t offset;
+    // attributes: #[fixed]
     std::int8_t size;
+    // attributes: #[fixed]
     std::int8_t mirror;
+    // attributes: #[fixed]
     std::int8_t rotation;
+    // attributes: #[fixed]
     std::int8_t data;
+    // attributes: #[fixed]
     std::int8_t integrity;
     std::uint32_t mirror_2;
     std::uint32_t rotation_2;
@@ -597,6 +606,7 @@ struct set_structure_block {
     float integrity_2;
     // attributes: #[varlong]
     std::int64_t seed;
+    // attributes: #[fixed]
     std::int8_t field_15;
 };
 
@@ -2090,7 +2100,7 @@ struct custom_click_action {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_i64(static_cast<std::int64_t>(value.is_flying));
+    out.write_u8(static_cast<std::uint8_t>(value.is_flying));
   }
   return ::refrain::status_ok();
 }
@@ -2099,7 +2109,7 @@ struct custom_click_action {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.is_flying = static_cast<decltype(value.is_flying)>(*value_0);
   }
@@ -2146,7 +2156,7 @@ struct custom_click_action {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_i64(static_cast<std::int64_t>(value.input));
+    out.write_u8(static_cast<std::uint8_t>(value.input));
   }
   return ::refrain::status_ok();
 }
@@ -2155,7 +2165,7 @@ struct custom_click_action {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.input = static_cast<decltype(value.input)>(*value_0);
   }
@@ -2397,7 +2407,7 @@ struct custom_click_action {
     out.write_varint(value.mode);
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.track_output));
+    out.write_u8(static_cast<std::uint8_t>(value.track_output));
   }
   return ::refrain::status_ok();
 }
@@ -2421,7 +2431,7 @@ struct custom_click_action {
     value.mode = *value_0;
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.track_output = static_cast<decltype(value.track_output)>(*value_0);
   }
@@ -2632,22 +2642,22 @@ struct custom_click_action {
     }
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.offset));
+    out.write_u8(static_cast<std::uint8_t>(value.offset));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.size));
+    out.write_u8(static_cast<std::uint8_t>(value.size));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.mirror));
+    out.write_u8(static_cast<std::uint8_t>(value.mirror));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.rotation));
+    out.write_u8(static_cast<std::uint8_t>(value.rotation));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.data));
+    out.write_u8(static_cast<std::uint8_t>(value.data));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.integrity));
+    out.write_u8(static_cast<std::uint8_t>(value.integrity));
   }
   {
     out.write_varint(value.mirror_2);
@@ -2667,7 +2677,7 @@ struct custom_click_action {
     out.write_varlong(static_cast<std::uint64_t>(value.seed));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.field_15));
+    out.write_u8(static_cast<std::uint8_t>(value.field_15));
   }
   return ::refrain::status_ok();
 }
@@ -2696,32 +2706,32 @@ struct custom_click_action {
     value.name = std::move(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.offset = static_cast<decltype(value.offset)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.size = static_cast<decltype(value.size)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.mirror = static_cast<decltype(value.mirror)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.rotation = static_cast<decltype(value.rotation)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.data = static_cast<decltype(value.data)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.integrity = static_cast<decltype(value.integrity)>(*value_0);
   }
@@ -2751,7 +2761,7 @@ struct custom_click_action {
     value.seed = static_cast<decltype(value.seed)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.field_15 = static_cast<decltype(value.field_15)>(*value_0);
   }

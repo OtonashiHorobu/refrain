@@ -245,7 +245,7 @@ packet place_recipe = 39 {
 }
 
 packet player_abilities = 40 {
-    is_flying: i8;
+    #[fixed] is_flying: i8;
 }
 
 packet player_command = 42 {
@@ -255,7 +255,7 @@ packet player_command = 42 {
 }
 
 packet player_input = 43 {
-    input: i8;
+    #[fixed] input: i8;
 }
 
 packet pong = 45 {
@@ -301,7 +301,7 @@ packet set_command_block = 55 {
     pos: i64;
     #[max(32767)] command: string;
     mode: varint_id;
-    track_output: i8;
+    #[fixed] track_output: i8;
 }
 
 packet set_command_minecart = 56 {
@@ -335,18 +335,18 @@ packet set_structure_block = 60 {
     update_type: varint_id;
     mode: varint_id;
     #[max(32767)] name: string;
-    offset: i8;
-    size: i8;
-    mirror: i8;
-    rotation: i8;
-    data: i8;
-    integrity: i8;
+    #[fixed] offset: i8;
+    #[fixed] size: i8;
+    #[fixed] mirror: i8;
+    #[fixed] rotation: i8;
+    #[fixed] data: i8;
+    #[fixed] integrity: i8;
     mirror_2: varint_id;
     rotation_2: varint_id;
     #[max(32767)] data_2: string;
     integrity_2: f32;
     #[varlong] seed: i64;
-    field_15: i8;
+    #[fixed] field_15: i8;
 }
 
 packet set_test_block = 61 {

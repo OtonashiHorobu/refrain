@@ -15,7 +15,7 @@ struct wire_at_entity_payload {
 }
 
 struct wire_entries_entry {
-    field_0: i8;
+    #[fixed] field_0: i8;
     field_1: item_stack;
 }
 
@@ -53,7 +53,7 @@ struct wire_argument_signatures {
 struct wire_update {
     #[varint] offset: i32;
     #[fixed_bytes(20)] acknowledged: bytes;
-    checksum: i8;
+    #[fixed] checksum: i8;
 }
 
 struct wire_data {
@@ -125,7 +125,7 @@ struct wire_explosion_particle_info {
 }
 
 struct wire_block_entities_data {
-    packed_xz: i8;
+    #[fixed] packed_xz: i8;
     #[fixed] y: i16;
     type_: varint_id;
     tag: nbt;
@@ -166,17 +166,17 @@ struct wire_common_player_spawn_info {
 
 struct wire_map_decoration {
     type_: varint_id;
-    x: i8;
-    y: i8;
-    rot: i8;
+    #[fixed] x: i8;
+    #[fixed] y: i8;
+    #[fixed] rot: i8;
     name: optional<nbt>;
 }
 
 struct wire_lerp_steps {
     position: wire_vec3;
     movement: wire_vec3;
-    y_rot: i8;
-    x_rot: i8;
+    #[fixed] y_rot: i8;
+    #[fixed] x_rot: i8;
     weight: f32;
 }
 
@@ -193,7 +193,7 @@ struct wire_body {
 
 struct wire_entry_2 {
     contents: recipe_display_entry;
-    flags_: i8;
+    #[fixed] flags_: i8;
 }
 
 struct wire_recipe_display_id {

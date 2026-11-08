@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9f887e44356d665e
+// Schema hash: d4f6267a5f946179
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -251,8 +251,11 @@ struct add_entity {
     double y;
     double z;
     ::refrain::net::lp_vec3 movement;
+    // attributes: #[fixed]
     std::int8_t x_rot;
+    // attributes: #[fixed]
     std::int8_t y_rot;
+    // attributes: #[fixed]
     std::int8_t y_head_rot;
     // attributes: #[varint]
     std::int32_t data;
@@ -264,6 +267,7 @@ struct animate {
 
     // attributes: #[varint]
     std::int32_t id;
+    // attributes: #[fixed]
     std::int8_t action;
 };
 
@@ -281,6 +285,7 @@ struct block_destruction {
     // attributes: #[varint]
     std::int32_t id;
     std::int64_t pos;
+    // attributes: #[fixed]
     std::int8_t progress;
 };
 
@@ -298,7 +303,9 @@ struct block_event {
     static constexpr std::string_view packet_name = "block_event";
 
     std::int64_t pos;
+    // attributes: #[fixed]
     std::int8_t b0;
+    // attributes: #[fixed]
     std::int8_t b1;
     std::uint32_t block;
 };
@@ -644,6 +651,7 @@ struct map_item_data {
 
     // attributes: #[varint]
     std::int32_t map_id;
+    // attributes: #[fixed]
     std::int8_t scale;
     bool locked;
     std::optional<std::vector<::refrain::protocol::v777::wire::wire_map_decoration>> decorations;
@@ -679,7 +687,9 @@ struct move_entity_pos_rot {
 
     std::uint32_t entity_id;
     ::refrain::net::vec_delta delta;
+    // attributes: #[fixed]
     std::int8_t y_rot;
+    // attributes: #[fixed]
     std::int8_t x_rot;
 };
 
@@ -698,7 +708,9 @@ struct move_entity_rot {
 
     std::uint32_t entity_id;
     bool on_ground;
+    // attributes: #[fixed]
     std::int8_t y_rot;
+    // attributes: #[fixed]
     std::int8_t x_rot;
 };
 
@@ -911,6 +923,7 @@ struct respawn {
     static constexpr std::string_view packet_name = "respawn";
 
     ::refrain::protocol::v777::wire::wire_common_player_spawn_info common_player_spawn_info;
+    // attributes: #[fixed]
     std::int8_t data_to_keep;
 };
 
@@ -920,6 +933,7 @@ struct rotate_head {
 
     // attributes: #[varint]
     std::int32_t entity_id;
+    // attributes: #[fixed]
     std::int8_t y_head_rot;
 };
 
@@ -1331,6 +1345,7 @@ struct update_mob_effect {
     std::int32_t effect_amplifier;
     // attributes: #[varint]
     std::int32_t effect_duration_ticks;
+    // attributes: #[fixed]
     std::int8_t flags_;
 };
 
@@ -2267,13 +2282,13 @@ struct show_dialog {
     }
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.x_rot));
+    out.write_u8(static_cast<std::uint8_t>(value.x_rot));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.y_rot));
+    out.write_u8(static_cast<std::uint8_t>(value.y_rot));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.y_head_rot));
+    out.write_u8(static_cast<std::uint8_t>(value.y_head_rot));
   }
   {
     out.write_varint(static_cast<std::uint32_t>(value.data));
@@ -2320,17 +2335,17 @@ struct show_dialog {
     }
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.x_rot = static_cast<decltype(value.x_rot)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.y_rot = static_cast<decltype(value.y_rot)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.y_head_rot = static_cast<decltype(value.y_head_rot)>(*value_0);
   }
@@ -2349,7 +2364,7 @@ struct show_dialog {
     out.write_varint(static_cast<std::uint32_t>(value.id));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.action));
+    out.write_u8(static_cast<std::uint8_t>(value.action));
   }
   return ::refrain::status_ok();
 }
@@ -2363,7 +2378,7 @@ struct show_dialog {
     value.id = static_cast<decltype(value.id)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.action = static_cast<decltype(value.action)>(*value_0);
   }
@@ -2417,7 +2432,7 @@ struct show_dialog {
     out.write_i64(static_cast<std::int64_t>(value.pos));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.progress));
+    out.write_u8(static_cast<std::uint8_t>(value.progress));
   }
   return ::refrain::status_ok();
 }
@@ -2436,7 +2451,7 @@ struct show_dialog {
     value.pos = static_cast<decltype(value.pos)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.progress = static_cast<decltype(value.progress)>(*value_0);
   }
@@ -2488,10 +2503,10 @@ struct show_dialog {
     out.write_i64(static_cast<std::int64_t>(value.pos));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.b0));
+    out.write_u8(static_cast<std::uint8_t>(value.b0));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.b1));
+    out.write_u8(static_cast<std::uint8_t>(value.b1));
   }
   {
     out.write_varint(value.block);
@@ -2508,12 +2523,12 @@ struct show_dialog {
     value.pos = static_cast<decltype(value.pos)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.b0 = static_cast<decltype(value.b0)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.b1 = static_cast<decltype(value.b1)>(*value_0);
   }
@@ -3876,7 +3891,7 @@ struct show_dialog {
     out.write_varint(static_cast<std::uint32_t>(value.map_id));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.scale));
+    out.write_u8(static_cast<std::uint8_t>(value.scale));
   }
   {
     out.write_bool(value.locked);
@@ -3909,7 +3924,7 @@ struct show_dialog {
     value.map_id = static_cast<decltype(value.map_id)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.scale = static_cast<decltype(value.scale)>(*value_0);
   }
@@ -4060,10 +4075,10 @@ struct show_dialog {
     }
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.y_rot));
+    out.write_u8(static_cast<std::uint8_t>(value.y_rot));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.x_rot));
+    out.write_u8(static_cast<std::uint8_t>(value.x_rot));
   }
   return ::refrain::status_ok();
 }
@@ -4082,12 +4097,12 @@ struct show_dialog {
     }
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.y_rot = static_cast<decltype(value.y_rot)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.x_rot = static_cast<decltype(value.x_rot)>(*value_0);
   }
@@ -4144,10 +4159,10 @@ struct show_dialog {
     out.write_bool(value.on_ground);
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.y_rot));
+    out.write_u8(static_cast<std::uint8_t>(value.y_rot));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.x_rot));
+    out.write_u8(static_cast<std::uint8_t>(value.x_rot));
   }
   return ::refrain::status_ok();
 }
@@ -4166,12 +4181,12 @@ struct show_dialog {
     value.on_ground = *value_0;
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.y_rot = static_cast<decltype(value.y_rot)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.x_rot = static_cast<decltype(value.x_rot)>(*value_0);
   }
@@ -5031,7 +5046,7 @@ struct show_dialog {
     }
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.data_to_keep));
+    out.write_u8(static_cast<std::uint8_t>(value.data_to_keep));
   }
   return ::refrain::status_ok();
 }
@@ -5045,7 +5060,7 @@ struct show_dialog {
     }
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.data_to_keep = static_cast<decltype(value.data_to_keep)>(*value_0);
   }
@@ -5059,7 +5074,7 @@ struct show_dialog {
     out.write_varint(static_cast<std::uint32_t>(value.entity_id));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.y_head_rot));
+    out.write_u8(static_cast<std::uint8_t>(value.y_head_rot));
   }
   return ::refrain::status_ok();
 }
@@ -5073,7 +5088,7 @@ struct show_dialog {
     value.entity_id = static_cast<decltype(value.entity_id)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.y_head_rot = static_cast<decltype(value.y_head_rot)>(*value_0);
   }
@@ -6622,7 +6637,7 @@ struct show_dialog {
     out.write_varint(static_cast<std::uint32_t>(value.effect_duration_ticks));
   }
   {
-    out.write_i64(static_cast<std::int64_t>(value.flags_));
+    out.write_u8(static_cast<std::uint8_t>(value.flags_));
   }
   return ::refrain::status_ok();
 }
@@ -6651,7 +6666,7 @@ struct show_dialog {
     value.effect_duration_ticks = static_cast<decltype(value.effect_duration_ticks)>(*value_0);
   }
   {
-    auto value_0 = in.read_i64();
+    auto value_0 = in.read_u8();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.flags_ = static_cast<decltype(value.flags_)>(*value_0);
   }
