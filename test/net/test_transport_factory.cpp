@@ -8,6 +8,8 @@
 
 #include <boost/ut.hpp>
 
+#include "test_protocol.hpp"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -95,6 +97,7 @@ suite transport_factory_tests = [] {
         }
         memory_transport *created{nullptr};
         net::server_inputs inputs{};
+        inputs.protocol = refrain::test::make_test_protocol();
         inputs.make_transport = [&created](net::transport_handler,
                                            std::size_t) {
             auto transport{std::make_unique<memory_transport>()};

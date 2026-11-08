@@ -8,6 +8,8 @@
 
 #include <boost/ut.hpp>
 
+#include "test_protocol.hpp"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
@@ -66,6 +68,7 @@ suite bot_tests = [] {
             out.write_varint(chunk_id);
         }
         net::server_inputs inputs{};
+        inputs.protocol = refrain::test::make_test_protocol();
         inputs.spawn_chunks =
             std::make_shared<const std::vector<std::vector<std::byte>>>(
                 std::vector<std::vector<std::byte>>{chunk_body});
@@ -195,7 +198,9 @@ suite bot_tests = [] {
             std::filesystem::remove_all(dir, error);
             return;
         }
-        auto server{net::server::start(net::server_inputs{}, *view)};
+        net::server_inputs inputs{};
+        inputs.protocol = refrain::test::make_test_protocol();
+        auto server{net::server::start(std::move(inputs), *view)};
         expect(static_cast<bool>(server));
         if (!server) {
             std::error_code error;
@@ -259,6 +264,7 @@ suite bot_tests = [] {
             return;
         }
         net::server_inputs inputs{};
+        inputs.protocol = refrain::test::make_test_protocol();
         inputs.verify_session =
             [](std::string_view,
                std::string_view) -> refrain::result<net::session_profile> {
@@ -310,6 +316,7 @@ suite bot_tests = [] {
             return;
         }
         net::server_inputs inputs{};
+        inputs.protocol = refrain::test::make_test_protocol();
         inputs.verify_session =
             [](std::string_view,
                std::string_view) -> refrain::result<net::session_profile> {

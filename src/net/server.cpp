@@ -198,8 +198,6 @@ struct server_settings {
 
 struct server::impl {
     struct connection_state_data {
-        frame_decoder decoder{-1};
-        frame_encoder encoder{-1};
         connection_state state{connection_state::handshake};
         std::int32_t protocol{0};
         std::string name{};
@@ -232,7 +230,6 @@ struct server::impl {
         float broadcast_yaw{0.0F};
         float broadcast_pitch{0.0F};
         bool broadcast_initialized{false};
-        std::unique_ptr<aes128_cfb8> cipher{};
         std::vector<std::byte> verify_token{};
         bool online_pending{false};
         token_bucket limiter{};
@@ -389,9 +386,7 @@ void server::impl::on_open(std::uint64_t id) {
         return;
     }
     log::debug("net: connection opened id={}", id);
-    if (protocol) {
-        protocol->create_connection(id);
-    }
+    protocol->create_connection(id);
     const std::lock_guard lock{connections_mutex};
     auto &connection{connections[id]};
     connection.limiter.configure(config.rate_limit);
@@ -436,72 +431,33 @@ void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
                        std::chrono::steady_clock::now().time_since_epoch())
                 .count();
         };
-        if (protocol) {
-            if (auto fed{protocol->feed(id, bytes)}; !fed) {
-                connection.closed = true;
-                failed = true;
-            } else {
-                for (;;) {
-                    std::uint32_t packet_id{0};
-                    std::span<const std::byte> payload{};
-                    auto next{protocol->next_packet(id, packet_id, payload)};
-                    if (!next) {
-                        connection.closed = true;
-                        failed = true;
-                        break;
-                    }
-                    if (!*next) {
-                        break;
-                    }
-                    if (connection.state == connection_state::play &&
-                        !connection.limiter.allow(now_ns())) {
-                        rate_limited = true;
-                        break;
-                    }
-                    connection.last_packet_ns = now_ns();
-                    std::vector<std::byte> body;
-                    writer out{body};
-                    out.write_varint(packet_id);
-                    out.write_bytes(payload);
-                    bodies.push_back(std::move(body));
-                }
-            }
+        if (auto fed{protocol->feed(id, bytes)}; !fed) {
+            connection.closed = true;
+            failed = true;
         } else {
-            std::vector<std::byte> plain{bytes.begin(), bytes.end()};
-            if (connection.cipher) {
-                auto decrypted{connection.cipher->decrypt(bytes)};
-                if (!decrypted) {
+            for (;;) {
+                std::uint32_t packet_id{0};
+                std::span<const std::byte> payload{};
+                auto next{protocol->next_packet(id, packet_id, payload)};
+                if (!next) {
                     connection.closed = true;
                     failed = true;
-                } else {
-                    plain = std::move(*decrypted);
+                    break;
                 }
-            }
-            if (!failed) {
-                if (auto pushed{connection.decoder.push(plain)}; !pushed) {
-                    connection.closed = true;
-                    failed = true;
-                } else {
-                    for (;;) {
-                        std::vector<std::byte> body;
-                        auto next{connection.decoder.next(body)};
-                        if (!next) {
-                            connection.closed = true;
-                            failed = true;
-                            break;
-                        }
-                        if (!*next) {
-                            break;
-                        }
-                        if (connection.state == connection_state::play &&
-                            !connection.limiter.allow(now_ns())) {
-                            rate_limited = true;
-                            break;
-                        }
-                        connection.last_packet_ns = now_ns();
-                        bodies.push_back(std::move(body));
-                    }
+                if (!*next) {
+                    break;
                 }
+                if (connection.state == connection_state::play &&
+                    !connection.limiter.allow(now_ns())) {
+                    rate_limited = true;
+                    break;
+                }
+                connection.last_packet_ns = now_ns();
+                std::vector<std::byte> body;
+                writer out{body};
+                out.write_varint(packet_id);
+                out.write_bytes(payload);
+                bodies.push_back(std::move(body));
             }
         }
     }
@@ -861,8 +817,6 @@ void server::impl::complete_login(std::uint64_t id) {
         if (found == connections.end() || found->second.closed) {
             return;
         }
-        found->second.encoder.set_threshold(config.compression_threshold);
-        found->second.decoder.set_threshold(config.compression_threshold);
         if (protocol) {
             static_cast<void>(
                 protocol->set_compression(id, config.compression_threshold));
@@ -931,7 +885,6 @@ void server::impl::handle_login_key(std::uint64_t id, reader &in) {
             return;
         }
         auto &live{found->second};
-        live.cipher = std::make_unique<aes128_cfb8>(std::move(*cipher));
         if (protocol) {
             static_cast<void>(protocol->set_cipher(
                 id, std::span<const std::byte>{secret->data(), secret->size()},
@@ -1298,8 +1251,8 @@ void server::impl::send_play_login(std::uint64_t id) {
                     play_cb::encode_set_chunk_cache_radius);
     }
 
-    // The client needs a spawn position and a first chunk batch before it can
-    // leave the loading screen.
+    // The client needs a spawn position and a first chunk batch before it
+    // can leave the loading screen.
     {
         play_cb::player_position position{
             .id = 1,
@@ -2113,8 +2066,8 @@ void server::impl::handle_play(std::uint64_t id,
             return;
         }
         const auto [x, y, z] = block_position(packet.position);
-        // Only START_DESTROY_BLOCK changes the world; the other actions stop
-        // or abort a prediction that the client resolves locally.
+        // Only START_DESTROY_BLOCK changes the world; the other actions
+        // stop or abort a prediction that the client resolves locally.
         if (packet.action == 0 && config.break_block &&
             config.break_block(x, y, z)) {
             play_cb::block_update update{.position = packet.position,
@@ -2361,45 +2314,23 @@ void server::impl::handle_play(std::uint64_t id,
 }
 
 void server::impl::send(std::uint64_t id, std::span<const std::byte> packet) {
-    if (protocol) {
-        reader in{packet};
-        auto packet_id{in.read_varint()};
-        if (!packet_id) {
-            return;
-        }
-        const auto payload{packet.subspan(in.position())};
-        if (auto sent{protocol->send_packet(id, *packet_id, payload)}; !sent) {
-            return;
-        }
-        if (socket) {
-            std::span<const std::byte> framed{};
-            while (protocol->take_outbound(id, framed)) {
-                socket->send(id, framed);
-            }
-        }
+    if (!protocol) {
         return;
     }
-    std::vector<std::byte> framed;
-    {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        if (auto encoded{found->second.encoder.encode(packet, framed)};
-            !encoded) {
-            return;
-        }
-        if (found->second.cipher) {
-            auto encrypted{found->second.cipher->encrypt(framed)};
-            if (!encrypted) {
-                return;
-            }
-            framed = std::move(*encrypted);
-        }
+    reader in{packet};
+    auto packet_id{in.read_varint()};
+    if (!packet_id) {
+        return;
+    }
+    const auto payload{packet.subspan(in.position())};
+    if (auto sent{protocol->send_packet(id, *packet_id, payload)}; !sent) {
+        return;
     }
     if (socket) {
-        socket->send(id, framed);
+        std::span<const std::byte> framed{};
+        while (protocol->take_outbound(id, framed)) {
+            socket->send(id, framed);
+        }
     }
 }
 
@@ -2427,9 +2358,7 @@ void server::impl::close(std::uint64_t id) {
     } else {
         log::info("net: player left id={} name={}", id, name);
     }
-    if (protocol) {
-        protocol->close_connection(id);
-    }
+    protocol->close_connection(id);
     if (socket) {
         socket->close(id);
     }
@@ -2558,6 +2487,11 @@ auto server::start(server_inputs inputs, core::config::view view)
     config.break_block = std::move(inputs.break_block);
     config.place_block = std::move(inputs.place_block);
 
+    if (!inputs.protocol) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "network server requires a protocol codec")};
+    }
     auto state{std::make_unique<impl>()};
     state->policy = std::move(inputs.policy);
     state->join_state = std::move(inputs.join_state);

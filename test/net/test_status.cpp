@@ -9,6 +9,8 @@
 
 #include <boost/ut.hpp>
 
+#include "test_protocol.hpp"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -98,7 +100,9 @@ const suite tests = [] {
             return;
         }
 
-        auto running{net::server::start({}, *view)};
+        net::server_inputs inputs{};
+        inputs.protocol = refrain::test::make_test_protocol();
+        auto running{net::server::start(std::move(inputs), *view)};
         expect(running.has_value());
         if (!running) {
             return;
