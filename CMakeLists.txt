@@ -388,6 +388,16 @@ target_link_libraries(refrain-sim PUBLIC refrain-kernel refrain-world
                                        refrain-data refrain-contracts)
 add_library(Refrain::Sim ALIAS refrain-sim)
 
+# --- protocol codecs: versioned connection framing --------------------------
+# New src/protocol files are picked up without editing this file. The library
+# depends on the wire primitives in refrain-net and is consumed by protocol
+# providers.
+file(GLOB_RECURSE REFRAIN_PROTOCOL_SOURCES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/protocol/*.cpp")
+refrain_add_library(refrain-protocol ${REFRAIN_PROTOCOL_SOURCES})
+target_link_libraries(refrain-protocol PUBLIC refrain-kernel refrain-net)
+add_library(Refrain::Protocol ALIAS refrain-protocol)
+
 # --- network protocol: wire codec, frame, transport, sessions --------------
 # New src/net files are picked up without editing this file. OpenSSL is linked
 # privately by the online-mode crypto unit; it never appears in a public header.
@@ -454,7 +464,8 @@ target_link_libraries(refrain-first-party-mods PUBLIC refrain-kernel
                                                     refrain-mod-host
                                                     refrain-sim
                                                     refrain-app
-                                                    refrain-server-runtime)
+                                                    refrain-server-runtime
+                                                    refrain-protocol)
 refrain_apply_warnings(refrain-first-party-mods)
 add_library(Refrain::FirstPartyMods ALIAS refrain-first-party-mods)
 
@@ -569,7 +580,8 @@ if(REFRAIN_BUILD_TESTS)
                                               refrain-archive refrain-data
                                               refrain-world refrain-sim
                                               refrain-command
-                                              refrain-net refrain-worldgen
+                                              refrain-net refrain-protocol
+                                              refrain-worldgen
                                               refrain-builtin
                                               refrain-mod-host
                                               refrain-first-party-mods
