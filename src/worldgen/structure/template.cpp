@@ -27,7 +27,7 @@ struct parsed_state {
 
 auto parse_state(std::string_view key) -> parsed_state;
 auto find_state(
-    const block_state_registry &states, std::string_view name,
+    block_state_registry &states, std::string_view name,
     const std::vector<std::pair<std::string, std::string>> &properties)
     -> block_state_id;
 
@@ -181,8 +181,7 @@ auto resolve_palette_state(block_state_registry &states,
     return inserted.has_value() ? *inserted : states.air();
 }
 
-auto is_full_block(const block_state_registry &states, block_state_id state)
-    -> bool {
+auto is_full_block(block_state_registry &states, block_state_id state) -> bool {
     const auto traits = states.traits(state);
     return !traits.air && !traits.fluid && traits.blocks_motion;
 }
@@ -285,7 +284,7 @@ auto parse_state(std::string_view key) -> parsed_state {
 }
 
 auto find_state(
-    const block_state_registry &states, std::string_view name,
+    block_state_registry &states, std::string_view name,
     const std::vector<std::pair<std::string, std::string>> &properties)
     -> block_state_id {
     for (std::size_t id = 0; id < states.size(); ++id) {
@@ -746,8 +745,8 @@ auto opposite_direction(std::string_view direction) -> std::string_view {
     return direction;
 }
 
-auto is_shape_sensitive(const block_state_registry &states,
-                        block_state_id state) -> bool {
+auto is_shape_sensitive(block_state_registry &states, block_state_id state)
+    -> bool {
     const auto block = state_block_name(states.name(state));
     return block.ends_with("_fence") || block.ends_with("_stairs");
 }
@@ -879,7 +878,7 @@ auto replace_block_name(std::string key, std::string_view replacement)
 
 } // namespace
 
-auto rule_processor::process(const block_state_registry &states,
+auto rule_processor::process(block_state_registry &states,
                              const chunk_region &region,
                              const template_block_info &info,
                              const block_pos &world,
@@ -915,7 +914,7 @@ auto rule_processor::process(const block_state_registry &states,
     return info;
 }
 
-auto protected_block_processor::process(const block_state_registry &states,
+auto protected_block_processor::process(block_state_registry &states,
                                         const chunk_region &region,
                                         const template_block_info &info,
                                         const block_pos &world,
@@ -929,7 +928,7 @@ auto protected_block_processor::process(const block_state_registry &states,
     return info;
 }
 
-auto lava_submerged_processor::process(const block_state_registry &states,
+auto lava_submerged_processor::process(block_state_registry &states,
                                        const chunk_region &region,
                                        const template_block_info &info,
                                        const block_pos &world,
@@ -946,7 +945,7 @@ auto lava_submerged_processor::process(const block_state_registry &states,
     return info;
 }
 
-auto block_age_processor::process(const block_state_registry &states,
+auto block_age_processor::process(block_state_registry &states,
                                   const chunk_region &region,
                                   const template_block_info &info,
                                   const block_pos &world,
@@ -964,8 +963,11 @@ auto block_age_processor::process(const block_state_registry &states,
                              std::string_view properties) {
         const std::string key =
             std::string{replacement} + "[" + std::string{properties} + "]";
-        const auto found = states.find(key);
-        return found ? *found : info.state;
+        if (const auto found = states.find(key); found) {
+            return *found;
+        }
+        const auto interned = states.intern(key, states.traits(info.state));
+        return interned ? *interned : info.state;
     };
     const auto properties = [&]() -> std::string {
         const auto open = name.find('[');
@@ -991,13 +993,17 @@ auto block_age_processor::process(const block_state_registry &states,
             facing = "west";
             break;
         }
-        const char *half = rng.next_int(2) == 0 ? "bottom" : "top";
+        const char *half = rng.next_int(2) == 0 ? "top" : "bottom";
         const std::string props =
             std::string{"facing="} + facing + ",half=" + half;
         const char *id = mossy ? "minecraft:mossy_stone_brick_stairs"
                                : "minecraft:stone_brick_stairs";
-        const auto found = states.find(std::string{id} + "[" + props + "]");
-        return found ? *found : info.state;
+        const std::string key = std::string{id} + "[" + props + "]";
+        if (const auto found = states.find(key); found) {
+            return *found;
+        }
+        const auto interned = states.intern(key, states.traits(info.state));
+        return interned ? *interned : info.state;
     };
     auto result = info;
     if (block == "minecraft:stone_bricks" || block == "minecraft:stone" ||
@@ -1005,6 +1011,10 @@ auto block_age_processor::process(const block_state_registry &states,
         if (rng.next_float() >= 0.5F) {
             return info;
         }
+        // Both stair variants are built before the mossiness and array
+        // choices, so each consumes its facing and half draws.
+        const auto non_mossy_stairs = stair(false);
+        const auto mossy_stairs = stair(true);
         const bool mossy = rng.next_float() < mossiness_;
         const auto choice = rng.next_int(2);
         if (choice == 0) {
@@ -1015,7 +1025,7 @@ auto block_age_processor::process(const block_state_registry &states,
                 result.state = *found;
             }
         } else {
-            result.state = stair(mossy);
+            result.state = mossy ? mossy_stairs : non_mossy_stairs;
         }
         return result;
     }
@@ -1073,7 +1083,7 @@ auto block_age_processor::process(const block_state_registry &states,
     return info;
 }
 
-auto blackstone_replace_processor::process(const block_state_registry &states,
+auto blackstone_replace_processor::process(block_state_registry &states,
                                            const chunk_region &region,
                                            const template_block_info &info,
                                            const block_pos &world,
@@ -1331,7 +1341,7 @@ auto template_bounding_box(const structure_template &templ,
     return bounds;
 }
 
-auto block_ignore_processor::process(const block_state_registry &states,
+auto block_ignore_processor::process(block_state_registry &states,
                                      const chunk_region &region,
                                      const template_block_info &info,
                                      const block_pos &world,
@@ -1347,7 +1357,7 @@ auto block_ignore_processor::process(const block_state_registry &states,
     return info;
 }
 
-auto block_rot_processor::process(const block_state_registry &states,
+auto block_rot_processor::process(block_state_registry &states,
                                   const chunk_region &region,
                                   const template_block_info &info,
                                   const block_pos &world,
@@ -1379,7 +1389,7 @@ auto block_rot_processor::process(const block_state_registry &states,
     return info;
 }
 
-auto protected_blocks_processor::process(const block_state_registry &states,
+auto protected_blocks_processor::process(block_state_registry &states,
                                          const chunk_region &region,
                                          const template_block_info &info,
                                          const block_pos &world,

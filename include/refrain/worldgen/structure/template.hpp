@@ -118,7 +118,7 @@ class template_block_processor {
     virtual ~template_block_processor() = default;
 
     [[nodiscard]] virtual auto
-    process(const block_state_registry &states, const chunk_region &region,
+    process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
             worldgen_random *random) const
         -> std::optional<template_block_info> = 0;
@@ -149,7 +149,7 @@ class capped_rule_processor final : public template_block_processor {
           loot_table_{std::move(loot_table)}, limit_{limit} {}
 
     [[nodiscard]] auto
-    process(const block_state_registry &states, const chunk_region &region,
+    process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
             worldgen_random *random) const
         -> std::optional<template_block_info> override {
@@ -181,7 +181,7 @@ class block_ignore_processor final : public template_block_processor {
         : blocks_{std::move(blocks)} {}
 
     [[nodiscard]] auto
-    process(const block_state_registry &states, const chunk_region &region,
+    process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
             worldgen_random *random) const
         -> std::optional<template_block_info> override;
@@ -207,7 +207,7 @@ class rule_processor final : public template_block_processor {
         : rules_{std::move(rules)} {}
 
     [[nodiscard]] auto
-    process(const block_state_registry &states, const chunk_region &region,
+    process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
             worldgen_random *random) const
         -> std::optional<template_block_info> override;
@@ -224,7 +224,7 @@ class protected_block_processor final : public template_block_processor {
         : tag_{std::move(tag)} {}
 
     [[nodiscard]] auto
-    process(const block_state_registry &states, const chunk_region &region,
+    process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
             worldgen_random *random) const
         -> std::optional<template_block_info> override;
@@ -240,7 +240,7 @@ class lava_submerged_processor final : public template_block_processor {
     explicit lava_submerged_processor(block_state_id lava) : lava_{lava} {}
 
     [[nodiscard]] auto
-    process(const block_state_registry &states, const chunk_region &region,
+    process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
             worldgen_random *random) const
         -> std::optional<template_block_info> override;
@@ -256,7 +256,7 @@ class block_age_processor final : public template_block_processor {
     explicit block_age_processor(float mossiness) : mossiness_{mossiness} {}
 
     [[nodiscard]] auto
-    process(const block_state_registry &states, const chunk_region &region,
+    process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
             worldgen_random *random) const
         -> std::optional<template_block_info> override;
@@ -270,7 +270,7 @@ class block_age_processor final : public template_block_processor {
 class blackstone_replace_processor final : public template_block_processor {
   public:
     [[nodiscard]] auto
-    process(const block_state_registry &states, const chunk_region &region,
+    process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
             worldgen_random *random) const
         -> std::optional<template_block_info> override;
@@ -286,7 +286,7 @@ class block_rot_processor final : public template_block_processor {
           has_rottable_{has_rottable} {}
 
     [[nodiscard]] auto
-    process(const block_state_registry &states, const chunk_region &region,
+    process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
             worldgen_random *random) const
         -> std::optional<template_block_info> override;
@@ -305,7 +305,7 @@ class protected_blocks_processor final : public template_block_processor {
         : tag_{std::move(tag)} {}
 
     [[nodiscard]] auto
-    process(const block_state_registry &states, const chunk_region &region,
+    process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
             worldgen_random *random) const
         -> std::optional<template_block_info> override;
