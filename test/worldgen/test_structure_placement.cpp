@@ -1467,3 +1467,42 @@ suite<"worldgen/mansion-grid"> mansion_grid_tests = [] {
         expect(has_indoor_wall);
     };
 };
+
+suite<"worldgen/mansion-reference"> mansion_reference_tests = [] {
+    "the mansion piece list matches the reference digest"_test = [] {
+        const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
+        if (templates_root == nullptr) {
+            return;
+        }
+        block_state_registry registry;
+        structure::structure_template_manager manager{templates_root, registry};
+        const auto start = structure::woodland_mansion_start(
+            chunk_pos{.x = 46, .z = 5}, 1, manager,
+            [](jint, jint, heightmap_kind) { return jint{63}; });
+        expect(start.pieces.size() == 484U);
+        std::uint64_t hash = 1469598103934665603ULL;
+        const auto mix = [&](std::string_view text) {
+            for (const char ch : text) {
+                hash ^=
+                    static_cast<std::uint64_t>(static_cast<unsigned char>(ch));
+                hash *= 1099511628211ULL;
+            }
+        };
+        constexpr std::string_view prefix{"minecraft:woodland_mansion/"};
+        for (const auto &piece : start.pieces) {
+            std::string_view name{piece.template_id};
+            if (name.starts_with(prefix)) {
+                name.remove_prefix(prefix.size());
+            }
+            const std::string line =
+                std::string{name} + "," +
+                std::to_string(piece.template_origin.x) + "," +
+                std::to_string(piece.template_origin.y) + "," +
+                std::to_string(piece.template_origin.z) + "," +
+                std::to_string(piece.template_rotation) + "," +
+                std::to_string(piece.template_mirror) + ";";
+            mix(line);
+        }
+        expect(hash == 0x9e4d7e3609cb264eULL);
+    };
+};
