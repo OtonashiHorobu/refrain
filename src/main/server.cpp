@@ -701,6 +701,92 @@ int main(int argc, char **argv) {
             refrain::log::info("config: imported {} propert(ies) from {}",
                                imported->applied, import_properties_path);
         }
+        const auto override_int =
+            [&](const char *option, std::string_view name_space,
+                std::string_view key, std::int64_t value) -> refrain::status {
+            if (app.get_option(option)->count() == 0) {
+                return refrain::status_ok();
+            }
+            return config_store.set_int64(
+                name_space, key, value, refrain::core::config::layer::override);
+        };
+        const auto apply_override =
+            [&](const char *option, std::string_view name_space,
+                std::string_view key, std::int64_t value) {
+                if (auto status{override_int(option, name_space, key, value)};
+                    !status) {
+                    return status;
+                }
+                return refrain::status_ok();
+            };
+        if (auto status{apply_override("--world-zstd-level", "storage",
+                                       "zstd_level", world_zstd_level)};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override("--zstd-near-level", "storage",
+                                       "zstd_near_level", zstd_near_level)};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override("--zstd-mid-level", "storage",
+                                       "zstd_mid_level", zstd_mid_level)};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override("--zstd-far-level", "storage",
+                                       "zstd_far_level", zstd_far_level)};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override("--zstd-near-radius", "storage",
+                                       "zstd_near_radius", zstd_near_radius)};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override("--zstd-mid-radius", "storage",
+                                       "zstd_mid_radius", zstd_mid_radius)};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override("--watchdog-timeout-ms", "runtime",
+                                       "watchdog_timeout_ms",
+                                       watchdog_timeout_ms)};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override(
+                "--autosave-interval-ticks", "storage",
+                "autosave_interval_ticks",
+                static_cast<std::int64_t>(autosave_interval_ticks))};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override(
+                "--compact-interval-ticks", "storage", "compact_interval_ticks",
+                static_cast<std::int64_t>(compact_interval_ticks))};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override(
+                "--store-compact-interval-ticks", "storage",
+                "store_compact_interval_ticks",
+                static_cast<std::int64_t>(store_compact_interval_ticks))};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override(
+                "--compact-min-bytes", "storage", "compact_min_bytes",
+                static_cast<std::int64_t>(compact_min_bytes))};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override("--compact-garbage-percent", "storage",
+                                       "compact_garbage_percent",
+                                       compact_garbage_percent)};
+            !status) {
+            return report_error(status.error());
+        }
         refrain::log::info("config: {} namespace(s) from {}",
                            config_store.names().size(), config_dir);
     }

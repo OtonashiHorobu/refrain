@@ -67,6 +67,28 @@ motd = "A Refrain Server"
 max_players = 20
 ```
 
+`storage.toml` holds the zstd policy and maintenance cadence:
+
+```toml
+zstd_level = 3
+zstd_near_level = 1
+zstd_mid_level = 3
+zstd_far_level = 6
+zstd_near_radius = 2
+zstd_mid_radius = 8
+autosave_interval_ticks = 6000
+compact_interval_ticks = 0
+```
+
+`runtime.toml` holds the watchdog and other tick-loop policy:
+
+```toml
+watchdog_timeout_ms = 5000
+```
+
+A CLI flag that names the same setting is an explicit override and wins over
+both the TOML file and imported properties.
+
 To migrate a Java `server.properties`:
 
 ```bash

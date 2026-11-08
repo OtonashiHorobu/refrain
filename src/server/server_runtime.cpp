@@ -800,22 +800,74 @@ auto run_server(const server_run_options &options) -> int {
         "config: level={} view={} sim={} max_players={} online_mode={}",
         level_name, view_distance, simulation_distance, max_players,
         online_mode);
+    const auto zstd_level{static_cast<int>(
+        options.storage.get_int64("zstd_level", options.world_zstd_level))};
+    const auto zstd_near_level{static_cast<int>(
+        options.storage.get_int64("zstd_near_level", options.zstd_near_level))};
+    const auto zstd_mid_level{static_cast<int>(
+        options.storage.get_int64("zstd_mid_level", options.zstd_mid_level))};
+    const auto zstd_far_level{static_cast<int>(
+        options.storage.get_int64("zstd_far_level", options.zstd_far_level))};
+    const auto zstd_near_radius{
+        static_cast<std::int32_t>(options.storage.get_int64(
+            "zstd_near_radius", options.zstd_near_radius))};
+    const auto zstd_mid_radius{static_cast<std::int32_t>(
+        options.storage.get_int64("zstd_mid_radius", options.zstd_mid_radius))};
+    const auto autosave_interval{
+        static_cast<std::uint64_t>(options.storage.get_int64(
+            "autosave_interval_ticks",
+            static_cast<std::int64_t>(options.autosave_interval_ticks)))};
+    const auto compact_interval{
+        static_cast<std::uint64_t>(options.storage.get_int64(
+            "compact_interval_ticks",
+            static_cast<std::int64_t>(options.compact_interval_ticks)))};
+    const auto store_compact_interval{
+        static_cast<std::uint64_t>(options.storage.get_int64(
+            "store_compact_interval_ticks",
+            static_cast<std::int64_t>(options.store_compact_interval_ticks)))};
+    const auto compact_min_bytes{
+        static_cast<std::uint64_t>(options.storage.get_int64(
+            "compact_min_bytes",
+            static_cast<std::int64_t>(options.compact_min_bytes)))};
+    const auto compact_garbage_percent{
+        static_cast<std::uint32_t>(options.storage.get_int64(
+            "compact_garbage_percent", options.compact_garbage_percent))};
+    const auto watchdog_timeout{
+        static_cast<std::uint32_t>(options.runtime.get_int64(
+            "watchdog_timeout_ms", options.watchdog_timeout_ms))};
+    refrain::log::info("config: zstd={}, watchdog={}ms, autosave={}",
+                       zstd_level, watchdog_timeout, autosave_interval);
+
+    // Keep the maintenance worker's option view consistent with the resolved
+    // configuration values.
+    server_run_options effective{options};
+    effective.world_zstd_level = zstd_level;
+    effective.zstd_near_level = zstd_near_level;
+    effective.zstd_mid_level = zstd_mid_level;
+    effective.zstd_far_level = zstd_far_level;
+    effective.zstd_near_radius = zstd_near_radius;
+    effective.zstd_mid_radius = zstd_mid_radius;
+    effective.watchdog_timeout_ms = watchdog_timeout;
+    effective.autosave_interval_ticks = autosave_interval;
+    effective.compact_interval_ticks = compact_interval;
+    effective.store_compact_interval_ticks = store_compact_interval;
+    effective.compact_min_bytes = compact_min_bytes;
+    effective.compact_garbage_percent = compact_garbage_percent;
 
     auto store{refrain::sim::world::open(options.world_path)};
     if (!store) {
         return report_error(store.error());
     }
-    if (auto configured{
-            store->store().set_zstd_level(options.world_zstd_level)};
+    if (auto configured{store->store().set_zstd_level(zstd_level)};
         !configured) {
         return report_error(configured.error());
     }
     if (auto configured{store->set_zstd_policy(
-            refrain::sim::zstd_policy{.near_level = options.zstd_near_level,
-                                      .mid_level = options.zstd_mid_level,
-                                      .far_level = options.zstd_far_level,
-                                      .near_radius = options.zstd_near_radius,
-                                      .mid_radius = options.zstd_mid_radius})};
+            refrain::sim::zstd_policy{.near_level = zstd_near_level,
+                                      .mid_level = zstd_mid_level,
+                                      .far_level = zstd_far_level,
+                                      .near_radius = zstd_near_radius,
+                                      .mid_radius = zstd_mid_radius})};
         !configured) {
         return report_error(configured.error());
     }
@@ -962,7 +1014,7 @@ auto run_server(const server_run_options &options) -> int {
     refrain::core::schedule::scheduler scheduler{};
     maintenance_context maintenance{.world = &*store,
                                     .writer = &writer,
-                                    .options = &options,
+                                    .options = &effective,
                                     .gc_worker = &gc_worker};
     std::array<refrain::core::schedule::task_descriptor, 4> tasks{};
     std::size_t task_count{0};
@@ -986,21 +1038,20 @@ auto run_server(const server_run_options &options) -> int {
             .invoke = invoke,
         };
     };
-    if (options.autosave_interval_ticks > 0) {
-        add_task("autosave", options.autosave_interval_ticks,
-                 &maintenance_autosave);
+    if (autosave_interval > 0) {
+        add_task("autosave", autosave_interval, &maintenance_autosave);
     }
     if (options.content_gc_interval_ticks > 0 &&
         !options.content_store.empty()) {
         add_task("content-gc", options.content_gc_interval_ticks,
                  &maintenance_content_gc);
     }
-    if (options.store_compact_interval_ticks > 0) {
-        add_task("store-compact", options.store_compact_interval_ticks,
+    if (store_compact_interval > 0) {
+        add_task("store-compact", store_compact_interval,
                  &maintenance_store_compact);
     }
-    if (options.compact_interval_ticks > 0) {
-        add_task("region-compact", options.compact_interval_ticks,
+    if (compact_interval > 0) {
+        add_task("region-compact", compact_interval,
                  &maintenance_region_compact);
     }
     if (task_count > 0) {
@@ -1044,8 +1095,8 @@ auto run_server(const server_run_options &options) -> int {
     }
 
     std::thread watchdog{};
-    if (options.watchdog_timeout_ms > 0) {
-        watchdog = std::thread{[state, timeout = options.watchdog_timeout_ms] {
+    if (watchdog_timeout > 0) {
+        watchdog = std::thread{[state, timeout = watchdog_timeout] {
             refrain::log::set_thread_name("watchdog");
             const auto timeout_ns{static_cast<std::int64_t>(timeout) *
                                   1'000'000LL};
