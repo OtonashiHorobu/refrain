@@ -117,9 +117,25 @@ rotation only:
   transform, and the final state is mirrored and rotated;
 - block entities receive the placed position and a loot-table seed drawn from
   the piece random;
-- feature elements are recorded as one-block pieces (so they take part in the
-  free-space walk and the beardifier) but only place blocks when the caller
-  supplies a placed-feature callback.
+- feature elements are placed while the piece is placed: the element position
+  becomes the placed feature's origin and the piece random is the placement
+  random, so feature writes precede the later biome decoration stage and share
+  the reference stream.
+
+## Feature elements
+
+`FeaturePoolElement` has zero size and a one-block bounding box, so it takes
+part in the free-space walk and the beardifier like any other piece. Its
+placement resolves the placed feature named by the pool document and runs the
+reference placement-modifier work stack with the piece random.
+
+The structure generator and the full-stage oracle load the placed features the
+start's element trees name (`feature_registry::load_placed`) instead of the
+whole data pack, so unrelated unsupported documents do not block generation.
+The feature context writes through the structure placement region and derives
+its height lookups from that region's chunks. A structure placement context
+carries no climate source, so snow and freeze probes see a non-freezing
+atmosphere.
 
 ## Terrain adaptation
 
@@ -137,21 +153,16 @@ fills without structures leave the context field unset and sample zero.
 Seed 1 with a fixed `minecraft:plains` biome places the reference village start
 at chunk `(15, 8)`; its 119 pieces match the reference start field for field,
 including rotations, bounds, template origins, axes, ground level deltas and
-junctions.
-
-Chunk `(17, 8)` — covered by the village but more than 17 blocks from every
-feature pool element — matches the reference block for block and in all four
-heightmaps. The start chunk itself still differs: 64 blocks and 81 heightmap
-entries, all caused by the eighteen `minecraft:oak`, `minecraft:flower_plain`
-and `minecraft:pile_hay` feature pool elements whose placed features are not
-generated. That is the one known jigsaw gap; a chunk outside their reach is
-clean. The beached shipwreck, jungle temple, mineshaft, ocean monument, ocean
-ruin, stronghold and woodland mansion full-stage oracles stay green.
+junctions. The start chunk and chunk `(17, 8)` both match the reference block
+for block and in all four heightmaps, including the eighteen `minecraft:oak`,
+`minecraft:flower_plain` and `minecraft:pile_hay` feature pool elements. The
+beached shipwreck, jungle temple, mineshaft, ocean monument, ocean ruin,
+stronghold and woodland mansion full-stage oracles stay green.
 
 ## Remaining gaps
 
-- Placed-feature elements need a feature-stage callback; they currently
-  contribute geometry and beard data but no blocks.
+- Structure placement has no climate source for feature modifiers that probe
+  snow or freezing; those probes read a non-freezing atmosphere.
 - `capped` processor lists, block-entity rule modifiers and the position
   predicates beyond the default are not decoded; a processor list that contains
   one decodes to the empty list.

@@ -95,7 +95,7 @@ The reference-backed suites currently cover:
 - structure starts, payload trees, piece placement and full-stage
   generation for jungle temple, warm ocean ruin, beached shipwreck,
   buried treasure, mineshaft, ocean monument, stronghold and a plains
-  village start;
+  village start, including its feature pool elements;
 - `locate_structure` against real seeds and reference heightmaps;
 - the storage bridge, RWF round trip and Anvil export/import;
 - parallel fill determinism and fixed-biome structure generator
@@ -103,11 +103,9 @@ The reference-backed suites currently cover:
 - benchmarks for fill, parallel fill, structure selection, corridor
   placement, template placement, feature freeze and decoration.
 
-Known gaps: jigsaw feature pool elements are recorded as pieces but their
-placed features are not generated yet, so a village chunk inside a feature's
-reach is not a stable block oracle; the village start and a chunk outside
-those features match the reference. Capped processor lists, block-entity rule
-modifiers and template entities are not implemented.
+Known gaps: structure feature placement has no climate source, so snow and
+freeze feature modifiers are inert there. Capped processor lists,
+block-entity rule modifiers and template entities are not implemented.
 
 Ruined portal starts place the template at the reference position and
 orientation. A dry reference candidate at chunk (-65, 0) matches block for
