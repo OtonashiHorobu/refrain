@@ -3,9 +3,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/data/nbt.hpp>
+#include <refrain/world/anvil.hpp>
 #include <refrain/world/chunk_codec.hpp>
 #include <refrain/world/model.hpp>
 #include <refrain/world/proto_bridge.hpp>
+#include <refrain/world/store.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 
@@ -13,7 +15,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace {
@@ -57,6 +61,56 @@ auto packed_height(const ::refrain::storage::heightmap_record &record,
         return std::nullopt;
     }
     return static_cast<std::int64_t>((record.data[word] >> offset) & 0x1FFU);
+}
+
+auto section_for_y(const chunk &value, std::int8_t section_y)
+    -> const ::refrain::storage::section_record * {
+    for (const auto &section : value.sections) {
+        if (section.y == section_y) {
+            return &section;
+        }
+    }
+    return nullptr;
+}
+
+auto same_block_contents(const chunk &left, const chunk &right) -> bool {
+    for (const auto &section : left.sections) {
+        const auto *other = section_for_y(right, section.y);
+        if (other == nullptr) {
+            return false;
+        }
+        for (std::size_t index = 0; index < 4096; ++index) {
+            if (paletted_state(section, index) !=
+                paletted_state(*other, index)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+auto same_heightmap(const chunk &left, const chunk &right,
+                    std::string_view name) -> bool {
+    const auto find = [&](const chunk &value) {
+        for (const auto &record : value.heightmaps) {
+            if (record.name == name) {
+                return &record;
+            }
+        }
+        return static_cast<const ::refrain::storage::heightmap_record *>(
+            nullptr);
+    };
+    const auto *a = find(left);
+    const auto *b = find(right);
+    if (a == nullptr || b == nullptr) {
+        return a == b;
+    }
+    for (std::size_t index = 0; index < 256; ++index) {
+        if (packed_height(*a, index) != packed_height(*b, index)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -128,5 +182,98 @@ suite<"worldgen/proto-bridge"> proto_bridge_tests = [] {
                 expect(world::validate(*decoded).has_value());
             }
         }
+    };
+
+    "the converted column round trips through the store"_test = [] {
+        auto states = make_registry();
+        worldgen::proto_chunk source{states, 0, 0, -64, 384};
+        const auto stone = *states.find("minecraft:stone");
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint y = -64; y < 5; ++y) {
+                    source.set_state(x, y, z, stone);
+                }
+            }
+        }
+        source.set_status(worldgen::chunk_status::terrain);
+        const auto converted = from_proto_chunk(source, {"minecraft:plains"});
+        expect(converted.has_value());
+        if (!converted) {
+            return;
+        }
+        const auto root =
+            std::filesystem::temp_directory_path() /
+            ("refrain-proto-bridge-" +
+             std::to_string(
+                 static_cast<unsigned long long>(std::filesystem::hash_value(
+                     std::filesystem::path{"proto-bridge-store"}))));
+        std::filesystem::remove_all(root);
+        auto store = world_store::create(root.string());
+        expect(store.has_value());
+        if (!store) {
+            return;
+        }
+        data::nbt::compound level{};
+        level["DataVersion"] = data::nbt::value{std::int32_t{5023}};
+        data::nbt::compound meta{};
+        meta["level"] = data::nbt::value{std::move(level)};
+        const auto meta_bytes =
+            data::nbt::write(data::nbt::value{std::move(meta)}, "",
+                             data::nbt::compression::none);
+        expect(meta_bytes.has_value());
+        if (!meta_bytes) {
+            return;
+        }
+        expect(store->write_meta(*meta_bytes).has_value());
+        expect(store->write_chunk({.x = 0, .z = 0}, *converted).has_value());
+        const auto read = store->read_chunk({.x = 0, .z = 0});
+        expect(read.has_value());
+        if (read) {
+            const auto before = semantic_hash(*converted);
+            const auto after = semantic_hash(*read);
+            expect(before.has_value() && after.has_value());
+            if (before && after) {
+                expect(*before == *after);
+            }
+            expect(read->sections.size() == 24U);
+        }
+        expect(store->commit().has_value());
+        const auto export_path =
+            root.parent_path() / (root.filename().string() + "-anvil");
+        std::filesystem::remove_all(export_path);
+        const auto exported_result =
+            anvil::export_world(root.string(), export_path.string(), true);
+        expect(exported_result.has_value());
+        if (!exported_result) {
+            std::filesystem::remove_all(root);
+            return;
+        }
+        {
+            auto imported = anvil::import_world(
+                export_path.string(),
+                (root.parent_path() / (root.filename().string() + "-rwf"))
+                    .string(),
+                true);
+            expect(imported.has_value());
+            if (imported) {
+                auto reopened = world_store::open(
+                    (root.parent_path() / (root.filename().string() + "-rwf"))
+                        .string());
+                expect(reopened.has_value());
+                if (reopened) {
+                    const auto back = reopened->read_chunk({.x = 0, .z = 0});
+                    expect(back.has_value());
+                    if (back) {
+                        expect(same_block_contents(*converted, *back));
+                        expect(
+                            same_heightmap(*converted, *back, "WORLD_SURFACE"));
+                    }
+                }
+            }
+        }
+        std::filesystem::remove_all(export_path);
+        std::filesystem::remove_all(root.parent_path() /
+                                    (root.filename().string() + "-rwf"));
+        std::filesystem::remove_all(root);
     };
 };
