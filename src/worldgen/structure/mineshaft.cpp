@@ -53,6 +53,10 @@ struct ms_piece {
     jint depth{0};
     ms_dir direction{ms_dir::north};
     bool two_floored{false};
+    std::vector<ms_box> entrances{};
+    jint sections{0};
+    bool rails{false};
+    bool spider{false};
 };
 
 struct ms_state {
@@ -160,10 +164,15 @@ auto create_random(ms_state &state, jint foot_x, jint foot_y, jint foot_z,
         box.move(foot_x, foot_y, foot_z);
         if (!find_collision(state, box)) {
             const bool rails = random.next_int(3) == 0;
-            if (!rails) {
-                (void)random.next_int(23);
-            }
-            return add(ms_kind::corridor, box, direction, false);
+            const bool spider =
+                !rails && random.next_int(23) == 0;
+            const auto index =
+                add(ms_kind::corridor, box, direction, false);
+            auto &corridor = state.pieces[index];
+            corridor.sections = length;
+            corridor.rails = rails;
+            corridor.spider = spider;
+            return index;
         }
         --length;
     }
@@ -200,10 +209,16 @@ void add_children(ms_state &state, std::size_t index) {
             if (position + 3 > box.x_span()) {
                 break;
             }
-            (void)generate_and_add(state, box.min_x + position,
-                                   box.min_y + random.next_int(height_space) +
-                                       1,
-                                   box.min_z - 1, ms_dir::north, depth);
+            if (const auto child_index = generate_and_add(
+                    state, box.min_x + position,
+                    box.min_y + random.next_int(height_space) + 1,
+                    box.min_z - 1, ms_dir::north, depth);
+                child_index) {
+                const auto child_box = state.pieces[*child_index].box;
+                state.pieces[index].entrances.push_back(
+                    ms_box{child_box.min_x, child_box.min_y, box.min_z,
+                           child_box.max_x, child_box.max_y, box.min_z + 1});
+            }
             position += 4;
         }
         position = 0;
@@ -212,10 +227,16 @@ void add_children(ms_state &state, std::size_t index) {
             if (position + 3 > box.x_span()) {
                 break;
             }
-            (void)generate_and_add(state, box.min_x + position,
-                                   box.min_y + random.next_int(height_space) +
-                                       1,
-                                   box.max_z + 1, ms_dir::south, depth);
+            if (const auto child_index = generate_and_add(
+                    state, box.min_x + position,
+                    box.min_y + random.next_int(height_space) + 1,
+                    box.max_z + 1, ms_dir::south, depth);
+                child_index) {
+                const auto child_box = state.pieces[*child_index].box;
+                state.pieces[index].entrances.push_back(
+                    ms_box{child_box.min_x, child_box.min_y, box.max_z - 1,
+                           child_box.max_x, child_box.max_y, box.max_z});
+            }
             position += 4;
         }
         position = 0;
@@ -224,10 +245,16 @@ void add_children(ms_state &state, std::size_t index) {
             if (position + 3 > box.z_span()) {
                 break;
             }
-            (void)generate_and_add(state, box.min_x - 1,
-                                   box.min_y + random.next_int(height_space) +
-                                       1,
-                                   box.min_z + position, ms_dir::west, depth);
+            if (const auto child_index = generate_and_add(
+                    state, box.min_x - 1,
+                    box.min_y + random.next_int(height_space) + 1,
+                    box.min_z + position, ms_dir::west, depth);
+                child_index) {
+                const auto child_box = state.pieces[*child_index].box;
+                state.pieces[index].entrances.push_back(
+                    ms_box{box.min_x, child_box.min_y, child_box.min_z,
+                           box.min_x + 1, child_box.max_y, child_box.max_z});
+            }
             position += 4;
         }
         position = 0;
@@ -236,10 +263,16 @@ void add_children(ms_state &state, std::size_t index) {
             if (position + 3 > box.z_span()) {
                 break;
             }
-            (void)generate_and_add(state, box.max_x + 1,
-                                   box.min_y + random.next_int(height_space) +
-                                       1,
-                                   box.min_z + position, ms_dir::east, depth);
+            if (const auto child_index = generate_and_add(
+                    state, box.max_x + 1,
+                    box.min_y + random.next_int(height_space) + 1,
+                    box.min_z + position, ms_dir::east, depth);
+                child_index) {
+                const auto child_box = state.pieces[*child_index].box;
+                state.pieces[index].entrances.push_back(
+                    ms_box{box.max_x - 1, child_box.min_y, child_box.min_z,
+                           box.max_x, child_box.max_y, child_box.max_z});
+            }
             position += 4;
         }
         break;
@@ -473,6 +506,9 @@ auto mineshaft_start(const chunk_pos &chunk, jlong seed, jint min_y,
     const jint dy = y1_position - bounds.max_y;
     for (auto &piece : state.pieces) {
         piece.box.move(0, dy, 0);
+        for (auto &entrance : piece.entrances) {
+            entrance.move(0, dy, 0);
+        }
     }
     bounds.move(0, dy, 0);
     structure_start start{.structure = "minecraft:mineshaft",
@@ -498,6 +534,25 @@ auto mineshaft_start(const chunk_pos &chunk, jlong seed, jint min_y,
                 (piece.kind == ms_kind::room || piece.kind == ms_kind::crossing)
                     ? -1
                     : direction_orientation(piece.direction),
+            .entrances = [&piece] {
+                std::vector<structure_bbox> boxes;
+                boxes.reserve(piece.entrances.size());
+                for (const auto &entrance : piece.entrances) {
+                    boxes.push_back(
+                        {.min_x = entrance.min_x,
+                         .min_y = entrance.min_y,
+                         .min_z = entrance.min_z,
+                         .max_x = entrance.max_x,
+                         .max_y = entrance.max_y,
+                         .max_z = entrance.max_z});
+                }
+                return boxes;
+            }(),
+            .sections = piece.sections,
+            .rails = piece.rails,
+            .spider = piece.spider,
+            .two_floored = piece.two_floored,
+            .mesa = mesa,
         });
     }
     return start;
