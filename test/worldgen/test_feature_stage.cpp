@@ -2755,3 +2755,56 @@ suite<"worldgen/feature/bonus-chest"> bonus_chest_tests = [] {
         expect(torches > 0);
     };
 };
+
+suite<"worldgen/feature/end-spike"> end_spike_tests = [] {
+    "the spike writes obsidian, bedrock and fire"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        (void)states.intern("minecraft:air", {.air = true});
+        (void)states.intern("minecraft:obsidian",
+                            {.air = false,
+                             .blocks_motion = true,
+                             .blocks_motion_no_leaves = true});
+        (void)states.intern("minecraft:bedrock",
+                            {.air = false,
+                             .blocks_motion = true,
+                             .blocks_motion_no_leaves = true});
+        (void)states.intern("minecraft:fire", {.air = false});
+        proto_chunk chunk{states, 0, 0, 0, 32};
+        chunk_region region{chunk, 0};
+        const auto resolve = [&](std::string_view key) {
+            if (const auto found = states.find(key); found) {
+                return *found;
+            }
+            return states
+                .intern(key, {.air = false,
+                              .blocks_motion = false,
+                              .blocks_motion_no_leaves = false})
+                .value_or(no_block_state);
+        };
+        feature::placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &states,
+            .generation = provider::generation_context{.min_y = 0,
+                                                       .height = 32,
+                                                       .sea_level = 8},
+            .resolve_state = resolve,
+        };
+        feature::feature_context context{.placement = placement};
+        const feature::end_spike_feature feature{
+            {feature::end_spike{.center_x = 8,
+                                .center_z = 8,
+                                .radius = 1,
+                                .height = 10,
+                                .guarded = false}},
+            false};
+        worldgen_random random{std::make_unique<legacy_random_source>(1)};
+        expect(
+            feature.place(context, random, block_pos{.x = 0, .y = 0, .z = 0}));
+        expect(states.name(chunk.state_at(8, 9, 8)) == "minecraft:obsidian");
+        expect(states.name(chunk.state_at(9, 9, 8)) == "minecraft:obsidian");
+        expect(states.name(chunk.state_at(8, 10, 8)) == "minecraft:bedrock");
+        expect(states.name(chunk.state_at(8, 11, 8)) == "minecraft:fire");
+    };
+};
