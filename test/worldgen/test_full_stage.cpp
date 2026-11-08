@@ -102,18 +102,35 @@ auto canonical(std::string name) -> std::string {
     if (close == std::string::npos) {
         return name;
     }
+    const std::string base = name.substr(0, open);
+    const bool fluid = base == "minecraft:lava" || base == "minecraft:water";
+    const bool stairs = base.ends_with("_stairs");
+    const bool slab = base.ends_with("_slab");
+    const bool leaves = base.ends_with("_leaves");
     std::vector<std::string> parts;
     std::string_view body{name.data() + open + 1, close - open - 1};
-    while (!body.empty()) {
+    while (true) {
         const auto comma = body.find(',');
-        parts.emplace_back(body.substr(0, comma));
+        const std::string part{body.substr(0, comma)};
+        const bool default_property =
+            part == "waterlogged=false" || (fluid && part == "level=0") ||
+            (stairs && (part == "facing=north" || part == "half=bottom" ||
+                        part == "shape=straight")) ||
+            (slab && part == "type=bottom") ||
+            (leaves && (part == "distance=7" || part == "persistent=false"));
+        if (!default_property) {
+            parts.emplace_back(part);
+        }
         if (comma == std::string_view::npos) {
             break;
         }
         body = body.substr(comma + 1);
     }
+    if (parts.empty()) {
+        return base;
+    }
     std::sort(parts.begin(), parts.end());
-    std::string rebuilt = name.substr(0, open);
+    std::string rebuilt = base;
     rebuilt.push_back('[');
     for (std::size_t i = 0; i < parts.size(); ++i) {
         if (i != 0) {
@@ -123,11 +140,11 @@ auto canonical(std::string name) -> std::string {
     }
     rebuilt.push_back(']');
     if (rebuilt.find("_fence[") != std::string::npos) {
-        const std::string base = rebuilt.substr(0, rebuilt.find('['));
+        const std::string fence_base = rebuilt.substr(0, rebuilt.find('['));
         const std::string water =
             rebuilt.find("waterlogged=true") != std::string::npos ? "true"
                                                                   : "false";
-        return base + "[waterlogged=" + water + "]";
+        return fence_base + "[waterlogged=" + water + "]";
     }
     if (rebuilt.starts_with("minecraft:chest[")) {
         return "minecraft:chest";
@@ -135,20 +152,6 @@ auto canonical(std::string name) -> std::string {
     if (rebuilt.ends_with("_log[axis=y]") ||
         rebuilt.find("_door[") != std::string::npos) {
         return rebuilt.substr(0, rebuilt.find('['));
-    }
-    if (rebuilt == "minecraft:rail[shape=north_south]") {
-        return "minecraft:rail";
-    }
-    if (rebuilt.ends_with("_slab[type=bottom,waterlogged=false]")) {
-        return rebuilt.substr(0, rebuilt.find('['));
-    }
-    if (rebuilt == "minecraft:cobblestone_stairs[facing=north,half=bottom,"
-                   "shape=straight,waterlogged=false]") {
-        return "minecraft:cobblestone_stairs";
-    }
-    if (rebuilt == "minecraft:sandstone_stairs[facing=north,half=bottom,"
-                   "shape=straight,waterlogged=false]") {
-        return "minecraft:sandstone_stairs";
     }
     return rebuilt;
 }
