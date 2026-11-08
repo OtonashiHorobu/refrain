@@ -1280,6 +1280,58 @@ void server::impl::send_play_login(std::uint64_t id) {
         send_packet(id, play_cb::set_experience::packet_id, experience,
                     play_cb::encode_set_experience);
     }
+    {
+        play_cb::recipe_book_settings settings{};
+        send_packet(id, play_cb::recipe_book_settings::packet_id, settings,
+                    play_cb::encode_recipe_book_settings);
+    }
+    {
+        play_cb::recipe_book_add recipes{};
+        send_packet(id, play_cb::recipe_book_add::packet_id, recipes,
+                    play_cb::encode_recipe_book_add);
+    }
+    {
+        play_cb::ticking_state ticking{.tick_rate = 20.0F, .is_frozen = false};
+        send_packet(id, play_cb::ticking_state::packet_id, ticking,
+                    play_cb::encode_ticking_state);
+    }
+    {
+        play_cb::ticking_step step{.tick_steps = 0};
+        send_packet(id, play_cb::ticking_step::packet_id, step,
+                    play_cb::encode_ticking_step);
+    }
+    {
+        play_cb::post_effects effects{};
+        send_packet(id, play_cb::post_effects::packet_id, effects,
+                    play_cb::encode_post_effects);
+    }
+    {
+        play_cb::set_entity_data data{
+            .entity_id = static_cast<std::uint32_t>(id),
+            .values = {},
+        };
+        send_packet(id, play_cb::set_entity_data::packet_id, data,
+                    play_cb::encode_set_entity_data);
+    }
+    {
+        play_cb::update_attributes attributes{
+            .get_entity_id = static_cast<std::int32_t>(id),
+            .get_values = {},
+        };
+        send_packet(id, play_cb::update_attributes::packet_id, attributes,
+                    play_cb::encode_update_attributes);
+    }
+    {
+        play_cb::update_advancements advancements{
+            .should_reset = true,
+            .added = {},
+            .removed = {},
+            .progress = {},
+            .show_advancements = false,
+        };
+        send_packet(id, play_cb::update_advancements::packet_id, advancements,
+                    play_cb::encode_update_advancements);
+    }
     send_commands(id);
     announce_join(id);
     send_initial_chunks(id);
