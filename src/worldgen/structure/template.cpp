@@ -867,6 +867,146 @@ auto update_template_block(block_state_registry &states, chunk_region &region,
 
 } // namespace
 
+namespace {
+
+auto replace_block_name(std::string key, std::string_view replacement)
+    -> std::string {
+    const auto open = key.find('[');
+    const std::string props =
+        open == std::string::npos ? std::string{} : key.substr(open);
+    return std::string{replacement} + props;
+}
+
+} // namespace
+
+auto rule_processor::process(const block_state_registry &states,
+                             const chunk_region &region,
+                             const template_block_info &info,
+                             const block_pos &world,
+                             worldgen_random *random) const
+    -> std::optional<template_block_info> {
+    (void)region;
+    worldgen_random local{std::make_unique<legacy_random_source>(
+        mth_get_seed(world.x, world.y, world.z))};
+    auto &rng = random == nullptr ? local : *random;
+    const auto name = state_block_name(states.name(info.state));
+    for (const auto &rule : rules_) {
+        bool matches = false;
+        if (!rule.tag.empty()) {
+            matches = states.in_tag(info.state, rule.tag);
+        } else {
+            for (const auto &block : rule.blocks) {
+                matches = matches || block == name;
+                if (matches) {
+                    break;
+                }
+            }
+        }
+        if (!matches) {
+            continue;
+        }
+        if (rule.probability >= 0.0F && rng.next_float() >= rule.probability) {
+            continue;
+        }
+        auto result = info;
+        result.state = rule.output;
+        return result;
+    }
+    return info;
+}
+
+auto protected_block_processor::process(const block_state_registry &states,
+                                        const chunk_region &region,
+                                        const template_block_info &info,
+                                        const block_pos &world,
+                                        worldgen_random *random) const
+    -> std::optional<template_block_info> {
+    (void)random;
+    const auto state = region.state_at(world.x, world.y, world.z);
+    if (states.in_tag(state, tag_)) {
+        return std::nullopt;
+    }
+    return info;
+}
+
+auto lava_submerged_processor::process(const block_state_registry &states,
+                                       const chunk_region &region,
+                                       const template_block_info &info,
+                                       const block_pos &world,
+                                       worldgen_random *random) const
+    -> std::optional<template_block_info> {
+    (void)random;
+    const auto current = region.state_at(world.x, world.y, world.z);
+    if (states.name(current) == "minecraft:lava" &&
+        !states.traits(info.state).blocks_motion) {
+        auto result = info;
+        result.state = lava_;
+        return result;
+    }
+    return info;
+}
+
+auto blackstone_replace_processor::process(const block_state_registry &states,
+                                           const chunk_region &region,
+                                           const template_block_info &info,
+                                           const block_pos &world,
+                                           worldgen_random *random) const
+    -> std::optional<template_block_info> {
+    (void)region;
+    (void)random;
+    (void)world;
+    static const std::array<std::pair<std::string_view, std::string_view>, 23>
+        replacements{{
+            {"minecraft:cobblestone", "minecraft:blackstone"},
+            {"minecraft:mossy_cobblestone", "minecraft:blackstone"},
+            {"minecraft:stone", "minecraft:polished_blackstone"},
+            {"minecraft:stone_bricks", "minecraft:polished_blackstone_bricks"},
+            {"minecraft:mossy_stone_bricks",
+             "minecraft:polished_blackstone_bricks"},
+            {"minecraft:cobblestone_stairs", "minecraft:blackstone_stairs"},
+            {"minecraft:mossy_cobblestone_stairs",
+             "minecraft:blackstone_stairs"},
+            {"minecraft:stone_stairs", "minecraft:polished_blackstone_stairs"},
+            {"minecraft:stone_brick_stairs",
+             "minecraft:polished_blackstone_brick_stairs"},
+            {"minecraft:mossy_stone_brick_stairs",
+             "minecraft:polished_blackstone_brick_stairs"},
+            {"minecraft:cobblestone_slab", "minecraft:blackstone_slab"},
+            {"minecraft:mossy_cobblestone_slab", "minecraft:blackstone_slab"},
+            {"minecraft:smooth_stone_slab",
+             "minecraft:polished_blackstone_slab"},
+            {"minecraft:stone_slab", "minecraft:polished_blackstone_slab"},
+            {"minecraft:stone_brick_slab",
+             "minecraft:polished_blackstone_brick_slab"},
+            {"minecraft:mossy_stone_brick_slab",
+             "minecraft:polished_blackstone_brick_slab"},
+            {"minecraft:stone_brick_wall",
+             "minecraft:polished_blackstone_brick_wall"},
+            {"minecraft:mossy_stone_brick_wall",
+             "minecraft:polished_blackstone_brick_wall"},
+            {"minecraft:cobblestone_wall", "minecraft:blackstone_wall"},
+            {"minecraft:mossy_cobblestone_wall", "minecraft:blackstone_wall"},
+            {"minecraft:chiseled_stone_bricks",
+             "minecraft:chiseled_polished_blackstone"},
+            {"minecraft:cracked_stone_bricks",
+             "minecraft:cracked_polished_blackstone_bricks"},
+            {"minecraft:iron_bars", "minecraft:iron_chain"},
+        }};
+    const auto name = state_block_name(states.name(info.state));
+    for (const auto &[from, to] : replacements) {
+        if (name == from) {
+            const auto key =
+                replace_block_name(std::string{states.name(info.state)}, to);
+            if (const auto found = states.find(key); found) {
+                auto result = info;
+                result.state = *found;
+                return result;
+            }
+        }
+    }
+    return info;
+}
+
 auto place_template(chunk_region &region, block_state_registry &states,
                     const structure_template &templ, const block_pos &origin,
                     const template_transform &transform) -> std::size_t {

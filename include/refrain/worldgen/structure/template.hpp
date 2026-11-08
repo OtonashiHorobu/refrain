@@ -190,6 +190,76 @@ class block_ignore_processor final : public template_block_processor {
     std::vector<std::string> blocks_{};
 };
 
+/// One rule of a `RuleProcessor`: a block-name or tag test with an optional
+/// probability (the `random_block_match` form).
+struct template_rule {
+    std::vector<std::string> blocks{};
+    std::string tag{};
+    /// Negative means the rule matches unconditionally after the block test.
+    float probability{-1.0F};
+    block_state_id output{no_block_state};
+};
+
+/// `RuleProcessor`: the first matching rule replaces the block.
+class rule_processor final : public template_block_processor {
+  public:
+    explicit rule_processor(std::vector<template_rule> rules)
+        : rules_{std::move(rules)} {}
+
+    [[nodiscard]] auto
+    process(const block_state_registry &states, const chunk_region &region,
+            const template_block_info &info, const block_pos &world,
+            worldgen_random *random) const
+        -> std::optional<template_block_info> override;
+
+  private:
+    std::vector<template_rule> rules_{};
+};
+
+/// `ProtectedBlockProcessor`: drops blocks whose current world state is in the
+/// protected tag.
+class protected_block_processor final : public template_block_processor {
+  public:
+    explicit protected_block_processor(std::string tag)
+        : tag_{std::move(tag)} {}
+
+    [[nodiscard]] auto
+    process(const block_state_registry &states, const chunk_region &region,
+            const template_block_info &info, const block_pos &world,
+            worldgen_random *random) const
+        -> std::optional<template_block_info> override;
+
+  private:
+    std::string tag_{};
+};
+
+/// `LavaSubmergedBlockProcessor`: restores lava under a non-full template
+/// block when the world position currently holds lava.
+class lava_submerged_processor final : public template_block_processor {
+  public:
+    explicit lava_submerged_processor(block_state_id lava) : lava_{lava} {}
+
+    [[nodiscard]] auto
+    process(const block_state_registry &states, const chunk_region &region,
+            const template_block_info &info, const block_pos &world,
+            worldgen_random *random) const
+        -> std::optional<template_block_info> override;
+
+  private:
+    block_state_id lava_{no_block_state};
+};
+
+/// `BlackstoneReplaceProcessor`: maps nether portal materials to blackstone
+/// equivalents while keeping the template's properties.
+class blackstone_replace_processor final : public template_block_processor {
+  public:
+    [[nodiscard]] auto
+    process(const block_state_registry &states, const chunk_region &region,
+            const template_block_info &info, const block_pos &world,
+            worldgen_random *random) const
+        -> std::optional<template_block_info> override;
+};
+
 /// `BlockRotProcessor`: drops a fraction of the blocks using the placement
 /// random stream, or a per-position legacy source when the stream is null.
 class block_rot_processor final : public template_block_processor {
