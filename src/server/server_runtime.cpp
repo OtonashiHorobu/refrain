@@ -1112,9 +1112,20 @@ auto run_server(const server_run_options &options) -> int {
     }
     auto command_environment{
         std::make_shared<refrain::server::command_environment>()};
+    command_environment->world = &store->store();
+    const auto initial_mode{
+        level->game_mode >= 0 && level->game_mode <= 3
+            ? static_cast<refrain::net::game_mode>(level->game_mode)
+            : refrain::net::game_mode::creative};
+    command_environment->default_mode = initial_mode;
     refrain::net::server_inputs network_inputs{};
     network_inputs.commands =
         refrain::server::make_command_bridge(command_environment);
+    network_inputs.policy.hardcore = level->hardcore;
+    network_inputs.join_state =
+        [command_environment](const refrain::net::player_identity &identity) {
+            return command_environment->join_state(identity.connection);
+        };
     network_inputs.make_transport = options.make_transport;
     network_inputs.seed = level->seed;
     network_inputs.spawn_x = static_cast<double>(level->spawn_x) + 0.5;

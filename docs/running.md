@@ -117,6 +117,8 @@ The server announces a small command tree after joining:
 | `/help` | list the available commands |
 | `/list` | show connected players |
 | `/say <message>` | broadcast a message to every player |
+| `/gamemode <mode>` | change the calling player's game mode |
+| `/defaultgamemode <mode>` | persist the world's default game mode |
 
 | Command | Effect |
 |---|---|

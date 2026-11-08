@@ -6,8 +6,13 @@
 
 #include <refrain/command/dispatcher.hpp>
 #include <refrain/net/server.hpp>
+#include <refrain/world/store.hpp>
 
+#include <cstdint>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <unordered_map>
 
 namespace refrain::server {
 
@@ -16,7 +21,26 @@ namespace refrain::server {
 struct command_environment {
     refrain::command::dispatcher dispatcher{};
     refrain::net::server *listener{nullptr};
+    refrain::world::world_store *world{nullptr};
     std::shared_ptr<const refrain::net::command_tree> tree_cache{};
+
+    /// Development default until a permission service exists. It allows the
+    /// built-in gameplay commands for every player.
+    refrain::command::permission_level permission{
+        refrain::command::level::gamemode};
+
+    mutable std::mutex mode_mutex{};
+    std::unordered_map<std::uint64_t, net::game_mode> modes{};
+    std::unordered_map<std::uint64_t, std::uint64_t> key_to_connection{};
+    net::game_mode default_mode{net::game_mode::creative};
+
+    [[nodiscard]] auto join_state(std::uint64_t connection) const
+        -> net::join_state;
+    [[nodiscard]] auto mode_of(std::uint64_t connection) const
+        -> net::game_mode;
+    void remember_key(std::uint64_t key, std::uint64_t connection);
+    [[nodiscard]] auto connection_for(std::uint64_t key) const
+        -> std::optional<std::uint64_t>;
 };
 
 /// Register the commands implemented by the server runtime.

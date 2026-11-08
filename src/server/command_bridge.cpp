@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -28,12 +29,44 @@ namespace {
     return key;
 }
 
+[[nodiscard]] auto parse_mode(std::string_view text)
+    -> std::optional<net::game_mode> {
+    if (text == "survival" || text == "0") {
+        return net::game_mode::survival;
+    }
+    if (text == "creative" || text == "1") {
+        return net::game_mode::creative;
+    }
+    if (text == "adventure" || text == "2") {
+        return net::game_mode::adventure;
+    }
+    if (text == "spectator" || text == "3") {
+        return net::game_mode::spectator;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] auto mode_name(net::game_mode mode) -> std::string_view {
+    switch (mode) {
+    case net::game_mode::survival:
+        return "survival";
+    case net::game_mode::creative:
+        return "creative";
+    case net::game_mode::adventure:
+        return "adventure";
+    case net::game_mode::spectator:
+        return "spectator";
+    }
+    return "creative";
+}
+
 [[nodiscard]] auto make_source(const std::shared_ptr<command_environment> &env,
                                const net::player_identity &identity)
     -> command::player_source {
+    const auto key{identity_key(identity)};
+    env->remember_key(key, identity.connection);
     return command::player_source{
-        std::string{identity.name}, identity_key(identity),
-        command::level::everyone,
+        std::string{identity.name}, key, env->permission,
         [env, connection = identity.connection](std::string_view message) {
             if (env->listener != nullptr) {
                 env->listener->send_system_chat(connection, message);
@@ -107,6 +140,36 @@ namespace {
 
 } // namespace
 
+auto command_environment::join_state(std::uint64_t connection) const
+    -> net::join_state {
+    const std::lock_guard lock{mode_mutex};
+    if (const auto found{modes.find(connection)}; found != modes.end()) {
+        return net::join_state{.mode = found->second};
+    }
+    return net::join_state{.mode = default_mode};
+}
+
+auto command_environment::mode_of(std::uint64_t connection) const
+    -> net::game_mode {
+    return join_state(connection).mode;
+}
+
+void command_environment::remember_key(std::uint64_t key,
+                                       std::uint64_t connection) {
+    const std::lock_guard lock{mode_mutex};
+    key_to_connection[key] = connection;
+}
+
+auto command_environment::connection_for(std::uint64_t key) const
+    -> std::optional<std::uint64_t> {
+    const std::lock_guard lock{mode_mutex};
+    if (const auto found{key_to_connection.find(key)};
+        found != key_to_connection.end()) {
+        return found->second;
+    }
+    return std::nullopt;
+}
+
 void register_runtime_commands(
     std::shared_ptr<command_environment> environment) {
     if (!environment) {
@@ -155,6 +218,74 @@ void register_runtime_commands(
             return 1;
         });
     say.then(message);
+
+    auto gamemode{dispatcher.literal("gamemode")};
+    auto mode_argument{dispatcher.argument("mode", command::gamemode_arg())};
+    mode_argument.require(command::level::gamemode);
+    mode_argument.executes(
+        [environment](command::context &context) -> refrain::result<int> {
+            const auto mode{parse_mode(context.string("mode"))};
+            if (!mode) {
+                context.fail("Unknown game mode");
+                return std::unexpected{make_error(error_code::invalid_argument,
+                                                  "unknown game mode")};
+            }
+            const auto connection{
+                environment->connection_for(context.source().identity().key)};
+            if (!connection) {
+                context.fail("Player is not in play");
+                return std::unexpected{
+                    make_error(error_code::not_found, "player not found")};
+            }
+            {
+                const std::lock_guard lock{environment->mode_mutex};
+                environment->modes[*connection] = *mode;
+            }
+            if (environment->listener != nullptr) {
+                environment->listener->set_player_game_mode(*connection, *mode);
+            }
+            context.reply(std::string{"Set game mode to "} +
+                          std::string{mode_name(*mode)});
+            return 1;
+        });
+    gamemode.then(mode_argument);
+
+    auto default_gamemode{dispatcher.literal("defaultgamemode")};
+    auto default_argument{dispatcher.argument("mode", command::gamemode_arg())};
+    default_argument.require(command::level::gamemode);
+    default_argument.executes(
+        [environment](command::context &context) -> refrain::result<int> {
+            const auto mode{parse_mode(context.string("mode"))};
+            if (!mode) {
+                context.fail("Unknown game mode");
+                return std::unexpected{make_error(error_code::invalid_argument,
+                                                  "unknown game mode")};
+            }
+            if (environment->world == nullptr) {
+                context.fail("No world is open");
+                return std::unexpected{
+                    make_error(error_code::not_found, "no world")};
+            }
+            auto settings{environment->world->read_gameplay()};
+            if (!settings) {
+                context.fail("Cannot read world gameplay settings");
+                return std::unexpected{std::move(settings.error())};
+            }
+            settings->game_mode = static_cast<std::int32_t>(*mode);
+            if (auto written{environment->world->write_gameplay(*settings)};
+                !written) {
+                context.fail("Cannot persist the default game mode");
+                return std::unexpected{std::move(written.error())};
+            }
+            {
+                const std::lock_guard lock{environment->mode_mutex};
+                environment->default_mode = *mode;
+            }
+            context.reply(std::string{"Default game mode set to "} +
+                          std::string{mode_name(*mode)});
+            return 1;
+        });
+    default_gamemode.then(default_argument);
 }
 
 auto make_command_bridge(std::shared_ptr<command_environment> environment)
