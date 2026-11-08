@@ -2445,6 +2445,64 @@ void server::impl::handle_play(std::uint64_t id,
         });
         return;
     }
+    case play_sb::client_command::packet_id: {
+        play_sb::client_command packet{};
+        if (auto decoded{play_sb::decode_client_command(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
+            return;
+        }
+        if (packet.action != 0) {
+            return;
+        }
+        game_mode mode{game_mode::creative};
+        {
+            const std::lock_guard lock{connections_mutex};
+            const auto found{connections.find(id)};
+            if (found == connections.end() || found->second.closed) {
+                return;
+            }
+            auto &live{found->second};
+            live.x = config.spawn_x;
+            live.y = config.spawn_y;
+            live.z = config.spawn_z;
+            live.chunk_initialized = false;
+            live.last_chunk_x = 0;
+            live.last_chunk_z = 0;
+            live.last_chunk_radius = 0;
+            mode = live.mode;
+        }
+        play_cb::respawn respawn{};
+        respawn.common_player_spawn_info.dimension_type = 0;
+        respawn.common_player_spawn_info.dimension = overworld();
+        respawn.common_player_spawn_info.seed = config.seed;
+        respawn.common_player_spawn_info.game_type =
+            static_cast<std::uint32_t>(mode);
+        respawn.common_player_spawn_info.previous_game_type = std::nullopt;
+        respawn.common_player_spawn_info.is_debug = false;
+        respawn.common_player_spawn_info.is_flat = false;
+        respawn.common_player_spawn_info.last_death_location = std::nullopt;
+        respawn.common_player_spawn_info.portal_cooldown = 0;
+        respawn.common_player_spawn_info.sea_level = 63;
+        respawn.data_to_keep = 0;
+        send_packet(id, play_cb::respawn::packet_id, respawn,
+                    play_cb::encode_respawn);
+        play_cb::player_position position{
+            .id = 1,
+            .x = config.spawn_x,
+            .y = config.spawn_y,
+            .z = config.spawn_z,
+            .delta_x = 0.0,
+            .delta_y = 0.0,
+            .delta_z = 0.0,
+            .y_rot = 0.0F,
+            .x_rot = 0.0F,
+            .relatives = 0,
+        };
+        send_packet(id, play_cb::player_position::packet_id, position,
+                    play_cb::encode_player_position);
+        return;
+    }
     case play_sb::container_close::packet_id: {
         play_sb::container_close packet{};
         if (auto decoded{play_sb::decode_container_close(in, packet)};
