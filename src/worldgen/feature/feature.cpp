@@ -3908,30 +3908,54 @@ auto vegetation_patch_feature::place(feature_context &context,
                  ++offset) {
                 pos.y += outwards;
             }
-            const block_pos below{.x = pos.x, .y = pos.y + inwards, .z = pos.z};
+            block_pos below{.x = pos.x, .y = pos.y + inwards, .z = pos.z};
             if (!states.traits(region.state_at(pos.x, pos.y, pos.z)).air ||
                 !states.traits(region.state_at(below.x, below.y, below.z))
                      .blocks_motion) {
                 continue;
             }
+            const block_pos ground = below;
             const jint depth =
                 depth_->sample(random) +
                 (extra_bottom_block_chance_ > 0.0F &&
                          random.next_float() < extra_bottom_block_chance_
                      ? 1
                      : 0);
-            place_ground(context, random, const_cast<block_pos &>(below),
-                         depth);
-            surface.push_back(below);
+            place_ground(context, random, below, depth);
+            surface.push_back(ground);
         }
     }
     if (waterlogged_) {
+        const std::array<std::pair<jint, jint>, 4> horizontal{
+            {{1, 0}, {-1, 0}, {0, 1}, {0, -1}}};
+        std::vector<block_pos> flooded;
         for (const auto &position : surface) {
-            (void)region.set_block_state(
-                position.x, position.y, position.z,
-                context.placement.resolve_state
-                    ? context.placement.resolve_state("minecraft:water")
-                    : no_block_state);
+            bool exposed = false;
+            for (const auto &[dx, dz] : horizontal) {
+                if (!states
+                         .traits(region.state_at(position.x + dx, position.y,
+                                                 position.z + dz))
+                         .blocks_motion) {
+                    exposed = true;
+                }
+            }
+            if (!states
+                     .traits(region.state_at(position.x, position.y + inwards,
+                                             position.z))
+                     .blocks_motion) {
+                exposed = true;
+            }
+            if (!exposed) {
+                flooded.push_back(position);
+            }
+        }
+        const auto water =
+            context.placement.resolve_state
+                ? context.placement.resolve_state("minecraft:water")
+                : no_block_state;
+        for (const auto &position : flooded) {
+            (void)region.set_block_state(position.x, position.y, position.z,
+                                         water);
         }
     }
     distribute(context, random, surface);
