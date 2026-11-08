@@ -107,7 +107,8 @@ remaining difference in one corridor. Ruined portal starts place the
 template at the reference position and orientation. A dry reference
 candidate at chunk (-65, 0) matches block for block and heightmap for
 heightmap; a candidate that intersects flowing lava is not a stable
-oracle after the reference world settles. Ocean
-monuments, strongholds and woodland mansions do not have start or block
+oracle after the reference world settles. Woodland mansion pieces match the reference list exactly, but wall
+connections at chunk borders still depend on neighbour placement order.
+Ocean monuments and strongholds do not have start or block
 implementations yet.
 
