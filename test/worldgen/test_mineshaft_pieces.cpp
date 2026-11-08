@@ -193,4 +193,30 @@ suite<"worldgen/mineshaft-pieces"> mineshaft_piece_tests = [] {
         }
         expect(rails > 0);
     };
+
+    "a spider corridor fills its shell with cobwebs"_test = [] {
+        fixture world;
+        auto record = make_piece("minecraft:mscorridor");
+        record.min_x = 0;
+        record.min_z = 0;
+        record.max_x = 2;
+        record.max_y = 20;
+        record.max_z = 9;
+        record.sections = 2;
+        record.spider = true;
+        record.orientation = 0;
+        auto random = make_random();
+        structure::place_structure_piece(world.context, record, random);
+        std::size_t cobwebs = 0;
+        for (jint y = 10; y <= 11; ++y) {
+            for (jint z = 0; z <= 9; ++z) {
+                for (jint x = 0; x <= 2; ++x) {
+                    if (world.name(x, y, z) == "minecraft:cobweb") {
+                        ++cobwebs;
+                    }
+                }
+            }
+        }
+        expect(cobwebs > 0);
+    };
 };
