@@ -1163,3 +1163,24 @@ suite<"worldgen/locate-oracle"> locate_oracle_tests = [] {
         }
     };
 };
+
+suite<"worldgen/structure-content-index"> structure_content_index_tests = [] {
+    "the content step order matches the reference indices"_test = [] {
+        const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+        if (data_root == nullptr) {
+            return;
+        }
+        const auto data = structure::load_structure_data(data_root);
+        expect(data.has_value());
+        if (!data) {
+            return;
+        }
+        const auto index = [&](std::string_view id) {
+            return structure::structure_step_index(*data, id);
+        };
+        expect(index("minecraft:buried_treasure") == 0);
+        expect(index("minecraft:mineshaft") == 1);
+        expect(index("minecraft:jungle_pyramid") == 22);
+        expect(!index("minecraft:missing_structure").has_value());
+    };
+};
