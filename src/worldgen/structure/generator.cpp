@@ -38,6 +38,15 @@ auto make_registry() -> block_state_registry {
     return states;
 }
 
+auto solid_traits() -> state_traits {
+    return state_traits{
+        .air = false, .blocks_motion = true, .blocks_motion_no_leaves = true};
+}
+
+auto fluid_traits(bool water) -> state_traits {
+    return state_traits{.air = false, .fluid = true, .water = water};
+}
+
 auto make_piece_record(const structure_piece &piece)
     -> ::refrain::worldgen::structure_piece_record {
     return to_piece_record(piece);
@@ -78,11 +87,26 @@ auto make_start_record(const structure_start &start)
 } // namespace
 
 structure_generator::structure_generator(structure_generator_config config,
+                                         const dimension_profile &profile,
                                          density::noise_settings settings,
                                          structure_data_set data,
                                          block_tag_set tags)
-    : config_{std::move(config)}, settings_{std::move(settings)},
-      data_{std::move(data)}, tags_{std::move(tags)}, states_{make_registry()} {
+    : config_{std::move(config)}, profile_{&profile},
+      settings_{std::move(settings)}, data_{std::move(data)},
+      tags_{std::move(tags)}, states_{make_registry()} {
+    // The profile owns the level bounds; the noise settings own the range the
+    // terrain stages write, which is shorter for the nether and the end.
+    min_y_ = config_.min_y.value_or(profile_->min_y);
+    height_ = config_.height.value_or(profile_->height);
+    sea_level_ = config_.sea_level.value_or(profile_->sea_level);
+    generation_min_y_ = std::max(min_y_, settings_.min_y);
+    const jint generation_max_y =
+        std::min(min_y_ + height_, settings_.min_y + settings_.height);
+    generation_height_ = generation_max_y - generation_min_y_;
+    if (generation_height_ <= 0) {
+        generation_height_ = height_;
+        generation_min_y_ = min_y_;
+    }
     motion_ = tag_names(tags_, "minecraft:blocks_motion_in_heightmap");
     motion_no_leaves_ =
         tag_names(tags_, "minecraft:blocks_motion_in_heightmap_no_leaves");
@@ -92,6 +116,19 @@ structure_generator::structure_generator(structure_generator_config config,
         }
         (void)states_.intern(key, inferred_traits(key));
     }
+    const auto block = states_.intern(settings_.default_block, solid_traits());
+    default_block_state_ = block.value_or(no_block_state);
+    if (settings_.default_fluid == "minecraft:air") {
+        default_fluid_state_ = states_.air();
+    } else {
+        const bool water = settings_.default_fluid == "minecraft:water";
+        default_fluid_state_ =
+            states_.intern(settings_.default_fluid, fluid_traits(water))
+                .value_or(no_block_state);
+    }
+    lava_state_ = states_.intern("minecraft:lava", fluid_traits(false))
+                      .value_or(no_block_state);
+    air_state_ = states_.air();
     templates_ = std::make_unique<structure_template_manager>(
         config_.templates_root, states_);
 }
@@ -116,8 +153,9 @@ auto structure_generator::inferred_traits(std::string_view key) const
 
 auto structure_generator::create(const structure_generator_config &config)
     -> result<std::unique_ptr<structure_generator>> {
+    const auto &profile = dimension_profile_for(config.kind);
     auto settings =
-        density::load_noise_settings(config.data_root, "minecraft/overworld",
+        density::load_noise_settings(config.data_root, profile.noise_settings,
                                      algorithm::xoroshiro, config.seed);
     if (!settings) {
         return std::unexpected{settings.error()};
@@ -130,22 +168,30 @@ auto structure_generator::create(const structure_generator_config &config)
     if (!tags) {
         return std::unexpected{tags.error()};
     }
-    auto generator =
-        std::unique_ptr<structure_generator>{new structure_generator{
-            config, std::move(*settings), std::move(*data), std::move(*tags)}};
+    auto generator = std::unique_ptr<structure_generator>{
+        new structure_generator{config, profile, std::move(*settings),
+                                std::move(*data), std::move(*tags)}};
     return generator;
 }
 
 auto structure_generator::generate(const chunk_pos &pos)
     -> result<std::unique_ptr<proto_chunk>> {
-    const auto ids = terrain::block_ids{
-        .air = 0, .default_block = 1, .default_fluid = 2, .lava = 3};
-    const auto picker = terrain::fluid_picker{.sea_level = config_.sea_level,
-                                              .default_fluid = 2,
-                                              .lava = 3,
-                                              .air = 0};
-    const auto options = terrain::proto_fill_options{
-        .air = 0, .default_block = 1, .default_fluid = 2, .lava = 3};
+    const auto ids = terrain::block_ids{.air = air_state_,
+                                        .default_block = default_block_state_,
+                                        .default_fluid = default_fluid_state_,
+                                        .lava = lava_state_};
+    const auto picker =
+        terrain::fluid_picker{.sea_level = sea_level_,
+                              .default_fluid = default_fluid_state_,
+                              .lava = lava_state_,
+                              .air = air_state_};
+    const auto options =
+        terrain::proto_fill_options{.air = air_state_,
+                                    .default_block = default_block_state_,
+                                    .default_fluid = default_fluid_state_,
+                                    .lava = lava_state_};
+    const auto fill_volume = terrain::proto_fill_volume{
+        .min_y = generation_min_y_, .height = generation_height_};
 
     // The starts stage reads `getFirstFreeHeight` from the unbearded noise.
     std::map<chunk_pos, std::unique_ptr<proto_chunk>> height_cache;
@@ -154,23 +200,26 @@ auto structure_generator::generate(const chunk_pos &pos)
         auto found = height_cache.find(target);
         if (found == height_cache.end()) {
             auto column = std::make_unique<proto_chunk>(
-                states_, target.x, target.z, config_.min_y, config_.height);
+                states_, target.x, target.z, min_y_, height_);
             column->set_status(chunk_status::biomes);
             const density::sampler_context context;
             auto random =
                 new_positional_factory(algorithm::xoroshiro, config_.seed);
             auto aquifer_factory =
                 random->from_hash_of("minecraft:aquifer")->fork_positional();
-            const volume column_volume{
-                16,           config_.height, 16, target.x * 16, config_.min_y,
-                target.z * 16};
+            const volume column_volume{16,
+                                       generation_height_,
+                                       16,
+                                       target.x * 16,
+                                       generation_min_y_,
+                                       target.z * 16};
             terrain::noise_aquifer aquifer{settings_.aquifer,
                                            *aquifer_factory,
                                            column_volume,
                                            picker,
                                            ids,
                                            context};
-            terrain::fill_proto_chunk(*column, options,
+            terrain::fill_proto_chunk(*column, options, fill_volume,
                                       *settings_.router.final_density, context,
                                       aquifer);
             found = height_cache.emplace(target, std::move(column)).first;
@@ -181,9 +230,9 @@ auto structure_generator::generate(const chunk_pos &pos)
     const structure_start_context start_context{
         .seed = config_.seed,
         .data = &data_,
-        .min_y = config_.min_y,
-        .world_height = config_.height,
-        .sea_level = config_.sea_level,
+        .min_y = min_y_,
+        .world_height = height_,
+        .sea_level = sea_level_,
         .fixed_biome = true,
         .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
         .biome_name = [this](std::uint16_t) -> std::string_view {
@@ -218,7 +267,7 @@ auto structure_generator::generate(const chunk_pos &pos)
         for (jint dx = -1; dx <= 1; ++dx) {
             const chunk_pos target{.x = pos.x + dx, .z = pos.z + dz};
             auto chunk = std::make_unique<proto_chunk>(
-                states_, target.x, target.z, config_.min_y, config_.height);
+                states_, target.x, target.z, min_y_, height_);
             chunk->set_status(chunk_status::biomes);
             const auto beard = collect_beard(area_starts, data_, target);
             density::sampler_context context;
@@ -234,16 +283,19 @@ auto structure_generator::generate(const chunk_pos &pos)
                 new_positional_factory(algorithm::xoroshiro, config_.seed);
             auto aquifer_factory =
                 factory->from_hash_of("minecraft:aquifer")->fork_positional();
-            const volume chunk_volume{
-                16,           config_.height, 16, target.x * 16, config_.min_y,
-                target.z * 16};
+            const volume chunk_volume{16,
+                                      generation_height_,
+                                      16,
+                                      target.x * 16,
+                                      generation_min_y_,
+                                      target.z * 16};
             terrain::noise_aquifer aquifer{settings_.aquifer,
                                            *aquifer_factory,
                                            chunk_volume,
                                            picker,
                                            ids,
                                            context};
-            terrain::fill_proto_chunk(*chunk, options,
+            terrain::fill_proto_chunk(*chunk, options, fill_volume,
                                       *settings_.router.final_density, context,
                                       aquifer);
             chunk->set_status(chunk_status::terrain);
@@ -300,7 +352,7 @@ auto structure_generator::generate(const chunk_pos &pos)
         .templates = templates_.get(),
         .registry = &states_,
         .seed = config_.seed,
-        .sea_level = config_.sea_level,
+        .sea_level = sea_level_,
         .adjusted_heights = &adjusted_heights,
         .data = &data_,
     };
@@ -365,7 +417,7 @@ auto structure_generator::generate(const chunk_pos &pos)
                 .templates = templates_.get(),
                 .registry = &states_,
                 .seed = config_.seed,
-                .sea_level = config_.sea_level,
+                .sea_level = sea_level_,
                 .adjusted_heights = &adjusted_heights,
                 .data = &data_,
                 .place_feature = place_feature,

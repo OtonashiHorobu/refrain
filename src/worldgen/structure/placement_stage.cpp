@@ -977,7 +977,8 @@ void place_ocean_ruin_piece(const structure_place_context &context,
             } else if (*text == "drowned") {
                 const auto water = context.state("minecraft:water");
                 const auto air = context.state("minecraft:air");
-                const auto replacement = world.y > 63 ? air : water;
+                const auto replacement =
+                    world.y > context.sea_level ? air : water;
                 if (replacement != no_block_state) {
                     (void)context.region->set_block_state(world.x, world.y,
                                                           world.z, replacement);

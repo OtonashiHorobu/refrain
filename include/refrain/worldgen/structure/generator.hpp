@@ -13,10 +13,12 @@
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
+#include <refrain/worldgen/dimension.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/template.hpp>
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -28,9 +30,13 @@ struct structure_generator_config {
     std::string templates_root{};
     std::string biome{"minecraft:plains"};
     jlong seed{0};
-    jint min_y{-64};
-    jint height{384};
-    jint sea_level{63};
+    /// Dimension whose profile selects the terrain bounds, sea level and noise
+    /// settings.
+    dimension_kind kind{dimension_kind::overworld};
+    /// Level overrides. Unset fields come from the dimension profile.
+    std::optional<jint> min_y{};
+    std::optional<jint> height{};
+    std::optional<jint> sea_level{};
     /// Optional block-state keys the template manager can resolve. A complete
     /// block table normally comes from content; this keeps partial registries
     /// from collapsing template blocks to air.
@@ -47,6 +53,7 @@ class structure_generator {
 
   private:
     structure_generator(structure_generator_config config,
+                        const dimension_profile &profile,
                         density::noise_settings settings,
                         structure_data_set data, block_tag_set tags);
 
@@ -54,7 +61,17 @@ class structure_generator {
         -> state_traits;
 
     structure_generator_config config_{};
+    const dimension_profile *profile_{nullptr};
     density::noise_settings settings_{};
+    jint min_y_{0};
+    jint height_{0};
+    jint sea_level_{0};
+    jint generation_min_y_{0};
+    jint generation_height_{0};
+    block_state_id air_state_{0};
+    block_state_id default_block_state_{1};
+    block_state_id default_fluid_state_{2};
+    block_state_id lava_state_{3};
     structure_data_set data_{};
     block_tag_set tags_{};
     std::set<std::string, std::less<>> motion_{};
