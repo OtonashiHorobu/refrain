@@ -1199,13 +1199,13 @@ void server::impl::send_play_login(std::uint64_t id) {
     }
     game_mode mode{game_mode::creative};
     if (join_state) {
-        const player_identity identity{
-            .connection = id,
-            .id = profile,
-            .name = name,
-            .world = {},
-        };
-        mode = join_state(identity).mode;
+        mode = join_state(player_identity{
+                              .connection = id,
+                              .id = profile,
+                              .name = name,
+                              .world = {},
+                          })
+                   .mode;
     }
     {
         const std::lock_guard lock{connections_mutex};
@@ -1221,39 +1221,43 @@ void server::impl::send_play_login(std::uint64_t id) {
         const std::lock_guard lock{policy_mutex};
         policy_snapshot = policy;
     }
-    play_cb::login packet{};
-    packet.player_id = static_cast<std::int32_t>(id);
-    packet.hardcore = policy_snapshot.hardcore;
-    packet.levels = {overworld()};
-    packet.max_players = static_cast<std::uint32_t>(config.status.max_players);
-    packet.chunk_radius = static_cast<std::uint32_t>(config.view_distance);
-    packet.simulation_distance =
-        static_cast<std::uint32_t>(config.simulation_distance);
-    packet.reduced_debug_info = false;
-    packet.show_death_screen = true;
-    packet.limited_crafting = false;
-    packet.spawn.dimension_type = 0;
-    packet.spawn.dimension = overworld();
-    packet.spawn.seed = config.seed;
-    packet.spawn.game_type = static_cast<std::uint32_t>(mode);
-    packet.spawn.previous_game_type = std::nullopt;
-    packet.spawn.debug = false;
-    packet.spawn.flat = false;
-    packet.spawn.last_death_location = std::nullopt;
-    packet.spawn.portal_cooldown = 0;
-    packet.spawn.sea_level = 63;
-    packet.online_mode = config.online_mode;
-    packet.enforces_secure_chat = config.status.enforces_secure_chat;
-    send_packet(id, play_cb::login::packet_id, packet, play_cb::encode_login);
 
-    {
+    const auto send_login = [&] {
+        play_cb::login packet{};
+        packet.player_id = static_cast<std::int32_t>(id);
+        packet.hardcore = policy_snapshot.hardcore;
+        packet.levels = {overworld()};
+        packet.max_players =
+            static_cast<std::uint32_t>(config.status.max_players);
+        packet.chunk_radius = static_cast<std::uint32_t>(config.view_distance);
+        packet.simulation_distance =
+            static_cast<std::uint32_t>(config.simulation_distance);
+        packet.reduced_debug_info = false;
+        packet.show_death_screen = true;
+        packet.limited_crafting = false;
+        packet.spawn.dimension_type = 0;
+        packet.spawn.dimension = overworld();
+        packet.spawn.seed = config.seed;
+        packet.spawn.game_type = static_cast<std::uint32_t>(mode);
+        packet.spawn.previous_game_type = std::nullopt;
+        packet.spawn.debug = false;
+        packet.spawn.flat = false;
+        packet.spawn.last_death_location = std::nullopt;
+        packet.spawn.portal_cooldown = 0;
+        packet.spawn.sea_level = 63;
+        packet.online_mode = config.online_mode;
+        packet.enforces_secure_chat = config.status.enforces_secure_chat;
+        send_packet(id, play_cb::login::packet_id, packet,
+                    play_cb::encode_login);
+    };
+    const auto send_difficulty = [&] {
         play_cb::change_difficulty difficulty{
             .difficulty = policy_snapshot.difficulty,
             .locked = policy_snapshot.difficulty_locked};
         send_packet(id, play_cb::change_difficulty::packet_id, difficulty,
                     play_cb::encode_change_difficulty);
-    }
-    {
+    };
+    const auto send_abilities = [&] {
         play_cb::player_abilities abilities{
             .flags = ability_flags(mode),
             .flying_speed = 0.05F,
@@ -1261,74 +1265,34 @@ void server::impl::send_play_login(std::uint64_t id) {
         };
         send_packet(id, play_cb::player_abilities::packet_id, abilities,
                     play_cb::encode_player_abilities);
-    }
-    {
+    };
+    const auto send_held_slot = [&] {
         play_cb::set_held_slot held{.slot = 0};
         send_packet(id, play_cb::set_held_slot::packet_id, held,
                     play_cb::encode_set_held_slot);
-    }
-    {
+    };
+    const auto send_recipes = [&] {
+        play_cb::update_recipes recipes{};
+        send_packet(id, play_cb::update_recipes::packet_id, recipes,
+                    play_cb::encode_update_recipes);
+    };
+    const auto send_permissions = [&] {
         play_cb::entity_event event{
             .entity_id = static_cast<std::int32_t>(id),
             .event = 24, // permission level: ALL
         };
         send_packet(id, play_cb::entity_event::packet_id, event,
                     play_cb::encode_entity_event);
-    }
-    {
-        play_cb::set_time time{.game_time = 0, .clock_updates = {}};
-        send_packet(id, play_cb::set_time::packet_id, time,
-                    play_cb::encode_set_time);
-    }
-    {
-        play_cb::initialize_border border{
-            .center_x = 0.0,
-            .center_z = 0.0,
-            .old_size = 29'999'984.0,
-            .new_size = 29'999'984.0,
-            .lerp_time = 0,
-            .absolute_max_size = 29'999'984,
-            .warning_blocks = 5,
-            .warning_time = 15,
-        };
-        send_packet(id, play_cb::initialize_border::packet_id, border,
-                    play_cb::encode_initialize_border);
-    }
-    {
-        play_cb::set_default_spawn_position spawn{
-            .dimension = overworld(),
-            .position = packed_block_position(config.spawn_x, config.spawn_y,
-                                              config.spawn_z),
-            .yaw = 0.0F,
-            .pitch = 0.0F,
-        };
-        send_packet(id, play_cb::set_default_spawn_position::packet_id, spawn,
-                    play_cb::encode_set_default_spawn_position);
-    }
-
-    // The client discards chunks outside its cache view. The center and
-    // radius must arrive before the first chunk batch.
-    {
-        play_cb::set_chunk_cache_center center{
-            .chunk_x =
-                static_cast<std::int32_t>(std::floor(config.spawn_x / 16.0)),
-            .chunk_z =
-                static_cast<std::int32_t>(std::floor(config.spawn_z / 16.0)),
-        };
-        send_packet(id, play_cb::set_chunk_cache_center::packet_id, center,
-                    play_cb::encode_set_chunk_cache_center);
-    }
-    {
-        play_cb::set_chunk_cache_radius radius{
-            .radius = config.view_distance,
-        };
-        send_packet(id, play_cb::set_chunk_cache_radius::packet_id, radius,
-                    play_cb::encode_set_chunk_cache_radius);
-    }
-
-    // The client needs a spawn position and a first chunk batch before it
-    // can leave the loading screen.
-    {
+    };
+    const auto send_recipe_book = [&] {
+        play_cb::recipe_book_settings settings{};
+        send_packet(id, play_cb::recipe_book_settings::packet_id, settings,
+                    play_cb::encode_recipe_book_settings);
+        play_cb::recipe_book_add recipes{};
+        send_packet(id, play_cb::recipe_book_add::packet_id, recipes,
+                    play_cb::encode_recipe_book_add);
+    };
+    const auto send_position = [&] {
         play_cb::player_position position{
             .id = 1,
             .x = config.spawn_x,
@@ -1343,32 +1307,78 @@ void server::impl::send_play_login(std::uint64_t id) {
         };
         send_packet(id, play_cb::player_position::packet_id, position,
                     play_cb::encode_player_position);
-    }
-    {
-        play_cb::game_event event{.event = 13, .value = 0.0F};
-        send_packet(id, play_cb::game_event::packet_id, event,
-                    play_cb::encode_game_event);
-    }
-    {
-        play_cb::update_recipes recipes{};
-        send_packet(id, play_cb::update_recipes::packet_id, recipes,
-                    play_cb::encode_update_recipes);
-    }
-    {
+    };
+    const auto send_server_data = [&] {
         play_cb::server_data data{
             .motd = {.text = config.status.description},
             .icon_bytes = std::nullopt,
         };
         send_packet(id, play_cb::server_data::packet_id, data,
                     play_cb::encode_server_data);
-    }
-    {
+    };
+    const auto send_border = [&] {
+        play_cb::initialize_border border{
+            .center_x = 0.0,
+            .center_z = 0.0,
+            .old_size = 29'999'984.0,
+            .new_size = 29'999'984.0,
+            .lerp_time = 0,
+            .absolute_max_size = 29'999'984,
+            .warning_blocks = 5,
+            .warning_time = 15,
+        };
+        send_packet(id, play_cb::initialize_border::packet_id, border,
+                    play_cb::encode_initialize_border);
+    };
+    const auto send_time = [&] {
+        play_cb::set_time time{.game_time = 0, .clock_updates = {}};
+        send_packet(id, play_cb::set_time::packet_id, time,
+                    play_cb::encode_set_time);
+    };
+    const auto send_spawn = [&] {
+        play_cb::set_default_spawn_position spawn{
+            .dimension = overworld(),
+            .position = packed_block_position(config.spawn_x, config.spawn_y,
+                                              config.spawn_z),
+            .yaw = 0.0F,
+            .pitch = 0.0F,
+        };
+        send_packet(id, play_cb::set_default_spawn_position::packet_id, spawn,
+                    play_cb::encode_set_default_spawn_position);
+    };
+    const auto send_level_start = [&] {
+        play_cb::game_event event{.event = 13, .value = 0.0F};
+        send_packet(id, play_cb::game_event::packet_id, event,
+                    play_cb::encode_game_event);
+    };
+    const auto send_ticking = [&] {
+        play_cb::ticking_state ticking{.tick_rate = 20.0F, .is_frozen = false};
+        send_packet(id, play_cb::ticking_state::packet_id, ticking,
+                    play_cb::encode_ticking_state);
+        play_cb::ticking_step step{.tick_steps = 0};
+        send_packet(id, play_cb::ticking_step::packet_id, step,
+                    play_cb::encode_ticking_step);
+    };
+    const auto send_view_cache = [&] {
+        play_cb::set_chunk_cache_center center{
+            .chunk_x =
+                static_cast<std::int32_t>(std::floor(config.spawn_x / 16.0)),
+            .chunk_z =
+                static_cast<std::int32_t>(std::floor(config.spawn_z / 16.0)),
+        };
+        send_packet(id, play_cb::set_chunk_cache_center::packet_id, center,
+                    play_cb::encode_set_chunk_cache_center);
+        play_cb::set_chunk_cache_radius radius{
+            .radius = config.view_distance,
+        };
+        send_packet(id, play_cb::set_chunk_cache_radius::packet_id, radius,
+                    play_cb::encode_set_chunk_cache_radius);
+    };
+    const auto send_vitals = [&] {
         play_cb::set_health health{
             .health = 20.0F, .food = 20, .saturation = 5.0F};
         send_packet(id, play_cb::set_health::packet_id, health,
                     play_cb::encode_set_health);
-    }
-    {
         play_cb::set_experience experience{
             .experience_progress = 0.0F,
             .experience_level = 0,
@@ -1376,49 +1386,20 @@ void server::impl::send_play_login(std::uint64_t id) {
         };
         send_packet(id, play_cb::set_experience::packet_id, experience,
                     play_cb::encode_set_experience);
-    }
-    {
-        play_cb::recipe_book_settings settings{};
-        send_packet(id, play_cb::recipe_book_settings::packet_id, settings,
-                    play_cb::encode_recipe_book_settings);
-    }
-    {
-        play_cb::recipe_book_add recipes{};
-        send_packet(id, play_cb::recipe_book_add::packet_id, recipes,
-                    play_cb::encode_recipe_book_add);
-    }
-    {
-        play_cb::ticking_state ticking{.tick_rate = 20.0F, .is_frozen = false};
-        send_packet(id, play_cb::ticking_state::packet_id, ticking,
-                    play_cb::encode_ticking_state);
-    }
-    {
-        play_cb::ticking_step step{.tick_steps = 0};
-        send_packet(id, play_cb::ticking_step::packet_id, step,
-                    play_cb::encode_ticking_step);
-    }
-    {
-        play_cb::post_effects effects{};
-        send_packet(id, play_cb::post_effects::packet_id, effects,
-                    play_cb::encode_post_effects);
-    }
-    {
+    };
+    const auto send_entity_state = [&] {
         play_cb::set_entity_data data{
             .entity_id = static_cast<std::uint32_t>(id),
             .values = {},
         };
         send_packet(id, play_cb::set_entity_data::packet_id, data,
                     play_cb::encode_set_entity_data);
-    }
-    {
         play_cb::update_attributes attributes{
             .get_entity_id = static_cast<std::int32_t>(id),
             .get_values = {},
         };
         send_packet(id, play_cb::update_attributes::packet_id, attributes,
                     play_cb::encode_update_attributes);
-    }
-    {
         play_cb::update_advancements advancements{
             .should_reset = true,
             .added = {},
@@ -1428,11 +1409,32 @@ void server::impl::send_play_login(std::uint64_t id) {
         };
         send_packet(id, play_cb::update_advancements::packet_id, advancements,
                     play_cb::encode_update_advancements);
-    }
+        play_cb::post_effects effects{};
+        send_packet(id, play_cb::post_effects::packet_id, effects,
+                    play_cb::encode_post_effects);
+    };
+
+    send_login();
+    send_difficulty();
+    send_abilities();
+    send_held_slot();
+    send_recipes();
+    send_permissions();
     send_commands(id);
+    send_recipe_book();
+    send_position();
+    send_server_data();
     announce_join(id);
-    send_tab_list(id);
+    send_border();
+    send_time();
+    send_spawn();
+    send_level_start();
+    send_ticking();
+    send_view_cache();
     send_initial_chunks(id);
+    send_vitals();
+    send_entity_state();
+    send_tab_list(id);
     send_keepalive(id);
 }
 
