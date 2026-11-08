@@ -1265,4 +1265,38 @@ suite<"worldgen/template"> template_tests = [] {
             expect(found->second.as_long().value_or(0) == seed);
         }
     };
+
+    "a placed fence clears a side over a non-sturdy neighbour"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        (void)states.intern("minecraft:air", {.air = true});
+        const auto carpet = states.intern(
+            "minecraft:red_carpet", {.air = false, .blocks_motion = false});
+        const auto fence =
+            states.intern("minecraft:birch_fence[east=false,north=false,south="
+                          "false,waterlogged=false,west=true]",
+                          {.air = false, .blocks_motion = true});
+        expect(carpet && fence);
+        if (!carpet || !fence) {
+            return;
+        }
+        structure::structure_template templ{};
+        templ.size_x = 2;
+        templ.size_y = 1;
+        templ.size_z = 1;
+        structure::template_block_info fence_info{};
+        fence_info.x = 1;
+        fence_info.state = *fence;
+        structure::template_block_info carpet_info{};
+        carpet_info.x = 0;
+        carpet_info.state = *carpet;
+        templ.palettes.push_back({carpet_info, fence_info});
+        proto_chunk chunk{states, 0, 0, 0, 32};
+        chunk_region region{chunk, 0};
+        (void)structure::place_template(region, states, templ,
+                                        block_pos{.x = 4, .y = 5, .z = 6},
+                                        structure::template_place_settings{});
+        const auto placed = states.name(chunk.state_at(6, 5, 6));
+        expect(placed.find("west=true") == std::string_view::npos);
+    };
 };
