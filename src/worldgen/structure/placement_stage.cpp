@@ -1703,6 +1703,213 @@ struct mineshaft_access {
             fill(x, y0, z, x, y1, z, planks);
         }
     }
+
+    [[nodiscard]] auto get_local(jint x, jint y, jint z) const
+        -> block_state_id {
+        const auto world = piece_local_to_world(piece, piece.min_y, x, y, z);
+        return get(world.x, world.y, world.z);
+    }
+
+    void set_local(jint x, jint y, jint z, block_state_id state) const {
+        const auto world = piece_local_to_world(piece, piece.min_y, x, y, z);
+        set(world.x, world.y, world.z, state);
+    }
+
+    [[nodiscard]] auto interior_local(jint x, jint y, jint z) const -> bool {
+        const auto world = piece_local_to_world(piece, piece.min_y, x, y, z);
+        return interior(world.x, world.y, world.z);
+    }
+
+    [[nodiscard]] auto name_of(block_state_id state) const -> std::string_view {
+        return context.states->name(state);
+    }
+
+    [[nodiscard]] auto replaceable_local(jint x, jint y, jint z) const -> bool {
+        const auto state = get_local(x, y, z);
+        const auto traits = context.states->traits(state);
+        const auto name = name_of(state);
+        return traits.air || traits.fluid || name == "minecraft:glow_lichen" ||
+               name.starts_with("minecraft:seagrass") ||
+               name.starts_with("minecraft:tall_seagrass");
+    }
+
+    [[nodiscard]] auto planks_at(jint x, jint y, jint z) const -> bool {
+        return name_of(get_local(x, y, z)) == name_of(planks);
+    }
+
+    void fill_column_local(jint x, jint y0, jint z, jint y1,
+                           block_state_id state) const {
+        for (jint y = y0; y < y1; ++y) {
+            set_local(x, y, z, state);
+        }
+    }
+
+    void fill_pillar_or_chain(jint x, jint local_y, jint z) const {
+        const auto world =
+            piece_local_to_world(piece, piece.min_y, x, local_y, z);
+        if (!inside(world.x, world.y, world.z)) {
+            return;
+        }
+        jint distance = 1;
+        bool check_below = true;
+        bool check_above = true;
+        while (check_below || check_above) {
+            if (check_below) {
+                const auto below = get_local(x, local_y - distance, z);
+                const bool empty =
+                    replaceable_local(x, local_y - distance, z) &&
+                    name_of(below) != "minecraft:lava";
+                if (!empty && context.states->traits(below).blocks_motion) {
+                    fill_column_local(x, local_y - distance + 1, z, local_y,
+                                      wood);
+                    return;
+                }
+                check_below = distance <= 20 && empty &&
+                              world.y - distance > context.chunk->min_y() + 1;
+            }
+            if (check_above) {
+                const auto above = get_local(x, local_y + distance, z);
+                const bool empty = replaceable_local(x, local_y + distance, z);
+                const auto above_name = name_of(above);
+                const bool can_hang =
+                    context.states->traits(above).blocks_motion &&
+                    !above_name.starts_with("minecraft:sand") &&
+                    !above_name.starts_with("minecraft:gravel") &&
+                    !above_name.starts_with("minecraft:anvil");
+                if (!empty && can_hang) {
+                    set_local(x, local_y + 1, z, fence);
+                    fill_column_local(x, local_y + 2, z, local_y + distance,
+                                      chain);
+                    return;
+                }
+                check_above = distance <= 50 && empty &&
+                              world.y + distance < context.chunk->min_y() +
+                                                       context.chunk->height();
+            }
+            ++distance;
+        }
+    }
+
+    void support_at(jint x0, jint y0, jint z, jint y1, jint x1,
+                    worldgen_random &random) const {
+        bool supported = true;
+        for (jint x = x0; x <= x1; ++x) {
+            if (context.states->traits(get_local(x, y1 + 1, z)).air) {
+                supported = false;
+            }
+        }
+        if (!supported) {
+            return;
+        }
+        fill_column_local(x0, y0, z, y1, fence_west);
+        fill_column_local(x1, y0, z, y1, fence_east);
+        if (random.next_int(4) == 0) {
+            set_local(x0, y1, z, planks);
+            set_local(x1, y1, z, planks);
+        } else {
+            for (jint x = x0; x <= x1; ++x) {
+                set_local(x, y1, z, planks);
+            }
+            auto torch = [&](jint tx, jint ty, jint tz, block_state_id state) {
+                if (random.next_float() < 0.05F) {
+                    set_local(tx, ty, tz, state);
+                }
+            };
+            torch(x0 + 1, y1, z - 1, torch_south);
+            torch(x0 + 1, y1, z + 1, torch_north);
+        }
+    }
+
+    void maybe_box(float probability, jint x0, jint y0, jint z0, jint x1,
+                   jint y1, jint z1, block_state_id fill_state,
+                   block_state_id edge_state, bool has_to_be_inside,
+                   worldgen_random &random) const {
+        for (jint y = y0; y <= y1; ++y) {
+            for (jint x = x0; x <= x1; ++x) {
+                for (jint z = z0; z <= z1; ++z) {
+                    if (random.next_float() > probability) {
+                        continue;
+                    }
+                    if (has_to_be_inside && !interior_local(x, y, z)) {
+                        continue;
+                    }
+                    const bool edge = x == x0 || x == x1 || y == y0 ||
+                                      y == y1 || z == z0 || z == z1;
+                    set_local(x, y, z, edge ? edge_state : fill_state);
+                }
+            }
+        }
+    }
+
+    void maybe_block(float probability, jint x, jint y, jint z,
+                     block_state_id state, worldgen_random &random) const {
+        if (random.next_float() < probability) {
+            set_local(x, y, z, state);
+        }
+    }
+
+    void maybe_cobweb(float probability, jint x, jint y, jint z,
+                      worldgen_random &random) const {
+        if (!interior_local(x, y, z)) {
+            return;
+        }
+        if (random.next_float() >= probability) {
+            return;
+        }
+        jint sturdy = 0;
+        for (const auto &direction : all_directions) {
+            const auto neighbour =
+                get_local(x + direction.dx, y + direction.dy, z + direction.dz);
+            if (context.states->traits(neighbour).blocks_motion) {
+                ++sturdy;
+            }
+        }
+        if (sturdy >= 2) {
+            set_local(x, y, z, cobweb);
+        }
+    }
+
+    void planks_floor(jint x, jint y, jint z) const {
+        if (interior_local(x, y, z) &&
+            !context.states->traits(get_local(x, y, z)).blocks_motion) {
+            set_local(x, y, z, planks);
+        }
+    }
+
+    void create_chest_local(jint x, jint y, jint z,
+                            worldgen_random &random) const {
+        const auto world = piece_local_to_world(piece, piece.min_y, x, y, z);
+        if (!inside(world.x, world.y, world.z)) {
+            return;
+        }
+        if (!context.states->traits(get(world.x, world.y, world.z)).air ||
+            context.states->traits(get(world.x, world.y - 1, world.z)).air) {
+            return;
+        }
+        set_local(x, y, z, random.next_boolean() ? rail_ns : rail_ew);
+        (void)random.next_long();
+    }
+
+    void double_support(jint x, jint y, jint z) const {
+        if (planks_at(x, y, z)) {
+            fill_pillar_or_chain(x, y, z);
+        }
+        if (planks_at(x + 2, y, z)) {
+            fill_pillar_or_chain(x + 2, y, z);
+        }
+    }
+
+    block_state_id wood{no_block_state};
+    block_state_id fence{no_block_state};
+    block_state_id fence_west{no_block_state};
+    block_state_id fence_east{no_block_state};
+    block_state_id chain{no_block_state};
+    block_state_id rail_ns{no_block_state};
+    block_state_id rail_ew{no_block_state};
+    block_state_id cobweb{no_block_state};
+    block_state_id spawner{no_block_state};
+    block_state_id torch_south{no_block_state};
+    block_state_id torch_north{no_block_state};
 };
 
 auto mineshaft_access_for(const structure_place_context &context,
@@ -1711,8 +1918,24 @@ auto mineshaft_access_for(const structure_place_context &context,
     mineshaft_access access{.context = context, .piece = piece};
     access.air = context.state("minecraft:air");
     access.cave_air = context.state("minecraft:cave_air");
-    access.planks = context.state(piece.mesa ? "minecraft:dark_oak_planks"
-                                             : "minecraft:oak_planks");
+    const std::string wood =
+        piece.mesa ? "minecraft:dark_oak" : "minecraft:oak";
+    access.planks = context.state(wood + "_planks");
+    access.wood = context.state(wood + "_log");
+    access.fence = context.state(wood + "_fence");
+    access.fence_west =
+        context.state(wood + "_fence[east=false,north=false,south=false,"
+                             "waterlogged=false,west=true]");
+    access.fence_east =
+        context.state(wood + "_fence[east=true,north=false,south=false,"
+                             "waterlogged=false,west=false]");
+    access.chain = context.state("minecraft:iron_chain");
+    access.rail_ns = context.state("minecraft:rail[shape=north_south]");
+    access.rail_ew = context.state("minecraft:rail[shape=east_west]");
+    access.cobweb = context.state("minecraft:cobweb");
+    access.spawner = context.state("minecraft:spawner");
+    access.torch_south = context.state("minecraft:wall_torch[facing=south]");
+    access.torch_north = context.state("minecraft:wall_torch[facing=north]");
     return access;
 }
 
@@ -1790,6 +2013,67 @@ void place_mineshaft_crossing(const structure_place_context &context,
     }
 }
 
+void place_mineshaft_corridor(const structure_place_context &context,
+                              const structure_piece_record &piece,
+                              worldgen_random &random) {
+    auto access = mineshaft_access_for(context, piece);
+    const jint length = piece.sections * 5 - 1;
+    access.fill_local(0, 0, 0, 2, 1, length, access.cave_air);
+    access.maybe_box(0.8F, 0, 0, 0, 2, 2, length, access.cave_air,
+                     access.cave_air, false, random);
+    if (piece.spider) {
+        access.maybe_box(0.6F, 0, 0, 0, 2, 1, length, access.cobweb,
+                         access.cave_air, true, random);
+    }
+    bool placed_spider = false;
+    for (jint section = 0; section < piece.sections; ++section) {
+        const jint z = 2 + section * 5;
+        access.support_at(0, 0, z, 2, 2, random);
+        access.maybe_cobweb(0.1F, 0, 2, z - 1, random);
+        access.maybe_cobweb(0.1F, 2, 2, z - 1, random);
+        access.maybe_cobweb(0.1F, 0, 2, z + 1, random);
+        access.maybe_cobweb(0.1F, 2, 2, z + 1, random);
+        access.maybe_cobweb(0.05F, 0, 2, z - 2, random);
+        access.maybe_cobweb(0.05F, 2, 2, z - 2, random);
+        access.maybe_cobweb(0.05F, 0, 2, z + 2, random);
+        access.maybe_cobweb(0.05F, 2, 2, z + 2, random);
+        if (random.next_int(100) == 0) {
+            access.create_chest_local(2, 0, z - 1, random);
+        }
+        if (random.next_int(100) == 0) {
+            access.create_chest_local(0, 0, z + 1, random);
+        }
+        if (piece.spider && !placed_spider) {
+            const jint new_z = z - 1 + random.next_int(3);
+            if (access.interior_local(1, 0, new_z)) {
+                placed_spider = true;
+                access.set_local(1, 0, new_z, access.spawner);
+            }
+        }
+    }
+    for (jint x = 0; x <= 2; ++x) {
+        for (jint z = 0; z <= length; ++z) {
+            access.planks_floor(x, -1, z);
+        }
+    }
+    access.double_support(0, -1, 2);
+    if (piece.sections > 1) {
+        access.double_support(0, -1, length - 2);
+    }
+    if (piece.rails) {
+        for (jint z = 0; z <= length; ++z) {
+            const auto floor = access.get_local(1, -1, z);
+            if (!context.states->traits(floor).air &&
+                context.states->traits(floor).blocks_motion) {
+                const float probability =
+                    access.interior_local(1, 0, z) ? 0.7F : 0.9F;
+                access.maybe_block(probability, 1, 0, z, access.rail_ns,
+                                   random);
+            }
+        }
+    }
+}
+
 void place_mineshaft_stairs(const structure_place_context &context,
                             const structure_piece_record &piece) {
     const auto access = mineshaft_access_for(context, piece);
@@ -1824,6 +2108,8 @@ void place_structure_piece(const structure_place_context &context,
         place_mineshaft_crossing(context, piece);
     } else if (piece.type == "minecraft:msstairs") {
         place_mineshaft_stairs(context, piece);
+    } else if (piece.type == "minecraft:mscorridor") {
+        place_mineshaft_corridor(context, piece, random);
     }
 }
 
