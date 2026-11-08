@@ -104,10 +104,9 @@ The reference-backed suites currently cover:
 
 Known gaps: the generated-start mineshaft full-stage case has a small
 remaining difference in one corridor. Ruined portal starts place the
-template at the reference position and orientation. A portal that lands
-in an aquifer is not a stable oracle: the settled reference world fills
-its air pocket with flowing water and bubble columns, so the comparison
-must use a dry candidate. Ocean
+template at the reference position and orientation. The aged template
+blocks and the netherrack spread still differ from the reference, so
+the piece is not verified block for block yet. Ocean
 monuments, strongholds and woodland mansions do not have start or block
 implementations yet.
 
