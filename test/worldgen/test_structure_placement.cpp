@@ -1438,6 +1438,9 @@ suite<"worldgen/mansion-grid"> mansion_grid_tests = [] {
         bool has_entrance = false;
         bool has_roof = false;
         bool has_wall = false;
+        bool has_corridor = false;
+        bool has_room = false;
+        bool has_indoor_wall = false;
         for (std::size_t i = 0; i < first.size(); ++i) {
             expect(first[i].template_name == second[i].template_name);
             expect(first[i].origin.x == second[i].origin.x);
@@ -1447,9 +1450,20 @@ suite<"worldgen/mansion-grid"> mansion_grid_tests = [] {
             has_entrance = has_entrance || first[i].template_name == "entrance";
             has_roof = has_roof || first[i].template_name == "roof";
             has_wall = has_wall || first[i].template_name == "wall_flat";
+            has_corridor =
+                has_corridor || first[i].template_name == "corridor_floor";
+            has_room = has_room || first[i].template_name.starts_with("1x1_") ||
+                       first[i].template_name.starts_with("1x2_") ||
+                       first[i].template_name.starts_with("2x2_");
+            has_indoor_wall =
+                has_indoor_wall ||
+                first[i].template_name.starts_with("indoors_wall");
         }
         expect(has_entrance);
         expect(has_roof);
         expect(has_wall);
+        expect(has_corridor);
+        expect(has_room);
+        expect(has_indoor_wall);
     };
 };

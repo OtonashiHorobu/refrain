@@ -347,12 +347,198 @@ void create_roof(std::vector<mansion_piece> &pieces,
     }
 }
 
+struct door_dir {
+    std::optional<mansion_direction> direction{};
+    bool up{false};
+};
+
+auto is_door(const door_dir &door, mansion_direction direction) -> bool {
+    return door.direction.has_value() && *door.direction == direction;
+}
+
+void add_room_1x1(std::vector<mansion_piece> &pieces, const block_pos &room_pos,
+                  template_rotation rotation, const door_dir &door,
+                  const mansion_room_collection &rooms,
+                  worldgen_random &random) {
+    auto piece_rotation = template_rotation::none;
+    auto name = rooms.room_1x1(random);
+    if (!is_door(door, mansion_direction::east)) {
+        if (is_door(door, mansion_direction::north)) {
+            piece_rotation = template_rotation::counterclockwise_90;
+        } else if (is_door(door, mansion_direction::west)) {
+            piece_rotation = template_rotation::clockwise_180;
+        } else if (is_door(door, mansion_direction::south)) {
+            piece_rotation = template_rotation::clockwise_90;
+        } else {
+            name = rooms.room_1x1_secret(random);
+        }
+    }
+    const template_transform zero_transform{
+        .mirror = template_mirror::none,
+        .rotation = piece_rotation,
+        .pivot = block_pos{.x = 7, .y = 0, .z = 7}};
+    const auto zero = structure::transform_position(
+        block_pos{.x = 1, .y = 0, .z = 0}, zero_transform);
+    const auto orientation = mansion_rotate_2d(rotation, zero.x, zero.z);
+    const auto position = block_pos{.x = room_pos.x + orientation.x,
+                                    .y = room_pos.y,
+                                    .z = room_pos.z + orientation.z};
+    add_piece(pieces, name, position, add_rotation(piece_rotation, rotation));
+}
+
+void add_room_1x2(std::vector<mansion_piece> &pieces, const block_pos &room_pos,
+                  template_rotation rotation, mansion_direction room_direction,
+                  const door_dir &door, const mansion_room_collection &rooms,
+                  bool stairs_room, worldgen_random &random) {
+    const auto east = [&](jint amount) {
+        return mansion_relative(room_pos, rotation, mansion_direction::east,
+                                amount);
+    };
+    const auto south = [&](const block_pos &pos, jint amount) {
+        return mansion_relative(pos, rotation, mansion_direction::south,
+                                amount);
+    };
+    const auto north = [&](const block_pos &pos, jint amount) {
+        return mansion_relative(pos, rotation, mansion_direction::north,
+                                amount);
+    };
+    const auto west = [&](const block_pos &pos, jint amount) {
+        return mansion_relative(pos, rotation, mansion_direction::west, amount);
+    };
+    const auto side_name = [&] {
+        return rooms.room_1x2_side(random, stairs_room);
+    };
+    const auto front_name = [&] {
+        return rooms.room_1x2_front(random, stairs_room);
+    };
+    if (is_door(door, mansion_direction::east) &&
+        room_direction == mansion_direction::south) {
+        add_piece(pieces, side_name(), east(1), rotation);
+    } else if (is_door(door, mansion_direction::east) &&
+               room_direction == mansion_direction::north) {
+        add_piece(pieces, side_name(), south(east(1), 6), rotation,
+                  template_mirror::left_right);
+    } else if (is_door(door, mansion_direction::west) &&
+               room_direction == mansion_direction::north) {
+        add_piece(pieces, side_name(), south(east(7), 6),
+                  add_rotation(rotation, template_rotation::clockwise_180));
+    } else if (is_door(door, mansion_direction::west) &&
+               room_direction == mansion_direction::south) {
+        add_piece(pieces, side_name(), east(7), rotation,
+                  template_mirror::front_back);
+    } else if (is_door(door, mansion_direction::south) &&
+               room_direction == mansion_direction::east) {
+        add_piece(pieces, side_name(), east(1),
+                  add_rotation(rotation, template_rotation::clockwise_90),
+                  template_mirror::left_right);
+    } else if (is_door(door, mansion_direction::south) &&
+               room_direction == mansion_direction::west) {
+        add_piece(pieces, side_name(), east(7),
+                  add_rotation(rotation, template_rotation::clockwise_90));
+    } else if (is_door(door, mansion_direction::north) &&
+               room_direction == mansion_direction::west) {
+        add_piece(pieces, side_name(), south(east(7), 6),
+                  add_rotation(rotation, template_rotation::clockwise_90),
+                  template_mirror::front_back);
+    } else if (is_door(door, mansion_direction::north) &&
+               room_direction == mansion_direction::east) {
+        add_piece(
+            pieces, side_name(), south(east(1), 6),
+            add_rotation(rotation, template_rotation::counterclockwise_90));
+    } else if (is_door(door, mansion_direction::south) &&
+               room_direction == mansion_direction::north) {
+        add_piece(pieces, front_name(), north(east(1), 8), rotation);
+    } else if (is_door(door, mansion_direction::north) &&
+               room_direction == mansion_direction::south) {
+        add_piece(pieces, front_name(), south(east(7), 14),
+                  add_rotation(rotation, template_rotation::clockwise_180));
+    } else if (is_door(door, mansion_direction::west) &&
+               room_direction == mansion_direction::east) {
+        add_piece(pieces, front_name(), east(15),
+                  add_rotation(rotation, template_rotation::clockwise_90));
+    } else if (is_door(door, mansion_direction::east) &&
+               room_direction == mansion_direction::west) {
+        add_piece(
+            pieces, front_name(), south(west(east(0), 7), 6),
+            add_rotation(rotation, template_rotation::counterclockwise_90));
+    } else if (door.up && room_direction == mansion_direction::east) {
+        add_piece(pieces, rooms.room_1x2_secret(random), east(15),
+                  add_rotation(rotation, template_rotation::clockwise_90));
+    } else if (door.up && room_direction == mansion_direction::south) {
+        add_piece(pieces, rooms.room_1x2_secret(random), north(east(1), 0),
+                  rotation);
+    }
+}
+
+void add_room_2x2(std::vector<mansion_piece> &pieces, const block_pos &room_pos,
+                  template_rotation rotation, mansion_direction room_direction,
+                  const door_dir &door, const mansion_room_collection &rooms,
+                  worldgen_random &random) {
+    jint east = 0;
+    jint south_offset = 0;
+    auto rot = rotation;
+    auto mirror = template_mirror::none;
+    if (is_door(door, mansion_direction::east) &&
+        room_direction == mansion_direction::south) {
+        east = -7;
+    } else if (is_door(door, mansion_direction::east) &&
+               room_direction == mansion_direction::north) {
+        east = -7;
+        south_offset = 6;
+        mirror = template_mirror::left_right;
+    } else if (is_door(door, mansion_direction::north) &&
+               room_direction == mansion_direction::east) {
+        east = 1;
+        south_offset = 14;
+        rot = add_rotation(rotation, template_rotation::counterclockwise_90);
+    } else if (is_door(door, mansion_direction::north) &&
+               room_direction == mansion_direction::west) {
+        east = 7;
+        south_offset = 14;
+        rot = add_rotation(rotation, template_rotation::counterclockwise_90);
+        mirror = template_mirror::left_right;
+    } else if (is_door(door, mansion_direction::south) &&
+               room_direction == mansion_direction::west) {
+        east = 7;
+        south_offset = -8;
+        rot = add_rotation(rotation, template_rotation::clockwise_90);
+    } else if (is_door(door, mansion_direction::south) &&
+               room_direction == mansion_direction::east) {
+        east = 1;
+        south_offset = -8;
+        rot = add_rotation(rotation, template_rotation::clockwise_90);
+        mirror = template_mirror::left_right;
+    } else if (is_door(door, mansion_direction::west) &&
+               room_direction == mansion_direction::north) {
+        east = 15;
+        south_offset = 6;
+        rot = add_rotation(rotation, template_rotation::clockwise_180);
+    } else if (is_door(door, mansion_direction::west) &&
+               room_direction == mansion_direction::south) {
+        east = 15;
+        mirror = template_mirror::front_back;
+    }
+    auto position =
+        mansion_relative(room_pos, rotation, mansion_direction::east, east);
+    position = mansion_relative(position, rotation, mansion_direction::south,
+                                south_offset);
+    add_piece(pieces, rooms.room_2x2(random), position, rot, mirror);
+}
+
+void add_room_2x2_secret(std::vector<mansion_piece> &pieces,
+                         const block_pos &room_pos, template_rotation rotation,
+                         const mansion_room_collection &rooms,
+                         worldgen_random &random) {
+    add_piece(pieces, rooms.room_2x2_secret(random),
+              mansion_relative(room_pos, rotation, mansion_direction::east, 1),
+              rotation);
+}
+
 } // namespace
 
 auto generate_mansion(worldgen_random &random, const block_pos &origin,
                       template_rotation rotation, const mansion_grid &grid)
     -> std::vector<mansion_piece> {
-    (void)random;
     std::vector<mansion_piece> pieces;
     placement_data data{
         .position = origin, .rotation = rotation, .wall_type = "wall_flat"};
@@ -403,6 +589,200 @@ auto generate_mansion(worldgen_random &random, const block_pos &origin,
     create_roof(pieces,
                 block_pos{.x = origin.x, .y = origin.y + 27, .z = origin.z},
                 rotation, third, nullptr, start_x, start_y);
+
+    const std::array<mansion_room_collection, 3> collections{
+        mansion_room_collection{0}, mansion_room_collection{1},
+        mansion_room_collection{2}};
+    for (jint floor = 0; floor < 3; ++floor) {
+        const block_pos floor_origin{.x = origin.x,
+                                     .y = origin.y + 8 * floor +
+                                          (floor == 2 ? 3 : 0),
+                                     .z = origin.z};
+        const auto &room_grid = grid.floor_rooms(floor);
+        const auto &layout_grid = floor == 2 ? third : base;
+        const std::string south_piece =
+            floor == 0 ? "carpet_south_1" : "carpet_south_2";
+        const std::string west_piece =
+            floor == 0 ? "carpet_west_1" : "carpet_west_2";
+
+        for (jint y = 0; y < layout_grid.height(); ++y) {
+            for (jint x = 0; x < layout_grid.width(); ++x) {
+                if (layout_grid.get(x, y) != 1) {
+                    continue;
+                }
+                auto pos = mansion_relative(floor_origin, rotation,
+                                            mansion_direction::south,
+                                            8 + (y - start_y) * 8);
+                pos = mansion_relative(pos, rotation, mansion_direction::east,
+                                       (x - start_x) * 8);
+                add_piece(pieces, "corridor_floor", pos, rotation);
+                const auto above =
+                    block_pos{.x = pos.x, .y = pos.y + 1, .z = pos.z};
+                if (layout_grid.get(x, y - 1) == 1 ||
+                    (room_grid.get(x, y - 1) & k_room_corridor) ==
+                        k_room_corridor) {
+                    add_piece(pieces, "carpet_north",
+                              mansion_relative(above, rotation,
+                                               mansion_direction::east, 1),
+                              rotation);
+                }
+                if (layout_grid.get(x + 1, y) == 1 ||
+                    (room_grid.get(x + 1, y) & k_room_corridor) ==
+                        k_room_corridor) {
+                    auto p = mansion_relative(pos, rotation,
+                                              mansion_direction::south, 1);
+                    p = mansion_relative(p, rotation, mansion_direction::east,
+                                         5);
+                    add_piece(pieces, "carpet_east",
+                              block_pos{.x = p.x, .y = p.y + 1, .z = p.z},
+                              rotation);
+                }
+                if (layout_grid.get(x, y + 1) == 1 ||
+                    (room_grid.get(x, y + 1) & k_room_corridor) ==
+                        k_room_corridor) {
+                    auto p = mansion_relative(pos, rotation,
+                                              mansion_direction::south, 5);
+                    p = mansion_relative(p, rotation, mansion_direction::west,
+                                         1);
+                    add_piece(pieces, south_piece, p, rotation);
+                }
+                if (layout_grid.get(x - 1, y) == 1 ||
+                    (room_grid.get(x - 1, y) & k_room_corridor) ==
+                        k_room_corridor) {
+                    auto p = mansion_relative(pos, rotation,
+                                              mansion_direction::west, 1);
+                    p = mansion_relative(p, rotation, mansion_direction::north,
+                                         1);
+                    add_piece(pieces, west_piece, p, rotation);
+                }
+            }
+        }
+
+        const std::string wall_piece =
+            floor == 0 ? "indoors_wall_1" : "indoors_wall_2";
+        const std::string door_piece =
+            floor == 0 ? "indoors_door_1" : "indoors_door_2";
+        std::vector<mansion_direction> door_directions;
+        for (jint y = 0; y < layout_grid.height(); ++y) {
+            for (jint x = 0; x < layout_grid.width(); ++x) {
+                bool third_floor_start_room =
+                    floor == 2 && layout_grid.get(x, y) == 3;
+                if (layout_grid.get(x, y) != 2 && !third_floor_start_room) {
+                    continue;
+                }
+                const jint room_data = room_grid.get(x, y);
+                const jint room_type = room_data & k_room_type_mask;
+                const jint room_id = room_data & k_room_id_mask;
+                third_floor_start_room =
+                    third_floor_start_room &&
+                    (room_data & k_room_corridor) == k_room_corridor;
+                door_directions.clear();
+                if ((room_data & k_room_door) == k_room_door) {
+                    static constexpr std::array<mansion_direction, 4>
+                        horizontal{
+                            mansion_direction::north, mansion_direction::east,
+                            mansion_direction::south, mansion_direction::west};
+                    for (const auto direction : horizontal) {
+                        if (layout_grid.get(x + mansion_step_x(direction),
+                                            y + mansion_step_z(direction)) ==
+                            1) {
+                            door_directions.push_back(direction);
+                        }
+                    }
+                }
+                door_dir door{};
+                if (!door_directions.empty()) {
+                    door.direction = door_directions[static_cast<std::size_t>(
+                        random.next_int(
+                            static_cast<jint>(door_directions.size())))];
+                } else if ((room_data & k_room_origin) == k_room_origin) {
+                    door.up = true;
+                }
+                auto room_pos = mansion_relative(floor_origin, rotation,
+                                                 mansion_direction::south,
+                                                 8 + (y - start_y) * 8);
+                room_pos = mansion_relative(room_pos, rotation,
+                                            mansion_direction::east,
+                                            -1 + (x - start_x) * 8);
+                if (mansion_grid::is_house(layout_grid, x - 1, y) &&
+                    !grid.is_room_id(layout_grid, x - 1, y, floor, room_id)) {
+                    add_piece(pieces,
+                              is_door(door, mansion_direction::west)
+                                  ? door_piece
+                                  : wall_piece,
+                              room_pos, rotation);
+                }
+                if (layout_grid.get(x + 1, y) == 1 && !third_floor_start_room) {
+                    add_piece(pieces,
+                              is_door(door, mansion_direction::east)
+                                  ? door_piece
+                                  : wall_piece,
+                              mansion_relative(room_pos, rotation,
+                                               mansion_direction::east, 8),
+                              rotation);
+                }
+                if (mansion_grid::is_house(layout_grid, x, y + 1) &&
+                    !grid.is_room_id(layout_grid, x, y + 1, floor, room_id)) {
+                    auto p = mansion_relative(room_pos, rotation,
+                                              mansion_direction::south, 7);
+                    p = mansion_relative(p, rotation, mansion_direction::east,
+                                         7);
+                    add_piece(pieces,
+                              is_door(door, mansion_direction::south)
+                                  ? door_piece
+                                  : wall_piece,
+                              p,
+                              add_rotation(rotation,
+                                           template_rotation::clockwise_90));
+                }
+                if (layout_grid.get(x, y - 1) == 1 && !third_floor_start_room) {
+                    auto p = mansion_relative(room_pos, rotation,
+                                              mansion_direction::north, 1);
+                    p = mansion_relative(p, rotation, mansion_direction::east,
+                                         7);
+                    add_piece(pieces,
+                              is_door(door, mansion_direction::north)
+                                  ? door_piece
+                                  : wall_piece,
+                              p,
+                              add_rotation(rotation,
+                                           template_rotation::clockwise_90));
+                }
+                if (room_type == k_room_1x1) {
+                    add_room_1x1(pieces, room_pos, rotation, door,
+                                 collections[static_cast<std::size_t>(floor)],
+                                 random);
+                } else if (room_type == k_room_1x2 && door.direction) {
+                    const auto room_direction = grid.get_1x2_room_direction(
+                        layout_grid, x, y, floor, room_id);
+                    if (room_direction) {
+                        const bool stairs_room =
+                            (room_data & k_room_stairs) == k_room_stairs;
+                        add_room_1x2(
+                            pieces, room_pos, rotation, *room_direction, door,
+                            collections[static_cast<std::size_t>(floor)],
+                            stairs_room, random);
+                    }
+                } else if (room_type == k_room_2x2 && door.direction &&
+                           !door.up) {
+                    auto room_direction = mansion_clockwise(*door.direction);
+                    if (!grid.is_room_id(layout_grid,
+                                         x + mansion_step_x(room_direction),
+                                         y + mansion_step_z(room_direction),
+                                         floor, room_id)) {
+                        room_direction = mansion_opposite(room_direction);
+                    }
+                    add_room_2x2(
+                        pieces, room_pos, rotation, room_direction, door,
+                        collections[static_cast<std::size_t>(floor)], random);
+                } else if (room_type == k_room_2x2 && door.up) {
+                    add_room_2x2_secret(
+                        pieces, room_pos, rotation,
+                        collections[static_cast<std::size_t>(floor)], random);
+                }
+            }
+        }
+    }
     return pieces;
 }
 
