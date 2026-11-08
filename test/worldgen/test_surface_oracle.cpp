@@ -533,6 +533,17 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             }
 
             block_state_registry block_registry;
+            for (const auto key :
+                 {"minecraft:end_portal", "minecraft:end_gateway",
+                  "minecraft:torch", "minecraft:wall_torch[facing=north]",
+                  "minecraft:soul_torch",
+                  "minecraft:soul_wall_torch[facing=north]",
+                  "minecraft:glow_lichen", "minecraft:sculk_vein"}) {
+                (void)block_registry.intern(key,
+                                            {.air = false,
+                                             .blocks_motion = false,
+                                             .blocks_motion_no_leaves = false});
+            }
             auto air_state =
                 block_registry.intern("minecraft:air", {.air = true});
             auto stone_state = block_registry.intern(
