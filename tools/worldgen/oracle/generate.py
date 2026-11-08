@@ -1770,10 +1770,21 @@ def main() -> int:
     else:
         run_server(root, args.server_jar, args.settle)
 
-    region = root / "world/dimensions/minecraft/overworld/region/r.0.0.mca"
+    region_dir = root / "world/dimensions/minecraft/overworld/region"
+    region = region_dir / "r.0.0.mca"
+    if args.force_load_box is not None:
+        region = region_dir / (
+            f"r.{args.force_load_box[0] // 512}."
+            f"{args.force_load_box[1] // 512}.mca"
+        )
     if not region.exists():
-        print(f"the server did not write {region}", file=sys.stderr)
-        return 1
+        # A force-load box away from the origin writes other region files.
+        regions = sorted(region_dir.glob("*.mca")) if region_dir.exists() else []
+        if not regions:
+            print(f"the server did not write a region under {region_dir}",
+                  file=sys.stderr)
+            return 1
+        region = regions[0]
     print(region)
     return 0
 
