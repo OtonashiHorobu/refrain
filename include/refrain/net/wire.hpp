@@ -767,6 +767,26 @@ struct command_tree {
 [[nodiscard]] auto decode_command_tree(reader &in, command_tree &value)
     -> status;
 
+/// The scalar fields of a container click; changed-slot and carried-item
+/// HashedStack payloads are parsed but not retained.
+struct container_click_data {
+    std::int32_t container_id{0};
+    std::int32_t state_id{0};
+    std::int16_t slot_num{0};
+    std::int8_t button_num{0};
+    std::uint32_t container_input{0};
+
+    friend auto operator==(const container_click_data &,
+                           const container_click_data &) -> bool = default;
+};
+
+[[nodiscard]] auto
+encode_container_click_data(writer &out, const container_click_data &value)
+    -> status;
+[[nodiscard]] auto decode_container_click_data(reader &in,
+                                               container_click_data &value)
+    -> status;
+
 /// One entity metadata entry. The active representation is selected by the
 /// serializer id; unused fields keep their defaults.
 struct metadata_value {

@@ -2735,6 +2735,120 @@ namespace {
 
 } // namespace
 
+namespace {
+
+[[nodiscard]] auto skip_hashed_components(reader &in) -> status {
+    auto count{in.read_varint()};
+    if (!count) {
+        return std::unexpected{std::move(count.error())};
+    }
+    if (*count > in.remaining()) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "container_click_data: bad component map")};
+    }
+    for (std::uint32_t index{0}; index < *count; ++index) {
+        auto key{in.read_varint()};
+        auto value{in.read_i32()};
+        if (!key || !value) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "container_click_data: truncated component map")};
+        }
+    }
+    auto removed{in.read_varint()};
+    if (!removed) {
+        return std::unexpected{std::move(removed.error())};
+    }
+    if (*removed > in.remaining()) {
+        return std::unexpected{make_error(
+            error_code::parse_error, "container_click_data: bad removed list")};
+    }
+    for (std::uint32_t index{0}; index < *removed; ++index) {
+        if (auto id{in.read_varint()}; !id) {
+            return std::unexpected{std::move(id.error())};
+        }
+    }
+    return status_ok();
+}
+
+[[nodiscard]] auto skip_hashed_item(reader &in) -> status {
+    auto item{in.read_varint()};
+    auto count{in.read_varint()};
+    if (!item || !count) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "container_click_data: truncated hashed item")};
+    }
+    return skip_hashed_components(in);
+}
+
+} // namespace
+
+auto encode_container_click_data(writer &out, const container_click_data &value)
+    -> status {
+    out.write_varint(static_cast<std::uint32_t>(value.container_id));
+    out.write_varint(static_cast<std::uint32_t>(value.state_id));
+    out.write_u16(static_cast<std::uint16_t>(value.slot_num));
+    out.write_u8(static_cast<std::uint8_t>(value.button_num));
+    out.write_varint(value.container_input);
+    out.write_varint(0);   // changed slots
+    out.write_bool(false); // carried item
+    return status_ok();
+}
+
+auto decode_container_click_data(reader &in, container_click_data &value)
+    -> status {
+    auto container_id{in.read_varint()};
+    auto state_id{in.read_varint()};
+    auto slot{in.read_u16()};
+    auto button{in.read_u8()};
+    auto input{in.read_varint()};
+    if (!container_id || !state_id || !slot || !button || !input) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "container_click_data: truncated")};
+    }
+    value.container_id = static_cast<std::int32_t>(*container_id);
+    value.state_id = static_cast<std::int32_t>(*state_id);
+    value.slot_num = static_cast<std::int16_t>(*slot);
+    value.button_num = static_cast<std::int8_t>(*button);
+    value.container_input = *input;
+
+    auto changed{in.read_varint()};
+    if (!changed) {
+        return std::unexpected{std::move(changed.error())};
+    }
+    if (*changed > in.remaining()) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "container_click_data: bad changed-slot count")};
+    }
+    for (std::uint32_t index{0}; index < *changed; ++index) {
+        auto key{in.read_u16()};
+        auto present{in.read_bool()};
+        if (!key || !present) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "container_click_data: truncated changed slot")};
+        }
+        if (*present) {
+            if (auto status{skip_hashed_item(in)}; !status) {
+                return status;
+            }
+        }
+    }
+    auto carried{in.read_bool()};
+    if (!carried) {
+        return std::unexpected{std::move(carried.error())};
+    }
+    if (*carried) {
+        if (auto status{skip_hashed_item(in)}; !status) {
+            return status;
+        }
+    }
+    return status_ok();
+}
+
 auto encode_command_tree(writer &out, const command_tree &value) -> status {
     out.write_varint(static_cast<std::uint32_t>(value.nodes.size()));
     for (const auto &node : value.nodes) {

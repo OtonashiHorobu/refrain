@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: f522b723b120f5d1
+// Schema hash: 9f887e44356d665e
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_SERVERBOUND_HPP
@@ -20,8 +20,6 @@
 #include <refrain/net/base.hpp>
 #include <refrain/data/resource_location.hpp>
 #include <refrain/net/wire.hpp>
-#include <map>
-#include <utility>
 #include <refrain/schema/protocol/777/common.hpp>
 #include <refrain/schema/protocol/777/wire.hpp>
 
@@ -281,16 +279,7 @@ struct container_click {
     static constexpr std::uint16_t packet_id = 0x12;
     static constexpr std::string_view packet_name = "container_click";
 
-    // attributes: #[varint]
-    std::int32_t container_id;
-    // attributes: #[varint]
-    std::int32_t state_id;
-    // attributes: #[fixed]
-    std::int16_t slot_num;
-    std::int8_t button_num;
-    std::uint32_t container_input;
-    std::map<std::int16_t, std::optional<::refrain::protocol::v777::wire::wire_actual_item>> changed_slots;
-    std::optional<::refrain::protocol::v777::wire::wire_actual_item> carried_item;
+    ::refrain::net::container_click_data payload;
 };
 
 struct container_close {
@@ -1556,38 +1545,8 @@ struct custom_click_action {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    out.write_varint(static_cast<std::uint32_t>(value.container_id));
-  }
-  {
-    out.write_varint(static_cast<std::uint32_t>(value.state_id));
-  }
-  {
-    out.write_u16(static_cast<std::uint16_t>(value.slot_num));
-  }
-  {
-    out.write_i64(static_cast<std::int64_t>(value.button_num));
-  }
-  {
-    out.write_varint(value.container_input);
-  }
-  {
-    out.write_varint(static_cast<std::uint32_t>(value.changed_slots.size()));
-    for (const auto &entry_0 : value.changed_slots) {
-      out.write_i64(static_cast<std::int64_t>(entry_0.first));
-      out.write_bool(entry_0.second.has_value());
-      if (entry_0.second.has_value()) {
-        if (auto written = ::refrain::protocol::v777::wire::encode_wire_actual_item(out, entry_0.second.value()); !written) {
-          return written;
-        }
-      }
-    }
-  }
-  {
-    out.write_bool(value.carried_item.has_value());
-    if (value.carried_item.has_value()) {
-      if (auto written = ::refrain::protocol::v777::wire::encode_wire_actual_item(out, value.carried_item.value()); !written) {
-        return written;
-      }
+    if (auto written = ::refrain::net::encode_container_click_data(out, value.payload); !written) {
+      return written;
     }
   }
   return ::refrain::status_ok();
@@ -1597,65 +1556,8 @@ struct custom_click_action {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto value_0 = in.read_varint();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.container_id = static_cast<decltype(value.container_id)>(*value_0);
-  }
-  {
-    auto value_0 = in.read_varint();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.state_id = static_cast<decltype(value.state_id)>(*value_0);
-  }
-  {
-    auto value_0 = in.read_u16();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.slot_num = static_cast<decltype(value.slot_num)>(*value_0);
-  }
-  {
-    auto value_0 = in.read_i64();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.button_num = static_cast<decltype(value.button_num)>(*value_0);
-  }
-  {
-    auto value_0 = in.read_varint();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.container_input = *value_0;
-  }
-  {
-    auto count_0 = in.read_varint();
-    if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.changed_slots.clear();
-    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
-      std::int16_t map_key_0{};
-      auto value_1 = in.read_i64();
-      if (!value_1) return std::unexpected{std::move(value_1.error())};
-      map_key_0 = static_cast<decltype(map_key_0)>(*value_1);
-      std::optional<::refrain::protocol::v777::wire::wire_actual_item> map_value_0{};
-      auto present_2 = in.read_bool();
-      if (!present_2) return std::unexpected{std::move(present_2.error())};
-      if (*present_2) {
-        ::refrain::protocol::v777::wire::wire_actual_item value_2{};
-        if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_actual_item(in, value_2); !decoded) {
-          return std::unexpected{std::move(decoded.error())};
-        }
-        map_value_0 = std::move(value_2);
-      } else {
-        map_value_0.reset();
-      }
-      value.changed_slots.emplace(std::move(map_key_0), std::move(map_value_0));
-    }
-  }
-  {
-    auto present_0 = in.read_bool();
-    if (!present_0) return std::unexpected{std::move(present_0.error())};
-    if (*present_0) {
-      ::refrain::protocol::v777::wire::wire_actual_item value_0{};
-      if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_actual_item(in, value_0); !decoded) {
-        return std::unexpected{std::move(decoded.error())};
-      }
-      value.carried_item = std::move(value_0);
-    } else {
-      value.carried_item.reset();
+    if (auto decoded = ::refrain::net::decode_container_click_data(in, value.payload); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
     }
   }
   return ::refrain::status_ok();

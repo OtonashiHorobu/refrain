@@ -62,17 +62,6 @@ struct wire_data {
     #[max(4096)] key_signature: bytes;
 }
 
-struct wire_type_81 {
-    added_components: map<varint_id, i32>;
-    removed_components: array<varint_id>;
-}
-
-struct wire_actual_item {
-    item: varint_id;
-    #[varint] count: i32;
-    components: wire_type_81;
-}
-
 struct wire_entry_4 {
     game_rule_key: identifier;
     #[max(32767)] value: string;

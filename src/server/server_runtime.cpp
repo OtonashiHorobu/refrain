@@ -1321,8 +1321,13 @@ auto run_server(const server_run_options &options) -> int {
                 continue;
             }
             auto &carried{carried_items[click.connection]};
-            static_cast<void>(refrain::server::apply_player_click(
-                store->player().inventory, carried, click.slot, click.button));
+            const auto changed{refrain::server::apply_player_click(
+                store->player().inventory, carried, click.slot, click.button)};
+            refrain::log::debug(
+                "inventory: click conn={} slot={} button={} mode={} -> "
+                "carried='{}' x{} changed={}",
+                click.connection, click.slot, click.button, click.mode,
+                carried.item, carried.count, changed);
             inventory_forced.insert(click.connection);
         }
     };

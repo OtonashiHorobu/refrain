@@ -107,6 +107,8 @@ enum class primitive_kind : std::uint8_t {
     debug_subscription_event,
     /// Hand-written wire payload: command_tree.
     command_tree,
+    /// Hand-written wire payload: container_click_data.
+    container_click_data,
     void_type,
 };
 

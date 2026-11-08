@@ -272,6 +272,34 @@ const suite tests = [] {
         expect(status.error().code == refrain::error_code::invalid_argument);
     };
 
+    "wire container click payload skips hashed stacks"_test = [] {
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        out.write_varint(0);   // container id
+        out.write_varint(7);   // state id
+        out.write_u16(36);     // slot
+        out.write_u8(0);       // button
+        out.write_varint(0);   // input
+        out.write_varint(1);   // changed slots
+        out.write_u16(36);     // changed slot key
+        out.write_bool(true);  // hashed item present
+        out.write_varint(1);   // item id
+        out.write_varint(5);   // count
+        out.write_varint(0);   // added components
+        out.write_varint(0);   // removed components
+        out.write_bool(false); // carried item
+        net::reader in{bytes};
+        net::container_click_data decoded{};
+        expect(
+            static_cast<bool>(net::decode_container_click_data(in, decoded)));
+        expect(decoded.container_id == 0);
+        expect(decoded.state_id == 7);
+        expect(decoded.slot_num == 36);
+        expect(decoded.button_num == 0);
+        expect(decoded.container_input == 0U);
+        expect(in.empty());
+    };
+
     "wire item stacks write both component patch counts"_test = [] {
         const net::item_stack stack{.count = 5U, .item_id = 1U};
         std::vector<std::byte> bytes;

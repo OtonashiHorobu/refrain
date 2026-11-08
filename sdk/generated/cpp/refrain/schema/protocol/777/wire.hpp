@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: f522b723b120f5d1
+// Schema hash: 9f887e44356d665e
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -84,18 +84,6 @@ struct wire_data {
     std::vector<std::byte> key;
     // attributes: #[max(4096)]
     std::vector<std::byte> key_signature;
-};
-
-struct wire_type_81 {
-    std::map<std::uint32_t, std::int32_t> added_components;
-    std::vector<std::uint32_t> removed_components;
-};
-
-struct wire_actual_item {
-    std::uint32_t item;
-    // attributes: #[varint]
-    std::int32_t count;
-    ::refrain::protocol::v777::wire::wire_type_81 components;
 };
 
 struct wire_entry_4 {
@@ -672,97 +660,6 @@ struct wire_position_move_rotation {
     auto value_0 = in.read_bytes(*length_0);
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.key_signature = std::vector<std::byte>{value_0->begin(), value_0->end()};
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto encode_wire_type_81(::refrain::net::writer &out, const wire_type_81 &value) -> ::refrain::status {
-  static_cast<void>(out);
-  static_cast<void>(value);
-  {
-    out.write_varint(static_cast<std::uint32_t>(value.added_components.size()));
-    for (const auto &entry_0 : value.added_components) {
-      out.write_varint(entry_0.first);
-      out.write_i64(static_cast<std::int64_t>(entry_0.second));
-    }
-  }
-  {
-    out.write_varint(static_cast<std::uint32_t>(value.removed_components.size()));
-    for (const auto &item_0 : value.removed_components) {
-      out.write_varint(item_0);
-    }
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto decode_wire_type_81(::refrain::net::reader &in, wire_type_81 &value) -> ::refrain::status {
-  static_cast<void>(in);
-  static_cast<void>(value);
-  {
-    auto count_0 = in.read_varint();
-    if (!count_0) return std::unexpected{std::move(count_0.error())};
-    value.added_components.clear();
-    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
-      std::uint32_t map_key_0{};
-      auto value_1 = in.read_varint();
-      if (!value_1) return std::unexpected{std::move(value_1.error())};
-      map_key_0 = *value_1;
-      std::int32_t map_value_0{};
-      auto value_2 = in.read_i64();
-      if (!value_2) return std::unexpected{std::move(value_2.error())};
-      map_value_0 = static_cast<decltype(map_value_0)>(*value_2);
-      value.added_components.emplace(std::move(map_key_0), std::move(map_value_0));
-    }
-  }
-  {
-    value.removed_components.clear();
-    auto count_0 = in.read_varint();
-    if (!count_0) return std::unexpected{std::move(count_0.error())};
-    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
-      std::uint32_t value_0{};
-      auto value_1 = in.read_varint();
-      if (!value_1) return std::unexpected{std::move(value_1.error())};
-      value_0 = *value_1;
-      value.removed_components.push_back(std::move(value_0));
-    }
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto encode_wire_actual_item(::refrain::net::writer &out, const wire_actual_item &value) -> ::refrain::status {
-  static_cast<void>(out);
-  static_cast<void>(value);
-  {
-    out.write_varint(value.item);
-  }
-  {
-    out.write_varint(static_cast<std::uint32_t>(value.count));
-  }
-  {
-    if (auto written = ::refrain::protocol::v777::wire::encode_wire_type_81(out, value.components); !written) {
-      return written;
-    }
-  }
-  return ::refrain::status_ok();
-}
-
-[[nodiscard]] inline auto decode_wire_actual_item(::refrain::net::reader &in, wire_actual_item &value) -> ::refrain::status {
-  static_cast<void>(in);
-  static_cast<void>(value);
-  {
-    auto value_0 = in.read_varint();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.item = *value_0;
-  }
-  {
-    auto value_0 = in.read_varint();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.count = static_cast<decltype(value.count)>(*value_0);
-  }
-  {
-    if (auto decoded = ::refrain::protocol::v777::wire::decode_wire_type_81(in, value.components); !decoded) {
-      return std::unexpected{std::move(decoded.error())};
-    }
   }
   return ::refrain::status_ok();
 }

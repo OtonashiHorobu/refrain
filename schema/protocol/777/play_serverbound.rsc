@@ -159,13 +159,7 @@ packet container_button_click = 17 {
 }
 
 packet container_click = 18 {
-    #[varint] container_id: i32;
-    #[varint] state_id: i32;
-    #[fixed] slot_num: i16;
-    button_num: i8;
-    container_input: varint_id;
-    changed_slots: map<i16, optional<wire_actual_item>>;
-    carried_item: optional<wire_actual_item>;
+    payload: container_click_data;
 }
 
 packet container_close = 19 {

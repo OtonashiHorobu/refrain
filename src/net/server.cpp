@@ -2052,16 +2052,16 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        if (packet.container_id != 0) {
+        if (packet.payload.container_id != 0) {
             return;
         }
         const std::lock_guard lock{click_mutex};
         container_clicks.push_back(container_click_event{
             .connection = id,
-            .container_id = packet.container_id,
-            .slot = packet.slot_num,
-            .button = packet.button_num,
-            .mode = packet.container_input,
+            .container_id = packet.payload.container_id,
+            .slot = packet.payload.slot_num,
+            .button = packet.payload.button_num,
+            .mode = packet.payload.container_input,
         });
         return;
     }

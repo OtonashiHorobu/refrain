@@ -126,6 +126,8 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "debug_subscription_event";
     case primitive_kind::command_tree:
         return "command_tree";
+    case primitive_kind::container_click_data:
+        return "container_click_data";
     case primitive_kind::void_type:
         return "void";
     }
@@ -188,6 +190,8 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"debug_subscription_event",
                   primitive_kind::debug_subscription_event},
         std::pair{"command_tree", primitive_kind::command_tree},
+        std::pair{"container_click_data",
+                  primitive_kind::container_click_data},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -370,6 +374,7 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::debug_subscription_update:
     case primitive_kind::debug_subscription_event:
     case primitive_kind::command_tree:
+    case primitive_kind::container_click_data:
     case primitive_kind::void_type:
         return false;
     }
@@ -430,6 +435,7 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::debug_subscription_update:
     case primitive_kind::debug_subscription_event:
     case primitive_kind::command_tree:
+    case primitive_kind::container_click_data:
     case primitive_kind::void_type:
         return false;
     }
@@ -2382,6 +2388,7 @@ class analyzer {
             case primitive_kind::debug_subscription_update:
             case primitive_kind::debug_subscription_event:
             case primitive_kind::command_tree:
+            case primitive_kind::container_click_data:
                 // Rejected for RIDL in resolve_type(); a wire-only primitive
                 // has no in-process ABI layout.
                 return std::nullopt;
