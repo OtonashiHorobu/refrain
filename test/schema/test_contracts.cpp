@@ -120,6 +120,10 @@ refrain_status fake_locate_structure(void *, refrain_core_handle_gen_ctx,
 
 // --- generated extension surface ------------------------------------------
 //
+static_assert(refrain::services::net_translator::abi_major == 1);
+static_assert(std::string_view{refrain::services::net_translator::service_id} ==
+              "refrain:net.translator");
+
 // The production `refrain:net.protocol` contract declares the `tab_codec`
 // extension, so these checks also compile the generated C++ wrapper and query
 // path. The fake provider exercises registration, success, missing extension,

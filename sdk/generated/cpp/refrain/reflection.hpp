@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 7195102635572e89
+// Schema hash: 5d21cfe923511284
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2784,6 +2784,35 @@ template <> struct custom_traits<::refrain::services::net_protocol::encoded_pack
     static constexpr std::string_view type_name = "refrain::services::net_protocol::encoded_packet";
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"data", &::refrain::services::net_protocol::encoded_packet::data});
+};
+
+/// Generated RIDL struct 'refrain::services::net_translator::translator_descriptor'.
+template <> struct custom_traits<::refrain::services::net_translator::translator_descriptor> {
+    static constexpr std::string_view type_name = "refrain::services::net_translator::translator_descriptor";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"name", &::refrain::services::net_translator::translator_descriptor::name},
+        refrain::reflect::custom_field{"source_family", &::refrain::services::net_translator::translator_descriptor::source_family},
+        refrain::reflect::custom_field{"target_family", &::refrain::services::net_translator::translator_descriptor::target_family},
+        refrain::reflect::custom_field{"capabilities", &::refrain::services::net_translator::translator_descriptor::capabilities});
+};
+
+/// Generated RIDL struct 'refrain::services::net_translator::translation_request'.
+template <> struct custom_traits<::refrain::services::net_translator::translation_request> {
+    static constexpr std::string_view type_name = "refrain::services::net_translator::translation_request";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"connection", &::refrain::services::net_translator::translation_request::connection},
+        refrain::reflect::custom_field{"source_protocol", &::refrain::services::net_translator::translation_request::source_protocol},
+        refrain::reflect::custom_field{"target_protocol", &::refrain::services::net_translator::translation_request::target_protocol},
+        refrain::reflect::custom_field{"packet_id", &::refrain::services::net_translator::translation_request::packet_id},
+        refrain::reflect::custom_field{"payload", &::refrain::services::net_translator::translation_request::payload});
+};
+
+/// Generated RIDL struct 'refrain::services::net_translator::translation_result'.
+template <> struct custom_traits<::refrain::services::net_translator::translation_result> {
+    static constexpr std::string_view type_name = "refrain::services::net_translator::translation_result";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"packet_id", &::refrain::services::net_translator::translation_result::packet_id},
+        refrain::reflect::custom_field{"payload", &::refrain::services::net_translator::translation_result::payload});
 };
 
 /// Generated RIDL struct 'refrain::services::runtime::runtime_config'.

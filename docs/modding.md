@@ -117,6 +117,17 @@ startup with the missing service key.
 descriptor plus `attach`, `detach` and `tick` lifecycle entries. Session feature
 services below are dispatched by that provider.
 
+### Translators
+
+`refrain:net.translator` is an optional, exclusive contract for external
+protocol translators. The repository ships only the contract: no mappings code,
+translation tables or game data are bundled. A user-installed translator must
+be selected explicitly; it is not part of the MIT host distribution.
+
+The contract carries a descriptor (source/target family and capabilities) and a
+per-packet `translate` call. A translator that needs copyleft-licensed mapping
+data is the user's responsibility and remains outside this repository.
+
 ### Session features
 
 A mod may implement optional session feature services instead of a packet
