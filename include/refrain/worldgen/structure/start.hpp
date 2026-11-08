@@ -8,6 +8,8 @@
 #pragma once
 
 #include <refrain/worldgen/chunk/chunk_region.hpp>
+
+#include <optional>
 #include <refrain/worldgen/core/java_compat.hpp>
 #include <refrain/worldgen/structure/bbox.hpp>
 
@@ -15,6 +17,16 @@
 #include <vector>
 
 namespace refrain::worldgen::structure {
+
+struct ruined_portal_properties {
+    std::string placement{"on_land_surface"};
+    float mossiness{0.0F};
+    bool air_pocket{false};
+    bool overgrown{false};
+    bool vines{false};
+    bool replace_with_blackstone{false};
+    bool cold{false};
+};
 
 struct structure_piece {
     std::string type{};
@@ -39,6 +51,7 @@ struct structure_piece {
     bool spider{false};
     bool two_floored{false};
     bool mesa{false};
+    std::optional<ruined_portal_properties> portal{};
 };
 
 struct structure_start {

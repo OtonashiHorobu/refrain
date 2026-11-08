@@ -64,6 +64,14 @@ struct structure_piece_record {
     bool spider{false};
     bool two_floored{false};
     bool mesa{false};
+    bool portal_valid{false};
+    std::string portal_placement{};
+    float portal_mossiness{0.0F};
+    bool portal_air_pocket{false};
+    bool portal_overgrown{false};
+    bool portal_vines{false};
+    bool portal_blackstone{false};
+    bool portal_cold{false};
 };
 
 struct structure_start {

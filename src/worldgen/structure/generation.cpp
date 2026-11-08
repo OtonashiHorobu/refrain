@@ -536,4 +536,228 @@ auto swamp_hut_start(const chunk_pos &chunk, jlong seed) -> structure_start {
     return start;
 }
 
+namespace {
+
+struct portal_setup {
+    std::string placement{"on_land_surface"};
+    float air_pocket_probability{0.0F};
+    float mossiness{0.0F};
+    bool overgrown{false};
+    bool vines{false};
+    bool can_be_cold{false};
+    bool replace_with_blackstone{false};
+    float weight{1.0F};
+};
+
+auto read_bool(const data::json::value &document, const char *key) -> bool {
+    const auto *value = document.find(key);
+    return value != nullptr && value->as_bool().value_or(false);
+}
+
+auto read_float(const data::json::value &document, const char *key,
+                float fallback) -> float {
+    const auto *value = document.find(key);
+    return value == nullptr
+               ? fallback
+               : static_cast<float>(value->as_double().value_or(fallback));
+}
+
+auto parse_portal_setups(const structure_document &structure)
+    -> std::vector<portal_setup> {
+    std::vector<portal_setup> setups;
+    const auto *values = structure.config.find("setups");
+    if (values == nullptr) {
+        return setups;
+    }
+    const auto array = values->as_array();
+    if (!array) {
+        return setups;
+    }
+    for (const auto &entry : *array) {
+        portal_setup setup;
+        if (const auto *placement = entry.find("placement");
+            placement != nullptr) {
+            setup.placement =
+                std::string{placement->as_string().value_or("on_land_surface")};
+        }
+        setup.air_pocket_probability =
+            read_float(entry, "air_pocket_probability", 0.0F);
+        setup.mossiness = read_float(entry, "mossiness", 0.0F);
+        setup.overgrown = read_bool(entry, "overgrown");
+        setup.vines = read_bool(entry, "vines");
+        setup.can_be_cold = read_bool(entry, "can_be_cold");
+        setup.replace_with_blackstone =
+            read_bool(entry, "replace_with_blackstone");
+        setup.weight = read_float(entry, "weight", 1.0F);
+        setups.push_back(std::move(setup));
+    }
+    return setups;
+}
+
+auto random_between_inclusive(worldgen_random &random, jint min, jint max)
+    -> jint {
+    return random.next_int(max - min + 1) + min;
+}
+
+auto random_within_interval(worldgen_random &random, jint preferred, jint max)
+    -> jint {
+    return preferred < max ? random_between_inclusive(random, preferred, max)
+                           : max;
+}
+
+} // namespace
+
+auto ruined_portal_start(
+    const chunk_pos &chunk, jlong seed, const structure_document &structure,
+    structure_template_manager &templates,
+    const std::function<jint(jint, jint, heightmap_kind)> &height_at,
+    const std::function<bool(jint, jint, jint)> &opaque_at,
+    const std::function<bool(jint, jint, jint)> &biome_cold, jint min_y)
+    -> structure_start {
+    const auto setups = parse_portal_setups(structure);
+    if (setups.empty()) {
+        return {};
+    }
+    worldgen_random random{std::make_unique<legacy_random_source>(0)};
+    random.set_large_feature_seed(seed, chunk.x, chunk.z);
+
+    const portal_setup *chosen = &setups.front();
+    if (setups.size() > 1) {
+        float total = 0.0F;
+        for (const auto &setup : setups) {
+            total += setup.weight;
+        }
+        float pick = random.next_float();
+        for (const auto &setup : setups) {
+            pick -= setup.weight / total;
+            if (pick < 0.0F) {
+                chosen = &setup;
+                break;
+            }
+        }
+    }
+    const bool air_pocket =
+        chosen->air_pocket_probability == 0.0F
+            ? false
+            : (chosen->air_pocket_probability == 1.0F ||
+               random.next_float() < chosen->air_pocket_probability);
+
+    static constexpr std::array<const char *, 10> portals{
+        "ruined_portal/portal_1", "ruined_portal/portal_2",
+        "ruined_portal/portal_3", "ruined_portal/portal_4",
+        "ruined_portal/portal_5", "ruined_portal/portal_6",
+        "ruined_portal/portal_7", "ruined_portal/portal_8",
+        "ruined_portal/portal_9", "ruined_portal/portal_10"};
+    static constexpr std::array<const char *, 3> giants{
+        "ruined_portal/giant_portal_1", "ruined_portal/giant_portal_2",
+        "ruined_portal/giant_portal_3"};
+    std::string template_id;
+    if (random.next_float() < 0.05F) {
+        template_id = std::string{"minecraft/"} +
+                      giants[static_cast<std::size_t>(
+                          random.next_int(static_cast<jint>(giants.size())))];
+    } else {
+        template_id = std::string{"minecraft/"} +
+                      portals[static_cast<std::size_t>(
+                          random.next_int(static_cast<jint>(portals.size())))];
+    }
+    const auto &templ = templates.get_or_create(template_id);
+    const jint rotation_index = random.next_int(4);
+    const auto rotation = static_cast<template_rotation>(rotation_index);
+    const auto mirror = random.next_float() < 0.5F
+                            ? template_mirror::none
+                            : template_mirror::front_back;
+    const block_pos pivot{.x = templ.size_x / 2, .y = 0, .z = templ.size_z / 2};
+    const template_transform transform{
+        .mirror = mirror, .rotation = rotation, .pivot = pivot};
+    const block_pos base_position{.x = chunk.x * 16, .y = 0, .z = chunk.z * 16};
+    const auto bounds = template_bounding_box(templ, transform, base_position);
+    const jint center_x = (bounds.min_x + bounds.max_x) / 2;
+    const jint center_z = (bounds.min_z + bounds.max_z) / 2;
+    const bool ocean_floor = chosen->placement == "on_ocean_floor";
+    const auto height_kind = ocean_floor ? heightmap_kind::ocean_floor_wg
+                                         : heightmap_kind::world_surface_wg;
+    const jint surface_y = height_at(center_x, center_z, height_kind) - 1;
+    const jint y_span = bounds.max_y - bounds.min_y + 1;
+    const jint lowest = min_y + 15;
+    jint projected_y = surface_y;
+    if (chosen->placement == "in_nether") {
+        if (air_pocket) {
+            projected_y = random_between_inclusive(random, 32, 100);
+        } else if (random.next_float() < 0.5F) {
+            projected_y = random_between_inclusive(random, 27, 29);
+        } else {
+            projected_y = random_between_inclusive(random, 29, 100);
+        }
+    } else if (chosen->placement == "in_mountain") {
+        projected_y = random_within_interval(random, 70, surface_y - y_span);
+    } else if (chosen->placement == "underground") {
+        projected_y =
+            random_within_interval(random, lowest, surface_y - y_span);
+    } else if (chosen->placement == "partly_buried") {
+        projected_y =
+            surface_y - y_span + random_between_inclusive(random, 2, 8);
+    }
+    const auto opaque = [&](jint x, jint y, jint z) {
+        if (opaque_at) {
+            return opaque_at(x, y, z);
+        }
+        return y < height_at(x, z, height_kind);
+    };
+    const std::array<std::pair<jint, jint>, 4> corners{{
+        {bounds.min_x, bounds.min_z},
+        {bounds.max_x, bounds.min_z},
+        {bounds.min_x, bounds.max_z},
+        {bounds.max_x, bounds.max_z},
+    }};
+    while (projected_y > lowest) {
+        jint solid = 0;
+        for (const auto &[x, z] : corners) {
+            if (opaque(x, projected_y, z) && ++solid == 3) {
+                break;
+            }
+        }
+        if (solid == 3) {
+            break;
+        }
+        --projected_y;
+    }
+    const bool cold = chosen->can_be_cold && biome_cold &&
+                      biome_cold(center_x, projected_y, center_z);
+    structure_start start{
+        .structure = structure.id,
+        .step = structure.step,
+        .chunk = chunk,
+        .bounds = structure_bbox{.min_x = bounds.min_x,
+                                 .min_y = bounds.min_y + projected_y,
+                                 .min_z = bounds.min_z,
+                                 .max_x = bounds.max_x,
+                                 .max_y = bounds.max_y + projected_y,
+                                 .max_z = bounds.max_z},
+    };
+    structure_piece piece{
+        .type = "minecraft:ruined_portal",
+        .bounds = start.bounds,
+        .template_id = template_id,
+        .template_origin = block_pos{.x = base_position.x,
+                                     .y = projected_y,
+                                     .z = base_position.z},
+        .template_rotation = rotation_index,
+        .template_mirror = static_cast<jint>(mirror),
+        .template_pivot = pivot,
+        .portal =
+            ruined_portal_properties{
+                .placement = chosen->placement,
+                .mossiness = chosen->mossiness,
+                .air_pocket = air_pocket,
+                .overgrown = chosen->overgrown,
+                .vines = chosen->vines,
+                .replace_with_blackstone = chosen->replace_with_blackstone,
+                .cold = cold,
+            },
+    };
+    start.pieces.push_back(std::move(piece));
+    start.max_references = 1;
+    return start;
+}
 } // namespace refrain::worldgen::structure

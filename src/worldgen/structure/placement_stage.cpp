@@ -2087,6 +2087,233 @@ void place_mineshaft_stairs(const structure_place_context &context,
     }
 }
 
+void place_ruined_portal(const structure_place_context &context,
+                         const structure_piece_record &piece,
+                         worldgen_random &random) {
+    if (context.templates == nullptr || !piece.portal_valid) {
+        return;
+    }
+    const auto &templ = context.templates->get_or_create(piece.template_id);
+    if (templ.palettes.empty()) {
+        return;
+    }
+    const auto &props = piece;
+    const auto resolve = [&](std::string_view key) -> block_state_id {
+        return context.state(key);
+    };
+    const auto air = resolve("minecraft:air");
+    const auto netherrack = resolve("minecraft:netherrack");
+    const auto magma = resolve("minecraft:magma_block");
+    const auto lava = resolve("minecraft:lava");
+
+    block_ignore_processor ignore{
+        props.portal_air_pocket
+            ? std::vector<std::string>{"minecraft:structure_block"}
+            : std::vector<std::string>{"minecraft:structure_block",
+                                       "minecraft:air"}};
+    std::vector<template_rule> rules;
+    rules.push_back(template_rule{.blocks = {"minecraft:gold_block"},
+                                  .probability = 0.3F,
+                                  .output = air});
+    if (props.portal_placement == "on_ocean_floor") {
+        rules.push_back(template_rule{.blocks = {"minecraft:lava"},
+                                      .probability = -1.0F,
+                                      .output = magma});
+    } else if (props.portal_cold) {
+        rules.push_back(template_rule{.blocks = {"minecraft:lava"},
+                                      .probability = -1.0F,
+                                      .output = netherrack});
+    } else {
+        rules.push_back(template_rule{.blocks = {"minecraft:lava"},
+                                      .probability = 0.2F,
+                                      .output = magma});
+    }
+    if (!props.portal_cold) {
+        rules.push_back(template_rule{.blocks = {"minecraft:netherrack"},
+                                      .probability = 0.07F,
+                                      .output = magma});
+    }
+    rule_processor rule_processor_{std::move(rules)};
+    block_age_processor age{props.portal_mossiness};
+    protected_block_processor protected_blocks{
+        "minecraft:features_cannot_replace"};
+    lava_submerged_processor submerged{lava};
+    blackstone_replace_processor blackstone;
+    std::vector<const template_block_processor *> processors{
+        &ignore, &rule_processor_, &age, &protected_blocks, &submerged};
+    if (props.portal_blackstone) {
+        processors.push_back(&blackstone);
+    }
+    template_place_settings settings{};
+    settings.transform = template_transform{
+        .mirror = static_cast<template_mirror>(piece.template_mirror),
+        .rotation = static_cast<template_rotation>(piece.template_rotation),
+        .pivot = block_pos{.x = piece.template_pivot_x,
+                           .y = piece.template_pivot_y,
+                           .z = piece.template_pivot_z},
+    };
+    settings.bounds = template_bounds{
+        .min_x = context.chunk->chunk_x() * 16,
+        .min_y = context.chunk->min_y(),
+        .min_z = context.chunk->chunk_z() * 16,
+        .max_x = context.chunk->chunk_x() * 16 + 15,
+        .max_y = context.chunk->min_y() + context.chunk->height() - 1,
+        .max_z = context.chunk->chunk_z() * 16 + 15,
+    };
+    settings.processors = std::move(processors);
+    const block_pos origin{
+        .x = piece.template_x, .y = piece.template_y, .z = piece.template_z};
+    (void)place_template(*context.region, *context.registry, templ, origin,
+                         settings);
+
+    const auto &states = *context.registry;
+    const auto height_kind = props.portal_placement == "on_ocean_floor"
+                                 ? heightmap_kind::ocean_floor_wg
+                                 : heightmap_kind::world_surface_wg;
+    const auto height_at = [&](jint x, jint z) -> std::optional<jint> {
+        auto *column = context.region->find(x >> 4, z >> 4);
+        if (column == nullptr) {
+            return std::nullopt;
+        }
+        return column->first_available(height_kind, x & 15, z & 15);
+    };
+    const auto in_protected_tag = [&](block_state_id state) {
+        return states.in_tag(state, "minecraft:features_cannot_replace");
+    };
+    const auto can_replace = [&](block_state_id state) -> bool {
+        const auto name = states.name(state);
+        if (name == "minecraft:air" || name == "minecraft:obsidian" ||
+            in_protected_tag(state)) {
+            return false;
+        }
+        return props.portal_placement == "in_nether" ||
+               name != "minecraft:lava";
+    };
+    const auto replaceable_at = [&](jint x, jint y, jint z) {
+        return can_replace(context.region->state_at(x, y, z));
+    };
+    const auto place_netherrack = [&](jint x, jint y, jint z) {
+        if (!replaceable_at(x, y, z)) {
+            return;
+        }
+        const auto state = !props.portal_cold && random.next_float() < 0.07F
+                               ? magma
+                               : netherrack;
+        (void)context.region->set_block_state(x, y, z, state);
+    };
+    const auto drip = [&](jint x, jint y, jint z) {
+        jint remaining = 8;
+        place_netherrack(x, y, z);
+        while (remaining > 0 && random.next_float() < 0.5F) {
+            --remaining;
+            --y;
+            place_netherrack(x, y, z);
+        }
+    };
+    const jint min_x = piece.min_x;
+    const jint max_x = piece.max_x;
+    const jint min_y = piece.min_y;
+    const jint max_y = piece.max_y;
+    const jint min_z = piece.min_z;
+    const jint max_z = piece.max_z;
+    const bool follow_surface = props.portal_placement == "on_land_surface" ||
+                                props.portal_placement == "on_ocean_floor";
+    static constexpr std::array<float, 14> probabilities{
+        1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F,
+        0.9F, 0.9F, 0.8F, 0.7F, 0.6F, 0.4F, 0.2F};
+    const jint center_x = (min_x + max_x) / 2;
+    const jint center_z = (min_z + max_z) / 2;
+    const jint width = (max_x - min_x + 1 + max_z - min_z + 1) / 2;
+    const jint adjustment = random.next_int(std::max(1, 8 - width / 2));
+    const jint max_distance = static_cast<jint>(probabilities.size());
+    for (jint x = center_x - max_distance; x <= center_x + max_distance; ++x) {
+        for (jint z = center_z - max_distance; z <= center_z + max_distance;
+             ++z) {
+            const jint distance =
+                std::abs(x - center_x) + std::abs(z - center_z);
+            const jint adjusted = std::max(0, distance + adjustment);
+            if (adjusted >= max_distance) {
+                continue;
+            }
+            if (random.next_double() >= probabilities[adjusted]) {
+                continue;
+            }
+            const auto surface = height_at(x, z);
+            if (!surface) {
+                continue;
+            }
+            const jint y =
+                follow_surface ? *surface : std::min(min_y, *surface);
+            if (std::abs(y - min_y) > 3 || !replaceable_at(x, y, z)) {
+                continue;
+            }
+            place_netherrack(x, y, z);
+            if (props.portal_overgrown) {
+                if (random.next_float() < 0.5F &&
+                    states.name(context.region->state_at(x, y, z)) ==
+                        "minecraft:netherrack" &&
+                    states.traits(context.region->state_at(x, y + 1, z)).air) {
+                    const auto leaves = resolve(
+                        "minecraft:jungle_leaves[distance=7,persistent=true]");
+                    (void)context.region->set_block_state(x, y + 1, z, leaves);
+                }
+            }
+            drip(x, y - 1, z);
+        }
+    }
+    for (jint x = min_x + 1; x < max_x; ++x) {
+        for (jint z = min_z + 1; z < max_z; ++z) {
+            if (states.name(context.region->state_at(x, min_y, z)) ==
+                "minecraft:netherrack") {
+                drip(x, min_y - 1, z);
+            }
+        }
+    }
+    if (props.portal_vines || props.portal_overgrown) {
+        for (jint y = min_y; y <= max_y; ++y) {
+            for (jint z = min_z; z <= max_z; ++z) {
+                for (jint x = min_x; x <= max_x; ++x) {
+                    const auto state = context.region->state_at(x, y, z);
+                    const auto name = states.name(state);
+                    if (name != "minecraft:air" && name != "minecraft:vine") {
+                        static constexpr std::array<const char *, 4> faces{
+                            "north", "east", "south", "west"};
+                        static constexpr std::array<std::pair<jint, jint>, 4>
+                            offsets{{{0, -1}, {1, 0}, {0, 1}, {-1, 0}}};
+                        const auto face =
+                            static_cast<std::size_t>(random.next_int(4));
+                        const auto [dx, dz] = offsets[face];
+                        const auto neighbour =
+                            context.region->state_at(x + dx, y, z + dz);
+                        if (states.traits(neighbour).air &&
+                            states.traits(state).blocks_motion) {
+                            const std::string key =
+                                std::string{"minecraft:vine["} +
+                                faces[(face + 2) % 4] + "=true]";
+                            const auto vine = context.registry->intern(
+                                key, {.air = false, .blocks_motion = false});
+                            if (vine) {
+                                (void)context.region->set_block_state(
+                                    x + dx, y, z + dz, *vine);
+                            }
+                        }
+                    }
+                    if (props.portal_overgrown && random.next_float() < 0.5F &&
+                        name == "minecraft:netherrack" &&
+                        states.traits(context.region->state_at(x, y + 1, z))
+                            .air) {
+                        const auto leaves =
+                            resolve("minecraft:jungle_leaves[distance=7,"
+                                    "persistent=true]");
+                        (void)context.region->set_block_state(x, y + 1, z,
+                                                              leaves);
+                    }
+                }
+            }
+        }
+    }
+}
+
 void place_structure_piece(const structure_place_context &context,
                            const structure_piece_record &piece,
                            worldgen_random &random) {
@@ -2104,6 +2331,8 @@ void place_structure_piece(const structure_place_context &context,
         place_ocean_ruin_piece(context, piece, random);
     } else if (piece.type == "minecraft:tejp") {
         place_jungle_temple(context, piece, random);
+    } else if (piece.type == "minecraft:ruined_portal") {
+        place_ruined_portal(context, piece, random);
     } else if (piece.type == "minecraft:msroom") {
         place_mineshaft_room(context, piece);
     } else if (piece.type == "minecraft:mscrossing") {

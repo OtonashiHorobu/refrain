@@ -8,6 +8,7 @@
 #pragma once
 
 #include <refrain/worldgen/structure/start.hpp>
+#include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/template.hpp>
 
 #include <functional>
@@ -44,6 +45,14 @@ class structure_template_manager;
 
 /// `OceanRuinStructure`: the main ruin piece plus an optional cluster of
 /// small ruins. `warm` selects the warm or cold template pools.
+[[nodiscard]] auto ruined_portal_start(
+    const chunk_pos &chunk, jlong seed, const structure_document &structure,
+    structure_template_manager &templates,
+    const std::function<jint(jint, jint, heightmap_kind)> &height_at,
+    const std::function<bool(jint, jint, jint)> &opaque_at,
+    const std::function<bool(jint, jint, jint)> &biome_cold, jint min_y)
+    -> structure_start;
+
 [[nodiscard]] auto ocean_ruin_start(const chunk_pos &chunk, jlong seed,
                                     structure_template_manager &templates,
                                     bool warm, float large_probability,

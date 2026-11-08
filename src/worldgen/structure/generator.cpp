@@ -65,6 +65,16 @@ auto make_piece_record(const structure_piece &piece)
     record.spider = piece.spider;
     record.two_floored = piece.two_floored;
     record.mesa = piece.mesa;
+    if (piece.portal) {
+        record.portal_valid = true;
+        record.portal_placement = piece.portal->placement;
+        record.portal_mossiness = piece.portal->mossiness;
+        record.portal_air_pocket = piece.portal->air_pocket;
+        record.portal_overgrown = piece.portal->overgrown;
+        record.portal_vines = piece.portal->vines;
+        record.portal_blackstone = piece.portal->replace_with_blackstone;
+        record.portal_cold = piece.portal->cold;
+    }
     return record;
 }
 

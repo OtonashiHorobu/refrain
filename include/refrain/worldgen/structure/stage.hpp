@@ -33,6 +33,12 @@ struct structure_start_context {
         biome_at{};
     std::function<std::string_view(std::uint16_t)> biome_name{};
     std::function<jint(jint block_x, jint block_z, heightmap_kind)> height_at{};
+    /// Terrain opacity used by structures that probe corner columns. Null
+    /// makes those structures fall back to the height map.
+    std::function<bool(jint block_x, jint block_y, jint block_z)> opaque_at{};
+    /// Whether the biome at a block is cold enough to snow, used by ruined
+    /// portal material selection.
+    std::function<bool(jint block_x, jint block_y, jint block_z)> biome_cold{};
     /// Template source for structure types that place `.nbt` pieces. Null
     /// leaves those types ungenerated.
     structure_template_manager *templates{nullptr};

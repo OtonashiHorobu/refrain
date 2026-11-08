@@ -286,6 +286,19 @@ auto try_generate(const structure_start_context &context,
         start.step = structure.step;
         return start;
     }
+    if (structure.type == "minecraft:ruined_portal") {
+        if (context.templates == nullptr) {
+            return std::nullopt;
+        }
+        auto start = ruined_portal_start(chunk, context.seed, structure,
+                                         *context.templates, context.height_at,
+                                         context.opaque_at, context.biome_cold,
+                                         context.min_y);
+        if (start.pieces.empty()) {
+            return std::nullopt;
+        }
+        return start;
+    }
     if (structure.type == "minecraft:desert_pyramid") {
         if (!biome_column_allowed(context, structure, chunk.x * 16 + 8,
                                   chunk.z * 16 + 8)) {
