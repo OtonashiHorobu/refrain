@@ -22,7 +22,7 @@ namespace refrain::worldgen::structure {
 
 namespace {
 
-// `Direction.values()`: down, up, north, south, west, east.
+// Face order: down, up, north, south, west, east.
 constexpr jint direction_down = 0;
 constexpr jint direction_up = 1;
 constexpr jint direction_north = 2;
@@ -290,8 +290,7 @@ auto template_jigsaws(const structure_template &templ,
     return result;
 }
 
-/// `FeaturePoolElement.getShuffledJigsawBlocks`: one anchor pointing down,
-/// independent of the requested rotation.
+/// One anchor pointing down, independent of the requested rotation.
 auto feature_jigsaws(const block_pos &position) -> std::vector<runtime_jigsaw> {
     return {runtime_jigsaw{
         .position = position,
@@ -421,8 +420,8 @@ struct piece_state {
     jint depth{0};
 };
 
-/// The `JigsawPlacement.Placer`: expands one start pool depth by depth in
-/// priority order and records junctions on both sides of each connection.
+/// Expands one start pool depth by depth in priority order and records
+/// junctions on both sides of each connection.
 class jigsaw_placer {
   public:
     jigsaw_placer(const jigsaw_generation_context &context,

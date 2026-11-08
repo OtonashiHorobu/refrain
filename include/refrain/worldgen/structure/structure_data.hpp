@@ -3,7 +3,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
 // The structure and structure-set documents the starts, references and
-// Beardifier stages consume.
+// terrain-adjustment stages consume.
 
 #pragma once
 

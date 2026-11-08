@@ -31,7 +31,7 @@ enum class stronghold_piece_kind : std::uint8_t {
     straight_stairs_down,
 };
 
-/// `StrongholdPiece.SmallDoorType`, in declaration order.
+/// Door kinds, in declaration order.
 enum class stronghold_door : std::uint8_t {
     opening = 0,
     wood_door = 1,

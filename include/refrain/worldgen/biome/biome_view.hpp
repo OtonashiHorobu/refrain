@@ -18,14 +18,13 @@
 
 namespace refrain::worldgen {
 
-/// `ChunkGenerator.doCreateBiomes` and `ChunkAccess.fillBiomesFromNoise`:
-/// fills the chunk's 4x4x4 quart biome cells in the reference order (sections
+/// Fills the chunk's 4x4x4 quart biome cells in generation order (sections
 /// bottom to top, then x, y, z). `source` carries the search cache, so one
 /// source must be shared by everything that queries biomes for the same chunk.
 void fill_chunk_biomes(proto_chunk &chunk, multi_noise_biome_source &source,
                        const climate_sampler &sampler);
 
-/// `LevelReader.getNoiseBiome`: reads a quart biome from a loaded generation
+/// Reads a quart biome from a loaded generation
 /// chunk and falls back to the uncached noise resolver outside it. The biome
 /// manager used by surface material rules reads through this view.
 class chunk_biome_resolver final : public biome_resolver {

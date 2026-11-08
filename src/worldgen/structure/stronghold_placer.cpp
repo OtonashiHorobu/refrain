@@ -832,8 +832,8 @@ void place_stronghold_piece(const structure_place_context &context,
     if (!piece.stronghold.has_value()) {
         return;
     }
-    // The selector and all piece interiors consume `level.getRandom()`, which
-    // is the placement stream the caller passes in.
+    // The selector and all piece interiors consume the level random stream,
+    // which is the placement stream the caller passes in.
     const stronghold_writer writer{context, piece};
     switch (piece.stronghold->kind) {
     case stronghold_piece_kind::start:

@@ -512,7 +512,7 @@ auto desert_pyramid_start(const chunk_pos &chunk, jlong seed)
 auto swamp_hut_start(const chunk_pos &chunk, jlong seed) -> structure_start {
     worldgen_random random{std::make_unique<legacy_random_source>(0)};
     random.set_large_feature_seed(seed, chunk.x, chunk.z);
-    // `Direction.Plane.HORIZONTAL` order: north, east, south, west.
+    // Horizontal face order: north, east, south, west.
     static constexpr std::array<jint, 4> orientations{2, 3, 0, 1};
     const jint direction =
         orientations[static_cast<std::size_t>(random.next_int(4))];

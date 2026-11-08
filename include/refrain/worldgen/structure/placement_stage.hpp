@@ -33,7 +33,7 @@ struct structure_place_context {
     jlong seed{0};
     jint sea_level{63};
     /// The chunk's `worldgen_region_random` stream, consumed by pieces that
-    /// read `level.getRandom()`.
+    /// read the level random stream.
     worldgen_random *level_random{nullptr};
     /// Per-piece adjusted heights shared by the owner and neighbour sections.
     std::unordered_map<std::string, jint> *adjusted_heights{nullptr};
@@ -53,7 +53,7 @@ void place_structure_piece(const structure_place_context &context,
                            worldgen_random &random);
 
 /// Places one ocean monument piece. A building also places the child pieces
-/// its bounding box overlaps, matching the reference `postProcess` order.
+/// its bounding box overlaps, matching the reference placement order.
 void place_monument_piece(const structure_place_context &context,
                           const structure_piece_record &piece,
                           worldgen_random &random);
@@ -69,8 +69,8 @@ void place_jigsaw_piece(const structure_place_context &context,
                         const structure_piece_record &piece,
                         worldgen_random &random);
 
-/// `StructurePiece.createChest` with an explicit loot table. Returns false
-/// when the position is occupied by a chest or the write is clipped.
+/// Places a chest with an explicit loot table. Returns false when the position
+/// is occupied by a chest or the write is clipped.
 [[nodiscard]] auto place_loot_chest(const structure_place_context &context,
                                     jint x, jint y, jint z,
                                     worldgen_random &random,

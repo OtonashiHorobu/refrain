@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// `FeatureSorter`: the per-step global feature order. The order is a
+// The per-step global feature order. The order is a
 // first-encounter index plus a depth-first topological sort over the edges
 // implied by each biome's feature lists; the decoration stage seeds every
 // placed feature with its position in the resulting per-step list.
@@ -35,9 +35,8 @@ struct step_features {
 
 class feature_sorter {
   public:
-    /// `FeatureSorter.buildFeaturesPerStep`. `possible_biomes` supplies the
-    /// iteration order of `biomeSource.possibleBiomes()`; every listed biome
-    /// must have a `biome_feature_list`.
+    /// Builds the per-step feature lists. `possible_biomes` supplies the
+    /// iteration order; every listed biome must have a `biome_feature_list`.
     [[nodiscard]] static auto
     build(const std::vector<std::string> &possible_biomes,
           const std::vector<biome_feature_list> &lists)

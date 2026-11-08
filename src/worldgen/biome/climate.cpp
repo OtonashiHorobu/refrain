@@ -15,8 +15,8 @@ namespace refrain::worldgen::climate {
 namespace {
 
 auto square(coord value) noexcept -> coord {
-    // Java `Mth.square(long)` wraps on overflow; unsigned arithmetic keeps that
-    // defined before converting back.
+    // The reference squares a long with wrap-around; unsigned arithmetic keeps
+    // the multiplication well-defined before converting back.
     return static_cast<coord>(static_cast<std::uint64_t>(value) *
                               static_cast<std::uint64_t>(value));
 }

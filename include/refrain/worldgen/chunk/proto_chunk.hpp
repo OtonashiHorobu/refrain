@@ -5,7 +5,7 @@
 // The mutable chunk the generation stages share before it becomes a level
 // chunk: dense block states, the 4x4x4 biome grid, the six heightmaps, block
 // entities and scheduled fluid post-processing. Status drives which heightmaps
-// a write updates, mirroring `ChunkStatus.heightmapsAfter`.
+// a write updates, following the heightmap set of the current status.
 
 #pragma once
 
@@ -173,7 +173,7 @@ class proto_chunk {
         return block_entities_;
     }
 
-    /// `ChunkAccess.markPosForPostProcessing`: packed `x | y<<4 | z<<8`.
+    /// Marks a position for post-processing: packed `x | y<<4 | z<<8`.
     void mark_post_processing(jint x, jint y, jint z);
     [[nodiscard]] auto post_processing() const
         -> const std::vector<std::vector<std::uint16_t>> & {

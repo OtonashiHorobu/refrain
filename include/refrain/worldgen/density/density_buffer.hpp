@@ -2,9 +2,9 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// Density sampling grid: the `DensityVolume` rectangle and the flat float
-// `DensityBuffer` the samplers fill. Index order is Java's
-// `indexY + (indexX + indexZ * sizeX) * sizeY`, i.e. Y is contiguous.
+// Density sampling grid: the sampling-volume rectangle and the flat float
+// buffer the samplers fill. Index order keeps Y contiguous:
+// `indexY + (indexX + indexZ * sizeX) * sizeY`.
 
 #pragma once
 
@@ -15,8 +15,8 @@
 
 namespace refrain::worldgen {
 
-/// Java `DensityVolume`: an axis-aligned grid of block coordinates with
-/// per-axis steps. Sizes and steps are positive.
+/// An axis-aligned grid of block coordinates with per-axis steps. Sizes and
+/// steps are positive.
 class volume {
   public:
     volume(jint size_x, jint size_y, jint size_z, jint min_block_x,
@@ -79,8 +79,8 @@ class volume {
                static_cast<std::size_t>(size_z_);
     }
 
-    /// `DensityVolume.indexOfBlock`: the buffer index of a block coordinate, or
-    /// `npos` when the block is outside the grid or not on a sample.
+    /// The buffer index of a block coordinate, or `npos` when the block is
+    /// outside the grid or not on a sample.
     [[nodiscard]] auto index_of_block(jint block_x, jint block_y,
                                       jint block_z) const noexcept
         -> std::size_t;
@@ -99,8 +99,8 @@ class volume {
     jint step_block_z_{1};
 };
 
-/// Java `DensityBuffer`: a flat float array with the sampling helpers the
-/// samplers use (`fill`, `addTo`, `setRange`, `copyFrom`).
+/// A flat float array with the sampling helpers the samplers use: fill, add,
+/// set a range and copy from another buffer.
 class buffer {
   public:
     explicit buffer(std::size_t size) : values_(size, 0.0F) {}

@@ -22,8 +22,8 @@ struct gradient {
     int z;
 };
 
-// Java `GradientNoise.GRADIENT`: 16 entries, including the four duplicates at
-// positions 12..15.
+// The 16-entry gradient table, including the four duplicates at positions
+// 12..15.
 constexpr std::array<gradient, 16> gradients{{
     {1, 1, 0},
     {-1, 1, 0},
@@ -46,8 +46,8 @@ constexpr std::array<gradient, 16> gradients{{
 constexpr double wrap_period = 33554432.0; // Java 3.3554432E7
 constexpr double half_wrap = 16777216.0;   // Java 1.6777216E7
 
-/// Java `GradientNoise.wrap`: keeps coordinates inside the stable range so the
-/// integer floor does not overflow far from spawn. Farländs are never enabled.
+/// Keeps coordinates inside the stable range so the integer floor does not
+/// overflow far from spawn. Far lands are never enabled.
 auto wrap(double value) -> double {
     static const double half_round_off = std::nextafter(half_wrap, 0.0);
     if (value >= -half_round_off && value < half_round_off) {

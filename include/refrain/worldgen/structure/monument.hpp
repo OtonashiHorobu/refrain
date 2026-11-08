@@ -17,7 +17,7 @@
 
 namespace refrain::worldgen::structure {
 
-/// `Direction.values()` order: down, up, north, south, west, east.
+/// Face order: down, up, north, south, west, east.
 enum class monument_direction : std::uint8_t {
     down = 0,
     up = 1,
@@ -42,9 +42,9 @@ enum class monument_piece_kind : std::uint8_t {
     penthouse,
 };
 
-/// The subset of `RoomDefinition` a placed piece reads: the room index (its
-/// floor and grid position), whether each face has an opening, and whether the
-/// room above exists.
+/// The room subset a placed piece reads: the room index (its floor and grid
+/// position), whether each face has an opening, and whether the room above
+/// exists.
 struct monument_room_state {
     jint index{-1};
     std::array<bool, 6> openings{};

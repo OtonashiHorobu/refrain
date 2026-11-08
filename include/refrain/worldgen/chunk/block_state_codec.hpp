@@ -20,7 +20,7 @@ class value;
 
 namespace refrain::worldgen {
 
-/// Decodes a `BlockState` JSON value: a state key string or an object with
+/// Decodes a block-state JSON value: a state key string or an object with
 /// `id`/`Name` and optional `properties`.
 [[nodiscard]] auto decode_state_key(const data::json::value &value)
     -> result<std::string>;

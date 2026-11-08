@@ -57,7 +57,7 @@ struct structure_beard {
     std::optional<bounding_box> affected_box{};
 };
 
-/// `Beardifier.forStructuresInChunk`: pieces within twelve blocks of `chunk`,
+/// Collects the beardifier inputs: pieces within twelve blocks of `chunk`,
 /// rigid jigsaw pieces only, plus every junction source in the chunk window.
 /// The affected box is the union of the included boxes inflated by 24.
 [[nodiscard]] auto collect_beard(const std::vector<structure_start> &starts,

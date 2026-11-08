@@ -2,8 +2,8 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// `ChunkGenerator.applyBiomeDecoration`'s feature half: the per-step candidate
-// set, the decoration seed, and the FeaturePlacer work stack.
+// The decoration half of generation: the per-step candidate set, the
+// decoration seed, and the placement work stack.
 
 #pragma once
 

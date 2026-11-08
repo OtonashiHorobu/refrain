@@ -2,8 +2,8 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// Java `Climate`: quantized parameter intervals, parameter points and the
-// R-tree that selects the nearest point for a sampled target. Biome selection
+// Quantized climate parameters: intervals, parameter points and the R-tree
+// that selects the nearest point for a sampled target. Biome selection
 // is the first consumer; the search order is observable because equal-distance
 // points are resolved by first encounter.
 
@@ -19,14 +19,13 @@
 
 namespace refrain::worldgen::climate {
 
-/// Quantized coordinate: `Climate.quantizeCoord` multiplies by 10000 and
-/// truncates toward zero.
+/// Quantized coordinate: multiplies by 10000 and truncates toward zero.
 using coord = jlong;
 
 [[nodiscard]] auto quantize(float value) noexcept -> coord;
 [[nodiscard]] auto unquantize(coord value) noexcept -> float;
 
-/// Java `Climate.Parameter`: an inclusive interval in quantized space.
+/// An inclusive interval in quantized space.
 struct parameter {
     coord min{0};
     coord max{0};
@@ -37,11 +36,11 @@ struct parameter {
         -> bool = default;
 };
 
-/// `Climate.Parameter.point` / `Climate.Parameter.span` (quantized).
+/// Builds a point interval or the span of two intervals (quantized).
 [[nodiscard]] auto point(coord value) noexcept -> parameter;
 [[nodiscard]] auto span(coord min, coord max) noexcept -> parameter;
 
-/// `Climate.TargetPoint`: the six quantized climate samples of one position.
+/// The six quantized climate samples of one position.
 struct target_point {
     coord temperature{0};
     coord humidity{0};
@@ -54,7 +53,7 @@ struct target_point {
     [[nodiscard]] auto to_array() const noexcept -> std::array<coord, 7>;
 };
 
-/// `Climate.ParameterPoint`.
+/// One point in the seven-dimensional climate parameter space.
 struct parameter_point {
     parameter temperature{};
     parameter humidity{};
@@ -71,9 +70,9 @@ struct parameter_point {
     [[nodiscard]] auto space() const noexcept -> std::array<parameter, 7>;
 };
 
-/// `Climate.ParameterList<T>` restricted to an integer payload (a biome id or
-/// index). Builds the reference R-tree (19 children per node) and reproduces
-/// its nearest-point search, including the last-result warm start.
+/// Nearest-point selection over an integer payload (a biome id or index).
+/// Builds the reference R-tree (19 children per node) and reproduces its
+/// nearest-point search, including the last-result warm start.
 class parameter_list {
   public:
     struct entry {
@@ -83,11 +82,11 @@ class parameter_list {
 
     explicit parameter_list(std::vector<entry> values);
 
-    /// `Climate.ParameterList.findValue`; mutable because the R-tree keeps the
-    /// previous result as the next search's starting candidate.
+    /// Nearest-point search; mutable because the R-tree keeps the previous
+    /// result as the next search's starting candidate.
     [[nodiscard]] auto find(const target_point &target) -> std::uint16_t;
 
-    /// `Climate.ParameterList.findValueBruteForce`, in insertion order.
+    /// Brute-force nearest-point search, in insertion order.
     [[nodiscard]] auto find_brute_force(const target_point &target) const
         -> std::uint16_t;
 

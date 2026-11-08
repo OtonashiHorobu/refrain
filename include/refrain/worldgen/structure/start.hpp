@@ -3,7 +3,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
 // Structure starts and their pieces: geometry and reference accounting that
-// the starts/references stages share with the placement and Beardifier code.
+// the starts/references stages share with the placement and terrain-adjustment
+// code.
 
 #pragma once
 
@@ -38,7 +39,7 @@ struct ruined_portal_properties {
 struct structure_piece {
     std::string type{};
     structure_bbox bounds{};
-    jint orientation{-1}; ///< `Direction.get2DDataValue`, -1 when unset
+    jint orientation{-1}; ///< 2D direction index, -1 when unset
 
     /// Template pieces (`minecraft:igl`) carry the template id and the
     /// placement transform; procedural pieces leave these empty.

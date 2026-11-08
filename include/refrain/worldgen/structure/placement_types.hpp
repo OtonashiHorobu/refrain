@@ -3,8 +3,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
 // Template placement vocabulary shared by the template manager and the pool
-// description. The values match `Mirror`, `Rotation` and `LiquidSettings`
-// ordinal order, which the piece payloads store as integers.
+// description. The values match the reference mirror, rotation and
+// liquid-settings ordinal order, which the piece payloads store as integers.
 
 #pragma once
 

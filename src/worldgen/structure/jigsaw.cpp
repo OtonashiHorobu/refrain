@@ -97,7 +97,7 @@ auto decode_height_bound(const data::json::value &document)
 auto decode_alias_binding(const data::json::value &document)
     -> result<pool_alias_binding>;
 
-/// Decodes a `WeightedList` entry: `{ "data": ..., "weight": n }`.
+/// Decodes a weighted entry: `{ "data": ..., "weight": n }`.
 auto decode_weighted(const data::json::value &entry, std::string &data,
                      jint &weight, bool &data_is_array) -> status {
     data_is_array = false;

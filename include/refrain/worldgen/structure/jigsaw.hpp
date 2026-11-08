@@ -5,7 +5,7 @@
 // The `minecraft:jigsaw` structure description: template pools, pool aliases,
 // start heights and the element payload a jigsaw piece carries. Pools are
 // expanded into their weighted selection table once at load time; every draw
-// then matches the reference's `StructureTemplatePool.getRandomTemplate`.
+// then matches the reference's pool selection.
 
 #pragma once
 
@@ -32,14 +32,14 @@ namespace refrain::worldgen::structure {
 
 class structure_template_manager;
 
-/// `StructureTemplatePool.Projection`. `terrain_matching` elements carry the
+/// Pool element projection. `terrain_matching` elements carry the
 /// gravity processor that drops every block onto the world surface.
 enum class pool_projection : std::uint8_t {
     rigid = 0,
     terrain_matching = 1,
 };
 
-/// `StructurePoolElementType`. Feature elements place a placed feature at the
+/// Pool element kinds. Feature elements place a placed feature at the
 /// piece position instead of template blocks.
 enum class pool_element_kind : std::uint8_t {
     empty = 0,
@@ -89,10 +89,10 @@ struct jigsaw_template_pool {
     [[nodiscard]] auto at(std::size_t index) const -> const pool_element & {
         return raw_elements[templates[index]].element;
     }
-    /// `getRandomTemplate`: one uniform draw over the expanded table.
+    /// One uniform draw over the expanded table.
     [[nodiscard]] auto get_random_template(worldgen_random &random) const
         -> const pool_element *;
-    /// `getShuffledTemplates`: `Util.shuffledCopy` over the expanded table.
+    /// One shuffled copy of the expanded table.
     [[nodiscard]] auto get_shuffled_templates(worldgen_random &random) const
         -> std::vector<const pool_element *>;
     /// `getMaxSize`: the tallest bounding box of any non-empty element at the
@@ -101,7 +101,7 @@ struct jigsaw_template_pool {
         -> jint;
 };
 
-/// `PoolAliasBinding`. Aliases are resolved once per structure start from the
+/// A pool alias binding. Aliases are resolved once per structure start from
 /// start position and the level seed.
 struct pool_alias_binding {
     enum class kind : std::uint8_t { direct = 0, random = 1, random_group = 2 };
@@ -122,8 +122,8 @@ struct pool_alias_binding {
     std::vector<group> groups{};
 };
 
-/// `PoolAliasLookup.create`: alias -> target over the bindings, resolved with a
-/// positional random at the start position.
+/// Resolves alias -> target over the bindings with a positional random at the
+/// start position.
 class pool_alias_lookup {
   public:
     pool_alias_lookup() = default;
@@ -138,8 +138,8 @@ class pool_alias_lookup {
     std::vector<std::pair<std::string, std::string>> aliases_{};
 };
 
-/// `VerticalAnchor`: an absolute height or an offset from the dimension
-/// bottom, top or sea level.
+/// A height anchor: an absolute height or an offset from the dimension bottom,
+/// top or sea level.
 enum class height_anchor : std::uint8_t {
     absolute = 0,
     above_bottom = 1,
@@ -152,7 +152,7 @@ struct height_bound {
     height_anchor anchor{height_anchor::absolute};
 };
 
-/// `HeightProvider` subset: a constant or uniform inclusive height.
+/// Height provider subset: a constant or uniform inclusive height.
 struct height_provider {
     enum class kind : std::uint8_t { constant = 0, uniform = 1 };
 
@@ -182,7 +182,7 @@ struct jigsaw_structure_config {
     liquid_settings liquid{liquid_settings::apply_waterlogging};
 };
 
-/// `Direction` for a jigsaw connector, in `Direction.values()` order.
+/// A jigsaw connector direction, in face order.
 enum class jigsaw_front : std::uint8_t {
     down = 0,
     up = 1,
@@ -203,7 +203,7 @@ struct jigsaw_connector {
     std::string target{};
 };
 
-/// `JigsawBlock.canAttach`: opposite fronts, a matching top for aligned
+/// Whether two connectors attach: opposite fronts, a matching top for aligned
 /// joints, and the source target naming the destination when it is named.
 [[nodiscard]] auto connectors_attach(const jigsaw_connector &source,
                                      const jigsaw_connector &target) -> bool;
@@ -221,8 +221,7 @@ struct jigsaw_element_info {
     std::vector<jigsaw_element_info> elements{};
 };
 
-/// `JigsawJunction`: the beardifier contribution a connection records on both
-/// of its pieces.
+/// The beardifier contribution a connection records on both of its pieces.
 struct jigsaw_junction_info {
     jint source_x{0};
     jint source_ground_y{0};
@@ -234,7 +233,7 @@ struct jigsaw_junction_info {
                                       const jigsaw_junction_info &) = default;
 };
 
-/// The payload a `PoolElementStructurePiece` carries into chunk placement.
+/// The payload a jigsaw piece carries into chunk placement.
 struct jigsaw_piece_data {
     jigsaw_element_info element{};
     jint ground_level_delta{1};
@@ -255,8 +254,8 @@ decode_jigsaw_structure_config(const data::json::value &document)
                                         const data::json::value &document)
     -> result<jigsaw_template_pool>;
 
-/// Resolves the alias bindings in `bindings` order, exactly like
-/// `PoolAliasLookup.create`; later bindings win for a repeated alias.
+/// Resolves the alias bindings in order; later bindings win for a repeated
+/// alias.
 [[nodiscard]] auto decode_pool_alias_binding(const data::json::value &document)
     -> result<pool_alias_binding>;
 

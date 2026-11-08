@@ -42,7 +42,7 @@ auto default_properties(std::string_view name) -> state_properties {
     return state_properties{};
 }
 
-/// Java `LazyXZCondition`: recompute only when the column changed.
+/// Recomputes only when the column changed.
 auto lazy_xz(material_context &context, std::function<bool()> compute)
     -> condition_evaluator {
     struct cached {
@@ -65,7 +65,7 @@ auto lazy_xz(material_context &context, std::function<bool()> compute)
     };
 }
 
-/// Java `LazyYCondition`: recompute only when the block position changed.
+/// Recomputes only when the block position changed.
 auto lazy_y(material_context &context, std::function<bool()> compute)
     -> condition_evaluator {
     struct cached {

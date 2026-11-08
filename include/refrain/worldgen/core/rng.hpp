@@ -5,16 +5,16 @@
 // World generation random sources.
 //
 // Three generators matter: the 48-bit legacy LCG, xoroshiro128++ and the
-// `WorldgenRandom` wrapper that re-seeds the same object for every stage. The
-// wrapper is not a thin delegate: it overrides only `next(bits)` and inherits
-// `nextLong`, `nextInt`, `nextFloat` and `nextDouble` from the Java
-// `BitRandomSource` mixin, so those draws are composed from the overridden
-// `next(bits)` even when the wrapped source is xoroshiro. Reproducing the
-// composition order is what makes decoration, feature and structure seeds
-// identical.
+// stage wrapper that re-seeds the same object for every stage. The wrapper is
+// not a thin delegate: it overrides only `next(bits)` and inherits the other
+// draw shapes from the base random stream, so those draws are composed from
+// the overridden `next(bits)` even when the wrapped source is xoroshiro.
+// Reproducing the composition order is what makes decoration, feature and
+// structure seeds identical.
 //
 // Every value here is defined by the reference implementation; the frozen
-// vectors in `test/worldgen/test_rng.cpp` come from the real 26.3 classes.
+// vectors in `test/worldgen/test_rng.cpp` come from the reference
+// implementation.
 
 #pragma once
 
@@ -30,7 +30,7 @@ namespace refrain::worldgen {
 
 class positional_random_factory;
 
-/// Java `RandomSource`: the subset world generation uses.
+/// The random-source surface world generation uses.
 ///
 /// Bit-exactness rules:
 /// * `next(bits)` returns the top `bits` bits of one state transition.
@@ -55,8 +55,8 @@ class random_source {
     [[nodiscard]] virtual auto next_long() -> jlong;
     [[nodiscard]] virtual auto next_float() -> float;
     [[nodiscard]] virtual auto next_double() -> double;
-    /// `MarsagliaPolarGaussian.nextGaussian`; the cached second value is reset
-    /// by `set_seed`.
+    /// Gaussian draw with the cached second value; the cache is reset by
+    /// `set_seed`.
     [[nodiscard]] virtual auto next_gaussian() -> double = 0;
     [[nodiscard]] virtual auto next_boolean() -> bool;
 
@@ -121,7 +121,7 @@ class xoroshiro128pp {
     jlong seed_hi_{0};
 };
 
-/// xoroshiro128++ backed `RandomSource`.
+/// xoroshiro128++ backed random source.
 class xoroshiro_random_source final : public random_source {
   public:
     explicit xoroshiro_random_source(jlong seed) noexcept;
@@ -160,7 +160,7 @@ struct seed128bit {
         -> bool = default;
 };
 
-/// Java `RandomSupport`: seed mixing and hash-derived seeds.
+/// Seed mixing and hash-derived seeds.
 namespace random_support {
 
 inline constexpr jlong golden_ratio_64 = -7046029254386353131LL;
@@ -192,7 +192,7 @@ inline constexpr jlong silver_ratio_64 = 7640891576956012809LL;
 
 } // namespace random_support
 
-/// `Mth.getSeed(x, y, z)`: the positional hash both factories fold in.
+/// Positional seed hash both factories fold in.
 [[nodiscard]] auto mth_get_seed(jint x, jint y, jint z) noexcept -> jlong;
 
 /// Factory for coordinate-derived and name-derived random streams.
@@ -215,10 +215,10 @@ class positional_random_factory {
         -> std::unique_ptr<random_source> = 0;
 };
 
-/// `WorldgenRandom`: the re-seedable wrapper used by every stage.
+/// The re-seedable wrapper used by every stage.
 ///
-/// Only `next(bits)` and `set_seed` delegate to the wrapped source; the rest of
-/// the Java surface is the `BitRandomSource` composition over that method.
+/// Only `next(bits)` and `set_seed` delegate to the wrapped source; the other
+/// draw shapes are composed from that method.
 class worldgen_random {
   public:
     explicit worldgen_random(std::unique_ptr<random_source> source)
@@ -238,17 +238,17 @@ class worldgen_random {
     [[nodiscard]] auto fork_positional()
         -> std::unique_ptr<positional_random_factory>;
 
-    /// `setDecorationSeed`: two odd multipliers derived from `seed`, folded
+    /// Derives the decoration seed: two odd multipliers from `seed`, folded
     /// with the chunk coordinates, and re-seeded. Returns the derived seed.
     auto set_decoration_seed(jlong seed, jint chunk_x, jint chunk_z) -> jlong;
 
-    /// `setFeatureSeed`: `seed + index + 10000 * step`.
+    /// Derives the feature seed: `seed + index + 10000 * step`.
     void set_feature_seed(jlong seed, jint index, jint step);
 
-    /// `setLargeFeatureSeed`: two multipliers, xor-combined with the seed.
+    /// Derives a large-feature seed: two multipliers xor-combined with it.
     void set_large_feature_seed(jlong seed, jint chunk_x, jint chunk_z);
 
-    /// `setLargeFeatureWithSalt`: structure placement's coordinate hash.
+    /// Derives a salted large-feature seed: structure placement's hash.
     void set_large_feature_with_salt(jlong seed, jint x, jint z, jint salt);
 
     [[nodiscard]] auto count() const noexcept -> int { return count_; }

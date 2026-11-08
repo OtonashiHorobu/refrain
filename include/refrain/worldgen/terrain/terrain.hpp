@@ -2,9 +2,9 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// Terrain fill: the `doFill` stage of `NoiseBasedChunkGenerator`. The chunk is
-// filled from the final-density volume, with an aquifer deciding the block
-// between stone and the fluid/air column.
+// Terrain fill: the fill stage of generation. The chunk is filled from the
+// final-density volume, with an aquifer deciding the block between stone and
+// the fluid/air column.
 
 #pragma once
 
@@ -36,9 +36,8 @@ struct block_ids {
     std::uint16_t lava{3};
 };
 
-/// Java `Aquifer.FluidPicker`: the fluid column of a position. The reference's
-/// global picker returns lava below `min(-54, sea level)` and the default
-/// fluid/air column otherwise.
+/// The fluid column of a position. The global picker returns lava below
+/// `min(-54, sea level)` and the default fluid/air column otherwise.
 struct fluid_status {
     jint fluid_level{0};
     std::uint16_t fluid_type{0};
@@ -72,8 +71,8 @@ struct fluid_picker {
     }
 };
 
-/// Java `Aquifer`: `computeSubstance` returning `nullopt` means "use the
-/// default block"; otherwise the returned id is written (air included).
+/// An aquifer: returning `nullopt` means "use the default block"; otherwise
+/// the returned id is written (air included).
 class aquifer {
   public:
     aquifer() = default;
@@ -89,8 +88,8 @@ class aquifer {
     [[nodiscard]] virtual auto should_schedule_fluid_update() const -> bool = 0;
 };
 
-/// `Aquifer.createDisabled`: density above zero is the default block, the rest
-/// is the fluid column.
+/// Disabled aquifer: density above zero is the default block, the rest is the
+/// fluid column.
 class disabled_aquifer final : public aquifer {
   public:
     explicit disabled_aquifer(fluid_picker picker) : picker_{picker} {}
@@ -117,16 +116,16 @@ inline constexpr jint chunk_depth = 16;
 
 /// One chunk's blocks laid out as `(y - min_y) * 256 + z * 16 + x`, plus the
 /// two write-time heightmaps. A heightmap entry holds the highest `y` whose
-/// written state matched the heightmap predicate, mirroring Java
-/// `Heightmap.getHighestTaken`; an empty column reads `min_y - 1`.
+/// written state matched the heightmap predicate, using the reference
+/// highest-taken rule; an empty column reads `min_y - 1`.
 struct chunk_blocks {
     jint min_y{0};
     jint height{0};
     std::vector<std::uint16_t> states{};
     std::array<jint, 256> ocean_floor{};
     std::array<jint, 256> world_surface{};
-    /// `ChunkAccess.postProcessing` per section: packed `x | y<<4 | z<<8`
-    /// coordinates of fluid blocks the aquifer asked to schedule. Section
+    /// Post-processing coordinates per section: packed `x | y<<4 | z<<8`
+    /// positions of fluid blocks the aquifer asked to schedule. Section
     /// indices are relative to `min_y`.
     std::vector<std::vector<std::uint16_t>> post_processing{};
 
@@ -149,8 +148,8 @@ struct fill_options {
     block_ids blocks{};
 };
 
-/// `NoiseBasedChunkGenerator.doFill` for one chunk: sample the final-density
-/// volume, walk y from the top down and write the aquifer/default block result.
+/// Fills one chunk: sample the final-density volume, walk y from the top down
+/// and write the aquifer/default block result.
 /// Air is skipped. `world_surface` records every written state, while
 /// `ocean_floor` only records states in `minecraft:blocks_motion_in_heightmap`;
 /// the fill writes stone and fluids, and no fluid belongs to that tag. Fluid
@@ -161,10 +160,10 @@ struct fill_options {
                               jint chunk_x, jint chunk_z, aquifer &aquifer)
     -> chunk_blocks;
 
-/// One column's first occupied height, as `ChunkGenerator.getBaseHeight` minus
-/// one. The volume is one block wide and tall, matching
-/// `NoiseBasedChunkGenerator.iterateNoiseColumn`; the aquifer therefore sees
-/// the same cell anchors and surface levels as a full-chunk fill.
+/// One column's first occupied height, one below the base height. The volume is
+/// one block wide and tall, matching the reference column sampling; the
+/// aquifer therefore sees the same cell anchors and surface levels as a
+/// full-chunk fill.
 struct column_height_options {
     jint min_y{-64};
     jint height{384};

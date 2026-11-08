@@ -37,7 +37,7 @@ class carver_generator {
                      const carver_biomes &biomes, jlong seed,
                      provider::generation_context context);
 
-    /// `NoiseBasedChunkGenerator.generateCarvers`, mask only.
+    /// Generates the carving mask for one chunk; no blocks are written.
     [[nodiscard]] auto generate(const chunk_pos &target) const -> carving_mask;
 
   private:
@@ -50,16 +50,16 @@ class carver_generator {
 struct carve_apply_context {
     terrain::aquifer *aquifer{nullptr};
     const block_state_table *states{nullptr};
-    /// `MaterialSystem.topMaterial`; receives the helper position and whether
+    /// Resolves the top material; receives the helper position and whether
     /// the carved block carried a fluid.
     std::function<std::optional<block_state_id>(jint x, jint y, jint z,
                                                 bool under_fluid)>
         top_material{};
-    /// `Blender.getCarvingFilter`; empty means no filter.
+    /// Optional carving filter; empty means no filter.
     std::function<bool(jint x, jint y, jint z)> filter{};
 };
 
-/// `NoiseBasedChunkGenerator.applyCarvingMask` against a generation chunk.
+/// Applies the carving mask to a generation chunk.
 void apply_carving_mask(proto_chunk &chunk, const carving_mask &mask,
                         carve_apply_context &context);
 

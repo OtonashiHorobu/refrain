@@ -49,7 +49,7 @@ constexpr jint magic_start_y = 64;
 constexpr jint max_horizontal_distance = 112;
 constexpr jint below_sea_offset = 10;
 
-// Horizontal directions stored as `Direction.get2DDataValue`.
+// Horizontal orientations stored as 2D direction indices.
 constexpr jint orientation_south = 0;
 constexpr jint orientation_west = 1;
 constexpr jint orientation_north = 2;
@@ -76,7 +76,7 @@ auto make_bounding_box(jint west, jint floor, jint north, jint orientation,
     };
 }
 
-/// `BoundingBox.orientBox`.
+/// Orients a box from a foot position, offsets and a size.
 auto oriented_box(jint foot_x, jint foot_y, jint foot_z, jint off_x, jint off_y,
                   jint off_z, jint width, jint height, jint depth,
                   jint orientation) -> structure_bbox {

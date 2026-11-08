@@ -57,8 +57,8 @@ class chunk_region {
     /// when the target is absent or outside the write radius.
     auto set_block_state(jint x, jint y, jint z, block_state_id state) -> bool;
 
-    /// `LevelChunk.markPosForPostProcessing`: marks a loaded chunk, independent
-    /// of the active write radius.
+    /// Marks a loaded chunk for post-processing, independent of the active
+    /// write radius.
     auto mark_post_processing(jint x, jint y, jint z) -> bool;
 
     /// Writes a block entity by world position with the same write-zone rule

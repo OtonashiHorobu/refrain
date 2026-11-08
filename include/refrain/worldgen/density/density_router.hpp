@@ -20,7 +20,7 @@ namespace refrain::worldgen::density {
 
 using aquifer_config = terrain::aquifer_config;
 
-/// The samplers `NoiseRouter` exposes. `final_density` drives terrain fill.
+/// The samplers the noise router exposes. `final_density` drives terrain fill.
 struct noise_router {
     sampler_ptr temperature{};
     sampler_ptr vegetation{};

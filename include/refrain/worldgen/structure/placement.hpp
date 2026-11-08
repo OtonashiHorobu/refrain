@@ -34,16 +34,15 @@ struct random_spread_placement {
         frequency_reduction_method::default_method};
     float frequency{1.0F};
 
-    /// `RandomSpreadStructurePlacement.getPotentialStructureChunk`.
+    /// Returns the potential structure chunk of the grid cell.
     [[nodiscard]] auto potential_chunk(jlong seed, jint chunk_x,
                                        jint chunk_z) const -> chunk_pos;
 
-    /// `StructurePlacement.isStructureChunk` for the random-spread kind, with
-    /// the default frequency reduction.
+    /// Whether the chunk owns a start under the default frequency reduction.
     [[nodiscard]] auto is_structure_chunk(jlong seed, jint chunk_x,
                                           jint chunk_z) const -> bool;
 
-    /// `AbstractSpreadingStructurePlacement.applyAdditionalChunkRestrictions`.
+    /// Applies the additional frequency restriction to the candidate chunk.
     [[nodiscard]] auto passes_frequency(jlong seed, jint chunk_x,
                                         jint chunk_z) const -> bool;
 };

@@ -82,9 +82,8 @@ struct aquifer_config {
     density::sampler_ptr surface_level{};
 };
 
-/// `Aquifer.NoiseBasedAquifer`: the overworld aquifer. Cell cache and surface
-/// level cache follow the reference; sampler caching is omitted because it does
-/// not change values.
+/// The overworld aquifer. Cell and surface-level caches follow the reference;
+/// sampler caching is omitted because it does not change values.
 class noise_aquifer final : public aquifer {
   public:
     /// The configuration is borrowed: the `noise_settings` that owns the
@@ -147,11 +146,11 @@ class noise_aquifer final : public aquifer {
     bool should_schedule_fluid_update_{false};
 };
 
-/// `DimensionType.WAY_BELOW_MIN_Y` (MIN_Y << 4).
+/// Way-below-min-y marker constant (MIN_Y << 4).
 inline constexpr jint way_below_min_y = -1024;
 
-/// `computeRandomizedFluidSurfaceLevel`: `middleY` is `floorDiv(y, 40) * 40 +
-/// 20`; the spread noise is sampled at `(floorDiv(x,16), floorDiv(y,40),
+/// Randomized fluid surface level: `middleY` is `floorDiv(y, 40) * 40 + 20`;
+/// the spread noise is sampled at `(floorDiv(x,16), floorDiv(y,40),
 /// floorDiv(z,16))` and multiplied by the float constant 10.0F.
 [[nodiscard]] inline auto randomized_fluid_surface_level(jint middle_y,
                                                          float spread_noise,
@@ -161,9 +160,9 @@ inline constexpr jint way_below_min_y = -1024;
     return std::min(lowest_surface, middle_y + mth::quantize(spread, 3));
 }
 
-/// `computeFluidType`: lava when the surface is at most -10, is not
-/// `WAY_BELOW_MIN_Y`, the global fluid is not already lava, and the lava noise
-/// magnitude exceeds 0.3.
+/// Whether the fluid is lava: the surface is at most -10, is not the
+/// way-below-min-y marker, the global fluid is not already lava, and the lava
+/// noise magnitude exceeds 0.3.
 [[nodiscard]] inline auto fluid_type_is_lava(jint fluid_surface_level,
                                              bool global_is_lava,
                                              double lava_noise) -> bool {

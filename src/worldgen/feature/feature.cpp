@@ -44,8 +44,8 @@ constexpr std::array<direction_offset, 6> all_directions{{
     {.dx = 1, .dy = 0, .dz = 0},
 }};
 
-/// `Feature.markAboveForPostProcessing`: mark up to two non-air blocks above a
-/// placement, stopping at the first air block.
+/// Marks up to two non-air blocks above a placement, stopping at the first
+/// air block.
 void mark_above_for_post_processing(const feature_context &context,
                                     const block_pos &pos) {
     for (jint offset = 1; offset <= 2; ++offset) {
@@ -554,7 +554,7 @@ auto vines_feature::place(feature_context &context, worldgen_random &random,
             continue;
         }
         // all_directions order is down, up, north, south, west, east; the
-        // state array uses Direction.get3DDataValue order.
+        // state array follows the same face order.
         static constexpr std::array<std::size_t, 6> state_index{0, 1, 2,
                                                                 3, 4, 5};
         return context.placement.region->set_block_state(
@@ -2794,8 +2794,7 @@ auto monster_room_feature::place(feature_context &context,
             if (walls != 1) {
                 continue;
             }
-            // `StructurePiece.reorient`: face away from the single solid
-            // horizontal neighbour.
+            // Face away from the single solid horizontal neighbour.
             for (const auto &[name, dx, dz] :
                  std::array<std::tuple<std::string_view, jint, jint>, 4>{
                      {{"north", 0, -1},

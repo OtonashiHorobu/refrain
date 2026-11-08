@@ -455,8 +455,8 @@ constexpr std::array<front_top_pair, 12> front_top_pairs{{
     {"south_up", "south", "up"},
 }};
 
-/// `FrontAndTop` after a mirror followed by a rotation; the pair stays
-/// orthogonal, so it always names one of the twelve values.
+/// The direction/top pair after a mirror followed by a rotation; the pair
+/// stays orthogonal, so it always names one of the twelve values.
 auto transform_orientation(std::string_view value, template_mirror mirror,
                            template_rotation rotation) -> std::string {
     for (const auto &entry : front_top_pairs) {
@@ -1340,7 +1340,7 @@ auto rule_processor::process(block_state_registry &states,
                              worldgen_random *random) const
     -> std::optional<template_block_info> {
     (void)random;
-    // `RuleProcessor` always seeds a positional source at the world position;
+    // A rule processor always seeds a positional source at the world position;
     // the input and location tests share it.
     worldgen_random rng{std::make_unique<legacy_random_source>(
         mth_get_seed(world.x, world.y, world.z))};

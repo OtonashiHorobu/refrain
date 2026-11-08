@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// Surface material evaluation: the `MaterialRuleContext` state machine and the
+// Surface material evaluation: the material-rule state machine and the
 // compiler that turns a decoded rule tree into evaluators. The block-state
 // table interns the names the rules and the chunk exchange.
 
@@ -77,8 +77,8 @@ class block_states {
 using condition_evaluator = std::function<bool()>;
 using rule_evaluator = std::function<std::optional<state_id>(jint, jint, jint)>;
 
-/// The generation bounds `VerticalAnchor` and the surface loop resolve
-/// against, plus the chunk origin for the ore-vein prefilled volume.
+/// The generation bounds the height anchors and surface loop resolve against,
+/// plus the chunk origin for the ore-vein prefilled volume.
 struct generation_bounds {
     jint min_gen_y{-64};
     jint gen_depth{384};
@@ -102,13 +102,13 @@ struct material_providers {
     std::function<result<density::sampler_ptr>(std::string_view)> density{};
     std::function<positional_random_factory &(std::string_view)>
         random_factory{};
-    /// `Biome.coldEnoughToSnow(pos, seaLevel)` for the current biome.
+    /// Whether the current biome is cold enough to snow at a position.
     std::function<bool(std::string_view, jint, jint, jint)>
         cold_enough_to_snow{};
     const std::set<std::string> *possible_biomes{nullptr};
 };
 
-/// Java `MaterialRuleContext`.
+/// The per-position state material rules read and update.
 class material_context {
   public:
     material_context(block_states &states, generation_bounds bounds,
@@ -164,7 +164,7 @@ class material_context {
     [[nodiscard]] auto min_surface_level() -> jint;
     [[nodiscard]] auto band(jint x, jint y, jint z) -> state_id;
 
-    /// `MaterialSystem.erodedBadlandsExtension`.
+    /// Applies the eroded-badlands extension to a column.
     void eroded_badlands_extension(
         jint block_x, jint block_z, jint height, jint min_y,
         const std::function<state_id(jint, jint, jint)> &get,
@@ -175,12 +175,11 @@ class material_context {
         -> positional_random_factory &;
     [[nodiscard]] auto cold_enough_to_snow(std::string_view biome) -> bool;
 
-    /// Java `getNoiseSampler`: the returned callable reads the current position
-    /// once per update.
+    /// Returns a callable that reads the current position once per update.
     [[nodiscard]] auto noise_sampler(std::string_view id, bool is_3d)
         -> result<std::function<double()>>;
 
-    /// Java `getDensitiesInChunk`.
+    /// Returns a callable that samples one density over the chunk.
     [[nodiscard]] auto densities_in_chunk(std::string_view id, bool prefill)
         -> result<std::function<float(jint, jint, jint)>>;
 
@@ -236,7 +235,7 @@ class material_context {
         density_samplers_{};
 };
 
-/// Shared `NormalNoise` instances for the names the surface stage uses.
+/// Shared normal-noise instances for the names the surface stage uses.
 class noise_registry {
   public:
     noise_registry(algorithm kind, jlong seed);
@@ -259,8 +258,7 @@ class noise_registry {
     std::unordered_map<std::string, noise_stack> noises_{};
 };
 
-/// Java `MaterialSystem`: surface depth/secondary, clay bands and the
-/// `buildSurface` loop.
+/// Surface material system: depth/secondary, clay bands and the surface loop.
 class surface_system {
   public:
     surface_system(block_states &states, generation_bounds bounds,
@@ -272,7 +270,7 @@ class surface_system {
     [[nodiscard]] auto surface_secondary(jint x, jint z) -> double;
     [[nodiscard]] auto band(jint x, jint y, jint z) -> state_id;
 
-    /// `MaterialSystem.erodedBadlandsExtension`.
+    /// Applies the eroded-badlands extension to a column.
     void eroded_badlands_extension(
         jint block_x, jint block_z, jint height, jint min_y,
         const std::function<state_id(jint, jint, jint)> &get,
@@ -297,8 +295,8 @@ class surface_system {
         const std::function<std::string_view(jint, jint, jint)> &biome)
         -> status;
 
-    /// `MaterialSystem.topMaterial`: the single-position repair the carver
-    /// applies under a carved grass or mycelium column. `world_surface` is the
+    /// The single-position repair the carver applies under a carved grass or
+    /// mycelium column. `world_surface` is the
     /// chunk's worldgen heightmap at local `(x, z)`.
     [[nodiscard]] auto
     top_material(material_context &context, const rule_evaluator &rule,

@@ -2,9 +2,8 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// Java `net.minecraft.util.Interval` in 26.3: a closed float interval with the
-// arithmetic the density-function compiler uses for its range shortcuts and
-// the spline/range nodes use for validation.
+// A closed float interval with the arithmetic the density-function compiler
+// uses for its range shortcuts and the spline/range nodes use for validation.
 
 #pragma once
 
@@ -17,7 +16,7 @@ namespace refrain::worldgen {
 
 class interval {
   public:
-    /// `Interval.of`: validates ordering and rejects NaN bounds.
+    /// Validates ordering and rejects NaN bounds.
     [[nodiscard]] static auto of(float min, float max) -> interval;
     [[nodiscard]] static auto of_symmetric(float range) -> interval;
     [[nodiscard]] static auto of_exact(float value) -> interval;

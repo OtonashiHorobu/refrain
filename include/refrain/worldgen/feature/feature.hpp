@@ -49,7 +49,7 @@ class feature {
                                      const block_pos &origin) const -> bool = 0;
 };
 
-/// `SimpleBlockFeature` restricted to the plain block-state form.
+/// Places one block state, optionally scheduling its tick.
 class simple_block_feature final : public feature {
   public:
     simple_block_feature(block_state_id state, bool schedule_tick)
@@ -66,7 +66,7 @@ class simple_block_feature final : public feature {
     bool schedule_tick_{false};
 };
 
-/// `DiskFeature`: a flat disk of one state over a target predicate.
+/// A flat disk of one state over a target predicate.
 class disk_feature final : public feature {
   public:
     disk_feature(block_state_id state, std::unique_ptr<block_predicate> target,
@@ -96,7 +96,7 @@ struct block_replacement {
     block_state_id state{no_block_state};
 };
 
-/// `OreFeature`: a randomly oriented ellipsoid family replacing a target rule
+/// A randomly oriented ellipsoid family replacing a target rule
 /// test. Air-exposure discard is implemented; the bulk section write path only
 /// differs in heightmap bookkeeping.
 class ore_feature final : public feature {
@@ -129,7 +129,7 @@ class ore_feature final : public feature {
     float discard_chance_on_air_exposure_{0.0F};
 };
 
-/// `SequenceFeature`: runs nested placed features in order and stops at the
+/// Runs nested placed features in order and stops at the
 /// first failure.
 class sequence_feature final : public feature {
   public:
@@ -143,7 +143,7 @@ class sequence_feature final : public feature {
     std::vector<std::string> features_{};
 };
 
-/// `ReplaceBlobsFeature`: finds the target block below the origin and replaces
+/// Finds the target block below the origin and replaces
 /// a Manhattan-radius ellipsoid of it.
 class replace_blobs_feature final : public feature {
   public:
@@ -161,7 +161,7 @@ class replace_blobs_feature final : public feature {
     std::unique_ptr<provider::int_provider> radius_{};
 };
 
-/// `BlueIceFeature`: grows a blue-ice blob from water next to packed ice.
+/// Grows a blue-ice blob from water next to packed ice.
 class blue_ice_feature final : public feature {
   public:
     blue_ice_feature(block_state_id blue_ice, block_state_id water,
@@ -181,7 +181,7 @@ class blue_ice_feature final : public feature {
     block_state_id air_{no_block_state};
 };
 
-/// `ScatteredOreFeature`: a handful of single-block ore replacements close to
+/// A handful of single-block ore replacements close to
 /// the origin.
 class scattered_ore_feature final : public feature {
   public:
@@ -206,7 +206,7 @@ class scattered_ore_feature final : public feature {
     float discard_chance_on_air_exposure_{0.0F};
 };
 
-/// `RandomNeighborSpreadFeature`: writes the origin block, then scatters more
+/// Writes the origin block, then scatters more
 /// of it next to exactly one accepted neighbour.
 class random_neighbor_spread_feature final : public feature {
   public:
@@ -237,7 +237,7 @@ class random_neighbor_spread_feature final : public feature {
     std::unique_ptr<provider::int_provider> y_offset_{};
 };
 
-/// `BambooFeature`: a bamboo stalk with a random height and optional podzol
+/// A bamboo stalk with a random height and optional podzol
 /// patch below it.
 class bamboo_feature final : public feature {
   public:
@@ -259,12 +259,12 @@ class bamboo_feature final : public feature {
     block_state_id podzol_{no_block_state};
 };
 
-/// `VinesFeature`: one vine block attached to the first acceptable horizontal
+/// One vine block attached to the first acceptable horizontal
 /// or upward neighbour.
 class vines_feature final : public feature {
   public:
-    /// Indexed by `Direction.get3DDataValue()`: down, up, north, south, west,
-    /// east. The down entry is unused.
+    /// Face order: down, up, north, south, west, east. The down entry is
+    /// unused.
     explicit vines_feature(std::array<block_state_id, 6> states)
         : states_{states} {}
 
@@ -275,7 +275,7 @@ class vines_feature final : public feature {
     std::array<block_state_id, 6> states_{};
 };
 
-/// `HugeFungusFeature`: crimson/warped stem plus cap, with optional weeping
+/// Crimson/warped stem plus cap, with optional weeping
 /// vines under the cap.
 class huge_fungus_feature final : public feature {
   public:
@@ -321,7 +321,7 @@ class huge_fungus_feature final : public feature {
     bool place_vines_{false};
 };
 
-/// `HugeRedMushroomFeature` / `HugeBrownMushroomFeature`: a stem with a
+/// A stem with a
 /// property-shaped cap.
 class huge_mushroom_feature final : public feature {
   public:
@@ -352,7 +352,7 @@ class huge_mushroom_feature final : public feature {
     std::unique_ptr<block_predicate> can_place_on_{};
 };
 
-/// `IcebergFeature`: an ellipse/circle iceberg centred on sea level.
+/// An ellipse/circle iceberg centred on sea level.
 class iceberg_feature final : public feature {
   public:
     iceberg_feature(block_state_id state, block_state_id snow_block,
@@ -443,7 +443,7 @@ struct geode_parameters {
     jint invalid_blocks_threshold{1};
 };
 
-/// `GeodeFeature`: layered amethyst geode with an optional crack.
+/// Layered amethyst geode with an optional crack.
 class geode_feature final : public feature {
   public:
     explicit geode_feature(geode_parameters parameters)
@@ -461,7 +461,7 @@ class geode_feature final : public feature {
     geode_parameters parameters_{};
 };
 
-/// `SnowAndFreezeFeature`: freezes the block below the motion-blocking top and
+/// Freezes the block below the motion-blocking top and
 /// covers the top with snow where the biome weather probes say so.
 class freeze_top_layer_feature final : public feature {
   public:
@@ -476,7 +476,7 @@ class freeze_top_layer_feature final : public feature {
     block_state_id snow_{no_block_state};
 };
 
-/// `MultifaceGrowthFeature`: glow-lichen style growth on block faces with the
+/// Glow-lichen style growth on block faces with the
 /// reference spreader.
 class multiface_growth_feature final : public feature {
   public:
@@ -500,7 +500,7 @@ class multiface_growth_feature final : public feature {
     std::vector<std::string> can_be_placed_on_{};
 };
 
-/// `VoidStartPlatformFeature`: a stone platform around (8, 3, 8) in the
+/// A stone platform around (8, 3, 8) in the
 /// origin chunk and its neighbours.
 class void_start_platform_feature final : public feature {
   public:
@@ -508,14 +508,14 @@ class void_start_platform_feature final : public feature {
                              const block_pos &origin) const -> bool override;
 };
 
-/// `EndPlatformFeature`: the obsidian platform at the end spawn point.
+/// The obsidian platform at the end spawn point.
 class end_platform_feature final : public feature {
   public:
     [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool override;
 };
 
-/// `VegetationPatchFeature`: a ground patch with optional nested vegetation.
+/// A ground patch with optional nested vegetation.
 class vegetation_patch_feature final : public feature {
   public:
     vegetation_patch_feature(std::string nested_feature,
@@ -561,7 +561,7 @@ class vegetation_patch_feature final : public feature {
     bool waterlogged_{false};
 };
 
-/// `RootSystemFeature`: places rooted dirt and hanging roots around a nested
+/// Places rooted dirt and hanging roots around a nested
 /// placed feature.
 class root_system_feature final : public feature {
   public:
@@ -622,7 +622,7 @@ class root_system_feature final : public feature {
     jint allowed_vertical_water_{2};
 };
 
-/// `EndGatewayFeature`: the bedrock frame around an end gateway block.
+/// The bedrock frame around an end gateway block.
 class end_gateway_feature final : public feature {
   public:
     end_gateway_feature(block_state_id gateway, block_state_id bedrock,
@@ -648,7 +648,7 @@ struct end_spike {
     bool guarded{false};
 };
 
-/// `EndSpikeFeature`: obsidian pillars with an optional iron-bar cage and a
+/// Obsidian pillars with an optional iron-bar cage and a
 /// fire-topped crystal block.
 class end_spike_feature final : public feature {
   public:
@@ -666,7 +666,7 @@ class end_spike_feature final : public feature {
     bool crystal_invulnerable_{false};
 };
 
-/// `BonusChestFeature`: the spawn chest with four torches.
+/// The spawn chest with four torches.
 class bonus_chest_feature final : public feature {
   public:
     bonus_chest_feature(block_state_id chest, block_state_id torch)
@@ -680,7 +680,7 @@ class bonus_chest_feature final : public feature {
     block_state_id torch_{no_block_state};
 };
 
-/// `ChorusPlantFeature`: grows a chorus plant from the origin.
+/// Grows a chorus plant from the origin.
 class chorus_plant_feature final : public feature {
   public:
     chorus_plant_feature(block_state_id plant, block_state_id flower)
@@ -700,7 +700,7 @@ class chorus_plant_feature final : public feature {
     block_state_id flower_{no_block_state};
 };
 
-/// `EndPodiumFeature`: the exit portal platform with its bedrock pillar and
+/// The exit portal platform with its bedrock pillar and
 /// torches.
 class end_podium_feature final : public feature {
   public:
@@ -721,7 +721,7 @@ class end_podium_feature final : public feature {
     std::array<block_state_id, 4> torches_{};
 };
 
-/// `EndIslandFeature`: a shrinking end-stone disc stack.
+/// A shrinking end-stone disc stack.
 class end_island_feature final : public feature {
   public:
     explicit end_island_feature(block_state_id end_stone)
@@ -734,7 +734,7 @@ class end_island_feature final : public feature {
     block_state_id end_stone_{no_block_state};
 };
 
-/// `FossilFeature`: places a fossil template below the surface, then the
+/// Places a fossil template below the surface, then the
 /// matching coal overlay template.
 class fossil_feature final : public feature {
   public:
@@ -759,7 +759,7 @@ class fossil_feature final : public feature {
     jint max_empty_corners_{0};
 };
 
-/// `SpeleothemClusterFeature`: a field of pointed dripstone columns grown
+/// A field of pointed dripstone columns grown
 /// between a cave floor and ceiling, optionally with water pools.
 class speleothem_cluster_feature final : public feature {
   public:
@@ -806,7 +806,7 @@ class speleothem_cluster_feature final : public feature {
     jint max_distance_from_center_{1};
 };
 
-/// `MonsterRoomFeature`: a cobblestone dungeon room with a spawner and up to
+/// A cobblestone dungeon room with a spawner and up to
 /// two loot chests, carved into a solid shell.
 class monster_room_feature final : public feature {
   public:
@@ -814,7 +814,7 @@ class monster_room_feature final : public feature {
                              const block_pos &origin) const -> bool override;
 };
 
-/// `SpikeFeature`: a tapering spike above a base block with an optional
+/// A tapering spike above a base block with an optional
 /// downward pillar (ice spikes).
 class spike_feature final : public feature {
   public:
@@ -833,7 +833,7 @@ class spike_feature final : public feature {
     std::unique_ptr<block_predicate> can_replace_{};
 };
 
-/// `UnderwaterMagmaFeature`: magma blocks buried in the floor under a water
+/// Magma blocks buried in the floor under a water
 /// column, chosen from a cube around the scanned floor.
 class underwater_magma_feature final : public feature {
   public:
@@ -854,7 +854,7 @@ class underwater_magma_feature final : public feature {
     block_state_id magma_{no_block_state};
 };
 
-/// `LakeFeature`: an ellipsoid lake carved into solid ground, lined with a
+/// An ellipsoid lake carved into solid ground, lined with a
 /// barrier block and filled with the fluid (the deprecated lava/water lake).
 class lake_feature final : public feature {
   public:
@@ -884,7 +884,7 @@ class lake_feature final : public feature {
     block_state_id ice_{no_block_state};
 };
 
-/// `DeltaFeature`: a lava pool with a magma rim on a flat cave floor.
+/// A lava pool with a magma rim on a flat cave floor.
 class delta_feature final : public feature {
   public:
     delta_feature(block_state_id contents, block_state_id rim,
@@ -908,7 +908,7 @@ class delta_feature final : public feature {
     std::unique_ptr<provider::int_provider> rim_size_{};
 };
 
-/// `LargeDripstoneFeature`: a stalactite/stalagmite pair in a cave column.
+/// A stalactite/stalagmite pair in a cave column.
 class large_dripstone_feature final : public feature {
   public:
     large_dripstone_feature(
@@ -991,7 +991,7 @@ class large_dripstone_feature final : public feature {
     float min_bluntness_for_wind_{0.6F};
 };
 
-/// `SpringFeature`: a fluid source surrounded by a fixed rock/hole pattern.
+/// A fluid source surrounded by a fixed rock/hole pattern.
 class spring_feature final : public feature {
   public:
     spring_feature(block_state_id state, bool requires_block_below,
@@ -1015,7 +1015,7 @@ class spring_feature final : public feature {
     std::vector<std::string> valid_blocks_{};
 };
 
-/// `BlockBlobFeature`: three random blobs anchored on a placeable block.
+/// Three random blobs anchored on a placeable block.
 class block_blob_feature final : public feature {
   public:
     block_blob_feature(block_state_id state,
@@ -1047,7 +1047,7 @@ enum class block_direction : std::uint8_t {
 [[nodiscard]] auto offset(block_direction direction, const block_pos &pos)
     -> block_pos;
 
-/// `BlockColumnFeature`: layered columns along one axis.
+/// Layered columns along one axis.
 class block_column_feature final : public feature {
   public:
     struct layer {
@@ -1075,7 +1075,7 @@ class block_column_feature final : public feature {
     bool prioritize_tip_{false};
 };
 
-/// `RandomSelectorFeature`: independent chances, then the default.
+/// Independent chances, then the default.
 class random_selector_feature final : public feature {
   public:
     random_selector_feature(std::vector<std::pair<float, std::string>> entries,
@@ -1090,7 +1090,7 @@ class random_selector_feature final : public feature {
     std::string default_id_{};
 };
 
-/// `WeightedRandomSelectorFeature`.
+/// Weighted random selection: entries carry an integer weight and a total.
 class weighted_selector_feature final : public feature {
   public:
     weighted_selector_feature(std::vector<std::pair<jint, std::string>> entries,
@@ -1105,7 +1105,7 @@ class weighted_selector_feature final : public feature {
     jint total_{0};
 };
 
-/// `SimpleRandomSelectorFeature`.
+/// Uniform random selection from a list of feature ids.
 class simple_selector_feature final : public feature {
   public:
     explicit simple_selector_feature(std::vector<std::string> entries)
@@ -1118,7 +1118,7 @@ class simple_selector_feature final : public feature {
     std::vector<std::string> entries_{};
 };
 
-/// `RandomBooleanSelectorFeature`.
+/// Picks one of two features by a random boolean.
 class boolean_selector_feature final : public feature {
   public:
     boolean_selector_feature(std::string feature_true,
@@ -1134,7 +1134,7 @@ class boolean_selector_feature final : public feature {
     std::string feature_false_{};
 };
 
-/// `BlockPileFeature`.
+/// A small pile of one block state on a placeable surface.
 class block_pile_feature final : public feature {
   public:
     explicit block_pile_feature(std::unique_ptr<state_provider> provider)
@@ -1153,7 +1153,7 @@ class block_pile_feature final : public feature {
     std::unique_ptr<state_provider> provider_{};
 };
 
-/// `OverlayFeature`: places every nested placed feature at the same origin.
+/// Places every nested placed feature at the same origin.
 class overlay_feature final : public feature {
   public:
     explicit overlay_feature(std::vector<std::string> features)

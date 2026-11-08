@@ -22,7 +22,7 @@
 
 namespace refrain::worldgen {
 
-/// Java `Climate.Sampler`: the six climate samplers bound to one context.
+/// The six climate samplers bound to one sampling context.
 class climate_sampler {
   public:
     climate_sampler(const density::sampler &temperature,
@@ -51,25 +51,25 @@ class climate_sampler {
     const density::sampler_context *context_{nullptr};
 };
 
-/// One `Climate.ParameterList` entry: the climate box and the biome key.
+/// One parameter-list entry: the climate box and the biome key.
 struct biome_parameter {
     climate::parameter_point parameters{};
     std::string biome{};
 };
 
-/// Java `MultiNoiseBiomeSource` over a list of parameter points. Biome keys are
-/// interned in first-seen order, so the returned ids are stable for the life of
-/// the source and index `biomes()`.
+/// Nearest-point biome selection over a list of parameter points. Biome keys
+/// are interned in first-seen order, so the returned ids are stable for the
+/// life of the source and index `biomes()`.
 class multi_noise_biome_source {
   public:
     explicit multi_noise_biome_source(std::vector<biome_parameter> parameters);
 
-    /// `MultiNoiseBiomeSource.getNoiseBiome`; mutates the underlying search
-    /// because the reference R-tree keeps the previous result as a candidate.
+    /// Selects the nearest biome; mutates the underlying search because the
+    /// R-tree keeps the previous result as a candidate.
     [[nodiscard]] auto noise_biome(const climate_sampler &sampler, jint quart_x,
                                    jint quart_y, jint quart_z) -> std::uint16_t;
 
-    /// `Climate.ParameterList.findValue`; mutates the search cache.
+    /// Selects the nearest biome key; mutates the search cache.
     [[nodiscard]] auto biome_at(const climate::target_point &target)
         -> std::uint16_t {
         return parameters_.find(target);
@@ -90,9 +90,8 @@ class multi_noise_biome_source {
     climate::parameter_list parameters_;
 };
 
-/// Java `MultiNoiseBiomeSource.createResolverForChunk`: the six climate
-/// functions are sampled once over the whole quart grid with step 4, and each
-/// query only picks the precomputed target out of the buffers.
+/// Samples the six climate functions once over the whole quart grid with
+/// step 4, so each query only picks the precomputed target out of the buffers.
 class biome_grid {
   public:
     /// `min_quart_*` are quart coordinates; the underlying volume is in block

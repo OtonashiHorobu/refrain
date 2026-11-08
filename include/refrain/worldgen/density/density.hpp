@@ -4,12 +4,11 @@
 //
 // 26.3 density-function samplers.
 //
-// 26.3 compiles every density-function node into a `DensitySampler` with a
-// scalar (`sampleValue`) and a bulk (`sampleVolume`) path. The two paths do not
-// always agree: for example `mul` short-circuits a zero left operand on the
-// scalar path but not in bulk, and `sub` accumulates the right operand negated
-// in bulk. Both are implemented separately, because terrain generation reads
-// the bulk path.
+// Every density-function node compiles into a sampler with a scalar and a bulk
+// sampling path. The two paths do not always agree: for example `mul`
+// short-circuits a zero left operand on the scalar path but not in bulk, and
+// `sub` accumulates the right operand negated in bulk. Both are implemented
+// separately, because terrain generation reads the bulk path.
 //
 // The compiler also rewrites the graph (constant specialisations, `div` by a
 // constant becoming a multiply by the reciprocal, min/max range shortcuts).
@@ -33,7 +32,7 @@ namespace refrain::worldgen::density {
 
 class sampler;
 
-/// Context fields the reference binds through `SamplerContext` keys. Terrain
+/// Context fields the reference binds through named sampler keys. Terrain
 /// generation without blending/beardifier leaves them unset, which makes the
 /// corresponding samplers use their fallbacks.
 enum class context_key : std::uint8_t {
@@ -118,7 +117,7 @@ using sampler_ptr = std::unique_ptr<sampler>;
 [[nodiscard]] auto gradient_y(jint from_coordinate, jint to_coordinate,
                               float from_value, float to_value) -> sampler_ptr;
 
-/// `minecraft:noise`: `noise.get(x * xz, y * y, z * xz)`.
+/// `minecraft:noise`: samples the noise at `(x * xz, y * y, z * xz)`.
 [[nodiscard]] auto noise(std::shared_ptr<const noise_stack> stack,
                          double xz_scale, double y_scale) -> sampler_ptr;
 
@@ -141,9 +140,8 @@ struct spline_point {
     std::shared_ptr<const spline> value{};
 };
 
-/// `net.minecraft.util.CubicSpline`: a constant or a multipoint Hermite
-/// spline. Coordinates are density samplers; identical samplers are sampled
-/// once per point/volume.
+/// A constant or a multipoint Hermite spline. Coordinates are density samplers;
+/// identical samplers are sampled once per point/volume.
 struct spline {
     [[nodiscard]] static auto constant(float value)
         -> std::shared_ptr<const spline>;
@@ -181,8 +179,8 @@ struct spline {
                                    std::vector<sampler_ptr> functions)
     -> sampler_ptr;
 
-/// `minecraft:lerp`: `Mth.lerp(alpha, first, second)` with the reference's
-/// 0/1 alpha short circuits and constant specialisations.
+/// `minecraft:lerp`: linear interpolation of the two branches with the
+/// reference's 0/1 alpha short circuits and constant specialisations.
 [[nodiscard]] auto lerp(sampler_ptr alpha, sampler_ptr first,
                         sampler_ptr second) -> sampler_ptr;
 
@@ -206,8 +204,8 @@ struct blended_noise_parameters {
 };
 
 /// `minecraft:old_blended_noise`: three smeared-Perlin FBM stacks combined by
-/// a clamped lerp. `random` is the stream derived from
-/// `factory.fromHashOf("minecraft:terrain")`.
+/// a clamped lerp. `random` is the stream derived from the
+/// `"minecraft:terrain"` name hash.
 [[nodiscard]] auto blended_noise(const blended_noise_parameters &parameters,
                                  random_source &random) -> sampler_ptr;
 
@@ -221,7 +219,7 @@ struct blended_noise_parameters {
                                     jint cell_height) -> sampler_ptr;
 
 /// `minecraft:cache`: the 26.3 compiler deduplicates caches by input and
-/// stores results per `SamplerContext`. Values on the bulk path are identical
+/// stores results per sampling context. Values on the bulk path are identical
 /// to the input; this implementation returns the input unchanged. The scalar
 /// cross-path behaviour is documented as a deviation.
 [[nodiscard]] auto cache(sampler_ptr input) -> sampler_ptr;

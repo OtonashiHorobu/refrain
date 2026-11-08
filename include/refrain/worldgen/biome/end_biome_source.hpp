@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// Java `TheEndBiomeSource`: the central island, the outer island bands and the
+// End biome selection: the central island, the outer island bands and the
 // small island ring, selected from the chunk radius and an erosion sample.
 
 #pragma once
@@ -19,7 +19,7 @@ namespace refrain::worldgen {
 
 class the_end_biome_source {
   public:
-    /// Biome ids follow `collectPossibleBiomes` order: the_end, end_highlands,
+    /// Biome ids follow the possible-biome order: the_end, end_highlands,
     /// end_midlands, small_end_islands, end_barrens.
     the_end_biome_source();
 

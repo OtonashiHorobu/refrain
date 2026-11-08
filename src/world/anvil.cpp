@@ -251,14 +251,12 @@ void set_child(value &parent, std::string key, value child) {
 
 /// Palette entry to the canonical block state key.
 ///
-/// 26.3 `BlockState.CODEC` (`Codec.either(Block, FULL_CODEC)`): a default state
-/// is `{"": "minecraft:stone"}` and a state with properties is
-/// `{"id": "minecraft:oak_log", "properties": {"axis": "y"}}`. Property values
-/// are strings (`Property.codec()` is `Codec.STRING`).
+/// 26.3 palette entries: a default state is `{"": "minecraft:stone"}` and a
+/// state with properties is `{"id": "minecraft:oak_log", "properties":
+/// {"axis": "y"}}`. Property values are strings.
 [[nodiscard]] auto palette_key(const value &entry) -> result<std::string> {
-    // `Codec.either(Block, FULL_CODEC)`: a default state is the bare block id
-    // string; a state with properties is `{id, properties}`. Both forms occur
-    // in 26.3 saves.
+    // A default state is the bare block id string; a state with properties is
+    // `{id, properties}`. Both forms occur in 26.3 saves.
     if (const auto text{entry.as_string()}; text) {
         return canonical_block_state_key(*text, {});
     }
@@ -764,12 +762,12 @@ struct staged_section {
                      [](const auto &left, const auto &right) {
                          return left.record.y < right.record.y;
                      });
-    // Vanilla `SectionData` can have a null `chunkSection` with light only:
-    // the light-engine padding section at `minSectionY - 1` /
-    // `maxSectionY + 1` (LevelLightEngine.LIGHT_SECTION_PADDING). Such
-    // sections have neither `block_states` nor `biomes`; every other section
-    // is a normal air/block column section. Light layers are stored separately
-    // from block sections, including for normal sections.
+    // A vanilla section record can have a null block-state container with
+    // light only: the light-engine padding section at `minSectionY - 1` /
+    // `maxSectionY + 1`. Such sections have neither `block_states` nor
+    // `biomes`; every other section is a normal air/block column section. Light
+    // layers are stored separately from block sections, including for normal
+    // sections.
     std::optional<std::int32_t> last_block_y;
     for (const auto &entry : staged) {
         if (entry.has_blocks || entry.has_biomes) {

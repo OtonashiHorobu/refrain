@@ -3,8 +3,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
 // Biome climate settings and the temperature function the surface stage uses
-// for frozen-ocean icebergs. The noises are the reference statics from
-// `Biome` (legacy seeds 1234/3456/2345).
+// for frozen-ocean icebergs. The noises are the per-biome static noises
+// (legacy seeds 1234/3456/2345).
 
 #pragma once
 
@@ -20,10 +20,10 @@
 
 namespace refrain::worldgen {
 
-/// Java `Biome.TemperatureModifier`.
+/// How a biome temperature is modified.
 enum class temperature_modifier : std::uint8_t { none, frozen };
 
-/// The `Biome.ClimateSettings` fields world generation reads.
+/// The climate fields world generation reads from a biome document.
 struct biome_climate {
     bool has_precipitation{true};
     float temperature{0.5F};
@@ -45,7 +45,7 @@ class biome_climates {
     std::unordered_map<std::string, biome_climate> climates_{};
 };
 
-/// Java `Biome.getTemperature` / `shouldMeltFrozenOceanIcebergSlightly`.
+/// Per-position biome temperature and frozen-ocean iceberg melting.
 class biome_temperatures {
   public:
     biome_temperatures();

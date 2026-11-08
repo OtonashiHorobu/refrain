@@ -22,7 +22,7 @@ struct horizontal_direction {
     std::string_view name;
 };
 
-// `Direction.Plane.HORIZONTAL`: north, east, south, west.
+// Horizontal face order: north, east, south, west.
 constexpr std::array<horizontal_direction, 4> horizontal{{
     {.dx = 0, .dz = -1, .name = "north"},
     {.dx = 1, .dz = 0, .name = "east"},
@@ -36,7 +36,7 @@ struct direction_offset {
     jint dz;
 };
 
-// `Direction.values()`: down, up, north, south, west, east.
+// Face order: down, up, north, south, west, east.
 constexpr std::array<direction_offset, 6> all_directions{{
     {.dx = 0, .dy = -1, .dz = 0},
     {.dx = 0, .dy = 1, .dz = 0},

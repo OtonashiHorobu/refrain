@@ -80,8 +80,8 @@ struct template_bounds {
     }
 };
 
-/// `StructureTemplate.getBoundingBox`: the transformed corners of the template
-/// moved to `origin`, normalised into a box.
+/// The transformed corners of the template moved to `origin`, normalised into
+/// a box.
 [[nodiscard]] auto template_bounding_box(const structure_template &templ,
                                          const template_transform &transform,
                                          const block_pos &origin)
@@ -105,8 +105,8 @@ class template_block_processor {
             const template_block_info &info, const block_pos &world,
             worldgen_random *random) const
         -> std::optional<template_block_info> = 0;
-    /// `GravityProcessor` and processors that move a block override this. It
-    /// runs after `process` and later processors see the moved position.
+    /// Processors that move a block override this. It runs after `process` and
+    /// later processors see the moved position.
     [[nodiscard]] virtual auto
     adjust_position(const block_state_registry &states,
                     const chunk_region &region, const template_block_info &info,
@@ -131,9 +131,9 @@ class template_block_processor {
     }
 };
 
-/// `CappedProcessor` over a single `RuleProcessor` rule: up to `limit`
-/// matching blocks are replaced, chosen from the whole piece with the
-/// positional random at the piece origin.
+/// A capped processor over a single rule: up to `limit` matching blocks are
+/// replaced, chosen from the whole piece with the positional random at the
+/// piece origin.
 class capped_rule_processor final : public template_block_processor {
   public:
     capped_rule_processor(std::string input_block, std::string output_state,
@@ -168,7 +168,7 @@ class capped_rule_processor final : public template_block_processor {
     jint limit_{0};
 };
 
-/// `BlockIgnoreProcessor`: drops blocks whose block name is listed.
+/// Drops blocks whose block name is listed.
 class block_ignore_processor final : public template_block_processor {
   public:
     explicit block_ignore_processor(std::vector<std::string> blocks)
@@ -184,7 +184,7 @@ class block_ignore_processor final : public template_block_processor {
     std::vector<std::string> blocks_{};
 };
 
-/// `RuleTest` kinds a processor rule can use. `block_state_match` compares the
+/// Rule-test kinds a processor rule can use. `block_state_match` compares the
 /// full state, `random_*` variants consume one positional draw once the block
 /// test passes.
 enum class rule_test_type : std::uint8_t {
@@ -209,15 +209,15 @@ struct rule_test {
     std::vector<rule_test> children{};
 };
 
-/// One rule of a `RuleProcessor`: an input state test, a location test against
-/// the world and the replacement state.
+/// One processor rule: an input state test, a location test against the world
+/// and the replacement state.
 struct template_rule {
     rule_test input{};
     rule_test location{};
     block_state_id output{no_block_state};
 };
 
-/// `RuleProcessor`: the first matching rule replaces the block.
+/// The first matching rule replaces the block.
 class rule_processor final : public template_block_processor {
   public:
     explicit rule_processor(std::vector<template_rule> rules)
@@ -233,8 +233,7 @@ class rule_processor final : public template_block_processor {
     std::vector<template_rule> rules_{};
 };
 
-/// `ProtectedBlockProcessor`: drops blocks whose current world state is in the
-/// protected tag.
+/// Drops blocks whose current world state is in the protected tag.
 class protected_block_processor final : public template_block_processor {
   public:
     explicit protected_block_processor(std::string tag)
@@ -250,8 +249,8 @@ class protected_block_processor final : public template_block_processor {
     std::string tag_{};
 };
 
-/// `LavaSubmergedBlockProcessor`: restores lava under a non-full template
-/// block when the world position currently holds lava.
+/// Restores lava under a non-full template block when the world position
+/// currently holds lava.
 class lava_submerged_processor final : public template_block_processor {
   public:
     explicit lava_submerged_processor(block_state_id lava) : lava_{lava} {}
@@ -266,8 +265,8 @@ class lava_submerged_processor final : public template_block_processor {
     block_state_id lava_{no_block_state};
 };
 
-/// `BlockAgeProcessor`: cracks, mosses or replaces stone-family template
-/// blocks using the piece mossiness.
+/// Cracks, mosses or replaces stone-family template blocks using the piece
+/// mossiness.
 class block_age_processor final : public template_block_processor {
   public:
     explicit block_age_processor(float mossiness) : mossiness_{mossiness} {}
@@ -282,8 +281,8 @@ class block_age_processor final : public template_block_processor {
     float mossiness_{0.0F};
 };
 
-/// `BlackstoneReplaceProcessor`: maps nether portal materials to blackstone
-/// equivalents while keeping the template's properties.
+/// Maps nether portal materials to blackstone equivalents while keeping the
+/// template's properties.
 class blackstone_replace_processor final : public template_block_processor {
   public:
     [[nodiscard]] auto
@@ -293,8 +292,8 @@ class blackstone_replace_processor final : public template_block_processor {
         -> std::optional<template_block_info> override;
 };
 
-/// `JigsawReplacementProcessor`: replaces a jigsaw block with the `final_state`
-/// recorded in its NBT, or drops it for `minecraft:structure_void`.
+/// Replaces a jigsaw block with the `final_state` recorded in its NBT, or
+/// drops it for `minecraft:structure_void`.
 class jigsaw_replacement_processor final : public template_block_processor {
   public:
     [[nodiscard]] auto
@@ -304,8 +303,8 @@ class jigsaw_replacement_processor final : public template_block_processor {
         -> std::optional<template_block_info> override;
 };
 
-/// `GravityProcessor`: moves every processed block to the column height plus
-/// the template-local y, used by the `terrain_matching` projection.
+/// Moves every processed block to the column height plus the template-local
+/// y, used by the `terrain_matching` projection.
 class gravity_processor final : public template_block_processor {
   public:
     gravity_processor(heightmap_kind kind, jint offset)
@@ -333,8 +332,8 @@ class gravity_processor final : public template_block_processor {
     jint offset_{0};
 };
 
-/// `BlockRotProcessor`: drops a fraction of the blocks using the placement
-/// random stream, or a per-position legacy source when the stream is null.
+/// Drops a fraction of the blocks using the placement random stream, or a
+/// per-position legacy source when the stream is null.
 class block_rot_processor final : public template_block_processor {
   public:
     block_rot_processor(float integrity, std::vector<std::string> rottable,
@@ -354,8 +353,8 @@ class block_rot_processor final : public template_block_processor {
     bool has_rottable_{false};
 };
 
-/// `ProtectedBlockProcessor`: keeps the template block only when the world
-/// block at the position is not protected.
+/// Keeps the template block only when the world block at the position is not
+/// protected.
 class protected_blocks_processor final : public template_block_processor {
   public:
     explicit protected_blocks_processor(std::string tag)
@@ -385,17 +384,15 @@ struct template_place_settings {
     worldgen_random *loot_random{nullptr};
 };
 
-/// `StructureTemplate.transform(BlockPos, Mirror, Rotation, pivot)`. Mirroring
-/// is applied to the local position first, then the rotation; the pivot only
-/// participates in the rotated branches.
+/// Transforms a local position: mirroring is applied first, then the rotation;
+/// the pivot only participates in the rotated branches.
 [[nodiscard]] auto transform_position(const block_pos &pos,
                                       const template_transform &transform)
     -> block_pos;
 
-/// `BlockState.mirror(mirror).rotate(rotation)` for the direction, axis,
-/// 0-15 rotation and face-boolean properties; other properties survive
-/// unchanged. The transformed key is resolved against `states` and interned
-/// with the source state's traits when it is new.
+/// Transforms the direction, axis, 0-15 rotation and face-boolean properties;
+/// other properties survive unchanged. The transformed key is resolved against
+/// `states` and interned with the source state's traits when it is new.
 [[nodiscard]] auto transform_state(block_state_registry &states,
                                    block_state_id state,
                                    const template_transform &transform)
@@ -422,7 +419,7 @@ place_template(chunk_region &region, block_state_registry &states,
 
 /// Loads and caches templates from `<root>/<namespace>/structure/<path>.nbt`.
 /// A missing or malformed file yields the empty template, exactly like the
-/// reference manager's `getOrCreate`.
+/// reference manager's cache-on-miss behaviour.
 struct structure_processor_list {
     std::vector<std::unique_ptr<template_block_processor>> owned{};
     std::vector<const template_block_processor *> processors{};
@@ -445,12 +442,12 @@ struct structure_processor_list {
 [[nodiscard]] auto resolve_block_state(block_state_registry &states,
                                        std::string_view key) -> block_state_id;
 
-/// `StructureTemplate.getSize(rotation)`.
+/// Template size after rotating the footprint.
 [[nodiscard]] auto rotated_template_size(const structure_template &templ,
                                          template_rotation rotation)
     -> block_pos;
 
-/// `StructureTemplate.getZeroPositionWithTransform`.
+/// Maps the template zero position through a transform.
 [[nodiscard]] auto zero_position_with_transform(const structure_template &templ,
                                                 const block_pos &zero,
                                                 template_mirror mirror,
@@ -485,7 +482,7 @@ class structure_template_manager {
         processor_cache_{};
 };
 
-/// `StructureTemplate.load`: resolves the palette against `states` (unknown or
+/// Loads a template: resolves the palette against `states` (unknown or
 /// malformed states become air) and keeps only entities that carry an NBT
 /// payload. The root is expected to be a loaded template compound.
 [[nodiscard]] auto load_structure_template(block_state_registry &states,

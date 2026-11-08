@@ -21,7 +21,7 @@
 
 namespace refrain::worldgen::surface {
 
-/// `VerticalAnchor`: a Y coordinate resolved against the generation bounds.
+/// A Y coordinate resolved against the generation bounds.
 struct vertical_anchor {
     enum class kind : std::uint8_t {
         absolute,
@@ -37,7 +37,7 @@ struct vertical_anchor {
                                jint sea_level) const noexcept -> jint;
 };
 
-/// `CaveSurface`.
+/// The cave surface a material condition inspects.
 enum class cave_surface : std::uint8_t { floor, ceiling };
 
 /// One material condition. `kind::reference` defers to a document id; every

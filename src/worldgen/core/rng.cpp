@@ -31,7 +31,7 @@ constexpr jlong mask_32 = 0xFFFFFFFFLL;
 
 } // namespace
 
-// --- random_source defaults (BitRandomSource) ------------------------------
+// --- random_source defaults (the composed base draws) ---------------------
 
 auto random_source::next_int() -> jint { return next(32); }
 
