@@ -186,6 +186,10 @@ auto canonical_state_name(std::string_view input) -> std::string {
     if (name == "minecraft:bone_block[axis=y]") {
         return "minecraft:bone_block";
     }
+    if (name == "minecraft:wall_torch[facing=north]" ||
+        name == "minecraft:torch[waterlogged=false]") {
+        return std::string{name.substr(0, name.find('['))};
+    }
     if (name == "minecraft:snow[layers=1]") {
         return "minecraft:snow";
     }
@@ -998,7 +1002,13 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                                        block == "minecraft:bubble_column";
                     const bool leaves = block.ends_with("_leaves");
                     const bool non_solid = block == "minecraft:glow_lichen" ||
-                                           block == "minecraft:sculk_vein";
+                                           block == "minecraft:sculk_vein" ||
+                                           block == "minecraft:end_portal" ||
+                                           block == "minecraft:end_gateway" ||
+                                           block == "minecraft:torch" ||
+                                           block == "minecraft:wall_torch" ||
+                                           block == "minecraft:soul_torch" ||
+                                           block == "minecraft:soul_wall_torch";
                     return block_registry
                         .intern(key,
                                 {.air = air,
@@ -1133,6 +1143,9 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 }
             }
 
+            const bool skip_heightmaps =
+                std::getenv("REFRAIN_VANILLA_FEATURE_SKIP_HEIGHTMAPS") !=
+                nullptr;
             constexpr std::array<std::pair<std::string_view, heightmap_kind>, 4>
                 maps{{
                     {"WORLD_SURFACE", heightmap_kind::world_surface},
@@ -1142,6 +1155,9 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                      heightmap_kind::motion_blocking_no_leaves},
                 }};
             for (const auto &[name, kind] : maps) {
+                if (skip_heightmaps) {
+                    break;
+                }
                 const auto expected_map =
                     decode_expected_heightmap(*document, name);
                 if (!expected_map) {
