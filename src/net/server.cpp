@@ -13,14 +13,7 @@
 #include <refrain/net/frame.hpp>
 #include <refrain/net/rate_limit.hpp>
 #include <refrain/net/registry.hpp>
-#include <refrain/schema/protocol/777/configuration_clientbound.hpp>
-#include <refrain/schema/protocol/777/configuration_serverbound.hpp>
-#include <refrain/schema/protocol/777/handshake_serverbound.hpp>
-#include <refrain/schema/protocol/777/login_clientbound.hpp>
-#include <refrain/schema/protocol/777/login_serverbound.hpp>
-#include <refrain/schema/protocol/777/play_clientbound.hpp>
-#include <refrain/schema/protocol/777/play_serverbound.hpp>
-#include <refrain/schema/protocol/777/status_serverbound.hpp>
+#include <refrain/protocol/current.hpp>
 
 #include <algorithm>
 #include <array>
@@ -46,14 +39,14 @@
 namespace refrain::net {
 namespace {
 
-namespace handshake_sb = ::refrain::protocol::v777::handshake::serverbound;
-namespace status_sb = ::refrain::protocol::v777::status::serverbound;
-namespace login_cb = ::refrain::protocol::v777::login::clientbound;
-namespace login_sb = ::refrain::protocol::v777::login::serverbound;
-namespace config_cb = ::refrain::protocol::v777::configuration::clientbound;
-namespace config_sb = ::refrain::protocol::v777::configuration::serverbound;
-namespace play_cb = ::refrain::protocol::v777::play::clientbound;
-namespace play_sb = ::refrain::protocol::v777::play::serverbound;
+namespace handshake_sb = ::refrain::protocol::current::handshake::serverbound;
+namespace status_sb = ::refrain::protocol::current::status::serverbound;
+namespace login_cb = ::refrain::protocol::current::login::clientbound;
+namespace login_sb = ::refrain::protocol::current::login::serverbound;
+namespace config_cb = ::refrain::protocol::current::configuration::clientbound;
+namespace config_sb = ::refrain::protocol::current::configuration::serverbound;
+namespace play_cb = ::refrain::protocol::current::play::clientbound;
+namespace play_sb = ::refrain::protocol::current::play::serverbound;
 
 /// Packets whose payload contains NBT keep hand-written codecs; only their
 /// protocol ids are shared with the schema-generated packet table.
@@ -505,14 +498,14 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
     }
 
     if (state == connection_state::handshake) {
-        if (*packet_id != ::refrain::protocol::v777::handshake::serverbound::
+        if (*packet_id != ::refrain::protocol::current::handshake::serverbound::
                               intention::packet_id) {
             reject(id, "malformed or unexpected packet");
             return;
         }
-        ::refrain::protocol::v777::handshake::serverbound::intention
+        ::refrain::protocol::current::handshake::serverbound::intention
             intention{};
-        if (auto decoded{::refrain::protocol::v777::handshake::serverbound::
+        if (auto decoded{::refrain::protocol::current::handshake::serverbound::
                              decode_intention(in, intention)};
             !decoded) {
             reject(id, "malformed or unexpected packet");
@@ -552,7 +545,7 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
     }
 
     if (state == connection_state::status) {
-        if (*packet_id == ::refrain::protocol::v777::status::serverbound::
+        if (*packet_id == ::refrain::protocol::current::status::serverbound::
                               status_request::packet_id) {
             bool duplicate{false};
             {
@@ -598,10 +591,10 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             send(id, *response);
             return;
         }
-        if (*packet_id == ::refrain::protocol::v777::status::serverbound::
+        if (*packet_id == ::refrain::protocol::current::status::serverbound::
                               ping_request::packet_id) {
             status_sb::ping_request packet{};
-            if (auto decoded{::refrain::protocol::v777::status::serverbound::
+            if (auto decoded{::refrain::protocol::current::status::serverbound::
                                  decode_ping_request(in, packet)};
                 !decoded) {
                 reject(id, "malformed or unexpected packet");
@@ -1016,7 +1009,7 @@ auto server::impl::build_configuration() -> status {
     }
     {
         config_cb::select_known_packs packet{};
-        packet.packs.push_back(::refrain::protocol::v777::common::known_pack{
+        packet.packs.push_back(::refrain::protocol::current::common::known_pack{
             .pack_namespace = "minecraft",
             .id = "core",
             .version = "26.3",
@@ -2290,7 +2283,7 @@ void server::impl::handle_play(std::uint64_t id,
         response.length = result.length;
         response.suggestions.reserve(result.entries.size());
         for (const auto &entry : result.entries) {
-            refrain::protocol::v777::wire::wire_entry suggestion{};
+            refrain::protocol::current::wire::wire_entry suggestion{};
             suggestion.text = std::string{entry.text};
             if (!entry.tooltip.empty()) {
                 suggestion.tooltip =
