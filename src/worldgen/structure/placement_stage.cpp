@@ -2024,8 +2024,8 @@ void place_mineshaft_corridor(const structure_place_context &context,
     access.maybe_box(0.8F, 0, 2, 0, 2, 2, length, access.cave_air,
                      access.cave_air, false, random);
     if (piece.spider) {
-        access.maybe_box(0.6F, 0, 0, 0, 2, 1, length, access.cobweb,
-                         access.cave_air, true, random);
+        access.maybe_box(0.6F, 0, 0, 0, 2, 1, length, access.cave_air,
+                         access.cobweb, true, random);
     }
     bool placed_spider = false;
     for (jint section = 0; section < piece.sections; ++section) {
