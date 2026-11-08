@@ -25,14 +25,12 @@ const suite tests = [] {
         std::vector<std::byte> bytes;
         net::writer out{bytes};
         expect(static_cast<bool>(net::encode_text_component(out, value)));
-        expect(bytes.size() == 8U);
+        expect(bytes.size() == 6U);
         expect(bytes[0] == std::byte{8});
         expect(bytes[1] == std::byte{0});
-        expect(bytes[2] == std::byte{0});
-        expect(bytes[3] == std::byte{0});
-        expect(bytes[4] == std::byte{3});
-        expect(bytes[5] == std::byte{'a'});
-        expect(bytes[7] == std::byte{'c'});
+        expect(bytes[2] == std::byte{3});
+        expect(bytes[3] == std::byte{'a'});
+        expect(bytes[5] == std::byte{'c'});
     };
 
     "text component round trips"_test = [] {
