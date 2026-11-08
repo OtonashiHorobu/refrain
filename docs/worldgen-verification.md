@@ -29,6 +29,7 @@ variables and reads the data and template roots from the caller.
 | ocean ruin | yes | yes | yes |
 | ruined portal | yes | yes | yes |
 | woodland mansion | yes | yes | yes |
+| ocean monument | yes | yes | yes |
 
 The mineshaft full-stage oracle matches the 141-piece reference start,
 including the corridor random stream. The ruined portal full-stage oracle
@@ -39,6 +40,11 @@ settles.
 The woodland mansion piece list is pinned by a digest over the template,
 origin, rotation and mirror of all 484 pieces. Its block oracle matches the
 reference chunk.
+
+The ocean monument start is pinned by a digest over the room graph, fitted
+piece order, wing and penthouse bounds. Candidate chunk `(12, 23)` of seed 1
+with `minecraft:deep_ocean` matches blocks and all four heightmaps in every
+chunk the 58x58 building covers: chunks `(10..13, 21..24)`.
 
 ## Storage and runtime
 

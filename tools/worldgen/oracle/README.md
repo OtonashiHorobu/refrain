@@ -101,3 +101,27 @@ REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:plains \
 `<namespace>/structure/...nbt` templates. The full-stage test fills the chunk
 and its neighbours, generates the starts, places the pieces and compares both
 blocks and the final heightmaps.
+
+An ocean monument owns its child pieces, so its start covers sixteen chunks.
+Set `REFRAIN_FULL_STAGE_START_CHUNK_X` and
+`REFRAIN_FULL_STAGE_START_CHUNK_Z` to place the start owned by another chunk
+into the target chunk:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:deep_ocean --settle 60 \
+    --force-load-box 128 304 287 463 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2monument
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_FULL_STAGE_REGION=/tmp/t2monument/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_FULL_STAGE_CHUNK_X=10 REFRAIN_FULL_STAGE_CHUNK_Z=21 \
+REFRAIN_FULL_STAGE_START_CHUNK_X=12 \
+REFRAIN_FULL_STAGE_START_CHUNK_Z=23 \
+REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:deep_ocean \
+    ./build/Release/bin/refrain-tests "fill and structure placement reproduce the reference chunk"
+```
+
+The monument candidate is chunk `(12, 23)`; its building covers chunks
+`(10..13, 21..24)`.

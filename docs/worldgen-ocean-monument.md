@@ -43,3 +43,10 @@ building list, so the shared random stream follows the fitter order above.
 Generate a fixed deep-ocean world and force-load the chunks covering a
 monument candidate. Compare the building chunks block for block and compare
 the four final heightmaps.
+
+Candidate chunk `(12, 23)` of seed 1 is a monument in
+`minecraft:deep_ocean`; the building covers chunks `(10..13, 21..24)`. The
+full-stage oracle can place the start owned by `(12, 23)` into any of those
+chunks by passing `REFRAIN_FULL_STAGE_START_CHUNK_X` and
+`REFRAIN_FULL_STAGE_START_CHUNK_Z` alongside the target chunk. All sixteen
+chunks match the reference block for block and in all four heightmaps.
