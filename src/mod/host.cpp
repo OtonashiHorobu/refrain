@@ -90,6 +90,27 @@ using mod::static_mod_registry;
            service[prefix.size() + slot.size()] == '.';
 }
 
+/// Compare `refrain:<slot with dots>` against an underscore slot, so
+/// "refrain:session.status" activates the gamepack slot "session_status".
+[[nodiscard]] auto equals_dotted_slot(std::string_view service,
+                                      std::string_view slot) -> bool {
+    constexpr std::string_view prefix{"refrain:"};
+    if (!service.starts_with(prefix)) {
+        return false;
+    }
+    const auto rest{service.substr(prefix.size())};
+    if (rest.size() != slot.size()) {
+        return false;
+    }
+    for (std::size_t index{0}; index < rest.size(); ++index) {
+        const auto character{rest[index] == '.' ? '_' : rest[index]};
+        if (character != slot[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// A gamepack names a service by its `[providers]` key ("data", "world",
 /// "protocol"), while a factory passes the full contract id
 /// ("refrain:data.packs", "refrain:net.protocol"). A service matches a slot
@@ -105,7 +126,8 @@ using mod::static_mod_registry;
     constexpr std::string_view net_prefix{"refrain:net."};
     return service == slot || equals_slot(service, namespace_prefix, slot) ||
            equals_slot(service, net_prefix, slot) ||
-           in_slot_namespace(service, namespace_prefix, slot);
+           in_slot_namespace(service, namespace_prefix, slot) ||
+           equals_dotted_slot(service, slot);
 }
 
 /// Does the manifest `[provides]` list cover `service`? Exact id match, or the
