@@ -125,3 +125,33 @@ REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:deep_ocean \
 
 The monument candidate is chunk `(12, 23)`; its building covers chunks
 `(10..13, 21..24)`.
+
+Strongholds use concentric rings instead of a random spread. Seed 1 with a
+fixed `minecraft:plains` biome places one at chunk `(108, 51)`; a force-load box
+around chunks `(101..115, 44..58)` covers its pieces. Because the box is away
+from the origin the generated regions are `r.3.0.mca` and `r.3.1.mca`; the
+generator prints the region it found.
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:plains --settle 60 \
+    --force-load-box 1616 704 1855 943 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2stronghold
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_VANILLA_STRONGHOLD_REGION=/tmp/t2stronghold/world/dimensions/minecraft/overworld/region/r.3.1.mca \
+REFRAIN_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_FULL_STAGE_REGION=/tmp/t2stronghold/world/dimensions/minecraft/overworld/region/r.3.1.mca \
+REFRAIN_FULL_STAGE_CHUNK_X=104 REFRAIN_FULL_STAGE_CHUNK_Z=50 \
+REFRAIN_FULL_STAGE_START_CHUNK_X=108 \
+REFRAIN_FULL_STAGE_START_CHUNK_Z=51 \
+REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:plains \
+    ./build/Release/bin/refrain-tests "fill and structure placement reproduce the reference chunk"
+```
+
+Other structure sets generate starts in neighbouring chunks of the reference
+world. For a whole-structure sweep, replace every other
+`worldgen/structure_set/*.json` in the generated datapack with an empty
+`structures` list, delete the overworld region files, and rerun the server
+with the same force-load box; chunks `(104..110, 49..57)` then reference only
+the stronghold.

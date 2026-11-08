@@ -30,6 +30,7 @@ variables and reads the data and template roots from the caller.
 | ruined portal | yes | yes | yes |
 | woodland mansion | yes | yes | yes |
 | ocean monument | yes | yes | yes |
+| stronghold | yes | yes | yes |
 
 The mineshaft full-stage oracle matches the 141-piece reference start,
 including the corridor random stream. The ruined portal full-stage oracle
@@ -45,6 +46,13 @@ The ocean monument start is pinned by a digest over the room graph, fitted
 piece order, wing and penthouse bounds. Candidate chunk `(12, 23)` of seed 1
 with `minecraft:deep_ocean` matches blocks and all four heightmaps in every
 chunk the 58x58 building covers: chunks `(10..13, 21..24)`.
+
+The stronghold ring placement is pinned by a digest over all 128 candidate
+chunks, and the fitted piece list by a digest over type, bounds, orientation,
+generation depth, door type and room flags. Seed 1 with `minecraft:plains`
+places the first stronghold at chunk `(108, 51)`; chunks `(104..110, 49..57)`
+match the reference blocks and heightmaps. With the other structure sets
+enabled, chunk `(104, 50)` references only the stronghold and also matches.
 
 ## Storage and runtime
 

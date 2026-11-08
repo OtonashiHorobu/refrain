@@ -94,7 +94,7 @@ The reference-backed suites currently cover:
   decoration, including a whole-chunk feature oracle;
 - structure starts, payload trees, piece placement and full-stage
   generation for jungle temple, warm ocean ruin, beached shipwreck,
-  buried treasure, mineshaft and ocean monument;
+  buried treasure, mineshaft, ocean monument and stronghold;
 - `locate_structure` against real seeds and reference heightmaps;
 - the storage bridge, RWF round trip and Anvil export/import;
 - parallel fill determinism and fixed-biome structure generator
@@ -111,5 +111,7 @@ oracle after the reference world settles. Woodland mansion pieces match
 the reference list exactly and its block oracle matches the reference
 chunk. An ocean monument start plus every room, wing and penthouse piece
 matches the reference world in the sixteen chunks the building covers.
-Strongholds do not have start or block implementations yet.
+A stronghold start plus every fitted corridor and room matches the reference
+world in the sixty-three chunks the pieces cover, and the ring placement
+reproduces the reference candidate chunks.
 
