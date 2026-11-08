@@ -2248,8 +2248,9 @@ void place_ruined_portal(const structure_place_context &context,
             if (!surface) {
                 continue;
             }
+            const jint surface_y = *surface - 1;
             const jint y =
-                follow_surface ? *surface : std::min(min_y, *surface);
+                follow_surface ? surface_y : std::min(min_y, surface_y);
             if (std::abs(y - min_y) > 3 || !replaceable_at(x, y, z)) {
                 continue;
             }
