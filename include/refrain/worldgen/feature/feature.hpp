@@ -529,6 +529,33 @@ class end_gateway_feature final : public feature {
     block_state_id bedrock_{no_block_state};
 };
 
+/// One configured end spike.
+struct end_spike {
+    jint center_x{0};
+    jint center_z{0};
+    jint radius{0};
+    jint height{0};
+    bool guarded{false};
+};
+
+/// `EndSpikeFeature`: obsidian pillars with an optional iron-bar cage and a
+/// fire-topped crystal block.
+class end_spike_feature final : public feature {
+  public:
+    end_spike_feature(std::vector<end_spike> spikes, bool crystal_invulnerable)
+        : spikes_{std::move(spikes)},
+          crystal_invulnerable_{crystal_invulnerable} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    void place_spike(feature_context &context, const end_spike &spike) const;
+
+    std::vector<end_spike> spikes_{};
+    bool crystal_invulnerable_{false};
+};
+
 /// `BonusChestFeature`: the spawn chest with four torches.
 class bonus_chest_feature final : public feature {
   public:

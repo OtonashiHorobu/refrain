@@ -2073,6 +2073,111 @@ auto bonus_chest_feature::place(feature_context &context,
     return false;
 }
 
+auto end_spike_feature::place(feature_context &context, worldgen_random &random,
+                              const block_pos &origin) const -> bool {
+    (void)random;
+    std::vector<end_spike> spikes = spikes_;
+    if (spikes.empty()) {
+        const jlong seed = context.placement.generation.world_seed;
+        worldgen_random seed_random{
+            std::make_unique<legacy_random_source>(seed)};
+        const auto key = seed_random.next_long() & 0xFFFFLL;
+        std::array<jint, 10> sizes{};
+        for (jint i = 0; i < 10; ++i) {
+            sizes[static_cast<std::size_t>(i)] = i;
+        }
+        worldgen_random shuffle{std::make_unique<legacy_random_source>(key)};
+        for (jint i = 10; i > 1; --i) {
+            const jint swap = shuffle.next_int(i);
+            std::swap(sizes[static_cast<std::size_t>(i - 1)],
+                      sizes[static_cast<std::size_t>(swap)]);
+        }
+        constexpr double pi = 3.14159265358979323846;
+        for (jint i = 0; i < 10; ++i) {
+            const double angle = 2.0 * (-pi + (pi / 10.0) * i);
+            const auto size = sizes[static_cast<std::size_t>(i)];
+            spikes.push_back(end_spike{.center_x = static_cast<jint>(
+                                           std::floor(42.0 * std::cos(angle))),
+                                       .center_z = static_cast<jint>(
+                                           std::floor(42.0 * std::sin(angle))),
+                                       .radius = 2 + size / 3,
+                                       .height = 76 + size * 3,
+                                       .guarded = size == 1 || size == 2});
+        }
+    }
+    for (const auto &spike : spikes) {
+        if ((spike.center_x >> 4) == (origin.x >> 4) &&
+            (spike.center_z >> 4) == (origin.z >> 4)) {
+            place_spike(context, spike);
+        }
+    }
+    return true;
+}
+
+void end_spike_feature::place_spike(feature_context &context,
+                                    const end_spike &spike) const {
+    auto &region = *context.placement.region;
+    const auto state_of = [&](std::string_view key) {
+        return context.placement.resolve_state
+                   ? context.placement.resolve_state(key)
+                   : no_block_state;
+    };
+    const auto obsidian = state_of("minecraft:obsidian");
+    const auto air = context.placement.states->air();
+    const auto bedrock = state_of("minecraft:bedrock");
+    const auto fire = state_of("minecraft:fire");
+    const auto radius = spike.radius;
+    for (jint x = spike.center_x - radius; x <= spike.center_x + radius; ++x) {
+        for (jint z = spike.center_z - radius; z <= spike.center_z + radius;
+             ++z) {
+            const jint dx = x - spike.center_x;
+            const jint dz = z - spike.center_z;
+            const bool in_disc = dx * dx + dz * dz <= radius * radius + 1;
+            for (jint y = context.placement.generation.min_y;
+                 y <= spike.height + 10; ++y) {
+                if (in_disc && y < spike.height) {
+                    (void)region.set_block_state(x, y, z, obsidian);
+                } else if (y > 65) {
+                    (void)region.set_block_state(x, y, z, air);
+                }
+            }
+        }
+    }
+    if (spike.guarded) {
+        for (jint dx = -2; dx <= 2; ++dx) {
+            for (jint dz = -2; dz <= 2; ++dz) {
+                for (jint dy = 0; dy <= 3; ++dy) {
+                    const bool x_side = std::abs(dx) == 2;
+                    const bool z_side = std::abs(dz) == 2;
+                    const bool top = dy == 3;
+                    if (!x_side && !z_side && !top) {
+                        continue;
+                    }
+                    const bool x_edge = dx == -2 || dx == 2 || top;
+                    const bool z_edge = dz == -2 || dz == 2 || top;
+                    const std::string key =
+                        "minecraft:iron_bars[east=" +
+                        std::string{z_edge && dx != 2 ? "true" : "false"} +
+                        ",north=" +
+                        std::string{x_edge && dz != -2 ? "true" : "false"} +
+                        ",south=" +
+                        std::string{x_edge && dz != 2 ? "true" : "false"} +
+                        ",waterlogged=false,west=" +
+                        std::string{z_edge && dx != -2 ? "true" : "false"} +
+                        "]";
+                    (void)region.set_block_state(
+                        spike.center_x + dx, spike.height + dy,
+                        spike.center_z + dz, state_of(key));
+                }
+            }
+        }
+    }
+    (void)region.set_block_state(spike.center_x, spike.height, spike.center_z,
+                                 bedrock);
+    (void)region.set_block_state(spike.center_x, spike.height + 1,
+                                 spike.center_z, fire);
+}
+
 void chorus_plant_feature::set_plant(feature_context &context,
                                      const block_pos &pos) const {
     auto &region = *context.placement.region;

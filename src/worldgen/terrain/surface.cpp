@@ -121,8 +121,8 @@ auto block_states::intern(std::string_view name) -> state_id {
         const auto block = name.substr(0, name.find('['));
         const bool non_solid =
             block == "minecraft:end_portal" ||
-            block == "minecraft:end_gateway" || block == "minecraft:torch" ||
-            block == "minecraft:wall_torch" ||
+            block == "minecraft:end_gateway" || block == "minecraft:fire" ||
+            block == "minecraft:torch" || block == "minecraft:wall_torch" ||
             block == "minecraft:soul_torch" ||
             block == "minecraft:soul_wall_torch" ||
             block == "minecraft:glow_lichen" || block == "minecraft:sculk_vein";

@@ -59,8 +59,8 @@ auto resolve_state(block_state_registry &states, std::string_view key)
                             key.find("layers=8") == std::string_view::npos;
     const bool non_solid =
         block == "minecraft:end_portal" || block == "minecraft:end_gateway" ||
-        block == "minecraft:torch" || block == "minecraft:wall_torch" ||
-        block == "minecraft:soul_torch" ||
+        block == "minecraft:fire" || block == "minecraft:torch" ||
+        block == "minecraft:wall_torch" || block == "minecraft:soul_torch" ||
         block == "minecraft:soul_wall_torch" ||
         block == "minecraft:glow_lichen" || block == "minecraft:sculk_vein";
     return states.intern(
@@ -839,6 +839,40 @@ auto feature_registry::load(const feature_data_set &data) -> status {
         }
         if (*type == "minecraft:end_platform") {
             features_.emplace(id, std::make_unique<end_platform_feature>());
+            continue;
+        }
+        if (*type == "minecraft:end_spike") {
+            std::vector<end_spike> spikes;
+            const auto *list = document.document.find("spikes");
+            if (list != nullptr && list->as_array()) {
+                for (const auto &entry : *list->as_array()) {
+                    end_spike spike{};
+                    const auto read_int = [&](const char *key, jint fallback) {
+                        const auto *value = entry.find(key);
+                        return value == nullptr
+                                   ? fallback
+                                   : static_cast<jint>(
+                                         value->as_int64().value_or(fallback));
+                    };
+                    spike.center_x = read_int("centerX", 0);
+                    spike.center_z = read_int("centerZ", 0);
+                    spike.radius = read_int("radius", 0);
+                    spike.height = read_int("height", 0);
+                    if (const auto *guarded = entry.find("guarded");
+                        guarded != nullptr) {
+                        spike.guarded = guarded->as_bool().value_or(false);
+                    }
+                    spikes.push_back(spike);
+                }
+            }
+            bool invulnerable = false;
+            if (const auto *value =
+                    document.document.find("crystal_invulnerable");
+                value != nullptr) {
+                invulnerable = value->as_bool().value_or(false);
+            }
+            features_.emplace(id, std::make_unique<end_spike_feature>(
+                                      std::move(spikes), invulnerable));
             continue;
         }
         if (*type == "minecraft:bonus_chest") {
