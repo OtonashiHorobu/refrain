@@ -128,6 +128,14 @@ void provider_protocol::notify_state(std::uint64_t connection,
         static_cast<services::net_protocol::connection_state>(state));
 }
 
+auto provider_protocol::transition(std::uint64_t connection,
+                                   net::protocol_event event)
+    -> net::connection_state {
+    return static_cast<net::connection_state>(provider_->transition(
+        connection,
+        static_cast<services::net_protocol::protocol_event>(event)));
+}
+
 auto make_provider_protocol(
     std::unique_ptr<services::net_protocol::provider> provider)
     -> std::unique_ptr<net::protocol_codec> {

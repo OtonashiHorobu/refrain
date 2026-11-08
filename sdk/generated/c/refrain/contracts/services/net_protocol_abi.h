@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 05c2082603634f9e
+// Schema hash: 7195102635572e89
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_ABI_H
@@ -77,6 +77,12 @@ typedef uint32_t refrain_services_net_protocol_protocol_error; // enum 'protocol
 #define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_ERROR_UNKNOWN_PACKET ((refrain_services_net_protocol_protocol_error)(3))
 #define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_ERROR_UNSUPPORTED_VERSION ((refrain_services_net_protocol_protocol_error)(4))
 #define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_ERROR_COMPRESSION_FAILED ((refrain_services_net_protocol_protocol_error)(5))
+
+typedef uint32_t refrain_services_net_protocol_protocol_event; // enum 'protocol_event'
+#define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_EVENT_STATUS_REQUEST ((refrain_services_net_protocol_protocol_event)(0))
+#define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_EVENT_LOGIN_REQUEST ((refrain_services_net_protocol_protocol_event)(1))
+#define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_EVENT_LOGIN_ACKNOWLEDGED ((refrain_services_net_protocol_protocol_event)(2))
+#define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_EVENT_CONFIGURATION_ACKNOWLEDGED ((refrain_services_net_protocol_protocol_event)(3))
 
 typedef uint32_t refrain_services_net_protocol_connection_state; // enum 'connection_state'
 #define REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_HANDSHAKE ((refrain_services_net_protocol_connection_state)(0))
@@ -216,6 +222,10 @@ typedef struct refrain_services_net_protocol_vtable {
     // keeps the state for `state_of`; it does not drive transitions.
     // attributes: #[thread(net)]
     void (*notify_state)(void *self, uint64_t connection, refrain_services_net_protocol_connection_state state);
+    // Advance the connection state machine for one protocol event. The
+    // provider returns the next state and records it for `state_of`.
+    // attributes: #[thread(net)]
+    refrain_services_net_protocol_connection_state (*transition)(void *self, uint64_t connection, refrain_services_net_protocol_protocol_event event);
     // attributes: #[thread(sim)]
     refrain_services_net_protocol_connection_state (*state_of)(void *self, refrain_core_handle_connection conn);
     // Extension query. Returns REFRAIN_EXTENSION_NOT_FOUND when the

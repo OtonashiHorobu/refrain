@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 05c2082603634f9e
+// Schema hash: 7195102635572e89
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_HPP
@@ -39,6 +39,13 @@ enum class protocol_error : std::uint32_t { // enum 'protocol_error'
     unknown_packet = 3,
     unsupported_version = 4,
     compression_failed = 5,
+};
+
+enum class protocol_event : std::uint32_t { // enum 'protocol_event'
+    status_request = 0,
+    login_request = 1,
+    login_acknowledged = 2,
+    configuration_acknowledged = 3,
 };
 
 enum class connection_state : std::uint32_t { // enum 'connection_state'
@@ -413,6 +420,12 @@ class provider final {
     /// keeps the state for `state_of`; it does not drive transitions.
     auto notify_state(std::uint64_t connection, ::refrain::services::net_protocol::connection_state state) const -> void {
         table_->notify_state(self_, connection, static_cast<refrain_services_net_protocol_connection_state>(state));
+    }
+
+    /// Advance the connection state machine for one protocol event. The
+    /// provider returns the next state and records it for `state_of`.
+    [[nodiscard]] auto transition(std::uint64_t connection, ::refrain::services::net_protocol::protocol_event event) const -> ::refrain::services::net_protocol::connection_state {
+        return static_cast<::refrain::services::net_protocol::connection_state>(table_->transition(self_, connection, static_cast<refrain_services_net_protocol_protocol_event>(event)));
     }
 
     [[nodiscard]] auto state_of(::refrain::core::connection conn) const -> ::refrain::services::net_protocol::connection_state {

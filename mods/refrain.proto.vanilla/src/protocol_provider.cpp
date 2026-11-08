@@ -183,6 +183,46 @@ auto take_outbound(void *self, std::uint64_t connection,
     return 1;
 }
 
+auto transition(void *self, std::uint64_t connection,
+                refrain_services_net_protocol_protocol_event event)
+    -> refrain_services_net_protocol_connection_state {
+    auto &state{*static_cast<protocol_state *>(self)};
+    auto &current{state.states[connection]};
+    using event_type = refrain_services_net_protocol_protocol_event;
+    using state_type = refrain_services_net_protocol_connection_state;
+    switch (event) {
+    case REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_EVENT_STATUS_REQUEST:
+        if (current ==
+            REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_HANDSHAKE) {
+            current = REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_STATUS;
+        }
+        break;
+    case REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_EVENT_LOGIN_REQUEST:
+        if (current ==
+            REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_HANDSHAKE) {
+            current = REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_LOGIN;
+        }
+        break;
+    case REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_EVENT_LOGIN_ACKNOWLEDGED:
+        if (current == REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_LOGIN) {
+            current =
+                REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_CONFIGURATION;
+        }
+        break;
+    case REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_EVENT_CONFIGURATION_ACKNOWLEDGED:
+        if (current ==
+            REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_CONFIGURATION) {
+            current = REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_PLAY;
+        }
+        break;
+    default:
+        return current;
+    }
+    static_cast<void>(static_cast<event_type>(event));
+    static_cast<void>(static_cast<state_type>(current));
+    return current;
+}
+
 auto state_of(void *self, refrain_core_handle_connection connection)
     -> refrain_services_net_protocol_connection_state {
     const auto &state{*static_cast<protocol_state *>(self)};
@@ -263,6 +303,7 @@ const refrain_services_net_protocol_vtable &vtable() {
         .send_packet = &send_packet,
         .take_outbound = &take_outbound,
         .notify_state = &notify_state,
+        .transition = &transition,
         .state_of = &state_of,
         .query_extension = &query_extension,
     };

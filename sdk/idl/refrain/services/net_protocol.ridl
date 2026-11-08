@@ -9,7 +9,7 @@
 // through the service vtable.
 
 module refrain::services::net_protocol;
-version 5.0.0;
+version 6.0.0;
 
 import refrain::core;
 
@@ -26,6 +26,13 @@ enum protocol_error : u32 {
     unknown_packet = 3,
     unsupported_version = 4,
     compression_failed = 5,
+}
+
+enum protocol_event : u32 {
+    status_request = 0,
+    login_request = 1,
+    login_acknowledged = 2,
+    configuration_acknowledged = 3,
 }
 
 enum connection_state : u32 {
@@ -151,6 +158,11 @@ service net_protocol : 2.0.0 {
     /// keeps the state for `state_of`; it does not drive transitions.
     #[thread(net)]
     fn notify_state(u64 connection, connection_state state);
+
+    /// Advance the connection state machine for one protocol event. The
+    /// provider returns the next state and records it for `state_of`.
+    #[thread(net)]
+    fn transition(u64 connection, protocol_event event) -> connection_state;
 
     #[thread(sim)]
     fn state_of(connection conn) -> connection_state;

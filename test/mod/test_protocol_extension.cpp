@@ -77,6 +77,16 @@ suite protocol_extension_tests = [] {
             return;
         }
         provider.create_connection(7);
+        expect(provider.transition(
+                   7, net_protocol::protocol_event::login_request) ==
+               net_protocol::connection_state::login);
+        expect(provider.transition(
+                   7, net_protocol::protocol_event::login_acknowledged) ==
+               net_protocol::connection_state::configuration);
+        expect(
+            provider.transition(
+                7, net_protocol::protocol_event::configuration_acknowledged) ==
+            net_protocol::connection_state::play);
         provider.notify_state(7, net_protocol::connection_state::play);
         expect(provider.state_of(refrain::core::connection{7}) ==
                net_protocol::connection_state::play);

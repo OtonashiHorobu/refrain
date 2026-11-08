@@ -516,7 +516,6 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
     }
 
     if (state == connection_state::handshake) {
-        connection_state next_state{connection_state::handshake};
         if (*packet_id != ::refrain::protocol::current::handshake::serverbound::
                               intention::packet_id) {
             reject(id, "malformed or unexpected packet");
@@ -540,16 +539,23 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             live.protocol = static_cast<std::int32_t>(intention.protocol);
             live.handshake_host = intention.host;
             live.handshake_port = intention.port;
-            if (intention.next == 1) {
-                live.state = connection_state::status;
-                next_state = connection_state::status;
-            } else if (intention.next == 2) {
-                live.state = connection_state::login;
-                next_state = connection_state::login;
-            }
         }
-        if (next_state != connection_state::handshake) {
-            protocol->notify_state(id, next_state);
+        const auto event{intention.next == 1 ? protocol_event::status_request
+                                             : protocol_event::login_request};
+        const auto next_state{protocol->transition(id, event)};
+        const auto expected{intention.next == 1 ? connection_state::status
+                                                : connection_state::login};
+        if (next_state != expected) {
+            reject(id, "malformed or unexpected packet");
+            return;
+        }
+        {
+            const std::lock_guard lock{connections_mutex};
+            const auto found{connections.find(id)};
+            if (found == connections.end() || found->second.closed) {
+                return;
+            }
+            found->second.state = next_state;
         }
         log::debug("net: handshake id={} protocol={} next={}", id,
                    intention.protocol, intention.next);
@@ -714,15 +720,20 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 reject(id, "malformed or unexpected packet");
                 return;
             }
+            const auto next_state{
+                protocol->transition(id, protocol_event::login_acknowledged)};
+            if (next_state != connection_state::configuration) {
+                reject(id, "malformed or unexpected packet");
+                return;
+            }
             {
                 const std::lock_guard lock{connections_mutex};
                 const auto found{connections.find(id)};
                 if (found == connections.end() || found->second.closed) {
                     return;
                 }
-                found->second.state = connection_state::configuration;
+                found->second.state = next_state;
             }
-            protocol->notify_state(id, connection_state::configuration);
             log::info("net: login complete id={} name={}", id, name);
             send_configuration(id);
             return;
@@ -757,15 +768,20 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 reject(id, "malformed or unexpected packet");
                 return;
             }
+            const auto next_state{protocol->transition(
+                id, protocol_event::configuration_acknowledged)};
+            if (next_state != connection_state::play) {
+                reject(id, "malformed or unexpected packet");
+                return;
+            }
             {
                 const std::lock_guard lock{connections_mutex};
                 const auto found{connections.find(id)};
                 if (found == connections.end() || found->second.closed) {
                     return;
                 }
-                found->second.state = connection_state::play;
+                found->second.state = next_state;
             }
-            protocol->notify_state(id, connection_state::play);
             send_play_login(id);
             return;
         }

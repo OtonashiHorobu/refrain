@@ -41,6 +41,7 @@ struct java777_codec::impl {
     std::mutex mutex{};
     std::unordered_map<std::uint64_t, std::unique_ptr<connection_codec>>
         connections{};
+    std::unordered_map<std::uint64_t, net::connection_state> states{};
 };
 
 java777_codec::java777_codec() : impl_{std::make_unique<impl>()} {}
@@ -49,11 +50,13 @@ java777_codec::~java777_codec() = default;
 void java777_codec::create_connection(std::uint64_t connection) {
     const std::lock_guard lock{impl_->mutex};
     impl_->connections[connection] = std::make_unique<connection_codec>();
+    impl_->states[connection] = net::connection_state::handshake;
 }
 
 void java777_codec::close_connection(std::uint64_t connection) {
     const std::lock_guard lock{impl_->mutex};
     impl_->connections.erase(connection);
+    impl_->states.erase(connection);
 }
 
 auto java777_codec::set_compression(std::uint64_t connection,
@@ -173,8 +176,38 @@ auto java777_codec::send_packet(std::uint64_t connection,
 
 void java777_codec::notify_state(std::uint64_t connection,
                                  net::connection_state state) {
-    static_cast<void>(connection);
-    static_cast<void>(state);
+    const std::lock_guard lock{impl_->mutex};
+    impl_->states[connection] = state;
+}
+
+auto java777_codec::transition(std::uint64_t connection,
+                               net::protocol_event event)
+    -> net::connection_state {
+    const std::lock_guard lock{impl_->mutex};
+    auto &current{impl_->states[connection]};
+    switch (event) {
+    case net::protocol_event::status_request:
+        if (current == net::connection_state::handshake) {
+            current = net::connection_state::status;
+        }
+        break;
+    case net::protocol_event::login_request:
+        if (current == net::connection_state::handshake) {
+            current = net::connection_state::login;
+        }
+        break;
+    case net::protocol_event::login_acknowledged:
+        if (current == net::connection_state::login) {
+            current = net::connection_state::configuration;
+        }
+        break;
+    case net::protocol_event::configuration_acknowledged:
+        if (current == net::connection_state::configuration) {
+            current = net::connection_state::play;
+        }
+        break;
+    }
+    return current;
 }
 
 auto java777_codec::take_outbound(std::uint64_t connection,

@@ -13,6 +13,13 @@
 
 namespace refrain::net {
 
+enum class protocol_event : std::uint8_t {
+    status_request = 0,
+    login_request = 1,
+    login_acknowledged = 2,
+    configuration_acknowledged = 3,
+};
+
 /// Per-connection protocol codec used by the network session. The protocol
 /// provider implements framing, compression and the connection cipher; the
 /// session keeps packet semantics and the state machine.
@@ -52,6 +59,10 @@ class protocol_codec {
 
     virtual void notify_state(std::uint64_t connection,
                               connection_state state) = 0;
+
+    /// Advance the provider-owned state machine for one event.
+    virtual auto transition(std::uint64_t connection, protocol_event event)
+        -> connection_state = 0;
 };
 
 } // namespace refrain::net

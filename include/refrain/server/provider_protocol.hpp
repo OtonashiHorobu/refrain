@@ -45,6 +45,9 @@ class provider_protocol final : public net::protocol_codec {
         -> bool override;
     void notify_state(std::uint64_t connection,
                       net::connection_state state) override;
+    [[nodiscard]] auto transition(std::uint64_t connection,
+                                  net::protocol_event event)
+        -> net::connection_state override;
 
   private:
     std::unique_ptr<services::net_protocol::provider> provider_;
