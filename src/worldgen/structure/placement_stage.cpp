@@ -1110,6 +1110,9 @@ void place_shipwreck_piece(const structure_place_context &context,
                            : mean;
         }
     }
+    if (context.adjusted_heights != nullptr) {
+        (*context.adjusted_heights)[height_key] = origin.y;
+    }
     (void)place_template(*context.region, *context.registry, templ, origin,
                          settings);
     static const std::array<std::pair<std::string_view, std::string_view>, 3>
