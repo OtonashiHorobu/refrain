@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: e32a57ccfdfa1ff7
+// Schema hash: f522b723b120f5d1
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2773,7 +2773,6 @@ template <> struct custom_traits<::refrain::services::runtime::runtime_config> {
     static constexpr std::string_view type_name = "refrain::services::runtime::runtime_config";
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"world_path", &::refrain::services::runtime::runtime_config::world_path},
-        refrain::reflect::custom_field{"server_properties", &::refrain::services::runtime::runtime_config::server_properties},
         refrain::reflect::custom_field{"ticks", &::refrain::services::runtime::runtime_config::ticks},
         refrain::reflect::custom_field{"command_file", &::refrain::services::runtime::runtime_config::command_file},
         refrain::reflect::custom_field{"script_file", &::refrain::services::runtime::runtime_config::script_file},

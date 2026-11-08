@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <refrain/core/config.hpp>
 #include <refrain/core/error.hpp>
 
 #include <cstddef>
@@ -71,6 +72,14 @@ struct server_properties_import_report {
 [[nodiscard]] auto
 import_server_properties(std::string_view text, std::string_view config_dir,
                          server_properties_import_mode mode, bool strict)
+    -> result<server_properties_import_report>;
+
+/// Apply properties values to an already mounted store, without touching any
+/// file. Used by `refrain-server --import-properties` to install a fallback
+/// layer below the user's TOML files.
+[[nodiscard]] auto
+apply_server_properties(std::string_view text, core::config::store &store,
+                        core::config::layer target, bool strict)
     -> result<server_properties_import_report>;
 
 } // namespace refrain::server

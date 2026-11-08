@@ -50,7 +50,6 @@ make_options(const refrain_services_runtime_runtime_config &config,
     options.world = world;
     options.storage = storage;
     options.runtime = runtime;
-    options.server_properties_path = string_of(config.server_properties);
     options.ticks = config.ticks;
     options.command_file = string_of(config.command_file);
     options.script_file = string_of(config.script_file);

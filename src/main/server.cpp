@@ -31,6 +31,7 @@
 #include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/startup_content.hpp>
+#include <refrain/server/server_properties.hpp>
 
 #include <CLI/CLI.hpp>
 #include <fmt/format.h>
@@ -177,9 +178,9 @@ int main(int argc, char **argv) {
     std::string config_dir{"config"};
     app.add_option("--config-dir", config_dir,
                    "Directory with per-namespace TOML configuration files");
-    std::string server_properties_path{"server.properties"};
-    app.add_option("--server-properties", server_properties_path,
-                   "Java server.properties path (missing file keeps defaults)");
+    std::string import_properties_path;
+    app.add_option("--import-properties", import_properties_path,
+                   "Import a Java server.properties file as a fallback layer");
     std::int64_t run_ticks{0};
     app.add_option("--ticks", run_ticks,
                    "Run N ticks then stop (0 = until 'stop'/EOF)");
@@ -680,6 +681,26 @@ int main(int argc, char **argv) {
         if (auto status{config_store.load_all()}; !status) {
             return report_error(status.error());
         }
+        if (!import_properties_path.empty()) {
+            auto text{refrain::core::io::read_text(
+                import_properties_path, {.max_bytes = 1ULL * 1024ULL * 1024ULL,
+                                         .allow_symlink = false})};
+            if (!text) {
+                return report_error(text.error());
+            }
+            auto imported{refrain::server::apply_server_properties(
+                *text, config_store, refrain::core::config::layer::fallback,
+                false)};
+            if (!imported) {
+                return report_error(imported.error());
+            }
+            for (const auto &key : imported->unknown_keys) {
+                refrain::log::warn("config: unknown server.properties key '{}'",
+                                   key);
+            }
+            refrain::log::info("config: imported {} propert(ies) from {}",
+                               imported->applied, import_properties_path);
+        }
         refrain::log::info("config: {} namespace(s) from {}",
                            config_store.names().size(), config_dir);
     }
@@ -912,8 +933,6 @@ int main(int argc, char **argv) {
     auto runtime_config{refrain::services::runtime::make_runtime_config()};
     runtime_config.world_path =
         refrain::contracts::to_borrowed(std::string_view{world_path});
-    runtime_config.server_properties = refrain::contracts::to_borrowed(
-        std::string_view{server_properties_path});
     runtime_config.ticks = run_ticks;
     runtime_config.command_file =
         refrain::contracts::to_borrowed(std::string_view{command_file});

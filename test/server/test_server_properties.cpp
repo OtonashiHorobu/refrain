@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/core/config.hpp>
+#include <refrain/core/io.hpp>
 #include <refrain/server/server_properties.hpp>
 
 #include <boost/ut.hpp>
@@ -163,6 +164,34 @@ void write_text_file(const std::filesystem::path &path, std::string_view text) {
                 expect(forced_document->get_int64("port", 0) == 25565);
                 expect(forced_document->get_string("status.motd", "") == "New");
             }
+            std::error_code error;
+            std::filesystem::remove_all(dir, error);
+        };
+
+    "server-properties/apply installs a non-persisted fallback layer"_test =
+        [] {
+            const auto dir{make_temp_dir()};
+            auto store{refrain::core::config::store::empty()};
+            expect(static_cast<bool>(store.mount(
+                {.name = "network", .path = (dir / "network.toml").string()})));
+            expect(static_cast<bool>(store.mount(
+                {.name = "world", .path = (dir / "world.toml").string()})));
+            expect(static_cast<bool>(store.load_all()));
+            auto report{refrain::server::apply_server_properties(
+                "server-port=25565\nmotd=Imported\n", store,
+                refrain::core::config::layer::fallback, false)};
+            expect(static_cast<bool>(report));
+            if (report) {
+                expect(report->applied == 2);
+            }
+            auto network{store.module("network")};
+            expect(static_cast<bool>(network));
+            if (network) {
+                expect(network->get_int64("port", 0) == 25565);
+                expect(network->get_string("status.motd", "") == "Imported");
+            }
+            // Applying a fallback does not create files.
+            expect(!refrain::core::io::exists((dir / "network.toml").string()));
             std::error_code error;
             std::filesystem::remove_all(dir, error);
         };

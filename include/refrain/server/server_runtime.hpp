@@ -25,8 +25,6 @@ struct server_run_options {
     core::config::view world{};
     core::config::view storage{};
     core::config::view runtime{};
-    /// Legacy Java `server.properties` import path. Empty disables it.
-    std::string server_properties_path{};
     /// Run exactly this many ticks, then stop. 0 = until `stop`/EOF.
     std::int64_t ticks{0};
     /// Optional batch command file (one console command per line, all at tick

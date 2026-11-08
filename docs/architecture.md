@@ -15,7 +15,7 @@ definitions and gameplay modules can evolve independently.
 | World | `include/refrain/world`, `src/world` | RWF world storage, chunk codec, Anvil import and export |
 | Simulation | `include/refrain/sim`, `src/sim` | runtime world, block registry, entities, inventory, tick loop, replay |
 | Mods | `include/refrain/mod`, `src/mod` | manifests, gamepack composition, discovery, resolution, loading, provider registry, static mod registry, startup content |
-| Server runtime | `include/refrain/server`, `src/server` | headless tick loop, console, watchdog, `server.properties` |
+| Server runtime | `include/refrain/server`, `src/server` | headless tick loop, console, watchdog, per-namespace TOML configuration |
 | Application | `include/refrain/app`, `src/app`, `src/main` | composition root, service layer shared by the CLIs, CLI entry points |
 | Tools | `tools`, `src/main/tools.cpp` | schema compiler, world conversion, packaging, diagnostics |
 

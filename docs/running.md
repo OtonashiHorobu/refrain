@@ -1,8 +1,8 @@
 # Running a server
 
 `refrain-server` runs a world headless for a fixed number of ticks or until the
-console receives `stop`. The server does not open a network socket yet, so no
-client can connect.
+console receives `stop`. It listens for protocol 777 clients using the
+`network.toml` settings.
 
 ## Start
 
@@ -10,6 +10,7 @@ client can connect.
 build/Release/bin/refrain-server \
     --gamepack gamepack/gamepack.toml \
     --world /path/to/world \
+    --config-dir config \
     --ticks 200
 ```
 
@@ -23,7 +24,8 @@ scripted stop command.
 |---|---|
 | `--gamepack <file>` | composition file; defaults to the bundled gamepack |
 | `--world <dir>` | RWF world directory |
-| `--server-properties <file>` | Java `server.properties`; missing keys keep defaults |
+| `--config-dir <dir>` | per-namespace TOML configuration; missing files keep defaults |
+| `--import-properties <file>` | import Java `server.properties` as a fallback layer (not written) |
 | `--ticks <n>` | stop after n ticks, 0 disables the limit |
 | `--script <file>` | tick-indexed commands, one `<tick> <command>` per line |
 | `--cmd-file <file>` | commands executed at tick 0 |
@@ -36,6 +38,44 @@ scripted stop command.
 | `--mods <dir>` | instance root with `mods/<id>/manifest.toml`, repeatable |
 
 `--dump-gamepack` prints the resolved composition and exits.
+
+## Configuration
+
+Configuration lives in one TOML file per namespace under `--config-dir`:
+
+```text
+config/
+  network.toml      bind_host, port, compression, view distance, status, online mode
+  world.toml        level_name, allow_nether
+  runtime.toml      tick/watchdog/autosave knobs
+  storage.toml      zstd and compaction policy
+  providers/<id>.toml   implementation-specific options
+  mods/<id>.toml        options of mods that do not provide a service
+```
+
+Precedence, high to low: CLI overrides, user TOML, imported properties, code
+defaults. A missing file is an empty layer; `network.toml` example:
+
+```toml
+bind_host = "0.0.0.0"
+port = 25565
+compression_threshold = 256
+online_mode = true
+
+[status]
+motd = "A Refrain Server"
+max_players = 20
+```
+
+To migrate a Java `server.properties`:
+
+```bash
+build/Release/bin/refrain-tools config import-properties \
+    --in server.properties --out-dir config
+```
+
+`--import-properties` on `refrain-server` only installs the values at runtime as
+the fallback layer; it never rewrites the TOML files.
 
 ## Console
 

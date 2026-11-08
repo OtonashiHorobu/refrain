@@ -71,59 +71,68 @@ struct location {
 
 [[nodiscard]] auto apply_value(core::config::store &store,
                                std::string_view property,
-                               const server_properties &properties) -> status {
+                               const server_properties &properties,
+                               core::config::layer target) -> status {
     if (property == "server-ip") {
-        return store.set_string("network", "bind_host", properties.server_ip);
+        return store.set_string("network", "bind_host", properties.server_ip,
+                                target);
     }
     if (property == "server-port") {
-        return store.set_int64("network", "port", properties.server_port);
+        return store.set_int64("network", "port", properties.server_port,
+                               target);
     }
     if (property == "motd") {
-        return store.set_string("network", "status.motd", properties.motd);
+        return store.set_string("network", "status.motd", properties.motd,
+                                target);
     }
     if (property == "max-players") {
         return store.set_int64("network", "status.max_players",
-                               properties.max_players);
+                               properties.max_players, target);
     }
     if (property == "enable-status") {
         return store.set_bool("network", "status.enabled",
-                              properties.enable_status);
+                              properties.enable_status, target);
     }
     if (property == "view-distance") {
         return store.set_int64("network", "view_distance",
-                               properties.view_distance);
+                               properties.view_distance, target);
     }
     if (property == "simulation-distance") {
         return store.set_int64("network", "simulation_distance",
-                               properties.simulation_distance);
+                               properties.simulation_distance, target);
     }
     if (property == "online-mode") {
-        return store.set_bool("network", "online_mode", properties.online_mode);
+        return store.set_bool("network", "online_mode", properties.online_mode,
+                              target);
     }
     if (property == "network-compression-threshold") {
         return store.set_int64("network", "compression_threshold",
-                               properties.network_compression_threshold);
+                               properties.network_compression_threshold,
+                               target);
     }
     if (property == "enforce-secure-profile") {
         return store.set_bool("network", "enforce_secure_profile",
-                              properties.enforce_secure_profile);
+                              properties.enforce_secure_profile, target);
     }
     if (property == "prevent-proxy-connections") {
         return store.set_bool("network", "prevent_proxy_connections",
-                              properties.prevent_proxy_connections);
+                              properties.prevent_proxy_connections, target);
     }
     if (property == "rate-limit") {
-        return store.set_int64("network", "rate_limit", properties.rate_limit);
+        return store.set_int64("network", "rate_limit", properties.rate_limit,
+                               target);
     }
     if (property == "player-idle-timeout") {
         return store.set_int64("network", "player_idle_timeout",
-                               properties.player_idle_timeout);
+                               properties.player_idle_timeout, target);
     }
     if (property == "level-name") {
-        return store.set_string("world", "level_name", properties.level_name);
+        return store.set_string("world", "level_name", properties.level_name,
+                                target);
     }
     if (property == "allow-nether") {
-        return store.set_bool("world", "allow_nether", properties.allow_nether);
+        return store.set_bool("world", "allow_nether", properties.allow_nether,
+                              target);
     }
     return std::unexpected{
         make_error(error_code::invalid_argument,
@@ -132,6 +141,36 @@ struct location {
 }
 
 } // namespace
+
+auto apply_server_properties(std::string_view text, core::config::store &store,
+                             core::config::layer target, bool strict)
+    -> result<server_properties_import_report> {
+    auto present_keys{std::vector<std::string>{}};
+    auto properties{parse_server_properties(text, &present_keys)};
+    if (!properties) {
+        return std::unexpected{std::move(properties.error())};
+    }
+    server_properties_import_report report{};
+    for (const auto &property : present_keys) {
+        if (std::ranges::find(importable_keys, property) ==
+            importable_keys.end()) {
+            report.unknown_keys.push_back(property);
+            continue;
+        }
+        auto status{apply_value(store, property, *properties, target)};
+        if (!status) {
+            return std::unexpected{std::move(status.error())};
+        }
+        ++report.applied;
+    }
+    if (strict && !report.unknown_keys.empty()) {
+        return std::unexpected{make_error(error_code::invalid_argument,
+                                          "server.properties: unknown key '" +
+                                              report.unknown_keys.front() +
+                                              "'")};
+    }
+    return report;
+}
 
 auto import_server_properties(std::string_view text,
                               std::string_view config_dir,
@@ -191,7 +230,9 @@ auto import_server_properties(std::string_view text,
             module->contains(key)) {
             continue;
         }
-        if (auto status{apply_value(store, property, *properties)}; !status) {
+        if (auto status{apply_value(store, property, *properties,
+                                    core::config::layer::user)};
+            !status) {
             return std::unexpected{std::move(status.error())};
         }
         ++report.applied;

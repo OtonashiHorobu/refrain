@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// `refrain:runtime` service contract v1.
+// `refrain:runtime` service contract v2.
 //
 // The contract is the narrow seam between the `refrain-server` composition
 // root and the first-party server runtime mod. The host stays a thin
@@ -13,7 +13,7 @@
 // contracts is future work.
 
 module refrain::services::runtime;
-version 1.0.0;
+version 2.0.0;
 
 import refrain::core;
 
@@ -29,8 +29,6 @@ enum runtime_error : u32 {
 struct runtime_config {
     /// RWF world directory (`--world`); required by `run`.
     string world_path;
-    /// Optional Java `server.properties`; a missing file keeps defaults.
-    string server_properties;
     /// Run exactly this many ticks, then stop. 0 = until `stop`/EOF.
     i64 ticks;
     /// Optional batch command file (one console command per line, tick 0).
@@ -66,7 +64,7 @@ struct runtime_config {
     u64 content_gc_interval_ticks;
 }
 
-service runtime : 1.0.0 {
+service runtime : 2.0.0 {
     side = server;
     thread = main;
     provides = [ "refrain:runtime" ];
