@@ -227,8 +227,11 @@ auto decode(const data::nbt::value &document) -> std::optional<decoded> {
             }
             const auto block = state_block_name(name);
             const bool air = is_air_block_name(block);
-            const auto interned =
-                out.registry.intern(name, {.air = air, .blocks_motion = !air});
+            const bool leaves = block.ends_with("_leaves");
+            const auto interned = out.registry.intern(
+                name, {.air = air,
+                       .blocks_motion = !air,
+                       .blocks_motion_no_leaves = !air && !leaves});
             if (!interned) {
                 return std::nullopt;
             }
@@ -496,8 +499,11 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 }
                 const auto block = state_block_name(key);
                 const bool air = is_air_block_name(block);
-                const auto interned =
-                    states.intern(key, {.air = air, .blocks_motion = !air});
+                const bool leaves = block.ends_with("_leaves");
+                const auto interned = states.intern(
+                    key, {.air = air,
+                          .blocks_motion = !air,
+                          .blocks_motion_no_leaves = !air && !leaves});
                 return interned.has_value() ? *interned : no_block_state;
             };
             std::vector<std::unique_ptr<proto_chunk>> neighbours;
@@ -627,16 +633,17 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 }
             }
         }
-        // MOTION_BLOCKING_NO_LEAVES is left out until the trait table carries
-        // the no-leaves flag for every resolved structure state.
         jint heightmap_mismatches = 0;
         for (const auto *kind_name :
-             {"WORLD_SURFACE", "OCEAN_FLOOR", "MOTION_BLOCKING"}) {
+             {"WORLD_SURFACE", "OCEAN_FLOOR", "MOTION_BLOCKING",
+              "MOTION_BLOCKING_NO_LEAVES"}) {
             const auto kind = std::string_view{kind_name} == "WORLD_SURFACE"
                                   ? heightmap_kind::world_surface
                               : std::string_view{kind_name} == "OCEAN_FLOOR"
                                   ? heightmap_kind::ocean_floor
-                                  : heightmap_kind::motion_blocking;
+                              : std::string_view{kind_name} == "MOTION_BLOCKING"
+                                  ? heightmap_kind::motion_blocking
+                                  : heightmap_kind::motion_blocking_no_leaves;
             for (std::size_t index = 0; index < 256U; ++index) {
                 const auto expected =
                     reference_heightmap(*document, kind_name, index);
