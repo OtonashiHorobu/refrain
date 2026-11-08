@@ -61,6 +61,8 @@ bind_host = "0.0.0.0"
 port = 25565
 compression_threshold = 256
 online_mode = true
+transport_instance = "asio_tcp"   # provider instance name
+protocol_instance = "java_777"    # provider instance name
 rate_limit = 0          # packets/second per play connection; 0 disables
 player_idle_timeout = 0 # minutes; 0 disables
 

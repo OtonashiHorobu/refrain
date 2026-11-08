@@ -105,6 +105,10 @@ struct runtime_provider {
                                   provider->storage, provider->runtime,
                                   provider->config_store)};
         if (provider->host != nullptr) {
+            const auto protocol_instance{
+                provider->network.get_string("protocol_instance", "java_777")};
+            const auto transport_instance{
+                provider->network.get_string("transport_instance", "asio_tcp")};
             std::vector<std::pair<
                 const refrain_services_session_status_vtable *, void *>>
                 status_hooks{};
@@ -216,7 +220,7 @@ struct runtime_provider {
                 };
             }
             const auto protocol{provider->host->services().active_provider(
-                "refrain:net.protocol", "java_777")};
+                "refrain:net.protocol", protocol_instance)};
             if (!protocol || protocol->instance == nullptr) {
                 return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
             }
@@ -251,7 +255,7 @@ struct runtime_provider {
                                          *>(protocol_api->vtable),
                         protocol_api->self))};
             const auto transport{provider->host->services().active_provider(
-                "refrain:transport", "asio_tcp")};
+                "refrain:transport", transport_instance)};
             if (transport) {
                 refrain::log::info("transport: {}", transport->id);
             }
