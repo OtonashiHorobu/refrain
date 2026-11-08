@@ -2877,3 +2877,76 @@ suite<"worldgen/feature/vegetation-patch"> vegetation_patch_tests = [] {
         expect(!nested_called);
     };
 };
+
+suite<"worldgen/feature/root-system"> root_system_tests = [] {
+    "the root system finds a ceiling pocket and delegates"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        const auto air = states.intern("minecraft:air", {.air = true});
+        const auto stone =
+            states.intern("minecraft:stone", {.air = false,
+                                              .blocks_motion = true,
+                                              .blocks_motion_no_leaves = true});
+        const auto rooted =
+            states.intern("minecraft:rooted_dirt", {.air = false});
+        const auto hanging =
+            states.intern("minecraft:hanging_roots", {.air = false});
+        expect(air && stone && rooted && hanging);
+        if (!air || !stone || !rooted || !hanging) {
+            return;
+        }
+        const std::array<block_state_id, 1> air_tag{*air};
+        states.add_tag("test:air", air_tag);
+        auto predicate = feature::decode_block_predicate(
+            parse(
+                R"({"type":"minecraft:matching_block_tag","tag":"test:air"})"),
+            states);
+        expect(predicate.has_value());
+        if (!predicate) {
+            return;
+        }
+        proto_chunk chunk{states, 0, 0, 0, 32};
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                chunk.set_state(x, 10, z, *stone);
+            }
+        }
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 0};
+        feature::placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &states,
+            .generation = provider::generation_context{.min_y = 0,
+                                                       .height = 32,
+                                                       .sea_level = 8},
+        };
+        bool nested_called = false;
+        feature::feature_context context{
+            .placement = placement,
+            .place_by_id =
+                [&](std::string_view, worldgen_random &, const block_pos &) {
+                    nested_called = true;
+                    return true;
+                },
+        };
+        const feature::root_system_feature root{"test:nested",
+                                                feature::simple_state(*rooted),
+                                                feature::simple_state(*hanging),
+                                                std::move(*predicate),
+                                                "#test:air",
+                                                2,
+                                                0,
+                                                0,
+                                                2,
+                                                1,
+                                                3,
+                                                2,
+                                                2,
+                                                1,
+                                                1};
+        worldgen_random random{std::make_unique<legacy_random_source>(1)};
+        expect(root.place(context, random, block_pos{.x = 8, .y = 9, .z = 8}));
+        expect(nested_called);
+    };
+};
