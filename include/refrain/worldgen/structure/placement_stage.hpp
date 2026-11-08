@@ -45,6 +45,11 @@ void place_structure_piece(const structure_place_context &context,
                                         jint base_y, jint local_x, jint local_y,
                                         jint local_z) -> block_pos;
 
+/// Recomputes fence, wall and stair connections in the chunk after all
+/// neighbouring pieces have been placed.
+void refresh_chunk_shapes(proto_chunk &chunk, const chunk_region &region,
+                          block_state_registry &states);
+
 /// Places every referenced start of `chunk` whose `step` matches, clipping
 /// pieces to the chunk. The random source is the decoration stream, already
 /// seeded by the caller for structure `structure_index`.

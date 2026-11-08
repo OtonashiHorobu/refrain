@@ -2423,6 +2423,29 @@ void place_structure_piece(const structure_place_context &context,
     }
 }
 
+void refresh_chunk_shapes(proto_chunk &chunk, const chunk_region &region,
+                          block_state_registry &states) {
+    for (jint y = chunk.min_y(); y < chunk.min_y() + chunk.height(); ++y) {
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                const auto state = chunk.state_at(x, y, z);
+                if (state >= states.size()) {
+                    continue;
+                }
+                const std::string name{state_block_name(states.name(state))};
+                if (name.ends_with("_wall") || name.ends_with("_fence") ||
+                    name.ends_with("_stairs")) {
+                    (void)refresh_block_shape(
+                        states, const_cast<chunk_region &>(region),
+                        block_pos{.x = chunk.chunk_x() * 16 + x,
+                                  .y = y,
+                                  .z = chunk.chunk_z() * 16 + z});
+                }
+            }
+        }
+    }
+}
+
 void place_structures(proto_chunk &chunk,
                       const structure_place_context &context,
                       std::string_view step, worldgen_random &random) {
@@ -2462,28 +2485,8 @@ void place_structures(proto_chunk &chunk,
     }
     if (static_cast<const block_state_table *>(context.registry) ==
         &context.chunk->table()) {
-        const auto &states = *context.registry;
-        for (jint y = context.chunk->min_y();
-             y < context.chunk->min_y() + context.chunk->height(); ++y) {
-            for (jint z = 0; z < 16; ++z) {
-                for (jint x = 0; x < 16; ++x) {
-                    const auto state = context.chunk->state_at(x, y, z);
-                    if (state >= states.size()) {
-                        continue;
-                    }
-                    const std::string name{
-                        state_block_name(states.name(state))};
-                    if (name.ends_with("_wall") || name.ends_with("_fence") ||
-                        name.ends_with("_stairs")) {
-                        (void)refresh_block_shape(
-                            *context.registry, *context.region,
-                            block_pos{.x = context.chunk->chunk_x() * 16 + x,
-                                      .y = y,
-                                      .z = context.chunk->chunk_z() * 16 + z});
-                    }
-                }
-            }
-        }
+        refresh_chunk_shapes(*context.chunk, *context.region,
+                             *context.registry);
     }
 }
 

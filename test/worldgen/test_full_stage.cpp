@@ -655,6 +655,7 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                     }
                 }
             }
+            structure::refresh_chunk_shapes(chunk, region_view, states);
         }
         std::size_t mismatches = 0;
         for (jint y = oracle_min_y; y < oracle_min_y + oracle_height; ++y) {

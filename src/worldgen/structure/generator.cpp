@@ -293,6 +293,7 @@ auto structure_generator::generate(const chunk_pos &pos)
             }
         }
     }
+    refresh_chunk_shapes(*center, region, states_);
     auto result = std::move(chunks[4]);
     return result;
 }

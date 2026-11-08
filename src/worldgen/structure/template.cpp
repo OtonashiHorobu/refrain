@@ -870,7 +870,15 @@ auto update_template_block(block_state_registry &states, chunk_region &region,
             std::string value = "none";
             if (connects) {
                 const auto above = region.state_at(pos.x, pos.y + 1, pos.z);
-                value = states.traits(above).blocks_motion ? "tall" : "low";
+                const auto above_name = state_block_name(states.name(above));
+                const bool covers = states.traits(above).blocks_motion &&
+                                    !above_name.ends_with("_wall") &&
+                                    !above_name.ends_with("_fence") &&
+                                    !above_name.ends_with("_stairs") &&
+                                    !above_name.ends_with("_slab") &&
+                                    !above_name.ends_with("_door") &&
+                                    !above_name.ends_with("_trapdoor");
+                value = covers ? "tall" : "low";
             }
             if (replace(name, value)) {
                 changed = true;
