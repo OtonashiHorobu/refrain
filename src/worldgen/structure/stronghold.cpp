@@ -17,6 +17,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -703,12 +704,50 @@ auto sampled_ring_position(const structure_start_context &context,
 
 } // namespace
 
+struct ring_cache_key {
+    jlong seed{0};
+    const structure_data_set *data{nullptr};
+    jint distance{0};
+    jint spread{0};
+    jint count{0};
+    jint salt{0};
+    bool fixed_biome{false};
+    std::string tag{};
+    std::vector<std::string> ids{};
+
+    auto operator<=>(const ring_cache_key &) const = default;
+};
+
+/// Ring positions depend only on the seed, placement and biome source, not on
+/// the requested chunk. The reference computes them once per generator state;
+/// caching per thread keeps the search out of the per-chunk path.
+auto ring_cache() -> std::map<ring_cache_key, std::vector<chunk_pos>> & {
+    thread_local std::map<ring_cache_key, std::vector<chunk_pos>> cache;
+    return cache;
+}
+
 auto concentric_ring_positions(jlong seed,
                                const concentric_rings_placement &placement,
                                const structure_start_context &context)
     -> std::vector<chunk_pos> {
+    ring_cache_key key{
+        .seed = seed,
+        .data = context.data,
+        .distance = placement.distance,
+        .spread = placement.spread,
+        .count = placement.count,
+        .salt = placement.salt,
+        .fixed_biome = context.fixed_biome,
+        .tag = placement.preferred_biomes_tag,
+        .ids = placement.preferred_biomes_ids,
+    };
+    if (const auto found = ring_cache().find(key);
+        found != ring_cache().end()) {
+        return found->second;
+    }
     std::vector<chunk_pos> positions;
     if (placement.count <= 0) {
+        ring_cache().emplace(std::move(key), positions);
         return positions;
     }
     positions.reserve(static_cast<std::size_t>(placement.count));
@@ -750,6 +789,7 @@ auto concentric_ring_positions(jlong seed,
             angle += random.next_double() * pi * 2.0;
         }
     }
+    ring_cache().emplace(std::move(key), positions);
     return positions;
 }
 
