@@ -2582,3 +2582,60 @@ suite<"worldgen/feature/end-island"> end_island_tests = [] {
         expect(count > 1);
     };
 };
+
+suite<"worldgen/feature/end-podium"> end_podium_tests = [] {
+    "the active podium writes the portal, pillar and torches"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        (void)states.intern("minecraft:air", {.air = true});
+        (void)states.intern("minecraft:bedrock",
+                            {.air = false,
+                             .blocks_motion = true,
+                             .blocks_motion_no_leaves = true});
+        const auto end_stone = states.intern("minecraft:end_stone",
+                                             {.air = false,
+                                              .blocks_motion = true,
+                                              .blocks_motion_no_leaves = true});
+        const auto portal = states.intern(
+            "minecraft:end_portal", {.air = false, .blocks_motion = true});
+        std::array<block_state_id, 4> torches{};
+        bool torches_ok = true;
+        for (std::size_t i = 0; i < 4; ++i) {
+            const std::array<std::string, 4> keys{
+                "minecraft:wall_torch[facing=south]",
+                "minecraft:wall_torch[facing=north]",
+                "minecraft:wall_torch[facing=east]",
+                "minecraft:wall_torch[facing=west]"};
+            const auto torch = states.intern(keys[i], {.air = false});
+            torches_ok = torches_ok && torch.has_value();
+            torches[i] = torch.value_or(no_block_state);
+        }
+        const auto bedrock = states.find("minecraft:bedrock");
+        expect(end_stone.has_value() && portal.has_value() && bedrock &&
+               torches_ok);
+        if (!end_stone || !portal || !bedrock || !torches_ok) {
+            return;
+        }
+        proto_chunk chunk{states, 0, 0, 0, 32};
+        chunk_region region{chunk, 0};
+        feature::placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &states,
+            .generation = provider::generation_context{.min_y = 0,
+                                                       .height = 32,
+                                                       .sea_level = 8},
+        };
+        feature::feature_context context{.placement = placement};
+        const feature::end_podium_feature feature{true, *bedrock, *end_stone,
+                                                  *portal, torches};
+        worldgen_random random{std::make_unique<legacy_random_source>(1)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 8, .z = 8}));
+        expect(chunk.state_at(8, 8, 8) == *bedrock);
+        expect(chunk.state_at(8, 8, 9) == *portal);
+        expect(chunk.state_at(8, 10, 8) == *bedrock);
+        expect(chunk.state_at(8, 7, 8) == *bedrock);
+        expect(chunk.state_at(8, 10, 9) == torches[0]);
+    };
+};
