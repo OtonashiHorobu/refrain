@@ -1122,6 +1122,11 @@ auto run_server(const server_run_options &options) -> int {
     network_inputs.commands =
         refrain::server::make_command_bridge(command_environment);
     network_inputs.policy.hardcore = level->hardcore;
+    network_inputs.policy.difficulty =
+        level->difficulty >= 0 && level->difficulty <= 3
+            ? static_cast<std::uint32_t>(level->difficulty)
+            : 2U;
+    network_inputs.policy.difficulty_locked = level->difficulty_locked;
     network_inputs.join_state =
         [command_environment](const refrain::net::player_identity &identity) {
             return command_environment->join_state(identity.connection);

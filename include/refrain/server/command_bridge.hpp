@@ -27,7 +27,7 @@ struct command_environment {
     /// Development default until a permission service exists. It allows the
     /// built-in gameplay commands for every player.
     refrain::command::permission_level permission{
-        refrain::command::level::gamemode};
+        refrain::command::level::admin};
 
     mutable std::mutex mode_mutex{};
     std::unordered_map<std::uint64_t, net::game_mode> modes{};

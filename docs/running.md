@@ -119,6 +119,8 @@ The server announces a small command tree after joining:
 | `/say <message>` | broadcast a message to every player |
 | `/gamemode <mode>` | change the calling player's game mode |
 | `/defaultgamemode <mode>` | persist the world's default game mode |
+| `/difficulty <0-3>` | persist and broadcast the world difficulty |
+| `/hardcore <on\|off>` | persist hardcore for new logins |
 
 | Command | Effect |
 |---|---|

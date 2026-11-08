@@ -64,6 +64,8 @@ struct join_state {
 /// World-level policy that is part of the login handshake.
 struct server_policy {
     bool hardcore{false};
+    std::uint32_t difficulty{2};
+    bool difficulty_locked{false};
 };
 
 using join_state_provider = std::function<join_state(const player_identity &)>;
@@ -194,6 +196,11 @@ class server {
     /// Call after the gameplay bridge changes commands or permissions.
     void resend_commands();
     void resend_commands(std::uint64_t connection);
+
+    /// Update the world difficulty and notify every play connection.
+    /// Hardcore only affects the next login handshake.
+    void set_difficulty(std::uint32_t difficulty, bool locked = false);
+    void set_hardcore(bool hardcore);
 
     /// Send one system chat line to a connection.
     void send_system_chat(std::uint64_t connection, std::string_view text);

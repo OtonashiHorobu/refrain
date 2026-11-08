@@ -241,6 +241,7 @@ struct server::impl {
 
     server_settings config{};
     server_policy policy{};
+    mutable std::mutex policy_mutex{};
     join_state_provider join_state{};
     command_bridge commands{};
     transport_factory make_transport{};
@@ -1145,9 +1146,14 @@ void server::impl::send_play_login(std::uint64_t id) {
         found->second.mode = mode;
     }
     log::info("net: player joined id={} name={}", id, name);
+    server_policy policy_snapshot{};
+    {
+        const std::lock_guard lock{policy_mutex};
+        policy_snapshot = policy;
+    }
     play_cb::login packet{};
     packet.player_id = static_cast<std::int32_t>(id);
-    packet.hardcore = policy.hardcore;
+    packet.hardcore = policy_snapshot.hardcore;
     packet.levels = {overworld()};
     packet.max_players = static_cast<std::uint32_t>(config.status.max_players);
     packet.chunk_radius = static_cast<std::uint32_t>(config.view_distance);
@@ -1171,7 +1177,9 @@ void server::impl::send_play_login(std::uint64_t id) {
     send_packet(id, play_cb::login::packet_id, packet, play_cb::encode_login);
 
     {
-        play_cb::change_difficulty difficulty{.difficulty = 2, .locked = false};
+        play_cb::change_difficulty difficulty{
+            .difficulty = policy_snapshot.difficulty,
+            .locked = policy_snapshot.difficulty_locked};
         send_packet(id, play_cb::change_difficulty::packet_id, difficulty,
                     play_cb::encode_change_difficulty);
     }
@@ -1573,6 +1581,38 @@ void server::resend_commands(std::uint64_t connection) {
         impl_->cached_commands.reset();
     }
     impl_->send_commands(connection);
+}
+
+void server::set_difficulty(std::uint32_t difficulty, bool locked) {
+    if (!impl_) {
+        return;
+    }
+    {
+        const std::lock_guard lock{impl_->policy_mutex};
+        impl_->policy.difficulty = difficulty;
+        impl_->policy.difficulty_locked = locked;
+    }
+    play_cb::change_difficulty packet{.difficulty = difficulty,
+                                      .locked = locked};
+    std::vector<std::byte> body;
+    if (auto encoded{encode_packet(play_cb::change_difficulty::packet_id,
+                                   packet, play_cb::encode_change_difficulty)};
+        encoded) {
+        body = std::move(*encoded);
+    } else {
+        return;
+    }
+    for (const auto connection : active_connections()) {
+        impl_->send(connection, body);
+    }
+}
+
+void server::set_hardcore(bool hardcore) {
+    if (!impl_) {
+        return;
+    }
+    const std::lock_guard lock{impl_->policy_mutex};
+    impl_->policy.hardcore = hardcore;
 }
 
 void server::send_system_chat(std::uint64_t connection, std::string_view text) {

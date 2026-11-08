@@ -286,6 +286,70 @@ void register_runtime_commands(
             return 1;
         });
     default_gamemode.then(default_argument);
+
+    auto difficulty{dispatcher.literal("difficulty")};
+    auto difficulty_argument{
+        dispatcher.argument("level", command::integer_arg(0, 3))};
+    difficulty_argument.require(command::level::gamemode);
+    difficulty_argument.executes(
+        [environment](command::context &context) -> refrain::result<int> {
+            if (environment->world == nullptr) {
+                context.fail("No world is open");
+                return std::unexpected{
+                    make_error(error_code::not_found, "no world")};
+            }
+            auto settings{environment->world->read_gameplay()};
+            if (!settings) {
+                context.fail("Cannot read world gameplay settings");
+                return std::unexpected{std::move(settings.error())};
+            }
+            settings->difficulty =
+                static_cast<std::int32_t>(context.integer("level"));
+            if (auto written{environment->world->write_gameplay(*settings)};
+                !written) {
+                context.fail("Cannot persist the difficulty");
+                return std::unexpected{std::move(written.error())};
+            }
+            if (environment->listener != nullptr) {
+                environment->listener->set_difficulty(
+                    static_cast<std::uint32_t>(settings->difficulty),
+                    settings->difficulty_locked);
+            }
+            context.reply(std::string{"Difficulty set to "} +
+                          std::to_string(settings->difficulty));
+            return 1;
+        });
+    difficulty.then(difficulty_argument);
+
+    auto hardcore{dispatcher.literal("hardcore")};
+    auto hardcore_argument{dispatcher.argument("enabled", command::bool_arg())};
+    hardcore_argument.require(command::level::admin);
+    hardcore_argument.executes(
+        [environment](command::context &context) -> refrain::result<int> {
+            if (environment->world == nullptr) {
+                context.fail("No world is open");
+                return std::unexpected{
+                    make_error(error_code::not_found, "no world")};
+            }
+            auto settings{environment->world->read_gameplay()};
+            if (!settings) {
+                context.fail("Cannot read world gameplay settings");
+                return std::unexpected{std::move(settings.error())};
+            }
+            settings->hardcore = context.boolean("enabled");
+            if (auto written{environment->world->write_gameplay(*settings)};
+                !written) {
+                context.fail("Cannot persist hardcore");
+                return std::unexpected{std::move(written.error())};
+            }
+            if (environment->listener != nullptr) {
+                environment->listener->set_hardcore(settings->hardcore);
+            }
+            context.reply(settings->hardcore ? "Hardcore enabled"
+                                             : "Hardcore disabled");
+            return 1;
+        });
+    hardcore.then(hardcore_argument);
 }
 
 auto make_command_bridge(std::shared_ptr<command_environment> environment)
