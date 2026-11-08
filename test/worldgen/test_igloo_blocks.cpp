@@ -2009,6 +2009,60 @@ auto mineshaft_canonical(std::string key) -> std::string {
 
 } // namespace
 
+namespace {
+
+auto generated_mineshaft_start(jint chunk_x, jint chunk_z, jlong seed)
+    -> ::refrain::worldgen::structure_start {
+    auto generated = structure::mineshaft_start(
+        chunk_pos{.x = chunk_x, .z = chunk_z}, seed, -64, 63, false);
+    ::refrain::worldgen::structure_start record{};
+    record.structure = generated.structure;
+    record.step = generated.step;
+    record.chunk_x = chunk_x;
+    record.chunk_z = chunk_z;
+    record.min_x = generated.bounds.min_x;
+    record.min_y = generated.bounds.min_y;
+    record.min_z = generated.bounds.min_z;
+    record.max_x = generated.bounds.max_x;
+    record.max_y = generated.bounds.max_y;
+    record.max_z = generated.bounds.max_z;
+    for (const auto &piece : generated.pieces) {
+        ::refrain::worldgen::structure_piece_record converted{};
+        converted.type = piece.type;
+        converted.min_x = piece.bounds.min_x;
+        converted.min_y = piece.bounds.min_y;
+        converted.min_z = piece.bounds.min_z;
+        converted.max_x = piece.bounds.max_x;
+        converted.max_y = piece.bounds.max_y;
+        converted.max_z = piece.bounds.max_z;
+        converted.orientation = piece.orientation;
+        converted.template_id = piece.template_id;
+        converted.template_x = piece.template_origin.x;
+        converted.template_y = piece.template_origin.y;
+        converted.template_z = piece.template_origin.z;
+        converted.template_rotation = piece.template_rotation;
+        converted.template_mirror = piece.template_mirror;
+        converted.template_pivot_x = piece.template_pivot.x;
+        converted.template_pivot_y = piece.template_pivot.y;
+        converted.template_pivot_z = piece.template_pivot.z;
+        converted.height_position = piece.height_position;
+        converted.height_offset = piece.height_offset;
+        converted.integrity = piece.integrity;
+        converted.large = piece.large;
+        converted.beached = piece.beached;
+        converted.entrances = piece.entrances;
+        converted.sections = piece.sections;
+        converted.rails = piece.rails;
+        converted.spider = piece.spider;
+        converted.two_floored = piece.two_floored;
+        converted.mesa = piece.mesa;
+        record.pieces.push_back(std::move(converted));
+    }
+    return record;
+}
+
+} // namespace
+
 suite<"worldgen/mineshaft-blocks"> mineshaft_block_tests = [] {
     "the mineshaft pieces match the reference chunk"_test = [&] {
         const char *region_path = std::getenv("REFRAIN_VANILLA_MINE_REGION");
@@ -2167,7 +2221,12 @@ suite<"worldgen/mineshaft-blocks"> mineshaft_block_tests = [] {
             start.max_y = std::max(start.max_y, record.max_y);
             start.max_z = std::max(start.max_z, record.max_z);
         }
-        chunk.add_structure_start(std::move(start));
+        if (std::getenv("REFRAIN_MINE_GENERATED_START") != nullptr) {
+            chunk.add_structure_start(
+                generated_mineshaft_start(center_x, center_z, seed));
+        } else {
+            chunk.add_structure_start(std::move(start));
+        }
 
         std::vector<std::unique_ptr<proto_chunk>> neighbours;
         chunk_region region_view{chunk, 1};
