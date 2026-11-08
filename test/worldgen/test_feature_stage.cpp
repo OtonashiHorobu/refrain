@@ -2701,3 +2701,57 @@ suite<"worldgen/feature/chorus-plant"> chorus_plant_tests = [] {
         expect(flowers > 0);
     };
 };
+
+suite<"worldgen/feature/bonus-chest"> bonus_chest_tests = [] {
+    "the bonus chest picks a surface cell and lights it"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        (void)states.intern("minecraft:air", {.air = true});
+        const auto stone =
+            states.intern("minecraft:stone", {.air = false,
+                                              .blocks_motion = true,
+                                              .blocks_motion_no_leaves = true});
+        const auto chest = states.intern("minecraft:chest", {.air = false});
+        const auto torch = states.intern("minecraft:torch", {.air = false});
+        expect(stone && chest && torch);
+        if (!stone || !chest || !torch) {
+            return;
+        }
+        proto_chunk chunk{states, 0, 0, 0, 32};
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint y = 0; y < 5; ++y) {
+                    chunk.set_state(x, y, z, *stone);
+                }
+            }
+        }
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 0};
+        feature::placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &states,
+            .generation = provider::generation_context{.min_y = 0,
+                                                       .height = 32,
+                                                       .sea_level = 8},
+        };
+        feature::feature_context context{.placement = placement};
+        const feature::bonus_chest_feature feature{*chest, *torch};
+        worldgen_random random{std::make_unique<legacy_random_source>(1)};
+        expect(
+            feature.place(context, random, block_pos{.x = 0, .y = 0, .z = 0}));
+        std::size_t chests = 0;
+        std::size_t torches = 0;
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                if (chunk.state_at(x, 5, z) == *chest) {
+                    ++chests;
+                } else if (chunk.state_at(x, 5, z) == *torch) {
+                    ++torches;
+                }
+            }
+        }
+        expect(chests == 1);
+        expect(torches > 0);
+    };
+};
