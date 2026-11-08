@@ -79,6 +79,34 @@ The generator needs a JDK (26.3 requires Java 25 or newer) and a locally owned
 vanilla world directory under `--output`, with the region files in
 `world/dimensions/minecraft/overworld/region/`.
 
+`--dimension the_nether|the_end` writes a reference world of that dimension
+instead. The preset of the targeted dimension gets a fixed real biome
+(`minecraft:nether_wastes` or `minecraft:the_end`) whose carvers and features
+are stripped, the real material rule is kept, `allow-nether` is enabled, and
+the force-load command runs inside the dimension. The region lands under
+`world/dimensions/minecraft/<dimension>/region`:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --dimension the_nether \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2nether
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_ORACLE_SEED=1 \
+REFRAIN_VANILLA_NETHER_REGION=/tmp/t2nether/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+    ./build/Release/bin/refrain-tests
+
+python3 tools/worldgen/oracle/generate.py --dimension the_end \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2end
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_ORACLE_SEED=1 \
+REFRAIN_VANILLA_END_REGION=/tmp/t2end/world/dimensions/minecraft/the_end/region/r.0.0.mca \
+    ./build/Release/bin/refrain-tests
+```
+
+The dimension suites compare chunks `(0,0)`, `(1,0)` and `(0,1)` of the nether
+and `(0,0)` and `(1,1)` of the end block for block and all four final
+heightmaps. `--fixed-biome` overrides the real biome, and the dimension mode
+rejects the overworld-only reference flags.
+
 The structure oracle keeps the normal world preset and generates structures
 for a fixed biome. `--force-load-box` moves the force-loaded area when the
 structure candidates are not near the origin:
