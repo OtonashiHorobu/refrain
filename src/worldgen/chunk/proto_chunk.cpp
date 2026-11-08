@@ -138,15 +138,14 @@ auto proto_chunk::source() const -> const heightmap_source & { return source_; }
 
 void proto_chunk::update_heightmaps(jint x, jint y, jint z,
                                     block_state_id state) {
-    // Heightmaps are live views of the column: every block write updates all
-    // six, including the worldgen maps after the terrain status.
-    for (const auto kind : worldgen_heightmaps) {
-        heightmap_at(kind).update(x, y, z, state, source_);
-    }
     if (status_at_least(status_, chunk_status::terrain)) {
         for (const auto kind : final_heightmaps) {
             heightmap_at(kind).update(x, y, z, state, source_);
         }
+        return;
+    }
+    for (const auto kind : worldgen_heightmaps) {
+        heightmap_at(kind).update(x, y, z, state, source_);
     }
 }
 
