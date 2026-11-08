@@ -950,3 +950,66 @@ suite<"worldgen/structure-data-index"> structure_data_index_tests = [] {
             !structure::structure_step_index(data, "test:missing").has_value());
     };
 };
+
+suite<"worldgen/structure-locate"> structure_locate_tests = [] {
+    auto make_data = [] {
+        structure::structure_data_set data;
+        data.structures.emplace(
+            "test:hut",
+            structure::structure_document{.id = "test:hut",
+                                          .type = "minecraft:buried_treasure",
+                                          .step = "underground_structures",
+                                          .biome_ids = {"minecraft:beach"}});
+        data.sets.emplace(
+            "test:huts",
+            structure::structure_set{
+                .id = "test:huts",
+                .structures = {{.structure = "test:hut", .weight = 1}},
+                .random_spread =
+                    structure::random_spread_placement{
+                        .spacing = 1,
+                        .separation = 0,
+                        .salt = 0,
+                        .spread = structure::spread_type::linear,
+                        .frequency = 1.0F},
+            });
+        return data;
+    };
+
+    "a structure is found in the origin chunk"_test = [&] {
+        const auto data = make_data();
+        const structure::structure_start_context context{
+            .seed = 1,
+            .data = &data,
+            .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+            .biome_name = [](std::uint16_t) -> std::string_view {
+                return "minecraft:beach";
+            },
+            .height_at = [](jint, jint, heightmap_kind) { return jint{70}; },
+        };
+        const auto found = structure::locate_structure(
+            "test:hut", chunk_pos{.x = 0, .z = 0}, 2, context);
+        expect(found.has_value());
+        expect(found && found->chunk.x == 0 && found->chunk.z == 0);
+        expect(found && found->structure == "test:hut");
+    };
+
+    "an unknown id and a disabled radius find nothing"_test = [&] {
+        const auto data = make_data();
+        const structure::structure_start_context context{
+            .seed = 1,
+            .data = &data,
+            .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+            .biome_name = [](std::uint16_t) -> std::string_view {
+                return "minecraft:beach";
+            },
+            .height_at = [](jint, jint, heightmap_kind) { return jint{70}; },
+        };
+        expect(!structure::locate_structure(
+                    "test:missing", chunk_pos{.x = 0, .z = 0}, 2, context)
+                    .has_value());
+        expect(!structure::locate_structure(
+                    "test:hut", chunk_pos{.x = 0, .z = 0}, -1, context)
+                    .has_value());
+    };
+};
