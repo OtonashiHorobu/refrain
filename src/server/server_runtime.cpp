@@ -37,7 +37,9 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace refrain::server {
@@ -155,6 +157,7 @@ struct runtime_state {
     std::vector<std::string> commands{};
     std::atomic<bool> stop{false};
     std::atomic<std::int64_t> heartbeat_ns{0};
+    refrain::core::config::store *config{nullptr};
 };
 
 void push_command(const std::shared_ptr<runtime_state> &state,
@@ -502,7 +505,9 @@ void print_console_help() {
         "console: commands: stop, save, tps, hash, pos, move <dx> <dy> <dz>, "
         "walk <dx> <dz>, jump, dig <x> <y> <z>, place <x> <y> <z> <block>, "
         "give <item> <count>, inv, spawn <type> <x> <y> <z>, entities, "
-        "kill <entity-id>, palette-gc, schedules");
+        "kill <entity-id>, palette-gc, schedules, config <namespace> "
+        "get|set <key> [value], config save|reload [namespace], "
+        "config names");
 }
 
 [[nodiscard]] auto split_console_line(std::string_view line)
@@ -530,6 +535,158 @@ template <typename T>
     const auto parsed{
         std::from_chars(text.data(), text.data() + text.size(), out)};
     return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+}
+
+[[nodiscard]] auto parse_config_value(std::string_view text)
+    -> std::variant<bool, std::int64_t, double, std::string> {
+    if (text == "true") {
+        return true;
+    }
+    if (text == "false") {
+        return false;
+    }
+    std::int64_t integer{0};
+    const auto int_parsed{
+        std::from_chars(text.data(), text.data() + text.size(), integer)};
+    if (int_parsed.ec == std::errc{} &&
+        int_parsed.ptr == text.data() + text.size()) {
+        return integer;
+    }
+    double real{0.0};
+    const auto real_parsed{
+        std::from_chars(text.data(), text.data() + text.size(), real)};
+    if (real_parsed.ec == std::errc{} &&
+        real_parsed.ptr == text.data() + text.size()) {
+        return real;
+    }
+    return std::string{text};
+}
+
+void execute_config_command(std::span<const std::string_view> tokens,
+                            refrain::core::config::store *config) {
+    namespace cfg = refrain::core::config;
+    if (config == nullptr) {
+        refrain::log::warn("config: no host configuration store");
+        return;
+    }
+    if (tokens.size() >= 2 && tokens[1] == "names") {
+        const auto names{config->names()};
+        std::string joined{};
+        for (const auto &name : names) {
+            if (!joined.empty()) {
+                joined += ' ';
+            }
+            joined += name;
+        }
+        refrain::log::info("config: {} namespace(s): {}", names.size(), joined);
+        return;
+    }
+    if (tokens.size() >= 2 && tokens[1] == "save") {
+        if (tokens.size() == 2) {
+            if (auto saved{config->save_all()}; !saved) {
+                refrain::log::error("config: save failed: {}",
+                                    saved.error().message);
+            } else {
+                refrain::log::info("config: saved dirty namespaces");
+            }
+        } else if (auto saved{config->save(tokens[2])}; !saved) {
+            refrain::log::error("config: save '{}' failed: {}", tokens[2],
+                                saved.error().message);
+        } else {
+            refrain::log::info("config: saved '{}'", tokens[2]);
+        }
+        return;
+    }
+    if (tokens.size() >= 2 && tokens[1] == "reload") {
+        if (tokens.size() == 2) {
+            if (auto loaded{config->reload_all()}; !loaded) {
+                refrain::log::error("config: reload failed: {}",
+                                    loaded.error().message);
+            } else {
+                refrain::log::info(
+                    "config: reloaded; running subsystems keep their "
+                    "startup snapshot until restart");
+            }
+        } else if (auto loaded{config->reload(tokens[2])}; !loaded) {
+            refrain::log::error("config: reload '{}' failed: {}", tokens[2],
+                                loaded.error().message);
+        } else {
+            refrain::log::info(
+                "config: reloaded '{}'; restart required to apply", tokens[2]);
+        }
+        return;
+    }
+    if (tokens.size() < 4) {
+        refrain::log::warn(
+            "config: usage: config <namespace> get <key> | set <key> <value> "
+            "| save [namespace] | reload [namespace] | names");
+        return;
+    }
+    const auto name_space{tokens[1]};
+    const auto action{tokens[2]};
+    const auto key{tokens[3]};
+    auto module{config->module(name_space)};
+    if (!module) {
+        refrain::log::warn("config: unknown namespace '{}'", name_space);
+        return;
+    }
+    if (action == "get") {
+        const auto kind{module->kind(key)};
+        if (kind == cfg::value_kind::missing) {
+            refrain::log::warn("config: {}.{} is not set", name_space, key);
+        } else if (kind == cfg::value_kind::boolean) {
+            refrain::log::info("config: {}.{} = {}", name_space, key,
+                               module->get_bool(key, false));
+        } else if (kind == cfg::value_kind::integer) {
+            refrain::log::info("config: {}.{} = {}", name_space, key,
+                               module->get_int64(key, 0));
+        } else if (kind == cfg::value_kind::floating) {
+            refrain::log::info("config: {}.{} = {}", name_space, key,
+                               module->get_double(key, 0.0));
+        } else if (kind == cfg::value_kind::string) {
+            refrain::log::info("config: {}.{} = '{}'", name_space, key,
+                               module->get_string(key, ""));
+        } else if (kind == cfg::value_kind::array) {
+            const auto values{module->get_strings(key)};
+            refrain::log::info("config: {}.{} = {} string(s)", name_space, key,
+                               values.size());
+        } else {
+            refrain::log::info("config: {}.{} = <table>", name_space, key);
+        }
+        return;
+    }
+    if (action == "set") {
+        if (tokens.size() < 5) {
+            refrain::log::warn("config: set expects a value");
+            return;
+        }
+        const auto value{parse_config_value(tokens[4])};
+        const auto result{std::visit(
+            [&](const auto &typed) -> status {
+                using T = std::decay_t<decltype(typed)>;
+                if constexpr (std::is_same_v<T, bool>) {
+                    return config->set_bool(name_space, key, typed);
+                } else if constexpr (std::is_same_v<T, std::int64_t>) {
+                    return config->set_int64(name_space, key, typed);
+                } else if constexpr (std::is_same_v<T, double>) {
+                    return config->set_double(name_space, key, typed);
+                } else {
+                    return config->set_string(name_space, key, typed);
+                }
+            },
+            value)};
+        if (!result) {
+            refrain::log::error("config: set failed: {}",
+                                result.error().message);
+        } else {
+            refrain::log::info(
+                "config: {}.{} updated in memory; 'config save' persists it "
+                "and subsystems pick it up after restart",
+                name_space, key);
+        }
+        return;
+    }
+    refrain::log::warn("config: unknown action '{}'", action);
 }
 
 void execute_console_command(const std::string &line,
@@ -620,6 +777,10 @@ void execute_console_command(const std::string &line,
         return;
     }
     const auto tokens{split_console_line(line)};
+    if (!tokens.empty() && tokens[0] == "config") {
+        execute_config_command(tokens, state->config);
+        return;
+    }
     if (line == "jump") {
         store.jump();
         refrain::log::info("jump: on_ground={}", store.player().on_ground);
@@ -1004,6 +1165,7 @@ auto run_server(const server_run_options &options) -> int {
         gc_worker.emplace(options.content_store, options.content_gc_budget_ms);
     }
     const auto state{std::make_shared<runtime_state>()};
+    state->config = options.config;
     state->heartbeat_ns.store(refrain::core::now_ns(),
                               std::memory_order_relaxed);
 
@@ -1203,6 +1365,20 @@ auto run_server(const server_run_options &options) -> int {
         refrain::log::error("shutdown: commit failed: {}",
                             committed.error().message);
         return 1;
+    }
+    if (options.config != nullptr) {
+        bool dirty{false};
+        for (const auto &name : options.config->names()) {
+            dirty = dirty || options.config->dirty(name);
+        }
+        if (dirty) {
+            if (auto saved{options.config->save_all()}; !saved) {
+                refrain::log::error("config: shutdown save failed: {}",
+                                    saved.error().message);
+            } else {
+                refrain::log::info("config: saved");
+            }
+        }
     }
     refrain::log::info("server stopped: {} ticks", ticks_run);
     return 0;

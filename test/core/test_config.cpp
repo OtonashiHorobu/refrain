@@ -447,6 +447,10 @@ name = "x"
         expect(static_cast<bool>(network));
         if (network) {
             expect(network->get_int64("port", 0) == 25565);
+            expect(network->kind("port") ==
+                   refrain::core::config::value_kind::integer);
+            expect(network->kind("missing") ==
+                   refrain::core::config::value_kind::missing);
             expect(network->get_bool("status.enabled", false));
             expect(network->get_string("status.motd", "") == "user");
             expect(network->contains("status.motd"));

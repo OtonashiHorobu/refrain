@@ -174,7 +174,8 @@ int main(int argc, char **argv) {
                  "Print the resolved gamepack/provider graph and exit");
     std::string world_path;
     app.add_option("--world", world_path,
-                   "RWF world directory to run (enables the tick loop)");
+                   "RWF world directory (overrides world.path; enables the "
+                   "tick loop)");
     std::string config_dir{"config"};
     app.add_option("--config-dir", config_dir,
                    "Directory with per-namespace TOML configuration files");
@@ -635,6 +636,7 @@ int main(int argc, char **argv) {
     // (manifest gates -> static factories -> service providers). Composition is
     // frozen on success; a failure aborts startup with the offending mod.
     refrain::core::config::store config_store{};
+    std::string config_world_path{};
     {
         const std::filesystem::path root{config_dir};
         const auto mount_namespace = [&](std::string name,
@@ -700,6 +702,9 @@ int main(int argc, char **argv) {
             }
             refrain::log::info("config: imported {} propert(ies) from {}",
                                imported->applied, import_properties_path);
+        }
+        if (auto view{config_store.module("world")}) {
+            config_world_path = view->get_string("path", "");
         }
         const auto override_int =
             [&](const char *option, std::string_view name_space,
@@ -790,6 +795,10 @@ int main(int argc, char **argv) {
         refrain::log::info("config: {} namespace(s) from {}",
                            config_store.names().size(), config_dir);
     }
+
+    const std::string resolved_world_path{world_path.empty() ? config_world_path
+                                                             : world_path};
+    refrain::log::info("config: world.path='{}'", resolved_world_path);
 
     refrain::mod::host mods{};
     mods.set_config(config_store);
@@ -990,7 +999,7 @@ int main(int argc, char **argv) {
     // explicit `--world` asks the active `refrain:runtime` provider to run the
     // tick loop; without it the process keeps the startup-check
     // behaviour (`--dump-gamepack` and CI composition smokes).
-    if (world_path.empty()) {
+    if (resolved_world_path.empty()) {
         return 0;
     }
 
@@ -1018,7 +1027,7 @@ int main(int argc, char **argv) {
     // and stays alive for the whole `run` call.
     auto runtime_config{refrain::services::runtime::make_runtime_config()};
     runtime_config.world_path =
-        refrain::contracts::to_borrowed(std::string_view{world_path});
+        refrain::contracts::to_borrowed(std::string_view{resolved_world_path});
     runtime_config.ticks = run_ticks;
     runtime_config.command_file =
         refrain::contracts::to_borrowed(std::string_view{command_file});

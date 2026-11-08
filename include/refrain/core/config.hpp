@@ -71,6 +71,7 @@ class document {
     /// `contains_at({})` is true for a valid document and `keys("")` lists the
     /// root table.
     [[nodiscard]] auto contains(std::string_view key) const noexcept -> bool;
+    [[nodiscard]] auto kind(std::string_view key) const noexcept -> value_kind;
 
     [[nodiscard]] auto get_bool(std::string_view key, bool fallback) const
         -> bool;
@@ -172,6 +173,7 @@ class view {
     [[nodiscard]] auto name() const noexcept -> std::string_view;
 
     [[nodiscard]] auto contains(std::string_view key) const noexcept -> bool;
+    [[nodiscard]] auto kind(std::string_view key) const noexcept -> value_kind;
 
     [[nodiscard]] auto get_bool(std::string_view key, bool fallback) const
         -> bool;

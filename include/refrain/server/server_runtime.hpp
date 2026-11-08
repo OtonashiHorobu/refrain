@@ -25,6 +25,9 @@ struct server_run_options {
     core::config::view world{};
     core::config::view storage{};
     core::config::view runtime{};
+    /// Host-owned store used by the console `/config` commands and the
+    /// shutdown save. Null disables both.
+    core::config::store *config{nullptr};
     /// Run exactly this many ticks, then stop. 0 = until `stop`/EOF.
     std::int64_t ticks{0};
     /// Optional batch command file (one console command per line, all at tick

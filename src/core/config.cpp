@@ -895,6 +895,13 @@ auto view::contains(std::string_view key) const noexcept -> bool {
     return impl_ != nullptr && flat_node(impl_->table, key) != nullptr;
 }
 
+auto view::kind(std::string_view key) const noexcept -> value_kind {
+    if (impl_ == nullptr) {
+        return value_kind::missing;
+    }
+    return kind_of(flat_node(impl_->table, key));
+}
+
 auto view::get_bool(std::string_view key, bool fallback) const -> bool {
     if (impl_ == nullptr) {
         return fallback;

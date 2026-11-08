@@ -46,7 +46,7 @@ Configuration lives in one TOML file per namespace under `--config-dir`:
 ```text
 config/
   network.toml      bind_host, port, compression, view distance, status, online mode
-  world.toml        level_name, allow_nether
+  world.toml        path, level_name, allow_nether
   runtime.toml      tick/watchdog/autosave knobs
   storage.toml      zstd and compaction policy
   providers/<id>.toml   implementation-specific options
@@ -102,11 +102,18 @@ the fallback layer; it never rewrites the TOML files.
 ## Console
 
 The server reads commands from stdin. The scripted replay format uses the same
-commands with a leading tick number.
+commands with a leading tick number. Dirty configuration is saved on shutdown;
+`config reload` changes the store but running subsystems keep their startup
+snapshot until restart.
 
 | Command | Effect |
 |---|---|
 | `stop` | stop after the current tick |
+| `config names` | list mounted configuration namespaces |
+| `config <ns> get <key>` | print one typed value |
+| `config <ns> set <key> <value>` | update the user layer in memory |
+| `config save [ns]` | persist dirty namespaces (all when omitted) |
+| `config reload [ns]` | re-read files; running subsystems need a restart |
 | `save` | flush pending snapshots and commit the world |
 | `tps` | print tick timing |
 | `hash` | print the state hash |

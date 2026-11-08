@@ -42,7 +42,8 @@ make_options(const refrain_services_runtime_runtime_config &config,
              const refrain::core::config::view &network,
              const refrain::core::config::view &world,
              const refrain::core::config::view &storage,
-             const refrain::core::config::view &runtime)
+             const refrain::core::config::view &runtime,
+             refrain::core::config::store *config_store)
     -> refrain::server::server_run_options {
     refrain::server::server_run_options options{};
     options.world_path = string_of(config.world_path);
@@ -50,6 +51,7 @@ make_options(const refrain_services_runtime_runtime_config &config,
     options.world = world;
     options.storage = storage;
     options.runtime = runtime;
+    options.config = config_store;
     options.ticks = config.ticks;
     options.command_file = string_of(config.command_file);
     options.script_file = string_of(config.script_file);
@@ -79,6 +81,7 @@ struct runtime_provider {
     refrain::core::config::view world{};
     refrain::core::config::view storage{};
     refrain::core::config::view runtime{};
+    refrain::core::config::store *config_store{nullptr};
 
     static auto run(void *self,
                     const refrain_services_runtime_runtime_config *config,
@@ -90,7 +93,8 @@ struct runtime_provider {
         }
         auto *provider{static_cast<runtime_provider *>(self)};
         auto options{make_options(*config, provider->network, provider->world,
-                                  provider->storage, provider->runtime)};
+                                  provider->storage, provider->runtime,
+                                  provider->config_store)};
         if (options.world_path.empty()) {
             return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
         }
@@ -118,6 +122,7 @@ auto make_server_vanilla(refrain::mod::host &host) -> refrain::status {
     static std::unique_ptr<runtime_provider> provider{};
     provider = std::make_unique<runtime_provider>();
     if (auto *store{host.config()}; store != nullptr) {
+        provider->config_store = store;
         if (auto view{store->module("network")}) {
             provider->network = *view;
         }
