@@ -1368,11 +1368,6 @@ void server::impl::send_play_login(std::uint64_t id) {
         };
         send_packet(id, play_cb::set_chunk_cache_center::packet_id, center,
                     play_cb::encode_set_chunk_cache_center);
-        play_cb::set_chunk_cache_radius radius{
-            .radius = config.view_distance,
-        };
-        send_packet(id, play_cb::set_chunk_cache_radius::packet_id, radius,
-                    play_cb::encode_set_chunk_cache_radius);
     };
     const auto send_vitals = [&] {
         play_cb::set_health health{
@@ -1931,15 +1926,23 @@ void server::impl::announce_join(std::uint64_t id) {
         };
     };
 
-    play_cb::player_info_update self_list{};
-    self_list.payload.actions =
-        static_cast<std::uint8_t>(player_info_add | player_info_game_mode |
-                                  player_info_listed | player_info_latency);
-    self_list.payload.entries.reserve(players.size());
+    play_cb::player_info_update self_add{};
+    self_add.payload.actions = player_info_add;
+    self_add.payload.entries.reserve(players.size());
     for (const auto &player : players) {
-        self_list.payload.entries.push_back(make_entry(player));
+        self_add.payload.entries.push_back(make_entry(player));
     }
-    send_packet(id, play_cb::player_info_update::packet_id, self_list,
+    send_packet(id, play_cb::player_info_update::packet_id, self_add,
+                play_cb::encode_player_info_update);
+
+    play_cb::player_info_update self_update{};
+    self_update.payload.actions = static_cast<std::uint8_t>(
+        player_info_game_mode | player_info_listed | player_info_latency);
+    self_update.payload.entries.reserve(players.size());
+    for (const auto &player : players) {
+        self_update.payload.entries.push_back(make_entry(player));
+    }
+    send_packet(id, play_cb::player_info_update::packet_id, self_update,
                 play_cb::encode_player_info_update);
 
     for (const auto &player : players) {
@@ -1951,7 +1954,9 @@ void server::impl::announce_join(std::uint64_t id) {
                     play_cb::encode_add_entity);
 
         play_cb::player_info_update update{};
-        update.payload.actions = self_list.payload.actions;
+        update.payload.actions =
+            static_cast<std::uint8_t>(player_info_add | player_info_game_mode |
+                                      player_info_listed | player_info_latency);
         update.payload.entries.push_back(make_entry(player_snapshot{
             .connection = id,
             .name = {},
