@@ -54,6 +54,37 @@ static mod registry. Their data, assets and scripts travel in a deterministic
 RFSI image embedded in the binary. External packages use the same manifest
 model and are installed into the content store.
 
+## Network
+
+The network stack is split along three contracts:
+
+- `refrain:transport` moves bytes. Providers declare reliability, ordering,
+  message orientation, MTU and backpressure. The bundled provider is TCP.
+- `refrain:net.protocol` turns bytes into packet ids and payloads. A provider
+  declares an edition/family descriptor, canonical and accepted versions,
+  required transport capabilities, framing/compression/encryption and the
+  optional `tab_codec` extension. Packet semantics and the connection state
+  machine stay in the network session shell; protocol providers do not own
+  world or player state.
+- `refrain:session` identifies the session family/edition. The runtime provider
+  registers it alongside `refrain:runtime`.
+
+Session presentation and observation are optional feature services, never
+network code:
+
+- `refrain:session.status` supplies server-list description, online and max
+  counts.
+- `refrain:session.tab` supplies tab-list header and footer.
+- `refrain:session.lifecycle` receives player join and leave notifications.
+
+The runtime enumerates every active instance in deterministic order. An empty
+service list keeps the static `network.toml` status, sends no tab packet and
+dispatches no lifecycle events.
+
+The stable C++ facade for the current wire version is
+`include/refrain/protocol/current.hpp`. Session and server code include this
+facade; only protocol providers and client tooling name a concrete version.
+
 ## World storage
 
 RWF v1 is the native world format. A world directory holds a header, world

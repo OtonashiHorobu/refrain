@@ -110,6 +110,27 @@ code is compiled into the server and registered through the static registry.
 A provider that the gamepack selects but the binary does not link fails at
 startup with the missing service key.
 
+### Session features
+
+A mod may implement optional session feature services instead of a packet
+provider:
+
+| Service | Contract | Purpose |
+|---|---|---|
+| `refrain:session.status` | `session_status.ridl` | dynamic MOTD, online and max player counts |
+| `refrain:session.tab` | `session_tab.ridl` | tab-list header and footer |
+| `refrain:session.lifecycle` | `session_lifecycle.ridl` | player join/leave notifications |
+
+Each service is `instanced`; select the mod under the matching gamepack
+provider key (`session_status`, `session_tab`, `session_lifecycle`). The runtime
+calls every active instance and uses the first handled view for status/tab.
+Lifecycle providers are notification-only.
+
+[`demo/refrain.session.dynamic`](../demo/refrain.session.dynamic) is an
+unbundled example. It is intentionally outside `mods/` and is not selected by
+the default gamepack; copy it into an instance mods root and bind it explicitly
+when testing.
+
 ## Content store
 
 `refrain-server --content-store <dir>` enables the content store. Packages
