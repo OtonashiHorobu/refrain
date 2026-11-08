@@ -11,6 +11,7 @@
 #include <refrain/net/base.hpp>
 #include <refrain/net/crypto.hpp>
 #include <refrain/net/frame.hpp>
+#include <refrain/net/rate_limit.hpp>
 #include <refrain/net/registry.hpp>
 #include <refrain/schema/protocol/777/configuration_clientbound.hpp>
 #include <refrain/schema/protocol/777/configuration_serverbound.hpp>
@@ -192,6 +193,8 @@ struct server_settings {
     std::function<bool(std::int32_t, std::int32_t, std::int32_t)> place_block{};
     std::string session_server{"https://sessionserver.mojang.com"};
     std::int32_t auth_timeout_ms{5000};
+    std::int32_t rate_limit{0};
+    std::int32_t idle_timeout_seconds{0};
 };
 
 [[nodiscard]] auto make_command_tree() -> refrain::net::command_tree {
@@ -263,6 +266,8 @@ struct server::impl {
         std::unique_ptr<aes128_cfb8> cipher{};
         std::vector<std::byte> verify_token{};
         bool online_pending{false};
+        token_bucket limiter{};
+        std::int64_t last_packet_ns{0};
     };
 
     server_settings config{};
@@ -400,7 +405,12 @@ void server::impl::on_open(std::uint64_t id) {
     }
     log::debug("net: connection opened id={}", id);
     const std::lock_guard lock{connections_mutex};
-    connections.emplace(id, connection_state_data{});
+    auto &connection{connections[id]};
+    connection.limiter.configure(config.rate_limit);
+    connection.last_packet_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
 }
 
 void server::impl::on_close(std::uint64_t id, std::string_view /*reason*/) {
@@ -425,6 +435,7 @@ void server::impl::on_close(std::uint64_t id, std::string_view /*reason*/) {
 void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
     std::vector<std::vector<std::byte>> bodies;
     bool failed{false};
+    bool rate_limited{false};
     {
         const std::lock_guard lock{connections_mutex};
         const auto found{connections.find(id)};
@@ -458,6 +469,20 @@ void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
                     if (!*next) {
                         break;
                     }
+                    if (connection.state == connection_state::play &&
+                        !connection.limiter.allow(
+                            std::chrono::duration_cast<
+                                std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now()
+                                    .time_since_epoch())
+                                .count())) {
+                        rate_limited = true;
+                        break;
+                    }
+                    connection.last_packet_ns =
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count();
                     bodies.push_back(std::move(body));
                 }
             }
@@ -465,6 +490,13 @@ void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
     }
     if (failed) {
         close(id);
+        return;
+    }
+    if (rate_limited) {
+        log::warn("net: rate limit exceeded id={}", id);
+        if (socket) {
+            socket->close(id);
+        }
         return;
     }
     for (const auto &body : bodies) {
@@ -2042,6 +2074,28 @@ void server::impl::tick() {
     }
     for (const auto &packet : local) {
         handle_play(packet.connection, packet.body);
+    }
+    if (config.idle_timeout_seconds > 0) {
+        const auto now{std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           std::chrono::steady_clock::now().time_since_epoch())
+                           .count()};
+        std::vector<std::uint64_t> idle;
+        {
+            const std::lock_guard lock{connections_mutex};
+            for (const auto &[id, state] : connections) {
+                if (!state.closed && state.state == connection_state::play &&
+                    idle_timed_out(
+                        state.last_packet_ns, now,
+                        static_cast<std::int64_t>(config.idle_timeout_seconds) *
+                            1'000'000'000LL)) {
+                    idle.push_back(id);
+                }
+            }
+        }
+        for (const auto id : idle) {
+            log::info("net: player idle timeout id={}", id);
+            close(id);
+        }
     }
     queue_chunk_views();
     broadcast_entity_moves();
