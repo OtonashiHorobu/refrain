@@ -209,8 +209,33 @@ struct blended_noise_parameters {
 [[nodiscard]] auto blended_noise(const blended_noise_parameters &parameters,
                                  random_source &random) -> sampler_ptr;
 
-/// `minecraft:slice`: evaluate `input` at a fixed Y and broadcast the result.
+/// `minecraft:slice`: evaluate `input` at a fixed coordinate of one axis and
+/// broadcast the result along that axis.
+enum class slice_axis : std::uint8_t { x, y, z };
+
+[[nodiscard]] auto slice(slice_axis axis, jint coordinate, sampler_ptr input)
+    -> sampler_ptr;
+
+/// `minecraft:slice` on Y. Kept as the constructor the surface probe uses.
 [[nodiscard]] auto slice_y(sampler_ptr input, jint y) -> sampler_ptr;
+
+/// The distance a `minecraft:distance_to_point` function reports.
+enum class distance_metric : std::uint8_t {
+    euclidean,
+    euclidean_squared,
+    manhattan,
+    chebyshev,
+};
+
+/// `minecraft:distance_to_point`: the metric between a fixed point and the
+/// sampled block position.
+[[nodiscard]] auto distance_to_point(jint x, jint y, jint z,
+                                     distance_metric metric) -> sampler_ptr;
+
+/// `minecraft:end_outer_islands`: the outer-island height field. The stream is
+/// a legacy source seeded with the world seed that has consumed the 17292
+/// draws the reference discards before building the simplex noise.
+[[nodiscard]] auto end_outer_islands(random_source &random) -> sampler_ptr;
 
 /// `minecraft:find_top_surface`: probe the density along Y in `cell_height`
 /// steps and return the first cell above zero (or `lower_bound`).

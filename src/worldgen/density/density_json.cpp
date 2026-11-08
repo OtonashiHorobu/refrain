@@ -167,6 +167,22 @@ class decoder {
         if (kind == "minecraft:find_top_surface") {
             return decode_find_top_surface(node);
         }
+        if (kind == "minecraft:slice") {
+            return decode_slice(node);
+        }
+        if (kind == "minecraft:distance_to_point") {
+            return decode_distance_to_point(node);
+        }
+        if (kind == "minecraft:end_outer_islands") {
+            // The reference builds the island noise from a legacy source seeded
+            // with the world seed after discarding 17292 draws.
+            auto source = new_random_source(algorithm::legacy, documents_.seed);
+            worldgen_random stream{std::move(source)};
+            for (jint draw = 0; draw < 17292; ++draw) {
+                (void)stream.next_int();
+            }
+            return end_outer_islands(stream.source());
+        }
         return std::unexpected{
             fail("unsupported density function type: " + std::string{kind})};
     }
@@ -577,8 +593,76 @@ class decoder {
         parameters.xz_factor = *xz_factor;
         parameters.y_factor = *y_factor;
         parameters.smear_scale_multiplier = *smear;
+        // The reference derives the blended-noise stream from the world seed
+        // when the settings select the legacy random source, and from the
+        // "minecraft:terrain" name hash otherwise.
+        if (documents_.random_algorithm == algorithm::legacy) {
+            auto source = new_random_source(algorithm::legacy, documents_.seed);
+            return blended_noise(parameters, *source);
+        }
         auto source = factory_->from_hash_of("minecraft:terrain");
         return blended_noise(parameters, *source);
+    }
+
+    auto decode_slice(const json &node) -> result<sampler_ptr> {
+        const auto axis_name = string_member(node, "axis");
+        const auto coordinate = int_member(node, "coordinate");
+        auto input = child(node, "input");
+        if (!axis_name || !coordinate || !input) {
+            return std::unexpected{fail("slice is incomplete")};
+        }
+        slice_axis axis = slice_axis::y;
+        if (*axis_name == "x") {
+            axis = slice_axis::x;
+        } else if (*axis_name == "z") {
+            axis = slice_axis::z;
+        } else if (*axis_name != "y") {
+            return std::unexpected{fail("slice axis is unknown")};
+        }
+        return slice(axis, *coordinate, std::move(*input));
+    }
+
+    auto decode_distance_metric(std::string_view name)
+        -> std::optional<distance_metric> {
+        if (name == "euclidean") {
+            return distance_metric::euclidean;
+        }
+        if (name == "euclidean_squared") {
+            return distance_metric::euclidean_squared;
+        }
+        if (name == "manhattan") {
+            return distance_metric::manhattan;
+        }
+        if (name == "chebyshev") {
+            return distance_metric::chebyshev;
+        }
+        return std::nullopt;
+    }
+
+    auto decode_distance_to_point(const json &node) -> result<sampler_ptr> {
+        const json *point = node.find("point");
+        const auto metric_name = string_member(node, "metric");
+        if (point == nullptr || !point->is_array() || !metric_name) {
+            return std::unexpected{fail("distance_to_point is incomplete")};
+        }
+        const auto coordinates = point->as_array();
+        if (!coordinates || coordinates->size() != 3U) {
+            return std::unexpected{fail("distance_to_point has no point")};
+        }
+        std::array<jint, 3> values{};
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            const auto value = (*coordinates)[index].as_int64();
+            if (!value) {
+                return std::unexpected{
+                    fail("distance_to_point point is not integer")};
+            }
+            values[index] = static_cast<jint>(*value);
+        }
+        const auto metric = decode_distance_metric(*metric_name);
+        if (!metric) {
+            return std::unexpected{fail("distance metric is unknown")};
+        }
+        return distance_to_point(values[0], values[1], values[2], *metric);
     }
 
     auto decode_find_top_surface(const json &node) -> result<sampler_ptr> {
