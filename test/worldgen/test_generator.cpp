@@ -119,7 +119,7 @@ suite<"worldgen/generator"> generator_tests = [] {
         ok.fill = [](proto_chunk &) {};
         generator status_gen{registry, 0, 32, std::move(ok)};
         const auto unsupported = status_gen.generate(chunk_pos{.x = 0, .z = 0},
-                                                     chunk_status::features);
+                                                     chunk_status::biomes);
         expect(!unsupported.has_value());
         if (!unsupported) {
             expect(unsupported.error().code == error_code::unsupported);
