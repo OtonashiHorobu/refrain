@@ -14,6 +14,7 @@
 
 #include <array>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace refrain::worldgen::structure {
@@ -78,6 +79,20 @@ class mansion_room_collection {
   private:
     jint floor_{0};
 };
+
+class mansion_grid;
+
+struct mansion_piece {
+    std::string template_name{};
+    block_pos origin{};
+    template_rotation rotation{template_rotation::none};
+    template_mirror mirror{template_mirror::none};
+};
+
+[[nodiscard]] auto
+generate_mansion(worldgen_random &random, const block_pos &origin,
+                 template_rotation rotation, const mansion_grid &grid)
+    -> std::vector<mansion_piece>;
 
 class mansion_grid {
   public:

@@ -1416,4 +1416,40 @@ suite<"worldgen/mansion-grid"> mansion_grid_tests = [] {
         expect(first.room_2x2_secret(random) == "2x2_s1");
         expect(second.room_2x2_secret(random) == "2x2_s1");
     };
+
+    "the mansion placer emits deterministic walls and roofs"_test = [] {
+        auto first_random =
+            worldgen_random{std::make_unique<legacy_random_source>(2)};
+        structure::mansion_grid first_grid{first_random};
+        const auto first = structure::generate_mansion(
+            first_random, block_pos{.x = 0, .y = 60, .z = 0},
+            structure::template_rotation::none, first_grid);
+        auto second_random =
+            worldgen_random{std::make_unique<legacy_random_source>(2)};
+        structure::mansion_grid second_grid{second_random};
+        const auto second = structure::generate_mansion(
+            second_random, block_pos{.x = 0, .y = 60, .z = 0},
+            structure::template_rotation::none, second_grid);
+        expect(first.size() == second.size());
+        expect(!first.empty());
+        if (first.size() != second.size() || first.empty()) {
+            return;
+        }
+        bool has_entrance = false;
+        bool has_roof = false;
+        bool has_wall = false;
+        for (std::size_t i = 0; i < first.size(); ++i) {
+            expect(first[i].template_name == second[i].template_name);
+            expect(first[i].origin.x == second[i].origin.x);
+            expect(first[i].origin.y == second[i].origin.y);
+            expect(first[i].origin.z == second[i].origin.z);
+            expect(first[i].rotation == second[i].rotation);
+            has_entrance = has_entrance || first[i].template_name == "entrance";
+            has_roof = has_roof || first[i].template_name == "roof";
+            has_wall = has_wall || first[i].template_name == "wall_flat";
+        }
+        expect(has_entrance);
+        expect(has_roof);
+        expect(has_wall);
+    };
 };
