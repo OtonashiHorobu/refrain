@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9a9c3f62f2fea89b
+// Schema hash: 05c2082603634f9e
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_SESSION_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_SESSION_ABI_H
@@ -17,7 +17,17 @@
 extern "C" {
 #endif
 
+typedef struct refrain_services_session_session_player refrain_services_session_session_player;
 typedef struct refrain_services_session_session_descriptor refrain_services_session_session_descriptor;
+
+struct refrain_services_session_session_player {
+    uint32_t struct_size;
+    uint8_t reserved_0[4];
+    uint64_t connection;
+    refrain_str name;
+    refrain_str world;
+}; // refrain_services_session_session_player size = 48
+#define REFRAIN_SERVICES_SESSION_SESSION_PLAYER_SIZE ((uint32_t)sizeof(refrain_services_session_session_player))
 
 struct refrain_services_session_session_descriptor {
     uint32_t struct_size;
@@ -46,6 +56,15 @@ typedef struct refrain_services_session_vtable {
     uint32_t abi_patch;
     // attributes: #[thread(any)]
     void (*descriptor)(void *self, refrain_services_session_session_descriptor *value);
+    // A player entered the play state.
+    // attributes: #[thread(sim)]
+    void (*attach)(void *self, const refrain_services_session_session_player *player);
+    // A player left or was disconnected.
+    // attributes: #[thread(sim)]
+    void (*detach)(void *self, const refrain_services_session_session_player *player);
+    // One simulation tick has advanced.
+    // attributes: #[thread(sim)]
+    void (*tick)(void *self, uint64_t tick);
 } refrain_services_session_vtable; // service refrain:session
 
 #define REFRAIN_SERVICES_SESSION_VTABLE_SIZE ((uint32_t)sizeof(refrain_services_session_vtable))

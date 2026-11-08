@@ -110,6 +110,13 @@ code is compiled into the server and registered through the static registry.
 A provider that the gamepack selects but the binary does not link fails at
 startup with the missing service key.
 
+### Session provider
+
+`refrain:session` is an instanced provider contract. The bundled
+`refrain.server.vanilla` registers instance `minecraft`; it exposes a
+descriptor plus `attach`, `detach` and `tick` lifecycle entries. Session feature
+services below are dispatched by that provider.
+
 ### Session features
 
 A mod may implement optional session feature services instead of a packet

@@ -66,8 +66,10 @@ The network stack is split along three contracts:
   optional `tab_codec` extension. Packet semantics and the connection state
   machine stay in the network session shell; protocol providers do not own
   world or player state.
-- `refrain:session` identifies the session family/edition. The runtime provider
-  registers it alongside `refrain:runtime`.
+- `refrain:session` identifies the session family/edition and receives
+  `attach`, `detach` and `tick` lifecycle calls. The runtime provider registers
+  it alongside `refrain:runtime` and forwards player/tick events from the
+  session shell.
 
 Session presentation and observation are optional feature services, never
 network code:

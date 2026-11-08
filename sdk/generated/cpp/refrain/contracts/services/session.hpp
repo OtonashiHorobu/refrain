@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9a9c3f62f2fea89b
+// Schema hash: 05c2082603634f9e
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_SESSION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_SESSION_HPP
@@ -25,6 +25,13 @@
 
 namespace refrain::services::session {
 
+using session_player = ::refrain_services_session_session_player;
+/// Zero-initialized `session_player` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
+[[nodiscard]] inline auto make_session_player() noexcept -> session_player {
+    session_player value{};
+    ::refrain::contracts::init_struct(value);
+    return value;
+}
 using session_descriptor = ::refrain_services_session_session_descriptor;
 /// Zero-initialized `session_descriptor` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
 [[nodiscard]] inline auto make_session_descriptor() noexcept -> session_descriptor {
@@ -33,6 +40,12 @@ using session_descriptor = ::refrain_services_session_session_descriptor;
     return value;
 }
 
+static_assert(sizeof(session_player) == 48);
+static_assert(alignof(session_player) == 8);
+static_assert(offsetof(session_player, struct_size) == 0);
+static_assert(offsetof(session_player, connection) == 8);
+static_assert(offsetof(session_player, name) == 16);
+static_assert(offsetof(session_player, world) == 32);
 static_assert(sizeof(session_descriptor) == 56);
 static_assert(alignof(session_descriptor) == 8);
 static_assert(offsetof(session_descriptor, struct_size) == 0);
@@ -72,6 +85,23 @@ class provider final {
     auto descriptor(::refrain::services::session::session_descriptor &value) const -> void {
         ::refrain::contracts::init_struct(value);
         table_->descriptor(self_, &value);
+    }
+
+    /// A player entered the play state.
+    auto attach(const ::refrain::services::session::session_player &player) const -> void {
+        const auto abi_player = ::refrain::contracts::with_struct_size(player);
+        table_->attach(self_, &abi_player);
+    }
+
+    /// A player left or was disconnected.
+    auto detach(const ::refrain::services::session::session_player &player) const -> void {
+        const auto abi_player = ::refrain::contracts::with_struct_size(player);
+        table_->detach(self_, &abi_player);
+    }
+
+    /// One simulation tick has advanced.
+    auto tick(std::uint64_t tick) const -> void {
+        table_->tick(self_, tick);
     }
 
   private:

@@ -8,9 +8,15 @@
 // `refrain:session.status` / `refrain:session.tab` services.
 
 module refrain::services::session;
-version 1.0.0;
+version 2.0.0;
 
 import refrain::core;
+
+struct session_player {
+    u64 connection;
+    string name;
+    string world;
+}
 
 struct session_descriptor {
     string family;
@@ -28,4 +34,16 @@ service session : 1.0.0 {
 
     #[thread(any)]
     fn descriptor(out session_descriptor value);
+
+    /// A player entered the play state.
+    #[thread(sim)]
+    fn attach(in session_player player);
+
+    /// A player left or was disconnected.
+    #[thread(sim)]
+    fn detach(in session_player player);
+
+    /// One simulation tick has advanced.
+    #[thread(sim)]
+    fn tick(u64 tick);
 }

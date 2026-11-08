@@ -29,6 +29,8 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -86,7 +88,17 @@ make_options(const refrain_services_runtime_runtime_config &config,
     return options;
 }
 
+using lifecycle_hook =
+    std::pair<const refrain_services_session_lifecycle_vtable *, void *>;
+
+void session_attach(void *self,
+                    const refrain_services_session_session_player *player);
+void session_detach(void *self,
+                    const refrain_services_session_session_player *player);
+void session_tick(void *self, std::uint64_t tick);
+
 struct runtime_provider {
+    std::vector<lifecycle_hook> lifecycle_hooks{};
     refrain::core::config::view network{};
     refrain::core::config::view world{};
     refrain::core::config::view storage{};
@@ -243,42 +255,30 @@ struct runtime_provider {
                 }
             }
             if (!lifecycle_hooks.empty()) {
-                const auto dispatch =
-                    [hooks = lifecycle_hooks](
-                        const refrain::net::player_identity &identity,
-                        bool joining) {
-                        for (const auto &[vtable, hook_self] : hooks) {
-                            const refrain::services::session_lifecycle::provider
-                                lifecycle{*vtable, hook_self};
-                            auto request{refrain::services::session_lifecycle::
-                                             make_player_info()};
-                            request.connection = identity.connection;
-                            request.name =
-                                refrain::contracts::to_borrowed(identity.name);
-                            request.world =
-                                refrain::contracts::to_borrowed(identity.world);
-                            if (joining) {
-                                lifecycle.player_join(request);
-                            } else {
-                                lifecycle.player_leave(request);
-                            }
-                        }
-                    };
+                auto &state{*static_cast<runtime_provider *>(self)};
+                state.lifecycle_hooks = lifecycle_hooks;
                 options.player_join =
-                    [dispatch](const refrain::net::player_identity &identity) {
-                        dispatch(identity, true);
+                    [self](const refrain::net::player_identity &identity) {
+                        refrain_services_session_session_player player{};
+                        player.connection = identity.connection;
+                        player.name =
+                            refrain::contracts::to_borrowed(identity.name);
+                        player.world =
+                            refrain::contracts::to_borrowed(identity.world);
+                        session_attach(self, &player);
                     };
                 options.player_leave =
-                    [dispatch](const refrain::net::player_identity &identity) {
-                        dispatch(identity, false);
+                    [self](const refrain::net::player_identity &identity) {
+                        refrain_services_session_session_player player{};
+                        player.connection = identity.connection;
+                        player.name =
+                            refrain::contracts::to_borrowed(identity.name);
+                        player.world =
+                            refrain::contracts::to_borrowed(identity.world);
+                        session_detach(self, &player);
                     };
-                options.on_tick = [hooks =
-                                       lifecycle_hooks](std::uint64_t tick) {
-                    for (const auto &[vtable, hook_self] : hooks) {
-                        const refrain::services::session_lifecycle::provider
-                            lifecycle{*vtable, hook_self};
-                        lifecycle.tick(tick);
-                    }
+                options.on_tick = [self](std::uint64_t tick) {
+                    session_tick(self, tick);
                 };
             }
             const auto protocol{provider->host->services().active_provider(
@@ -403,6 +403,55 @@ auto runtime_vtable() -> const refrain_services_runtime_vtable & {
     return table;
 }
 
+void dispatch_lifecycle(runtime_provider &state,
+                        const refrain_services_session_session_player *player,
+                        bool joining) {
+    if (player == nullptr) {
+        return;
+    }
+    for (const auto &[vtable, hook_self] : state.lifecycle_hooks) {
+        const refrain::services::session_lifecycle::provider lifecycle{
+            *vtable, hook_self};
+        auto request{refrain::services::session_lifecycle::make_player_info()};
+        request.connection = player->connection;
+        request.name = player->name;
+        request.world = player->world;
+        if (joining) {
+            lifecycle.player_join(request);
+        } else {
+            lifecycle.player_leave(request);
+        }
+    }
+}
+
+void session_attach(void *self,
+                    const refrain_services_session_session_player *player) {
+    if (self != nullptr) {
+        dispatch_lifecycle(*static_cast<runtime_provider *>(self), player,
+                           true);
+    }
+}
+
+void session_detach(void *self,
+                    const refrain_services_session_session_player *player) {
+    if (self != nullptr) {
+        dispatch_lifecycle(*static_cast<runtime_provider *>(self), player,
+                           false);
+    }
+}
+
+void session_tick(void *self, std::uint64_t tick) {
+    if (self == nullptr) {
+        return;
+    }
+    auto &state{*static_cast<runtime_provider *>(self)};
+    for (const auto &[vtable, hook_self] : state.lifecycle_hooks) {
+        const refrain::services::session_lifecycle::provider lifecycle{
+            *vtable, hook_self};
+        lifecycle.tick(tick);
+    }
+}
+
 void session_descriptor(void *self,
                         refrain_services_session_session_descriptor *out) {
     static_cast<void>(self);
@@ -425,6 +474,9 @@ const refrain_services_session_vtable &session_vtable() {
         .abi_minor = REFRAIN_SERVICES_SESSION_ABI_MINOR,
         .abi_patch = REFRAIN_SERVICES_SESSION_ABI_PATCH,
         .descriptor = &session_descriptor,
+        .attach = &session_attach,
+        .detach = &session_detach,
+        .tick = &session_tick,
     };
     return table;
 }
