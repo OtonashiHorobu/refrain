@@ -1657,6 +1657,58 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             expect(actual.bounds.max_x == (*values)[3]);
             expect(actual.bounds.max_y == (*values)[4]);
             expect(actual.bounds.max_z == (*values)[5]);
+            const auto type = id->as_string().value_or("");
+            if (type == "minecraft:mscorridor") {
+                const auto *num = child(piece, "Num");
+                const auto *hr = child(piece, "hr");
+                const auto *sc = child(piece, "sc");
+                expect(num != nullptr && num->as_int().value_or(-1) ==
+                                           actual.sections);
+                expect(hr != nullptr &&
+                       (hr->as_byte().value_or(0) != 0) == actual.rails);
+                expect(sc != nullptr &&
+                       (sc->as_byte().value_or(0) != 0) == actual.spider);
+            } else if (type == "minecraft:msroom") {
+                const auto *entrances = child(piece, "Entrances");
+                const auto *list =
+                    entrances == nullptr ? nullptr : entrances->as_list();
+                const std::size_t expected_count =
+                    list == nullptr ? 0 : list->items.size();
+                expect(actual.entrances.size() == expected_count);
+                for (std::size_t entrance_index = 0;
+                     list != nullptr && entrance_index < list->items.size() &&
+                     entrance_index < actual.entrances.size();
+                     ++entrance_index) {
+                    const auto *box =
+                        list->items[entrance_index].as_compound();
+                    const auto *bb2 =
+                        box == nullptr ? nullptr : child(box, "BB");
+                    const auto vals2 =
+                        bb2 != nullptr
+                            ? bb2->as_int_array()
+                            : list->items[entrance_index].as_int_array();
+                    if (!vals2 || vals2->size() != 6U) {
+                        continue;
+                    }
+                    expect(actual.entrances[entrance_index].min_x ==
+                           (*vals2)[0]);
+                    expect(actual.entrances[entrance_index].min_y ==
+                           (*vals2)[1]);
+                    expect(actual.entrances[entrance_index].min_z ==
+                           (*vals2)[2]);
+                    expect(actual.entrances[entrance_index].max_x ==
+                           (*vals2)[3]);
+                    expect(actual.entrances[entrance_index].max_y ==
+                           (*vals2)[4]);
+                    expect(actual.entrances[entrance_index].max_z ==
+                           (*vals2)[5]);
+                }
+            } else if (type == "minecraft:mscrossing") {
+                const auto *tf = child(piece, "tf");
+                expect(tf != nullptr &&
+                       (tf->as_byte().value_or(0) != 0) ==
+                           actual.two_floored);
+            }
         }
     };
 
