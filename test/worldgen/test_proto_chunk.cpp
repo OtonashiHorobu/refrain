@@ -79,7 +79,7 @@ using namespace boost::ut;
 using namespace refrain::worldgen;
 
 suite<"worldgen/proto-chunk"> proto_chunk_tests = [] {
-    "writes update only the heightmaps of the current status"_test = [] {
+    "writes update the live heightmaps of every status"_test = [] {
         const test_table table;
         proto_chunk chunk{table, 3, -2, 0, 32};
         chunk.set_status(chunk_status::biomes);
@@ -102,7 +102,7 @@ suite<"worldgen/proto-chunk"> proto_chunk_tests = [] {
         expect(chunk.set_state(1, 10, 2, leaves));
         expect(first(chunk, heightmap_kind::motion_blocking) == 11);
         expect(first(chunk, heightmap_kind::motion_blocking_no_leaves) == 9);
-        expect(first(chunk, heightmap_kind::world_surface_wg) == 9);
+        expect(first(chunk, heightmap_kind::world_surface_wg) == 11);
 
         expect(chunk.set_state(1, 10, 2, air));
         expect(first(chunk, heightmap_kind::motion_blocking) == 9);
