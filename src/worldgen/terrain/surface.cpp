@@ -118,13 +118,19 @@ auto block_states::intern(std::string_view name) -> state_id {
         if (const auto found = registry_->find(name); found.has_value()) {
             return *found;
         }
+        const auto block = name.substr(0, name.find('['));
+        const bool non_solid =
+            block == "minecraft:end_portal" ||
+            block == "minecraft:end_gateway" || block == "minecraft:torch" ||
+            block == "minecraft:wall_torch" ||
+            block == "minecraft:soul_torch" ||
+            block == "minecraft:soul_wall_torch" ||
+            block == "minecraft:glow_lichen" || block == "minecraft:sculk_vein";
         const auto id = registry_->intern(
-            name,
-            state_traits{
-                .air = false,
-                .blocks_motion = true,
-                .blocks_motion_no_leaves =
-                    !name.substr(0, name.find('[')).ends_with("_leaves")});
+            name, state_traits{.air = false,
+                               .blocks_motion = !non_solid,
+                               .blocks_motion_no_leaves =
+                                   !non_solid && !block.ends_with("_leaves")});
         return id.has_value() ? *id : no_state;
     }
     return intern(name, default_properties(name));
