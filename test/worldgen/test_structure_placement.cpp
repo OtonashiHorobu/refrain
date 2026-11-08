@@ -1376,4 +1376,29 @@ suite<"worldgen/mansion-grid"> mansion_grid_tests = [] {
         expect(grid.edges_to(3, 3, 9));
         expect(!grid.edges_to(8, 8, 9));
     };
+
+    "the mansion grid is deterministic and has an entrance"_test = [] {
+        auto random_a =
+            worldgen_random{std::make_unique<legacy_random_source>(1)};
+        auto random_b =
+            worldgen_random{std::make_unique<legacy_random_source>(1)};
+        structure::mansion_grid first{random_a};
+        structure::mansion_grid second{random_b};
+        expect(first.entrance_x() == 7 && first.entrance_y() == 4);
+        expect(structure::mansion_grid::is_house(first.base_grid(), 7, 4));
+        expect(first.base_grid().get(7, 4) == 3);
+        bool has_room = false;
+        bool has_third = false;
+        for (jint y = 0; y < 11; ++y) {
+            for (jint x = 0; x < 11; ++x) {
+                expect(first.base_grid().get(x, y) ==
+                       second.base_grid().get(x, y));
+                has_room = has_room || first.floor_rooms(0).get(x, y) != 0;
+                has_third = has_third || structure::mansion_grid::is_house(
+                                             first.third_floor_grid(), x, y);
+            }
+        }
+        expect(has_room);
+        expect(has_third);
+    };
 };
