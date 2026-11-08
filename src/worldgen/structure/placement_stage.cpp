@@ -2167,6 +2167,12 @@ void place_ruined_portal(const structure_place_context &context,
                          settings);
 
     const auto &states = *context.registry;
+    const jint chunk_center_x = (piece.min_x + piece.max_x) / 2;
+    const jint chunk_center_z = (piece.min_z + piece.max_z) / 2;
+    if ((chunk_center_x >> 4) != context.chunk->chunk_x() ||
+        (chunk_center_z >> 4) != context.chunk->chunk_z()) {
+        return;
+    }
     const auto height_kind = props.portal_placement == "on_ocean_floor"
                                  ? heightmap_kind::ocean_floor_wg
                                  : heightmap_kind::world_surface_wg;
