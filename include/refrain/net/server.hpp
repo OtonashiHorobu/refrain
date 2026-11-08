@@ -30,6 +30,11 @@ using session_verifier = std::function<result<session_profile>(
     std::string_view name, std::string_view server_hash)>;
 
 /// One player-inventory click observed on a play connection.
+struct container_close_event {
+    std::uint64_t connection{0};
+    std::int32_t container_id{0};
+};
+
 struct container_click_event {
     std::uint64_t connection{0};
     std::int32_t container_id{0};
@@ -227,6 +232,8 @@ class server {
     /// Drain container clicks observed since the previous call.
     [[nodiscard]] auto take_container_clicks()
         -> std::vector<container_click_event>;
+    [[nodiscard]] auto take_container_closes()
+        -> std::vector<container_close_event>;
 
     /// Re-send the tab header/footer to every play connection or one
     /// connection after the session view changed.

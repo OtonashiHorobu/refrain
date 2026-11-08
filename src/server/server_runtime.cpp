@@ -1346,6 +1346,13 @@ auto run_server(const server_run_options &options) -> int {
         if (!listener) {
             return;
         }
+        for (const auto &close : listener->take_container_closes()) {
+            if (close.container_id != 0) {
+                continue;
+            }
+            carried_items.erase(close.connection);
+            inventory_forced.insert(close.connection);
+        }
         for (const auto &click : listener->take_container_clicks()) {
             if (click.container_id != 0 || click.mode != 0) {
                 continue;

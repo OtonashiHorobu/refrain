@@ -268,6 +268,7 @@ struct server::impl {
     std::vector<chunk_view_request> chunk_requests{};
     std::mutex click_mutex{};
     std::vector<container_click_event> container_clicks{};
+    std::vector<container_close_event> container_closes{};
     std::thread keepalive_thread{};
 
     [[nodiscard]] auto start() -> status;
@@ -1633,6 +1634,18 @@ auto server::take_container_clicks() -> std::vector<container_click_event> {
     return clicks;
 }
 
+auto server::take_container_closes() -> std::vector<container_close_event> {
+    if (!impl_) {
+        return {};
+    }
+    std::vector<container_close_event> closes;
+    {
+        const std::lock_guard lock{impl_->click_mutex};
+        closes.swap(impl_->container_closes);
+    }
+    return closes;
+}
+
 void server::send_container_content(std::uint64_t connection,
                                     std::int32_t container_id,
                                     std::int32_t state_id,
@@ -2401,6 +2414,20 @@ void server::impl::handle_play(std::uint64_t id,
             return;
         }
         static_cast<void>(packet);
+        return;
+    }
+    case play_sb::container_close::packet_id: {
+        play_sb::container_close packet{};
+        if (auto decoded{play_sb::decode_container_close(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
+            return;
+        }
+        const std::lock_guard lock{click_mutex};
+        container_closes.push_back(container_close_event{
+            .connection = id,
+            .container_id = packet.container_id,
+        });
         return;
     }
     case play_sb::container_click::packet_id: {
