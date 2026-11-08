@@ -125,4 +125,43 @@ suite<"worldgen/generator"> generator_tests = [] {
             expect(unsupported.error().code == error_code::unsupported);
         }
     };
+
+    "features and full targets run the later stages in order"_test = [] {
+        block_state_registry registry;
+        (void)registry.intern("minecraft:stone",
+                              {.air = false,
+                               .blocks_motion = true,
+                               .blocks_motion_no_leaves = true});
+        std::vector<std::string> order;
+        generator_stages stages;
+        stages.fill = [](proto_chunk &) {};
+        stages.structures = [&order](proto_chunk &) {
+            order.emplace_back("structures");
+            return refrain::status{};
+        };
+        stages.features = [&order](proto_chunk &) {
+            order.emplace_back("features");
+            return refrain::status{};
+        };
+        generator gen{registry, 0, 32, std::move(stages)};
+        const auto features =
+            gen.generate(chunk_pos{.x = 0, .z = 0}, chunk_status::features);
+        expect(features.has_value());
+        if (features) {
+            expect((*features)->status() == chunk_status::features);
+        }
+        expect(order.size() == 2U);
+        expect(order[0] == "structures");
+        expect(order[1] == "features");
+        order.clear();
+        const auto full =
+            gen.generate(chunk_pos{.x = 1, .z = 1}, chunk_status::full);
+        expect(full.has_value());
+        if (full) {
+            expect((*full)->status() == chunk_status::full);
+        }
+        expect(order.size() == 2U);
+        expect(order[0] == "structures");
+        expect(order[1] == "features");
+    };
 };
