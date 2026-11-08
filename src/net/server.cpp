@@ -216,6 +216,7 @@ struct server::impl {
         bool client_loaded{false};
         std::int32_t client_view_distance{0};
         std::uint32_t held_slot{0};
+        float health{20.0F};
         std::int32_t last_chunk_x{0};
         std::int32_t last_chunk_z{0};
         std::int32_t last_chunk_radius{0};
@@ -2470,6 +2471,7 @@ void server::impl::handle_play(std::uint64_t id,
             live.last_chunk_x = 0;
             live.last_chunk_z = 0;
             live.last_chunk_radius = 0;
+            live.health = 20.0F;
             mode = live.mode;
         }
         play_cb::respawn respawn{};
@@ -2501,6 +2503,13 @@ void server::impl::handle_play(std::uint64_t id,
         };
         send_packet(id, play_cb::player_position::packet_id, position,
                     play_cb::encode_player_position);
+        play_cb::set_health health_packet{
+            .health = 20.0F,
+            .food = 20,
+            .saturation = 5.0F,
+        };
+        send_packet(id, play_cb::set_health::packet_id, health_packet,
+                    play_cb::encode_set_health);
         return;
     }
     case play_sb::container_close::packet_id: {
@@ -2592,6 +2601,39 @@ void server::impl::handle_play(std::uint64_t id,
             return;
         }
         broadcast_animation(id, 0);
+        const auto target_id{static_cast<std::uint64_t>(packet.entity_id)};
+        if (target_id == 0 || target_id == id) {
+            return;
+        }
+        float health{0.0F};
+        bool damaged{false};
+        {
+            const std::lock_guard lock{connections_mutex};
+            const auto target{connections.find(target_id)};
+            if (target != connections.end() && !target->second.closed &&
+                target->second.state == connection_state::play) {
+                auto &live{target->second};
+                live.health = std::max(0.0F, live.health - 1.0F);
+                health = live.health;
+                damaged = true;
+            }
+        }
+        if (!damaged) {
+            return;
+        }
+        play_cb::set_health health_packet{
+            .health = health,
+            .food = 20,
+            .saturation = 5.0F,
+        };
+        send_packet(target_id, play_cb::set_health::packet_id, health_packet,
+                    play_cb::encode_set_health);
+        play_cb::hurt_animation hurt{
+            .id = static_cast<std::int32_t>(target_id),
+            .yaw = 0.0F,
+        };
+        send_packet(target_id, play_cb::hurt_animation::packet_id, hurt,
+                    play_cb::encode_hurt_animation);
         return;
     }
     case play_sb::ping_request::packet_id: {
