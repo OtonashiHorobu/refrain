@@ -277,6 +277,31 @@ auto decode(const data::nbt::value &document) -> std::optional<decoded> {
     return out;
 }
 
+auto reference_heightmap(const data::nbt::value &document, std::string_view key,
+                         std::size_t index) -> std::optional<jint> {
+    const auto *heightmaps = child(document.as_compound(), "Heightmaps");
+    if (heightmaps == nullptr) {
+        return std::nullopt;
+    }
+    const auto *encoded = child(heightmaps->as_compound(), key);
+    if (encoded == nullptr) {
+        return std::nullopt;
+    }
+    const auto data = encoded->as_long_array();
+    if (!data) {
+        return std::nullopt;
+    }
+    constexpr std::size_t per_long = 64U / 9U;
+    const std::size_t word = index / per_long;
+    const std::size_t offset = (index % per_long) * 9U;
+    if (word >= data->size()) {
+        return std::nullopt;
+    }
+    const auto value =
+        (static_cast<std::uint64_t>((*data)[word]) >> offset) & 0x1FFU;
+    return static_cast<jint>(value) + oracle_min_y;
+}
+
 } // namespace
 
 suite<"worldgen/full-stage"> full_stage_tests = [] {
@@ -602,6 +627,37 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 }
             }
         }
+        // MOTION_BLOCKING_NO_LEAVES is left out until the trait table carries
+        // the no-leaves flag for every resolved structure state.
+        jint heightmap_mismatches = 0;
+        for (const auto *kind_name :
+             {"WORLD_SURFACE", "OCEAN_FLOOR", "MOTION_BLOCKING"}) {
+            const auto kind = std::string_view{kind_name} == "WORLD_SURFACE"
+                                  ? heightmap_kind::world_surface
+                              : std::string_view{kind_name} == "OCEAN_FLOOR"
+                                  ? heightmap_kind::ocean_floor
+                                  : heightmap_kind::motion_blocking;
+            for (std::size_t index = 0; index < 256U; ++index) {
+                const auto expected =
+                    reference_heightmap(*document, kind_name, index);
+                if (!expected) {
+                    continue;
+                }
+                const auto x = static_cast<jint>(index % 16U);
+                const auto z = static_cast<jint>(index / 16U);
+                if (chunk.first_available(kind, x, z) != *expected) {
+                    if (heightmap_mismatches < 8) {
+                        std::fprintf(
+                            stderr, "heightmap %s (%d,%d): got %d want %d\n",
+                            kind_name, static_cast<int>(x), static_cast<int>(z),
+                            static_cast<int>(chunk.first_available(kind, x, z)),
+                            static_cast<int>(*expected));
+                    }
+                    ++heightmap_mismatches;
+                }
+            }
+        }
+        expect(heightmap_mismatches == 0);
         expect(mismatches == 0);
     };
 };
