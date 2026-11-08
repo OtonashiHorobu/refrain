@@ -71,6 +71,12 @@ struct protocol_capture_options {
     std::string username{"Bot"};
     std::size_t wait_chunks{1};
     int timeout_ms{15000};
+    int linger_ms{0};
+};
+
+struct protocol_diff_options {
+    std::string left{};
+    std::string right{};
 };
 
 struct config_import_options {
@@ -198,6 +204,8 @@ run_config_import_properties(const config_import_options &options) -> int;
 [[nodiscard]] auto run_protocol_load(const protocol_load_options &options)
     -> int;
 [[nodiscard]] auto run_protocol_capture(const protocol_capture_options &options)
+    -> int;
+[[nodiscard]] auto run_protocol_diff(const protocol_diff_options &options)
     -> int;
 [[nodiscard]] auto run_schema_gen(const std::string &output_root,
                                   const std::vector<std::string> &roots,

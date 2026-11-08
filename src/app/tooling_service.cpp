@@ -148,6 +148,134 @@ auto run_protocol_bot(const protocol_bot_options &options) -> int {
     return 0;
 }
 
+namespace {
+
+struct captured_entry {
+    std::uint8_t state{0};
+    std::uint32_t id{0};
+    std::vector<std::byte> body{};
+};
+
+[[nodiscard]] auto read_capture(std::string_view path,
+                                std::vector<captured_entry> &entries)
+    -> refrain::status {
+    auto bytes{refrain::core::io::read_file(
+        path,
+        {.max_bytes = 64ULL * 1024ULL * 1024ULL, .allow_symlink = false})};
+    if (!bytes) {
+        return std::unexpected{std::move(bytes.error())};
+    }
+    constexpr std::string_view magic{"RFCAP1\n"};
+    if (bytes->size() < magic.size() ||
+        !std::equal(magic.begin(), magic.end(), bytes->begin(),
+                    [](char expected, std::byte actual) {
+                        return static_cast<std::byte>(
+                                   static_cast<unsigned char>(expected)) ==
+                               actual;
+                    })) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::parse_error, "not an RFCAP1 capture")};
+    }
+    std::size_t position{magic.size()};
+    const auto read_u32 = [&](std::uint32_t &value) {
+        if (position + 4 > bytes->size()) {
+            return false;
+        }
+        value = 0;
+        for (int shift{0}; shift < 32; shift += 8) {
+            value |= static_cast<std::uint32_t>(
+                         std::to_integer<unsigned int>(bytes->at(position)))
+                     << shift;
+            ++position;
+        }
+        return true;
+    };
+    while (position < bytes->size()) {
+        if (position + 1 > bytes->size()) {
+            break;
+        }
+        captured_entry entry{};
+        entry.state = std::to_integer<std::uint8_t>(bytes->at(position));
+        ++position;
+        std::uint32_t length{0};
+        if (!read_u32(entry.id) || !read_u32(length) ||
+            position + length > bytes->size()) {
+            return std::unexpected{refrain::make_error(
+                refrain::error_code::parse_error, "truncated capture entry")};
+        }
+        entry.body.assign(
+            bytes->begin() + static_cast<std::ptrdiff_t>(position),
+            bytes->begin() + static_cast<std::ptrdiff_t>(position + length));
+        position += length;
+        entries.push_back(std::move(entry));
+    }
+    return refrain::status_ok();
+}
+
+} // namespace
+
+auto run_protocol_diff(const protocol_diff_options &options) -> int {
+    std::vector<captured_entry> left{};
+    std::vector<captured_entry> right{};
+    if (auto read{read_capture(options.left, left)}; !read) {
+        return report_error(read.error());
+    }
+    if (auto read{read_capture(options.right, right)}; !read) {
+        return report_error(read.error());
+    }
+    fmt::print("diff: left {} packet(s), right {} packet(s)\n", left.size(),
+               right.size());
+    const auto common{std::min(left.size(), right.size())};
+    for (std::size_t index{0}; index < common; ++index) {
+        if (left[index].state != right[index].state ||
+            left[index].id != right[index].id) {
+            fmt::print("diff: first mismatch at {}: left state={} id={}, right "
+                       "state={} id={}\n",
+                       index, left[index].state, left[index].id,
+                       right[index].state, right[index].id);
+            break;
+        }
+    }
+    if (left.size() == right.size() && common == left.size()) {
+        bool identical{true};
+        for (std::size_t index{0}; index < left.size(); ++index) {
+            if (left[index].state != right[index].state ||
+                left[index].id != right[index].id) {
+                identical = false;
+                break;
+            }
+        }
+        if (identical) {
+            fmt::print("diff: packet sequence is identical\n");
+        }
+    }
+    const auto summarize = [](const std::vector<captured_entry> &entries) {
+        std::set<std::pair<std::uint8_t, std::uint32_t>> ids{};
+        for (const auto &entry : entries) {
+            ids.emplace(entry.state, entry.id);
+        }
+        return ids;
+    };
+    const auto left_ids{summarize(left)};
+    const auto right_ids{summarize(right)};
+    std::size_t only_left{0};
+    std::size_t only_right{0};
+    for (const auto &id : left_ids) {
+        if (!right_ids.contains(id)) {
+            ++only_left;
+        }
+    }
+    for (const auto &id : right_ids) {
+        if (!left_ids.contains(id)) {
+            ++only_right;
+        }
+    }
+    fmt::print("diff: unique ids left={}, right={}, only-left={}, "
+               "only-right={}\n",
+               left_ids.size(), right_ids.size(), only_left, only_right);
+    return 0;
+}
+
 auto run_protocol_capture(const protocol_capture_options &options) -> int {
     const auto separator{options.target.rfind(':')};
     if (separator == std::string::npos ||
@@ -172,6 +300,7 @@ auto run_protocol_capture(const protocol_capture_options &options) -> int {
     bot.username = options.username;
     bot.timeout = std::chrono::milliseconds{options.timeout_ms};
     bot.wait_chunks = options.wait_chunks;
+    bot.linger = std::chrono::milliseconds{options.linger_ms};
     bot.capture = true;
     auto result{refrain::net::run_bot(bot)};
     if (!result) {

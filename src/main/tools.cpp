@@ -474,6 +474,7 @@ int main(int argc, char **argv) {
     protocol_bot_options protocol_bot{};
     protocol_load_options protocol_load{};
     protocol_capture_options protocol_capture{};
+    protocol_diff_options protocol_diff{};
     auto *protocol_cmd =
         app.add_subcommand("protocol", "Protocol 777 client tools");
     auto *protocol_ping_cmd = protocol_cmd->add_subcommand(
@@ -544,6 +545,16 @@ int main(int argc, char **argv) {
     protocol_capture_cmd->add_option("--timeout-ms",
                                      protocol_capture.timeout_ms,
                                      "Join timeout in milliseconds");
+    protocol_capture_cmd->add_option("--linger-ms", protocol_capture.linger_ms,
+                                     "Keep capturing for N ms after join");
+
+    auto *protocol_diff_cmd = protocol_cmd->add_subcommand(
+        "diff", "Compare two RFCAP1 packet sequences");
+    protocol_diff_cmd->add_option("--left", protocol_diff.left, "First capture")
+        ->required();
+    protocol_diff_cmd
+        ->add_option("--right", protocol_diff.right, "Second capture")
+        ->required();
 
     auto *wasm_cmd = app.add_subcommand("wasm", "WASM runtime smoke tests");
     auto *wasm_smoke_cmd =
@@ -785,6 +796,9 @@ int main(int argc, char **argv) {
     }
     if (protocol_capture_cmd->parsed()) {
         return app_services::run_protocol_capture(protocol_capture);
+    }
+    if (protocol_diff_cmd->parsed()) {
+        return app_services::run_protocol_diff(protocol_diff);
     }
     if (protocol_ping_cmd->parsed()) {
         const auto separator{protocol_target.rfind(':')};

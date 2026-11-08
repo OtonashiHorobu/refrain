@@ -83,8 +83,16 @@ build/Release/bin/refrain-tools protocol capture \
 ```
 
 The tool records the clientbound packet bodies seen by the bot (state, packet
-id, length, payload) in the RFCAP1 container. Captures are diagnostics and
-regression baselines; they contain no credentials.
+id, length, payload) in the RFCAP1 container. `--linger-ms` keeps recording
+after the join, which is needed for packets sent after the first chunk. Compare
+two captures by packet sequence with:
+
+```bash
+build/Release/bin/refrain-tools protocol diff \
+    --left vanilla.rfcap --right refrain.rfcap
+```
+
+Captures are diagnostics and regression baselines; they contain no credentials.
 
 ### Load harness
 
