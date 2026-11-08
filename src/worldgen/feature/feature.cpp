@@ -2287,6 +2287,21 @@ auto end_gateway_feature::place(feature_context &context,
                 block_state_id state = air;
                 if (same_x && same_y && same_z) {
                     state = gateway_;
+                    data::nbt::compound entity{};
+                    entity["id"] =
+                        data::nbt::value{std::string{"minecraft:end_gateway"}};
+                    entity["ExactTeleport"] = data::nbt::value{exact_};
+                    if (exit_) {
+                        data::nbt::compound portal{};
+                        portal["X"] = data::nbt::value{exit_->x};
+                        portal["Y"] = data::nbt::value{exit_->y};
+                        portal["Z"] = data::nbt::value{exit_->z};
+                        entity["ExitPortal"] =
+                            data::nbt::value{std::move(portal)};
+                    }
+                    (void)region.set_block_entity(origin.x + dx, origin.y + dy,
+                                                  origin.z + dz,
+                                                  std::move(entity));
                 } else if (same_y) {
                     state = air;
                 } else if (top && same_x && same_z) {

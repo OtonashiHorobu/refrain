@@ -625,8 +625,9 @@ class root_system_feature final : public feature {
 /// `EndGatewayFeature`: the bedrock frame around an end gateway block.
 class end_gateway_feature final : public feature {
   public:
-    end_gateway_feature(block_state_id gateway, block_state_id bedrock)
-        : gateway_{gateway}, bedrock_{bedrock} {}
+    end_gateway_feature(block_state_id gateway, block_state_id bedrock,
+                        std::optional<block_pos> exit, bool exact)
+        : gateway_{gateway}, bedrock_{bedrock}, exit_{exit}, exact_{exact} {}
 
     [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool override;
@@ -634,6 +635,8 @@ class end_gateway_feature final : public feature {
   private:
     block_state_id gateway_{no_block_state};
     block_state_id bedrock_{no_block_state};
+    std::optional<block_pos> exit_{};
+    bool exact_{false};
 };
 
 /// One configured end spike.

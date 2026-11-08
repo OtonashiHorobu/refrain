@@ -1055,8 +1055,26 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 return std::unexpected{make_error(
                     error_code::parse_error, "end gateway states are invalid")};
             }
-            features_.emplace(
-                id, std::make_unique<end_gateway_feature>(*gateway, *bedrock));
+            std::optional<block_pos> exit;
+            if (const auto *exit_value = document.document.find("exit");
+                exit_value != nullptr) {
+                const auto values = exit_value->as_array();
+                if (values && values->size() == 3) {
+                    exit = block_pos{.x = static_cast<jint>(
+                                         (*values)[0].as_int64().value_or(0)),
+                                     .y = static_cast<jint>(
+                                         (*values)[1].as_int64().value_or(0)),
+                                     .z = static_cast<jint>(
+                                         (*values)[2].as_int64().value_or(0))};
+                }
+            }
+            bool exact = false;
+            if (const auto *exact_value = document.document.find("exact");
+                exact_value != nullptr) {
+                exact = exact_value->as_bool().value_or(false);
+            }
+            features_.emplace(id, std::make_unique<end_gateway_feature>(
+                                      *gateway, *bedrock, exit, exact));
             continue;
         }
         if (*type == "minecraft:fossil") {
