@@ -12,6 +12,8 @@
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/net_protocol.hpp>
 #include <refrain/contracts/services/runtime_abi.h>
+#include <refrain/contracts/services/session_status.hpp>
+#include <refrain/contracts/services/session_tab.hpp>
 #include <refrain/contracts/services/transport.hpp>
 #include <refrain/core/config.hpp>
 #include <refrain/core/log.hpp>
@@ -103,6 +105,116 @@ struct runtime_provider {
                                   provider->storage, provider->runtime,
                                   provider->config_store)};
         if (provider->host != nullptr) {
+            std::vector<std::pair<
+                const refrain_services_session_status_vtable *, void *>>
+                status_hooks{};
+            for (const auto &instance :
+                 provider->host->services().active_instances(
+                     "refrain:session.status")) {
+                const auto info{provider->host->services().active_provider(
+                    "refrain:session.status", instance)};
+                if (!info || info->instance == nullptr) {
+                    continue;
+                }
+                const auto *api{static_cast<const refrain::mod::provider_api *>(
+                    info->instance)};
+                if (api->vtable != nullptr) {
+                    status_hooks.emplace_back(
+                        static_cast<const refrain_services_session_status_vtable
+                                        *>(api->vtable),
+                        api->self);
+                }
+            }
+            if (!status_hooks.empty()) {
+                const auto network_view{provider->network};
+                options.status =
+                    [hooks = std::move(status_hooks), network_view](
+                        const refrain::net::status_request_context &context) {
+                        for (const auto &[vtable, hook_self] : hooks) {
+                            const refrain::services::session_status::provider
+                                status_service{*vtable, hook_self};
+                            auto request{refrain::services::session_status::
+                                             make_status_request()};
+                            request.protocol =
+                                static_cast<std::uint32_t>(context.protocol);
+                            request.host =
+                                refrain::contracts::to_borrowed(context.host);
+                            request.port = context.port;
+                            request.online_players = static_cast<std::uint32_t>(
+                                context.online_players);
+                            auto view{refrain::services::session_status::
+                                          make_status_view()};
+                            if (status_service.status(request, view)) {
+                                refrain::net::status_info info{};
+                                info.description = std::string{
+                                    refrain::contracts::as_string_view(
+                                        view.description)};
+                                info.online_players = static_cast<std::int32_t>(
+                                    view.online_players);
+                                info.max_players =
+                                    static_cast<std::int32_t>(view.max_players);
+                                return info;
+                            }
+                        }
+                        refrain::net::status_info info{};
+                        info.description = network_view.get_string(
+                            "status.motd", "A Refrain Server");
+                        info.online_players = context.online_players;
+                        info.max_players = static_cast<std::int32_t>(
+                            network_view.get_int64("status.max_players", 20));
+                        return info;
+                    };
+            }
+            std::vector<
+                std::pair<const refrain_services_session_tab_vtable *, void *>>
+                tab_hooks{};
+            for (const auto &instance :
+                 provider->host->services().active_instances(
+                     "refrain:session.tab")) {
+                const auto info{provider->host->services().active_provider(
+                    "refrain:session.tab", instance)};
+                if (!info || info->instance == nullptr) {
+                    continue;
+                }
+                const auto *api{static_cast<const refrain::mod::provider_api *>(
+                    info->instance)};
+                if (api->vtable != nullptr) {
+                    tab_hooks.emplace_back(
+                        static_cast<const refrain_services_session_tab_vtable
+                                        *>(api->vtable),
+                        api->self);
+                }
+            }
+            if (!tab_hooks.empty()) {
+                options
+                    .tab = [hooks = std::move(tab_hooks)](
+                               const refrain::net::player_identity &identity) {
+                    for (const auto &[vtable, hook_self] : hooks) {
+                        const refrain::services::session_tab::provider
+                            tab_service{*vtable, hook_self};
+                        auto request{
+                            refrain::services::session_tab::make_tab_request()};
+                        request.connection = identity.connection;
+                        request.player_name =
+                            refrain::contracts::to_borrowed(identity.name);
+                        auto view{
+                            refrain::services::session_tab::make_tab_view()};
+                        if (tab_service.tab(request, view)) {
+                            return refrain::net::tab_view{
+                                .header =
+                                    std::string{
+                                        refrain::contracts::as_string_view(
+                                            view.header)},
+                                .footer =
+                                    std::string{
+                                        refrain::contracts::as_string_view(
+                                            view.footer)},
+                            };
+                        }
+                    }
+                    return refrain::net::tab_view{};
+                };
+            }
             const auto protocol{provider->host->services().active_provider(
                 "refrain:net.protocol", "java_777")};
             if (!protocol || protocol->instance == nullptr) {

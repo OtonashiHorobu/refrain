@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 4d4424e4f6b78480
+// Schema hash: 01de959e836fba16
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2805,6 +2805,41 @@ template <> struct custom_traits<::refrain::services::runtime::runtime_config> {
         refrain::reflect::custom_field{"content_gc_keep_days", &::refrain::services::runtime::runtime_config::content_gc_keep_days},
         refrain::reflect::custom_field{"content_gc_budget_ms", &::refrain::services::runtime::runtime_config::content_gc_budget_ms},
         refrain::reflect::custom_field{"content_gc_interval_ticks", &::refrain::services::runtime::runtime_config::content_gc_interval_ticks});
+};
+
+/// Generated RIDL struct 'refrain::services::session_status::status_request'.
+template <> struct custom_traits<::refrain::services::session_status::status_request> {
+    static constexpr std::string_view type_name = "refrain::services::session_status::status_request";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"protocol", &::refrain::services::session_status::status_request::protocol},
+        refrain::reflect::custom_field{"host", &::refrain::services::session_status::status_request::host},
+        refrain::reflect::custom_field{"port", &::refrain::services::session_status::status_request::port},
+        refrain::reflect::custom_field{"online_players", &::refrain::services::session_status::status_request::online_players});
+};
+
+/// Generated RIDL struct 'refrain::services::session_status::status_view'.
+template <> struct custom_traits<::refrain::services::session_status::status_view> {
+    static constexpr std::string_view type_name = "refrain::services::session_status::status_view";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"description", &::refrain::services::session_status::status_view::description},
+        refrain::reflect::custom_field{"online_players", &::refrain::services::session_status::status_view::online_players},
+        refrain::reflect::custom_field{"max_players", &::refrain::services::session_status::status_view::max_players});
+};
+
+/// Generated RIDL struct 'refrain::services::session_tab::tab_request'.
+template <> struct custom_traits<::refrain::services::session_tab::tab_request> {
+    static constexpr std::string_view type_name = "refrain::services::session_tab::tab_request";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"connection", &::refrain::services::session_tab::tab_request::connection},
+        refrain::reflect::custom_field{"player_name", &::refrain::services::session_tab::tab_request::player_name});
+};
+
+/// Generated RIDL struct 'refrain::services::session_tab::tab_view'.
+template <> struct custom_traits<::refrain::services::session_tab::tab_view> {
+    static constexpr std::string_view type_name = "refrain::services::session_tab::tab_view";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"header", &::refrain::services::session_tab::tab_view::header},
+        refrain::reflect::custom_field{"footer", &::refrain::services::session_tab::tab_view::footer});
 };
 
 /// Generated RIDL struct 'refrain::services::sim::sim_config'.
