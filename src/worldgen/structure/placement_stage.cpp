@@ -1040,8 +1040,53 @@ void place_shipwreck_piece(const structure_place_context &context,
         .max_z = context.chunk->chunk_z() * 16 + 15,
     };
     settings.processors = {&ignore};
-    const block_pos origin{
+    block_pos origin{
         .x = piece.template_x, .y = piece.template_y, .z = piece.template_z};
+    if (piece.height_position < 0 && templ.size_x <= 32 && templ.size_y <= 32) {
+        const auto kind = piece.beached ? heightmap_kind::world_surface_wg
+                                        : heightmap_kind::ocean_floor_wg;
+        const auto height_at = [&](jint x, jint z) -> std::optional<jint> {
+            auto *column = context.region->find(x >> 4, z >> 4);
+            if (column == nullptr) {
+                return std::nullopt;
+            }
+            return column->first_available(kind, x & 15, z & 15);
+        };
+        const jint base_size = templ.size_x * templ.size_z;
+        if (base_size == 0) {
+            origin.y = height_at(origin.x, origin.z).value_or(origin.y);
+        } else {
+            const auto corner = transform_position(
+                block_pos{.x = templ.size_x - 1, .y = 0, .z = templ.size_z - 1},
+                settings.transform);
+            const block_pos corner_world{.x = origin.x + corner.x,
+                                         .y = origin.y,
+                                         .z = origin.z + corner.z};
+            jint min_y = 1 << 30;
+            jint total = 0;
+            jint count = 0;
+            for (jint z = std::min(origin.z, corner_world.z);
+                 z <= std::max(origin.z, corner_world.z); ++z) {
+                for (jint x = std::min(origin.x, corner_world.x);
+                     x <= std::max(origin.x, corner_world.x); ++x) {
+                    const auto height = height_at(x, z);
+                    if (!height) {
+                        continue;
+                    }
+                    min_y = std::min(min_y, *height);
+                    total += *height;
+                    ++count;
+                }
+            }
+            if (count == 0) {
+                return;
+            }
+            const jint mean = total / base_size;
+            origin.y = piece.beached
+                           ? min_y - templ.size_y / 2 - random.next_int(3)
+                           : mean;
+        }
+    }
     (void)place_template(*context.region, *context.registry, templ, origin,
                          settings);
     static const std::array<std::pair<std::string_view, std::string_view>, 3>

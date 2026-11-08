@@ -56,6 +56,7 @@ struct structure_piece_record {
     jint height_offset{0};
     float integrity{1.0F};
     bool large{false};
+    bool beached{false};
 };
 
 struct structure_start {

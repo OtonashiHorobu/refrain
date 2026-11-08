@@ -233,6 +233,7 @@ auto shipwreck_start(
         .template_rotation = rotation_index,
         .template_mirror = 0,
         .template_pivot = block_pos{.x = 4, .y = 0, .z = 15},
+        .beached = beached,
     });
     return start;
 }

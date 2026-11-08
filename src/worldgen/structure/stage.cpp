@@ -409,7 +409,8 @@ void write_structure_stage(proto_chunk &chunk,
                 .height_position = piece.height_position,
                 .height_offset = piece.height_offset,
                 .integrity = piece.integrity,
-                .large = piece.large});
+                .large = piece.large,
+                .beached = piece.beached});
         }
         chunk.add_structure_start(std::move(record));
     }
