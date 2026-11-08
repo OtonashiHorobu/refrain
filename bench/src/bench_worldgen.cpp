@@ -13,6 +13,7 @@
 #include <refrain/worldgen/feature/feature_stage.hpp>
 #include <refrain/worldgen/feature/placement.hpp>
 #include <refrain/worldgen/structure/generator.hpp>
+#include <refrain/worldgen/structure/mansion_layout.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
 #include <refrain/worldgen/structure/placement_stage.hpp>
 #include <refrain/worldgen/structure/stage.hpp>
@@ -444,10 +445,22 @@ void structure_generator(benchmark::State &state) {
     }
 }
 
+void mansion_layout(benchmark::State &state) {
+    for (auto _ : state) {
+        worldgen_random random{std::make_unique<legacy_random_source>(1)};
+        structure::mansion_grid grid{random};
+        const auto pieces = structure::generate_mansion(
+            random, block_pos{.x = 0, .y = 60, .z = 0},
+            structure::template_rotation::none, grid);
+        benchmark::DoNotOptimize(pieces.size());
+    }
+}
+
 BENCHMARK(structure_area);
 BENCHMARK(structure_corridor);
 BENCHMARK(feature_decorate);
 BENCHMARK(structure_generator)->Unit(benchmark::kMillisecond);
+BENCHMARK(mansion_layout);
 BENCHMARK(template_place);
 BENCHMARK(feature_freeze);
 BENCHMARK(chunk_fill);
