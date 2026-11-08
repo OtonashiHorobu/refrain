@@ -1,6 +1,6 @@
 gamepack refrain.vanilla@26.3.0 (side=server, abi=1, auto_scan=false)
 display name: Refrain vanilla (server)
-mods: 11 (load order)
+mods: 12 (load order)
    1. refrain.content.vanilla@1.0.0
    2. refrain.data.vanilla@1.0.0 requires [refrain.content.vanilla@^1.0.0]
    3. refrain.world.vanilla@1.0.0
@@ -9,18 +9,21 @@ mods: 11 (load order)
    6. refrain.storage.rwf@1.0.0
    7. refrain.proto.vanilla@1.0.0
    8. refrain.transport.asio.tcp@1.0.0
-   9. refrain.session.vanilla@1.0.0
-  10. refrain.admin.vanilla@1.0.0
-  11. refrain.server.vanilla@1.0.0
-providers: 10
-  admin     -> refrain.admin.vanilla@1.0.0
-  data      -> refrain.data.vanilla@1.0.0
-  protocol  [instanced:java_777] (default) -> refrain.proto.vanilla@1.0.0
-  runtime   -> refrain.server.vanilla@1.0.0
-  session   -> refrain.session.vanilla@1.0.0
-  sim       -> refrain.sim.vanilla@1.0.0
-  storage   -> refrain.storage.rwf@1.0.0
-  transport [instanced:asio_tcp] (default) -> refrain.transport.asio.tcp@1.0.0
-  world     -> refrain.world.vanilla@1.0.0
-  worldgen  -> refrain.worldgen.vanilla@1.0.0
+   9. refrain.session.dynamic@1.0.0
+  10. refrain.session.vanilla@1.0.0
+  11. refrain.admin.vanilla@1.0.0
+  12. refrain.server.vanilla@1.0.0
+providers: 12
+  admin          -> refrain.admin.vanilla@1.0.0
+  data           -> refrain.data.vanilla@1.0.0
+  protocol       [instanced:java_777] (default) -> refrain.proto.vanilla@1.0.0
+  runtime        -> refrain.server.vanilla@1.0.0
+  session        -> refrain.session.vanilla@1.0.0
+  session_status [instanced:dynamic] (default) -> refrain.session.dynamic@1.0.0
+  session_tab    [instanced:dynamic] (default) -> refrain.session.dynamic@1.0.0
+  sim            -> refrain.sim.vanilla@1.0.0
+  storage        -> refrain.storage.rwf@1.0.0
+  transport      [instanced:asio_tcp] (default) -> refrain.transport.asio.tcp@1.0.0
+  world          -> refrain.world.vanilla@1.0.0
+  worldgen       -> refrain.worldgen.vanilla@1.0.0
 mods_dir: mods
