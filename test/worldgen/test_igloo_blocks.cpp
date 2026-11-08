@@ -2001,6 +2001,9 @@ auto mineshaft_canonical(std::string key) -> std::string {
     if (key.ends_with("_log[axis=y]")) {
         return key.substr(0, key.find('['));
     }
+    if (key == "minecraft:rail[shape=north_south]") {
+        return "minecraft:rail";
+    }
     return key;
 }
 

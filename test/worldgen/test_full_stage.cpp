@@ -135,6 +135,9 @@ auto canonical(std::string name) -> std::string {
         rebuilt.find("_door[") != std::string::npos) {
         return rebuilt.substr(0, rebuilt.find('['));
     }
+    if (rebuilt == "minecraft:rail[shape=north_south]") {
+        return "minecraft:rail";
+    }
     if (rebuilt.ends_with("_slab[type=bottom,waterlogged=false]")) {
         return rebuilt.substr(0, rebuilt.find('['));
     }
@@ -487,6 +490,12 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                             .integrity = piece.integrity,
                             .large = piece.large,
                             .beached = piece.beached,
+                            .entrances = piece.entrances,
+                            .sections = piece.sections,
+                            .rails = piece.rails,
+                            .spider = piece.spider,
+                            .two_floored = piece.two_floored,
+                            .mesa = piece.mesa,
                         });
                 }
                 record.pieces = piece_records;
