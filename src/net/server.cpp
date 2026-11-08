@@ -2692,6 +2692,104 @@ void server::impl::handle_play(std::uint64_t id,
                     play_cb::encode_pong_response);
         return;
     }
+    // Parse-only packets: these carry client presentation/acknowledgement
+    // state that the server does not need yet. Decoding still validates frame
+    // bounds and field types before the packet is ignored.
+    case play_sb::player_abilities::packet_id: {
+        play_sb::player_abilities packet{};
+        if (auto decoded{play_sb::decode_player_abilities(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
+        }
+        return;
+    }
+    case play_sb::player_command::packet_id: {
+        play_sb::player_command packet{};
+        if (auto decoded{play_sb::decode_player_command(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
+        }
+        return;
+    }
+    case play_sb::player_input::packet_id: {
+        play_sb::player_input packet{};
+        if (auto decoded{play_sb::decode_player_input(in, packet)}; !decoded) {
+            reject(id, "malformed or unexpected packet");
+        }
+        return;
+    }
+    case play_sb::bundle_item_selected::packet_id: {
+        play_sb::bundle_item_selected packet{};
+        if (auto decoded{play_sb::decode_bundle_item_selected(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
+        }
+        return;
+    }
+    case play_sb::client_tick_end::packet_id: {
+        play_sb::client_tick_end packet{};
+        if (auto decoded{play_sb::decode_client_tick_end(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
+        }
+        return;
+    }
+    case play_sb::pong::packet_id: {
+        play_sb::pong packet{};
+        if (auto decoded{play_sb::decode_pong(in, packet)}; !decoded) {
+            reject(id, "malformed or unexpected packet");
+        }
+        return;
+    }
+    case play_sb::chat_ack::packet_id: {
+        play_sb::chat_ack packet{};
+        if (auto decoded{play_sb::decode_chat_ack(in, packet)}; !decoded) {
+            reject(id, "malformed or unexpected packet");
+        }
+        return;
+    }
+    case play_sb::recipe_book_change_settings::packet_id: {
+        play_sb::recipe_book_change_settings packet{};
+        if (auto decoded{
+                play_sb::decode_recipe_book_change_settings(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
+        }
+        return;
+    }
+    case play_sb::recipe_book_seen_recipe::packet_id: {
+        play_sb::recipe_book_seen_recipe packet{};
+        if (auto decoded{play_sb::decode_recipe_book_seen_recipe(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
+        }
+        return;
+    }
+    case play_sb::seen_advancements::packet_id: {
+        play_sb::seen_advancements packet{};
+        if (auto decoded{play_sb::decode_seen_advancements(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
+        }
+        return;
+    }
+    case play_sb::container_button_click::packet_id: {
+        play_sb::container_button_click packet{};
+        if (auto decoded{play_sb::decode_container_button_click(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
+        }
+        return;
+    }
+    case play_sb::container_slot_state_changed::packet_id: {
+        play_sb::container_slot_state_changed packet{};
+        if (auto decoded{
+                play_sb::decode_container_slot_state_changed(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
+        }
+        return;
+    }
     default:
         // Packets without server-side state (animation, input, containers)
         // are ignored until their handlers land.
