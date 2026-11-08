@@ -1216,4 +1216,50 @@ suite<"worldgen/template"> template_tests = [] {
             expect(result->state == *cracked);
         }
     };
+
+    "loot table containers consume one shared random seed"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        const auto air = states.intern("minecraft:air", {.air = true});
+        const auto chest =
+            states.intern("minecraft:chest", {.air = false,
+                                              .blocks_motion = true,
+                                              .blocks_motion_no_leaves = true});
+        expect(air && chest);
+        if (!air || !chest) {
+            return;
+        }
+        structure::structure_template templ{};
+        templ.size_x = 1;
+        templ.size_y = 1;
+        templ.size_z = 1;
+        structure::template_block_info block{};
+        block.state = *chest;
+        data::nbt::compound chest_nbt{};
+        chest_nbt["LootTable"] =
+            data::nbt::value{std::string{"minecraft:chests/test"}};
+        block.nbt =
+            std::make_shared<const data::nbt::compound>(std::move(chest_nbt));
+        templ.palettes.push_back({block});
+        proto_chunk chunk{states, 0, 0, 0, 32};
+        chunk_region region{chunk, 0};
+        worldgen_random loot{std::make_unique<legacy_random_source>(7)};
+        worldgen_random expected{std::make_unique<legacy_random_source>(7)};
+        const jlong seed = expected.next_long();
+        structure::template_place_settings settings{};
+        settings.loot_random = &loot;
+        (void)structure::place_template(
+            region, states, templ, block_pos{.x = 4, .y = 5, .z = 6}, settings);
+        const auto *entity =
+            chunk.block_entity_at(block_pos{.x = 4, .y = 5, .z = 6});
+        expect(entity != nullptr);
+        if (entity == nullptr) {
+            return;
+        }
+        const auto found = entity->find("LootTableSeed");
+        expect(found != entity->end());
+        if (found != entity->end()) {
+            expect(found->second.as_long().value_or(0) == seed);
+        }
+    };
 };
