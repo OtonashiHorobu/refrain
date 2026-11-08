@@ -162,7 +162,21 @@ struct runtime_state {
     std::atomic<bool> stop{false};
     std::atomic<std::int64_t> heartbeat_ns{0};
     refrain::core::config::store *config{nullptr};
+    static constexpr std::size_t tick_samples{2048};
+    std::array<std::uint32_t, tick_samples> tick_us{};
+    std::size_t tick_count{0};
+    std::uint64_t tick_total_us{0};
+    std::uint64_t tick_max_us{0};
 };
+
+void record_tick_work(runtime_state &state, std::uint64_t work_ns) {
+    const auto us{static_cast<std::uint32_t>(work_ns / 1'000ULL)};
+    state.tick_us[state.tick_count % runtime_state::tick_samples] = us;
+    ++state.tick_count;
+    state.tick_total_us += us;
+    state.tick_max_us =
+        std::max(state.tick_max_us, static_cast<std::uint64_t>(us));
+}
 
 void push_command(const std::shared_ptr<runtime_state> &state,
                   std::string line) {
@@ -753,11 +767,33 @@ void execute_console_command(const std::string &line,
         return;
     }
     if (line == "tps") {
+        const auto samples{
+            std::min(state->tick_count, runtime_state::tick_samples)};
+        std::vector<std::uint32_t> sorted(state->tick_us.begin(),
+                                          state->tick_us.begin() + samples);
+        std::sort(sorted.begin(), sorted.end());
+        const auto percentile = [&](double fraction) {
+            if (sorted.empty()) {
+                return std::uint64_t{0};
+            }
+            const auto index{static_cast<std::size_t>(
+                static_cast<double>(sorted.size() - 1) * fraction)};
+            return static_cast<std::uint64_t>(sorted[index]);
+        };
+        const auto average{state->tick_count == 0
+                               ? 0.0
+                               : static_cast<double>(state->tick_total_us) /
+                                     static_cast<double>(state->tick_count) /
+                                     1000.0};
         refrain::log::info(
-            "tick: {} {}ms missed={}", tick.index,
+            "tick: {} interval={}ms missed={} work_avg={:.2f}ms "
+            "work_p99={:.2f}ms work_max={:.2f}ms samples={}",
+            tick.index,
             std::chrono::duration_cast<std::chrono::milliseconds>(tick.actual)
                 .count(),
-            tick.missed);
+            tick.missed, average,
+            static_cast<double>(percentile(0.99)) / 1000.0,
+            static_cast<double>(state->tick_max_us) / 1000.0, samples);
         return;
     }
     if (line == "hash") {
@@ -1630,6 +1666,7 @@ auto run_server(const server_run_options &options) -> int {
         const auto tick_start_ns{refrain::core::now_ns()};
         state->heartbeat_ns.store(refrain::core::now_ns(),
                                   std::memory_order_relaxed);
+        const auto tick_start_ns{refrain::core::now_ns()};
         for (const auto &batch : writer.drain_completed()) {
             store->mark_clean(batch);
         }
@@ -1656,12 +1693,8 @@ auto run_server(const server_run_options &options) -> int {
         store->tick();
         ++ticks_run;
         scheduler.run(refrain::core::schedule::phase::post_tick, ticks_run);
-        const auto tick_elapsed_ns{static_cast<std::uint64_t>(
-            refrain::core::now_ns() - tick_start_ns)};
-        total_tick_ns += tick_elapsed_ns;
-        if (tick_elapsed_ns > max_tick_ns) {
-            max_tick_ns = tick_elapsed_ns;
-        }
+        record_tick_work(*state, static_cast<std::uint64_t>(
+                                     refrain::core::now_ns() - tick_start_ns));
         if (options.on_tick) {
             options.on_tick(static_cast<std::uint64_t>(ticks_run));
         }
