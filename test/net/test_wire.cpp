@@ -274,6 +274,50 @@ const suite tests = [] {
         expect(status.error().code == refrain::error_code::invalid_argument);
     };
 
+    "wire item stacks write both component patch counts"_test = [] {
+        const net::item_stack stack{.count = 5U, .item_id = 1U};
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_item_stack(out, stack)));
+        expect(bytes.size() == 4U);
+        if (bytes.size() == 4U) {
+            expect(bytes[0] == std::byte{5});
+            expect(bytes[1] == std::byte{1});
+            expect(bytes[2] == std::byte{0});
+            expect(bytes[3] == std::byte{0});
+        }
+        net::reader in{bytes};
+        net::item_stack decoded{};
+        expect(static_cast<bool>(net::decode_item_stack(in, decoded)));
+        expect(decoded.count == 5U && decoded.item_id == 1U);
+        expect(in.empty());
+
+        const net::item_stack empty{};
+        bytes.clear();
+        net::writer empty_out{bytes};
+        expect(static_cast<bool>(net::encode_item_stack(empty_out, empty)));
+        expect(bytes.size() == 1U);
+        net::reader empty_in{bytes};
+        net::item_stack empty_decoded{};
+        expect(
+            static_cast<bool>(net::decode_item_stack(empty_in, empty_decoded)));
+        expect(empty_decoded.count == 0U);
+        expect(empty_in.empty());
+
+        const net::item_stack_template icon{.item_id = 1U, .count = 2U};
+        bytes.clear();
+        net::writer icon_out{bytes};
+        expect(
+            static_cast<bool>(net::encode_item_stack_template(icon_out, icon)));
+        expect(bytes.size() == 4U);
+        net::reader icon_in{bytes};
+        net::item_stack_template icon_decoded{};
+        expect(static_cast<bool>(
+            net::decode_item_stack_template(icon_in, icon_decoded)));
+        expect(icon_decoded.item_id == 1U && icon_decoded.count == 2U);
+        expect(icon_in.empty());
+    };
+
     "recipe slots and displays round trip"_test = [] {
         const auto tag{
             refrain::data::resource_location::parse("minecraft:planks")};
@@ -1011,7 +1055,7 @@ const suite tests = [] {
         std::vector<std::byte> bytes;
         net::writer out{bytes};
         expect(static_cast<bool>(net::encode_item_stack(out, value)));
-        expect(bytes.size() == 3U);
+        expect(bytes.size() == 4U);
         net::reader in{bytes};
         net::item_stack decoded{};
         expect(static_cast<bool>(net::decode_item_stack(in, decoded)));
@@ -1019,7 +1063,8 @@ const suite tests = [] {
         expect(same);
         expect(in.empty());
 
-        const std::array encoded{std::byte{1}, std::byte{5}, std::byte{1}};
+        const std::array encoded{std::byte{1}, std::byte{5}, std::byte{1},
+                                 std::byte{0}};
         net::reader patch_in{encoded};
         net::item_stack patched{};
         const auto status{net::decode_item_stack(patch_in, patched)};

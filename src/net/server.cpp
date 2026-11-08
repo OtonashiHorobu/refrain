@@ -1327,6 +1327,23 @@ void server::send_chunk_batch(std::uint64_t connection, std::int32_t chunk_x,
                       finished, play_cb::encode_chunk_batch_finished);
 }
 
+void server::send_container_content(std::uint64_t connection,
+                                    std::int32_t container_id,
+                                    std::int32_t state_id,
+                                    std::span<const item_stack> items,
+                                    const item_stack &carried) {
+    if (!impl_) {
+        return;
+    }
+    play_cb::container_set_content packet{};
+    packet.container_id = container_id;
+    packet.state_id = state_id;
+    packet.items.assign(items.begin(), items.end());
+    packet.carried_item = carried;
+    impl_->send_packet(connection, play_cb::container_set_content::packet_id,
+                       packet, play_cb::encode_container_set_content);
+}
+
 auto server::active_connections() const -> std::vector<std::uint64_t> {
     if (!impl_) {
         return {};

@@ -1283,6 +1283,95 @@ auto run_server(const server_run_options &options) -> int {
         }
     };
 
+    // Player inventory: map runtime item keys to protocol item ids once, then
+    // mirror the simulation inventory into the player inventory container.
+    std::unordered_map<std::string, std::uint32_t> item_ids{};
+    if (tables) {
+        if (const auto registry{tables->find_registry("minecraft:item")}) {
+            const auto count{tables->registry_entry_count(*registry)};
+            item_ids.reserve(count);
+            for (std::uint32_t index{0}; index < count; ++index) {
+                const auto entry{tables->registry_entry(*registry, index)};
+                if (entry.protocol_id >= 0) {
+                    item_ids.emplace(
+                        std::string{entry.name},
+                        static_cast<std::uint32_t>(entry.protocol_id));
+                }
+            }
+        }
+    }
+    if (auto stone{item_ids.find("minecraft:stone")}; stone != item_ids.end()) {
+        refrain::log::info("inventory: minecraft:stone -> {}", stone->second);
+    }
+    std::set<std::uint64_t> inventory_initialized{};
+    std::uint64_t last_inventory_hash{0};
+    bool have_inventory_hash{false};
+    std::int32_t inventory_state{0};
+    const auto process_inventory = [&]() {
+        if (!listener) {
+            return;
+        }
+        const auto active_ids{listener->active_connections()};
+        const std::set<std::uint64_t> active{active_ids.begin(),
+                                             active_ids.end()};
+        for (auto iterator = inventory_initialized.begin();
+             iterator != inventory_initialized.end();) {
+            if (!active.contains(*iterator)) {
+                iterator = inventory_initialized.erase(iterator);
+            } else {
+                ++iterator;
+            }
+        }
+        std::vector<refrain::net::item_stack> slots(46);
+        std::uint64_t hash{0};
+        const auto &inventory{store->player().inventory};
+        for (std::size_t index{0}; index < inventory.size(); ++index) {
+            const auto &stack{inventory[index]};
+            const auto item{item_ids.find(stack.item)};
+            hash ^= std::hash<std::string>{}(stack.item) +
+                    (static_cast<std::uint64_t>(stack.count) << 1U);
+            if (item == item_ids.end()) {
+                continue;
+            }
+            std::size_t slot{0};
+            if (index < 9) {
+                slot = 36U + index;
+            } else if (index < 36U) {
+                slot = index;
+            } else {
+                continue;
+            }
+            slots[slot] = refrain::net::item_stack{
+                .count = stack.count,
+                .item_id = item->second,
+            };
+        }
+        const auto changed{!have_inventory_hash || hash != last_inventory_hash};
+        bool any_new{false};
+        for (const auto id : active_ids) {
+            if (!inventory_initialized.contains(id)) {
+                any_new = true;
+                break;
+            }
+        }
+        if (!changed && !any_new) {
+            return;
+        }
+        if (changed) {
+            last_inventory_hash = hash;
+            have_inventory_hash = true;
+            ++inventory_state;
+        }
+        for (const auto id : active_ids) {
+            if (!changed && inventory_initialized.contains(id)) {
+                continue;
+            }
+            listener->send_container_content(id, 0, inventory_state, slots,
+                                             refrain::net::item_stack{});
+            inventory_initialized.insert(id);
+        }
+    };
+
     snapshot_writer writer{*store};
     // One background deleter, only for an applying GC policy. `--content-gc
     // off|dry-run` must never delete: no worker is started and a queue left by
@@ -1443,6 +1532,7 @@ auto run_server(const server_run_options &options) -> int {
             listener->tick();
         }
         process_chunk_streams();
+        process_inventory();
         store->tick();
         ++ticks_run;
         scheduler.run(refrain::core::schedule::phase::post_tick, ticks_run);

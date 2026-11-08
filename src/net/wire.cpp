@@ -3185,7 +3185,9 @@ auto encode_item_stack_template(writer &out, const item_stack_template &value)
     -> status {
     out.write_varint(value.item_id);
     out.write_varint(value.count);
-    out.write_varint(0); // empty component patch
+    // DataComponentPatch: added and removed counts, both zero.
+    out.write_varint(0);
+    out.write_varint(0);
     return status_ok();
 }
 
@@ -3193,12 +3195,13 @@ auto decode_item_stack_template(reader &in, item_stack_template &value)
     -> status {
     auto item{in.read_varint()};
     auto count{in.read_varint()};
-    auto patch{in.read_varint()};
-    if (!item || !count || !patch) {
+    auto positive{in.read_varint()};
+    auto negative{in.read_varint()};
+    if (!item || !count || !positive || !negative) {
         return std::unexpected{make_error(error_code::parse_error,
                                           "item_stack_template: truncated")};
     }
-    if (*patch != 0U) {
+    if (*positive != 0U || *negative != 0U) {
         return std::unexpected{make_error(
             error_code::unsupported,
             "item_stack_template: non-empty patches are not implemented")};
@@ -3932,7 +3935,9 @@ auto encode_item_stack(writer &out, const item_stack &value) -> status {
         return status_ok();
     }
     out.write_varint(value.item_id);
-    out.write_varint(0); // empty data-component patch
+    // DataComponentPatch: added and removed counts, both zero.
+    out.write_varint(0);
+    out.write_varint(0);
     return status_ok();
 }
 
@@ -3950,11 +3955,13 @@ auto decode_item_stack(reader &in, item_stack &value) -> status {
     if (!item) {
         return std::unexpected{std::move(item.error())};
     }
-    auto patch_size{in.read_varint()};
-    if (!patch_size) {
-        return std::unexpected{std::move(patch_size.error())};
+    auto positive{in.read_varint()};
+    auto negative{in.read_varint()};
+    if (!positive || !negative) {
+        return std::unexpected{make_error(
+            error_code::parse_error, "item_stack: truncated component patch")};
     }
-    if (*patch_size != 0U) {
+    if (*positive != 0U || *negative != 0U) {
         return std::unexpected{make_error(
             error_code::unsupported,
             "item_stack: non-empty component patches are not implemented")};

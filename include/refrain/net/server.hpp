@@ -8,6 +8,7 @@
 #include <refrain/core/error.hpp>
 #include <refrain/net/status.hpp>
 #include <refrain/net/transport.hpp>
+#include <refrain/net/wire.hpp>
 
 #include <cstdint>
 #include <functional>
@@ -85,6 +86,13 @@ class server {
 
     /// Connections currently in play (closed connections excluded).
     [[nodiscard]] auto active_connections() const -> std::vector<std::uint64_t>;
+
+    /// Send a full container snapshot (player inventory uses container 0).
+    void send_container_content(std::uint64_t connection,
+                                std::int32_t container_id,
+                                std::int32_t state_id,
+                                std::span<const item_stack> items,
+                                const item_stack &carried);
 
   private:
     struct impl;
