@@ -105,6 +105,20 @@ The harness opens N bots, keeps each in play for the duration and reports how
 many joined. The server logs `runtime: <ticks> tick(s), avg <ms> ms, max <ms>
 ms` on a clean shutdown, which is the baseline for MSPT checks.
 
+### Client input (X11)
+
+Run the vanilla client under XWayland when a test needs real key/mouse input:
+
+```bash
+SDL_VIDEODRIVER=x11 MC_CLIENT_HOME=... MC_SERVER=127.0.0.1:25565 \
+    scripts/dev/vanilla-client.sh
+xdotool search --class com.mojang.minecraft windowactivate --sync
+xdotool key e   # open the player inventory
+```
+
+This keeps the client unmodified; use it for manual inventory/click acceptance.
+The native Wayland window does not accept `wlrctl keyboard type` as game input.
+
 ## Adding a suite
 
 Create a file under the matching directory in `test/`, for example

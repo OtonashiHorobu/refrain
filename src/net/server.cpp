@@ -2275,8 +2275,9 @@ auto server::start(server_inputs inputs, core::config::view view)
     config.spawn_y = inputs.spawn_y;
     config.spawn_z = inputs.spawn_z;
     config.seed = inputs.seed;
-    config.game_mode = inputs.game_mode;
-    config.hardcore = inputs.hardcore;
+    config.game_mode = static_cast<std::int32_t>(
+        view.get_int64("game_mode", inputs.game_mode));
+    config.hardcore = view.get_bool("hardcore", inputs.hardcore);
     config.registry_catalog_path = std::move(inputs.registry_catalog_path);
     config.spawn_chunks = std::move(inputs.spawn_chunks);
     config.break_block = std::move(inputs.break_block);
