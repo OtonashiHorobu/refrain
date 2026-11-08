@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: d4f6267a5f946179
+// Schema hash: d8b792e342ba3012
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -35,12 +35,18 @@
 #include <refrain/schema/protocol/777/wire.hpp>
 #include <refrain/schema/storage/chunk.hpp>
 
+#include <cstdint>
 #include <string_view>
 #include <tuple>
 
 #include <refrain/reflect.hpp>
 
 namespace refrain::reflect {
+
+/// Extension metadata specialization point for generated RIDL
+/// extensions. The primary template is empty; the generator
+/// specializes it per declared extension.
+template <typename T> struct custom_extension_traits {};
 
 /// Generated RIDL struct 'refrain::core::chunk_pos'.
 template <> struct custom_traits<::refrain::core::chunk_pos> {
@@ -2917,6 +2923,16 @@ template <> struct custom_traits<::refrain::storage::chunk> {
         refrain::reflect::custom_field{"extensions", &::refrain::storage::chunk::extensions},
         refrain::reflect::custom_field{"y_pos", &::refrain::storage::chunk::y_pos},
         refrain::reflect::custom_field{"light_sections", &::refrain::storage::chunk::light_sections});
+};
+
+/// Generated RIDL extension 'refrain:net.protocol/chunk_codec'.
+template <> struct custom_extension_traits<::refrain::services::net_protocol::chunk_codec> {
+    static constexpr std::string_view id = "refrain:net.protocol/chunk_codec";
+    static constexpr std::string_view extends = "refrain:net.protocol";
+    static constexpr std::string_view capability = "chunk-codec";
+    static constexpr std::uint32_t abi_major = 1;
+    static constexpr std::uint32_t abi_minor = 0;
+    static constexpr std::uint32_t abi_patch = 0;
 };
 
 } // namespace refrain::reflect

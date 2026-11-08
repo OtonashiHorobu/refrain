@@ -12,6 +12,7 @@
 #include <schema/ast.hpp>
 #include <schema/diagnostic.hpp>
 
+#include <compare>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -209,6 +210,16 @@ struct method_model {
     source_location location;
 };
 
+/// Resolved reference to an extension declaration. Plain indices keep the
+/// model deterministic and independent of pointer identity.
+struct extension_point {
+    std::uint32_t module_index{0};
+    std::uint32_t decl_index{0};
+
+    friend auto operator<=>(const extension_point &,
+                            const extension_point &) = default;
+};
+
 struct decl_model {
     declaration_kind kind{declaration_kind::structure};
     std::string name;
@@ -238,6 +249,20 @@ struct decl_model {
     std::uint32_t service_version_patch{0};
     service_decl service;
     std::vector<method_model> methods;
+
+    // extension (`declaration_kind::extension` only)
+    extension_decl extension;
+    std::uint32_t extension_version_major{0};
+    std::uint32_t extension_version_minor{0};
+    std::uint32_t extension_version_patch{0};
+    /// Stable id derived from the parent service id and the declaration name:
+    /// `<extends>/<name>`. Empty until sema resolves the declaration.
+    std::string extension_id;
+    /// Resolved parent service (`extends`), when the id is known.
+    std::optional<extension_point> extension_parent;
+
+    // service extension points (resolved refs, declaration order)
+    std::vector<extension_point> extension_points;
 
     // ABI layout (RIDL structs; empty for RSC data types).
     std::uint32_t abi_size{0};

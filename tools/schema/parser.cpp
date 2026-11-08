@@ -46,6 +46,8 @@ auto declaration_kind_name(declaration_kind kind) noexcept -> const char * {
         return "service";
     case declaration_kind::event:
         return "event";
+    case declaration_kind::extension:
+        return "extension";
     }
     return "declaration";
 }
@@ -56,7 +58,7 @@ namespace {
     -> bool {
     return text == "struct" || text == "enum" || text == "flags" ||
            text == "packet" || text == "record" || text == "handle" ||
-           text == "service" || text == "event";
+           text == "service" || text == "event" || text == "extension";
 }
 
 [[nodiscard]] auto is_integer_type_name(std::string_view text) noexcept
@@ -327,6 +329,9 @@ class parser_impl {
                 return parse_structure(declaration_kind::event,
                                        std::move(documentation));
             }
+            if (keyword == "extension") {
+                return parse_extension(std::move(documentation));
+            }
             return parse_service(std::move(documentation));
         }
         error_here(std::format("expected a declaration, found {}",
@@ -507,6 +512,79 @@ class parser_impl {
         return decl;
     }
 
+    /// `extension <name> : <semver> { extends = "..."; capability = "..."; fn
+    /// ... }`. Shares the service body grammar for methods (`fn`); the metadata
+    /// keys are extension-specific and are validated in sema.
+    [[nodiscard]] auto parse_extension(std::string documentation)
+        -> declaration {
+        declaration decl;
+        decl.kind = declaration_kind::extension;
+        decl.location = location();
+        decl.documentation = std::move(documentation);
+        advance(); // 'extension'
+        decl.name = expect_identifier("extension name").text;
+        expect(token_kind::colon, "':' before the extension version");
+        if (at(token_kind::floating) || at(token_kind::integer)) {
+            decl.extension.version = current_.text;
+            advance();
+        } else {
+            error_here("expected an extension version (a full SemVer triple, "
+                       "e.g. 1.0.0)");
+        }
+        expect(token_kind::l_brace, "'{' opening the extension body");
+        while (!at(token_kind::r_brace) && !at(token_kind::end_of_file)) {
+            const auto line{current_.line};
+            const auto column{current_.column};
+            auto member_documentation{parse_documentation()};
+            auto member_attributes{parse_attributes()};
+            if (at_identifier("fn")) {
+                decl.methods.push_back(
+                    parse_method(std::move(member_documentation),
+                                 std::move(member_attributes)));
+            } else if (at(token_kind::identifier)) {
+                parse_extension_meta(decl);
+            } else {
+                error_here(
+                    "expected an extension method ('fn ...') or metadata");
+                advance();
+            }
+            if (current_.line == line && current_.column == column) {
+                advance();
+            }
+        }
+        expect(token_kind::r_brace, "'}' closing the extension");
+        consume(token_kind::semicolon);
+        return decl;
+    }
+
+    void parse_extension_meta(declaration &extension_declaration) {
+        const auto key_location{location()};
+        const auto key{current_.text};
+        advance(); // key
+        expect(token_kind::equals, "'=' after the extension metadata key");
+        if (!at(token_kind::string)) {
+            error_here("expected a quoted string value for extension metadata");
+            if (!at(token_kind::end_of_file)) {
+                advance();
+            }
+        } else {
+            const auto value{current_.text};
+            advance();
+            if (key == "extends") {
+                extension_declaration.extension.extends_service = value;
+            } else if (key == "capability") {
+                extension_declaration.extension.capability = value;
+            } else {
+                diagnostics_.error(
+                    key_location,
+                    std::format("unknown extension metadata '{}' (expected "
+                                "'extends' or 'capability')",
+                                key));
+            }
+        }
+        expect(token_kind::semicolon, "';' after extension metadata");
+    }
+
     void parse_service_meta(declaration &service_declaration) {
         const auto key_location{location()};
         const auto key{current_.text};
@@ -524,6 +602,8 @@ class parser_impl {
                 service_declaration.service.emits = std::move(values);
             } else if (key == "consumes") {
                 service_declaration.service.consumes = std::move(values);
+            } else if (key == "extensions") {
+                service_declaration.service.extensions = std::move(values);
             } else {
                 diagnostics_.error(
                     key_location,
@@ -552,9 +632,20 @@ class parser_impl {
         auto values{std::vector<std::string>{}};
         expect(token_kind::l_bracket, "'[' opening the list");
         while (!at(token_kind::r_bracket) && !at(token_kind::end_of_file)) {
-            if (at(token_kind::string) || at(token_kind::identifier)) {
+            if (at(token_kind::string)) {
                 values.push_back(current_.text);
                 advance();
+            } else if (at(token_kind::identifier)) {
+                // Identifier entries may be qualified (`refrain::ext::codec`)
+                // so a service can name an imported extension unambiguously;
+                // plain entries keep the import-based lookup.
+                auto value{current_.text};
+                advance();
+                while (consume(token_kind::colon_colon)) {
+                    value += "::";
+                    value += expect_identifier("qualified list entry").text;
+                }
+                values.push_back(std::move(value));
             } else {
                 error_here("expected a string or identifier in the list");
                 advance();

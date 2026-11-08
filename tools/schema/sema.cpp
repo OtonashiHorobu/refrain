@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -481,7 +482,9 @@ class analyzer {
         const auto baseline{sink_.size()};
         build_modules();
         build_symbol_tables();
+        build_service_ids();
         resolve_declarations();
+        validate_extension_links();
         compute_abi();
         if (sink_.size() != baseline) {
             return std::nullopt;
@@ -504,6 +507,16 @@ class analyzer {
 
     [[nodiscard]] auto decl_at(decl_ref ref) const -> const decl_model & {
         return model_.modules[ref.module].declarations[ref.decl];
+    }
+
+    [[nodiscard]] static auto make_extension_point(decl_ref ref) noexcept
+        -> extension_point {
+        return extension_point{ref.module, ref.decl};
+    }
+
+    [[nodiscard]] static auto make_decl_ref(extension_point point) noexcept
+        -> decl_ref {
+        return decl_ref{point.module_index, point.decl_index};
     }
 
     void error(const source_location &where, std::string message) {
@@ -651,6 +664,7 @@ class analyzer {
         decl.entries = source.entries;
         decl.service = source.service;
         decl.service_version = source.service.version;
+        decl.extension = source.extension;
         return decl;
     }
 
@@ -693,6 +707,30 @@ class analyzer {
                     } else {
                         handles_.emplace(decl.name,
                                          decl_ref{module_index, decl_index});
+                    }
+                }
+            }
+        }
+    }
+
+    /// Index services by every `provides` entry. Extensions use this map to
+    /// resolve `extends = "<service-id>"` without depending on declaration
+    /// order (a service and its extensions may live in either order or in
+    /// different modules).
+    void build_service_ids() {
+        for (std::uint32_t module_index = 0;
+             module_index < model_.modules.size(); ++module_index) {
+            const auto &module{module_at(module_index)};
+            for (std::uint32_t decl_index = 0;
+                 decl_index < module.declarations.size(); ++decl_index) {
+                const auto &decl{module.declarations[decl_index]};
+                if (decl.kind != declaration_kind::service) {
+                    continue;
+                }
+                for (const auto &provided : decl.service.provides) {
+                    if (!provided.empty()) {
+                        service_ids_.emplace(
+                            provided, decl_ref{module_index, decl_index});
                     }
                 }
             }
@@ -810,6 +848,14 @@ class analyzer {
                       "'service' is only valid in RIDL service contracts");
             }
             resolve_service(module_index, decl, source);
+            break;
+        case declaration_kind::extension:
+            if (!ridl) {
+                error(decl.location,
+                      "'extension' is only valid in RIDL service contracts");
+                break;
+            }
+            resolve_extension(module_index, decl, source);
             break;
         case declaration_kind::event:
             // Events are in-process notifications: they have no C ABI, no
@@ -1357,6 +1403,9 @@ class analyzer {
             case declaration_kind::event:
                 return std::optional<std::string>{
                     "events cannot be referenced by name as field types"};
+            case declaration_kind::extension:
+                return std::optional<std::string>{
+                    "extensions cannot be referenced by name as field types"};
             }
             return std::nullopt;
         };
@@ -1682,8 +1731,8 @@ class analyzer {
     void resolve_service(std::uint32_t module_index, decl_model &decl,
                          const declaration &source) {
         static_cast<void>(module_index);
-        const auto version{
-            parse_service_version(decl.service_version, decl.location)};
+        const auto version{parse_contract_version(decl.service_version,
+                                                  decl.location, "service")};
         if (!version.has_value()) {
             return;
         }
@@ -1727,7 +1776,7 @@ class analyzer {
                               "'provides' entry",
                               decl.name));
         }
-        resolve_methods(module_index, decl, source);
+        resolve_methods(module_index, decl, source, true);
         if (decl.methods.empty()) {
             error(decl.location,
                   std::format("service '{}' has no methods", decl.name));
@@ -1740,10 +1789,261 @@ class analyzer {
                                   method.name, decl.name));
             }
         }
+        resolve_service_extensions(module_index, decl);
+    }
+
+    /// Resolve `extensions = [ ... ]` to extension declarations and check that
+    /// every entry belongs to this service. The extension's own `extends` is
+    /// raw at this point (declarations may resolve in any order), so the check
+    /// compares the service's `provides` list instead of the resolved parent
+    /// reference. `validate_extension_links()` closes the reverse direction
+    /// after all declarations are resolved.
+    void resolve_service_extensions(std::uint32_t module_index,
+                                    decl_model &decl) {
+        std::set<std::string> names;
+        std::set<std::string> ids;
+        for (const auto &entry : decl.service.extensions) {
+            if (!names.insert(entry).second) {
+                error(decl.location,
+                      std::format("service '{}' lists extension '{}' more "
+                                  "than once",
+                                  decl.name, entry));
+                continue;
+            }
+            const auto found{
+                find_extension_decl(entry, module_index, decl.location)};
+            if (!found.has_value()) {
+                error(decl.location,
+                      std::format("service '{}' declares unknown extension "
+                                  "'{}'",
+                                  decl.name, entry));
+                continue;
+            }
+            const auto &extension{decl_at(*found)};
+            const auto declared{std::ranges::find(
+                decl.service.provides, extension.extension.extends_service)};
+            if (declared == decl.service.provides.end()) {
+                error(decl.location,
+                      std::format("service '{}' lists extension '{}', but that "
+                                  "extension extends '{}', not this service",
+                                  decl.name, entry,
+                                  extension.extension.extends_service));
+                continue;
+            }
+            const auto extension_id{extension.extension_id.empty()
+                                        ? extension.extension.extends_service +
+                                              "/" + extension.name
+                                        : extension.extension_id};
+            if (!ids.insert(extension_id).second) {
+                error(decl.location,
+                      std::format("service '{}' lists extension id '{}' more "
+                                  "than once",
+                                  decl.name, extension_id));
+                continue;
+            }
+            decl.extension_points.push_back(make_extension_point(*found));
+        }
+    }
+
+    [[nodiscard]] auto find_extension_decl(std::string_view name,
+                                           std::uint32_t current_module,
+                                           const source_location &where)
+        -> std::optional<decl_ref> {
+        const auto search =
+            [this](const std::string &key) -> std::optional<decl_ref> {
+            const auto found{symbols_.find(key)};
+            if (found == symbols_.end() ||
+                decl_at(found->second).kind != declaration_kind::extension) {
+                return std::nullopt;
+            }
+            return found->second;
+        };
+        if (name.find("::") != std::string_view::npos) {
+            return search(std::string{name});
+        }
+        const auto &module{module_at(current_module)};
+        if (auto local{search(module.name + "::" + std::string{name})};
+            local.has_value()) {
+            return local;
+        }
+        std::vector<decl_ref> matches;
+        for (const auto &imported : module.imports) {
+            if (auto found{search(imported + "::" + std::string{name})};
+                found.has_value()) {
+                matches.push_back(*found);
+            }
+        }
+        if (matches.size() == 1) {
+            return matches.front();
+        }
+        if (matches.size() > 1) {
+            error(where, std::format("ambiguous extension '{}' (imported from "
+                                     "multiple modules)",
+                                     name));
+        }
+        return std::nullopt;
+    }
+
+    /// Resolve `extends = "<service-id>"` against every declared `provides`
+    /// entry. Ambiguous ids are rejected: the stable extension id embeds the
+    /// parent id, so two owners would make it non-deterministic.
+    [[nodiscard]] auto find_service_id(std::string_view id,
+                                       std::string_view extension_name,
+                                       const source_location &where)
+        -> std::optional<decl_ref> {
+        const auto [first, last] = service_ids_.equal_range(std::string{id});
+        const auto count{std::distance(first, last)};
+        if (count == 0) {
+            error(where,
+                  std::format("extension '{}' extends unknown service '{}'",
+                              extension_name, id));
+            return std::nullopt;
+        }
+        if (count > 1) {
+            error(where,
+                  std::format("extension '{}' extends '{}', which is provided "
+                              "by more than one service",
+                              extension_name, id));
+            return std::nullopt;
+        }
+        return first->second;
+    }
+
+    /// Non-empty printable id without whitespace or comparison characters.
+    /// `extends` is embedded verbatim in the generated id string.
+    [[nodiscard]] static auto valid_contract_id(std::string_view text) noexcept
+        -> bool {
+        return !text.empty() && std::ranges::all_of(text, [](char character) {
+            const auto byte{static_cast<unsigned char>(character)};
+            return byte > 0x20U && byte < 0x7FU && character != '<' &&
+                   character != '>';
+        });
+    }
+
+    /// Capability labels are lowercase identifiers: `[a-z0-9]` followed by
+    /// `[a-z0-9._-]`, at most 64 characters.
+    [[nodiscard]] static auto valid_capability(std::string_view text) noexcept
+        -> bool {
+        if (text.empty() || text.size() > 64) {
+            return false;
+        }
+        const auto is_lower_alnum = [](char character) {
+            return (character >= 'a' && character <= 'z') ||
+                   (character >= '0' && character <= '9');
+        };
+        if (!is_lower_alnum(text.front())) {
+            return false;
+        }
+        return std::ranges::all_of(text, [&](char character) {
+            return is_lower_alnum(character) || character == '.' ||
+                   character == '-' || character == '_';
+        });
+    }
+
+    void resolve_extension(std::uint32_t module_index, decl_model &decl,
+                           const declaration &source) {
+        const auto version{parse_contract_version(decl.extension.version,
+                                                  decl.location, "extension")};
+        if (!version.has_value()) {
+            return;
+        }
+        decl.extension_version_major = version->major;
+        decl.extension_version_minor = version->minor;
+        decl.extension_version_patch = version->patch;
+        // The query slot packs the requested minimum version as
+        // `(major << 16) | minor`, so both components must fit.
+        constexpr std::uint32_t component_limit{0xFFFF};
+        if (version->major > component_limit ||
+            version->minor > component_limit) {
+            error(decl.location,
+                  std::format("extension '{}' version {}.{}.{} cannot be "
+                              "encoded in the extension query: major and minor "
+                              "must not exceed {}",
+                              decl.name, version->major, version->minor,
+                              version->patch, component_limit));
+            return;
+        }
+        const auto &parent_id{decl.extension.extends_service};
+        if (parent_id.empty()) {
+            error(decl.location,
+                  std::format("extension '{}' must declare extends = "
+                              "\"<service-id>\"",
+                              decl.name));
+        } else if (!valid_contract_id(parent_id)) {
+            error(decl.location,
+                  std::format("extension '{}' has invalid parent service id "
+                              "'{}' (expected a non-empty id without "
+                              "whitespace or comparison characters)",
+                              decl.name, parent_id));
+        } else if (auto parent{
+                       find_service_id(parent_id, decl.name, decl.location)};
+                   parent.has_value()) {
+            decl.extension_parent = make_extension_point(*parent);
+        }
+        decl.extension_id = parent_id + "/" + decl.name;
+        if (extension_ids_.contains(decl.extension_id)) {
+            error(decl.location,
+                  std::format("duplicate extension id '{}' (declared by "
+                              "another extension)",
+                              decl.extension_id));
+        } else {
+            extension_ids_.emplace(
+                decl.extension_id,
+                decl_ref{module_index, decl_index_of(module_index, decl)});
+        }
+        if (decl.extension.capability.empty()) {
+            error(decl.location,
+                  std::format("extension '{}' must declare capability = "
+                              "\"<capability>\"",
+                              decl.name));
+        } else if (!valid_capability(decl.extension.capability)) {
+            error(decl.location,
+                  std::format("extension '{}' has invalid capability '{}' "
+                              "(expected a lowercase identifier of at most 64 "
+                              "characters: a-z, 0-9, '.', '-' or '_')",
+                              decl.name, decl.extension.capability));
+        }
+        resolve_methods(module_index, decl, source, false);
+        std::set<std::string> method_names;
+        for (const auto &method : decl.methods) {
+            if (!method_names.insert(method.name).second) {
+                error(method.location,
+                      std::format("duplicate method '{}' in extension '{}'",
+                                  method.name, decl.name));
+            }
+        }
+    }
+
+    /// Reverse direction of the service/extension link: a declared extension
+    /// must be listed by the parent service it extends, otherwise hosts have
+    /// no query slot through which to reach it.
+    void validate_extension_links() {
+        for (std::uint32_t module_index = 0;
+             module_index < model_.modules.size(); ++module_index) {
+            const auto &module{module_at(module_index)};
+            for (std::uint32_t decl_index = 0;
+                 decl_index < module.declarations.size(); ++decl_index) {
+                const auto &decl{module.declarations[decl_index]};
+                if (decl.kind != declaration_kind::extension ||
+                    !decl.extension_parent.has_value()) {
+                    continue;
+                }
+                const auto &parent{
+                    decl_at(make_decl_ref(*decl.extension_parent))};
+                const auto self{extension_point{module_index, decl_index}};
+                if (std::ranges::find(parent.extension_points, self) ==
+                    parent.extension_points.end()) {
+                    error(decl.location,
+                          std::format("extension '{}' is not listed by its "
+                                      "parent service '{}'",
+                                      decl.name, parent.name));
+                }
+            }
+        }
     }
 
     void resolve_methods(std::uint32_t module_index, decl_model &decl,
-                         const declaration &source) {
+                         const declaration &source, bool schedules_allowed) {
         for (const auto &method_source : source.methods) {
             validate_attributes(method_source.attributes,
                                 method_source.location,
@@ -1861,7 +2161,16 @@ class analyzer {
             if (const auto *schedule{
                     find_attribute(method_source.attributes, "schedule")};
                 schedule != nullptr) {
-                resolve_schedule(*schedule, method, method_source);
+                if (schedules_allowed) {
+                    resolve_schedule(*schedule, method, method_source);
+                } else {
+                    // Extension vtables have no tick descriptor table, so a
+                    // schedule on an extension method would otherwise be
+                    // silently ignored by the emitter.
+                    error(schedule->location,
+                          "'#[schedule]' is only valid on service methods, "
+                          "not on extension methods");
+                }
             }
             decl.methods.push_back(std::move(method));
         }
@@ -2020,41 +2329,42 @@ class analyzer {
         });
     }
 
-    struct service_version {
+    struct contract_version {
         std::uint32_t major{0};
         std::uint32_t minor{0};
         std::uint32_t patch{0};
     };
 
-    /// Full SemVer 2.0.0 service version. Parsing is delegated to the shared
-    /// `refrain::core::semver` (same parser and rules as the gamepack
-    /// resolver); sema stores the parsed triple in the model so the emitters
-    /// never re-parse the version string. Published contract services
-    /// must be release versions: the emitted ABI constants have no place to
+    /// Full SemVer 2.0.0 contract version (service or extension). Parsing is
+    /// delegated to the shared `refrain::core::semver` (same parser and rules
+    /// as the gamepack resolver); sema stores the parsed triple in the model so
+    /// the emitters never re-parse the version string. Published contract
+    /// versions must be releases: the emitted ABI constants have no place to
     /// encode prerelease identifiers, while build metadata is accepted and
     /// ignored for ABI purposes.
-    [[nodiscard]] auto parse_service_version(std::string_view text,
-                                             const source_location &where)
-        -> std::optional<service_version> {
+    [[nodiscard]] auto parse_contract_version(std::string_view text,
+                                              const source_location &where,
+                                              std::string_view kind)
+        -> std::optional<contract_version> {
         const auto parsed{core::semver::parse(text)};
         if (!parsed.has_value()) {
             error(where,
-                  std::format("invalid service version '{}': expected a full "
-                              "SemVer 2.0.0 version major.minor.patch ({})",
-                              text, error_text(parsed.error())));
+                  std::format("invalid {} version '{}': expected a full SemVer "
+                              "2.0.0 version major.minor.patch ({})",
+                              kind, text, error_text(parsed.error())));
             return std::nullopt;
         }
         if (parsed->is_prerelease()) {
             error(where,
-                  std::format("invalid service version '{}': published "
-                              "contracts must declare a release version "
-                              "(prerelease identifiers cannot be encoded in "
-                              "the ABI constants; use build metadata instead, "
-                              "e.g. 1.0.0+dev)",
-                              text));
+                  std::format("invalid {} version '{}': published contracts "
+                              "must declare a release version (prerelease "
+                              "identifiers cannot be encoded in the ABI "
+                              "constants; use build metadata instead, e.g. "
+                              "1.0.0+dev)",
+                              kind, text));
             return std::nullopt;
         }
-        return service_version{parsed->major, parsed->minor, parsed->patch};
+        return contract_version{parsed->major, parsed->minor, parsed->patch};
     }
 
     /// Validate one RIDL `requires` entry: `<service_id><op><semver>` with
@@ -2470,6 +2780,8 @@ class analyzer {
     std::vector<std::vector<const declaration *>> ast_declarations_;
     std::map<std::string, decl_ref> symbols_;
     std::map<std::string, decl_ref> handles_;
+    std::multimap<std::string, decl_ref> service_ids_;
+    std::map<std::string, decl_ref> extension_ids_;
     std::map<std::string, size_align> layouts_;
     std::map<std::uint32_t, std::set<std::int64_t>> packet_ids_;
     std::set<std::string> layout_stack_;

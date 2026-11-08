@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: d4f6267a5f946179
+// Schema hash: d8b792e342ba3012
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_ABI_H
@@ -17,6 +17,45 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// Extension ABI v1: a service exposes provider-implemented extensions
+// through its `query_extension` vtable slot. A reference is a
+// struct_size-prologue value; the vtable pointer stays type-erased in C and is
+// typed by the generated C++ wrapper.
+#ifndef REFRAIN_EXTENSION_ABI_DEFINED
+#define REFRAIN_EXTENSION_ABI_DEFINED
+
+#define REFRAIN_EXTENSION_ABI_MAJOR 1u
+#define REFRAIN_EXTENSION_ABI_MINOR 0u
+
+// Query status values; the numeric codes mirror the shared core error taxonomy
+// (invalid_argument, not_found, version_mismatch).
+#define REFRAIN_EXTENSION_INVALID ((refrain_status)1u)
+#define REFRAIN_EXTENSION_NOT_FOUND ((refrain_status)2u)
+#define REFRAIN_EXTENSION_VERSION_MISMATCH ((refrain_status)8u)
+
+// Packed minimum extension version requested by a query:
+// (major << 16) | minor.
+#define REFRAIN_EXTENSION_VERSION(major, minor)                                \
+    ((((uint32_t)(major)) << 16u) | ((uint32_t)(minor) & 0xFFFFu))
+
+typedef struct refrain_extension_ref {
+    // sizeof(refrain_extension_ref) written by the producer; a host accepts
+    // only its own compiled size.
+    uint32_t struct_size;
+    uint32_t abi_major;
+    uint32_t abi_minor;
+    uint32_t abi_patch;
+    // Stable id derived from the parent service id and the declaration name.
+    refrain_str id;
+    // Provider-owned extension vtable (first member: uint32_t struct_size).
+    const void *vtable;
+    // Provider-owned extension instance passed to every vtable method.
+    void *self;
+} refrain_extension_ref;
+
+#define REFRAIN_EXTENSION_REF_SIZE ((uint32_t)sizeof(refrain_extension_ref))
+#endif // REFRAIN_EXTENSION_ABI_DEFINED
 
 typedef struct refrain_services_net_protocol_protocol_version refrain_services_net_protocol_protocol_version;
 typedef struct refrain_services_net_protocol_frame_header refrain_services_net_protocol_frame_header;
@@ -58,9 +97,26 @@ struct refrain_services_net_protocol_packet_view {
 }; // refrain_services_net_protocol_packet_view size = 24
 #define REFRAIN_SERVICES_NET_PROTOCOL_PACKET_VIEW_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_packet_view))
 
+// Optional chunk-to-buffer codec implemented by chunk-aware providers.
+#define REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_ID "refrain:net.protocol/chunk_codec"
+#define REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_ABI_MAJOR 1u
+#define REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_ABI_MINOR 0u
+#define REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_ABI_PATCH 0u
+#define REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_CAPABILITY "chunk-codec"
+#define REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_EXTENDS "refrain:net.protocol"
+
+typedef struct refrain_services_net_protocol_chunk_codec_vtable {
+    uint32_t struct_size;
+    // Serialize one borrowed chunk view into the caller-provided buffer.
+    // attributes: #[thread(worker)] #[can_fail]
+    refrain_status (*encode_chunk)(void *self, const refrain_core_chunk_view *chunk, refrain_core_chunk_buffer *encoded);
+} refrain_services_net_protocol_chunk_codec_vtable; // extension refrain:net.protocol/chunk_codec
+
+#define REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_VTABLE_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_chunk_codec_vtable))
+
 #define REFRAIN_SERVICES_NET_PROTOCOL_SERVICE_ID "refrain:net.protocol"
 #define REFRAIN_SERVICES_NET_PROTOCOL_ABI_MAJOR 1u
-#define REFRAIN_SERVICES_NET_PROTOCOL_ABI_MINOR 0u
+#define REFRAIN_SERVICES_NET_PROTOCOL_ABI_MINOR 1u
 #define REFRAIN_SERVICES_NET_PROTOCOL_ABI_PATCH 0u
 #define REFRAIN_SERVICES_NET_PROTOCOL_SIDE REFRAIN_SIDE_SERVER
 #define REFRAIN_SERVICES_NET_PROTOCOL_THREAD REFRAIN_THREAD_NET
@@ -68,6 +124,7 @@ struct refrain_services_net_protocol_packet_view {
 #define REFRAIN_SERVICES_NET_PROTOCOL_CAPABILITIES "frame-compression,registry-sync"
 #define REFRAIN_SERVICES_NET_PROTOCOL_REQUIRES "refrain:core>=1.0.0"
 #define REFRAIN_SERVICES_NET_PROTOCOL_SERVICE_IDS "refrain:net.protocol"
+#define REFRAIN_SERVICES_NET_PROTOCOL_EXTENSION_IDS "refrain:net.protocol/chunk_codec"
 
 typedef struct refrain_services_net_protocol_vtable {
     uint32_t struct_size;
@@ -87,6 +144,14 @@ typedef struct refrain_services_net_protocol_vtable {
     refrain_status (*send_packet)(void *self, refrain_core_handle_connection conn, const refrain_services_net_protocol_packet_view *packet);
     // attributes: #[thread(sim)]
     refrain_services_net_protocol_connection_state (*state_of)(void *self, refrain_core_handle_connection conn);
+    // Extension query. Returns REFRAIN_EXTENSION_NOT_FOUND when the
+    // provider does not offer `id`, REFRAIN_EXTENSION_VERSION_MISMATCH
+    // when its major/minor cannot satisfy `min_version`, and
+    // REFRAIN_EXTENSION_INVALID for a malformed reference. The host
+    // initialises `out->struct_size` before the call.
+    refrain_status (*query_extension)(void *self, refrain_str id,
+                                      uint32_t min_version,
+                                      refrain_extension_ref *out);
 } refrain_services_net_protocol_vtable; // service refrain:net.protocol
 
 #define REFRAIN_SERVICES_NET_PROTOCOL_VTABLE_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_vtable))

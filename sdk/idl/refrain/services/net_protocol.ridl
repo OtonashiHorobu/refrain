@@ -2,12 +2,13 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// `refrain:net.protocol` service contract v0. Framing, compression and
-// encryption stay in net.session; this
-// contract is the versioned packet codec for protocol 777.
+// `refrain:net.protocol` service contract. Framing, compression and
+// encryption stay in net.session; this contract is the versioned packet codec
+// for protocol 777. The `chunk_codec` extension point is an optional provider
+// capability queried through the service vtable.
 
 module refrain::services::net_protocol;
-version 1.0.0;
+version 1.1.0;
 
 import refrain::core;
 
@@ -43,12 +44,24 @@ struct packet_view {
     bytes payload;
 }
 
-service net_protocol : 1.0.0 {
+/// Optional chunk-to-buffer codec implemented by chunk-aware providers.
+extension chunk_codec : 1.0.0 {
+    extends = "refrain:net.protocol";
+    capability = "chunk-codec";
+
+    /// Serialize one borrowed chunk view into the caller-provided buffer.
+    #[thread(worker)] #[can_fail]
+    fn encode_chunk(in chunk_view chunk, out chunk_buffer encoded)
+        -> result<void, protocol_error>;
+}
+
+service net_protocol : 1.1.0 {
     side = server;
     thread = net;
     provides = [ "refrain:net.protocol" ];
     requires = [ "refrain:core>=1.0.0" ];
     capabilities = [ "frame-compression", "registry-sync" ];
+    extensions = [ chunk_codec ];
 
     /// Protocol number implemented by this provider (777 for vanilla 26.3).
     #[thread(any)]

@@ -97,6 +97,23 @@ struct service_decl {
     std::vector<std::string> capabilities;
     std::vector<std::string> emits;
     std::vector<std::string> consumes;
+    /// Extension points declared by the service, by extension declaration name.
+    /// Semantics resolves each entry to an `extension` declaration in the same
+    /// module or an imported one.
+    std::vector<std::string> extensions;
+};
+
+/// `extension <name> : <semver> { extends = "<service-id>"; capability = "...";
+/// ... }`. Extensions add provider-implemented capabilities to one base service
+/// without changing the base contract's method list. The stable extension id
+/// is derived from the parent service id and the extension name.
+struct extension_decl {
+    /// Full SemVer 2.0.0 release triple; sema validates it.
+    std::string version{"1.0.0"};
+    /// Service id (`provides` entry) of the service this extension extends.
+    std::string extends_service;
+    /// Stable capability label advertised with the extension.
+    std::string capability;
 };
 
 enum class declaration_kind : std::uint8_t {
@@ -110,6 +127,8 @@ enum class declaration_kind : std::uint8_t {
     /// In-process, transient notification (RIDL only). Events are not
     /// C ABI structs: they carry no `struct_size` and never cross the wire.
     event,
+    /// Provider-implemented capability attached to a base service (RIDL only).
+    extension,
 };
 
 [[nodiscard]] auto declaration_kind_name(declaration_kind kind) noexcept
@@ -132,6 +151,8 @@ struct declaration {
 
     // service
     service_decl service;
+    // extension
+    extension_decl extension;
     std::vector<method_decl> methods;
 };
 
