@@ -281,6 +281,14 @@ def main() -> int:
         help="biome of the fixed source used by --surface (default "
         "oracle:terrain; real keys are overridden without carvers/features)",
     )
+    parser.add_argument(
+        "--force-load-box",
+        type=int,
+        nargs=4,
+        metavar=("X1", "Z1", "X2", "Z2"),
+        default=None,
+        help="block-coordinate box for the structure/plain forceload run",
+    )
     args = parser.parse_args()
 
     root = args.output.resolve()
@@ -1740,11 +1748,25 @@ def main() -> int:
     if args.structures:
         # forceload accepts at most 256 chunks; this 16x16 box covers the
         # structure candidates around the origin.
-        run_server(root, args.server_jar, args.settle, force_load=True,
-                   force_load_box=(-64, -64, 191, 191))
+        run_server(
+            root,
+            args.server_jar,
+            args.settle,
+            force_load=True,
+            force_load_box=tuple(args.force_load_box)
+            if args.force_load_box is not None
+            else (-64, -64, 191, 191),
+        )
     elif args.plain:
-        run_server(root, args.server_jar, args.settle, force_load=True,
-                   force_load_box=(-64, -64, 191, 191))
+        run_server(
+            root,
+            args.server_jar,
+            args.settle,
+            force_load=True,
+            force_load_box=tuple(args.force_load_box)
+            if args.force_load_box is not None
+            else (-64, -64, 191, 191),
+        )
     else:
         run_server(root, args.server_jar, args.settle)
 
