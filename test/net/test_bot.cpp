@@ -78,6 +78,9 @@ suite bot_tests = [] {
         inputs.commands.tree = [tree](const net::player_identity &) {
             return tree;
         };
+        inputs.tab = [](const net::player_identity &) {
+            return net::tab_view{.header = "Header", .footer = "Footer"};
+        };
         net::server *server_ptr{nullptr};
         inputs.commands.execute =
             [&server_ptr](const net::player_identity &identity,
@@ -172,6 +175,7 @@ suite bot_tests = [] {
             expect(has_id(88U));  // server_data
             expect(has_id(106U)); // set_health
             expect(has_id(136U)); // update_recipes
+            expect(has_id(125U)); // tab_list
         }
         ticking.store(false, std::memory_order_relaxed);
         ticker.join();

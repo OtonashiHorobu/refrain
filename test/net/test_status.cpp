@@ -122,6 +122,56 @@ const suite tests = [] {
         std::error_code error;
         std::filesystem::remove_all(dir, error);
     };
+
+    "net/status uses the injected dynamic provider"_test = [] {
+        const auto dir{make_temp_dir()};
+        {
+            std::ofstream stream{dir / "network.toml",
+                                 std::ios::binary | std::ios::trunc};
+            stream << "bind_host = \"127.0.0.1\"\nport = 0\n";
+        }
+        auto store{refrain::core::config::store::empty()};
+        expect(static_cast<bool>(store.mount(
+            {.name = "network", .path = (dir / "network.toml").string()})));
+        expect(static_cast<bool>(store.load_all()));
+        auto view{store.module("network")};
+        expect(static_cast<bool>(view));
+        if (!view) {
+            std::error_code error;
+            std::filesystem::remove_all(dir, error);
+            return;
+        }
+        net::server_inputs inputs{};
+        inputs.protocol = refrain::test::make_test_protocol();
+        inputs.status = [](const net::status_request_context &context) {
+            net::status_info info{};
+            info.description = "Dynamic MOTD";
+            info.max_players = 99;
+            info.online_players = context.online_players + 5;
+            info.sample.push_back({.name = "Dynamic", .id = {}});
+            return info;
+        };
+        auto running{net::server::start(std::move(inputs), *view)};
+        expect(running.has_value());
+        if (!running) {
+            std::error_code error;
+            std::filesystem::remove_all(dir, error);
+            return;
+        }
+        auto result{net::ping(net::endpoint{.host = "127.0.0.1",
+                                            .port = (*running)->local_port()},
+                              std::chrono::milliseconds{5000})};
+        expect(result.has_value());
+        if (result) {
+            expect(result->status.description == "Dynamic MOTD");
+            expect(result->status.max_players == 99);
+            expect(result->status.online_players == 5);
+            expect(result->status.sample.size() == 1U);
+        }
+        (*running)->stop();
+        std::error_code error;
+        std::filesystem::remove_all(dir, error);
+    };
 };
 
 } // namespace

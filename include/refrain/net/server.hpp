@@ -62,6 +62,26 @@ struct join_state {
     game_mode mode{game_mode::creative};
 };
 
+/// Context for a server-list status request. Strings are borrowed for the
+/// duration of the callback.
+struct status_request_context {
+    std::int32_t protocol{0};
+    std::string_view host{};
+    std::uint16_t port{0};
+    std::string_view client_ip{};
+    std::int32_t online_players{0};
+};
+
+/// Header/footer for the tab list. The network layer only encodes this view.
+struct tab_view {
+    std::string header{};
+    std::string footer{};
+};
+
+using status_provider =
+    std::function<status_info(const status_request_context &)>;
+using tab_provider = std::function<tab_view(const player_identity &)>;
+
 /// World-level policy that is part of the login handshake.
 struct server_policy {
     bool hardcore{false};
@@ -134,6 +154,8 @@ struct server_inputs {
     server_policy policy{};
     join_state_provider join_state{};
     command_bridge commands{};
+    status_provider status{};
+    tab_provider tab{};
     /// Optional transport provider. Empty uses the built-in Asio TCP
     /// transport.
     transport_factory make_transport{};
@@ -195,6 +217,11 @@ class server {
     /// Drain container clicks observed since the previous call.
     [[nodiscard]] auto take_container_clicks()
         -> std::vector<container_click_event>;
+
+    /// Re-send the tab header/footer to every play connection or one
+    /// connection after the session view changed.
+    void refresh_tab();
+    void refresh_tab(std::uint64_t connection);
 
     /// Re-send the command tree to every play connection or one connection.
     /// Call after the gameplay bridge changes commands or permissions.

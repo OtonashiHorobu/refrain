@@ -200,6 +200,8 @@ struct server::impl {
     struct connection_state_data {
         connection_state state{connection_state::handshake};
         std::int32_t protocol{0};
+        std::string handshake_host{};
+        std::uint16_t handshake_port{0};
         std::string name{};
         uuid profile{};
         uuid session{};
@@ -241,6 +243,8 @@ struct server::impl {
     mutable std::mutex policy_mutex{};
     join_state_provider join_state{};
     command_bridge commands{};
+    status_provider status_hook{};
+    tab_provider tab_hook{};
     transport_factory make_transport{};
     std::shared_ptr<protocol_codec> protocol{};
     std::mutex command_cache_mutex{};
@@ -249,7 +253,6 @@ struct server::impl {
     session_verifier verify_session{};
     std::unique_ptr<transport> socket{};
     std::unordered_map<std::uint64_t, connection_state_data> connections{};
-    std::string status_json{};
     std::optional<rsa_keypair> server_key{};
     std::unique_ptr<http_transport> http{};
     std::unique_ptr<auth_service> auth{};
@@ -289,6 +292,7 @@ struct server::impl {
     void send_configuration(std::uint64_t id);
     void send_play_login(std::uint64_t id);
     void send_commands(std::uint64_t id);
+    void send_tab_list(std::uint64_t id);
     void set_game_mode(std::uint64_t id, game_mode mode);
     void send_system_chat(std::uint64_t id, std::string_view text);
     void broadcast_system_chat(std::string_view text);
@@ -314,7 +318,6 @@ struct server::impl {
 };
 
 auto server::impl::start() -> status {
-    status_json = build_status_json(config.status);
     if (config.online_mode) {
         auto key{rsa_keypair::generate()};
         if (!key) {
@@ -523,6 +526,8 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             }
             auto &live{found->second};
             live.protocol = static_cast<std::int32_t>(intention.protocol);
+            live.handshake_host = intention.host;
+            live.handshake_port = intention.port;
             if (intention.next == 1) {
                 live.state = connection_state::status;
             } else if (intention.next == 2) {
@@ -564,7 +569,28 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 reject(id, "malformed or unexpected packet");
                 return;
             }
-            auto response{encode_status_response(status_json)};
+            status_request_context context{};
+            {
+                const std::lock_guard lock{connections_mutex};
+                const auto found{connections.find(id)};
+                if (found == connections.end() || found->second.closed) {
+                    return;
+                }
+                context.protocol = found->second.protocol;
+                context.host = found->second.handshake_host;
+                context.port = found->second.handshake_port;
+                std::int32_t online{0};
+                for (const auto &[other, connection] : connections) {
+                    static_cast<void>(other);
+                    if (!connection.closed &&
+                        connection.state == connection_state::play) {
+                        ++online;
+                    }
+                }
+                context.online_players = online;
+            }
+            auto info{status_hook ? status_hook(context) : config.status};
+            auto response{encode_status_response(build_status_json(info))};
             if (!response) {
                 reject(id, "malformed or unexpected packet");
                 return;
@@ -1356,6 +1382,7 @@ void server::impl::send_play_login(std::uint64_t id) {
     }
     send_commands(id);
     announce_join(id);
+    send_tab_list(id);
     send_initial_chunks(id);
     send_keepalive(id);
 }
@@ -1407,6 +1434,35 @@ void server::impl::send_commands(std::uint64_t id) {
         cached_commands = body;
     }
     send(id, *body);
+}
+
+void server::impl::send_tab_list(std::uint64_t id) {
+    if (!tab_hook) {
+        return;
+    }
+    std::string name;
+    uuid profile{};
+    {
+        const std::lock_guard lock{connections_mutex};
+        const auto found{connections.find(id)};
+        if (found == connections.end() || found->second.closed) {
+            return;
+        }
+        name = found->second.name;
+        profile = found->second.profile;
+    }
+    const player_identity identity{
+        .connection = id,
+        .id = profile,
+        .name = name,
+        .world = {},
+    };
+    const auto view{tab_hook(identity)};
+    play_cb::tab_list packet{};
+    packet.header.text = view.header;
+    packet.footer.text = view.footer;
+    send_packet(id, play_cb::tab_list::packet_id, packet,
+                play_cb::encode_tab_list);
 }
 
 void server::impl::send_system_chat(std::uint64_t id, std::string_view text) {
@@ -1550,6 +1606,21 @@ void server::send_container_content(std::uint64_t connection,
     packet.carried_item = carried;
     impl_->send_packet(connection, play_cb::container_set_content::packet_id,
                        packet, play_cb::encode_container_set_content);
+}
+
+void server::refresh_tab() {
+    if (!impl_) {
+        return;
+    }
+    for (const auto id : active_connections()) {
+        impl_->send_tab_list(id);
+    }
+}
+
+void server::refresh_tab(std::uint64_t connection) {
+    if (impl_) {
+        impl_->send_tab_list(connection);
+    }
 }
 
 void server::resend_commands() {
@@ -2496,6 +2567,8 @@ auto server::start(server_inputs inputs, core::config::view view)
     state->policy = std::move(inputs.policy);
     state->join_state = std::move(inputs.join_state);
     state->commands = std::move(inputs.commands);
+    state->status_hook = std::move(inputs.status);
+    state->tab_hook = std::move(inputs.tab);
     state->make_transport = std::move(inputs.make_transport);
     state->protocol = std::move(inputs.protocol);
     state->verify_session = std::move(inputs.verify_session);
