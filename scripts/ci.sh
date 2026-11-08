@@ -857,10 +857,10 @@ echo "  content: 4 file(s) -> 3 blob(s) (2 in segments), deterministic RFRX, whe
     --dump-gamepack | grep -q 'worldgen -> refrain.worldgen.flat@1.0.0' \
     || die "server did not resolve the flat-worldgen preset"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --dump-gamepack 2>&1 | grep -q 'builtin image: files=11' \
+    --dump-gamepack 2>&1 | grep -q 'builtin image: files=12' \
     || die "server did not load the embedded built-in image"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    2>&1 | grep -q 'mod host: 10 mod(s) loaded' \
+    2>&1 | grep -q 'mod host: 11 mod(s) loaded' \
     || die "server did not load the gamepack mods through the mod host"
 # Console diagnostics are stderr; stdout carries only the command's data.
 # CI/scripts grep these streams directly (`dump > out.txt`), so a console log
