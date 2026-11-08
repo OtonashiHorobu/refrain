@@ -661,6 +661,18 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                     }
                 }
             }
+            if (std::getenv("REFRAIN_MANSION_DEBUG") != nullptr) {
+                for (const auto &neighbour : neighbours) {
+                    if (neighbour->chunk_x() == 47 &&
+                        neighbour->chunk_z() == 5) {
+                        std::fprintf(
+                            stderr, "mansion east %s\n",
+                            std::string{
+                                states.name(neighbour->state_at(0, 85, 2))}
+                                .c_str());
+                    }
+                }
+            }
             structure::refresh_chunk_shapes(chunk, region_view, states);
         }
         std::size_t mismatches = 0;

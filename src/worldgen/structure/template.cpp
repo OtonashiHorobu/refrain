@@ -774,6 +774,17 @@ auto update_template_block(block_state_registry &states, chunk_region &region,
                            const block_pos &pos) -> bool {
     const auto current = region.state_at(pos.x, pos.y, pos.z);
     auto parsed = parse_state(states.name(current));
+    if (parsed.properties.empty() && parsed.name.ends_with("_fence")) {
+        parsed.properties = {{"east", "false"},
+                             {"north", "false"},
+                             {"south", "false"},
+                             {"waterlogged", "false"},
+                             {"west", "false"}};
+    } else if (parsed.properties.empty() && parsed.name.ends_with("_wall")) {
+        parsed.properties = {{"east", "none"},         {"north", "none"},
+                             {"south", "none"},        {"up", "true"},
+                             {"waterlogged", "false"}, {"west", "none"}};
+    }
     const auto find_property = [&](std::string_view name) -> std::string {
         for (const auto &[property, value] : parsed.properties) {
             if (property == name) {
@@ -797,6 +808,11 @@ auto update_template_block(block_state_registry &states, chunk_region &region,
         return changed;
     };
     bool changed = false;
+    if (std::getenv("REFRAIN_FENCE_DEBUG") != nullptr && pos.x == 751 &&
+        pos.y == 85 && pos.z == 82) {
+        std::fprintf(stderr, "fence at target name=%s\n",
+                     std::string{parsed.name}.c_str());
+    }
     if (is_fence(parsed.name)) {
         for (const auto *direction : {"north", "east", "south", "west"}) {
             const auto target = neighbour_pos(pos, direction);
@@ -1376,6 +1392,10 @@ auto place_template(chunk_region &region, block_state_registry &states,
         }
     }
     for (const auto &pos : placed_positions) {
+        if (state_block_name(states.name(region.state_at(pos.x, pos.y, pos.z)))
+                .ends_with("_fence")) {
+            continue;
+        }
         if (is_shape_sensitive(states, region.state_at(pos.x, pos.y, pos.z))) {
             (void)update_template_block(states, region, pos);
         }
