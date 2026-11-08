@@ -38,6 +38,12 @@ struct structure_start_context {
     structure_template_manager *templates{nullptr};
 };
 
+/// One structure found by `locate_structure`.
+struct located_structure {
+    chunk_pos chunk{};
+    std::string structure{};
+};
+
 struct structure_area {
     std::vector<structure_start> starts{};
     std::vector<structure_reference> references{};
@@ -59,6 +65,14 @@ generate_structure_area(const chunk_pos &target,
 generate_structure_starts(const chunk_pos &chunk,
                           const structure_start_context &context)
     -> std::vector<structure_start>;
+
+/// Finds the nearest chunk whose starts contain `structure_id`, scanning
+/// rings outward from `origin` up to `max_radius` chunks. Returns `nullopt`
+/// when no such start exists in the square or the id is unknown.
+[[nodiscard]] auto locate_structure(std::string_view structure_id,
+                                    const chunk_pos &origin, jint max_radius,
+                                    const structure_start_context &context)
+    -> std::optional<located_structure>;
 
 struct selected_structure {
     std::string id{};

@@ -442,4 +442,34 @@ auto generate_buried_starts(jlong seed, const chunk_pos &target,
     return result;
 }
 
+auto locate_structure(std::string_view structure_id, const chunk_pos &origin,
+                      jint max_radius, const structure_start_context &context)
+    -> std::optional<located_structure> {
+    if (context.data == nullptr || max_radius < 0) {
+        return std::nullopt;
+    }
+    if (context.data->structures.find(std::string{structure_id}) ==
+        context.data->structures.end()) {
+        return std::nullopt;
+    }
+    for (jint radius = 0; radius <= max_radius; ++radius) {
+        for (jint dz = -radius; dz <= radius; ++dz) {
+            for (jint dx = -radius; dx <= radius; ++dx) {
+                if (std::max(std::abs(dx), std::abs(dz)) != radius) {
+                    continue;
+                }
+                const chunk_pos chunk{.x = origin.x + dx, .z = origin.z + dz};
+                const auto starts = generate_structure_starts(chunk, context);
+                for (const auto &start : starts) {
+                    if (start.structure == structure_id) {
+                        return located_structure{.chunk = chunk,
+                                                 .structure = start.structure};
+                    }
+                }
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 } // namespace refrain::worldgen::structure
