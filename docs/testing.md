@@ -125,3 +125,10 @@ Create a file under the matching directory in `test/`, for example
 `test/world/test_my_feature.cpp`, and define a `boost::ut::suite`. The CMake
 build globs the directory, so no build file edit is needed. Prefer a negative
 case over a second happy path.
+
+
+## Network oracle (optional, local)
+
+`tools/net/oracle/` compares a capture from a locally owned vanilla 26.3 server
+with a Refrain capture. It never downloads or commits server jars, assets or
+captures. See [the oracle README](../tools/net/oracle/README.md).
