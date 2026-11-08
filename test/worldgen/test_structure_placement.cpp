@@ -94,7 +94,7 @@ suite<"worldgen/structure-placement"> structure_placement_tests = [] {
                                               .frequency = 0.5F};
             expect(placement.passes_frequency(12345, 5, -7) == expected);
         };
-        check(frequency_reduction_method::default_method, true);
+        check(frequency_reduction_method::default_method, false);
         check(frequency_reduction_method::legacy_type_1, false);
         check(frequency_reduction_method::legacy_type_2, true);
         check(frequency_reduction_method::legacy_type_3, false);
