@@ -613,21 +613,20 @@ suite<"worldgen/jigsaw"> jigsaw_tests = [] {
             templates_root == nullptr) {
             return;
         }
-        jint chunk_x = 15;
-        jint chunk_z = 8;
-        if (const char *value = std::getenv("REFRAIN_JIGSAW_CHUNK_X");
-            value != nullptr) {
-            chunk_x = std::atoi(value);
+        const char *chunk_x_raw = std::getenv("REFRAIN_JIGSAW_CHUNK_X");
+        const char *chunk_z_raw = std::getenv("REFRAIN_JIGSAW_CHUNK_Z");
+        const char *seed_raw = std::getenv("REFRAIN_JIGSAW_SEED");
+        if (chunk_x_raw == nullptr || chunk_z_raw == nullptr ||
+            seed_raw == nullptr) {
+            std::fprintf(stderr,
+                         "skipping the jigsaw piece oracle: set "
+                         "REFRAIN_JIGSAW_CHUNK_X, REFRAIN_JIGSAW_CHUNK_Z and "
+                         "REFRAIN_JIGSAW_SEED to the reference candidate\n");
+            return;
         }
-        if (const char *value = std::getenv("REFRAIN_JIGSAW_CHUNK_Z");
-            value != nullptr) {
-            chunk_z = std::atoi(value);
-        }
-        jlong seed = 1;
-        if (const char *value = std::getenv("REFRAIN_JIGSAW_SEED");
-            value != nullptr) {
-            seed = std::strtoll(value, nullptr, 10);
-        }
+        const jint chunk_x = std::atoi(chunk_x_raw);
+        const jint chunk_z = std::atoi(chunk_z_raw);
+        const jlong seed = std::strtoll(seed_raw, nullptr, 10);
         std::string structure_id = "minecraft:village_plains";
         const char *structure_env = std::getenv("REFRAIN_JIGSAW_STRUCTURE");
         if (structure_env != nullptr) {

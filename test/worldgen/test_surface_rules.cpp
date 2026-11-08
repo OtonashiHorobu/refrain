@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-#include <refrain/worldgen/biome/overworld_biome_builder.hpp>
+#include <refrain/worldgen/biome/biome_parameters.hpp>
 #include <refrain/worldgen/density/density.hpp>
 #include <refrain/worldgen/terrain/surface.hpp>
 
@@ -378,8 +378,14 @@ suite<"worldgen/surface-rules"> surface_rule_tests = [] {
         }
         fixture env;
         env.documents = *documents;
+        const auto parameters =
+            load_biome_parameters(root, dimension_kind::overworld);
+        expect(parameters.has_value()) << parameters.error().message;
+        if (!parameters) {
+            return;
+        }
         env.possible_biomes.clear();
-        for (const auto &parameter : overworld_parameters()) {
+        for (const auto &parameter : *parameters) {
             env.possible_biomes.insert(parameter.biome);
         }
         const auto *overworld = [&]() -> const std::string * {

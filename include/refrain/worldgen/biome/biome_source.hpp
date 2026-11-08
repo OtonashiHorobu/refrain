@@ -2,11 +2,10 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// Java `Climate.Sampler` and `MultiNoiseBiomeSource`: sample the six climate
-// density functions at a quart position, quantize them and select the biome of
-// the nearest parameter point. The overworld parameter table is code-generated
-// in the reference, so it is built by `overworld_biome_builder` rather than
-// loaded from a document.
+// Climate sampling: sample the six climate density functions at a quart
+// position, quantize them and select the biome of the nearest parameter point.
+// The parameter tables are loaded from the worldgen content snapshot rather
+// than built in code.
 
 #pragma once
 

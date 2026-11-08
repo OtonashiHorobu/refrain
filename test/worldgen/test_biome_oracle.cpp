@@ -16,8 +16,8 @@
 #include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
 #include <refrain/worldgen/biome/biome_manager.hpp>
+#include <refrain/worldgen/biome/biome_parameters.hpp>
 #include <refrain/worldgen/biome/biome_source.hpp>
-#include <refrain/worldgen/biome/overworld_biome_builder.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
 
 #include <boost/ut.hpp>
@@ -33,6 +33,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -209,7 +210,13 @@ suite<"worldgen/biome-oracle"> biome_oracle_tests = [] {
                                       *settings->router.depth,
                                       *settings->router.ridges,
                                       context};
-        multi_noise_biome_source source{overworld_parameters()};
+        auto parameters =
+            load_biome_parameters(data_root, dimension_kind::overworld);
+        expect(parameters.has_value()) << parameters.error().message;
+        if (!parameters) {
+            return;
+        }
+        multi_noise_biome_source source{std::move(*parameters)};
 
         constexpr std::array<std::array<jint, 2>, 5> chunks{{
             {0, 0},

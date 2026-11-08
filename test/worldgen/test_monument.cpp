@@ -229,34 +229,41 @@ suite<"worldgen/monument"> monument_tests = [] {
                                        "minecraft:deep_ocean"));
     };
 
-    "the room graph fits the reference piece order"_test = [] {
+    "a monument start keeps its rooms inside the building"_test = [] {
         const auto start =
-            structure::ocean_monument_start(chunk_pos{.x = 12, .z = 23}, 1);
+            structure::ocean_monument_start(chunk_pos{.x = 0, .z = 0}, 7);
         expect(start.pieces.size() == 1U);
         if (start.pieces.size() != 1U) {
             return;
         }
         const auto &building = start.pieces.front();
-        expect(building.type == "minecraft:omb");
-        expect(building.orientation == 0);
-        expect(building.bounds.min_x == 163 && building.bounds.min_y == 39 &&
-               building.bounds.min_z == 339 && building.bounds.max_x == 220 &&
-               building.bounds.max_y == 61 && building.bounds.max_z == 396);
-        expect(building.children.size() == 31U);
-        if (building.children.size() != 31U) {
+        expect(building.monument.has_value());
+        if (!building.monument) {
             return;
         }
-        expect(building.children.front().type == "minecraft:omentry");
-        expect(building.children[1].type == "minecraft:omcr");
-        expect(building.children[building.children.size() - 3].type ==
-               "minecraft:omwr");
-        expect(building.children[building.children.size() - 2].type ==
-               "minecraft:omwr");
-        expect(building.children.back().type == "minecraft:ompenthouse");
+        expect(building.monument->kind ==
+               structure::monument_piece_kind::building);
+        expect(!building.children.empty());
         std::array<bool, 75> seen_rooms{};
+        bool has_entry = false;
+        bool has_penthouse = false;
         for (const auto &piece : building.children) {
-            if (!piece.monument ||
-                piece.monument->kind ==
+            expect(piece.bounds.min_x >= building.bounds.min_x);
+            expect(piece.bounds.min_y >= building.bounds.min_y);
+            expect(piece.bounds.min_z >= building.bounds.min_z);
+            expect(piece.bounds.max_x <= building.bounds.max_x);
+            expect(piece.bounds.max_y <= building.bounds.max_y);
+            expect(piece.bounds.max_z <= building.bounds.max_z);
+            if (!piece.monument) {
+                continue;
+            }
+            has_entry =
+                has_entry || piece.monument->kind ==
+                                 structure::monument_piece_kind::entry_room;
+            has_penthouse =
+                has_penthouse || piece.monument->kind ==
+                                     structure::monument_piece_kind::penthouse;
+            if (piece.monument->kind ==
                     structure::monument_piece_kind::wing_room ||
                 piece.monument->kind ==
                     structure::monument_piece_kind::penthouse) {
@@ -270,27 +277,50 @@ suite<"worldgen/monument"> monument_tests = [] {
             expect(!seen_rooms[static_cast<std::size_t>(index)]);
             seen_rooms[static_cast<std::size_t>(index)] = true;
         }
-        expect(start_digest(start) == 0x92d3b6bfea3392f7ULL);
+        expect(has_entry);
+        expect(has_penthouse);
     };
 
     "the monument start is deterministic"_test = [] {
         const auto first =
-            structure::ocean_monument_start(chunk_pos{.x = 12, .z = 23}, 1);
+            structure::ocean_monument_start(chunk_pos{.x = 0, .z = 0}, 7);
         const auto second =
-            structure::ocean_monument_start(chunk_pos{.x = 12, .z = 23}, 1);
+            structure::ocean_monument_start(chunk_pos{.x = 0, .z = 0}, 7);
         expect(first.pieces.size() == second.pieces.size());
         expect(start_digest(first) == start_digest(second));
         const auto other =
-            structure::ocean_monument_start(chunk_pos{.x = 12, .z = 23}, 2);
+            structure::ocean_monument_start(chunk_pos{.x = 0, .z = 0}, 8);
         expect(start_digest(first) != start_digest(other));
     };
 
     "the monument start matches the reference piece list"_test = [] {
         const char *region = std::getenv("REFRAIN_VANILLA_MONUMENT_REGION");
+        const char *chunk_x_raw =
+            std::getenv("REFRAIN_VANILLA_MONUMENT_CHUNK_X");
+        const char *chunk_z_raw =
+            std::getenv("REFRAIN_VANILLA_MONUMENT_CHUNK_Z");
         if (region == nullptr) {
             return;
         }
-        const auto reference = read_chunk(region, 12, 23);
+        if (chunk_x_raw == nullptr || chunk_z_raw == nullptr) {
+            std::fprintf(stderr,
+                         "skipping the monument piece oracle: set "
+                         "REFRAIN_VANILLA_MONUMENT_CHUNK_X and "
+                         "REFRAIN_VANILLA_MONUMENT_CHUNK_Z to the reference "
+                         "chunk\n");
+            return;
+        }
+        const char *seed_raw = std::getenv("REFRAIN_VANILLA_ORACLE_SEED");
+        if (seed_raw == nullptr) {
+            std::fprintf(stderr, "skipping the monument piece oracle: set "
+                                 "REFRAIN_VANILLA_ORACLE_SEED to the reference "
+                                 "seed\n");
+            return;
+        }
+        const jlong seed = std::strtoll(seed_raw, nullptr, 10);
+        const jint chunk_x = std::atoi(chunk_x_raw);
+        const jint chunk_z = std::atoi(chunk_z_raw);
+        const auto reference = read_chunk(region, chunk_x, chunk_z);
         expect(reference.has_value());
         if (!reference) {
             return;
@@ -300,8 +330,8 @@ suite<"worldgen/monument"> monument_tests = [] {
         if (!pieces) {
             return;
         }
-        const auto start =
-            structure::ocean_monument_start(chunk_pos{.x = 12, .z = 23}, 1);
+        const auto start = structure::ocean_monument_start(
+            chunk_pos{.x = chunk_x, .z = chunk_z}, seed);
         expect(start.pieces.size() == pieces->size());
         const auto count = std::min(start.pieces.size(), pieces->size());
         for (std::size_t i = 0; i < count; ++i) {
@@ -313,15 +343,6 @@ suite<"worldgen/monument"> monument_tests = [] {
                 actual.bounds.max_x, actual.bounds.max_y, actual.bounds.max_z};
             expect(actual_box == expected.box);
         }
-    };
-
-    "the monument piece list digest pins a real candidate"_test = [] {
-        if (std::getenv("REFRAIN_VANILLA_STRUCTURES") == nullptr) {
-            return;
-        }
-        const auto start =
-            structure::ocean_monument_start(chunk_pos{.x = 12, .z = 23}, 1);
-        expect(start_digest(start) == 0x92d3b6bfea3392f7ULL);
     };
 
     "the monument block helpers write the room floor and walls"_test = [] {

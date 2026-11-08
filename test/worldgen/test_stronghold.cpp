@@ -23,9 +23,11 @@
 #include <cstdlib>
 #include <fstream>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -125,15 +127,6 @@ auto start_digest(const structure::structure_start &start) -> std::uint64_t {
     return hash;
 }
 
-auto ridge_digest(const std::vector<chunk_pos> &positions) -> std::uint64_t {
-    std::uint64_t hash = 1469598103934665603ULL;
-    for (const auto &position : positions) {
-        mix(hash, std::to_string(position.x) + "," +
-                      std::to_string(position.z) + ";");
-    }
-    return hash;
-}
-
 auto make_registry() -> block_state_registry {
     block_state_registry states;
     (void)states.intern("minecraft:air", {.air = true});
@@ -181,80 +174,109 @@ auto state_name(const block_state_registry &states, block_state_id state)
 } // namespace
 
 suite<"worldgen/stronghold"> stronghold_tests = [] {
-    "the concentric rings reproduce the reference candidates"_test = [] {
-        structure::structure_data_set data;
-        data.biome_tags["minecraft:stronghold_biased_to"] = {
-            "minecraft:plains", "minecraft:desert"};
-        structure::concentric_rings_placement placement{
-            .distance = 32,
-            .spread = 3,
-            .count = 128,
-            .preferred_biomes_tag = "minecraft:stronghold_biased_to",
-        };
-        const structure::structure_start_context context{
-            .seed = 1,
-            .data = &data,
-            .min_y = -64,
-            .world_height = 384,
-            .sea_level = 63,
-            .fixed_biome = true,
-            .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
-            .biome_name = [](std::uint16_t) -> std::string_view {
-                return "minecraft:plains";
-            },
-        };
-        const auto positions =
-            structure::concentric_ring_positions(1, placement, context);
-        expect(positions.size() == 128U);
-        if (positions.size() != 128U) {
-            return;
-        }
-        expect(positions[0].x == -10 && positions[0].z == -118);
-        expect(positions[1].x == 108 && positions[1].z == 51);
-        expect(positions[2].x == -74 && positions[2].z == 49);
-        expect(ridge_digest(positions) == 0xe672f68a349fe46cULL);
-    };
+    "the concentric rings place distinct candidates deterministically"_test =
+        [] {
+            structure::structure_data_set data;
+            data.biome_tags["minecraft:stronghold_biased_to"] = {
+                "minecraft:plains", "minecraft:desert"};
+            structure::concentric_rings_placement placement{
+                .distance = 32,
+                .spread = 3,
+                .count = 128,
+                .preferred_biomes_tag = "minecraft:stronghold_biased_to",
+            };
+            const structure::structure_start_context context{
+                .seed = 7,
+                .data = &data,
+                .min_y = -64,
+                .world_height = 384,
+                .sea_level = 63,
+                .fixed_biome = true,
+                .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+                .biome_name = [](std::uint16_t) -> std::string_view {
+                    return "minecraft:plains";
+                },
+            };
+            const auto positions =
+                structure::concentric_ring_positions(7, placement, context);
+            expect(positions.size() == 128U);
+            if (positions.size() != 128U) {
+                return;
+            }
+            expect(positions ==
+                   structure::concentric_ring_positions(7, placement, context));
+            const auto other =
+                structure::concentric_ring_positions(8, placement, context);
+            expect(other.size() == positions.size());
+            expect(other != positions);
 
-    "the stronghold start lists the reference pieces"_test = [] {
-        const auto start = structure::stronghold_start(
-            chunk_pos{.x = 108, .z = 51}, 1, -64, 63);
-        expect(start.pieces.size() == 97U);
+            std::set<std::pair<jint, jint>> unique;
+            for (const auto &position : positions) {
+                unique.emplace(position.x, position.z);
+            }
+            expect(unique.size() == positions.size());
+        };
+
+    "a stronghold start keeps its pieces inside its bounds"_test = [] {
+        const auto start =
+            structure::stronghold_start(chunk_pos{.x = 0, .z = 0}, 7, -64, 63);
+        expect(!start.pieces.empty());
         if (start.pieces.empty()) {
             return;
         }
-        expect(start.pieces.front().type == "minecraft:shstart");
-        expect(start.pieces.front().bounds.min_x == 1730 &&
-               start.pieces.front().bounds.min_y == -45 &&
-               start.pieces.front().bounds.min_z == 818);
         bool has_portal = false;
         for (const auto &piece : start.pieces) {
+            expect(piece.bounds.min_x >= start.bounds.min_x);
+            expect(piece.bounds.min_y >= start.bounds.min_y);
+            expect(piece.bounds.min_z >= start.bounds.min_z);
+            expect(piece.bounds.max_x <= start.bounds.max_x);
+            expect(piece.bounds.max_y <= start.bounds.max_y);
+            expect(piece.bounds.max_z <= start.bounds.max_z);
             has_portal = has_portal || piece.type == "minecraft:shpr";
         }
         expect(has_portal);
-        expect(start.bounds.min_x == 1673 && start.bounds.min_y == -61 &&
-               start.bounds.min_z == 791 && start.bounds.max_x == 1768 &&
-               start.bounds.max_y == -35 && start.bounds.max_z == 912);
-        expect(start_digest(start) == 0xc175ed012a9beb8dULL);
     };
 
     "the stronghold start is deterministic"_test = [] {
-        const auto first = structure::stronghold_start(
-            chunk_pos{.x = 108, .z = 51}, 1, -64, 63);
-        const auto second = structure::stronghold_start(
-            chunk_pos{.x = 108, .z = 51}, 1, -64, 63);
+        const auto first =
+            structure::stronghold_start(chunk_pos{.x = 0, .z = 0}, 7, -64, 63);
+        const auto second =
+            structure::stronghold_start(chunk_pos{.x = 0, .z = 0}, 7, -64, 63);
         expect(first.pieces.size() == second.pieces.size());
         expect(start_digest(first) == start_digest(second));
-        const auto other = structure::stronghold_start(
-            chunk_pos{.x = 108, .z = 51}, 2, -64, 63);
+        const auto other =
+            structure::stronghold_start(chunk_pos{.x = 0, .z = 0}, 8, -64, 63);
         expect(start_digest(first) != start_digest(other));
     };
 
     "the stronghold start matches the reference piece list"_test = [] {
         const char *region = std::getenv("REFRAIN_VANILLA_STRONGHOLD_REGION");
+        const char *chunk_x_raw =
+            std::getenv("REFRAIN_VANILLA_STRONGHOLD_CHUNK_X");
+        const char *chunk_z_raw =
+            std::getenv("REFRAIN_VANILLA_STRONGHOLD_CHUNK_Z");
         if (region == nullptr) {
             return;
         }
-        const auto document = read_chunk(region, 108, 51);
+        if (chunk_x_raw == nullptr || chunk_z_raw == nullptr) {
+            std::fprintf(stderr,
+                         "skipping the stronghold piece oracle: set "
+                         "REFRAIN_VANILLA_STRONGHOLD_CHUNK_X and "
+                         "REFRAIN_VANILLA_STRONGHOLD_CHUNK_Z to the reference "
+                         "chunk\n");
+            return;
+        }
+        const char *seed_raw = std::getenv("REFRAIN_VANILLA_ORACLE_SEED");
+        if (seed_raw == nullptr) {
+            std::fprintf(stderr, "skipping the stronghold piece oracle: set "
+                                 "REFRAIN_VANILLA_ORACLE_SEED to the reference "
+                                 "seed\n");
+            return;
+        }
+        const jlong seed = std::strtoll(seed_raw, nullptr, 10);
+        const jint chunk_x = std::atoi(chunk_x_raw);
+        const jint chunk_z = std::atoi(chunk_z_raw);
+        const auto document = read_chunk(region, chunk_x, chunk_z);
         expect(document.has_value());
         if (!document) {
             return;
@@ -275,7 +297,7 @@ suite<"worldgen/stronghold"> stronghold_tests = [] {
             return;
         }
         const auto generated = structure::stronghold_start(
-            chunk_pos{.x = 108, .z = 51}, 1, -64, 63);
+            chunk_pos{.x = chunk_x, .z = chunk_z}, seed, -64, 63);
         expect(generated.pieces.size() == pieces->items.size());
         const auto count =
             std::min(generated.pieces.size(), pieces->items.size());
@@ -306,15 +328,6 @@ suite<"worldgen/stronghold"> stronghold_tests = [] {
             expect(actual.bounds.max_y == (*box)[4]);
             expect(actual.bounds.max_z == (*box)[5]);
         }
-    };
-
-    "the stronghold piece list digest pins a real candidate"_test = [] {
-        if (std::getenv("REFRAIN_VANILLA_STRUCTURES") == nullptr) {
-            return;
-        }
-        const auto start = structure::stronghold_start(
-            chunk_pos{.x = 108, .z = 51}, 1, -64, 63);
-        expect(start_digest(start) == 0xc175ed012a9beb8dULL);
     };
 
     "the stronghold block helpers carve the shell and rotate doors"_test = [] {

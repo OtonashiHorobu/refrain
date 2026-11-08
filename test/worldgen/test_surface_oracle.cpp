@@ -17,9 +17,9 @@
 #include <refrain/data/nbt.hpp>
 #include <refrain/worldgen/biome/biome_climate.hpp>
 #include <refrain/worldgen/biome/biome_manager.hpp>
+#include <refrain/worldgen/biome/biome_parameters.hpp>
 #include <refrain/worldgen/biome/biome_source.hpp>
 #include <refrain/worldgen/biome/biome_view.hpp>
-#include <refrain/worldgen/biome/overworld_biome_builder.hpp>
 #include <refrain/worldgen/carver/carver_data.hpp>
 #include <refrain/worldgen/carver/carver_stage.hpp>
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
@@ -49,6 +49,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -448,7 +449,13 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
         noise_registry registry{algorithm::xoroshiro, seed};
         expect(registry.load(data_root).has_value());
         auto root_factory = new_positional_factory(algorithm::xoroshiro, seed);
-        multi_noise_biome_source source{overworld_parameters()};
+        auto parameters =
+            load_biome_parameters(data_root, dimension_kind::overworld);
+        expect(parameters.has_value()) << parameters.error().message;
+        if (!parameters) {
+            return;
+        }
+        multi_noise_biome_source source{std::move(*parameters)};
         const bool real_biomes =
             std::getenv("REFRAIN_VANILLA_SURFACE_BIOMES") != nullptr ||
             carver_mode || feature_real_mode;
@@ -481,9 +488,8 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
         }
         std::set<std::string> possible_biomes;
         if (real_biomes) {
-            for (const auto &parameter : overworld_parameters()) {
-                possible_biomes.insert(parameter.biome);
-            }
+            possible_biomes.insert(source.biomes().begin(),
+                                   source.biomes().end());
         } else {
             possible_biomes.insert(fixed_biome);
         }
@@ -869,12 +875,7 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 std::vector<std::string> plan_biomes;
                 std::vector<std::string> candidate_biomes;
                 if (feature_real_mode) {
-                    std::set<std::string> seen;
-                    for (const auto &parameter : overworld_parameters()) {
-                        if (seen.insert(parameter.biome).second) {
-                            plan_biomes.push_back(parameter.biome);
-                        }
-                    }
+                    plan_biomes = source.biomes();
                     biome_grid grid{source,
                                     sampler,
                                     (chunk_x - 1) * 4,
