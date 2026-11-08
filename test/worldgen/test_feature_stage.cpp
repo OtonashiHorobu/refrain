@@ -2500,3 +2500,41 @@ suite<"worldgen/selector"> selector_tests = [] {
         expect(chunk.state_at(8, 5, 8) == *stone);
     };
 };
+
+suite<"worldgen/feature/end-gateway"> end_gateway_tests = [] {
+    "the gateway frame is bedrock around one gateway block"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        (void)states.intern("minecraft:air", {.air = true});
+        (void)states.intern("minecraft:bedrock",
+                            {.air = false,
+                             .blocks_motion = true,
+                             .blocks_motion_no_leaves = true});
+        const auto gateway = states.intern(
+            "minecraft:end_gateway", {.air = false, .blocks_motion = true});
+        const auto bedrock = states.find("minecraft:bedrock");
+        expect(gateway.has_value() && bedrock.has_value());
+        if (!gateway || !bedrock) {
+            return;
+        }
+        proto_chunk chunk{states, 0, 0, 0, 32};
+        chunk_region region{chunk, 0};
+        feature::placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &states,
+            .generation = provider::generation_context{.min_y = 0,
+                                                       .height = 32,
+                                                       .sea_level = 8},
+        };
+        feature::feature_context context{.placement = placement};
+        const feature::end_gateway_feature feature{*gateway, *bedrock};
+        worldgen_random random{std::make_unique<legacy_random_source>(1)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 8, .z = 8}));
+        expect(chunk.state_at(8, 8, 8) == *gateway);
+        expect(chunk.state_at(8, 10, 8) == *bedrock);
+        expect(chunk.state_at(7, 8, 8) == *states.find("minecraft:air"));
+        expect(chunk.state_at(9, 8, 8) == *states.find("minecraft:air"));
+    };
+};
