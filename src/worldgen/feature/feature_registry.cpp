@@ -834,6 +834,35 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             features_.emplace(id, std::make_unique<end_platform_feature>());
             continue;
         }
+        if (*type == "minecraft:end_podium") {
+            const auto *active = document.document.find("active");
+            const bool is_active =
+                active != nullptr && active->as_bool().value_or(false);
+            const auto bedrock = resolve_state(*states_, "minecraft:bedrock");
+            const auto end_stone =
+                resolve_state(*states_, "minecraft:end_stone");
+            const auto portal = resolve_state(*states_, "minecraft:end_portal");
+            const std::array<std::string, 4> torch_keys{
+                "minecraft:wall_torch[facing=south]",
+                "minecraft:wall_torch[facing=north]",
+                "minecraft:wall_torch[facing=east]",
+                "minecraft:wall_torch[facing=west]"};
+            std::array<block_state_id, 4> torches{};
+            bool torches_ok = true;
+            for (std::size_t i = 0; i < 4; ++i) {
+                const auto torch = resolve_state(*states_, torch_keys[i]);
+                torches_ok = torches_ok && torch.has_value();
+                torches[i] = torch.value_or(no_block_state);
+            }
+            if (!bedrock || !end_stone || !portal || !torches_ok) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "end podium states are invalid")};
+            }
+            features_.emplace(
+                id, std::make_unique<end_podium_feature>(
+                        is_active, *bedrock, *end_stone, *portal, torches));
+            continue;
+        }
         if (*type == "minecraft:end_island") {
             const auto end_stone =
                 resolve_state(*states_, "minecraft:end_stone");

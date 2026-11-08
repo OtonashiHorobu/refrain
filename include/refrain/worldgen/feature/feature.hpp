@@ -529,6 +529,27 @@ class end_gateway_feature final : public feature {
     block_state_id bedrock_{no_block_state};
 };
 
+/// `EndPodiumFeature`: the exit portal platform with its bedrock pillar and
+/// torches.
+class end_podium_feature final : public feature {
+  public:
+    end_podium_feature(bool active, block_state_id bedrock,
+                       block_state_id end_stone, block_state_id end_portal,
+                       std::array<block_state_id, 4> torches)
+        : active_{active}, bedrock_{bedrock}, end_stone_{end_stone},
+          end_portal_{end_portal}, torches_{torches} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    bool active_{false};
+    block_state_id bedrock_{no_block_state};
+    block_state_id end_stone_{no_block_state};
+    block_state_id end_portal_{no_block_state};
+    std::array<block_state_id, 4> torches_{};
+};
+
 /// `EndIslandFeature`: a shrinking end-stone disc stack.
 class end_island_feature final : public feature {
   public:

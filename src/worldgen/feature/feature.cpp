@@ -1934,6 +1934,57 @@ auto end_island_feature::place(feature_context &context,
     return true;
 }
 
+auto end_podium_feature::place(feature_context &context,
+                               worldgen_random &random,
+                               const block_pos &origin) const -> bool {
+    (void)random;
+    auto &region = *context.placement.region;
+    const auto air = context.placement.states->air();
+    const auto distance_squared = [&](jint x, jint y, jint z) {
+        const jint dx = x - origin.x;
+        const jint dy = y - origin.y;
+        const jint dz = z - origin.z;
+        return static_cast<float>(dx * dx + dy * dy + dz * dz);
+    };
+    for (jint y = origin.y - 1; y <= origin.y + 32; ++y) {
+        for (jint x = origin.x - 4; x <= origin.x + 4; ++x) {
+            for (jint z = origin.z - 4; z <= origin.z + 4; ++z) {
+                const float distance = distance_squared(x, y, z);
+                const bool inside_rim = distance < 2.5F * 2.5F;
+                if (!inside_rim && distance >= 3.5F * 3.5F) {
+                    continue;
+                }
+                block_state_id state = air;
+                if (y < origin.y) {
+                    state = inside_rim ? bedrock_ : end_stone_;
+                } else if (y > origin.y) {
+                    state = air;
+                } else if (!inside_rim) {
+                    state = bedrock_;
+                } else {
+                    state = active_ ? end_portal_ : air;
+                }
+                (void)region.set_block_state(x, y, z, state);
+            }
+        }
+    }
+    for (jint y = 0; y < 4; ++y) {
+        (void)region.set_block_state(origin.x, origin.y + y, origin.z,
+                                     bedrock_);
+    }
+    const std::array<block_pos, 4> torch_positions{{
+        {.x = origin.x, .y = origin.y + 2, .z = origin.z + 1},
+        {.x = origin.x, .y = origin.y + 2, .z = origin.z - 1},
+        {.x = origin.x + 1, .y = origin.y + 2, .z = origin.z},
+        {.x = origin.x - 1, .y = origin.y + 2, .z = origin.z},
+    }};
+    for (std::size_t i = 0; i < 4; ++i) {
+        (void)region.set_block_state(torch_positions[i].x, torch_positions[i].y,
+                                     torch_positions[i].z, torches_[i]);
+    }
+    return true;
+}
+
 auto end_gateway_feature::place(feature_context &context,
                                 worldgen_random &random,
                                 const block_pos &origin) const -> bool {
