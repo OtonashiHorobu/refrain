@@ -515,6 +515,20 @@ class end_platform_feature final : public feature {
                              const block_pos &origin) const -> bool override;
 };
 
+/// `EndGatewayFeature`: the bedrock frame around an end gateway block.
+class end_gateway_feature final : public feature {
+  public:
+    end_gateway_feature(block_state_id gateway, block_state_id bedrock)
+        : gateway_{gateway}, bedrock_{bedrock} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    block_state_id gateway_{no_block_state};
+    block_state_id bedrock_{no_block_state};
+};
+
 /// `FossilFeature`: places a fossil template below the surface, then the
 /// matching coal overlay template.
 class fossil_feature final : public feature {

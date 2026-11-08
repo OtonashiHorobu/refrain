@@ -1912,6 +1912,37 @@ auto end_platform_feature::place(feature_context &context,
     return true;
 }
 
+auto end_gateway_feature::place(feature_context &context,
+                                worldgen_random &random,
+                                const block_pos &origin) const -> bool {
+    (void)random;
+    auto &region = *context.placement.region;
+    const auto air = context.placement.states->air();
+    for (jint dy = -2; dy <= 2; ++dy) {
+        for (jint dx = -1; dx <= 1; ++dx) {
+            for (jint dz = -1; dz <= 1; ++dz) {
+                const bool same_x = dx == 0;
+                const bool same_y = dy == 0;
+                const bool same_z = dz == 0;
+                const bool top = std::abs(dy) == 2;
+                block_state_id state = air;
+                if (same_x && same_y && same_z) {
+                    state = gateway_;
+                } else if (same_y) {
+                    state = air;
+                } else if (top && same_x && same_z) {
+                    state = bedrock_;
+                } else if ((same_x || same_z) && !top) {
+                    state = bedrock_;
+                }
+                (void)region.set_block_state(origin.x + dx, origin.y + dy,
+                                             origin.z + dz, state);
+            }
+        }
+    }
+    return true;
+}
+
 auto fossil_feature::place(feature_context &context, worldgen_random &random,
                            const block_pos &origin) const -> bool {
     if (context.templates == nullptr || context.registry == nullptr ||

@@ -834,6 +834,18 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             features_.emplace(id, std::make_unique<end_platform_feature>());
             continue;
         }
+        if (*type == "minecraft:end_gateway") {
+            const auto gateway =
+                resolve_state(*states_, "minecraft:end_gateway");
+            const auto bedrock = resolve_state(*states_, "minecraft:bedrock");
+            if (!gateway || !bedrock) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "end gateway states are invalid")};
+            }
+            features_.emplace(
+                id, std::make_unique<end_gateway_feature>(*gateway, *bedrock));
+            continue;
+        }
         if (*type == "minecraft:fossil") {
             const auto *fossils = document.document.find("fossil_structures");
             const auto *overlays = document.document.find("overlay_structures");
