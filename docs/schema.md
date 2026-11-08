@@ -206,10 +206,11 @@ Generated files are not edited by hand. Change the schema or the emitter in
 
 ## Versioning
 
-Contract versions follow SemVer. The ABI major version must match between a
-provider and its consumer; the minor version may be newer at the provider.
-During the pre-release period contract changes update the generated output and
-the schema hash rather than introducing migration paths. Additive extension
-points bump the service minor version (for example `net_protocol` 1.1.0) while
-keeping the same major; published releases switch to semantic version
-increments with migrations.
+Before the first public release every service, mod and manifest version stays
+`1.0.0`. Incompatible contract changes are made in place at `1.0.0`; only the
+schema hash changes, and no migration path or new `v2`/`v3` name is introduced.
+This keeps pre-release builds from accumulating versions with no external
+readers.
+
+The ABI major version must match between a provider and its consumer. After the
+release freeze, contracts switch to SemVer increments with migrations.

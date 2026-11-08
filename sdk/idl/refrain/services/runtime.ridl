@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// `refrain:runtime` service contract v2.
+// `refrain:runtime` service contract.
 //
 // The contract is the narrow seam between the `refrain-server` composition
 // root and the first-party server runtime mod. The host stays a thin
@@ -13,7 +13,7 @@
 // contracts is future work.
 
 module refrain::services::runtime;
-version 2.0.0;
+version 1.0.0;
 
 import refrain::core;
 

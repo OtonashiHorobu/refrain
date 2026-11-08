@@ -9,7 +9,7 @@
 // through the service vtable.
 
 module refrain::services::net_protocol;
-version 3.0.0;
+version 1.0.0;
 
 import refrain::core;
 
