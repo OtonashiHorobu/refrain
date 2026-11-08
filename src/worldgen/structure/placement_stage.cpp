@@ -1671,9 +1671,12 @@ struct mineshaft_access {
 
     void fill_local(jint x0, jint y0, jint z0, jint x1, jint y1, jint z1,
                     block_state_id state) const {
-        const auto first = piece_local_to_world(piece, piece.min_y, x0, y0, z0);
+        const auto first = piece_local_to_world(piece, piece.min_y, x0, y0,
+                                                z0);
         const auto last = piece_local_to_world(piece, piece.min_y, x1, y1, z1);
-        fill(first.x, first.y, first.z, last.x, last.y, last.z, state);
+        fill(std::min(first.x, last.x), std::min(first.y, last.y),
+             std::min(first.z, last.z), std::max(first.x, last.x),
+             std::max(first.y, last.y), std::max(first.z, last.z), state);
     }
 
     [[nodiscard]] auto interior(jint x, jint y, jint z) const -> bool {
@@ -2019,7 +2022,7 @@ void place_mineshaft_corridor(const structure_place_context &context,
     auto access = mineshaft_access_for(context, piece);
     const jint length = piece.sections * 5 - 1;
     access.fill_local(0, 0, 0, 2, 1, length, access.cave_air);
-    access.maybe_box(0.8F, 0, 0, 0, 2, 2, length, access.cave_air,
+    access.maybe_box(0.8F, 0, 2, 0, 2, 2, length, access.cave_air,
                      access.cave_air, false, random);
     if (piece.spider) {
         access.maybe_box(0.6F, 0, 0, 0, 2, 1, length, access.cobweb,
