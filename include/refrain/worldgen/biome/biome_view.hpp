@@ -12,6 +12,7 @@
 
 #include <refrain/worldgen/biome/biome_manager.hpp>
 #include <refrain/worldgen/biome/biome_source.hpp>
+#include <refrain/worldgen/biome/dimension_biome_source.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 
 #include <functional>
@@ -22,6 +23,11 @@ namespace refrain::worldgen {
 /// bottom to top, then x, y, z). `source` carries the search cache, so one
 /// source must be shared by everything that queries biomes for the same chunk.
 void fill_chunk_biomes(proto_chunk &chunk, multi_noise_biome_source &source,
+                       const climate_sampler &sampler);
+
+/// Fills the cells from a dimension source: the overworld and the nether use
+/// their climate table, the end its island bands, a fixed source one biome.
+void fill_chunk_biomes(proto_chunk &chunk, dimension_biome_source &source,
                        const climate_sampler &sampler);
 
 /// Reads a quart biome from a loaded generation
@@ -41,6 +47,23 @@ class chunk_biome_resolver final : public biome_resolver {
   private:
     chunk_lookup lookup_{};
     biome_resolver *fallback_{nullptr};
+};
+
+/// Uncached resolver over a dimension source.
+class dimension_biome_resolver final : public biome_resolver {
+  public:
+    dimension_biome_resolver(dimension_biome_source &source,
+                             const climate_sampler &sampler)
+        : source_{&source}, sampler_{&sampler} {}
+
+    [[nodiscard]] auto get_noise_biome(jint quart_x, jint quart_y, jint quart_z)
+        -> std::uint16_t override {
+        return source_->noise_biome(*sampler_, quart_x, quart_y, quart_z);
+    }
+
+  private:
+    dimension_biome_source *source_{nullptr};
+    const climate_sampler *sampler_{nullptr};
 };
 
 } // namespace refrain::worldgen

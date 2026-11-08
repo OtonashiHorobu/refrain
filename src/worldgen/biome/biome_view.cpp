@@ -4,10 +4,15 @@
 
 #include <refrain/worldgen/biome/biome_view.hpp>
 
+#include <utility>
+
 namespace refrain::worldgen {
 
-void fill_chunk_biomes(proto_chunk &chunk, multi_noise_biome_source &source,
-                       const climate_sampler &sampler) {
+namespace {
+
+template <class Source>
+void fill_biomes(proto_chunk &chunk, Source &source,
+                 const climate_sampler &sampler) {
     const jint base_quart_x = chunk.chunk_x() * 4;
     const jint base_quart_z = chunk.chunk_z() * 4;
     for (jint section = 0; section < chunk.section_count(); ++section) {
@@ -23,6 +28,18 @@ void fill_chunk_biomes(proto_chunk &chunk, multi_noise_biome_source &source,
             }
         }
     }
+}
+
+} // namespace
+
+void fill_chunk_biomes(proto_chunk &chunk, multi_noise_biome_source &source,
+                       const climate_sampler &sampler) {
+    fill_biomes(chunk, source, sampler);
+}
+
+void fill_chunk_biomes(proto_chunk &chunk, dimension_biome_source &source,
+                       const climate_sampler &sampler) {
+    fill_biomes(chunk, source, sampler);
 }
 
 auto chunk_biome_resolver::get_noise_biome(jint quart_x, jint quart_y,

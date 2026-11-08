@@ -121,10 +121,20 @@ void fill_proto_chunk(proto_chunk &chunk, const proto_fill_options &options,
                       const density::sampler &final_density,
                       const density::sampler_context &context,
                       aquifer &aquifer) {
-    const jint min_y = chunk.min_y();
-    const jint height = chunk.height();
-    const volume vol{chunk_width,          height, chunk_depth,
-                     chunk.chunk_x() * 16, min_y,  chunk.chunk_z() * 16};
+    fill_proto_chunk(
+        chunk, options,
+        proto_fill_volume{.min_y = chunk.min_y(), .height = chunk.height()},
+        final_density, context, aquifer);
+}
+
+void fill_proto_chunk(proto_chunk &chunk, const proto_fill_options &options,
+                      const proto_fill_volume &volume_settings,
+                      const density::sampler &final_density,
+                      const density::sampler_context &context,
+                      aquifer &aquifer) {
+    const volume vol{chunk_width,           volume_settings.height,
+                     chunk_depth,           chunk.chunk_x() * 16,
+                     volume_settings.min_y, chunk.chunk_z() * 16};
     buffer density_buffer{vol.size()};
     final_density.sample_volume(context, density_buffer, vol);
 

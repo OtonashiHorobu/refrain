@@ -192,7 +192,21 @@ struct proto_fill_options {
     block_state_id lava{3};
 };
 
+/// The range `doFill` writes. The reference clamps the noise settings to the
+/// level height, so a dimension whose noise height is shorter than its level
+/// (the nether and the end are 128 inside 256) fills only this range.
+struct proto_fill_volume {
+    jint min_y{0};
+    jint height{0};
+};
+
 void fill_proto_chunk(proto_chunk &chunk, const proto_fill_options &options,
+                      const density::sampler &final_density,
+                      const density::sampler_context &context,
+                      aquifer &aquifer);
+
+void fill_proto_chunk(proto_chunk &chunk, const proto_fill_options &options,
+                      const proto_fill_volume &volume,
                       const density::sampler &final_density,
                       const density::sampler_context &context,
                       aquifer &aquifer);
