@@ -1912,6 +1912,28 @@ auto end_platform_feature::place(feature_context &context,
     return true;
 }
 
+auto end_island_feature::place(feature_context &context,
+                               worldgen_random &random,
+                               const block_pos &origin) const -> bool {
+    auto &region = *context.placement.region;
+    float size = static_cast<float>(random.next_int(3)) + 4.0F;
+    for (jint y = 0; size > 0.5F; --y) {
+        const jint min = static_cast<jint>(std::floor(-size));
+        const jint max = static_cast<jint>(std::ceil(size));
+        for (jint x = min; x <= max; ++x) {
+            for (jint z = min; z <= max; ++z) {
+                if (static_cast<float>(x * x + z * z) <=
+                    (size + 1.0F) * (size + 1.0F)) {
+                    (void)region.set_block_state(origin.x + x, origin.y + y,
+                                                 origin.z + z, end_stone_);
+                }
+            }
+        }
+        size -= static_cast<float>(random.next_int(2)) + 0.5F;
+    }
+    return true;
+}
+
 auto end_gateway_feature::place(feature_context &context,
                                 worldgen_random &random,
                                 const block_pos &origin) const -> bool {

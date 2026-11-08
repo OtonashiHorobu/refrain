@@ -834,6 +834,17 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             features_.emplace(id, std::make_unique<end_platform_feature>());
             continue;
         }
+        if (*type == "minecraft:end_island") {
+            const auto end_stone =
+                resolve_state(*states_, "minecraft:end_stone");
+            if (!end_stone) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "end island state is invalid")};
+            }
+            features_.emplace(id,
+                              std::make_unique<end_island_feature>(*end_stone));
+            continue;
+        }
         if (*type == "minecraft:end_gateway") {
             const auto gateway =
                 resolve_state(*states_, "minecraft:end_gateway");

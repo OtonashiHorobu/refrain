@@ -529,6 +529,19 @@ class end_gateway_feature final : public feature {
     block_state_id bedrock_{no_block_state};
 };
 
+/// `EndIslandFeature`: a shrinking end-stone disc stack.
+class end_island_feature final : public feature {
+  public:
+    explicit end_island_feature(block_state_id end_stone)
+        : end_stone_{end_stone} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    block_state_id end_stone_{no_block_state};
+};
+
 /// `FossilFeature`: places a fossil template below the surface, then the
 /// matching coal overlay template.
 class fossil_feature final : public feature {
