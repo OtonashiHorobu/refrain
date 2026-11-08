@@ -1312,4 +1312,49 @@ suite<"worldgen/ruined-portal"> ruined_portal_tests = [] {
             expect(piece.portal->placement == "on_land_surface");
         }
     };
+
+    "the underground reference portal start matches its transform"_test = [] {
+        const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+        const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
+        if (data_root == nullptr || templates_root == nullptr ||
+            std::getenv("REFRAIN_PORTAL_START_ORACLE") == nullptr) {
+            return;
+        }
+        const auto data = structure::load_structure_data(data_root);
+        expect(data.has_value());
+        if (!data) {
+            return;
+        }
+        block_state_registry registry;
+        structure::structure_template_manager manager{templates_root, registry};
+        const structure::structure_start_context context{
+            .seed = 1,
+            .data = &*data,
+            .min_y = -64,
+            .world_height = 384,
+            .sea_level = 63,
+            .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+            .biome_name = [](std::uint16_t) -> std::string_view {
+                return "minecraft:plains";
+            },
+            .height_at = [](jint, jint, heightmap_kind) { return jint{63}; },
+            .opaque_at = [](jint, jint y, jint) { return y < 63; },
+            .templates = &manager,
+        };
+        const auto starts = structure::generate_structure_starts(
+            chunk_pos{.x = 15, .z = -40}, context);
+        expect(starts.size() == 1U);
+        if (starts.empty() || starts.front().pieces.empty()) {
+            return;
+        }
+        const auto &piece = starts.front().pieces.front();
+        expect(piece.template_id == "minecraft:ruined_portal/portal_9");
+        expect(piece.template_rotation == 3);
+        expect(piece.template_mirror == 2);
+        expect(piece.template_origin.y == 52);
+        expect(piece.portal.has_value());
+        if (piece.portal) {
+            expect(piece.portal->placement == "underground");
+        }
+    };
 };
