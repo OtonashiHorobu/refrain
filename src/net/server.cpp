@@ -243,6 +243,7 @@ struct server::impl {
     server_policy policy{};
     join_state_provider join_state{};
     command_bridge commands{};
+    transport_factory make_transport{};
     std::mutex command_cache_mutex{};
     std::shared_ptr<const command_tree> cached_tree{};
     std::shared_ptr<const std::vector<std::byte>> cached_commands{};
@@ -353,7 +354,8 @@ auto server::impl::start() -> status {
                            std::string_view reason) { on_close(id, reason); },
         .on_error = [](std::string_view) {},
     };
-    auto opened{transport::open(std::move(handler), 1)};
+    auto opened{make_transport ? make_transport(std::move(handler), 1)
+                               : transport::open(std::move(handler), 1)};
     if (!opened) {
         return std::unexpected{std::move(opened.error())};
     }
@@ -2457,6 +2459,7 @@ auto server::start(server_inputs inputs, core::config::view view)
     state->policy = std::move(inputs.policy);
     state->join_state = std::move(inputs.join_state);
     state->commands = std::move(inputs.commands);
+    state->make_transport = std::move(inputs.make_transport);
     state->verify_session = std::move(inputs.verify_session);
     state->config = std::move(config);
     if (auto started{state->start()}; !started) {

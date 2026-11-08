@@ -52,6 +52,7 @@ class transport_impl final : public transport {
     void stop() noexcept override;
     [[nodiscard]] auto connection_count() const -> std::size_t override;
     [[nodiscard]] auto local_port() const -> std::uint16_t override;
+    [[nodiscard]] auto descriptor() const -> transport_descriptor override;
 
   private:
     struct session final : std::enable_shared_from_this<session> {
@@ -383,6 +384,18 @@ void transport_impl::session::finish(std::string reason) {
 }
 
 } // namespace
+
+auto transport_impl::descriptor() const -> transport_descriptor {
+    return transport_descriptor{
+        .provider = "asio.tcp",
+        .protocol = transport_protocol::tcp,
+        .reliable = true,
+        .ordered = true,
+        .message_oriented = false,
+        .mtu = 0,
+        .backpressure = false,
+    };
+}
 
 auto transport::open(transport_handler handler, std::size_t io_threads)
     -> result<std::unique_ptr<transport>> {

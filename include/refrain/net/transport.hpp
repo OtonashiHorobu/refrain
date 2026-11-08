@@ -16,6 +16,28 @@
 
 namespace refrain::net {
 
+/// Carrying protocol of one transport provider. `memory_stream` is a test
+/// transport that preserves stream semantics without a socket.
+enum class transport_protocol : std::uint8_t {
+    tcp = 0,
+    tls_tcp = 1,
+    raknet = 2,
+    unix_stream = 3,
+    memory_stream = 4,
+    custom = 5,
+};
+
+/// Capabilities a protocol provider can require before accepting a transport.
+struct transport_descriptor {
+    std::string provider{};
+    transport_protocol protocol{transport_protocol::tcp};
+    bool reliable{true};
+    bool ordered{true};
+    bool message_oriented{false};
+    std::uint32_t mtu{0};
+    bool backpressure{false};
+};
+
 struct endpoint {
     std::string host{"0.0.0.0"};
     std::uint16_t port{25565};
@@ -71,6 +93,10 @@ class transport {
 
     /// Bound listener port (0 when not listening).
     [[nodiscard]] virtual auto local_port() const -> std::uint16_t = 0;
+
+    /// Static description used by the host to match transport capabilities
+    /// with protocol requirements.
+    [[nodiscard]] virtual auto descriptor() const -> transport_descriptor = 0;
 };
 
 } // namespace refrain::net

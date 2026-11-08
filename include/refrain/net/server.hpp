@@ -118,6 +118,9 @@ struct chunk_view_request {
     std::int32_t seed_radius{0};
 };
 
+using transport_factory = std::function<result<std::unique_ptr<transport>>(
+    transport_handler, std::size_t)>;
+
 /// Runtime values the network layer cannot take from configuration: world
 /// spawn state, pre-encoded chunks and world callbacks.
 struct server_inputs {
@@ -128,6 +131,9 @@ struct server_inputs {
     server_policy policy{};
     join_state_provider join_state{};
     command_bridge commands{};
+    /// Optional transport provider. Empty uses the built-in Asio TCP
+    /// transport.
+    transport_factory make_transport{};
     /// Generated registry/tag catalog (JSON). Empty disables registry sync.
     std::string registry_catalog_path{};
     /// Pre-encoded `level_chunk_with_light` bodies around the spawn point.
