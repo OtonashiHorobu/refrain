@@ -28,6 +28,7 @@ list = [
     "refrain.sim.vanilla@1.0.0",
     "refrain.storage.rwf@1.0.0",
     "refrain.proto.vanilla@1.0.0",
+    "refrain.transport.asio.tcp@1.0.0",
     "refrain.session.vanilla@1.0.0",
     "refrain.admin.vanilla@1.0.0",
     "refrain.server.vanilla@1.0.0",
@@ -45,6 +46,7 @@ worldgen = "refrain.worldgen.vanilla@^1.0.0"
 sim = "refrain.sim.vanilla@^1.0.0"
 storage = "refrain.storage.rwf@^1.0.0"
 protocol = "refrain.proto.vanilla@^1.0.0"
+transport = { default = "asio_tcp", instances = { "asio_tcp" = "refrain.transport.asio.tcp@^1.0.0" } }
 runtime = "refrain.server.vanilla@^1.0.0"
 session = "refrain.session.vanilla@^1.0.0"
 admin = "refrain.admin.vanilla@^1.0.0"

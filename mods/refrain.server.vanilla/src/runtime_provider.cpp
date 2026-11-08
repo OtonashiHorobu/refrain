@@ -9,10 +9,13 @@
 // through `refrain:world`/`refrain:sim`/`refrain:storage` is not implemented
 // here.
 
+#include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/runtime_abi.h>
+#include <refrain/contracts/services/transport.hpp>
 #include <refrain/core/config.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/static_mod.hpp>
+#include <refrain/server/provider_transport.hpp>
 #include <refrain/server/server_runtime.hpp>
 
 #include <cstdint>
@@ -82,6 +85,7 @@ struct runtime_provider {
     refrain::core::config::view storage{};
     refrain::core::config::view runtime{};
     refrain::core::config::store *config_store{nullptr};
+    refrain::mod::host *host{nullptr};
 
     static auto run(void *self,
                     const refrain_services_runtime_runtime_config *config,
@@ -95,6 +99,32 @@ struct runtime_provider {
         auto options{make_options(*config, provider->network, provider->world,
                                   provider->storage, provider->runtime,
                                   provider->config_store)};
+        if (provider->host != nullptr) {
+            const auto transport{provider->host->services().active_provider(
+                "refrain:transport", "asio_tcp")};
+            if (transport && transport->instance != nullptr) {
+                const auto *api{static_cast<const refrain::mod::provider_api *>(
+                    transport->instance)};
+                if (api->vtable != nullptr) {
+                    const auto *vtable{
+                        static_cast<const refrain_services_transport_vtable *>(
+                            api->vtable)};
+                    void *transport_self{api->self};
+                    options.make_transport =
+                        [vtable, transport_self](
+                            refrain::net::transport_handler handler,
+                            std::size_t)
+                        -> refrain::result<
+                            std::unique_ptr<refrain::net::transport>> {
+                        auto transport_service{std::make_unique<
+                            refrain::services::transport::provider>(
+                            *vtable, transport_self)};
+                        return refrain::server::make_provider_transport(
+                            std::move(transport_service), std::move(handler));
+                    };
+                }
+            }
+        }
         if (options.world_path.empty()) {
             return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
         }

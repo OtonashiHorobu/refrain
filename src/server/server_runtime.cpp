@@ -1115,6 +1115,7 @@ auto run_server(const server_run_options &options) -> int {
     refrain::net::server_inputs network_inputs{};
     network_inputs.commands =
         refrain::server::make_command_bridge(command_environment);
+    network_inputs.make_transport = options.make_transport;
     network_inputs.seed = level->seed;
     network_inputs.spawn_x = static_cast<double>(level->spawn_x) + 0.5;
     network_inputs.spawn_y = static_cast<double>(level->spawn_y);

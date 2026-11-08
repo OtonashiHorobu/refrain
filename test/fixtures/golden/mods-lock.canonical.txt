@@ -10,5 +10,6 @@ mod=refrain.session.vanilla	1.0.0	1	builtin	d038a7098cb62c39c0fbcaf0960dcdaefce4
 mod=refrain.sim.vanilla	1.0.0	1	builtin	24e1f533a2b81df923a755d4f46634ca7448fdb3f95ad26f1f4b707e90cba0f7
 mod=refrain.storage.rwf	1.0.0	1	builtin	161d12903a52be681884188438d373c1a81d173eeac4685c7242fa04a84a5bc5
 mod=refrain.test.extra	1.0.0	1	user	48d14932ae252e611681a3f27aa86e6fd7ddfa49164bf48cf14efdbee5e4d526
+mod=refrain.transport.asio.tcp	1.0.0	1	builtin	c1c9e258e63d6e98f04cd082f841682a3b4aae5d80b559bf071ee8d37d86f316
 mod=refrain.world.vanilla	1.0.0	1	builtin	6e7bcb061250a6003d8dd4784360f0cb1c6b420f91ebfaf695251d0f8b932967
 mod=refrain.worldgen.vanilla	1.0.0	1	builtin	43229e2c9f195f348164211fd8fe40405892badd1bdfc8c91d61cbfe216beb21

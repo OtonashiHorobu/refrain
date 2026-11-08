@@ -5,8 +5,10 @@
 #pragma once
 
 #include <refrain/core/config.hpp>
+#include <refrain/net/transport.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace refrain::server {
@@ -25,6 +27,11 @@ struct server_run_options {
     core::config::view world{};
     core::config::view storage{};
     core::config::view runtime{};
+    /// Optional transport provider factory. Empty keeps the built-in Asio
+    /// TCP transport.
+    std::function<result<std::unique_ptr<net::transport>>(
+        net::transport_handler, std::size_t)>
+        make_transport{};
     /// Host-owned store used by the console `/config` commands and the
     /// shutdown save. Null disables both.
     core::config::store *config{nullptr};
