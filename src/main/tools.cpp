@@ -473,6 +473,7 @@ int main(int argc, char **argv) {
     int protocol_timeout_ms{5000};
     protocol_bot_options protocol_bot{};
     protocol_load_options protocol_load{};
+    protocol_capture_options protocol_capture{};
     auto *protocol_cmd =
         app.add_subcommand("protocol", "Protocol 777 client tools");
     auto *protocol_ping_cmd = protocol_cmd->add_subcommand(
@@ -526,6 +527,23 @@ int main(int argc, char **argv) {
                                   "How long each bot stays in play");
     protocol_load_cmd->add_option("--timeout-ms", protocol_load.timeout_ms,
                                   "Per-bot join timeout");
+
+    auto *protocol_capture_cmd = protocol_cmd->add_subcommand(
+        "capture", "Record decoded clientbound packets into RFCAP1");
+    protocol_capture_cmd
+        ->add_option("--host", protocol_capture.target, "host:port (required)")
+        ->required();
+    protocol_capture_cmd
+        ->add_option("--out", protocol_capture.out, "Capture file (required)")
+        ->required();
+    protocol_capture_cmd->add_option("--username", protocol_capture.username,
+                                     "Bot username");
+    protocol_capture_cmd->add_option("--wait-chunks",
+                                     protocol_capture.wait_chunks,
+                                     "Chunks to wait for before stopping");
+    protocol_capture_cmd->add_option("--timeout-ms",
+                                     protocol_capture.timeout_ms,
+                                     "Join timeout in milliseconds");
 
     auto *wasm_cmd = app.add_subcommand("wasm", "WASM runtime smoke tests");
     auto *wasm_smoke_cmd =
@@ -764,6 +782,9 @@ int main(int argc, char **argv) {
     }
     if (protocol_load_cmd->parsed()) {
         return app_services::run_protocol_load(protocol_load);
+    }
+    if (protocol_capture_cmd->parsed()) {
+        return app_services::run_protocol_capture(protocol_capture);
     }
     if (protocol_ping_cmd->parsed()) {
         const auto separator{protocol_target.rfind(':')};

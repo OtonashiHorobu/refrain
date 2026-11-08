@@ -38,6 +38,14 @@ struct bot_options {
     double move_dz{0.0};
     std::chrono::milliseconds move_delay{0};
     std::chrono::milliseconds command_delay{0};
+    /// Record decoded packet bodies for capture tooling.
+    bool capture{false};
+};
+
+struct captured_packet {
+    std::uint8_t state{0};
+    std::uint32_t id{0};
+    std::vector<std::byte> body{};
 };
 
 struct bot_report {
@@ -45,6 +53,7 @@ struct bot_report {
     std::size_t chunks{0};
     std::string name{};
     std::vector<std::string> messages{};
+    std::vector<captured_packet> capture{};
 };
 
 /// Offline-mode protocol bot: handshake -> login -> configuration -> play.

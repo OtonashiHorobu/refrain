@@ -75,6 +75,17 @@ waits for system chat replies, and `--linger-ms` keeps the connection in play.
 The bot also performs the online-mode RSA/AES handshake; whether the session is
 accepted is decided by the server's verifier.
 
+### Packet capture
+
+```bash
+build/Release/bin/refrain-tools protocol capture \
+    --host 127.0.0.1:25565 --out /tmp/join.rfcap
+```
+
+The tool records the clientbound packet bodies seen by the bot (state, packet
+id, length, payload) in the RFCAP1 container. Captures are diagnostics and
+regression baselines; they contain no credentials.
+
 ### Load harness
 
 ```bash

@@ -148,6 +148,60 @@ auto run_protocol_bot(const protocol_bot_options &options) -> int {
     return 0;
 }
 
+auto run_protocol_capture(const protocol_capture_options &options) -> int {
+    const auto separator{options.target.rfind(':')};
+    if (separator == std::string::npos ||
+        separator + 1 >= options.target.size() || options.out.empty()) {
+        return report_error(refrain::make_error(
+            refrain::error_code::invalid_argument,
+            "protocol capture: expected --host host:port --out file"));
+    }
+    std::uint16_t port{0};
+    const auto port_text{options.target.substr(separator + 1)};
+    const auto parsed{std::from_chars(
+        port_text.data(), port_text.data() + port_text.size(), port)};
+    if (parsed.ec != std::errc{} ||
+        parsed.ptr != port_text.data() + port_text.size()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol capture: invalid port"));
+    }
+    refrain::net::bot_options bot{};
+    bot.target.host = options.target.substr(0, separator);
+    bot.target.port = port;
+    bot.username = options.username;
+    bot.timeout = std::chrono::milliseconds{options.timeout_ms};
+    bot.wait_chunks = options.wait_chunks;
+    bot.capture = true;
+    auto result{refrain::net::run_bot(bot)};
+    if (!result) {
+        return report_error(result.error());
+    }
+    std::vector<std::byte> file{};
+    constexpr std::string_view magic{"RFCAP1\n"};
+    for (const char character : magic) {
+        file.push_back(
+            static_cast<std::byte>(static_cast<unsigned char>(character)));
+    }
+    const auto append_u32 = [&file](std::uint32_t value) {
+        for (int shift{0}; shift < 32; shift += 8) {
+            file.push_back(static_cast<std::byte>((value >> shift) & 0xFFU));
+        }
+    };
+    for (const auto &packet : result->capture) {
+        file.push_back(static_cast<std::byte>(packet.state));
+        append_u32(packet.id);
+        append_u32(static_cast<std::uint32_t>(packet.body.size()));
+        file.insert(file.end(), packet.body.begin(), packet.body.end());
+    }
+    if (auto written{io::write_file(options.out, file)}; !written) {
+        return report_error(written.error());
+    }
+    fmt::print("capture: {} packet(s), {} byte(s) -> {}\n",
+               result->capture.size(), file.size(), options.out);
+    return 0;
+}
+
 auto run_protocol_load(const protocol_load_options &options) -> int {
     const auto separator{options.target.rfind(':')};
     if (separator == std::string::npos ||

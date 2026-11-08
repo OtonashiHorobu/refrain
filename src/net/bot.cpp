@@ -135,7 +135,8 @@ class bot_session {
         return bot_report{.packets = packets_,
                           .chunks = chunks_,
                           .name = std::move(name_),
-                          .messages = std::move(messages_)};
+                          .messages = std::move(messages_),
+                          .capture = std::move(capture_)};
     }
 
   private:
@@ -233,6 +234,17 @@ class bot_session {
             {
                 std::lock_guard lock{mutex_};
                 ++packets_;
+                if (options_.capture) {
+                    reader capture_in{body};
+                    if (auto captured_id{capture_in.read_varint()};
+                        captured_id) {
+                        capture_.push_back(captured_packet{
+                            .state = static_cast<std::uint8_t>(state_),
+                            .id = *captured_id,
+                            .body = body,
+                        });
+                    }
+                }
             }
             handle(body);
         }
@@ -505,6 +517,7 @@ class bot_session {
     std::string error_{};
     std::string name_{};
     std::vector<std::string> messages_{};
+    std::vector<captured_packet> capture_{};
     double spawn_x_{0.0};
     double spawn_y_{64.0};
     double spawn_z_{0.0};

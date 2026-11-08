@@ -65,6 +65,14 @@ struct protocol_load_options {
     int timeout_ms{15000};
 };
 
+struct protocol_capture_options {
+    std::string target{};
+    std::string out{};
+    std::string username{"Bot"};
+    std::size_t wait_chunks{1};
+    int timeout_ms{15000};
+};
+
 struct config_import_options {
     std::string properties{};
     std::string config_dir{"config"};
@@ -188,6 +196,8 @@ struct builtin_image_options {
 run_config_import_properties(const config_import_options &options) -> int;
 [[nodiscard]] auto run_protocol_bot(const protocol_bot_options &options) -> int;
 [[nodiscard]] auto run_protocol_load(const protocol_load_options &options)
+    -> int;
+[[nodiscard]] auto run_protocol_capture(const protocol_capture_options &options)
     -> int;
 [[nodiscard]] auto run_schema_gen(const std::string &output_root,
                                   const std::vector<std::string> &roots,
