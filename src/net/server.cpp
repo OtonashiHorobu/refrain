@@ -21,6 +21,7 @@
 #include <refrain/schema/protocol/777/play_serverbound.hpp>
 #include <refrain/schema/protocol/777/status_serverbound.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -253,6 +254,12 @@ struct server::impl {
         std::int32_t last_chunk_z{0};
         std::int32_t last_chunk_radius{0};
         bool chunk_initialized{false};
+        double broadcast_x{0.0};
+        double broadcast_y{0.0};
+        double broadcast_z{0.0};
+        float broadcast_yaw{0.0F};
+        float broadcast_pitch{0.0F};
+        bool broadcast_initialized{false};
         std::unique_ptr<aes128_cfb8> cipher{};
         std::vector<std::byte> verify_token{};
         bool online_pending{false};
@@ -303,6 +310,9 @@ struct server::impl {
     void broadcast_system_chat(std::string_view text);
     void send_initial_chunks(std::uint64_t id);
     void queue_chunk_views();
+    void announce_join(std::uint64_t id);
+    void announce_leave(std::uint64_t id, const uuid &profile);
+    void broadcast_entity_moves();
     void send_keepalive(std::uint64_t id);
     void keepalive_loop();
     [[nodiscard]] auto build_configuration() -> status;
@@ -394,8 +404,22 @@ void server::impl::on_open(std::uint64_t id) {
 }
 
 void server::impl::on_close(std::uint64_t id, std::string_view /*reason*/) {
-    const std::lock_guard lock{connections_mutex};
-    connections.erase(id);
+    std::uint64_t left_id{0};
+    uuid left_profile{};
+    {
+        const std::lock_guard lock{connections_mutex};
+        const auto found{connections.find(id)};
+        if (found != connections.end() &&
+            found->second.state == connection_state::play &&
+            !found->second.name.empty()) {
+            left_id = id;
+            left_profile = found->second.profile;
+        }
+        connections.erase(id);
+    }
+    if (left_id != 0) {
+        announce_leave(left_id, left_profile);
+    }
 }
 
 void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
@@ -597,8 +621,13 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 }
                 auto &live{found->second};
                 live.name = std::move(packet.name);
-                live.profile =
-                    uuid_from_halves(packet.profile_high, packet.profile_low);
+                auto profile{
+                    uuid_from_halves(packet.profile_high, packet.profile_low)};
+                const bool zero_profile{
+                    std::ranges::all_of(profile.bytes, [](std::uint8_t byte) {
+                        return byte == 0U;
+                    })};
+                live.profile = zero_profile ? random_uuid() : profile;
                 live.session = session;
             }
             if (config.online_mode) {
@@ -1313,6 +1342,204 @@ auto server::active_connections() const -> std::vector<std::uint64_t> {
     return ids;
 }
 
+namespace {
+
+constexpr std::uint8_t player_info_add{1U};
+constexpr std::uint8_t player_info_game_mode{4U};
+constexpr std::uint8_t player_info_listed{8U};
+constexpr std::uint8_t player_info_latency{16U};
+constexpr std::uint32_t player_entity_type{159U};
+
+[[nodiscard]] auto angle_byte(float degrees) -> std::int8_t {
+    return static_cast<std::int8_t>(std::lround(degrees * 256.0F / 360.0F));
+}
+
+} // namespace
+
+void server::impl::announce_join(std::uint64_t id) {
+    struct player_snapshot {
+        std::uint64_t connection{0};
+        std::string name{};
+        uuid profile{};
+        double x{0.0};
+        double y{0.0};
+        double z{0.0};
+        float yaw{0.0F};
+        float pitch{0.0F};
+    };
+    std::vector<player_snapshot> players;
+    {
+        const std::lock_guard lock{connections_mutex};
+        for (const auto &[other, live] : connections) {
+            if (live.closed || live.state != connection_state::play) {
+                continue;
+            }
+            players.push_back({.connection = other,
+                               .name = live.name,
+                               .profile = live.profile,
+                               .x = live.x,
+                               .y = live.y,
+                               .z = live.z,
+                               .yaw = live.yaw,
+                               .pitch = live.pitch});
+        }
+    }
+    const auto make_entry = [&](const player_snapshot &player) {
+        player_info_entry entry{};
+        entry.id = player.profile;
+        entry.name = player.name;
+        entry.game_mode = static_cast<std::uint32_t>(config.game_mode);
+        entry.listed = true;
+        entry.latency = 0U;
+        return entry;
+    };
+    const auto make_entity = [&](const player_snapshot &player) {
+        return play_cb::add_entity{
+            .id = static_cast<std::int32_t>(player.connection),
+            .uuid = player.profile,
+            .type_ = player_entity_type,
+            .x = player.x,
+            .y = player.y,
+            .z = player.z,
+            .movement = {},
+            .x_rot = angle_byte(player.pitch),
+            .y_rot = angle_byte(player.yaw),
+            .y_head_rot = angle_byte(player.yaw),
+            .data = 0,
+        };
+    };
+
+    play_cb::player_info_update self_list{};
+    self_list.payload.actions =
+        static_cast<std::uint8_t>(player_info_add | player_info_game_mode |
+                                  player_info_listed | player_info_latency);
+    self_list.payload.entries.reserve(players.size());
+    for (const auto &player : players) {
+        self_list.payload.entries.push_back(make_entry(player));
+    }
+    send_packet(id, play_cb::player_info_update::packet_id, self_list,
+                play_cb::encode_player_info_update);
+
+    for (const auto &player : players) {
+        if (player.connection == id) {
+            continue;
+        }
+        play_cb::add_entity existing{make_entity(player)};
+        send_packet(id, play_cb::add_entity::packet_id, existing,
+                    play_cb::encode_add_entity);
+
+        play_cb::player_info_update update{};
+        update.payload.actions = self_list.payload.actions;
+        update.payload.entries.push_back(make_entry(player_snapshot{
+            .connection = id,
+            .name = {},
+            .profile = {},
+        }));
+        // Fill the joining player's own entry from the snapshot list.
+        const auto self{std::ranges::find_if(
+            players, [&](const player_snapshot &candidate) {
+                return candidate.connection == id;
+            })};
+        if (self != players.end()) {
+            update.payload.entries.back() = make_entry(*self);
+        }
+        send_packet(player.connection, play_cb::player_info_update::packet_id,
+                    update, play_cb::encode_player_info_update);
+
+        play_cb::add_entity joining{};
+        if (self != players.end()) {
+            joining = make_entity(*self);
+            send_packet(player.connection, play_cb::add_entity::packet_id,
+                        joining, play_cb::encode_add_entity);
+        }
+    }
+}
+
+void server::impl::announce_leave(std::uint64_t id, const uuid &profile) {
+    std::vector<std::uint64_t> targets;
+    {
+        const std::lock_guard lock{connections_mutex};
+        for (const auto &[other, live] : connections) {
+            if (other != id && !live.closed &&
+                live.state == connection_state::play) {
+                targets.push_back(other);
+            }
+        }
+    }
+    play_cb::player_info_remove remove{};
+    remove.profile_ids.push_back(profile);
+    play_cb::remove_entities entities{};
+    entities.entity_ids.push_back(static_cast<std::uint32_t>(id));
+    for (const auto target : targets) {
+        send_packet(target, play_cb::player_info_remove::packet_id, remove,
+                    play_cb::encode_player_info_remove);
+        send_packet(target, play_cb::remove_entities::packet_id, entities,
+                    play_cb::encode_remove_entities);
+    }
+}
+
+void server::impl::broadcast_entity_moves() {
+    struct move_event {
+        std::uint64_t connection{0};
+        double x{0.0};
+        double y{0.0};
+        double z{0.0};
+        float yaw{0.0F};
+        float pitch{0.0F};
+        bool on_ground{false};
+    };
+    std::vector<move_event> moves;
+    std::vector<std::uint64_t> targets;
+    {
+        const std::lock_guard lock{connections_mutex};
+        for (const auto &[id, live] : connections) {
+            if (live.closed || live.state != connection_state::play) {
+                continue;
+            }
+            targets.push_back(id);
+            const bool moved{
+                !live.broadcast_initialized || live.x != live.broadcast_x ||
+                live.y != live.broadcast_y || live.z != live.broadcast_z ||
+                live.yaw != live.broadcast_yaw ||
+                live.pitch != live.broadcast_pitch};
+            if (!moved) {
+                continue;
+            }
+            auto &mutable_live{connections.at(id)};
+            mutable_live.broadcast_initialized = true;
+            mutable_live.broadcast_x = live.x;
+            mutable_live.broadcast_y = live.y;
+            mutable_live.broadcast_z = live.z;
+            mutable_live.broadcast_yaw = live.yaw;
+            mutable_live.broadcast_pitch = live.pitch;
+            moves.push_back({.connection = id,
+                             .x = live.x,
+                             .y = live.y,
+                             .z = live.z,
+                             .yaw = live.yaw,
+                             .pitch = live.pitch,
+                             .on_ground = live.on_ground});
+        }
+    }
+    for (const auto &move : moves) {
+        play_cb::teleport_entity packet{};
+        packet.id = static_cast<std::int32_t>(move.connection);
+        packet.change.position = {.x = move.x, .y = move.y, .z = move.z};
+        packet.change.delta_movement = {};
+        packet.change.y_rot = move.yaw;
+        packet.change.x_rot = move.pitch;
+        packet.relatives = 0;
+        packet.on_ground = move.on_ground;
+        for (const auto target : targets) {
+            if (target == move.connection) {
+                continue;
+            }
+            send_packet(target, play_cb::teleport_entity::packet_id, packet,
+                        play_cb::encode_teleport_entity);
+        }
+    }
+}
+
 void server::impl::send_initial_chunks(std::uint64_t id) {
     play_cb::chunk_batch_start start{};
     send_packet(id, play_cb::chunk_batch_start::packet_id, start,
@@ -1800,6 +2027,7 @@ void server::impl::tick() {
         handle_play(packet.connection, packet.body);
     }
     queue_chunk_views();
+    broadcast_entity_moves();
 }
 
 server::server(std::unique_ptr<impl> state) : impl_{std::move(state)} {}
