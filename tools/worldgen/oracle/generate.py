@@ -252,6 +252,24 @@ def main() -> int:
         "structure generation, no carvers or features, empty surface rules",
     )
     parser.add_argument(
+        "--extra-feature-pack",
+        type=pathlib.Path,
+        help="datapack root whose `data` tree is copied into the feature "
+        "oracle pack",
+    )
+    parser.add_argument(
+        "--extra-feature",
+        action="append",
+        default=[],
+        help="placed feature id appended to the oracle:feature biome list",
+    )
+    parser.add_argument(
+        "--features-only-extra",
+        action="store_true",
+        help="with --extra-feature, drop the curated feature list and keep "
+        "only the extra placed features",
+    )
+    parser.add_argument(
         "--keep-features",
         action="store_true",
         help="with --structures, keep the fixed biome's real features and "
@@ -292,7 +310,7 @@ def main() -> int:
                 json.dumps(document, indent=2) + "\n"
             )
         feature_dir = pack / "data/oracle/worldgen/feature"
-        feature_dir.mkdir(parents=True)
+        feature_dir.mkdir(parents=True, exist_ok=True)
         (feature_dir / "stone_patch.json").write_text(
             json.dumps(
                 {
@@ -320,7 +338,7 @@ def main() -> int:
             + "\n"
         )
         placed_dir = pack / "data/oracle/worldgen/placed_feature"
-        placed_dir.mkdir(parents=True)
+        placed_dir.mkdir(parents=True, exist_ok=True)
         (placed_dir / "stone_patch.json").write_text(
             json.dumps(
                 {
@@ -454,12 +472,21 @@ def main() -> int:
                 "oracle:glow_lichen",
             ]
         )
+        if args.extra_feature_pack is not None:
+            shutil.copytree(
+                args.extra_feature_pack / "data",
+                pack / "data",
+                dirs_exist_ok=True,
+            )
+        if args.features_only_extra:
+            biome["features"][9] = []
+        biome["features"][9].extend(args.extra_feature)
         (biome_dir / "feature.json").write_text(
             json.dumps(biome, indent=2) + "\n"
         )
 
         feature_dir = pack / "data/oracle/worldgen/feature"
-        feature_dir.mkdir(parents=True)
+        feature_dir.mkdir(parents=True, exist_ok=True)
         (feature_dir / "stone_patch.json").write_text(
             json.dumps(
                 {
@@ -487,7 +514,7 @@ def main() -> int:
             + "\n"
         )
         placed_dir = pack / "data/oracle/worldgen/placed_feature"
-        placed_dir.mkdir(parents=True)
+        placed_dir.mkdir(parents=True, exist_ok=True)
         geode = read_pack_data(
             args.server_jar,
             "data/minecraft/worldgen/feature/amethyst_geode.json",
