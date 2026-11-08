@@ -168,6 +168,7 @@ auto structure_generator::generate(const chunk_pos &pos)
         .min_y = config_.min_y,
         .world_height = config_.height,
         .sea_level = config_.sea_level,
+        .fixed_biome = true,
         .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
         .biome_name = [this](std::uint16_t) -> std::string_view {
             return config_.biome;

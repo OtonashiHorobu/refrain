@@ -15,6 +15,7 @@
 #include <refrain/worldgen/chunk/status.hpp>
 #include <refrain/worldgen/structure/bbox.hpp>
 #include <refrain/worldgen/structure/monument.hpp>
+#include <refrain/worldgen/structure/stronghold.hpp>
 
 #include <array>
 #include <compare>
@@ -75,6 +76,7 @@ struct structure_piece_record {
     bool portal_blackstone{false};
     bool portal_cold{false};
     std::optional<structure::monument_piece_data> monument{};
+    std::optional<structure::stronghold_piece_data> stronghold{};
     std::vector<structure_piece_record> children{};
 };
 

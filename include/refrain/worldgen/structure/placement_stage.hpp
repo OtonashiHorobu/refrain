@@ -50,6 +50,18 @@ void place_monument_piece(const structure_place_context &context,
                           const structure_piece_record &piece,
                           worldgen_random &random);
 
+/// Places one stronghold piece.
+void place_stronghold_piece(const structure_place_context &context,
+                            const structure_piece_record &piece,
+                            worldgen_random &random);
+
+/// `StructurePiece.createChest` with an explicit loot table. Returns false
+/// when the position is occupied by a chest or the write is clipped.
+[[nodiscard]] auto place_loot_chest(const structure_place_context &context,
+                                    jint x, jint y, jint z,
+                                    worldgen_random &random,
+                                    std::string_view loot_table) -> bool;
+
 /// Maps a procedural piece's local coordinates to world coordinates using
 /// the piece orientation and `base_y` as the shifted bounding box floor.
 [[nodiscard]] auto piece_local_to_world(const structure_piece_record &piece,

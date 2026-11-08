@@ -451,6 +451,7 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 .min_y = oracle_min_y,
                 .world_height = oracle_height,
                 .sea_level = settings->sea_level,
+                .fixed_biome = true,
                 .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
                 .biome_name = [&biome](std::uint16_t) -> std::string_view {
                     return biome;

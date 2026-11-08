@@ -444,6 +444,7 @@ suite<"worldgen/structure-stage"> structure_stage_tests = [] {
             .min_y = -64,
             .world_height = 384,
             .sea_level = 63,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [](std::uint16_t) { return "minecraft:desert"; },
             .height_at = [](jint, jint, heightmap_kind) { return 70; },
@@ -493,6 +494,7 @@ suite<"worldgen/structure-stage"> structure_stage_tests = [] {
         const structure::structure_start_context context{
             .seed = 12345,
             .data = &data,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [](std::uint16_t) { return "minecraft:plains"; },
             .height_at = [](jint, jint, heightmap_kind) { return 70; },
@@ -527,6 +529,7 @@ suite<"worldgen/structure-stage"> structure_stage_tests = [] {
         const structure::structure_start_context context{
             .seed = 12345,
             .data = &data,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [](std::uint16_t) { return "minecraft:beach"; },
             .height_at = [](jint, jint, heightmap_kind) { return 70; },
@@ -1001,6 +1004,7 @@ suite<"worldgen/structure-locate"> structure_locate_tests = [] {
         const structure::structure_start_context context{
             .seed = 1,
             .data = &data,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [](std::uint16_t) -> std::string_view {
                 return "minecraft:beach";
@@ -1019,6 +1023,7 @@ suite<"worldgen/structure-locate"> structure_locate_tests = [] {
         const structure::structure_start_context context{
             .seed = 1,
             .data = &data,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [](std::uint16_t) -> std::string_view {
                 return "minecraft:beach";
@@ -1163,6 +1168,7 @@ suite<"worldgen/locate-oracle"> locate_oracle_tests = [] {
             .min_y = -64,
             .world_height = 384,
             .sea_level = 63,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [&biome](std::uint16_t) -> std::string_view {
                 return biome;
@@ -1244,6 +1250,7 @@ suite<"worldgen/ruined-portal"> ruined_portal_tests = [] {
             .min_y = -64,
             .world_height = 384,
             .sea_level = 63,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [](std::uint16_t) -> std::string_view {
                 return "minecraft:plains";
@@ -1290,6 +1297,7 @@ suite<"worldgen/ruined-portal"> ruined_portal_tests = [] {
             .min_y = -64,
             .world_height = 384,
             .sea_level = 63,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [](std::uint16_t) -> std::string_view {
                 return "minecraft:plains";
@@ -1334,6 +1342,7 @@ suite<"worldgen/ruined-portal"> ruined_portal_tests = [] {
             .min_y = -64,
             .world_height = 384,
             .sea_level = 63,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [](std::uint16_t) -> std::string_view {
                 return "minecraft:plains";

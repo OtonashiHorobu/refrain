@@ -15,6 +15,8 @@
 
 namespace refrain::worldgen::structure {
 
+struct structure_start_context;
+
 /// `BuriedTreasureStructure.findGenerationPoint`: a single 1x1x1 piece at the
 /// chunk centre column, y=90.
 [[nodiscard]] auto buried_treasure_start(const chunk_pos &chunk)
@@ -55,6 +57,18 @@ class structure_template_manager;
 /// building starts 29 blocks west and north of the chunk.
 [[nodiscard]] auto ocean_monument_start(const chunk_pos &chunk, jlong seed)
     -> structure_start;
+
+/// `StrongholdStructure.findGenerationPoint`: one start stairs-down piece plus
+/// the recursively fitted stronghold rooms, moved below sea level.
+[[nodiscard]] auto stronghold_start(const chunk_pos &chunk, jlong seed,
+                                    jint min_y, jint sea_level,
+                                    jint max_tries = 10000) -> structure_start;
+
+/// Candidate chunks of a `concentric_rings` placement: the ring geometry and
+/// per-ring biome search, including the fixed-biome search shape.
+[[nodiscard]] auto concentric_ring_positions(
+    jlong seed, const concentric_rings_placement &placement,
+    const structure_start_context &context) -> std::vector<chunk_pos>;
 
 [[nodiscard]] auto ruined_portal_start(
     const chunk_pos &chunk, jlong seed, const structure_document &structure,

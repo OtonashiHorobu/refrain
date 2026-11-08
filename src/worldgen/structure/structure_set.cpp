@@ -49,6 +49,61 @@ auto structure_set::weighted_order(jlong seed, const chunk_pos &chunk) const
     return result;
 }
 
+auto decode_concentric_rings(const data::json::value &document)
+    -> result<concentric_rings_placement> {
+    const auto *distance = document.find("distance");
+    const auto *spread = document.find("spread");
+    const auto *count = document.find("count");
+    const auto *preferred = document.find("preferred_biomes");
+    if (distance == nullptr || spread == nullptr || count == nullptr ||
+        preferred == nullptr) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "concentric rings placement is incomplete")};
+    }
+    const auto distance_value = distance->as_int64();
+    const auto spread_value = spread->as_int64();
+    const auto count_value = count->as_int64();
+    if (!distance_value || !spread_value || !count_value) {
+        return std::unexpected{make_error(
+            error_code::parse_error, "concentric rings numbers are invalid")};
+    }
+    concentric_rings_placement decoded{
+        .distance = static_cast<jint>(*distance_value),
+        .spread = static_cast<jint>(*spread_value),
+        .count = static_cast<jint>(*count_value),
+    };
+    if (const auto *salt = document.find("salt"); salt != nullptr) {
+        const auto value = salt->as_int64();
+        if (!value) {
+            return std::unexpected{value.error()};
+        }
+        decoded.salt = static_cast<jint>(*value);
+    }
+    if (const auto tag = preferred->as_string(); tag.has_value()) {
+        decoded.preferred_biomes_tag = std::string{*tag};
+        if (!decoded.preferred_biomes_tag.empty() &&
+            decoded.preferred_biomes_tag.front() == '#') {
+            decoded.preferred_biomes_tag.erase(0, 1);
+        }
+    } else if (const auto array = preferred->as_array(); array) {
+        for (const auto &entry : *array) {
+            const auto text = entry.as_string();
+            if (!text) {
+                return std::unexpected{make_error(
+                    error_code::parse_error,
+                    "concentric rings preferred biome is not a string")};
+            }
+            decoded.preferred_biomes_ids.emplace_back(*text);
+        }
+    } else {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "concentric rings preferred biomes are invalid")};
+    }
+    return decoded;
+}
+
 auto decode_structure_set(std::string_view id,
                           const data::json::value &document)
     -> result<structure_set> {
@@ -92,7 +147,13 @@ auto decode_structure_set(std::string_view id,
             return std::unexpected{spread.error()};
         }
         decoded.random_spread = std::move(*spread);
-    } else if (*type_name != "minecraft:concentric_rings") {
+    } else if (*type_name == "minecraft:concentric_rings") {
+        auto rings = decode_concentric_rings(*placement);
+        if (!rings) {
+            return std::unexpected{rings.error()};
+        }
+        decoded.concentric_rings = std::move(*rings);
+    } else {
         return std::unexpected{make_error(error_code::unsupported,
                                           "unsupported structure placement")};
     }

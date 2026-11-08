@@ -13,6 +13,7 @@
 #include <refrain/worldgen/core/java_compat.hpp>
 #include <refrain/worldgen/structure/bbox.hpp>
 #include <refrain/worldgen/structure/monument.hpp>
+#include <refrain/worldgen/structure/stronghold.hpp>
 
 #include <string>
 #include <vector>
@@ -60,6 +61,9 @@ struct structure_piece {
     /// Ocean monument pieces: the room definition and neighbouring room
     /// states the interior reads at placement time.
     std::optional<monument_piece_data> monument{};
+    /// Stronghold pieces are flat start pieces; the payload carries the
+    /// constructor random choices their interiors read.
+    std::optional<stronghold_piece_data> stronghold{};
     /// The monument building carries its child pieces so its `postProcess`
     /// can run them before the outer piece loop runs them again.
     std::vector<structure_piece> children{};

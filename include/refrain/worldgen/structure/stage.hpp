@@ -29,6 +29,10 @@ struct structure_start_context {
     jint min_y{-64};
     jint world_height{384};
     jint sea_level{63};
+    /// True when the biome source returns one biome everywhere; ring
+    /// placement then uses the fixed-biome search shape instead of sampling
+    /// the biome grid.
+    bool fixed_biome{false};
     std::function<std::uint16_t(jint quart_x, jint quart_y, jint quart_z)>
         biome_at{};
     std::function<std::string_view(std::uint16_t)> biome_name{};

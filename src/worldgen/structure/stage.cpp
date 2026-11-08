@@ -237,6 +237,19 @@ auto try_generate(const structure_start_context &context,
         start.step = structure.step;
         return start;
     }
+    if (structure.type == "minecraft:stronghold") {
+        if (!biome_allowed(context, structure, chunk.x * 16, 0, chunk.z * 16)) {
+            return std::nullopt;
+        }
+        auto start = stronghold_start(chunk, context.seed, context.min_y,
+                                      context.sea_level);
+        if (start.pieces.empty()) {
+            return std::nullopt;
+        }
+        start.structure = structure.id;
+        start.step = structure.step;
+        return start;
+    }
     if (structure.type == "minecraft:jungle_temple") {
         const jint middle_x = chunk.x * 16 + 8;
         const jint middle_z = chunk.z * 16 + 8;
@@ -421,9 +434,17 @@ auto generate_structure_starts(const chunk_pos &chunk,
     }
     for (const auto &[set_id, set] : context.data->sets) {
         (void)set_id;
-        if (!set.random_spread.has_value() ||
-            !set.random_spread->is_structure_chunk(context.seed, chunk.x,
-                                                   chunk.z)) {
+        bool set_candidate = false;
+        if (set.random_spread.has_value()) {
+            set_candidate = set.random_spread->is_structure_chunk(
+                context.seed, chunk.x, chunk.z);
+        } else if (set.concentric_rings.has_value()) {
+            const auto positions = concentric_ring_positions(
+                context.seed, *set.concentric_rings, context);
+            set_candidate = std::find(positions.begin(), positions.end(),
+                                      chunk) != positions.end();
+        }
+        if (!set_candidate) {
             continue;
         }
         for (const auto &candidate : set.weighted_order(context.seed, chunk)) {

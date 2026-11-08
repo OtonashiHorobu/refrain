@@ -257,6 +257,7 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             .min_y = -64,
             .world_height = 384,
             .sea_level = 63,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [](std::uint16_t) -> std::string_view {
                 return "minecraft:beach";
@@ -391,6 +392,7 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             .min_y = -64,
             .world_height = 384,
             .sea_level = 63,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [](std::uint16_t) -> std::string_view {
                 return "minecraft:snowy_taiga";
@@ -526,6 +528,7 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             .min_y = -64,
             .world_height = 384,
             .sea_level = 63,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [](std::uint16_t) -> std::string_view {
                 return "minecraft:swamp";
@@ -646,6 +649,7 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             .min_y = -64,
             .world_height = 384,
             .sea_level = 63,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [](std::uint16_t) -> std::string_view {
                 return "minecraft:desert";
@@ -771,6 +775,7 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
                 .min_y = -64,
                 .world_height = 384,
                 .sea_level = 63,
+                .fixed_biome = true,
                 .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
                 .biome_name = [&biome_name](std::uint16_t) -> std::string_view {
                     return biome_name;
@@ -1071,6 +1076,7 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
                 .min_y = -64,
                 .world_height = 384,
                 .sea_level = 63,
+                .fixed_biome = true,
                 .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
                 .biome_name = [](std::uint16_t) -> std::string_view {
                     return "minecraft:beach";
@@ -1190,6 +1196,7 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             .min_y = -64,
             .world_height = 384,
             .sea_level = 63,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [](std::uint16_t) -> std::string_view {
                 return "minecraft:ocean";
@@ -1305,6 +1312,7 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
                 .min_y = -64,
                 .world_height = 384,
                 .sea_level = 63,
+                .fixed_biome = true,
                 .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
                 .biome_name = [](std::uint16_t) -> std::string_view {
                     return "minecraft:warm_ocean";
@@ -1432,6 +1440,7 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             .min_y = -64,
             .world_height = 384,
             .sea_level = 63,
+            .fixed_biome = true,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
             .biome_name = [](std::uint16_t) -> std::string_view {
                 return "minecraft:cold_ocean";

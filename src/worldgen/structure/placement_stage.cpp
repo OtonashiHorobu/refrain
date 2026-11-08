@@ -107,31 +107,8 @@ auto chest_facing(const structure_place_context &context, jint x, jint y,
 
 auto create_chest(const structure_place_context &context, jint x, jint y,
                   jint z, worldgen_random &random) -> bool {
-    const auto current = context.region->state_at(x, y, z);
-    if (block_name(context, current) == "minecraft:chest") {
-        return false;
-    }
-    const auto facing = chest_facing(context, x, y, z);
-    const std::string key =
-        "minecraft:chest[facing=" + std::string{facing} + "]";
-    const auto chest = context.state(key);
-    if (chest == no_block_state ||
-        !context.region->set_block_state(x, y, z, chest)) {
-        return false;
-    }
-    data::nbt::compound entity;
-    entity.emplace("id", data::nbt::value{std::string{"minecraft:chest"}});
-    entity.emplace("x", data::nbt::value{static_cast<jint>(x)});
-    entity.emplace("y", data::nbt::value{static_cast<jint>(y)});
-    entity.emplace("z", data::nbt::value{static_cast<jint>(z)});
-    entity.emplace("LootTable", data::nbt::value{std::string{
-                                    "minecraft:chests/buried_treasure"}});
-    entity.emplace("LootTableSeed", data::nbt::value{random.next_long()});
-    entity.emplace("components", data::nbt::value{data::nbt::compound{}});
-    entity.emplace("keepPacked", data::nbt::value{static_cast<std::int8_t>(0)});
-    context.chunk->set_block_entity(block_pos{.x = x & 15, .y = y, .z = z & 15},
-                                    std::move(entity));
-    return true;
+    return place_loot_chest(context, x, y, z, random,
+                            "minecraft:chests/buried_treasure");
 }
 
 auto igloo_offset(std::string_view template_id) -> std::optional<block_pos> {
@@ -1172,6 +1149,35 @@ void place_shipwreck_piece(const structure_place_context &context,
 }
 
 } // namespace
+
+auto place_loot_chest(const structure_place_context &context, jint x, jint y,
+                      jint z, worldgen_random &random,
+                      std::string_view loot_table) -> bool {
+    const auto current = context.region->state_at(x, y, z);
+    if (block_name(context, current) == "minecraft:chest") {
+        return false;
+    }
+    const auto facing = chest_facing(context, x, y, z);
+    const std::string key =
+        "minecraft:chest[facing=" + std::string{facing} + "]";
+    const auto chest = context.state(key);
+    if (chest == no_block_state ||
+        !context.region->set_block_state(x, y, z, chest)) {
+        return false;
+    }
+    data::nbt::compound entity;
+    entity.emplace("id", data::nbt::value{std::string{"minecraft:chest"}});
+    entity.emplace("x", data::nbt::value{static_cast<jint>(x)});
+    entity.emplace("y", data::nbt::value{static_cast<jint>(y)});
+    entity.emplace("z", data::nbt::value{static_cast<jint>(z)});
+    entity.emplace("LootTable", data::nbt::value{std::string{loot_table}});
+    entity.emplace("LootTableSeed", data::nbt::value{random.next_long()});
+    entity.emplace("components", data::nbt::value{data::nbt::compound{}});
+    entity.emplace("keepPacked", data::nbt::value{static_cast<std::int8_t>(0)});
+    context.chunk->set_block_entity(block_pos{.x = x & 15, .y = y, .z = z & 15},
+                                    std::move(entity));
+    return true;
+}
 
 namespace {
 
@@ -2441,6 +2447,8 @@ void place_structure_piece(const structure_place_context &context,
         place_mineshaft_corridor(context, piece, random);
     } else if (piece.monument.has_value()) {
         place_monument_piece(context, piece, random);
+    } else if (piece.stronghold.has_value()) {
+        place_stronghold_piece(context, piece, random);
     }
 }
 

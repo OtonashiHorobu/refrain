@@ -42,6 +42,7 @@ auto to_piece_record(const structure_piece &piece)
         .two_floored = piece.two_floored,
         .mesa = piece.mesa,
         .monument = piece.monument,
+        .stronghold = piece.stronghold,
     };
     if (piece.portal) {
         record.portal_valid = true;
