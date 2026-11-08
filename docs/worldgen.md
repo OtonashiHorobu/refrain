@@ -103,7 +103,9 @@ The reference-backed suites currently cover:
   placement, template placement, feature freeze and decoration.
 
 Known gaps: the generated-start mineshaft full-stage case has a small
-remaining difference in one corridor, and ocean monuments, strongholds,
-woodland mansions and ruined portals do not have start or block
+remaining difference in one corridor. Ruined portal starts place the
+template at the reference position and orientation, but the netherrack
+spread around the piece still differs from the reference. Ocean
+monuments, strongholds and woodland mansions do not have start or block
 implementations yet.
 
