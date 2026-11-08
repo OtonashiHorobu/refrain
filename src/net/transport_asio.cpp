@@ -2,6 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/core/log.hpp>
 #include <refrain/net/transport.hpp>
 
 #include <asio/bind_executor.hpp>
@@ -109,7 +110,10 @@ transport_impl::transport_impl(transport_handler handler,
     threads_.reserve(io_threads);
     try {
         for (std::size_t index{0}; index < io_threads; ++index) {
-            threads_.emplace_back([this] { context_.run(); });
+            threads_.emplace_back([this, index] {
+                log::set_thread_name("net-io-" + std::to_string(index));
+                context_.run();
+            });
         }
     } catch (...) {
         work_.reset();

@@ -2,6 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/core/log.hpp>
 #include <refrain/net/bot.hpp>
 
 #include <refrain/net/base.hpp>
@@ -444,6 +445,7 @@ class bot_session {
                     send_command();
                 } else {
                     command_thread_ = std::thread{[this] {
+                        log::set_thread_name("bot-command");
                         std::this_thread::sleep_for(options_.command_delay);
                         send_command();
                     }};
@@ -452,6 +454,7 @@ class bot_session {
             if (options_.move_dx != 0.0 || options_.move_dy != 0.0 ||
                 options_.move_dz != 0.0) {
                 move_thread_ = std::thread{[this] {
+                    log::set_thread_name("bot-move");
                     if (options_.move_delay.count() > 0) {
                         std::this_thread::sleep_for(options_.move_delay);
                     }

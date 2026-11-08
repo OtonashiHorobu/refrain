@@ -5,6 +5,7 @@
 #include <refrain/server/provider_transport.hpp>
 
 #include <refrain/contracts/abi.hpp>
+#include <refrain/core/log.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -54,7 +55,10 @@ provider_transport::provider_transport(
     std::unique_ptr<services::transport::provider> provider,
     net::transport_handler handler)
     : provider_{std::move(provider)}, handler_{std::move(handler)} {
-    poller_ = std::thread{[this] { poll_loop(); }};
+    poller_ = std::thread{[this] {
+        log::set_thread_name("net-transport");
+        poll_loop();
+    }};
 }
 
 provider_transport::~provider_transport() { stop(); }

@@ -362,6 +362,7 @@ auto run_protocol_load(const protocol_load_options &options) -> int {
     threads.reserve(static_cast<std::size_t>(options.bots));
     for (int index{0}; index < options.bots; ++index) {
         threads.emplace_back([&, index] {
+            refrain::log::set_thread_name("bot-" + std::to_string(index));
             refrain::net::bot_options bot{};
             bot.target.host = options.target.substr(0, separator);
             bot.target.port = port;
