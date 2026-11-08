@@ -2949,4 +2949,69 @@ suite<"worldgen/feature/root-system"> root_system_tests = [] {
         expect(root.place(context, random, block_pos{.x = 8, .y = 9, .z = 8}));
         expect(nested_called);
     };
+
+    "a patch calls its nested feature for every surface cell"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        (void)states.intern("minecraft:air", {.air = true});
+        const auto stone =
+            states.intern("minecraft:stone", {.air = false,
+                                              .blocks_motion = true,
+                                              .blocks_motion_no_leaves = true});
+        const auto moss = states.intern("minecraft:moss_block", {.air = false});
+        expect(stone && moss);
+        if (!stone || !moss) {
+            return;
+        }
+        const std::array<block_state_id, 1> tag_states{*stone};
+        states.add_tag("test:replaceable", tag_states);
+        proto_chunk chunk{states, 0, 0, 0, 32};
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint y = 0; y < 6; ++y) {
+                    chunk.set_state(x, y, z, *stone);
+                }
+            }
+        }
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 0};
+        auto depth = provider::int_provider::decode(parse("1"));
+        auto radius = provider::int_provider::decode(parse("1"));
+        expect(depth.has_value() && radius.has_value());
+        if (!depth || !radius) {
+            return;
+        }
+        feature::placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &states,
+            .generation = provider::generation_context{.min_y = 0,
+                                                       .height = 32,
+                                                       .sea_level = 8},
+        };
+        std::size_t calls = 0;
+        feature::feature_context context{
+            .placement = placement,
+            .place_by_id =
+                [&](std::string_view, worldgen_random &, const block_pos &) {
+                    ++calls;
+                    return true;
+                },
+        };
+        const feature::vegetation_patch_feature patch{
+            "test:nested",
+            feature::simple_state(*moss),
+            "#test:replaceable",
+            std::move(*depth),
+            std::move(*radius),
+            false,
+            5,
+            1.0F,
+            0.0F,
+            0.0F,
+            false};
+        worldgen_random random{std::make_unique<legacy_random_source>(1)};
+        expect(patch.place(context, random, block_pos{.x = 8, .y = 6, .z = 8}));
+        expect(calls > 0);
+    };
 };
