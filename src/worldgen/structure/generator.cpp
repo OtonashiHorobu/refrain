@@ -36,46 +36,7 @@ auto make_registry() -> block_state_registry {
 
 auto make_piece_record(const structure_piece &piece)
     -> ::refrain::worldgen::structure_piece_record {
-    ::refrain::worldgen::structure_piece_record record{};
-    record.type = piece.type;
-    record.min_x = piece.bounds.min_x;
-    record.min_y = piece.bounds.min_y;
-    record.min_z = piece.bounds.min_z;
-    record.max_x = piece.bounds.max_x;
-    record.max_y = piece.bounds.max_y;
-    record.max_z = piece.bounds.max_z;
-    record.orientation = piece.orientation;
-    record.template_id = piece.template_id;
-    record.template_x = piece.template_origin.x;
-    record.template_y = piece.template_origin.y;
-    record.template_z = piece.template_origin.z;
-    record.template_rotation = piece.template_rotation;
-    record.template_mirror = piece.template_mirror;
-    record.template_pivot_x = piece.template_pivot.x;
-    record.template_pivot_y = piece.template_pivot.y;
-    record.template_pivot_z = piece.template_pivot.z;
-    record.height_position = piece.height_position;
-    record.height_offset = piece.height_offset;
-    record.integrity = piece.integrity;
-    record.large = piece.large;
-    record.beached = piece.beached;
-    record.entrances = piece.entrances;
-    record.sections = piece.sections;
-    record.rails = piece.rails;
-    record.spider = piece.spider;
-    record.two_floored = piece.two_floored;
-    record.mesa = piece.mesa;
-    if (piece.portal) {
-        record.portal_valid = true;
-        record.portal_placement = piece.portal->placement;
-        record.portal_mossiness = piece.portal->mossiness;
-        record.portal_air_pocket = piece.portal->air_pocket;
-        record.portal_overgrown = piece.portal->overgrown;
-        record.portal_vines = piece.portal->vines;
-        record.portal_blackstone = piece.portal->replace_with_blackstone;
-        record.portal_cold = piece.portal->cold;
-    }
-    return record;
+    return to_piece_record(piece);
 }
 
 auto make_start_record(const structure_start &start)
@@ -239,6 +200,7 @@ auto structure_generator::generate(const chunk_pos &pos)
         .templates = templates_.get(),
         .registry = &states_,
         .seed = config_.seed,
+        .sea_level = config_.sea_level,
         .adjusted_heights = &adjusted_heights,
     };
     worldgen_random decoration{
@@ -287,6 +249,7 @@ auto structure_generator::generate(const chunk_pos &pos)
                 .templates = templates_.get(),
                 .registry = &states_,
                 .seed = config_.seed,
+                .sea_level = config_.sea_level,
                 .adjusted_heights = &adjusted_heights,
             };
             for (const auto &piece : records[start_index]) {

@@ -196,6 +196,47 @@ auto try_generate(const structure_start_context &context,
         start.step = structure.step;
         return start;
     }
+    if (structure.type == "minecraft:ocean_monument") {
+        const jint middle_x = chunk.x * 16 + 8;
+        const jint middle_z = chunk.z * 16 + 8;
+        const jint middle_y = context.height_at(middle_x, middle_z,
+                                                heightmap_kind::ocean_floor_wg);
+        if (!biome_allowed(context, structure, middle_x, middle_y, middle_z)) {
+            return std::nullopt;
+        }
+        if (!context.biome_at || !context.biome_name ||
+            context.data == nullptr) {
+            return std::nullopt;
+        }
+        // `getBiomesWithin` samples the quart box around the chunk offset
+        // (9, sea level, 9); every biome must belong to the required
+        // surrounding tag.
+        const jint offset_x = chunk.x * 16 + 9;
+        const jint offset_z = chunk.z * 16 + 9;
+        const jint quart_x0 = (offset_x - 29) >> 2;
+        const jint quart_x1 = (offset_x + 29) >> 2;
+        const jint quart_z0 = (offset_z - 29) >> 2;
+        const jint quart_z1 = (offset_z + 29) >> 2;
+        const jint quart_y0 = (context.sea_level - 29) >> 2;
+        const jint quart_y1 = (context.sea_level + 29) >> 2;
+        for (jint quart_z = quart_z0; quart_z <= quart_z1; ++quart_z) {
+            for (jint quart_x = quart_x0; quart_x <= quart_x1; ++quart_x) {
+                for (jint quart_y = quart_y0; quart_y <= quart_y1; ++quart_y) {
+                    const auto biome =
+                        context.biome_at(quart_x, quart_y, quart_z);
+                    if (!context.data->biome_matches_tag(
+                            "minecraft:required_ocean_monument_surrounding",
+                            context.biome_name(biome))) {
+                        return std::nullopt;
+                    }
+                }
+            }
+        }
+        auto start = ocean_monument_start(chunk, context.seed);
+        start.structure = structure.id;
+        start.step = structure.step;
+        return start;
+    }
     if (structure.type == "minecraft:jungle_temple") {
         const jint middle_x = chunk.x * 16 + 8;
         const jint middle_z = chunk.z * 16 + 8;
@@ -421,35 +462,7 @@ void write_structure_stage(proto_chunk &chunk,
         };
         record.pieces.reserve(start.pieces.size());
         for (const auto &piece : start.pieces) {
-            record.pieces.push_back(::refrain::worldgen::structure_piece_record{
-                .type = piece.type,
-                .min_x = piece.bounds.min_x,
-                .min_y = piece.bounds.min_y,
-                .min_z = piece.bounds.min_z,
-                .max_x = piece.bounds.max_x,
-                .max_y = piece.bounds.max_y,
-                .max_z = piece.bounds.max_z,
-                .orientation = piece.orientation,
-                .template_id = piece.template_id,
-                .template_x = piece.template_origin.x,
-                .template_y = piece.template_origin.y,
-                .template_z = piece.template_origin.z,
-                .template_rotation = piece.template_rotation,
-                .template_mirror = piece.template_mirror,
-                .template_pivot_x = piece.template_pivot.x,
-                .template_pivot_y = piece.template_pivot.y,
-                .template_pivot_z = piece.template_pivot.z,
-                .height_position = piece.height_position,
-                .height_offset = piece.height_offset,
-                .integrity = piece.integrity,
-                .large = piece.large,
-                .beached = piece.beached,
-                .entrances = piece.entrances,
-                .sections = piece.sections,
-                .rails = piece.rails,
-                .spider = piece.spider,
-                .two_floored = piece.two_floored,
-                .mesa = piece.mesa});
+            record.pieces.push_back(to_piece_record(piece));
         }
         chunk.add_structure_start(std::move(record));
     }

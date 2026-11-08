@@ -43,6 +43,10 @@ struct structure_data_set {
 
     [[nodiscard]] auto allows_biome(const structure_document &structure,
                                     std::string_view biome) const -> bool;
+    /// Whether `biome` is in `tag`, resolving nested `#` entries. Missing
+    /// tags contain nothing.
+    [[nodiscard]] auto biome_matches_tag(std::string_view tag,
+                                         std::string_view biome) const -> bool;
 };
 
 /// Position of `structure_id` among the structures of the same step, in the

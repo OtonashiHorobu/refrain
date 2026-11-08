@@ -352,6 +352,17 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
             value != nullptr) {
             biome = value;
         }
+        jint start_x = chunk_x;
+        jint start_z = chunk_z;
+        if (const char *value = std::getenv("REFRAIN_FULL_STAGE_START_CHUNK_X");
+            value != nullptr) {
+            start_x = std::atoi(value);
+        }
+        if (const char *value = std::getenv("REFRAIN_FULL_STAGE_START_CHUNK_Z");
+            value != nullptr) {
+            start_z = std::atoi(value);
+        }
+        const bool own_start = start_x == chunk_x && start_z == chunk_z;
         const auto region = core::io::read_file(region_path);
         expect(region.has_value()) << region.error().message;
         if (!region) {
@@ -476,7 +487,7 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 .templates = &manager,
             };
             const auto starts = structure::generate_structure_starts(
-                chunk_pos{.x = chunk_x, .z = chunk_z}, start_context);
+                chunk_pos{.x = start_x, .z = start_z}, start_context);
             expect(!starts.empty());
             if (starts.empty()) {
                 return;
@@ -487,8 +498,8 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 ::refrain::worldgen::structure_start record{
                     .structure = start.structure,
                     .step = start.step,
-                    .chunk_x = chunk_x,
-                    .chunk_z = chunk_z,
+                    .chunk_x = start.chunk.x,
+                    .chunk_z = start.chunk.z,
                     .min_x = start.bounds.min_x,
                     .min_y = start.bounds.min_y,
                     .min_z = start.bounds.min_z,
@@ -497,55 +508,12 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                     .max_z = start.bounds.max_z,
                 };
                 for (const auto &piece : start.pieces) {
-                    piece_records.push_back(
-                        ::refrain::worldgen::structure_piece_record{
-                            .type = piece.type,
-                            .min_x = piece.bounds.min_x,
-                            .min_y = piece.bounds.min_y,
-                            .min_z = piece.bounds.min_z,
-                            .max_x = piece.bounds.max_x,
-                            .max_y = piece.bounds.max_y,
-                            .max_z = piece.bounds.max_z,
-                            .orientation = piece.orientation,
-                            .template_id = piece.template_id,
-                            .template_x = piece.template_origin.x,
-                            .template_y = piece.template_origin.y,
-                            .template_z = piece.template_origin.z,
-                            .template_rotation = piece.template_rotation,
-                            .template_mirror = piece.template_mirror,
-                            .template_pivot_x = piece.template_pivot.x,
-                            .template_pivot_y = piece.template_pivot.y,
-                            .template_pivot_z = piece.template_pivot.z,
-                            .height_position = piece.height_position,
-                            .height_offset = piece.height_offset,
-                            .integrity = piece.integrity,
-                            .large = piece.large,
-                            .beached = piece.beached,
-                            .entrances = piece.entrances,
-                            .sections = piece.sections,
-                            .rails = piece.rails,
-                            .spider = piece.spider,
-                            .two_floored = piece.two_floored,
-                            .mesa = piece.mesa,
-                            .portal_valid = piece.portal.has_value(),
-                            .portal_placement = piece.portal
-                                                    ? piece.portal->placement
-                                                    : std::string{},
-                            .portal_mossiness =
-                                piece.portal ? piece.portal->mossiness : 0.0F,
-                            .portal_air_pocket =
-                                piece.portal && piece.portal->air_pocket,
-                            .portal_overgrown =
-                                piece.portal && piece.portal->overgrown,
-                            .portal_vines = piece.portal && piece.portal->vines,
-                            .portal_blackstone =
-                                piece.portal &&
-                                piece.portal->replace_with_blackstone,
-                            .portal_cold = piece.portal && piece.portal->cold,
-                        });
+                    piece_records.push_back(structure::to_piece_record(piece));
                 }
                 record.pieces = piece_records;
-                chunk.add_structure_start(std::move(record));
+                if (own_start) {
+                    chunk.add_structure_start(std::move(record));
+                }
                 all_records.push_back(std::move(piece_records));
             }
             const auto resolve = [&](std::string_view key) -> block_state_id {
@@ -600,6 +568,7 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 .templates = &manager,
                 .registry = &states,
                 .seed = seed,
+                .sea_level = settings->sea_level,
                 .adjusted_heights = &adjusted_heights,
             };
             worldgen_random decoration_random{
@@ -623,11 +592,25 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                     std::make_unique<xoroshiro_random_source>(0)};
                 placement_random.set_feature_seed(decoration_seed, *index,
                                                   step);
-                structure::place_structures(chunk, place_context, start.step,
-                                            placement_random);
+                if (own_start) {
+                    structure::place_structures(chunk, place_context,
+                                                start.step, placement_random);
+                    continue;
+                }
+                for (const auto &piece : start.pieces) {
+                    if (piece.bounds.max_x < chunk_x * 16 ||
+                        piece.bounds.min_x > chunk_x * 16 + 15 ||
+                        piece.bounds.max_z < chunk_z * 16 ||
+                        piece.bounds.min_z > chunk_z * 16 + 15) {
+                        continue;
+                    }
+                    structure::place_structure_piece(
+                        place_context, structure::to_piece_record(piece),
+                        placement_random);
+                }
             }
-            for (std::size_t start_index = 0; start_index < starts.size();
-                 ++start_index) {
+            for (std::size_t start_index = 0;
+                 own_start && start_index < starts.size(); ++start_index) {
                 for (const auto &neighbour : neighbours) {
                     if (neighbour->chunk_x() == chunk_x &&
                         neighbour->chunk_z() == chunk_z) {
@@ -653,6 +636,7 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                         .templates = &manager,
                         .registry = &states,
                         .seed = seed,
+                        .sea_level = settings->sea_level,
                         .adjusted_heights = &adjusted_heights,
                     };
                     for (const auto &piece : all_records[start_index]) {
@@ -744,6 +728,9 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
         expect(heightmap_mismatches == 0);
         expect(mismatches == 0);
 
+        if (!own_start) {
+            return;
+        }
         auto generator = structure::structure_generator::create(
             structure::structure_generator_config{
                 .data_root = data_root,

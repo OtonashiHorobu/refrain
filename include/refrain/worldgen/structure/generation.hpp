@@ -50,6 +50,12 @@ class structure_template_manager;
     const std::function<jint(jint, jint, heightmap_kind)> &height_at)
     -> structure_start;
 
+/// `OceanMonumentStructure`: one building piece whose generated room graph
+/// yields entry, core, fitted rooms and the two wings plus the penthouse. The
+/// building starts 29 blocks west and north of the chunk.
+[[nodiscard]] auto ocean_monument_start(const chunk_pos &chunk, jlong seed)
+    -> structure_start;
+
 [[nodiscard]] auto ruined_portal_start(
     const chunk_pos &chunk, jlong seed, const structure_document &structure,
     structure_template_manager &templates,

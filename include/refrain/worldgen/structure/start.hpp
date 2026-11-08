@@ -12,9 +12,14 @@
 #include <optional>
 #include <refrain/worldgen/core/java_compat.hpp>
 #include <refrain/worldgen/structure/bbox.hpp>
+#include <refrain/worldgen/structure/monument.hpp>
 
 #include <string>
 #include <vector>
+
+namespace refrain::worldgen {
+struct structure_piece_record;
+} // namespace refrain::worldgen
 
 namespace refrain::worldgen::structure {
 
@@ -52,7 +57,17 @@ struct structure_piece {
     bool two_floored{false};
     bool mesa{false};
     std::optional<ruined_portal_properties> portal{};
+    /// Ocean monument pieces: the room definition and neighbouring room
+    /// states the interior reads at placement time.
+    std::optional<monument_piece_data> monument{};
+    /// The monument building carries its child pieces so its `postProcess`
+    /// can run them before the outer piece loop runs them again.
+    std::vector<structure_piece> children{};
 };
+
+/// Converts a start piece to the placement record shared with the chunk.
+[[nodiscard]] auto to_piece_record(const structure_piece &piece)
+    -> ::refrain::worldgen::structure_piece_record;
 
 struct structure_start {
     std::string structure{};

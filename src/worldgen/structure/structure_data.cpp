@@ -119,6 +119,43 @@ auto structure_data_set::allows_biome(const structure_document &structure,
                      biome) != structure.biome_ids.end();
 }
 
+namespace {
+
+auto tag_matches(
+    const std::unordered_map<std::string, std::vector<std::string>> &tags,
+    const std::string &tag, std::string_view biome,
+    std::set<std::string> &visited) -> bool {
+    if (tag == biome) {
+        return true;
+    }
+    if (!visited.insert(tag).second) {
+        return false;
+    }
+    const auto found = tags.find(tag);
+    if (found == tags.end()) {
+        return false;
+    }
+    for (const auto &entry : found->second) {
+        if (!entry.empty() && entry.front() == '#') {
+            if (tag_matches(tags, entry.substr(1), biome, visited)) {
+                return true;
+            }
+        } else if (entry == biome) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+auto structure_data_set::biome_matches_tag(std::string_view tag,
+                                           std::string_view biome) const
+    -> bool {
+    std::set<std::string> visited;
+    return tag_matches(biome_tags, std::string{tag}, biome, visited);
+}
+
 auto decode_structure_document(std::string_view id,
                                const data::json::value &document)
     -> result<structure_document> {

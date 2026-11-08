@@ -30,6 +30,7 @@ struct structure_place_context {
     const structure_template_manager *templates{nullptr};
     block_state_registry *registry{nullptr};
     jlong seed{0};
+    jint sea_level{63};
     /// The chunk's `worldgen_region_random` stream, consumed by pieces that
     /// read `level.getRandom()`.
     worldgen_random *level_random{nullptr};
@@ -42,6 +43,12 @@ struct structure_place_context {
 void place_structure_piece(const structure_place_context &context,
                            const structure_piece_record &piece,
                            worldgen_random &random);
+
+/// Places one ocean monument piece. A building also places the child pieces
+/// its bounding box overlaps, matching the reference `postProcess` order.
+void place_monument_piece(const structure_place_context &context,
+                          const structure_piece_record &piece,
+                          worldgen_random &random);
 
 /// Maps a procedural piece's local coordinates to world coordinates using
 /// the piece orientation and `base_y` as the shifted bounding box floor.

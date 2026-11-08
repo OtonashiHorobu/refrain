@@ -2439,6 +2439,8 @@ void place_structure_piece(const structure_place_context &context,
         place_mineshaft_stairs(context, piece);
     } else if (piece.type == "minecraft:mscorridor") {
         place_mineshaft_corridor(context, piece, random);
+    } else if (piece.monument.has_value()) {
+        place_monument_piece(context, piece, random);
     }
 }
 

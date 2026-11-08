@@ -14,12 +14,14 @@
 #include <refrain/worldgen/chunk/heightmap.hpp>
 #include <refrain/worldgen/chunk/status.hpp>
 #include <refrain/worldgen/structure/bbox.hpp>
+#include <refrain/worldgen/structure/monument.hpp>
 
 #include <array>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -72,6 +74,8 @@ struct structure_piece_record {
     bool portal_vines{false};
     bool portal_blackstone{false};
     bool portal_cold{false};
+    std::optional<structure::monument_piece_data> monument{};
+    std::vector<structure_piece_record> children{};
 };
 
 struct structure_start {

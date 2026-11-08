@@ -4,9 +4,61 @@
 
 #include <refrain/worldgen/structure/start.hpp>
 
+#include <refrain/worldgen/chunk/proto_chunk.hpp>
+
 #include <algorithm>
 
 namespace refrain::worldgen::structure {
+
+auto to_piece_record(const structure_piece &piece)
+    -> ::refrain::worldgen::structure_piece_record {
+    ::refrain::worldgen::structure_piece_record record{
+        .type = piece.type,
+        .min_x = piece.bounds.min_x,
+        .min_y = piece.bounds.min_y,
+        .min_z = piece.bounds.min_z,
+        .max_x = piece.bounds.max_x,
+        .max_y = piece.bounds.max_y,
+        .max_z = piece.bounds.max_z,
+        .orientation = piece.orientation,
+        .template_id = piece.template_id,
+        .template_x = piece.template_origin.x,
+        .template_y = piece.template_origin.y,
+        .template_z = piece.template_origin.z,
+        .template_rotation = piece.template_rotation,
+        .template_mirror = piece.template_mirror,
+        .template_pivot_x = piece.template_pivot.x,
+        .template_pivot_y = piece.template_pivot.y,
+        .template_pivot_z = piece.template_pivot.z,
+        .height_position = piece.height_position,
+        .height_offset = piece.height_offset,
+        .integrity = piece.integrity,
+        .large = piece.large,
+        .beached = piece.beached,
+        .entrances = piece.entrances,
+        .sections = piece.sections,
+        .rails = piece.rails,
+        .spider = piece.spider,
+        .two_floored = piece.two_floored,
+        .mesa = piece.mesa,
+        .monument = piece.monument,
+    };
+    if (piece.portal) {
+        record.portal_valid = true;
+        record.portal_placement = piece.portal->placement;
+        record.portal_mossiness = piece.portal->mossiness;
+        record.portal_air_pocket = piece.portal->air_pocket;
+        record.portal_overgrown = piece.portal->overgrown;
+        record.portal_vines = piece.portal->vines;
+        record.portal_blackstone = piece.portal->replace_with_blackstone;
+        record.portal_cold = piece.portal->cold;
+    }
+    record.children.reserve(piece.children.size());
+    for (const auto &child : piece.children) {
+        record.children.push_back(to_piece_record(child));
+    }
+    return record;
+}
 
 auto structure_bbox::intersects(const structure_bbox &other) const -> bool {
     return min_x <= other.max_x && max_x >= other.min_x &&
