@@ -368,6 +368,17 @@ refrain_add_library(refrain-worldgen ${REFRAIN_WORLDGEN_SOURCES})
 target_link_libraries(refrain-worldgen PUBLIC refrain-kernel)
 add_library(Refrain::WorldGen ALIAS refrain-worldgen)
 
+# --- command dispatch: flat graph, parsers, immutable snapshots ------------
+# Gameplay code registers literals/arguments here; the network adapter converts
+# command::tree into its own packet representation. This target intentionally
+# has no net/world/server dependency. New src/command/*.cpp files are picked up
+# without editing this file.
+file(GLOB_RECURSE REFRAIN_COMMAND_SOURCES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/command/*.cpp")
+refrain_add_library(refrain-command ${REFRAIN_COMMAND_SOURCES})
+target_link_libraries(refrain-command PUBLIC refrain-kernel PRIVATE fmt::fmt)
+add_library(Refrain::Command ALIAS refrain-command)
+
 # --- simulation runtime: block registry, loaded chunks, tickets -------------
 # New src/sim files are picked up without editing this file.
 file(GLOB_RECURSE REFRAIN_SIM_SOURCES CONFIGURE_DEPENDS
@@ -556,6 +567,7 @@ if(REFRAIN_BUILD_TESTS)
                                               refrain-schema refrain-contracts
                                               refrain-archive refrain-data
                                               refrain-world refrain-sim
+                                              refrain-command
                                               refrain-net refrain-worldgen
                                               refrain-builtin
                                               refrain-mod-host
