@@ -125,7 +125,7 @@ refrain_status fake_locate_structure(void *, refrain_core_handle_gen_ctx,
 // path. The fake provider exercises registration, success, missing extension,
 // version mismatch and malformed/undersized vtable handling.
 
-static_assert(refrain::services::net_protocol::abi_minor == 1);
+static_assert(refrain::services::net_protocol::abi_minor == 0);
 static_assert(std::string_view{
                   refrain::services::net_protocol::chunk_codec::extension_id} ==
               "refrain:net.protocol/chunk_codec");

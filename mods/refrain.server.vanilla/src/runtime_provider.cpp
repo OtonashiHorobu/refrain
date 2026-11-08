@@ -10,9 +10,11 @@
 // here.
 
 #include <refrain/contracts/abi.hpp>
+#include <refrain/contracts/services/net_protocol.hpp>
 #include <refrain/contracts/services/runtime_abi.h>
 #include <refrain/contracts/services/transport.hpp>
 #include <refrain/core/config.hpp>
+#include <refrain/core/log.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/static_mod.hpp>
 #include <refrain/server/provider_transport.hpp>
@@ -100,8 +102,40 @@ struct runtime_provider {
                                   provider->storage, provider->runtime,
                                   provider->config_store)};
         if (provider->host != nullptr) {
+            const auto protocol{provider->host->services().active_provider(
+                "refrain:net.protocol", "java_777")};
+            if (!protocol || protocol->instance == nullptr) {
+                return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
+            }
+            const auto *protocol_api{
+                static_cast<const refrain::mod::provider_api *>(
+                    protocol->instance)};
+            if (protocol_api->vtable == nullptr) {
+                return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
+            }
+            const refrain::services::net_protocol::provider protocol_service{
+                *static_cast<const refrain_services_net_protocol_vtable *>(
+                    protocol_api->vtable),
+                protocol_api->self};
+            auto descriptor{
+                refrain::services::net_protocol::make_protocol_descriptor()};
+            protocol_service.descriptor(descriptor);
+            if (descriptor.canonical_version != 777U ||
+                descriptor.transport_protocol != 0U ||
+                descriptor.requires_stream == 0) {
+                return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
+            }
+            refrain::log::info(
+                "protocol: {} {} over {}",
+                refrain::contracts::as_string_view(descriptor.family),
+                descriptor.canonical_version,
+                refrain::contracts::as_string_view(
+                    descriptor.accepted_versions));
             const auto transport{provider->host->services().active_provider(
                 "refrain:transport", "asio_tcp")};
+            if (transport) {
+                refrain::log::info("transport: {}", transport->id);
+            }
             if (transport && transport->instance != nullptr) {
                 const auto *api{static_cast<const refrain::mod::provider_api *>(
                     transport->instance)};
@@ -151,6 +185,7 @@ auto runtime_vtable() -> const refrain_services_runtime_vtable & {
 auto make_server_vanilla(refrain::mod::host &host) -> refrain::status {
     static std::unique_ptr<runtime_provider> provider{};
     provider = std::make_unique<runtime_provider>();
+    provider->host = &host;
     if (auto *store{host.config()}; store != nullptr) {
         provider->config_store = store;
         if (auto view{store->module("network")}) {

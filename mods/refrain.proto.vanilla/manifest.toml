@@ -17,5 +17,8 @@ display_name = "refrain.proto.vanilla"
 description = "Protocol 777 server transport."
 license = "MIT"
 
+[provides]
+services = ["refrain:net.protocol"]
+
 [requires]
 "refrain.world.vanilla" = "^1.0.0"

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: dde5b4dbceca0c8c
+// Schema hash: c51c38b6cd952844
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_ABI_H
@@ -57,9 +57,16 @@ typedef struct refrain_extension_ref {
 #define REFRAIN_EXTENSION_REF_SIZE ((uint32_t)sizeof(refrain_extension_ref))
 #endif // REFRAIN_EXTENSION_ABI_DEFINED
 
+typedef struct refrain_services_net_protocol_protocol_descriptor refrain_services_net_protocol_protocol_descriptor;
 typedef struct refrain_services_net_protocol_protocol_version refrain_services_net_protocol_protocol_version;
 typedef struct refrain_services_net_protocol_frame_header refrain_services_net_protocol_frame_header;
 typedef struct refrain_services_net_protocol_packet_view refrain_services_net_protocol_packet_view;
+
+typedef uint32_t refrain_services_net_protocol_protocol_edition; // enum 'protocol_edition'
+#define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_EDITION_JAVA ((refrain_services_net_protocol_protocol_edition)(0))
+#define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_EDITION_BEDROCK ((refrain_services_net_protocol_protocol_edition)(1))
+#define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_EDITION_REFRAIN ((refrain_services_net_protocol_protocol_edition)(2))
+#define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_EDITION_CUSTOM ((refrain_services_net_protocol_protocol_edition)(3))
 
 typedef uint32_t refrain_services_net_protocol_protocol_error; // enum 'protocol_error'
 #define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_ERROR_FRAME_TOO_LARGE ((refrain_services_net_protocol_protocol_error)(1))
@@ -74,6 +81,22 @@ typedef uint32_t refrain_services_net_protocol_connection_state; // enum 'connec
 #define REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_LOGIN ((refrain_services_net_protocol_connection_state)(2))
 #define REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_CONFIGURATION ((refrain_services_net_protocol_connection_state)(3))
 #define REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_PLAY ((refrain_services_net_protocol_connection_state)(4))
+
+// Provider identity and transport requirements. `transport_protocol` mirrors
+// the transport service values (tcp=0, tls_tcp=1, raknet=2, ...).
+struct refrain_services_net_protocol_protocol_descriptor {
+    uint32_t struct_size;
+    refrain_services_net_protocol_protocol_edition edition;
+    refrain_str family;
+    uint32_t canonical_version;
+    uint8_t reserved_0[4];
+    refrain_str accepted_versions;
+    uint32_t transport_protocol;
+    uint8_t requires_stream;
+    uint8_t reserved_1[3];
+    refrain_str capabilities;
+}; // refrain_services_net_protocol_protocol_descriptor size = 72
+#define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_DESCRIPTOR_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_protocol_descriptor))
 
 struct refrain_services_net_protocol_protocol_version {
     uint32_t struct_size;
@@ -115,12 +138,12 @@ typedef struct refrain_services_net_protocol_chunk_codec_vtable {
 #define REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_VTABLE_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_chunk_codec_vtable))
 
 #define REFRAIN_SERVICES_NET_PROTOCOL_SERVICE_ID "refrain:net.protocol"
-#define REFRAIN_SERVICES_NET_PROTOCOL_ABI_MAJOR 1u
-#define REFRAIN_SERVICES_NET_PROTOCOL_ABI_MINOR 1u
+#define REFRAIN_SERVICES_NET_PROTOCOL_ABI_MAJOR 2u
+#define REFRAIN_SERVICES_NET_PROTOCOL_ABI_MINOR 0u
 #define REFRAIN_SERVICES_NET_PROTOCOL_ABI_PATCH 0u
 #define REFRAIN_SERVICES_NET_PROTOCOL_SIDE REFRAIN_SIDE_SERVER
 #define REFRAIN_SERVICES_NET_PROTOCOL_THREAD REFRAIN_THREAD_NET
-#define REFRAIN_SERVICES_NET_PROTOCOL_COMPOSITION REFRAIN_COMPOSITION_EXCLUSIVE
+#define REFRAIN_SERVICES_NET_PROTOCOL_COMPOSITION REFRAIN_COMPOSITION_INSTANCED
 #define REFRAIN_SERVICES_NET_PROTOCOL_CAPABILITIES "frame-compression,registry-sync"
 #define REFRAIN_SERVICES_NET_PROTOCOL_REQUIRES "refrain:core>=1.0.0"
 #define REFRAIN_SERVICES_NET_PROTOCOL_SERVICE_IDS "refrain:net.protocol"
@@ -131,6 +154,8 @@ typedef struct refrain_services_net_protocol_vtable {
     uint32_t abi_major;
     uint32_t abi_minor;
     uint32_t abi_patch;
+    // attributes: #[thread(any)]
+    void (*descriptor)(void *self, refrain_services_net_protocol_protocol_descriptor *value);
     // Protocol number implemented by this provider (777 for vanilla 26.3).
     // attributes: #[thread(any)]
     uint32_t (*protocol_id)(void *self);

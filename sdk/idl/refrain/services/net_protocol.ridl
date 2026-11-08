@@ -2,15 +2,23 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// `refrain:net.protocol` service contract. Framing, compression and
-// encryption stay in net.session; this contract is the versioned packet codec
-// for protocol 777. The `chunk_codec` extension point is an optional provider
-// capability queried through the service vtable.
+// `refrain:net.protocol` service contract. A provider describes its game
+// family, edition and accepted protocol versions, then decodes/encodes packets
+// for one transport connection. Edition is data, not a separate service key.
+// The `chunk_codec` extension point is an optional provider capability queried
+// through the service vtable.
 
 module refrain::services::net_protocol;
-version 1.1.0;
+version 2.0.0;
 
 import refrain::core;
+
+enum protocol_edition : u32 {
+    java = 0,
+    bedrock = 1,
+    refrain = 2,
+    custom = 3,
+}
 
 enum protocol_error : u32 {
     frame_too_large = 1,
@@ -26,6 +34,18 @@ enum connection_state : u32 {
     login = 2,
     configuration = 3,
     play = 4,
+}
+
+/// Provider identity and transport requirements. `transport_protocol` mirrors
+/// the transport service values (tcp=0, tls_tcp=1, raknet=2, ...).
+struct protocol_descriptor {
+    protocol_edition edition;
+    string family;
+    u32 canonical_version;
+    string accepted_versions;
+    u32 transport_protocol;
+    bool requires_stream;
+    string capabilities;
 }
 
 struct protocol_version {
@@ -55,13 +75,17 @@ extension chunk_codec : 1.0.0 {
         -> result<void, protocol_error>;
 }
 
-service net_protocol : 1.1.0 {
+service net_protocol : 2.0.0 {
     side = server;
     thread = net;
+    composition = instanced;
     provides = [ "refrain:net.protocol" ];
     requires = [ "refrain:core>=1.0.0" ];
     capabilities = [ "frame-compression", "registry-sync" ];
     extensions = [ chunk_codec ];
+
+    #[thread(any)]
+    fn descriptor(out protocol_descriptor value);
 
     /// Protocol number implemented by this provider (777 for vanilla 26.3).
     #[thread(any)]

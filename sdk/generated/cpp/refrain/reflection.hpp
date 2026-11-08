@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: dde5b4dbceca0c8c
+// Schema hash: c51c38b6cd952844
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2725,6 +2725,19 @@ template <> struct custom_traits<::refrain::services::data_packs::pack_info> {
         refrain::reflect::custom_field{"version", &::refrain::services::data_packs::pack_info::version},
         refrain::reflect::custom_field{"pack_format", &::refrain::services::data_packs::pack_info::pack_format},
         refrain::reflect::custom_field{"file_count", &::refrain::services::data_packs::pack_info::file_count});
+};
+
+/// Generated RIDL struct 'refrain::services::net_protocol::protocol_descriptor'.
+template <> struct custom_traits<::refrain::services::net_protocol::protocol_descriptor> {
+    static constexpr std::string_view type_name = "refrain::services::net_protocol::protocol_descriptor";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"edition", &::refrain::services::net_protocol::protocol_descriptor::edition},
+        refrain::reflect::custom_field{"family", &::refrain::services::net_protocol::protocol_descriptor::family},
+        refrain::reflect::custom_field{"canonical_version", &::refrain::services::net_protocol::protocol_descriptor::canonical_version},
+        refrain::reflect::custom_field{"accepted_versions", &::refrain::services::net_protocol::protocol_descriptor::accepted_versions},
+        refrain::reflect::custom_field{"transport_protocol", &::refrain::services::net_protocol::protocol_descriptor::transport_protocol},
+        refrain::reflect::custom_field{"requires_stream", &::refrain::services::net_protocol::protocol_descriptor::requires_stream},
+        refrain::reflect::custom_field{"capabilities", &::refrain::services::net_protocol::protocol_descriptor::capabilities});
 };
 
 /// Generated RIDL struct 'refrain::services::net_protocol::protocol_version'.

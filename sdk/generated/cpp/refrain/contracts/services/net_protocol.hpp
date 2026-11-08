@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: dde5b4dbceca0c8c
+// Schema hash: c51c38b6cd952844
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_HPP
@@ -26,6 +26,13 @@
 
 namespace refrain::services::net_protocol {
 
+enum class protocol_edition : std::uint32_t { // enum 'protocol_edition'
+    java = 0,
+    bedrock = 1,
+    refrain = 2,
+    custom = 3,
+};
+
 enum class protocol_error : std::uint32_t { // enum 'protocol_error'
     frame_too_large = 1,
     malformed_packet = 2,
@@ -42,6 +49,15 @@ enum class connection_state : std::uint32_t { // enum 'connection_state'
     play = 4,
 };
 
+/// Provider identity and transport requirements. `transport_protocol` mirrors
+/// the transport service values (tcp=0, tls_tcp=1, raknet=2, ...).
+using protocol_descriptor = ::refrain_services_net_protocol_protocol_descriptor;
+/// Zero-initialized `protocol_descriptor` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
+[[nodiscard]] inline auto make_protocol_descriptor() noexcept -> protocol_descriptor {
+    protocol_descriptor value{};
+    ::refrain::contracts::init_struct(value);
+    return value;
+}
 using protocol_version = ::refrain_services_net_protocol_protocol_version;
 /// Zero-initialized `protocol_version` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
 [[nodiscard]] inline auto make_protocol_version() noexcept -> protocol_version {
@@ -65,6 +81,16 @@ using packet_view = ::refrain_services_net_protocol_packet_view;
     return value;
 }
 
+static_assert(sizeof(protocol_descriptor) == 72);
+static_assert(alignof(protocol_descriptor) == 8);
+static_assert(offsetof(protocol_descriptor, struct_size) == 0);
+static_assert(offsetof(protocol_descriptor, edition) == 4);
+static_assert(offsetof(protocol_descriptor, family) == 8);
+static_assert(offsetof(protocol_descriptor, canonical_version) == 24);
+static_assert(offsetof(protocol_descriptor, accepted_versions) == 32);
+static_assert(offsetof(protocol_descriptor, transport_protocol) == 48);
+static_assert(offsetof(protocol_descriptor, requires_stream) == 52);
+static_assert(offsetof(protocol_descriptor, capabilities) == 56);
 static_assert(sizeof(protocol_version) == 24);
 static_assert(alignof(protocol_version) == 8);
 static_assert(offsetof(protocol_version, struct_size) == 0);
@@ -132,12 +158,12 @@ class chunk_codec final {
 static_assert(offsetof(::refrain_services_net_protocol_chunk_codec_vtable, struct_size) == 0);
 
 inline constexpr std::string_view service_id = "refrain:net.protocol";
-inline constexpr std::uint32_t abi_major = 1;
-inline constexpr std::uint32_t abi_minor = 1;
+inline constexpr std::uint32_t abi_major = 2;
+inline constexpr std::uint32_t abi_minor = 0;
 inline constexpr std::uint32_t abi_patch = 0;
 inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::side_kind::server;
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::net;
-inline constexpr ::refrain::contracts::composition_kind composition = ::refrain::contracts::composition_kind::exclusive;
+inline constexpr ::refrain::contracts::composition_kind composition = ::refrain::contracts::composition_kind::instanced;
 inline constexpr std::string_view capabilities = "frame-compression,registry-sync";
 inline constexpr std::string_view required_services = "refrain:core>=1.0.0";
 inline constexpr std::string_view service_ids[] = {"refrain:net.protocol"};
@@ -274,6 +300,11 @@ class provider final {
 
     [[nodiscard]] auto self() const noexcept -> void * {
         return self_;
+    }
+
+    auto descriptor(::refrain::services::net_protocol::protocol_descriptor &value) const -> void {
+        ::refrain::contracts::init_struct(value);
+        table_->descriptor(self_, &value);
     }
 
     /// Protocol number implemented by this provider (777 for vanilla 26.3).
