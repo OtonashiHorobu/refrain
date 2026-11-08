@@ -8,6 +8,7 @@
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/structure/generation.hpp>
+#include <refrain/worldgen/structure/mansion_layout.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
 #include <refrain/worldgen/structure/placement_stage.hpp>
 #include <refrain/worldgen/structure/stage.hpp>
@@ -1356,5 +1357,23 @@ suite<"worldgen/ruined-portal"> ruined_portal_tests = [] {
         if (piece.portal) {
             expect(piece.portal->placement == "underground");
         }
+    };
+};
+
+suite<"worldgen/mansion-grid"> mansion_grid_tests = [] {
+    "the mansion grid keeps an outside value and edits ranges"_test = [] {
+        structure::mansion_simple_grid grid{11, 11, 5};
+        expect(grid.get(-1, 0) == 5);
+        expect(grid.get(11, 11) == 5);
+        grid.set(2, 3, 4, 5, 7);
+        expect(grid.get(2, 3) == 7);
+        expect(grid.get(4, 5) == 7);
+        expect(grid.get(1, 3) == 0);
+        grid.set_if(2, 3, 0, 9);
+        expect(grid.get(2, 3) == 7);
+        grid.set_if(2, 3, 7, 9);
+        expect(grid.get(2, 3) == 9);
+        expect(grid.edges_to(3, 3, 9));
+        expect(!grid.edges_to(8, 8, 9));
     };
 };
