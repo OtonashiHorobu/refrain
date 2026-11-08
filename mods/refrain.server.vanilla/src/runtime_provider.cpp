@@ -17,6 +17,7 @@
 #include <refrain/core/log.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/static_mod.hpp>
+#include <refrain/server/provider_protocol.hpp>
 #include <refrain/server/provider_transport.hpp>
 #include <refrain/server/server_runtime.hpp>
 
@@ -131,6 +132,12 @@ struct runtime_provider {
                 descriptor.canonical_version,
                 refrain::contracts::as_string_view(
                     descriptor.accepted_versions));
+            options.protocol = std::shared_ptr<refrain::net::protocol_codec>{
+                refrain::server::make_provider_protocol(
+                    std::make_unique<refrain::services::net_protocol::provider>(
+                        *static_cast<const refrain_services_net_protocol_vtable
+                                         *>(protocol_api->vtable),
+                        protocol_api->self))};
             const auto transport{provider->host->services().active_provider(
                 "refrain:transport", "asio_tcp")};
             if (transport) {

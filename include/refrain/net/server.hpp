@@ -6,6 +6,7 @@
 
 #include <refrain/core/config.hpp>
 #include <refrain/core/error.hpp>
+#include <refrain/net/protocol_codec.hpp>
 #include <refrain/net/status.hpp>
 #include <refrain/net/transport.hpp>
 #include <refrain/net/wire.hpp>
@@ -136,6 +137,9 @@ struct server_inputs {
     /// Optional transport provider. Empty uses the built-in Asio TCP
     /// transport.
     transport_factory make_transport{};
+    /// Optional protocol codec provider. Empty keeps the built-in 777 codec
+    /// for net-only tests.
+    std::shared_ptr<protocol_codec> protocol{};
     /// Generated registry/tag catalog (JSON). Empty disables registry sync.
     std::string registry_catalog_path{};
     /// Pre-encoded `level_chunk_with_light` bodies around the spawn point.

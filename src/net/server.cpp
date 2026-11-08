@@ -245,6 +245,7 @@ struct server::impl {
     join_state_provider join_state{};
     command_bridge commands{};
     transport_factory make_transport{};
+    std::shared_ptr<protocol_codec> protocol{};
     std::mutex command_cache_mutex{};
     std::shared_ptr<const command_tree> cached_tree{};
     std::shared_ptr<const std::vector<std::byte>> cached_commands{};
@@ -388,6 +389,9 @@ void server::impl::on_open(std::uint64_t id) {
         return;
     }
     log::debug("net: connection opened id={}", id);
+    if (protocol) {
+        protocol->create_connection(id);
+    }
     const std::lock_guard lock{connections_mutex};
     auto &connection{connections[id]};
     connection.limiter.configure(config.rate_limit);
@@ -427,24 +431,20 @@ void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
             return;
         }
         auto &connection{found->second};
-        std::vector<std::byte> plain{bytes.begin(), bytes.end()};
-        if (connection.cipher) {
-            auto decrypted{connection.cipher->decrypt(bytes)};
-            if (!decrypted) {
-                connection.closed = true;
-                failed = true;
-            } else {
-                plain = std::move(*decrypted);
-            }
-        }
-        if (!failed) {
-            if (auto pushed{connection.decoder.push(plain)}; !pushed) {
+        const auto now_ns = [] {
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        };
+        if (protocol) {
+            if (auto fed{protocol->feed(id, bytes)}; !fed) {
                 connection.closed = true;
                 failed = true;
             } else {
                 for (;;) {
-                    std::vector<std::byte> body;
-                    auto next{connection.decoder.next(body)};
+                    std::uint32_t packet_id{0};
+                    std::span<const std::byte> payload{};
+                    auto next{protocol->next_packet(id, packet_id, payload)};
                     if (!next) {
                         connection.closed = true;
                         failed = true;
@@ -454,20 +454,53 @@ void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
                         break;
                     }
                     if (connection.state == connection_state::play &&
-                        !connection.limiter.allow(
-                            std::chrono::duration_cast<
-                                std::chrono::nanoseconds>(
-                                std::chrono::steady_clock::now()
-                                    .time_since_epoch())
-                                .count())) {
+                        !connection.limiter.allow(now_ns())) {
                         rate_limited = true;
                         break;
                     }
-                    connection.last_packet_ns =
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(
-                            std::chrono::steady_clock::now().time_since_epoch())
-                            .count();
+                    connection.last_packet_ns = now_ns();
+                    std::vector<std::byte> body;
+                    writer out{body};
+                    out.write_varint(packet_id);
+                    out.write_bytes(payload);
                     bodies.push_back(std::move(body));
+                }
+            }
+        } else {
+            std::vector<std::byte> plain{bytes.begin(), bytes.end()};
+            if (connection.cipher) {
+                auto decrypted{connection.cipher->decrypt(bytes)};
+                if (!decrypted) {
+                    connection.closed = true;
+                    failed = true;
+                } else {
+                    plain = std::move(*decrypted);
+                }
+            }
+            if (!failed) {
+                if (auto pushed{connection.decoder.push(plain)}; !pushed) {
+                    connection.closed = true;
+                    failed = true;
+                } else {
+                    for (;;) {
+                        std::vector<std::byte> body;
+                        auto next{connection.decoder.next(body)};
+                        if (!next) {
+                            connection.closed = true;
+                            failed = true;
+                            break;
+                        }
+                        if (!*next) {
+                            break;
+                        }
+                        if (connection.state == connection_state::play &&
+                            !connection.limiter.allow(now_ns())) {
+                            rate_limited = true;
+                            break;
+                        }
+                        connection.last_packet_ns = now_ns();
+                        bodies.push_back(std::move(body));
+                    }
                 }
             }
         }
@@ -830,6 +863,10 @@ void server::impl::complete_login(std::uint64_t id) {
         }
         found->second.encoder.set_threshold(config.compression_threshold);
         found->second.decoder.set_threshold(config.compression_threshold);
+        if (protocol) {
+            static_cast<void>(
+                protocol->set_compression(id, config.compression_threshold));
+        }
     }
     send_login_finished(id);
 }
@@ -895,6 +932,11 @@ void server::impl::handle_login_key(std::uint64_t id, reader &in) {
         }
         auto &live{found->second};
         live.cipher = std::make_unique<aes128_cfb8>(std::move(*cipher));
+        if (protocol) {
+            static_cast<void>(protocol->set_cipher(
+                id, std::span<const std::byte>{secret->data(), secret->size()},
+                std::span<const std::byte>{secret->data(), secret->size()}));
+        }
         name = live.name;
     }
     session_profile profile{};
@@ -2319,6 +2361,24 @@ void server::impl::handle_play(std::uint64_t id,
 }
 
 void server::impl::send(std::uint64_t id, std::span<const std::byte> packet) {
+    if (protocol) {
+        reader in{packet};
+        auto packet_id{in.read_varint()};
+        if (!packet_id) {
+            return;
+        }
+        const auto payload{packet.subspan(in.position())};
+        if (auto sent{protocol->send_packet(id, *packet_id, payload)}; !sent) {
+            return;
+        }
+        if (socket) {
+            std::span<const std::byte> framed{};
+            while (protocol->take_outbound(id, framed)) {
+                socket->send(id, framed);
+            }
+        }
+        return;
+    }
     std::vector<std::byte> framed;
     {
         const std::lock_guard lock{connections_mutex};
@@ -2366,6 +2426,9 @@ void server::impl::close(std::uint64_t id) {
                    to_string(state));
     } else {
         log::info("net: player left id={} name={}", id, name);
+    }
+    if (protocol) {
+        protocol->close_connection(id);
     }
     if (socket) {
         socket->close(id);
@@ -2500,6 +2563,7 @@ auto server::start(server_inputs inputs, core::config::view view)
     state->join_state = std::move(inputs.join_state);
     state->commands = std::move(inputs.commands);
     state->make_transport = std::move(inputs.make_transport);
+    state->protocol = std::move(inputs.protocol);
     state->verify_session = std::move(inputs.verify_session);
     state->config = std::move(config);
     if (auto started{state->start()}; !started) {

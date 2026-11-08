@@ -1132,6 +1132,7 @@ auto run_server(const server_run_options &options) -> int {
             return command_environment->join_state(identity.connection);
         };
     network_inputs.make_transport = options.make_transport;
+    network_inputs.protocol = options.protocol;
     network_inputs.seed = level->seed;
     network_inputs.spawn_x = static_cast<double>(level->spawn_x) + 0.5;
     network_inputs.spawn_y = static_cast<double>(level->spawn_y);

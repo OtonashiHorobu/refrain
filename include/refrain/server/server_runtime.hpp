@@ -5,6 +5,7 @@
 #pragma once
 
 #include <refrain/core/config.hpp>
+#include <refrain/net/protocol_codec.hpp>
 #include <refrain/net/transport.hpp>
 
 #include <cstdint>
@@ -32,6 +33,8 @@ struct server_run_options {
     std::function<result<std::unique_ptr<net::transport>>(
         net::transport_handler, std::size_t)>
         make_transport{};
+    /// Optional protocol codec provider. Empty keeps the built-in 777 codec.
+    std::shared_ptr<net::protocol_codec> protocol{};
     /// Host-owned store used by the console `/config` commands and the
     /// shutdown save. Null disables both.
     core::config::store *config{nullptr};
