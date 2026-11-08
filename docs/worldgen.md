@@ -73,3 +73,16 @@ world; `REFRAIN_VANILLA_FEATURE_CHUNK_X`/`_Z` select one chunk and
 touches a border, where features from neighbouring chunks write across the
 chunk boundary and a single-chunk oracle cannot reproduce them.
 
+### Root systems and vegetation patches
+
+A root-system reference world can be built from two placed features: a
+simple-block feature that writes a stone platform at a fixed position and a
+root-system feature placed one block below it. The root system climbs
+through the platform and delegates to a nested grass feature above it, so
+the chunk exercises the ceiling scan, dirt replacement and hanging roots.
+The same pattern works for vegetation patches: place a patch at a fixed
+surface position and compare a single chunk. Set
+`REFRAIN_VANILLA_FEATURE_CHUNK_X`/`_Z` to that chunk and point
+`REFRAIN_VANILLA_FEATURE_REGION` and `REFRAIN_VANILLA_FEATURE_DATA` at the
+generated world.
+
