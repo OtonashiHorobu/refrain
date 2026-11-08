@@ -6,12 +6,15 @@
 // REFRAIN_VANILLA_WORLDGEN, REFRAIN_VANILLA_STRUCTURES and optionally
 // REFRAIN_STRUCTURE_GENERATOR_SEED/BIOME/CHUNK_X/CHUNK_Z.
 
+#include <refrain/world/chunk_codec.hpp>
+#include <refrain/world/proto_bridge.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/structure/generator.hpp>
 
 #include <boost/ut.hpp>
 
 #include <cstdlib>
+#include <map>
 #include <string>
 
 namespace {
@@ -89,5 +92,71 @@ suite<"worldgen/structure-generator"> structure_generator_tests = [] {
         }
         expect(same_chunk(**a, **b));
         expect(same_chunk(**a, **c));
+    };
+
+    "a generated structure chunk survives the storage bridge"_test = [] {
+        const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+        const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
+        if (data_root == nullptr || templates_root == nullptr) {
+            return;
+        }
+        const auto generator = structure::structure_generator::create(
+            structure::structure_generator_config{
+                .data_root = data_root,
+                .templates_root = templates_root,
+                .biome = "minecraft:jungle",
+                .seed = 2,
+            });
+        expect(generator.has_value());
+        if (!generator) {
+            return;
+        }
+        const auto chunk = (*generator)->generate(chunk_pos{.x = 9, .z = 2});
+        expect(chunk.has_value());
+        if (!chunk) {
+            return;
+        }
+        auto storage = world::from_proto_chunk(
+            **chunk, {"minecraft:plains", "minecraft:jungle"});
+        expect(storage.has_value());
+        if (!storage) {
+            return;
+        }
+        const auto payload = world::encode_chunk(
+            *storage, nullptr, true, world::chunk_palette_mode::inline_keys);
+        if (!payload) {
+            std::fprintf(stderr, "encode error code=%d message=%s\n",
+                         static_cast<int>(payload.error().code),
+                         payload.error().message.c_str());
+        }
+        expect(payload.has_value());
+        if (!payload) {
+            return;
+        }
+        const auto decoded = world::decode_chunk(*payload);
+        expect(decoded.has_value());
+        if (!decoded) {
+            return;
+        }
+        expect(world::validate(*decoded).has_value());
+        std::map<std::int8_t, const ::refrain::storage::section_record *>
+            sections;
+        for (const auto &section : decoded->sections) {
+            sections.emplace(section.y, &section);
+        }
+        std::size_t mismatches = 0;
+        for (const auto &section : storage->sections) {
+            const auto found = sections.find(section.y);
+            if (found == sections.end()) {
+                ++mismatches;
+                continue;
+            }
+            const auto &other = *found->second;
+            if (section.palette.size() != other.palette.size() ||
+                section.data != other.data) {
+                ++mismatches;
+            }
+        }
+        expect(mismatches == 0);
     };
 };
