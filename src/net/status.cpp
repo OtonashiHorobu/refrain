@@ -3,13 +3,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/net/status.hpp>
+#include <refrain/protocol/current.hpp>
 
 #include <refrain/data/json.hpp>
-#include <refrain/schema/protocol/777/handshake_serverbound.hpp>
-#include <refrain/schema/protocol/777/login_clientbound.hpp>
-#include <refrain/schema/protocol/777/login_serverbound.hpp>
-#include <refrain/schema/protocol/777/status_clientbound.hpp>
-#include <refrain/schema/protocol/777/status_serverbound.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -183,7 +179,7 @@ auto encode_handshake(const handshake_intention &intention)
     std::vector<std::byte> body;
     writer out{body};
     out.write_varint(
-        protocol::v777::handshake::serverbound::intention::packet_id);
+        protocol::current::handshake::serverbound::intention::packet_id);
     out.write_varint(static_cast<std::uint32_t>(intention.protocol));
     if (auto written{out.write_string(intention.host, 255)}; !written) {
         return std::unexpected{std::move(written.error())};
@@ -201,14 +197,15 @@ auto decode_handshake(std::span<const std::byte> body)
         return std::unexpected{packet_id.error()};
     }
     if (*packet_id !=
-        protocol::v777::handshake::serverbound::intention::packet_id) {
+        protocol::current::handshake::serverbound::intention::packet_id) {
         return std::unexpected{status_failure(fmt::format(
             "handshake packet id is {}, expected {}", *packet_id,
-            protocol::v777::handshake::serverbound::intention::packet_id))};
+            protocol::current::handshake::serverbound::intention::packet_id))};
     }
-    protocol::v777::handshake::serverbound::intention packet{};
-    if (auto decoded{protocol::v777::handshake::serverbound::decode_intention(
-            in, packet)};
+    protocol::current::handshake::serverbound::intention packet{};
+    if (auto decoded{
+            protocol::current::handshake::serverbound::decode_intention(
+                in, packet)};
         !decoded) {
         return std::unexpected{std::move(decoded.error())};
     }
@@ -224,11 +221,11 @@ auto encode_status_request() -> std::vector<std::byte> {
     std::vector<std::byte> body;
     writer out{body};
     out.write_varint(
-        protocol::v777::status::serverbound::status_request::packet_id);
-    protocol::v777::status::serverbound::status_request packet{};
+        protocol::current::status::serverbound::status_request::packet_id);
+    protocol::current::status::serverbound::status_request packet{};
     static_cast<void>(
-        protocol::v777::status::serverbound::encode_status_request(out,
-                                                                   packet));
+        protocol::current::status::serverbound::encode_status_request(out,
+                                                                      packet));
     return body;
 }
 
@@ -236,10 +233,11 @@ auto encode_ping_request(std::int64_t time) -> std::vector<std::byte> {
     std::vector<std::byte> body;
     writer out{body};
     out.write_varint(
-        protocol::v777::status::serverbound::ping_request::packet_id);
-    protocol::v777::status::serverbound::ping_request packet{.time = time};
+        protocol::current::status::serverbound::ping_request::packet_id);
+    protocol::current::status::serverbound::ping_request packet{.time = time};
     static_cast<void>(
-        protocol::v777::status::serverbound::encode_ping_request(out, packet));
+        protocol::current::status::serverbound::encode_ping_request(out,
+                                                                    packet));
     return body;
 }
 
@@ -248,11 +246,11 @@ auto encode_status_response(std::string_view text)
     std::vector<std::byte> body;
     writer out{body};
     out.write_varint(
-        protocol::v777::status::clientbound::status_response::packet_id);
-    protocol::v777::status::clientbound::status_response packet{
+        protocol::current::status::clientbound::status_response::packet_id);
+    protocol::current::status::clientbound::status_response packet{
         .json = std::string{text}};
     if (auto written{
-            protocol::v777::status::clientbound::encode_status_response(
+            protocol::current::status::clientbound::encode_status_response(
                 out, packet)};
         !written) {
         return std::unexpected{std::move(written.error())};
@@ -264,10 +262,11 @@ auto encode_pong_response(std::int64_t time) -> std::vector<std::byte> {
     std::vector<std::byte> body;
     writer out{body};
     out.write_varint(
-        protocol::v777::status::clientbound::pong_response::packet_id);
-    protocol::v777::status::clientbound::pong_response packet{.time = time};
+        protocol::current::status::clientbound::pong_response::packet_id);
+    protocol::current::status::clientbound::pong_response packet{.time = time};
     static_cast<void>(
-        protocol::v777::status::clientbound::encode_pong_response(out, packet));
+        protocol::current::status::clientbound::encode_pong_response(out,
+                                                                     packet));
     return body;
 }
 

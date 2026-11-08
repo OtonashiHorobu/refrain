@@ -16,6 +16,7 @@
 #include <refrain/schema/protocol/777/login_serverbound.hpp>
 #include <refrain/schema/protocol/777/play_clientbound.hpp>
 #include <refrain/schema/protocol/777/play_serverbound.hpp>
+#include <refrain/schema/protocol/777/status_clientbound.hpp>
 #include <refrain/schema/protocol/777/status_serverbound.hpp>
 
 namespace refrain::protocol {
