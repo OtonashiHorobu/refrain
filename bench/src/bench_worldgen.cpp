@@ -7,6 +7,10 @@
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
 #include <refrain/worldgen/feature/feature.hpp>
+#include <refrain/worldgen/feature/feature_data.hpp>
+#include <refrain/worldgen/feature/feature_plan.hpp>
+#include <refrain/worldgen/feature/feature_registry.hpp>
+#include <refrain/worldgen/feature/feature_stage.hpp>
 #include <refrain/worldgen/feature/placement.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
 #include <refrain/worldgen/structure/placement_stage.hpp>
@@ -343,8 +347,77 @@ void structure_corridor(benchmark::State &state) {
     }
 }
 
+void feature_decorate(benchmark::State &state) {
+    block_state_registry registry;
+    (void)registry.intern("minecraft:air", {.air = true});
+    const auto stone = registry.intern(
+        "minecraft:stone",
+        {.air = false, .blocks_motion = true, .blocks_motion_no_leaves = true});
+    if (!stone) {
+        return;
+    }
+    proto_chunk chunk{registry, 0, 0, 0, 64};
+    for (jint y = 0; y < 4; ++y) {
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                chunk.set_state(x, y, z, *stone);
+            }
+        }
+    }
+    chunk.set_status(chunk_status::terrain);
+    chunk_region region{chunk, 1};
+    const std::vector<feature::biome_feature_list> lists{{
+        .biome = "bench:test",
+        .steps = {{}, {}, {}, {}, {}, {}, {}, {}, {}, {"bench:stone"}},
+    }};
+    const auto plan = feature::feature_sorter::build({"bench:test"}, lists);
+    if (!plan) {
+        return;
+    }
+    feature::feature_registry feature_registry{registry};
+    feature::placed_feature_runtime placed;
+    placed.id = "bench:stone";
+    const feature::simple_block_feature feature{*stone, false};
+    placed.configured = &feature;
+    const auto placement_document = data::json::value::parse(
+        R"([{"type":"minecraft:count","count":4},
+            {"type":"minecraft:in_square"},
+            {"type":"minecraft:heightmap","heightmap":"WORLD_SURFACE_WG"}])");
+    if (!placement_document || !placement_document->is_array()) {
+        return;
+    }
+    for (const auto &entry : *placement_document->as_array()) {
+        auto modifier = feature::decode_placement(entry, registry);
+        if (!modifier) {
+            return;
+        }
+        placed.placement.push_back(std::move(*modifier));
+    }
+    std::unordered_map<std::string, feature::placed_feature_runtime> runtime;
+    runtime.emplace("bench:stone", std::move(placed));
+    feature::placement_context placement{
+        .region = &region,
+        .chunk = &chunk,
+        .states = &registry,
+        .generation = provider::generation_context{.min_y = 0,
+                                                   .height = 64,
+                                                   .sea_level = 16},
+        .height =
+            [&chunk](worldgen::heightmap_kind kind, jint x, jint z) {
+                return chunk.first_available(kind, x & 15, z & 15);
+            },
+    };
+    feature::feature_context context{.placement = placement};
+    for (auto _ : state) {
+        feature::decorate(context, *plan, runtime, {"bench:test"}, lists,
+                          12345);
+        benchmark::DoNotOptimize(chunk.state_at(1, 5, 1));
+    }
+}
+
 BENCHMARK(structure_area);
 BENCHMARK(structure_corridor);
+BENCHMARK(feature_decorate);
 BENCHMARK(template_place);
 BENCHMARK(feature_freeze);
 BENCHMARK(chunk_fill);
