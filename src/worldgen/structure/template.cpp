@@ -1266,6 +1266,11 @@ auto place_template(chunk_region &region, block_state_registry &states,
         }
         if (processed.nbt != nullptr) {
             auto entity = *processed.nbt;
+            if (settings.loot_random != nullptr &&
+                entity.find("LootTable") != entity.end()) {
+                entity["LootTableSeed"] = data::nbt::value{
+                    static_cast<jlong>(settings.loot_random->next_long())};
+            }
             entity["x"] = data::nbt::value{world.x};
             entity["y"] = data::nbt::value{world.y};
             entity["z"] = data::nbt::value{world.z};

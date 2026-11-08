@@ -324,6 +324,8 @@ struct template_place_settings {
     worldgen_random *random{nullptr};
     /// World seed used by whole-piece processors with a positional random.
     jlong level_seed{0};
+    /// Shared piece random: loot-table containers consume one seed from it.
+    worldgen_random *loot_random{nullptr};
 };
 
 /// `StructureTemplate.transform(BlockPos, Mirror, Rotation, pivot)`. Mirroring

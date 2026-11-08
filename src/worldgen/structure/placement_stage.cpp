@@ -2161,6 +2161,7 @@ void place_ruined_portal(const structure_place_context &context,
         .max_z = context.chunk->chunk_z() * 16 + 15,
     };
     settings.processors = std::move(processors);
+    settings.loot_random = &random;
     const block_pos origin{
         .x = piece.template_x, .y = piece.template_y, .z = piece.template_z};
     (void)place_template(*context.region, *context.registry, templ, origin,
