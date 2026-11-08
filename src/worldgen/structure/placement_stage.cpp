@@ -1017,6 +1017,13 @@ void place_shipwreck_piece(const structure_place_context &context,
         return;
     }
     const auto &templ = context.templates->get_or_create(piece.template_id);
+    if (std::getenv("REFRAIN_MANSION_DEBUG") != nullptr) {
+        std::fprintf(stderr, "mansion piece %s palettes=%zu origin=%d,%d,%d\n",
+                     piece.template_id.c_str(), templ.palettes.size(),
+                     static_cast<int>(piece.template_x),
+                     static_cast<int>(piece.template_y),
+                     static_cast<int>(piece.template_z));
+    }
     if (templ.palettes.empty()) {
         return;
     }
@@ -2322,6 +2329,66 @@ void place_ruined_portal(const structure_place_context &context,
     }
 }
 
+void place_woodland_mansion(const structure_place_context &context,
+                            const structure_piece_record &piece) {
+    if (context.templates == nullptr) {
+        return;
+    }
+    const auto &templ = context.templates->get_or_create(piece.template_id);
+    if (templ.palettes.empty()) {
+        return;
+    }
+    block_ignore_processor ignore{
+        std::vector<std::string>{"minecraft:structure_block"}};
+    template_place_settings settings{};
+    settings.transform = template_transform{
+        .mirror = static_cast<template_mirror>(piece.template_mirror),
+        .rotation = static_cast<template_rotation>(piece.template_rotation),
+        .pivot = block_pos{.x = piece.template_pivot_x,
+                           .y = piece.template_pivot_y,
+                           .z = piece.template_pivot_z},
+    };
+    settings.bounds = template_bounds{
+        .min_x = context.chunk->chunk_x() * 16,
+        .min_y = context.chunk->min_y(),
+        .min_z = context.chunk->chunk_z() * 16,
+        .max_x = context.chunk->chunk_x() * 16 + 15,
+        .max_y = context.chunk->min_y() + context.chunk->height() - 1,
+        .max_z = context.chunk->chunk_z() * 16 + 15,
+    };
+    settings.processors = {&ignore};
+    (void)place_template(*context.region, *context.registry, templ,
+                         block_pos{.x = piece.template_x,
+                                   .y = piece.template_y,
+                                   .z = piece.template_z},
+                         settings);
+
+    const auto &states = *context.registry;
+    const jint min_x = std::max(piece.min_x, context.chunk->chunk_x() * 16);
+    const jint max_x =
+        std::min(piece.max_x, context.chunk->chunk_x() * 16 + 15);
+    const jint min_z = std::max(piece.min_z, context.chunk->chunk_z() * 16);
+    const jint max_z =
+        std::min(piece.max_z, context.chunk->chunk_z() * 16 + 15);
+    for (jint x = min_x; x <= max_x; ++x) {
+        for (jint z = min_z; z <= max_z; ++z) {
+            const auto bottom = context.region->state_at(x, piece.min_y, z);
+            if (states.traits(bottom).air || states.traits(bottom).fluid) {
+                continue;
+            }
+            for (jint y = piece.min_y - 1; y > context.chunk->min_y(); --y) {
+                const auto current = context.region->state_at(x, y, z);
+                if (!states.traits(current).air &&
+                    !states.traits(current).fluid) {
+                    break;
+                }
+                (void)context.region->set_block_state(
+                    x, y, z, context.state("minecraft:cobblestone"));
+            }
+        }
+    }
+}
+
 void place_structure_piece(const structure_place_context &context,
                            const structure_piece_record &piece,
                            worldgen_random &random) {
@@ -2339,6 +2406,8 @@ void place_structure_piece(const structure_place_context &context,
         place_ocean_ruin_piece(context, piece, random);
     } else if (piece.type == "minecraft:tejp") {
         place_jungle_temple(context, piece, random);
+    } else if (piece.type == "minecraft:woodland_mansion") {
+        place_woodland_mansion(context, piece);
     } else if (piece.type == "minecraft:ruined_portal") {
         place_ruined_portal(context, piece, random);
     } else if (piece.type == "minecraft:msroom") {

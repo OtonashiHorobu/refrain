@@ -286,6 +286,26 @@ auto try_generate(const structure_start_context &context,
         start.step = structure.step;
         return start;
     }
+    if (structure.type == "minecraft:woodland_mansion") {
+        if (context.templates == nullptr) {
+            return std::nullopt;
+        }
+        const jint center_x = chunk.x * 16 + 7;
+        const jint center_z = chunk.z * 16 + 7;
+        const jint center_y = context.height_at(
+            center_x, center_z, heightmap_kind::world_surface_wg);
+        if (!biome_allowed(context, structure, center_x, center_y, center_z)) {
+            return std::nullopt;
+        }
+        auto start = woodland_mansion_start(
+            chunk, context.seed, *context.templates, context.height_at);
+        if (start.pieces.empty()) {
+            return std::nullopt;
+        }
+        start.structure = structure.id;
+        start.step = structure.step;
+        return start;
+    }
     if (structure.type == "minecraft:ruined_portal") {
         if (context.templates == nullptr) {
             return std::nullopt;

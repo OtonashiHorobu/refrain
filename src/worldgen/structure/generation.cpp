@@ -5,6 +5,7 @@
 #include <refrain/worldgen/structure/generation.hpp>
 
 #include <refrain/worldgen/core/rng.hpp>
+#include <refrain/worldgen/structure/mansion_layout.hpp>
 #include <refrain/worldgen/structure/template.hpp>
 
 #include <array>
@@ -758,6 +759,87 @@ auto ruined_portal_start(
     };
     start.pieces.push_back(std::move(piece));
     start.max_references = 1;
+    return start;
+}
+
+auto woodland_mansion_start(
+    const chunk_pos &chunk, jlong seed, structure_template_manager &templates,
+    const std::function<jint(jint, jint, heightmap_kind)> &height_at)
+    -> structure_start {
+    worldgen_random random{std::make_unique<legacy_random_source>(0)};
+    random.set_large_feature_seed(seed, chunk.x, chunk.z);
+    const jint middle_x = chunk.x * 16 + 7;
+    const jint middle_z = chunk.z * 16 + 7;
+    const auto rotation = static_cast<template_rotation>(random.next_int(4));
+    jint offset_x = 5;
+    jint offset_z = 5;
+    if (rotation == template_rotation::clockwise_90) {
+        offset_x = -5;
+    } else if (rotation == template_rotation::clockwise_180) {
+        offset_x = -5;
+        offset_z = -5;
+    } else if (rotation == template_rotation::counterclockwise_90) {
+        offset_z = -5;
+    }
+    const auto height = [&](jint x, jint z) {
+        return height_at(x, z, heightmap_kind::world_surface_wg);
+    };
+    const jint lowest =
+        std::min(std::min(height(middle_x, middle_z),
+                          height(middle_x + offset_x, middle_z)),
+                 std::min(height(middle_x, middle_z + offset_z),
+                          height(middle_x + offset_x, middle_z + offset_z))) -
+        1;
+    if (lowest < 60) {
+        return {};
+    }
+    const block_pos origin{.x = middle_x, .y = lowest, .z = middle_z};
+    mansion_grid layout{random};
+    const auto generated = generate_mansion(random, origin, rotation, layout);
+    structure_start start{
+        .structure = "minecraft:woodland_mansion",
+        .chunk = chunk,
+        .max_references = 1,
+    };
+    for (const auto &piece : generated) {
+        const structure_template &templ = templates.get_or_create(
+            "minecraft:woodland_mansion/" + piece.template_name);
+        if (templ.palettes.empty()) {
+            continue;
+        }
+        const template_transform transform{
+            .mirror = piece.mirror,
+            .rotation = piece.rotation,
+            .pivot = block_pos{.x = 0, .y = 0, .z = 0}};
+        const auto bounds =
+            template_bounding_box(templ, transform, piece.origin);
+        start.pieces.push_back(structure_piece{
+            .type = "minecraft:woodland_mansion",
+            .bounds = structure_bbox{.min_x = bounds.min_x,
+                                     .min_y = bounds.min_y,
+                                     .min_z = bounds.min_z,
+                                     .max_x = bounds.max_x,
+                                     .max_y = bounds.max_y,
+                                     .max_z = bounds.max_z},
+            .template_id = "minecraft:woodland_mansion/" + piece.template_name,
+            .template_origin = piece.origin,
+            .template_rotation = static_cast<jint>(piece.rotation),
+            .template_mirror = static_cast<jint>(piece.mirror),
+            .template_pivot = block_pos{.x = 0, .y = 0, .z = 0},
+        });
+    }
+    if (start.pieces.empty()) {
+        return {};
+    }
+    start.bounds = start.pieces.front().bounds;
+    for (const auto &piece : start.pieces) {
+        start.bounds.min_x = std::min(start.bounds.min_x, piece.bounds.min_x);
+        start.bounds.min_y = std::min(start.bounds.min_y, piece.bounds.min_y);
+        start.bounds.min_z = std::min(start.bounds.min_z, piece.bounds.min_z);
+        start.bounds.max_x = std::max(start.bounds.max_x, piece.bounds.max_x);
+        start.bounds.max_y = std::max(start.bounds.max_y, piece.bounds.max_y);
+        start.bounds.max_z = std::max(start.bounds.max_z, piece.bounds.max_z);
+    }
     return start;
 }
 } // namespace refrain::worldgen::structure
