@@ -154,6 +154,58 @@ REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:end_highlands \
     ./build/Release/bin/refrain-tests "fill and structure placement reproduce the reference chunk"
 ```
 
+Bastion remnants share the nether complexes set with fortresses. Seed 1 puts a
+bastion start at chunk `(12, 0)`; the reference world force-loads its pieces and
+keeps only `minecraft:nether_complexes`:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --dimension the_nether --only-structure-set nether_complexes \
+    --fixed-biome minecraft:nether_wastes --settle 40 \
+    --force-load-box 160 0 271 63 \
+    --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2nether-bastion
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_ORACLE_SEED=1 REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_VANILLA_BASTION_REGION=/tmp/t2nether-bastion/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+REFRAIN_VANILLA_BASTION_CHUNK_X=12 REFRAIN_VANILLA_BASTION_CHUNK_Z=0 \
+    ./build/Release/bin/refrain-tests
+
+REFRAIN_FULL_STAGE_STRUCTURES=1 REFRAIN_FULL_STAGE_DIMENSION=the_nether \
+REFRAIN_FULL_STAGE_REGION=/tmp/t2nether-bastion/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+REFRAIN_FULL_STAGE_CHUNK_X=12 REFRAIN_FULL_STAGE_CHUNK_Z=0 \
+REFRAIN_FULL_STAGE_START_CHUNK_X=12 REFRAIN_FULL_STAGE_START_CHUNK_Z=0 \
+REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:nether_wastes \
+    ./build/Release/bin/refrain-tests
+```
+
+The bastion start suite compares the complete piece list, including the pool
+element, rotation, ground-level delta and junctions. The nether fossils set has
+a two-chunk spacing, so seed 1 with a force-load box near the origin yields
+several starts. The fossil biome tag only contains soul sand valleys, so the
+fixed biome for that run is `minecraft:soul_sand_valley` rather than
+`minecraft:nether_wastes`:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --dimension the_nether --only-structure-set nether_fossils \
+    --fixed-biome minecraft:soul_sand_valley --settle 40 \
+    --force-load-box 0 0 127 63 \
+    --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2nether-fossil
+REFRAIN_FULL_STAGE_STRUCTURES=1 REFRAIN_FULL_STAGE_DIMENSION=the_nether \
+REFRAIN_FULL_STAGE_REGION=/tmp/t2nether-fossil/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+REFRAIN_FULL_STAGE_CHUNK_X=2 REFRAIN_FULL_STAGE_CHUNK_Z=0 \
+REFRAIN_FULL_STAGE_START_CHUNK_X=2 REFRAIN_FULL_STAGE_START_CHUNK_Z=0 \
+REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:soul_sand_valley \
+    ./build/Release/bin/refrain-tests
+```
+
+A nether fossil reference chunk compares the fossil blocks, the ignored air and
+structure blocks, and the dried ghast the piece may add at its floor. The same
+command with chunk `(2, 2)` covers a rotated fossil whose piece spans two
+chunks.
+
 The start tests compare the complete piece list (bounds, orientation, piece id,
 template name, rotation and overwrite flag) against the reference chunk. The
 full-stage run compares the selected chunk block for block and all four final

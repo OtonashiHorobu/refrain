@@ -92,9 +92,12 @@ worlds whose preset declares a single biome.
 
 The nether and the end have no carver stage; carvers belong to the overworld
 pipeline. The structure generator runs starts in every dimension: the nether
-generates fortresses and the end generates end cities, next to the overworld
-structure types. A structure start reads the dimension's noise settings through
-the same profile the terrain stages use.
+generates fortresses, bastion remnants and fossils, and the end generates end
+cities, next to the overworld structure types. A structure start reads the
+dimension's noise settings through the same profile the terrain stages use.
+Height providers sample over the generator's generation depth, which is shorter
+than the level for the nether and the end, while jigsaw padding and distance
+limits use the level bounds.
 
 ## Custom feature reference worlds
 
@@ -144,7 +147,8 @@ The reference-backed suites currently cover:
 - structure starts, payload trees, piece placement and full-stage
   generation for jungle temple, warm ocean ruin, beached shipwreck,
   buried treasure, mineshaft, ocean monument, stronghold, nether fortress,
-  end city and a plains village start, including its feature pool elements;
+  bastion remnant, nether fossil, end city and a plains village start,
+  including its feature pool elements;
 - `locate_structure` against real seeds and reference heightmaps;
 - the storage bridge, RWF round trip and Anvil export/import;
 - parallel fill determinism and fixed-biome structure generator
@@ -156,13 +160,11 @@ Known gaps: structure feature placement has no climate source, so snow and
 freeze feature modifiers are inert there. Capped processor lists,
 block-entity rule modifiers and template entities are not implemented; end
 city shulker and elytra data markers therefore leave no entities behind.
-Bastion remnants, end gateways and the obsidian end platform are not
-implemented; a `nether_complexes` draw that selects a bastion falls through to
-the fortress entry. The nether climate samplers use the standard noise layout,
-while the reference builds the temperature and vegetation noises of that
-dimension with the legacy nether-biome initializer, so a nether world's biome
-selection can differ from the reference even though the parameter table it
-selects from does not.
+End gateways and the obsidian end platform are not implemented. The nether
+climate samplers use the standard noise layout, while the reference builds the
+temperature and vegetation noises of that dimension with the legacy
+nether-biome initializer, so a nether world's biome selection can differ from
+the reference even though the parameter table it selects from does not.
 
 Ruined portal starts place the template at the reference position and
 orientation. A dry reference candidate at chunk (-65, 0) matches block for
@@ -175,9 +177,13 @@ A stronghold start plus every fitted corridor and room matches the reference
 world in the sixty-three chunks the pieces cover, and the ring placement
 reproduces the reference candidate chunks.
 
-The dimension oracle of seed 1 matches nether chunks `(0,0)`, `(1,0)` and
-`(0,1)` and end chunks `(0,0)` and `(1,1)` block for block and in all four
-final heightmaps. Both reference worlds fix a real biome and strip its carvers
+The nether structure oracle also compares a full-stage bastion remnant chunk
+and a full-stage nether fossil chunk block for block and in all four final
+heightmaps. The bastion start list and junctions match the reference for the
+treasure, bridge, stable and housing/units branches; the fossil start and its
+dried ghast placement match a soul-sand-valley reference chunk. The dimension
+oracle of seed 1 matches nether chunks `(0,0)`, `(1,0)` and `(0,1)` and end
+chunks `(0,0)` and `(1,1)` block for block and in all four final heightmaps. Both reference worlds fix a real biome and strip its carvers
 and features, so they contain exactly the fill and surface output of that
 dimension. The deterministic dimension test repeats the fixed-biome chunks
 without a reference world, using the snapshot this repository ships.
