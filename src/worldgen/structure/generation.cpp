@@ -653,11 +653,11 @@ auto ruined_portal_start(
         "ruined_portal/giant_portal_3"};
     std::string template_id;
     if (random.next_float() < 0.05F) {
-        template_id = std::string{"minecraft/"} +
+        template_id = std::string{"minecraft:"} +
                       giants[static_cast<std::size_t>(
                           random.next_int(static_cast<jint>(giants.size())))];
     } else {
-        template_id = std::string{"minecraft/"} +
+        template_id = std::string{"minecraft:"} +
                       portals[static_cast<std::size_t>(
                           random.next_int(static_cast<jint>(portals.size())))];
     }

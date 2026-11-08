@@ -1266,6 +1266,6 @@ suite<"worldgen/ruined-portal"> ruined_portal_tests = [] {
             expect(piece.portal->overgrown);
             expect(piece.portal->replace_with_blackstone);
         }
-        expect(piece.template_id.starts_with("minecraft/ruined_portal/"));
+        expect(piece.template_id.starts_with("minecraft:ruined_portal/"));
     };
 };
