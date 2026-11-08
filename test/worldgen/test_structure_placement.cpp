@@ -1139,27 +1139,43 @@ suite<"worldgen/locate-oracle"> locate_oracle_tests = [] {
         if (!data) {
             return;
         }
+        const auto env_int = [](const char *name, jint fallback) {
+            const char *value = std::getenv(name);
+            return value == nullptr ? fallback : std::atoi(value);
+        };
+        const std::string structure_id =
+            std::getenv("REFRAIN_LOCATE_STRUCTURE") == nullptr
+                ? "minecraft:jungle_pyramid"
+                : std::getenv("REFRAIN_LOCATE_STRUCTURE");
+        const std::string biome = std::getenv("REFRAIN_LOCATE_BIOME") == nullptr
+                                      ? "minecraft:jungle"
+                                      : std::getenv("REFRAIN_LOCATE_BIOME");
+        const jlong locate_seed = env_int("REFRAIN_LOCATE_SEED", 2);
+        const jint radius = env_int("REFRAIN_LOCATE_RADIUS", 12);
+        const jint expected_x = env_int("REFRAIN_LOCATE_EXPECT_X", 9);
+        const jint expected_z = env_int("REFRAIN_LOCATE_EXPECT_Z", 2);
         block_state_registry registry;
         structure::structure_template_manager manager{templates_root, registry};
         const structure::structure_start_context context{
-            .seed = 2,
+            .seed = locate_seed,
             .data = &*data,
             .min_y = -64,
             .world_height = 384,
             .sea_level = 63,
             .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
-            .biome_name = [](std::uint16_t) -> std::string_view {
-                return "minecraft:jungle";
+            .biome_name = [&biome](std::uint16_t) -> std::string_view {
+                return biome;
             },
             .height_at = [&](jint x, jint z,
                              heightmap_kind) { return height_at(x, z); },
             .templates = &manager,
         };
         const auto found = structure::locate_structure(
-            "minecraft:jungle_pyramid", chunk_pos{.x = 0, .z = 0}, 12, context);
+            structure_id, chunk_pos{.x = 0, .z = 0}, radius, context);
         expect(found.has_value());
         if (found) {
-            expect(found->chunk.x == 9 && found->chunk.z == 2);
+            expect(found->chunk.x == expected_x &&
+                   found->chunk.z == expected_z);
         }
     };
 };
