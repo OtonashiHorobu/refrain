@@ -149,4 +149,48 @@ suite<"worldgen/mineshaft-pieces"> mineshaft_piece_tests = [] {
         expect(world.name(2, 12, 4) == "minecraft:cave_air");
         expect(world.name(2, 8, 0) == "minecraft:stone");
     };
+
+    "a corridor clears its tube and keeps the surrounding stone"_test = [] {
+        fixture world;
+        auto record = make_piece("minecraft:mscorridor");
+        record.min_x = 0;
+        record.min_z = 0;
+        record.max_x = 2;
+        record.max_y = 20;
+        record.max_z = 4;
+        record.sections = 1;
+        record.orientation = 0;
+        const auto air = *world.states.find("minecraft:air");
+        world.chunk.set_state(0, 13, 2, air);
+        world.chunk.set_state(1, 13, 2, air);
+        world.chunk.set_state(2, 13, 2, air);
+        auto random = make_random();
+        structure::place_structure_piece(world.context, record, random);
+        expect(world.name(1, 10, 0) == "minecraft:cave_air");
+        expect(world.name(1, 11, 4) == "minecraft:cave_air");
+        expect(world.name(1, 11, 5) == "minecraft:stone");
+        expect(world.name(1, 9, 0) == "minecraft:stone");
+    };
+
+    "a railed corridor places rails on its solid floor"_test = [] {
+        fixture world;
+        auto record = make_piece("minecraft:mscorridor");
+        record.min_x = 0;
+        record.min_z = 0;
+        record.max_x = 2;
+        record.max_y = 20;
+        record.max_z = 14;
+        record.sections = 3;
+        record.rails = true;
+        record.orientation = 0;
+        auto random = make_random();
+        structure::place_structure_piece(world.context, record, random);
+        std::size_t rails = 0;
+        for (jint z = 0; z <= 14; ++z) {
+            if (world.name(1, 10, z) == "minecraft:rail[shape=north_south]") {
+                ++rails;
+            }
+        }
+        expect(rails > 0);
+    };
 };
