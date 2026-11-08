@@ -158,4 +158,109 @@ class document {
     std::shared_ptr<const impl> impl_;
 };
 
+/// Read-only view of one mounted configuration namespace. Copies share an
+/// immutable snapshot, so an I/O thread may keep a view across reloads.
+class view {
+  public:
+    view() noexcept;
+    view(const view &) noexcept = default;
+    auto operator=(const view &) noexcept -> view & = default;
+    view(view &&) noexcept = default;
+    auto operator=(view &&) noexcept -> view & = default;
+    ~view();
+
+    [[nodiscard]] auto name() const noexcept -> std::string_view;
+
+    [[nodiscard]] auto contains(std::string_view key) const noexcept -> bool;
+
+    [[nodiscard]] auto get_bool(std::string_view key, bool fallback) const
+        -> bool;
+    [[nodiscard]] auto get_int64(std::string_view key,
+                                 std::int64_t fallback) const -> std::int64_t;
+    [[nodiscard]] auto get_double(std::string_view key, double fallback) const
+        -> double;
+    [[nodiscard]] auto get_string(std::string_view key,
+                                  std::string_view fallback) const
+        -> std::string;
+    [[nodiscard]] auto
+    get_strings(std::string_view key,
+                std::span<const std::string_view> fallback = {}) const
+        -> std::vector<std::string>;
+
+  private:
+    struct impl;
+    explicit view(std::shared_ptr<const impl> state) noexcept;
+
+    std::shared_ptr<const impl> impl_{};
+
+    friend class store;
+};
+
+/// One namespace mounted from a TOML file, optionally layered over a defaults
+/// file shipped by a provider package.
+struct mount_options {
+    std::string name{};
+    std::string path{};
+    std::string defaults_path{};
+};
+
+/// Which layer a write targets. `user` is persisted by save(); `override`
+/// models CLI overrides and is never written to disk.
+enum class layer : std::uint8_t { user, override };
+
+/// Host-owned configuration store composed of one TOML file per namespace.
+///
+/// The store is not thread-safe. Views it returns are immutable snapshots and
+/// may be read from other threads; a write rebuilds the affected snapshot.
+class store {
+  public:
+    store();
+    store(store &&) noexcept;
+    auto operator=(store &&) noexcept -> store &;
+    store(const store &) = delete;
+    auto operator=(const store &) -> store & = delete;
+    ~store();
+
+    [[nodiscard]] static auto empty() -> store;
+
+    /// Register a namespace. The file is read by load_all()/reload(); a
+    /// missing user file is an empty layer. Duplicate names fail with
+    /// `already_exists`, invalid names with `invalid_argument`.
+    [[nodiscard]] auto mount(mount_options options) -> status;
+
+    [[nodiscard]] auto load_all() -> status;
+
+    [[nodiscard]] auto module(std::string_view name) const -> result<view>;
+    [[nodiscard]] auto names() const -> std::vector<std::string>;
+
+    [[nodiscard]] auto set_bool(std::string_view name, std::string_view key,
+                                bool value, layer target = layer::user)
+        -> status;
+    [[nodiscard]] auto set_int64(std::string_view name, std::string_view key,
+                                 std::int64_t value, layer target = layer::user)
+        -> status;
+    [[nodiscard]] auto set_double(std::string_view name, std::string_view key,
+                                  double value, layer target = layer::user)
+        -> status;
+    [[nodiscard]] auto set_string(std::string_view name, std::string_view key,
+                                  std::string_view value,
+                                  layer target = layer::user) -> status;
+    [[nodiscard]] auto set_strings(std::string_view name, std::string_view key,
+                                   std::span<const std::string_view> value,
+                                   layer target = layer::user) -> status;
+    [[nodiscard]] auto erase(std::string_view name, std::string_view key,
+                             layer target = layer::user) -> status;
+
+    [[nodiscard]] auto reload(std::string_view name) -> status;
+    [[nodiscard]] auto reload_all() -> status;
+    [[nodiscard]] auto save(std::string_view name) -> status;
+    [[nodiscard]] auto save_all() -> status;
+    [[nodiscard]] auto dirty(std::string_view name) const -> bool;
+
+  private:
+    struct impl;
+
+    std::unique_ptr<impl> impl_;
+};
+
 } // namespace refrain::core::config
