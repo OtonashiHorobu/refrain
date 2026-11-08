@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: f206f877bdcce707
+// Schema hash: 58ef0c35f02ee803
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -3031,16 +3031,6 @@ template <> struct custom_extension_traits<::refrain::services::net_protocol::ta
     static constexpr std::string_view id = "refrain:net.protocol/tab_codec";
     static constexpr std::string_view extends = "refrain:net.protocol";
     static constexpr std::string_view capability = "tab-codec";
-    static constexpr std::uint32_t abi_major = 1;
-    static constexpr std::uint32_t abi_minor = 0;
-    static constexpr std::uint32_t abi_patch = 0;
-};
-
-/// Generated RIDL extension 'refrain:net.protocol/chunk_codec'.
-template <> struct custom_extension_traits<::refrain::services::net_protocol::chunk_codec> {
-    static constexpr std::string_view id = "refrain:net.protocol/chunk_codec";
-    static constexpr std::string_view extends = "refrain:net.protocol";
-    static constexpr std::string_view capability = "chunk-codec";
     static constexpr std::uint32_t abi_major = 1;
     static constexpr std::uint32_t abi_minor = 0;
     static constexpr std::uint32_t abi_patch = 0;

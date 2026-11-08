@@ -9,7 +9,7 @@
 // through the service vtable.
 
 module refrain::services::net_protocol;
-version 3.0.0;
+version 4.0.0;
 
 import refrain::core;
 
@@ -90,17 +90,6 @@ extension tab_codec : 1.0.0 {
         -> result<void, protocol_error>;
 }
 
-/// Optional chunk-to-buffer codec implemented by chunk-aware providers.
-extension chunk_codec : 1.0.0 {
-    extends = "refrain:net.protocol";
-    capability = "chunk-codec";
-
-    /// Serialize one borrowed chunk view into the caller-provided buffer.
-    #[thread(worker)] #[can_fail]
-    fn encode_chunk(in chunk_view chunk, out chunk_buffer encoded)
-        -> result<void, protocol_error>;
-}
-
 service net_protocol : 2.0.0 {
     side = server;
     thread = net;
@@ -108,7 +97,7 @@ service net_protocol : 2.0.0 {
     provides = [ "refrain:net.protocol" ];
     requires = [ "refrain:core>=1.0.0" ];
     capabilities = [ "frame-compression", "registry-sync" ];
-    extensions = [ chunk_codec, tab_codec ];
+    extensions = [ tab_codec ];
 
     #[thread(any)]
     fn descriptor(out protocol_descriptor value);

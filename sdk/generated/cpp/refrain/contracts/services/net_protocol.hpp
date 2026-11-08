@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: f206f877bdcce707
+// Schema hash: 58ef0c35f02ee803
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_HPP
@@ -190,56 +190,6 @@ class tab_codec final {
 
 static_assert(offsetof(::refrain_services_net_protocol_tab_codec_vtable, struct_size) == 0);
 
-/// Optional chunk-to-buffer codec implemented by chunk-aware providers.
-/// Provider-implemented extension extending 'refrain:net.protocol'.
-/// A host binds the reference once through `provider::extension<T>()`;
-/// method calls below dispatch through the bound vtable.
-class chunk_codec final {
-  public:
-    using vtable = ::refrain_services_net_protocol_chunk_codec_vtable;
-    static constexpr std::string_view extension_id =
-        "refrain:net.protocol/chunk_codec";
-    static constexpr std::string_view extends_service =
-        "refrain:net.protocol";
-    static constexpr std::string_view capability =
-        "chunk-codec";
-    static constexpr std::uint32_t abi_major = 1;
-    static constexpr std::uint32_t abi_minor = 0;
-    static constexpr std::uint32_t abi_patch = 0;
-    /// Packed minimum version requested from a provider:
-    /// (major << 16) | minor.
-    static constexpr std::uint32_t abi_version =
-        (1u << 16u) | 0u;
-
-    chunk_codec(const vtable &table, void *self) noexcept
-        : table_{&table}, self_{self} {}
-
-    [[nodiscard]] auto table() const noexcept
-        -> const vtable & {
-        return *table_;
-    }
-
-    [[nodiscard]] auto self() const noexcept -> void * {
-        return self_;
-    }
-
-    /// Serialize one borrowed chunk view into the caller-provided buffer.
-    [[nodiscard]] auto encode_chunk(const ::refrain::core::chunk_view &chunk, ::refrain::core::chunk_buffer &encoded) const -> std::expected<void, ::refrain::services::net_protocol::protocol_error> {
-        const auto abi_chunk = ::refrain::contracts::with_struct_size(chunk);
-        ::refrain::contracts::init_struct(encoded);
-        if (const auto code = table_->encode_chunk(self_, &abi_chunk, &encoded); code != REFRAIN_STATUS_OK) {
-            return std::unexpected(static_cast<::refrain::services::net_protocol::protocol_error>(code));
-        }
-        return {};
-    }
-
-  private:
-    const vtable *table_;
-    void *self_;
-};
-
-static_assert(offsetof(::refrain_services_net_protocol_chunk_codec_vtable, struct_size) == 0);
-
 inline constexpr std::string_view service_id = "refrain:net.protocol";
 inline constexpr std::uint32_t abi_major = 2;
 inline constexpr std::uint32_t abi_minor = 0;
@@ -251,7 +201,7 @@ inline constexpr std::string_view capabilities = "frame-compression,registry-syn
 inline constexpr std::string_view required_services = "refrain:core>=1.0.0";
 inline constexpr std::string_view service_ids[] = {"refrain:net.protocol"};
 inline constexpr std::string_view extension_ids[] = {
-"refrain:net.protocol/chunk_codec", "refrain:net.protocol/tab_codec"};
+"refrain:net.protocol/tab_codec"};
 
 namespace detail {
 [[nodiscard]] inline auto extension_failure(::refrain_status status,

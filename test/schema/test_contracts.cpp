@@ -120,27 +120,27 @@ refrain_status fake_locate_structure(void *, refrain_core_handle_gen_ctx,
 
 // --- generated extension surface ------------------------------------------
 //
-// The production `refrain:net.protocol` contract declares the `chunk_codec`
+// The production `refrain:net.protocol` contract declares the `tab_codec`
 // extension, so these checks also compile the generated C++ wrapper and query
 // path. The fake provider exercises registration, success, missing extension,
 // version mismatch and malformed/undersized vtable handling.
 
 static_assert(refrain::services::net_protocol::abi_minor == 0);
 static_assert(std::string_view{
-                  refrain::services::net_protocol::chunk_codec::extension_id} ==
-              "refrain:net.protocol/chunk_codec");
+                  refrain::services::net_protocol::tab_codec::extension_id} ==
+              "refrain:net.protocol/tab_codec");
 static_assert(
     std::string_view{
-        refrain::services::net_protocol::chunk_codec::extends_service} ==
+        refrain::services::net_protocol::tab_codec::extends_service} ==
     "refrain:net.protocol");
 static_assert(std::string_view{
-                  refrain::services::net_protocol::chunk_codec::capability} ==
-              "chunk-codec");
-static_assert(refrain::services::net_protocol::chunk_codec::abi_major == 1);
-static_assert(refrain::services::net_protocol::chunk_codec::abi_minor == 0);
+                  refrain::services::net_protocol::tab_codec::capability} ==
+              "tab-codec");
+static_assert(refrain::services::net_protocol::tab_codec::abi_major == 1);
+static_assert(refrain::services::net_protocol::tab_codec::abi_minor == 0);
 static_assert(REFRAIN_EXTENSION_REF_SIZE == sizeof(refrain_extension_ref));
-static_assert(REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_VTABLE_SIZE ==
-              sizeof(refrain_services_net_protocol_chunk_codec_vtable));
+static_assert(REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_VTABLE_SIZE ==
+              sizeof(refrain_services_net_protocol_tab_codec_vtable));
 static_assert(offsetof(refrain_services_net_protocol_vtable, query_extension) >=
               4 * sizeof(std::uint32_t));
 
@@ -148,22 +148,23 @@ namespace net_protocol = refrain::services::net_protocol;
 using net_query_fn = refrain_status (*)(void *, refrain_str, std::uint32_t,
                                         refrain_extension_ref *);
 
-refrain_status fake_encode_chunk(void *, const refrain_core_chunk_view *chunk,
-                                 refrain_core_chunk_buffer *encoded) {
-    if (chunk == nullptr || encoded == nullptr ||
-        chunk->struct_size != sizeof(refrain_core_chunk_view) ||
-        encoded->struct_size != sizeof(refrain_core_chunk_buffer)) {
+refrain_status
+fake_encode_tab(void *, refrain_str header, refrain_str footer,
+                refrain_services_net_protocol_encoded_packet *out) {
+    if (header.data == nullptr || footer.data == nullptr || out == nullptr ||
+        out->struct_size !=
+            sizeof(refrain_services_net_protocol_encoded_packet)) {
         return REFRAIN_EXTENSION_INVALID;
     }
-    encoded->generation = 7;
-    encoded->word_count = 42;
+    static constexpr std::uint8_t encoded[]{0x7D};
+    out->data = refrain_bytes{encoded, sizeof(encoded)};
     return REFRAIN_STATUS_OK;
 }
 
-const refrain_services_net_protocol_chunk_codec_vtable fake_chunk_vtable{
-    REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_VTABLE_SIZE, &fake_encode_chunk};
+const refrain_services_net_protocol_tab_codec_vtable fake_tab_vtable{
+    REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_VTABLE_SIZE, &fake_encode_tab};
 
-const refrain_services_net_protocol_chunk_codec_vtable undersized_chunk_vtable{
+const refrain_services_net_protocol_tab_codec_vtable undersized_tab_vtable{
     0, nullptr};
 
 refrain_status mismatch_extension_query(void *, refrain_str, std::uint32_t,
@@ -186,7 +187,7 @@ refrain_status undersized_vtable_query(void *self, refrain_str id,
     out->abi_minor = 0;
     out->abi_patch = 0;
     out->id = id;
-    out->vtable = &undersized_chunk_vtable;
+    out->vtable = &undersized_tab_vtable;
     out->self = nullptr;
     return REFRAIN_STATUS_OK;
 }
@@ -327,8 +328,8 @@ const suite extension_contract_tests = [] {
     "contracts/generated extension binds and dispatches through the vtable"_test =
         [] {
             const net_protocol::extension_binding bindings[] = {
-                net_protocol::make_extension_binding<net_protocol::chunk_codec>(
-                    fake_chunk_vtable, nullptr),
+                net_protocol::make_extension_binding<net_protocol::tab_codec>(
+                    fake_tab_vtable, nullptr),
             };
             fake_extension_provider provider_state{
                 net_protocol::extension_registry{bindings}};
@@ -337,20 +338,16 @@ const suite extension_contract_tests = [] {
             const net_protocol::provider service{table, &provider_state};
 
             expect(std::string_view{net_protocol::extension_ids[0]} ==
-                   "refrain:net.protocol/chunk_codec");
-            const auto bound{service.extension<net_protocol::chunk_codec>()};
+                   "refrain:net.protocol/tab_codec");
+            const auto bound{service.extension<net_protocol::tab_codec>()};
             expect(bound.has_value());
             if (!bound) {
                 return;
             }
-            refrain::core::chunk_view view{};
-            refrain::contracts::init_struct(view);
-            refrain::core::chunk_buffer buffer{};
-            const auto encoded{bound->encode_chunk(view, buffer)};
+            ::refrain::services::net_protocol::encoded_packet packet{};
+            const auto encoded{bound->encode_tab("header", "footer", packet)};
             expect(encoded.has_value());
-            expect(buffer.generation == 7U);
-            expect(buffer.word_count == 42U);
-            expect(buffer.struct_size == sizeof(refrain_core_chunk_buffer));
+            expect(packet.data.len == 1U);
         };
 
     "contracts/extension query reports missing and incompatible providers"_test =
@@ -363,7 +360,7 @@ const suite extension_contract_tests = [] {
             const net_protocol::provider missing_service{missing_table,
                                                          &empty_provider};
             const auto missing{
-                missing_service.extension<net_protocol::chunk_codec>()};
+                missing_service.extension<net_protocol::tab_codec>()};
             expect(!missing.has_value());
             if (!missing) {
                 expect(missing.error().code == refrain::error_code::not_found);
@@ -374,7 +371,7 @@ const suite extension_contract_tests = [] {
             const net_protocol::provider mismatch_service{mismatch_table,
                                                           nullptr};
             const auto mismatch{
-                mismatch_service.extension<net_protocol::chunk_codec>()};
+                mismatch_service.extension<net_protocol::tab_codec>()};
             expect(!mismatch.has_value());
             if (!mismatch) {
                 expect(mismatch.error().code ==
@@ -388,7 +385,7 @@ const suite extension_contract_tests = [] {
         const net_protocol::provider malformed_service{malformed_table,
                                                        nullptr};
         const auto malformed{
-            malformed_service.extension<net_protocol::chunk_codec>()};
+            malformed_service.extension<net_protocol::tab_codec>()};
         expect(!malformed.has_value());
         if (!malformed) {
             expect(malformed.error().code ==
@@ -400,7 +397,7 @@ const suite extension_contract_tests = [] {
         const net_protocol::provider undersized_service{undersized_table,
                                                         nullptr};
         const auto undersized{
-            undersized_service.extension<net_protocol::chunk_codec>()};
+            undersized_service.extension<net_protocol::tab_codec>()};
         expect(!undersized.has_value());
         if (!undersized) {
             expect(undersized.error().code ==
@@ -411,7 +408,7 @@ const suite extension_contract_tests = [] {
         slotless.struct_size = 4 * sizeof(std::uint32_t);
         const net_protocol::provider slotless_service{slotless, nullptr};
         const auto slotless_extension{
-            slotless_service.extension<net_protocol::chunk_codec>()};
+            slotless_service.extension<net_protocol::tab_codec>()};
         expect(!slotless_extension.has_value());
         if (!slotless_extension) {
             expect(slotless_extension.error().code ==
@@ -421,12 +418,12 @@ const suite extension_contract_tests = [] {
 
     "contracts/extension registry validates id, version and sizes"_test = [] {
         const net_protocol::extension_binding bindings[] = {
-            net_protocol::make_extension_binding<net_protocol::chunk_codec>(
-                fake_chunk_vtable, nullptr),
+            net_protocol::make_extension_binding<net_protocol::tab_codec>(
+                fake_tab_vtable, nullptr),
         };
         const net_protocol::extension_registry registry{bindings};
         const auto id{refrain::contracts::to_borrowed(
-            net_protocol::chunk_codec::extension_id)};
+            net_protocol::tab_codec::extension_id)};
 
         refrain_extension_ref ref{};
         ref.struct_size = REFRAIN_EXTENSION_REF_SIZE;
@@ -434,7 +431,7 @@ const suite extension_contract_tests = [] {
                REFRAIN_STATUS_OK);
         expect(ref.abi_major == 1U);
         expect(ref.abi_minor == 0U);
-        expect(ref.vtable == &fake_chunk_vtable);
+        expect(ref.vtable == &fake_tab_vtable);
 
         expect(registry.query(id, REFRAIN_EXTENSION_VERSION(2, 0), ref) ==
                REFRAIN_EXTENSION_VERSION_MISMATCH);
@@ -452,8 +449,8 @@ const suite extension_contract_tests = [] {
 
         // A registration-time undersized vtable fails closed.
         const auto rejected{
-            net_protocol::make_extension_binding<net_protocol::chunk_codec>(
-                undersized_chunk_vtable, nullptr)};
+            net_protocol::make_extension_binding<net_protocol::tab_codec>(
+                undersized_tab_vtable, nullptr)};
         expect(rejected.vtable == nullptr);
         const net_protocol::extension_binding rejected_bindings[]{rejected};
         const net_protocol::extension_registry rejected_registry{
