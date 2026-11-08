@@ -1346,6 +1346,26 @@ auto run_server(const server_run_options &options) -> int {
         if (!listener) {
             return;
         }
+        for (const auto &slot : listener->take_creative_slots()) {
+            const auto index{static_cast<std::size_t>(slot.slot)};
+            if (slot.slot < 0 || index >= store->player().inventory.size()) {
+                continue;
+            }
+            auto &target{store->player().inventory[index]};
+            if (slot.item_id == 0 || slot.count == 0) {
+                target = sim::item_stack{};
+            } else {
+                const auto name{item_names.find(slot.item_id)};
+                if (name == item_names.end()) {
+                    continue;
+                }
+                target = sim::item_stack{
+                    .item = name->second,
+                    .count = slot.count,
+                };
+            }
+            inventory_forced.insert(slot.connection);
+        }
         for (const auto &close : listener->take_container_closes()) {
             if (close.container_id != 0) {
                 continue;

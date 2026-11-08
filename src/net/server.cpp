@@ -269,6 +269,7 @@ struct server::impl {
     std::mutex click_mutex{};
     std::vector<container_click_event> container_clicks{};
     std::vector<container_close_event> container_closes{};
+    std::vector<creative_slot_event> creative_slots{};
     std::thread keepalive_thread{};
 
     [[nodiscard]] auto start() -> status;
@@ -1634,6 +1635,18 @@ auto server::take_container_clicks() -> std::vector<container_click_event> {
     return clicks;
 }
 
+auto server::take_creative_slots() -> std::vector<creative_slot_event> {
+    if (!impl_) {
+        return {};
+    }
+    std::vector<creative_slot_event> slots;
+    {
+        const std::lock_guard lock{impl_->click_mutex};
+        slots.swap(impl_->creative_slots);
+    }
+    return slots;
+}
+
 auto server::take_container_closes() -> std::vector<container_close_event> {
     if (!impl_) {
         return {};
@@ -2416,6 +2429,22 @@ void server::impl::handle_play(std::uint64_t id,
         static_cast<void>(packet);
         return;
     }
+    case play_sb::set_creative_mode_slot::packet_id: {
+        play_sb::set_creative_mode_slot packet{};
+        if (auto decoded{play_sb::decode_set_creative_mode_slot(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
+            return;
+        }
+        const std::lock_guard lock{click_mutex};
+        creative_slots.push_back(creative_slot_event{
+            .connection = id,
+            .slot = packet.slot_num,
+            .item_id = packet.item_stack.item_id,
+            .count = packet.item_stack.count,
+        });
+        return;
+    }
     case play_sb::container_close::packet_id: {
         play_sb::container_close packet{};
         if (auto decoded{play_sb::decode_container_close(in, packet)};
@@ -2483,6 +2512,15 @@ void server::impl::handle_play(std::uint64_t id,
     case play_sb::punch::packet_id: {
         play_sb::punch packet{};
         if (auto decoded{play_sb::decode_punch(in, packet)}; !decoded) {
+            reject(id, "malformed or unexpected packet");
+            return;
+        }
+        broadcast_animation(id, 0);
+        return;
+    }
+    case play_sb::interact::packet_id: {
+        play_sb::interact packet{};
+        if (auto decoded{play_sb::decode_interact(in, packet)}; !decoded) {
             reject(id, "malformed or unexpected packet");
             return;
         }

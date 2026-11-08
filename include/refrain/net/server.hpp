@@ -30,6 +30,13 @@ using session_verifier = std::function<result<session_profile>(
     std::string_view name, std::string_view server_hash)>;
 
 /// One player-inventory click observed on a play connection.
+struct creative_slot_event {
+    std::uint64_t connection{0};
+    std::int16_t slot{0};
+    std::uint32_t item_id{0};
+    std::uint32_t count{0};
+};
+
 struct container_close_event {
     std::uint64_t connection{0};
     std::int32_t container_id{0};
@@ -234,6 +241,8 @@ class server {
         -> std::vector<container_click_event>;
     [[nodiscard]] auto take_container_closes()
         -> std::vector<container_close_event>;
+    [[nodiscard]] auto take_creative_slots()
+        -> std::vector<creative_slot_event>;
 
     /// Re-send the tab header/footer to every play connection or one
     /// connection after the session view changed.
