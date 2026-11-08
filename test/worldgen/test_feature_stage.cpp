@@ -2538,3 +2538,47 @@ suite<"worldgen/feature/end-gateway"> end_gateway_tests = [] {
         expect(chunk.state_at(9, 8, 8) == *states.find("minecraft:air"));
     };
 };
+
+suite<"worldgen/feature/end-island"> end_island_tests = [] {
+    "the island places end stone below the origin"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        (void)states.intern("minecraft:air", {.air = true});
+        const auto end_stone = states.intern("minecraft:end_stone",
+                                             {.air = false,
+                                              .blocks_motion = true,
+                                              .blocks_motion_no_leaves = true});
+        expect(end_stone.has_value());
+        if (!end_stone) {
+            return;
+        }
+        proto_chunk chunk{states, 0, 0, 0, 32};
+        chunk_region region{chunk, 0};
+        feature::placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &states,
+            .generation = provider::generation_context{.min_y = 0,
+                                                       .height = 32,
+                                                       .sea_level = 8},
+        };
+        feature::feature_context context{.placement = placement};
+        const feature::end_island_feature feature{*end_stone};
+        worldgen_random random{std::make_unique<legacy_random_source>(1)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 16, .z = 8}));
+        expect(chunk.state_at(8, 16, 8) == *end_stone);
+        expect(chunk.state_at(8, 17, 8) == *states.find("minecraft:air"));
+        std::size_t count = 0;
+        for (jint y = 0; y < 32; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    if (chunk.state_at(x, y, z) == *end_stone) {
+                        ++count;
+                    }
+                }
+            }
+        }
+        expect(count > 1);
+    };
+};
