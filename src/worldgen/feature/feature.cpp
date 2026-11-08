@@ -1985,6 +1985,119 @@ auto end_podium_feature::place(feature_context &context,
     return true;
 }
 
+auto chorus_plant_feature::place(feature_context &context,
+                                 worldgen_random &random,
+                                 const block_pos &origin) const -> bool {
+    auto &region = *context.placement.region;
+    const auto below = region.state_at(origin.x, origin.y - 1, origin.z);
+    const bool supported =
+        context.placement.states->in_tag(below,
+                                         "minecraft:supports_chorus_plant") ||
+        context.placement.states->name(below) == "minecraft:end_stone";
+    if (!context.placement.states
+             ->traits(region.state_at(origin.x, origin.y, origin.z))
+             .air ||
+        !supported) {
+        return false;
+    }
+    set_plant(context, origin);
+    grow(context, random, origin, origin, 0, 8);
+    return true;
+}
+
+void chorus_plant_feature::set_plant(feature_context &context,
+                                     const block_pos &pos) const {
+    auto &region = *context.placement.region;
+    const auto is_chorus = [&](jint x, jint y, jint z) {
+        const auto name =
+            context.placement.states->name(region.state_at(x, y, z));
+        return name == "minecraft:chorus_plant" ||
+               name == "minecraft:chorus_flower";
+    };
+    const std::string key =
+        "minecraft:chorus_plant[down=" +
+        std::string{is_chorus(pos.x, pos.y - 1, pos.z) ||
+                            context.placement.states->in_tag(
+                                region.state_at(pos.x, pos.y - 1, pos.z),
+                                "minecraft:supports_chorus_plant")
+                        ? "true"
+                        : "false"} +
+        ",east=" + (is_chorus(pos.x + 1, pos.y, pos.z) ? "true" : "false") +
+        ",north=" + (is_chorus(pos.x, pos.y, pos.z - 1) ? "true" : "false") +
+        ",south=" + (is_chorus(pos.x, pos.y, pos.z + 1) ? "true" : "false") +
+        ",up=" + (is_chorus(pos.x, pos.y + 1, pos.z) ? "true" : "false") +
+        ",west=" + (is_chorus(pos.x - 1, pos.y, pos.z) ? "true" : "false") +
+        "]";
+    const auto state = context.placement.resolve_state
+                           ? context.placement.resolve_state(key)
+                           : plant_;
+    (void)region.set_block_state(pos.x, pos.y, pos.z,
+                                 state == no_block_state ? plant_ : state);
+}
+
+void chorus_plant_feature::set_flower(feature_context &context,
+                                      const block_pos &pos) const {
+    (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                    flower_);
+}
+
+void chorus_plant_feature::grow(feature_context &context,
+                                worldgen_random &random,
+                                const block_pos &current,
+                                const block_pos &start, jint depth,
+                                jint max_spread) const {
+    auto &region = *context.placement.region;
+    const auto empty = [&](jint x, jint y, jint z) {
+        return context.placement.states->traits(region.state_at(x, y, z)).air;
+    };
+    const auto neighbours_empty = [&](jint x, jint y, jint z) {
+        return empty(x + 1, y, z) && empty(x - 1, y, z) && empty(x, y, z + 1) &&
+               empty(x, y, z - 1);
+    };
+    jint height = random.next_int(4) + 1;
+    if (depth == 0) {
+        ++height;
+    }
+    for (jint i = 0; i < height; ++i) {
+        const jint y = current.y + i + 1;
+        if (!neighbours_empty(current.x, y, current.z)) {
+            return;
+        }
+        set_plant(context, block_pos{.x = current.x, .y = y, .z = current.z});
+        set_plant(context,
+                  block_pos{.x = current.x, .y = y - 1, .z = current.z});
+    }
+    bool placed_stem = false;
+    if (depth < 4) {
+        jint stems = random.next_int(4);
+        if (depth == 0) {
+            ++stems;
+        }
+        for (jint i = 0; i < stems; ++i) {
+            const jint direction = random.next_int(4);
+            const jint dx = direction == 0 ? 1 : direction == 1 ? -1 : 0;
+            const jint dz = direction == 2 ? 1 : direction == 3 ? -1 : 0;
+            const jint x = current.x + dx;
+            const jint y = current.y + height;
+            const jint z = current.z + dz;
+            if (std::abs(x - start.x) < max_spread &&
+                std::abs(z - start.z) < max_spread && empty(x, y, z) &&
+                empty(x, y - 1, z) && neighbours_empty(x, y, z)) {
+                placed_stem = true;
+                set_plant(context, block_pos{.x = x, .y = y, .z = z});
+                set_plant(context, block_pos{.x = x - dx, .y = y, .z = z - dz});
+                grow(context, random, block_pos{.x = x, .y = y, .z = z}, start,
+                     depth + 1, max_spread);
+            }
+        }
+    }
+    if (!placed_stem) {
+        set_flower(
+            context,
+            block_pos{.x = current.x, .y = current.y + height, .z = current.z});
+    }
+}
+
 auto end_gateway_feature::place(feature_context &context,
                                 worldgen_random &random,
                                 const block_pos &origin) const -> bool {

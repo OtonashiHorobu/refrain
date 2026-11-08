@@ -841,6 +841,19 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             features_.emplace(id, std::make_unique<end_platform_feature>());
             continue;
         }
+        if (*type == "minecraft:chorus_plant") {
+            const auto plant =
+                resolve_state(*states_, "minecraft:chorus_plant");
+            const auto flower =
+                resolve_state(*states_, "minecraft:chorus_flower[age=5]");
+            if (!plant || !flower) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "chorus states are invalid")};
+            }
+            features_.emplace(
+                id, std::make_unique<chorus_plant_feature>(*plant, *flower));
+            continue;
+        }
         if (*type == "minecraft:end_podium") {
             const auto *active = document.document.find("active");
             const bool is_active =

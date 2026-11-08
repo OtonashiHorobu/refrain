@@ -529,6 +529,26 @@ class end_gateway_feature final : public feature {
     block_state_id bedrock_{no_block_state};
 };
 
+/// `ChorusPlantFeature`: grows a chorus plant from the origin.
+class chorus_plant_feature final : public feature {
+  public:
+    chorus_plant_feature(block_state_id plant, block_state_id flower)
+        : plant_{plant}, flower_{flower} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    void grow(feature_context &context, worldgen_random &random,
+              const block_pos &current, const block_pos &start, jint depth,
+              jint max_spread) const;
+    void set_plant(feature_context &context, const block_pos &pos) const;
+    void set_flower(feature_context &context, const block_pos &pos) const;
+
+    block_state_id plant_{no_block_state};
+    block_state_id flower_{no_block_state};
+};
+
 /// `EndPodiumFeature`: the exit portal platform with its bedrock pillar and
 /// torches.
 class end_podium_feature final : public feature {
