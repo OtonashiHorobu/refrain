@@ -82,6 +82,11 @@ class mansion_room_collection {
 
 class mansion_grid;
 
+[[nodiscard]] auto mansion_zero_position(const block_pos &zero,
+                                         template_mirror mirror,
+                                         template_rotation rotation,
+                                         jint size_x, jint size_z) -> block_pos;
+
 struct mansion_piece {
     std::string template_name{};
     block_pos origin{};

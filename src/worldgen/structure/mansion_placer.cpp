@@ -356,36 +356,6 @@ auto is_door(const door_dir &door, mansion_direction direction) -> bool {
     return door.direction.has_value() && *door.direction == direction;
 }
 
-auto mansion_zero_position(const block_pos &zero, template_mirror mirror,
-                           template_rotation rotation, jint size_x, jint size_z)
-    -> block_pos {
-    --size_x;
-    --size_z;
-    const jint mirror_delta_x =
-        mirror == template_mirror::front_back ? size_x : 0;
-    const jint mirror_delta_z =
-        mirror == template_mirror::left_right ? size_z : 0;
-    switch (rotation) {
-    case template_rotation::counterclockwise_90:
-        return {.x = zero.x + mirror_delta_z,
-                .y = zero.y,
-                .z = zero.z + size_x - mirror_delta_x};
-    case template_rotation::clockwise_90:
-        return {.x = zero.x + size_z - mirror_delta_z,
-                .y = zero.y,
-                .z = zero.z + mirror_delta_x};
-    case template_rotation::clockwise_180:
-        return {.x = zero.x + size_x - mirror_delta_x,
-                .y = zero.y,
-                .z = zero.z + size_z - mirror_delta_z};
-    case template_rotation::none:
-    default:
-        return {.x = zero.x + mirror_delta_x,
-                .y = zero.y,
-                .z = zero.z + mirror_delta_z};
-    }
-}
-
 void add_room_1x1(std::vector<mansion_piece> &pieces, const block_pos &room_pos,
                   template_rotation rotation, const door_dir &door,
                   const mansion_room_collection &rooms,
@@ -811,6 +781,36 @@ auto generate_mansion(worldgen_random &random, const block_pos &origin,
         }
     }
     return pieces;
+}
+
+auto mansion_zero_position(const block_pos &zero, template_mirror mirror,
+                           template_rotation rotation, jint size_x, jint size_z)
+    -> block_pos {
+    --size_x;
+    --size_z;
+    const jint mirror_delta_x =
+        mirror == template_mirror::front_back ? size_x : 0;
+    const jint mirror_delta_z =
+        mirror == template_mirror::left_right ? size_z : 0;
+    switch (rotation) {
+    case template_rotation::counterclockwise_90:
+        return {.x = zero.x + mirror_delta_z,
+                .y = zero.y,
+                .z = zero.z + size_x - mirror_delta_x};
+    case template_rotation::clockwise_90:
+        return {.x = zero.x + size_z - mirror_delta_z,
+                .y = zero.y,
+                .z = zero.z + mirror_delta_x};
+    case template_rotation::clockwise_180:
+        return {.x = zero.x + size_x - mirror_delta_x,
+                .y = zero.y,
+                .z = zero.z + size_z - mirror_delta_z};
+    case template_rotation::none:
+    default:
+        return {.x = zero.x + mirror_delta_x,
+                .y = zero.y,
+                .z = zero.z + mirror_delta_z};
+    }
 }
 
 } // namespace refrain::worldgen::structure

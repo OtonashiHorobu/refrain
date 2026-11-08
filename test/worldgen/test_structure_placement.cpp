@@ -1505,4 +1505,28 @@ suite<"worldgen/mansion-reference"> mansion_reference_tests = [] {
         }
         expect(hash == 0x9e4d7e3609cb264eULL);
     };
+
+    "the mansion zero position follows size and rotation"_test = [] {
+        const block_pos zero{.x = 1, .y = 0, .z = 0};
+        const auto none = structure::mansion_zero_position(
+            zero, structure::template_mirror::none,
+            structure::template_rotation::none, 7, 7);
+        expect(none.x == 1 && none.z == 0);
+        const auto half = structure::mansion_zero_position(
+            zero, structure::template_mirror::none,
+            structure::template_rotation::clockwise_180, 7, 7);
+        expect(half.x == 7 && half.z == 6);
+        const auto cw = structure::mansion_zero_position(
+            zero, structure::template_mirror::none,
+            structure::template_rotation::clockwise_90, 7, 7);
+        expect(cw.x == 7 && cw.z == 0);
+        const auto ccw = structure::mansion_zero_position(
+            zero, structure::template_mirror::none,
+            structure::template_rotation::counterclockwise_90, 7, 7);
+        expect(ccw.x == 1 && ccw.z == 6);
+        const auto mirrored = structure::mansion_zero_position(
+            zero, structure::template_mirror::front_back,
+            structure::template_rotation::none, 7, 7);
+        expect(mirrored.x == 7 && mirrored.z == 0);
+    };
 };
