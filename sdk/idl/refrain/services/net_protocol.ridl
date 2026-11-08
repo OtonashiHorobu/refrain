@@ -5,11 +5,11 @@
 // `refrain:net.protocol` service contract. A provider describes its game
 // family, edition and accepted protocol versions, then decodes/encodes packets
 // for one transport connection. Edition is data, not a separate service key.
-// The `chunk_codec` extension point is an optional provider capability queried
+// The `tab_codec` extension point is an optional provider capability queried
 // through the service vtable.
 
 module refrain::services::net_protocol;
-version 6.0.0;
+version 3.0.0;
 
 import refrain::core;
 
