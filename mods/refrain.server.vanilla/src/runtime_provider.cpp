@@ -151,6 +151,19 @@ struct runtime_provider {
                         static_cast<const refrain_services_transport_vtable *>(
                             api->vtable)};
                     void *transport_self{api->self};
+                    const refrain::services::transport::provider
+                        transport_inspector{*vtable, transport_self};
+                    auto transport_descriptor{refrain::services::transport::
+                                                  make_transport_descriptor()};
+                    transport_inspector.descriptor(transport_descriptor);
+                    if (transport_descriptor.protocol !=
+                            descriptor.transport_protocol ||
+                        transport_descriptor.reliable == 0 ||
+                        transport_descriptor.ordered == 0 ||
+                        (descriptor.requires_stream != 0 &&
+                         transport_descriptor.message_oriented != 0)) {
+                        return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
+                    }
                     options.make_transport =
                         [vtable, transport_self](
                             refrain::net::transport_handler handler,
