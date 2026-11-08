@@ -49,6 +49,8 @@ cd "$ROOT"
 say "[1/12] vendor policy guard (tools/vendor_check.py, G1-G7)"
 python3 tools/vendor_check.py
 python3 tools/check_action_pins.py
+python3 tools/check_licenses.py
+python3 tools/check_protocol_boundary.py
 test -s NOTICE.md || { echo "NOTICE.md is missing or empty" >&2; exit 1; }
 
 say "[2/12] platform abstraction guard (tools/platform_check.py)"
