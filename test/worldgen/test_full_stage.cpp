@@ -107,6 +107,7 @@ auto canonical(std::string name) -> std::string {
     const bool stairs = base.ends_with("_stairs");
     const bool slab = base.ends_with("_slab");
     const bool leaves = base.ends_with("_leaves");
+    const bool bars = base == "minecraft:iron_bars";
     std::vector<std::string> parts;
     std::string_view body{name.data() + open + 1, close - open - 1};
     while (true) {
@@ -117,7 +118,9 @@ auto canonical(std::string name) -> std::string {
             (stairs && (part == "facing=north" || part == "half=bottom" ||
                         part == "shape=straight")) ||
             (slab && part == "type=bottom") ||
-            (leaves && (part == "distance=7" || part == "persistent=false"));
+            (leaves && (part == "distance=7" || part == "persistent=false")) ||
+            (bars && (part == "east=false" || part == "north=false" ||
+                      part == "south=false" || part == "west=false"));
         if (!default_property) {
             parts.emplace_back(part);
         }
