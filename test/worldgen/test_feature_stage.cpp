@@ -2528,12 +2528,17 @@ suite<"worldgen/feature/end-gateway"> end_gateway_tests = [] {
                                                        .sea_level = 8},
         };
         feature::feature_context context{.placement = placement};
-        const feature::end_gateway_feature feature{*gateway, *bedrock};
+        const feature::end_gateway_feature feature{
+            *gateway, *bedrock, block_pos{.x = 0, .y = 64, .z = 0}, true};
         worldgen_random random{std::make_unique<legacy_random_source>(1)};
         expect(
             feature.place(context, random, block_pos{.x = 8, .y = 8, .z = 8}));
         expect(chunk.state_at(8, 8, 8) == *gateway);
         expect(chunk.state_at(8, 10, 8) == *bedrock);
+        const auto *entity = chunk.block_entity_at(
+            refrain::worldgen::block_pos{.x = 8, .y = 8, .z = 8});
+        expect(entity != nullptr &&
+               entity->find("ExitPortal") != entity->end());
         expect(chunk.state_at(7, 8, 8) == *states.find("minecraft:air"));
         expect(chunk.state_at(9, 8, 8) == *states.find("minecraft:air"));
     };
