@@ -190,8 +190,7 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"debug_subscription_event",
                   primitive_kind::debug_subscription_event},
         std::pair{"command_tree", primitive_kind::command_tree},
-        std::pair{"container_click_data",
-                  primitive_kind::container_click_data},
+        std::pair{"container_click_data", primitive_kind::container_click_data},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
