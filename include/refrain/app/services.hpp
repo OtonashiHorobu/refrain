@@ -57,6 +57,14 @@ struct protocol_bot_options {
     int command_delay_ms{0};
 };
 
+struct protocol_load_options {
+    std::string target{};
+    std::string username_prefix{"Bot"};
+    int bots{20};
+    int duration_ms{10000};
+    int timeout_ms{15000};
+};
+
 struct config_import_options {
     std::string properties{};
     std::string config_dir{"config"};
@@ -179,6 +187,8 @@ struct builtin_image_options {
 [[nodiscard]] auto
 run_config_import_properties(const config_import_options &options) -> int;
 [[nodiscard]] auto run_protocol_bot(const protocol_bot_options &options) -> int;
+[[nodiscard]] auto run_protocol_load(const protocol_load_options &options)
+    -> int;
 [[nodiscard]] auto run_schema_gen(const std::string &output_root,
                                   const std::vector<std::string> &roots,
                                   bool check) -> int;

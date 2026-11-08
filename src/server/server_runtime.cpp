@@ -1542,6 +1542,8 @@ auto run_server(const server_run_options &options) -> int {
     refrain::core::tick_clock clock{};
     clock.start();
     std::int64_t ticks_run{0};
+    std::uint64_t max_tick_ns{0};
+    std::uint64_t total_tick_ns{0};
     refrain::log::info("tick loop: {} tps", refrain::core::ticks_per_second);
 
     while (!state->stop.load(std::memory_order_acquire)) {
@@ -1550,6 +1552,7 @@ auto run_server(const server_run_options &options) -> int {
             refrain::log::error("tick loop: {}", tick.error().message);
             break;
         }
+        const auto tick_start_ns{refrain::core::now_ns()};
         state->heartbeat_ns.store(refrain::core::now_ns(),
                                   std::memory_order_relaxed);
         for (const auto &batch : writer.drain_completed()) {
@@ -1578,6 +1581,12 @@ auto run_server(const server_run_options &options) -> int {
         store->tick();
         ++ticks_run;
         scheduler.run(refrain::core::schedule::phase::post_tick, ticks_run);
+        const auto tick_elapsed_ns{static_cast<std::uint64_t>(
+            refrain::core::now_ns() - tick_start_ns)};
+        total_tick_ns += tick_elapsed_ns;
+        if (tick_elapsed_ns > max_tick_ns) {
+            max_tick_ns = tick_elapsed_ns;
+        }
         if (options.hash_every > 0 &&
             (ticks_run % static_cast<std::int64_t>(options.hash_every)) == 0) {
             refrain::log::info("replay: tick={} hash={}", ticks_run,
@@ -1640,6 +1649,13 @@ auto run_server(const server_run_options &options) -> int {
                 refrain::log::info("config: saved");
             }
         }
+    }
+    if (ticks_run > 0) {
+        const auto average_ms{static_cast<double>(total_tick_ns) /
+                              (static_cast<double>(ticks_run) * 1'000'000.0)};
+        refrain::log::info("runtime: ticks={} avg_ms={:.2f} max_ms={:.2f}",
+                           ticks_run, average_ms,
+                           static_cast<double>(max_tick_ns) / 1'000'000.0);
     }
     refrain::log::info("server stopped: {} ticks", ticks_run);
     return 0;

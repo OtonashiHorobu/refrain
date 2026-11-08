@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <chrono>
 #include <compare>
@@ -20,6 +21,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <refrain/archive/manifest.hpp>
 #include <refrain/archive/zip.hpp>
@@ -58,6 +60,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -141,6 +144,65 @@ auto run_protocol_bot(const protocol_bot_options &options) -> int {
                result->messages.size());
     if (!result->messages.empty()) {
         fmt::print("bot: first message: {}\n", result->messages.front());
+    }
+    return 0;
+}
+
+auto run_protocol_load(const protocol_load_options &options) -> int {
+    const auto separator{options.target.rfind(':')};
+    if (separator == std::string::npos ||
+        separator + 1 >= options.target.size()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol load: expected host:port"));
+    }
+    std::uint16_t port{0};
+    const auto port_text{options.target.substr(separator + 1)};
+    const auto parsed{std::from_chars(
+        port_text.data(), port_text.data() + port_text.size(), port)};
+    if (parsed.ec != std::errc{} ||
+        parsed.ptr != port_text.data() + port_text.size()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol load: invalid port"));
+    }
+    if (options.bots <= 0) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol load: bots must be positive"));
+    }
+
+    std::atomic<int> joined{0};
+    std::mutex errors_mutex{};
+    std::vector<std::string> errors{};
+    std::vector<std::thread> threads{};
+    threads.reserve(static_cast<std::size_t>(options.bots));
+    for (int index{0}; index < options.bots; ++index) {
+        threads.emplace_back([&, index] {
+            refrain::net::bot_options bot{};
+            bot.target.host = options.target.substr(0, separator);
+            bot.target.port = port;
+            bot.username = options.username_prefix + std::to_string(index);
+            bot.timeout = std::chrono::milliseconds{options.timeout_ms};
+            bot.linger = std::chrono::milliseconds{options.duration_ms};
+            auto result{refrain::net::run_bot(bot)};
+            if (result) {
+                ++joined;
+            } else {
+                const std::lock_guard lock{errors_mutex};
+                errors.push_back(result.error().message);
+            }
+        });
+    }
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    fmt::print("load: {}/{} joined\n", joined.load(), options.bots);
+    if (joined.load() != options.bots) {
+        if (!errors.empty()) {
+            fmt::print(stderr, "load: first error: {}\n", errors.front());
+        }
+        return 1;
     }
     return 0;
 }

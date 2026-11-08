@@ -472,6 +472,7 @@ int main(int argc, char **argv) {
     std::string protocol_target{};
     int protocol_timeout_ms{5000};
     protocol_bot_options protocol_bot{};
+    protocol_load_options protocol_load{};
     auto *protocol_cmd =
         app.add_subcommand("protocol", "Protocol 777 client tools");
     auto *protocol_ping_cmd = protocol_cmd->add_subcommand(
@@ -510,6 +511,21 @@ int main(int argc, char **argv) {
                                  "Move this many blocks along Z after join");
     protocol_bot_cmd->add_option("--move-delay-ms", protocol_bot.move_delay_ms,
                                  "Delay the move packet by N milliseconds");
+
+    auto *protocol_load_cmd = protocol_cmd->add_subcommand(
+        "load", "Open N protocol bots and keep them in play");
+    protocol_load_cmd
+        ->add_option("--host", protocol_load.target, "host:port (required)")
+        ->required();
+    protocol_load_cmd->add_option("--bots", protocol_load.bots,
+                                  "Number of bots");
+    protocol_load_cmd->add_option("--username-prefix",
+                                  protocol_load.username_prefix,
+                                  "Bot username prefix");
+    protocol_load_cmd->add_option("--duration-ms", protocol_load.duration_ms,
+                                  "How long each bot stays in play");
+    protocol_load_cmd->add_option("--timeout-ms", protocol_load.timeout_ms,
+                                  "Per-bot join timeout");
 
     auto *wasm_cmd = app.add_subcommand("wasm", "WASM runtime smoke tests");
     auto *wasm_smoke_cmd =
@@ -745,6 +761,9 @@ int main(int argc, char **argv) {
     }
     if (protocol_bot_cmd->parsed()) {
         return app_services::run_protocol_bot(protocol_bot);
+    }
+    if (protocol_load_cmd->parsed()) {
+        return app_services::run_protocol_load(protocol_load);
     }
     if (protocol_ping_cmd->parsed()) {
         const auto separator{protocol_target.rfind(':')};

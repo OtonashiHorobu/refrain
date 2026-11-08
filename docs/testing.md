@@ -68,6 +68,17 @@ waits for system chat replies, and `--linger-ms` keeps the connection in play.
 The bot also performs the online-mode RSA/AES handshake; whether the session is
 accepted is decided by the server's verifier.
 
+### Load harness
+
+```bash
+build/Release/bin/refrain-tools protocol load \
+    --host 127.0.0.1:25565 --bots 20 --duration-ms 5000
+```
+
+The harness opens N bots, keeps each in play for the duration and reports how
+many joined. The server logs `runtime: <ticks> tick(s), avg <ms> ms, max <ms>
+ms` on a clean shutdown, which is the baseline for MSPT checks.
+
 ## Adding a suite
 
 Create a file under the matching directory in `test/`, for example
