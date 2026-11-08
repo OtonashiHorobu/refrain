@@ -54,8 +54,15 @@ using namespace boost::ut;
 using namespace refrain;
 using namespace refrain::worldgen;
 
-constexpr jint oracle_min_y = -64;
-constexpr jint oracle_height = 384;
+auto ceil_log2(std::size_t value) -> int {
+    int bits = 0;
+    std::size_t limit = 1;
+    while (limit < value) {
+        limit <<= 1U;
+        ++bits;
+    }
+    return bits;
+}
 
 auto child(const data::nbt::compound *root, std::string_view key)
     -> const data::nbt::value * {
@@ -100,6 +107,11 @@ auto chunk_payload(std::span<const std::byte> region, jint chunk_x,
 struct decoded {
     block_state_registry registry{};
     std::vector<block_state_id> blocks{};
+};
+
+struct aquifer_holder {
+    std::unique_ptr<positional_random_factory> factory{};
+    std::unique_ptr<terrain::aquifer> aquifer{};
 };
 
 auto canonical(std::string name) -> std::string {
@@ -173,7 +185,13 @@ auto canonical(std::string name) -> std::string {
     if (rebuilt.starts_with("minecraft:chest[")) {
         return "minecraft:chest";
     }
+    if (rebuilt == "minecraft:end_rod[facing=up]" ||
+        rebuilt == "minecraft:ender_chest[facing=north]" ||
+        rebuilt == "minecraft:ladder[facing=north]") {
+        return base;
+    }
     if (rebuilt.ends_with("_log[axis=y]") ||
+        rebuilt.ends_with("_pillar[axis=y]") ||
         rebuilt.find("_door[") != std::string::npos) {
         return rebuilt.substr(0, rebuilt.find('['));
     }
@@ -182,14 +200,14 @@ auto canonical(std::string name) -> std::string {
 
 auto decode(const data::nbt::value &document,
             const std::set<std::string> &motion,
-            const std::set<std::string> &motion_no_leaves)
-    -> std::optional<decoded> {
+            const std::set<std::string> &motion_no_leaves, jint min_y,
+            jint height) -> std::optional<decoded> {
     const auto *sections = child(document.as_compound(), "sections");
     if (sections == nullptr || sections->as_list() == nullptr) {
         return std::nullopt;
     }
     decoded out;
-    out.blocks.assign(static_cast<std::size_t>(oracle_height) * 256U,
+    out.blocks.assign(static_cast<std::size_t>(height) * 256U,
                       out.registry.air());
     for (const auto &section_value : sections->as_list()->items) {
         const auto *section = section_value.as_compound();
@@ -307,8 +325,8 @@ auto decode(const data::nbt::value &document,
         for (std::size_t i = 0; i < section_ids.size(); ++i) {
             const auto block_y = static_cast<jint>(*section_y) * 16 +
                                  static_cast<jint>(i / 256U);
-            const auto local_y = block_y - oracle_min_y;
-            if (local_y < 0 || local_y >= oracle_height) {
+            const auto local_y = block_y - min_y;
+            if (local_y < 0 || local_y >= height) {
                 continue;
             }
             const auto local_x = static_cast<jint>(i % 16U);
@@ -322,7 +340,8 @@ auto decode(const data::nbt::value &document,
 }
 
 auto reference_heightmap(const data::nbt::value &document, std::string_view key,
-                         std::size_t index) -> std::optional<jint> {
+                         std::size_t index, jint min_y, jint level_height)
+    -> std::optional<jint> {
     const auto *heightmaps = child(document.as_compound(), "Heightmaps");
     if (heightmaps == nullptr) {
         return std::nullopt;
@@ -335,15 +354,18 @@ auto reference_heightmap(const data::nbt::value &document, std::string_view key,
     if (!data) {
         return std::nullopt;
     }
-    constexpr std::size_t per_long = 64U / 9U;
+    const int bits = ceil_log2(static_cast<std::size_t>(level_height) + 1U);
+    const auto per_long = static_cast<std::size_t>(64 / bits);
     const std::size_t word = index / per_long;
-    const std::size_t offset = (index % per_long) * 9U;
+    const std::size_t offset =
+        (index % per_long) * static_cast<std::size_t>(bits);
     if (word >= data->size()) {
         return std::nullopt;
     }
+    const auto mask = (std::uint64_t{1} << bits) - 1U;
     const auto value =
-        (static_cast<std::uint64_t>((*data)[word]) >> offset) & 0x1FFU;
-    return static_cast<jint>(value) + oracle_min_y;
+        (static_cast<std::uint64_t>((*data)[word]) >> offset) & mask;
+    return static_cast<jint>(value) + min_y;
 }
 
 } // namespace
@@ -389,6 +411,17 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
             start_z = std::atoi(value);
         }
         const bool own_start = start_x == chunk_x && start_z == chunk_z;
+        dimension_kind dimension = dimension_kind::overworld;
+        if (const char *value = std::getenv("REFRAIN_FULL_STAGE_DIMENSION");
+            value != nullptr) {
+            const std::string_view dimension_name{value};
+            if (dimension_name == "the_nether") {
+                dimension = dimension_kind::nether;
+            } else if (dimension_name == "the_end") {
+                dimension = dimension_kind::end;
+            }
+        }
+        const auto &profile = dimension_profile_for(dimension);
         const auto region = core::io::read_file(region_path);
         expect(region.has_value()) << region.error().message;
         if (!region) {
@@ -426,37 +459,52 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
             resolve_tag_names("minecraft:blocks_motion_in_heightmap");
         const auto motion_no_leaves =
             resolve_tag_names("minecraft:blocks_motion_in_heightmap_no_leaves");
-        const auto reference = decode(*document, motion, motion_no_leaves);
+        const auto reference = decode(*document, motion, motion_no_leaves,
+                                      profile.min_y, profile.height);
         expect(reference.has_value());
         if (!reference) {
             return;
         }
         auto settings = density::load_noise_settings(
-            data_root, "minecraft/overworld", algorithm::xoroshiro, seed);
+            data_root, profile.noise_settings, algorithm::xoroshiro, seed);
         expect(settings.has_value()) << settings.error().message;
         if (!settings) {
             return;
         }
+        const jint generation_min_y = std::max(profile.min_y, settings->min_y);
+        const jint generation_max_y = std::min(
+            profile.min_y + profile.height, settings->min_y + settings->height);
+        const jint generation_height = generation_max_y - generation_min_y;
         block_state_registry states;
         expect(states.intern("minecraft:air", {.air = true})
                    .value_or(no_block_state) == 0);
-        expect(states
-                   .intern("minecraft:stone", {.air = false,
-                                               .blocks_motion = true,
-                                               .blocks_motion_no_leaves = true})
-                   .value_or(no_block_state) == 1);
-        expect(states
-                   .intern("minecraft:water",
-                           {.air = false, .fluid = true, .water = true})
-                   .value_or(no_block_state) == 2);
-        expect(states.intern("minecraft:lava", {.air = false, .fluid = true})
-                   .value_or(no_block_state) == 3);
-        const terrain::block_ids ids{
-            .air = 0, .default_block = 1, .default_fluid = 2, .lava = 3};
+        const auto default_block =
+            states
+                .intern(settings->default_block,
+                        {.air = false,
+                         .blocks_motion = true,
+                         .blocks_motion_no_leaves = true})
+                .value_or(no_block_state);
+        block_state_id default_fluid = states.air();
+        if (settings->default_fluid != "minecraft:air") {
+            const bool water = settings->default_fluid == "minecraft:water";
+            default_fluid =
+                states
+                    .intern(settings->default_fluid,
+                            {.air = false, .fluid = true, .water = water})
+                    .value_or(no_block_state);
+        }
+        const auto lava =
+            states.intern("minecraft:lava", {.air = false, .fluid = true})
+                .value_or(no_block_state);
+        const terrain::block_ids ids{.air = states.air(),
+                                     .default_block = default_block,
+                                     .default_fluid = default_fluid,
+                                     .lava = lava};
         const terrain::fluid_picker picker{.sea_level = settings->sea_level,
-                                           .default_fluid = 2,
-                                           .lava = 3,
-                                           .air = 0};
+                                           .default_fluid = default_fluid,
+                                           .lava = lava,
+                                           .air = states.air()};
         // Reference states colour the registry before the templates intern
         // their palettes: template state inference is coarser, so a flower or
         // grass block first seen in a palette would keep wrong heightmap
@@ -470,11 +518,18 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
         }
         test_support::prime_template_states(states, templates_root,
                                             "minecraft/structure/village");
-        proto_chunk chunk{states, chunk_x, chunk_z, oracle_min_y,
-                          oracle_height};
+        test_support::prime_template_states(states, templates_root,
+                                            "minecraft/structure/end_city");
+        proto_chunk chunk{states, chunk_x, chunk_z, profile.min_y,
+                          profile.height};
         chunk.set_status(chunk_status::biomes);
         const terrain::proto_fill_options fill_options{
-            .air = 0, .default_block = 1, .default_fluid = 2, .lava = 3};
+            .air = states.air(),
+            .default_block = default_block,
+            .default_fluid = default_fluid,
+            .lava = lava};
+        const terrain::proto_fill_volume fill_volume{
+            .min_y = generation_min_y, .height = generation_height};
 
         // Fills one chunk with the beardifier its adapted starts produce.
         const auto fill_chunk =
@@ -492,22 +547,29 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                     context.set_field(density::context_key::beardifier,
                                       &*beardifier);
                 }
-                auto random =
-                    new_positional_factory(algorithm::xoroshiro, seed);
-                auto aquifer_random = random->from_hash_of("minecraft:aquifer");
-                auto factory = aquifer_random->fork_positional();
-                const volume chunk_volume{16,           oracle_height,
-                                          16,           target_pos.x * 16,
-                                          oracle_min_y, target_pos.z * 16};
-                terrain::noise_aquifer aquifer{settings->aquifer,
-                                               *factory,
-                                               chunk_volume,
-                                               picker,
-                                               ids,
-                                               context};
-                terrain::fill_proto_chunk(target, fill_options,
+                aquifer_holder holder;
+                if (settings->aquifers) {
+                    auto random =
+                        new_positional_factory(algorithm::xoroshiro, seed);
+                    auto aquifer_random =
+                        random->from_hash_of("minecraft:aquifer");
+                    holder.factory = aquifer_random->fork_positional();
+                    const volume chunk_volume{16,
+                                              generation_height,
+                                              16,
+                                              target_pos.x * 16,
+                                              generation_min_y,
+                                              target_pos.z * 16};
+                    holder.aquifer = std::make_unique<terrain::noise_aquifer>(
+                        settings->aquifer, *holder.factory, chunk_volume,
+                        picker, ids, context);
+                } else {
+                    holder.aquifer =
+                        std::make_unique<terrain::disabled_aquifer>(picker);
+                }
+                terrain::fill_proto_chunk(target, fill_options, fill_volume,
                                           *settings->router.final_density,
-                                          context, aquifer);
+                                          context, *holder.aquifer);
             };
 
         // Unbearded fill heights: the source `getFirstFreeHeight` reads while
@@ -519,25 +581,29 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
             auto found = height_cache.find(pos);
             if (found == height_cache.end()) {
                 auto height_chunk = std::make_unique<proto_chunk>(
-                    states, pos.x, pos.z, oracle_min_y, oracle_height);
+                    states, pos.x, pos.z, profile.min_y, profile.height);
                 height_chunk->set_status(chunk_status::biomes);
-                auto random =
-                    new_positional_factory(algorithm::xoroshiro, seed);
-                auto aquifer_random = random->from_hash_of("minecraft:aquifer");
-                auto factory = aquifer_random->fork_positional();
+                aquifer_holder holder;
                 const density::sampler_context context;
-                const volume chunk_volume{16,           oracle_height,
-                                          16,           pos.x * 16,
-                                          oracle_min_y, pos.z * 16};
-                terrain::noise_aquifer aquifer{settings->aquifer,
-                                               *factory,
-                                               chunk_volume,
-                                               picker,
-                                               ids,
-                                               context};
-                terrain::fill_proto_chunk(*height_chunk, fill_options,
-                                          *settings->router.final_density,
-                                          context, aquifer);
+                if (settings->aquifers) {
+                    auto random =
+                        new_positional_factory(algorithm::xoroshiro, seed);
+                    auto aquifer_random =
+                        random->from_hash_of("minecraft:aquifer");
+                    holder.factory = aquifer_random->fork_positional();
+                    const volume chunk_volume{
+                        16,         generation_height, 16,
+                        pos.x * 16, generation_min_y,  pos.z * 16};
+                    holder.aquifer = std::make_unique<terrain::noise_aquifer>(
+                        settings->aquifer, *holder.factory, chunk_volume,
+                        picker, ids, context);
+                } else {
+                    holder.aquifer =
+                        std::make_unique<terrain::disabled_aquifer>(picker);
+                }
+                terrain::fill_proto_chunk(
+                    *height_chunk, fill_options, fill_volume,
+                    *settings->router.final_density, context, *holder.aquifer);
                 found =
                     height_cache.emplace(pos, std::move(height_chunk)).first;
             }
@@ -560,8 +626,8 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
             const structure::structure_start_context start_context{
                 .seed = seed,
                 .data = &*data,
-                .min_y = oracle_min_y,
-                .world_height = oracle_height,
+                .min_y = profile.min_y,
+                .world_height = profile.height,
                 .sea_level = settings->sea_level,
                 .fixed_biome = true,
                 .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
@@ -607,8 +673,8 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                         continue;
                     }
                     auto neighbour = std::make_unique<proto_chunk>(
-                        states, chunk_x + dx, chunk_z + dz, oracle_min_y,
-                        oracle_height);
+                        states, chunk_x + dx, chunk_z + dz, profile.min_y,
+                        profile.height);
                     neighbour->set_status(chunk_status::biomes);
                     fill_chunk(*neighbour,
                                chunk_pos{.x = chunk_x + dx, .z = chunk_z + dz},
@@ -715,12 +781,8 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 if (!index) {
                     continue;
                 }
-                jint step = 0;
-                if (start.step == "surface_structures") {
-                    step = 4;
-                } else if (start.step == "underground_structures") {
-                    step = 3;
-                }
+                const jint step =
+                    structure::generation_step_ordinal(start.step);
                 auto placement_random = worldgen_random{
                     std::make_unique<xoroshiro_random_source>(0)};
                 placement_random.set_feature_seed(decoration_seed, *index,
@@ -787,12 +849,8 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                         continue;
                     }
                     const auto &start = starts[start_index];
-                    jint step = 0;
-                    if (start.step == "surface_structures") {
-                        step = 4;
-                    } else if (start.step == "underground_structures") {
-                        step = 3;
-                    }
+                    const jint step =
+                        structure::generation_step_ordinal(start.step);
                     neighbour_random.set_feature_seed(neighbour_decoration_seed,
                                                       *start_index_value, step);
                     for (const auto &piece : all_records[start_index]) {
@@ -822,11 +880,11 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
             structure::refresh_chunk_shapes(chunk, region_view, states);
         }
         std::size_t mismatches = 0;
-        for (jint y = oracle_min_y; y < oracle_min_y + oracle_height; ++y) {
+        for (jint y = profile.min_y; y < profile.min_y + profile.height; ++y) {
             for (jint z = 0; z < 16; ++z) {
                 for (jint x = 0; x < 16; ++x) {
                     const auto index =
-                        static_cast<std::size_t>(y - oracle_min_y) * 256U +
+                        static_cast<std::size_t>(y - profile.min_y) * 256U +
                         static_cast<std::size_t>(z) * 16U +
                         static_cast<std::size_t>(x);
                     const auto expected = canonical(std::string{
@@ -860,8 +918,8 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                                   ? heightmap_kind::motion_blocking
                                   : heightmap_kind::motion_blocking_no_leaves;
             for (std::size_t index = 0; index < 256U; ++index) {
-                const auto expected =
-                    reference_heightmap(*document, kind_name, index);
+                const auto expected = reference_heightmap(
+                    *document, kind_name, index, profile.min_y, profile.height);
                 if (!expected) {
                     continue;
                 }
@@ -895,8 +953,9 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 .templates_root = templates_root,
                 .biome = biome,
                 .seed = seed,
-                .min_y = oracle_min_y,
-                .height = oracle_height,
+                .kind = dimension,
+                .min_y = profile.min_y,
+                .height = profile.height,
                 .sea_level = settings->sea_level,
                 .known_blocks =
                     [&states] {
@@ -916,7 +975,7 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
             expect(service.has_value());
             if (service) {
                 std::size_t service_mismatches = 0;
-                for (jint y = oracle_min_y; y < oracle_min_y + oracle_height;
+                for (jint y = profile.min_y; y < profile.min_y + profile.height;
                      ++y) {
                     for (jint z = 0; z < 16; ++z) {
                         for (jint x = 0; x < 16; ++x) {

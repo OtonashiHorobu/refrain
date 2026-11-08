@@ -91,8 +91,10 @@ the end selects from its island bands. A fixed-biome source backs reference
 worlds whose preset declares a single biome.
 
 The nether and the end have no carver stage; carvers belong to the overworld
-pipeline. The nether temples and the end cities are not generated yet, so the
-structure generator runs in the overworld only.
+pipeline. Structure starts run in every dimension: the nether generates
+fortresses and the end generates end cities, next to the overworld structure
+types. A structure start reads the dimension's noise settings through the same
+profile the terrain stages use.
 
 ## Custom feature reference worlds
 
@@ -141,8 +143,8 @@ The reference-backed suites currently cover:
   those dimensions, plus deterministic fixed-biome chunks of both dimensions;
 - structure starts, payload trees, piece placement and full-stage
   generation for jungle temple, warm ocean ruin, beached shipwreck,
-  buried treasure, mineshaft, ocean monument, stronghold and a plains
-  village start, including its feature pool elements;
+  buried treasure, mineshaft, ocean monument, stronghold, nether fortress,
+  end city and a plains village start, including its feature pool elements;
 - `locate_structure` against real seeds and reference heightmaps;
 - the storage bridge, RWF round trip and Anvil export/import;
 - parallel fill determinism and fixed-biome structure generator
@@ -152,11 +154,15 @@ The reference-backed suites currently cover:
 
 Known gaps: structure feature placement has no climate source, so snow and
 freeze feature modifiers are inert there. Capped processor lists,
-block-entity rule modifiers and template entities are not implemented. The
-nether climate samplers use the standard noise layout, while the reference
-builds the temperature and vegetation noises of that dimension with the legacy
-nether-biome initializer, so a nether world's biome selection can differ from
-the reference even though the parameter table it selects from does not.
+block-entity rule modifiers and template entities are not implemented; end
+city shulker and elytra data markers therefore leave no entities behind.
+Bastion remnants, end gateways and the obsidian end platform are not
+implemented; a `nether_complexes` draw that selects a bastion falls through to
+the fortress entry. The nether climate samplers use the standard noise layout,
+while the reference builds the temperature and vegetation noises of that
+dimension with the legacy nether-biome initializer, so a nether world's biome
+selection can differ from the reference even though the parameter table it
+selects from does not.
 
 Ruined portal starts place the template at the reference position and
 orientation. A dry reference candidate at chunk (-65, 0) matches block for
@@ -175,4 +181,12 @@ final heightmaps. Both reference worlds fix a real biome and strip its carvers
 and features, so they contain exactly the fill and surface output of that
 dimension. The deterministic dimension test repeats the fixed-biome chunks
 without a reference world, using the snapshot this repository ships.
+
+A second dimension reference world keeps one structure set and uses an empty
+material rule, so a compared chunk contains terrain fill plus structure pieces
+only. The full-stage test selects the dimension through
+`REFRAIN_FULL_STAGE_DIMENSION` and takes the level bounds, noise settings and
+sea level from the dimension profile; the reference fortress start and end city
+start piece lists are compared separately. The fortress and end city reference
+runs are documented in `tools/worldgen/oracle/README.md`.
 

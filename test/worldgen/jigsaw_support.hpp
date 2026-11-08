@@ -59,6 +59,37 @@ inline auto palette_key(const data::nbt::compound &entry) -> std::string {
     return key;
 }
 
+inline void prime_key(block_state_registry &states, const std::string &key) {
+    if (states.find(key).has_value()) {
+        return;
+    }
+    // The reference palette names default states without their properties.
+    // When the registry already knows the block, keep its heightmap traits
+    // instead of re-inferring them from the state key.
+    const auto bracket = key.find('[');
+    const std::string_view base =
+        bracket == std::string::npos ? std::string_view{key}
+                                     : std::string_view{key}.substr(0, bracket);
+    for (std::size_t id = 0; id < states.size(); ++id) {
+        const auto existing = states.name(static_cast<block_state_id>(id));
+        const auto existing_bracket = existing.find('[');
+        const auto existing_base = existing_bracket == std::string::npos
+                                       ? existing
+                                       : existing.substr(0, existing_bracket);
+        if (existing_base != base) {
+            continue;
+        }
+        auto traits = states.traits(static_cast<block_state_id>(id));
+        if (key.find("waterlogged=true") != std::string::npos) {
+            traits.fluid = true;
+            traits.water = base == "minecraft:water";
+        }
+        (void)states.intern(key, traits);
+        return;
+    }
+    (void)structure::resolve_block_state(states, key);
+}
+
 inline void prime_palette(block_state_registry &states,
                           const data::nbt::compound &root) {
     const auto prime_list = [&](const data::nbt::list_value &palette) {
@@ -69,7 +100,7 @@ inline void prime_palette(block_state_registry &states,
             }
             const auto key = palette_key(*compound);
             if (!key.empty()) {
-                (void)structure::resolve_block_state(states, key);
+                prime_key(states, key);
             }
         }
     };
