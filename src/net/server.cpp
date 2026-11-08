@@ -297,6 +297,7 @@ struct server::impl {
     void queue_chunk_views();
     void announce_join(std::uint64_t id);
     void announce_leave(std::uint64_t id, const uuid &profile);
+    void broadcast_animation(std::uint64_t id, std::int8_t action);
     void broadcast_entity_moves();
     void send_keepalive(std::uint64_t id);
     void keepalive_loop();
@@ -1963,6 +1964,27 @@ void server::impl::announce_leave(std::uint64_t id, const uuid &profile) {
     }
 }
 
+void server::impl::broadcast_animation(std::uint64_t id, std::int8_t action) {
+    std::vector<std::uint64_t> targets;
+    {
+        const std::lock_guard lock{connections_mutex};
+        for (const auto &[other, live] : connections) {
+            if (other != id && !live.closed &&
+                live.state == connection_state::play) {
+                targets.push_back(other);
+            }
+        }
+    }
+    play_cb::animate animation{
+        .id = static_cast<std::int32_t>(id),
+        .action = action,
+    };
+    for (const auto target : targets) {
+        send_packet(target, play_cb::animate::packet_id, animation,
+                    play_cb::encode_animate);
+    }
+}
+
 void server::impl::broadcast_entity_moves() {
     struct move_event {
         std::uint64_t connection{0};
@@ -2429,6 +2451,35 @@ void server::impl::handle_play(std::uint64_t id,
             return;
         }
         found->second.client_view_distance = packet.information.view_distance;
+        return;
+    }
+    case play_sb::punch::packet_id: {
+        play_sb::punch packet{};
+        if (auto decoded{play_sb::decode_punch(in, packet)}; !decoded) {
+            reject(id, "malformed or unexpected packet");
+            return;
+        }
+        broadcast_animation(id, 0);
+        return;
+    }
+    case play_sb::attack::packet_id: {
+        play_sb::attack packet{};
+        if (auto decoded{play_sb::decode_attack(in, packet)}; !decoded) {
+            reject(id, "malformed or unexpected packet");
+            return;
+        }
+        broadcast_animation(id, 0);
+        return;
+    }
+    case play_sb::ping_request::packet_id: {
+        play_sb::ping_request packet{};
+        if (auto decoded{play_sb::decode_ping_request(in, packet)}; !decoded) {
+            reject(id, "malformed or unexpected packet");
+            return;
+        }
+        play_cb::pong_response pong{.time = packet.time};
+        send_packet(id, play_cb::pong_response::packet_id, pong,
+                    play_cb::encode_pong_response);
         return;
     }
     default:
