@@ -186,6 +186,26 @@ int main(int argc, char **argv) {
         ->add_option("tables", vanilla_info.tables, "tables.rvtb path")
         ->required();
 
+    config_import_options config_import{};
+    auto *config_cmd =
+        app.add_subcommand("config", "Configuration file tooling");
+    auto *config_import_cmd = config_cmd->add_subcommand(
+        "import-properties",
+        "Import Java server.properties into per-namespace TOML files");
+    config_import_cmd
+        ->add_option("-i,--in", config_import.properties,
+                     "Java server.properties path")
+        ->required();
+    config_import_cmd
+        ->add_option("-o,--out-dir", config_import.config_dir,
+                     "Target configuration directory")
+        ->default_val("config");
+    config_import_cmd->add_flag(
+        "--force", config_import.force,
+        "Overwrite keys already present in the target TOML files");
+    config_import_cmd->add_flag("--strict", config_import.strict,
+                                "Fail on unknown server.properties keys");
+
     mods_check_options mods_check{};
     auto *mods_cmd = app.add_subcommand("mods", "Mod manifest tooling");
     auto *mods_check_cmd = mods_cmd->add_subcommand(
@@ -604,6 +624,9 @@ int main(int argc, char **argv) {
     }
     if (vanilla_info_cmd->parsed()) {
         return app_services::run_vanilla_info(vanilla_info);
+    }
+    if (config_import_cmd->parsed()) {
+        return app_services::run_config_import_properties(config_import);
     }
     if (mods_check_cmd->parsed()) {
         return app_services::run_mods_check(mods_check);

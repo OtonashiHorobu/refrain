@@ -49,6 +49,7 @@
 #include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
 #include <refrain/script/wasm.hpp>
+#include <refrain/server/server_properties.hpp>
 #include <schema/schema.hpp>
 #include <set>
 #include <span>
@@ -69,6 +70,7 @@ namespace kernel = refrain::kernel;
 namespace log = refrain::log;
 namespace mod = refrain::mod;
 namespace schema = refrain::schema;
+namespace server = refrain::server;
 namespace script = refrain::script;
 
 // --- vanilla ---------------------------------------------------------------
@@ -92,6 +94,35 @@ auto run_vanilla_import(const vanilla_import_options &options) -> int {
               << result->tables_bytes << " bytes, blake3 "
               << result->tables_digest << ")\n";
     std::cout << "  manifest: " << result->manifest_path << '\n';
+    return 0;
+}
+
+auto run_config_import_properties(const config_import_options &options) -> int {
+    constexpr io::read_options read_options{
+        .max_bytes = 1ULL * 1024ULL * 1024ULL, .allow_symlink = false};
+    auto text{io::read_text(options.properties, read_options)};
+    if (!text) {
+        return report_error(text.error());
+    }
+    const auto mode{options.force
+                        ? server::server_properties_import_mode::force
+                        : server::server_properties_import_mode::merge};
+    auto report{server::import_server_properties(*text, options.config_dir,
+                                                 mode, options.strict)};
+    if (!report) {
+        return report_error(report.error());
+    }
+    for (const auto &key : report->unknown_keys) {
+        fmt::print(stderr,
+                   "config: warning: unknown server.properties key "
+                   "'{}'\n",
+                   key);
+    }
+    fmt::print("config: imported {} key(s) into {}\n", report->applied,
+               options.config_dir);
+    for (const auto &path : report->written_files) {
+        fmt::print("config: wrote {}\n", path);
+    }
     return 0;
 }
 

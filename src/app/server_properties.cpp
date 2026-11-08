@@ -92,7 +92,8 @@ constexpr std::size_t max_value_bytes = 4096;
 
 } // namespace
 
-auto parse_server_properties(std::string_view text)
+auto parse_server_properties(std::string_view text,
+                             std::vector<std::string> *present_keys)
     -> result<server_properties> {
     server_properties properties{};
     std::size_t line_number{0};
@@ -133,6 +134,9 @@ auto parse_server_properties(std::string_view text)
                             line_number))};
         }
         const auto value{unescape(raw_value)};
+        if (present_keys != nullptr) {
+            present_keys->emplace_back(key);
+        }
         if (key == "level-name") {
             properties.level_name = value;
         } else if (key == "motd") {

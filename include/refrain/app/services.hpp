@@ -42,6 +42,13 @@ struct vanilla_info_options {
     std::string tables{};
 };
 
+struct config_import_options {
+    std::string properties{};
+    std::string config_dir{"config"};
+    bool force{false};
+    bool strict{false};
+};
+
 struct mods_check_options {
     std::string mods_dir{"mods"};
     std::string gamepack{};
@@ -154,6 +161,8 @@ struct builtin_image_options {
 [[nodiscard]] auto run_vanilla_import(const vanilla_import_options &options)
     -> int;
 [[nodiscard]] auto run_vanilla_info(const vanilla_info_options &options) -> int;
+[[nodiscard]] auto
+run_config_import_properties(const config_import_options &options) -> int;
 [[nodiscard]] auto run_schema_gen(const std::string &output_root,
                                   const std::vector<std::string> &roots,
                                   bool check) -> int;

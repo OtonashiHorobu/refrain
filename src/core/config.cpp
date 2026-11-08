@@ -14,6 +14,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <span>
@@ -466,34 +467,45 @@ void merge_flat(flat_table &destination, const flat_table &source) {
     return status_ok();
 }
 
-/// Rebuild a nested TOML object from flat keys for serialization.
-[[nodiscard]] auto unflatten(const flat_table &table) -> config_value {
-    config_object root;
-    for (const auto &[key, value] : table) {
-        config_object *current{&root};
-        std::size_t start{0};
-        while (true) {
-            const auto dot{key.find('.', start)};
-            const auto component{key.substr(start, dot == std::string::npos
-                                                       ? std::string::npos
-                                                       : dot - start)};
-            if (dot == std::string::npos) {
-                (*current)[std::string{component}] = value;
-                break;
-            }
-            auto &child{(*current)[std::string{component}]};
-            auto *object{std::get_if<config_object>(&child.data)};
-            if (object == nullptr) {
-                child.data = config_object{};
-                object = std::get_if<config_object>(&child.data);
-            }
-            current = object;
-            start = dot + 1;
-        }
+/// Rebuild a nested TOML table from flat keys for serialization.
+void insert_object(config_object &object, std::string_view path,
+                   const config_value &value) {
+    const auto dot{path.find('.')};
+    if (dot == std::string_view::npos) {
+        object[std::string{path}] = value;
+        return;
     }
-    config_value result{};
-    result.data = std::move(root);
-    return result;
+    auto &child{object[std::string{path.substr(0, dot)}]};
+    auto *nested{std::get_if<config_object>(&child.data)};
+    if (nested == nullptr) {
+        child.data = config_object{};
+        nested = std::get_if<config_object>(&child.data);
+    }
+    insert_object(*nested, path.substr(dot + 1), value);
+}
+
+[[nodiscard]] auto unflatten(const flat_table &table) -> config_table {
+    config_table root;
+    for (const auto &[key, value] : table) {
+        const auto dot{key.find('.')};
+        if (dot == std::string::npos) {
+            root.insert_or_assign(key, value);
+            continue;
+        }
+        const auto first{key.substr(0, dot)};
+        auto match{root.find(first)};
+        if (match == root.end()) {
+            match = root.emplace(std::string{first}, config_value{}).first;
+            match->second.data = config_object{};
+        }
+        auto *nested{std::get_if<config_object>(&match->second.data)};
+        if (nested == nullptr) {
+            match->second.data = config_object{};
+            nested = std::get_if<config_object>(&match->second.data);
+        }
+        insert_object(*nested, key.substr(dot + 1), value);
+    }
+    return root;
 }
 
 } // namespace
@@ -834,6 +846,12 @@ namespace {
     -> result<flat_table> {
     if (path.empty()) {
         return flat_table{};
+    }
+    if (!required) {
+        std::error_code error;
+        if (!std::filesystem::exists(path, error)) {
+            return flat_table{};
+        }
     }
     const io::read_options options{.max_bytes = 4ULL * 1024ULL * 1024ULL,
                                    .allow_symlink = false};
