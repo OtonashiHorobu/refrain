@@ -31,6 +31,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -126,6 +127,10 @@ auto canonical(std::string name) -> std::string {
     if (rebuilt == "minecraft:cobblestone_stairs[facing=north,half=bottom,"
                    "shape=straight,waterlogged=false]") {
         return "minecraft:cobblestone_stairs";
+    }
+    if (rebuilt == "minecraft:sandstone_stairs[facing=north,half=bottom,"
+                   "shape=straight,waterlogged=false]") {
+        return "minecraft:sandstone_stairs";
     }
     return rebuilt;
 }
@@ -263,16 +268,33 @@ auto decode(const data::nbt::value &document) -> std::optional<decoded> {
 suite<"worldgen/full-stage"> full_stage_tests = [] {
     "fill and structure placement reproduce the reference chunk"_test = [] {
         const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
-        const char *region_path = std::getenv("REFRAIN_VANILLA_JUNGLE_REGION");
+        const char *region_path = std::getenv("REFRAIN_FULL_STAGE_REGION");
         const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
         if (std::getenv("REFRAIN_FULL_STAGE_STRUCTURES") == nullptr ||
             data_root == nullptr || region_path == nullptr ||
             templates_root == nullptr) {
             return;
         }
-        constexpr jint chunk_x = 9;
-        constexpr jint chunk_z = 2;
-        constexpr jlong seed = 2;
+        jint chunk_x = 9;
+        jint chunk_z = 2;
+        jlong seed = 2;
+        std::string biome = "minecraft:jungle";
+        if (const char *value = std::getenv("REFRAIN_FULL_STAGE_CHUNK_X");
+            value != nullptr) {
+            chunk_x = std::atoi(value);
+        }
+        if (const char *value = std::getenv("REFRAIN_FULL_STAGE_CHUNK_Z");
+            value != nullptr) {
+            chunk_z = std::atoi(value);
+        }
+        if (const char *value = std::getenv("REFRAIN_FULL_STAGE_SEED");
+            value != nullptr) {
+            seed = std::strtoll(value, nullptr, 10);
+        }
+        if (const char *value = std::getenv("REFRAIN_FULL_STAGE_BIOME");
+            value != nullptr) {
+            biome = value;
+        }
         const auto region = core::io::read_file(region_path);
         expect(region.has_value()) << region.error().message;
         if (!region) {
@@ -345,6 +367,14 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
             if (!data) {
                 return;
             }
+            for (std::size_t id = 0; id < reference->registry.size(); ++id) {
+                const auto state = static_cast<block_state_id>(id);
+                const std::string name{reference->registry.name(state)};
+                if (!states.find(name).has_value()) {
+                    (void)states.intern(name,
+                                        reference->registry.traits(state));
+                }
+            }
             structure::structure_template_manager manager{templates_root,
                                                           states};
             const structure::structure_start_context start_context{
@@ -354,8 +384,8 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 .world_height = oracle_height,
                 .sea_level = settings->sea_level,
                 .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
-                .biome_name = [](std::uint16_t) -> std::string_view {
-                    return "minecraft:jungle";
+                .biome_name = [&biome](std::uint16_t) -> std::string_view {
+                    return biome;
                 },
                 .height_at =
                     [&chunk](jint x, jint z, heightmap_kind kind) {
@@ -426,7 +456,36 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                     states.intern(key, {.air = air, .blocks_motion = !air});
                 return interned.has_value() ? *interned : no_block_state;
             };
-            chunk_region region_view{chunk, 0};
+            std::vector<std::unique_ptr<proto_chunk>> neighbours;
+            chunk_region region_view{chunk, 1};
+            for (jint dz = -1; dz <= 1; ++dz) {
+                for (jint dx = -1; dx <= 1; ++dx) {
+                    if (dx == 0 && dz == 0) {
+                        continue;
+                    }
+                    auto neighbour = std::make_unique<proto_chunk>(
+                        states, chunk_x + dx, chunk_z + dz, oracle_min_y,
+                        oracle_height);
+                    neighbour->set_status(chunk_status::biomes);
+                    const volume neighbour_volume{
+                        16,           oracle_height,
+                        16,           (chunk_x + dx) * 16,
+                        oracle_min_y, (chunk_z + dz) * 16};
+                    terrain::noise_aquifer neighbour_aquifer{settings->aquifer,
+                                                             *factory,
+                                                             neighbour_volume,
+                                                             picker,
+                                                             ids,
+                                                             sampler_context};
+                    terrain::fill_proto_chunk(*neighbour, fill_options,
+                                              *settings->router.final_density,
+                                              sampler_context,
+                                              neighbour_aquifer);
+                    neighbour->set_status(chunk_status::terrain);
+                    region_view.attach(*neighbour);
+                    neighbours.push_back(std::move(neighbour));
+                }
+            }
             const structure::structure_place_context place_context{
                 .region = &region_view,
                 .chunk = &chunk,
