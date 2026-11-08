@@ -946,6 +946,131 @@ auto lava_submerged_processor::process(const block_state_registry &states,
     return info;
 }
 
+auto block_age_processor::process(const block_state_registry &states,
+                                  const chunk_region &region,
+                                  const template_block_info &info,
+                                  const block_pos &world,
+                                  worldgen_random *random) const
+    -> std::optional<template_block_info> {
+    (void)region;
+    worldgen_random local{std::make_unique<legacy_random_source>(
+        mth_get_seed(world.x, world.y, world.z))};
+    auto &rng = random == nullptr ? local : *random;
+    const std::string name{states.name(info.state)};
+    const std::string block{state_block_name(name)};
+    const auto replace = [&](std::string_view replacement,
+                             std::string_view properties) {
+        const std::string key =
+            std::string{replacement} + "[" + std::string{properties} + "]";
+        const auto found = states.find(key);
+        return found ? *found : info.state;
+    };
+    const auto properties = [&]() -> std::string {
+        const auto open = name.find('[');
+        if (open == std::string::npos) {
+            return {};
+        }
+        auto text = name.substr(open + 1, name.size() - open - 2);
+        return text;
+    };
+    const auto stair = [&](bool mossy) {
+        const char *facing = nullptr;
+        switch (rng.next_int(4)) {
+        case 0:
+            facing = "north";
+            break;
+        case 1:
+            facing = "east";
+            break;
+        case 2:
+            facing = "south";
+            break;
+        default:
+            facing = "west";
+            break;
+        }
+        const char *half = rng.next_int(2) == 0 ? "bottom" : "top";
+        const std::string props =
+            std::string{"facing="} + facing + ",half=" + half;
+        const char *id = mossy ? "minecraft:mossy_stone_brick_stairs"
+                               : "minecraft:stone_brick_stairs";
+        const auto found = states.find(std::string{id} + "[" + props + "]");
+        return found ? *found : info.state;
+    };
+    auto result = info;
+    if (block == "minecraft:stone_bricks" || block == "minecraft:stone" ||
+        block == "minecraft:chiseled_stone_bricks") {
+        if (rng.next_float() >= 0.5F) {
+            return info;
+        }
+        const bool mossy = rng.next_float() < mossiness_;
+        const auto choice = rng.next_int(2);
+        if (choice == 0) {
+            const auto found =
+                states.find(mossy ? "minecraft:mossy_stone_bricks"
+                                  : "minecraft:cracked_stone_bricks");
+            if (found) {
+                result.state = *found;
+            }
+        } else {
+            result.state = stair(mossy);
+        }
+        return result;
+    }
+    if (block.ends_with("_stairs")) {
+        if (rng.next_float() >= 0.5F) {
+            return info;
+        }
+        const bool mossy = rng.next_float() < mossiness_;
+        if (rng.next_int(2) == 0) {
+            if (mossy) {
+                result.state =
+                    replace("minecraft:mossy_stone_brick_stairs", properties());
+            } else {
+                const auto found = states.find("minecraft:stone_slab");
+                if (found) {
+                    result.state = *found;
+                }
+            }
+        } else {
+            const auto found =
+                states.find(mossy ? "minecraft:mossy_stone_brick_slab"
+                                  : "minecraft:stone_brick_slab");
+            if (found) {
+                result.state = *found;
+            }
+        }
+        return result;
+    }
+    if (block.ends_with("_slab")) {
+        if (rng.next_float() < mossiness_) {
+            result.state =
+                replace("minecraft:mossy_stone_brick_slab", properties());
+            return result;
+        }
+        return info;
+    }
+    if (block.ends_with("_wall")) {
+        if (rng.next_float() < mossiness_) {
+            result.state =
+                replace("minecraft:mossy_stone_brick_wall", properties());
+            return result;
+        }
+        return info;
+    }
+    if (block == "minecraft:obsidian") {
+        if (rng.next_float() < 0.15F) {
+            const auto found = states.find("minecraft:crying_obsidian");
+            if (found) {
+                result.state = *found;
+                return result;
+            }
+        }
+        return info;
+    }
+    return info;
+}
+
 auto blackstone_replace_processor::process(const block_state_registry &states,
                                            const chunk_region &region,
                                            const template_block_info &info,

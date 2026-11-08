@@ -249,6 +249,22 @@ class lava_submerged_processor final : public template_block_processor {
     block_state_id lava_{no_block_state};
 };
 
+/// `BlockAgeProcessor`: cracks, mosses or replaces stone-family template
+/// blocks using the piece mossiness.
+class block_age_processor final : public template_block_processor {
+  public:
+    explicit block_age_processor(float mossiness) : mossiness_{mossiness} {}
+
+    [[nodiscard]] auto
+    process(const block_state_registry &states, const chunk_region &region,
+            const template_block_info &info, const block_pos &world,
+            worldgen_random *random) const
+        -> std::optional<template_block_info> override;
+
+  private:
+    float mossiness_{0.0F};
+};
+
 /// `BlackstoneReplaceProcessor`: maps nether portal materials to blackstone
 /// equivalents while keeping the template's properties.
 class blackstone_replace_processor final : public template_block_processor {
