@@ -1199,7 +1199,10 @@ suite<"worldgen/template"> template_tests = [] {
         (void)states.intern(
             "minecraft:stone_brick_stairs[facing=north,half=bottom]",
             {.air = false, .blocks_motion = true});
-        expect(stone_bricks && cracked && mossy);
+        const auto expected_stairs =
+            states.intern("minecraft:stone_brick_stairs[facing=east,half=top]",
+                          {.air = false, .blocks_motion = true});
+        expect(stone_bricks && cracked && mossy && expected_stairs);
         if (!stone_bricks || !cracked || !mossy) {
             return;
         }
@@ -1213,7 +1216,7 @@ suite<"worldgen/template"> template_tests = [] {
                         block_pos{.x = -253, .y = 63, .z = -569}, nullptr);
         expect(result.has_value());
         if (result) {
-            expect(result->state == *cracked);
+            expect(result->state == *expected_stairs);
         }
     };
 
