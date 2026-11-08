@@ -2577,6 +2577,10 @@ void place_structure_piece(const structure_place_context &context,
         place_monument_piece(context, piece, random);
     } else if (piece.stronghold.has_value()) {
         place_stronghold_piece(context, piece, random);
+    } else if (piece.fortress.has_value()) {
+        place_fortress_piece(context, piece, random);
+    } else if (piece.type == "minecraft:end_city") {
+        place_end_city_piece(context, piece, random);
     }
 }
 

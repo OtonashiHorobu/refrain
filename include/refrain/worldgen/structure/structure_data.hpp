@@ -59,6 +59,11 @@ struct structure_data_set {
                                          std::string_view biome) const -> bool;
 };
 
+/// Ordinal of a decoration step name, i.e. its position in the reference
+/// generation-step enumeration. Unknown names fall back to
+/// `surface_structures`, the structure default.
+[[nodiscard]] auto generation_step_ordinal(std::string_view step) -> jint;
+
 /// Position of `structure_id` among the structures of the same step, in the
 /// registry order used for `setFeatureSeed(index, step)`. Structure documents
 /// load in identifier order, so the order is the sorted id list.

@@ -41,8 +41,10 @@ auto to_piece_record(const structure_piece &piece)
         .spider = piece.spider,
         .two_floored = piece.two_floored,
         .mesa = piece.mesa,
+        .overwrite = piece.overwrite,
         .monument = piece.monument,
         .stronghold = piece.stronghold,
+        .fortress = piece.fortress,
         .jigsaw = piece.jigsaw,
     };
     if (piece.portal) {

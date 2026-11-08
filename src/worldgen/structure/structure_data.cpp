@@ -8,6 +8,8 @@
 #include <refrain/core/io.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <set>
 #include <string>
 #include <utility>
@@ -112,6 +114,28 @@ void resolve_tag(
 }
 
 } // namespace
+
+auto generation_step_ordinal(std::string_view step) -> jint {
+    static constexpr std::array<std::string_view, 11> steps{{
+        "raw_generation",
+        "lakes",
+        "local_modifications",
+        "underground_structures",
+        "surface_structures",
+        "strongholds",
+        "underground_ores",
+        "underground_decoration",
+        "fluid_springs",
+        "vegetal_decoration",
+        "top_layer_modification",
+    }};
+    for (std::size_t index = 0; index < steps.size(); ++index) {
+        if (steps[index] == step) {
+            return static_cast<jint>(index);
+        }
+    }
+    return 4;
+}
 
 auto structure_data_set::allows_biome(const structure_document &structure,
                                       std::string_view biome) const -> bool {

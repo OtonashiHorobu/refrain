@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <refrain/worldgen/structure/end_city.hpp>
+#include <refrain/worldgen/structure/fortress.hpp>
 #include <refrain/worldgen/structure/start.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/template.hpp>
@@ -62,6 +64,11 @@ class structure_template_manager;
 [[nodiscard]] auto stronghold_start(const chunk_pos &chunk, jlong seed,
                                     jint min_y, jint sea_level,
                                     jint max_tries = 10000) -> structure_start;
+
+/// Nether fortress: the bridge and castle piece graph, moved into the allowed
+/// height band.
+[[nodiscard]] auto fortress_start(const chunk_pos &chunk, jlong seed)
+    -> structure_start;
 
 /// Candidate chunks of a `concentric_rings` placement: the ring geometry and
 /// per-ring biome search, including the fixed-biome search shape.

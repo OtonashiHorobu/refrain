@@ -63,6 +63,16 @@ void place_stronghold_piece(const structure_place_context &context,
                             const structure_piece_record &piece,
                             worldgen_random &random);
 
+/// Places one nether fortress piece.
+void place_fortress_piece(const structure_place_context &context,
+                          const structure_piece_record &piece,
+                          worldgen_random &random);
+
+/// Places one end city template piece and applies its data markers.
+void place_end_city_piece(const structure_place_context &context,
+                          const structure_piece_record &piece,
+                          worldgen_random &random);
+
 /// Places one `minecraft:jigsaw` piece: every element in the piece's element
 /// tree is placed at the piece origin with its processors and projection.
 void place_jigsaw_piece(const structure_place_context &context,

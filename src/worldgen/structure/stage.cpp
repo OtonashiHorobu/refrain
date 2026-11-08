@@ -399,6 +399,73 @@ auto try_generate(const structure_start_context &context,
         }
         return start;
     }
+    if (structure.type == "minecraft:fortress") {
+        if (!biome_allowed(context, structure, chunk.x * 16, 64,
+                           chunk.z * 16)) {
+            return std::nullopt;
+        }
+        auto start = fortress_start(chunk, context.seed);
+        start.structure = structure.id;
+        start.step = structure.step;
+        return start;
+    }
+    if (structure.type == "minecraft:end_city") {
+        if (context.templates == nullptr || context.data == nullptr) {
+            return std::nullopt;
+        }
+        const jint block_x = chunk.x * 16 + 7;
+        const jint block_z = chunk.z * 16 + 7;
+        if (!biome_column_allowed(context, structure, block_x, block_z)) {
+            return std::nullopt;
+        }
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(0)};
+        random.set_large_feature_seed(context.seed, chunk.x, chunk.z);
+        static constexpr std::array<template_rotation, 4> rotations{
+            template_rotation::none, template_rotation::clockwise_90,
+            template_rotation::clockwise_180,
+            template_rotation::counterclockwise_90};
+        const auto rotation =
+            rotations[static_cast<std::size_t>(random.next_int(4))];
+        jint offset_x = 5;
+        jint offset_z = 5;
+        if (rotation == template_rotation::clockwise_90) {
+            offset_x = -5;
+        } else if (rotation == template_rotation::clockwise_180) {
+            offset_x = -5;
+            offset_z = -5;
+        } else if (rotation == template_rotation::counterclockwise_90) {
+            offset_z = -5;
+        }
+        // `height_at` returns the first free height; the end city anchors
+        // the lowest first-occupied corner.
+        const jint y = std::min(
+            std::min(context.height_at(block_x, block_z,
+                                       heightmap_kind::world_surface_wg) -
+                         1,
+                     context.height_at(block_x, block_z + offset_z,
+                                       heightmap_kind::world_surface_wg) -
+                         1),
+            std::min(context.height_at(block_x + offset_x, block_z,
+                                       heightmap_kind::world_surface_wg) -
+                         1,
+                     context.height_at(block_x + offset_x, block_z + offset_z,
+                                       heightmap_kind::world_surface_wg) -
+                         1));
+        if (y < 60 || !biome_allowed(context, structure, block_x, y, block_z)) {
+            return std::nullopt;
+        }
+        auto start = end_city_start(
+            *context.templates, block_pos{.x = block_x, .y = y, .z = block_z},
+            rotation, random);
+        if (!start) {
+            return std::nullopt;
+        }
+        start->structure = structure.id;
+        start->step = structure.step;
+        start->chunk = chunk;
+        return *start;
+    }
     if (structure.type == "minecraft:desert_pyramid") {
         if (!biome_column_allowed(context, structure, chunk.x * 16 + 8,
                                   chunk.z * 16 + 8)) {

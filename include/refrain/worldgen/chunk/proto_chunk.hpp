@@ -14,6 +14,7 @@
 #include <refrain/worldgen/chunk/heightmap.hpp>
 #include <refrain/worldgen/chunk/status.hpp>
 #include <refrain/worldgen/structure/bbox.hpp>
+#include <refrain/worldgen/structure/fortress.hpp>
 #include <refrain/worldgen/structure/jigsaw.hpp>
 #include <refrain/worldgen/structure/monument.hpp>
 #include <refrain/worldgen/structure/stronghold.hpp>
@@ -68,6 +69,7 @@ struct structure_piece_record {
     bool spider{false};
     bool two_floored{false};
     bool mesa{false};
+    bool overwrite{true};
     bool portal_valid{false};
     std::string portal_placement{};
     float portal_mossiness{0.0F};
@@ -78,6 +80,7 @@ struct structure_piece_record {
     bool portal_cold{false};
     std::optional<structure::monument_piece_data> monument{};
     std::optional<structure::stronghold_piece_data> stronghold{};
+    std::optional<structure::fortress_piece_data> fortress{};
     /// Pool-element pieces carry their element, ground level delta, liquid
     /// setting and junctions.
     std::optional<structure::jigsaw_piece_data> jigsaw{};

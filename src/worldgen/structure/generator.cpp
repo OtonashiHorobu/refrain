@@ -192,6 +192,31 @@ auto structure_generator::generate(const chunk_pos &pos)
                                     .lava = lava_state_};
     const auto fill_volume = terrain::proto_fill_volume{
         .min_y = generation_min_y_, .height = generation_height_};
+    struct aquifer_holder {
+        std::unique_ptr<positional_random_factory> factory{};
+        std::unique_ptr<terrain::aquifer> aquifer{};
+    };
+    const auto create_aquifer =
+        [&](jint chunk_x, jint chunk_z,
+            const density::sampler_context &context) -> aquifer_holder {
+        aquifer_holder holder;
+        if (!settings_.aquifers) {
+            holder.aquifer =
+                std::make_unique<terrain::disabled_aquifer>(picker);
+            return holder;
+        }
+        auto random =
+            new_positional_factory(algorithm::xoroshiro, config_.seed);
+        auto aquifer_random = random->from_hash_of("minecraft:aquifer");
+        holder.factory = aquifer_random->fork_positional();
+        const volume chunk_volume{
+            16,           generation_height_, 16,
+            chunk_x * 16, generation_min_y_,  chunk_z * 16};
+        holder.aquifer = std::make_unique<terrain::noise_aquifer>(
+            settings_.aquifer, *holder.factory, chunk_volume, picker, ids,
+            context);
+        return holder;
+    };
 
     // The starts stage reads `getFirstFreeHeight` from the unbearded noise.
     std::map<chunk_pos, std::unique_ptr<proto_chunk>> height_cache;
@@ -203,25 +228,10 @@ auto structure_generator::generate(const chunk_pos &pos)
                 states_, target.x, target.z, min_y_, height_);
             column->set_status(chunk_status::biomes);
             const density::sampler_context context;
-            auto random =
-                new_positional_factory(algorithm::xoroshiro, config_.seed);
-            auto aquifer_factory =
-                random->from_hash_of("minecraft:aquifer")->fork_positional();
-            const volume column_volume{16,
-                                       generation_height_,
-                                       16,
-                                       target.x * 16,
-                                       generation_min_y_,
-                                       target.z * 16};
-            terrain::noise_aquifer aquifer{settings_.aquifer,
-                                           *aquifer_factory,
-                                           column_volume,
-                                           picker,
-                                           ids,
-                                           context};
+            auto holder = create_aquifer(target.x, target.z, context);
             terrain::fill_proto_chunk(*column, options, fill_volume,
                                       *settings_.router.final_density, context,
-                                      aquifer);
+                                      *holder.aquifer);
             found = height_cache.emplace(target, std::move(column)).first;
         }
         return found->second->first_available(kind, x & 15, z & 15);
@@ -279,25 +289,10 @@ auto structure_generator::generate(const chunk_pos &pos)
                 context.set_field(density::context_key::beardifier,
                                   &*beardifier);
             }
-            auto factory =
-                new_positional_factory(algorithm::xoroshiro, config_.seed);
-            auto aquifer_factory =
-                factory->from_hash_of("minecraft:aquifer")->fork_positional();
-            const volume chunk_volume{16,
-                                      generation_height_,
-                                      16,
-                                      target.x * 16,
-                                      generation_min_y_,
-                                      target.z * 16};
-            terrain::noise_aquifer aquifer{settings_.aquifer,
-                                           *aquifer_factory,
-                                           chunk_volume,
-                                           picker,
-                                           ids,
-                                           context};
+            auto holder = create_aquifer(target.x, target.z, context);
             terrain::fill_proto_chunk(*chunk, options, fill_volume,
                                       *settings_.router.final_density, context,
-                                      aquifer);
+                                      *holder.aquifer);
             chunk->set_status(chunk_status::terrain);
             chunks.push_back(std::move(chunk));
         }
@@ -380,12 +375,7 @@ auto structure_generator::generate(const chunk_pos &pos)
         if (!index) {
             continue;
         }
-        jint step = 0;
-        if (start.step == "surface_structures") {
-            step = 4;
-        } else if (start.step == "underground_structures") {
-            step = 3;
-        }
+        const jint step = generation_step_ordinal(start.step);
         worldgen_random random{std::make_unique<xoroshiro_random_source>(0)};
         random.set_feature_seed(decoration_seed, *index, step);
         place_structures(*center, place_context, start.step, random);
@@ -427,12 +417,7 @@ auto structure_generator::generate(const chunk_pos &pos)
             if (!index) {
                 continue;
             }
-            jint step = 0;
-            if (starts[start_index].step == "surface_structures") {
-                step = 4;
-            } else if (starts[start_index].step == "underground_structures") {
-                step = 3;
-            }
+            const jint step = generation_step_ordinal(starts[start_index].step);
             worldgen_random random{
                 std::make_unique<xoroshiro_random_source>(0)};
             const jlong neighbour_decoration_seed = random.set_decoration_seed(

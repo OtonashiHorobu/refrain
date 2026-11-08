@@ -13,6 +13,7 @@
 #include <optional>
 #include <refrain/worldgen/core/java_compat.hpp>
 #include <refrain/worldgen/structure/bbox.hpp>
+#include <refrain/worldgen/structure/fortress.hpp>
 #include <refrain/worldgen/structure/jigsaw.hpp>
 #include <refrain/worldgen/structure/monument.hpp>
 #include <refrain/worldgen/structure/stronghold.hpp>
@@ -59,6 +60,9 @@ struct structure_piece {
     bool spider{false};
     bool two_floored{false};
     bool mesa{false};
+    /// End city template pieces ignore air in addition to the structure
+    /// block; every other template piece overwrites air.
+    bool overwrite{true};
     std::optional<ruined_portal_properties> portal{};
     /// Ocean monument pieces: the room definition and neighbouring room
     /// states the interior reads at placement time.
@@ -66,6 +70,9 @@ struct structure_piece {
     /// Stronghold pieces are flat start pieces; the payload carries the
     /// constructor random choices their interiors read.
     std::optional<stronghold_piece_data> stronghold{};
+    /// Nether fortress pieces: the bridge/castle kind and its constructor
+    /// random choices.
+    std::optional<fortress_piece_data> fortress{};
     /// `minecraft:jigsaw` pieces: the pool element, ground level delta,
     /// liquid setting and the junctions both sides of a connection record.
     std::optional<jigsaw_piece_data> jigsaw{};
