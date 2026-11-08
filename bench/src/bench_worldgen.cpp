@@ -4,6 +4,8 @@
 
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/chunk/chunk_region.hpp>
+#include <refrain/worldgen/chunk/proto_chunk.hpp>
+#include <refrain/worldgen/density/density_router.hpp>
 #include <refrain/worldgen/feature/feature.hpp>
 #include <refrain/worldgen/feature/placement.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
@@ -11,11 +13,17 @@
 #include <refrain/worldgen/structure/start.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/template.hpp>
+#include <refrain/worldgen/terrain/aquifer.hpp>
+#include <refrain/worldgen/terrain/terrain.hpp>
 
 #include <benchmark/benchmark.h>
 
+#include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <string_view>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -147,6 +155,135 @@ void feature_freeze(benchmark::State &state) {
 
 } // namespace
 
+void chunk_fill(benchmark::State &state) {
+    const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+    if (data_root == nullptr) {
+        state.SkipWithError("REFRAIN_VANILLA_WORLDGEN is not set");
+        return;
+    }
+    auto settings = density::load_noise_settings(
+        data_root, "minecraft/overworld", algorithm::xoroshiro, 12345);
+    if (!settings) {
+        state.SkipWithError("cannot load the noise settings");
+        return;
+    }
+    constexpr jint min_y = -64;
+    constexpr jint height = 384;
+    jint position = 0;
+    for (auto _ : state) {
+        block_state_registry states;
+        (void)states.intern("minecraft:air", {.air = true});
+        (void)states.intern("minecraft:stone",
+                            {.air = false,
+                             .blocks_motion = true,
+                             .blocks_motion_no_leaves = true});
+        (void)states.intern("minecraft:water",
+                            {.air = false, .fluid = true, .water = true});
+        (void)states.intern("minecraft:lava", {.air = false, .fluid = true});
+        auto random = new_positional_factory(algorithm::xoroshiro, 12345);
+        auto factory =
+            random->from_hash_of("minecraft:aquifer")->fork_positional();
+        proto_chunk chunk{states, position, 0, min_y, height};
+        chunk.set_status(chunk_status::biomes);
+        const density::sampler_context sampler_context;
+        const volume volume{16, height, 16, position * 16, min_y, 0};
+        terrain::noise_aquifer aquifer{
+            settings->aquifer,
+            *factory,
+            volume,
+            terrain::fluid_picker{.sea_level = settings->sea_level,
+                                  .default_fluid = 2,
+                                  .lava = 3,
+                                  .air = 0},
+            terrain::block_ids{
+                .air = 0, .default_block = 1, .default_fluid = 2, .lava = 3},
+            sampler_context};
+        terrain::fill_proto_chunk(
+            chunk,
+            terrain::proto_fill_options{
+                .air = 0, .default_block = 1, .default_fluid = 2, .lava = 3},
+            *settings->router.final_density, sampler_context, aquifer);
+        benchmark::DoNotOptimize(chunk.state_at(8, 0, 8));
+        ++position;
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+
+void chunk_fill_parallel(benchmark::State &state) {
+    const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+    if (data_root == nullptr) {
+        state.SkipWithError("REFRAIN_VANILLA_WORLDGEN is not set");
+        return;
+    }
+    auto settings = density::load_noise_settings(
+        data_root, "minecraft/overworld", algorithm::xoroshiro, 12345);
+    if (!settings) {
+        state.SkipWithError("cannot load the noise settings");
+        return;
+    }
+    const auto workers = static_cast<std::size_t>(state.range(0));
+    constexpr jint min_y = -64;
+    constexpr jint height = 384;
+    for (auto _ : state) {
+        std::vector<std::jthread> threads;
+        threads.reserve(workers);
+        for (std::size_t worker = 0; worker < workers; ++worker) {
+            threads.emplace_back([&settings, worker] {
+                for (jint batch = 0; batch < 4; ++batch) {
+                    block_state_registry states;
+                    (void)states.intern("minecraft:air", {.air = true});
+                    (void)states.intern("minecraft:stone",
+                                        {.air = false,
+                                         .blocks_motion = true,
+                                         .blocks_motion_no_leaves = true});
+                    (void)states.intern(
+                        "minecraft:water",
+                        {.air = false, .fluid = true, .water = true});
+                    (void)states.intern("minecraft:lava",
+                                        {.air = false, .fluid = true});
+                    auto random =
+                        new_positional_factory(algorithm::xoroshiro, 12345);
+                    auto factory = random->from_hash_of("minecraft:aquifer")
+                                       ->fork_positional();
+                    const jint chunk_x = static_cast<jint>(worker) + batch * 8;
+                    proto_chunk chunk{states, chunk_x, 0, min_y, height};
+                    chunk.set_status(chunk_status::biomes);
+                    const density::sampler_context sampler_context;
+                    const volume volume{16, height, 16, chunk_x * 16, min_y, 0};
+                    terrain::noise_aquifer aquifer{
+                        settings->aquifer,
+                        *factory,
+                        volume,
+                        terrain::fluid_picker{.sea_level = settings->sea_level,
+                                              .default_fluid = 2,
+                                              .lava = 3,
+                                              .air = 0},
+                        terrain::block_ids{.air = 0,
+                                           .default_block = 1,
+                                           .default_fluid = 2,
+                                           .lava = 3},
+                        sampler_context};
+                    terrain::fill_proto_chunk(
+                        chunk,
+                        terrain::proto_fill_options{.air = 0,
+                                                    .default_block = 1,
+                                                    .default_fluid = 2,
+                                                    .lava = 3},
+                        *settings->router.final_density, sampler_context,
+                        aquifer);
+                    benchmark::DoNotOptimize(chunk.state_at(8, 0, 8));
+                }
+            });
+        }
+        for (auto &thread : threads) {
+            thread.join();
+        }
+    }
+    state.counters["chunks_per_iteration"] = static_cast<double>(workers) * 4.0;
+}
+
 BENCHMARK(structure_area);
 BENCHMARK(template_place);
 BENCHMARK(feature_freeze);
+BENCHMARK(chunk_fill);
+BENCHMARK(chunk_fill_parallel)->Arg(1)->Arg(2)->Arg(4)->Arg(8);
