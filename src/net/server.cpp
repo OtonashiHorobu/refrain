@@ -271,6 +271,10 @@ struct server::impl {
     std::vector<container_click_event> container_clicks{};
     std::vector<container_close_event> container_closes{};
     std::vector<creative_slot_event> creative_slots{};
+    std::atomic<std::uint64_t> packets_in{0};
+    std::atomic<std::uint64_t> packets_out{0};
+    std::atomic<std::uint64_t> bytes_in{0};
+    std::atomic<std::uint64_t> bytes_out{0};
     std::thread keepalive_thread{};
 
     [[nodiscard]] auto start() -> status;
@@ -438,6 +442,7 @@ void server::impl::on_close(std::uint64_t id, std::string_view /*reason*/) {
 }
 
 void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
+    bytes_in.fetch_add(bytes.size(), std::memory_order_relaxed);
     std::vector<std::vector<std::byte>> bodies;
     bool failed{false};
     bool rate_limited{false};
@@ -502,6 +507,7 @@ void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
                 return;
             }
         }
+        packets_in.fetch_add(1, std::memory_order_relaxed);
         handle(id, body);
     }
 }
@@ -1659,6 +1665,27 @@ void server::send_chunk_batch(std::uint64_t connection, std::int32_t chunk_x,
                       finished, play_cb::encode_chunk_batch_finished);
 }
 
+auto server::stats() const -> server_stats {
+    if (!impl_) {
+        return {};
+    }
+    server_stats out{};
+    {
+        const std::lock_guard lock{impl_->connections_mutex};
+        for (const auto &[id, state] : impl_->connections) {
+            static_cast<void>(id);
+            if (!state.closed && state.state == connection_state::play) {
+                ++out.connections;
+            }
+        }
+    }
+    out.packets_in = impl_->packets_in.load(std::memory_order_relaxed);
+    out.packets_out = impl_->packets_out.load(std::memory_order_relaxed);
+    out.bytes_in = impl_->bytes_in.load(std::memory_order_relaxed);
+    out.bytes_out = impl_->bytes_out.load(std::memory_order_relaxed);
+    return out;
+}
+
 auto server::take_container_clicks() -> std::vector<container_click_event> {
     if (!impl_) {
         return {};
@@ -2674,6 +2701,8 @@ void server::impl::handle_play(std::uint64_t id,
 }
 
 void server::impl::send(std::uint64_t id, std::span<const std::byte> packet) {
+    packets_out.fetch_add(1, std::memory_order_relaxed);
+    bytes_out.fetch_add(packet.size(), std::memory_order_relaxed);
     if (!protocol) {
         return;
     }

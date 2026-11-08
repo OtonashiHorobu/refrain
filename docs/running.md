@@ -134,6 +134,7 @@ The server announces a small command tree after joining:
 | `config reload [ns]` | re-read files; running subsystems need a restart |
 | `save` | flush pending snapshots and commit the world |
 | `tps` | print tick timing |
+| `net` | print connection/packet/byte counters |
 | `hash` | print the state hash |
 | `pos` | print the player position |
 | `move <dx> <dy> <dz>` | move the player by a delta |

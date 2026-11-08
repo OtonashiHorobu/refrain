@@ -189,6 +189,12 @@ suite bot_tests = [] {
             expect(has_id(136U)); // update_recipes
             expect(has_id(125U)); // tab_list
         }
+        const auto stats{(*server)->stats()};
+        expect(stats.connections == 1U);
+        expect(stats.packets_out > 0U);
+        expect(stats.bytes_out > 0U);
+        expect(stats.packets_in > 0U);
+        expect(stats.bytes_in > 0U);
         ticking.store(false, std::memory_order_relaxed);
         ticker.join();
         (*server)->stop();

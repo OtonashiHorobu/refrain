@@ -163,6 +163,15 @@ struct chunk_view_request {
 using transport_factory = std::function<result<std::unique_ptr<transport>>(
     transport_handler, std::size_t)>;
 
+/// Cumulative network counters. `connections` counts play connections.
+struct server_stats {
+    std::size_t connections{0};
+    std::uint64_t packets_in{0};
+    std::uint64_t packets_out{0};
+    std::uint64_t bytes_in{0};
+    std::uint64_t bytes_out{0};
+};
+
 /// Runtime values the network layer cannot take from configuration: world
 /// spawn state, pre-encoded chunks and world callbacks.
 struct server_inputs {
@@ -235,6 +244,9 @@ class server {
 
     /// Connections currently in play (closed connections excluded).
     [[nodiscard]] auto active_connections() const -> std::vector<std::uint64_t>;
+
+    /// Cumulative counters since `start`.
+    [[nodiscard]] auto stats() const -> server_stats;
 
     /// Drain container clicks observed since the previous call.
     [[nodiscard]] auto take_container_clicks()

@@ -698,7 +698,8 @@ void execute_console_command(const std::string &line,
                              refrain::sim::world &store,
                              snapshot_writer &writer,
                              const refrain::core::tick_info &tick,
-                             refrain::core::schedule::scheduler *scheduler) {
+                             refrain::core::schedule::scheduler *scheduler,
+                             refrain::net::server *listener) {
     if (line == "stop") {
         refrain::log::info("console: stop");
         state->stop.store(true, std::memory_order_release);
@@ -737,6 +738,18 @@ void execute_console_command(const std::string &line,
         } else {
             refrain::log::info("save: ok");
         }
+        return;
+    }
+    if (line == "net") {
+        if (listener == nullptr) {
+            refrain::log::warn("console: net is unavailable");
+            return;
+        }
+        const auto stats{listener->stats()};
+        refrain::log::info(
+            "net: players={} in={} out={} bytes_in={} bytes_out={}",
+            stats.connections, stats.packets_in, stats.packets_out,
+            stats.bytes_in, stats.bytes_out);
         return;
     }
     if (line == "tps") {
@@ -1622,12 +1635,12 @@ auto run_server(const server_run_options &options) -> int {
         }
         for (const auto &line : drain_commands(state)) {
             execute_console_command(line, state, *store, writer, *tick,
-                                    &scheduler);
+                                    &scheduler, listener.get());
         }
         while (replay_index < replay.size() &&
                replay[replay_index].tick == ticks_run) {
             execute_console_command(replay[replay_index].command, state, *store,
-                                    writer, *tick, &scheduler);
+                                    writer, *tick, &scheduler, listener.get());
             if (state->stop.load(std::memory_order_acquire)) {
                 break;
             }
