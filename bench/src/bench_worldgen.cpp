@@ -12,6 +12,7 @@
 #include <refrain/worldgen/feature/feature_registry.hpp>
 #include <refrain/worldgen/feature/feature_stage.hpp>
 #include <refrain/worldgen/feature/placement.hpp>
+#include <refrain/worldgen/structure/generator.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
 #include <refrain/worldgen/structure/placement_stage.hpp>
 #include <refrain/worldgen/structure/stage.hpp>
@@ -415,9 +416,38 @@ void feature_decorate(benchmark::State &state) {
     }
 }
 
+void structure_generator(benchmark::State &state) {
+    const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+    const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
+    if (data_root == nullptr || templates_root == nullptr) {
+        state.SkipWithError("worldgen paths are not set");
+        return;
+    }
+    auto generator = structure::structure_generator::create(
+        structure::structure_generator_config{
+            .data_root = data_root,
+            .templates_root = templates_root,
+            .biome = "minecraft:plains",
+            .seed = 1,
+        });
+    if (!generator) {
+        state.SkipWithError("cannot load the structure generator");
+        return;
+    }
+    for (auto _ : state) {
+        const auto chunk = (*generator)->generate(chunk_pos{.x = 0, .z = 0});
+        if (!chunk) {
+            state.SkipWithError("generation failed");
+            return;
+        }
+        benchmark::DoNotOptimize((*chunk)->state_at(8, 0, 8));
+    }
+}
+
 BENCHMARK(structure_area);
 BENCHMARK(structure_corridor);
 BENCHMARK(feature_decorate);
+BENCHMARK(structure_generator)->Unit(benchmark::kMillisecond);
 BENCHMARK(template_place);
 BENCHMARK(feature_freeze);
 BENCHMARK(chunk_fill);
