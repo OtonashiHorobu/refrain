@@ -17,7 +17,7 @@ providers: 10
   data      -> refrain.data.vanilla@1.0.0
   protocol  [instanced:java_777] (default) -> refrain.proto.vanilla@1.0.0
   runtime   -> refrain.server.vanilla@1.0.0
-  session   -> refrain.session.vanilla@1.0.0
+  session   [instanced:minecraft] (default) -> refrain.server.vanilla@1.0.0
   sim       -> refrain.sim.vanilla@1.0.0
   storage   -> refrain.storage.rwf@1.0.0
   transport [instanced:asio_tcp] (default) -> refrain.transport.asio.tcp@1.0.0

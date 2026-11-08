@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:session` contract. A session provider owns the game/session
+// lifecycle for one family (the vanilla provider drives the headless server
+// runtime today). Feature views are supplied through the optional
+// `refrain:session.status` / `refrain:session.tab` services.
+
+module refrain::services::session;
+version 1.0.0;
+
+import refrain::core;
+
+struct session_descriptor {
+    string family;
+    string edition;
+    string capabilities;
+}
+
+service session : 1.0.0 {
+    side = server;
+    thread = main;
+    composition = instanced;
+    provides = [ "refrain:session" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "tick", "console" ];
+
+    #[thread(any)]
+    fn descriptor(out session_descriptor value);
+}

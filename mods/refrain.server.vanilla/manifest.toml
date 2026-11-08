@@ -18,7 +18,7 @@ description = "Dedicated server runtime host provider."
 license = "MIT"
 
 [provides]
-services = ["refrain:runtime"]
+services = ["refrain:runtime", "refrain:session"]
 
 [requires]
 "refrain.data.vanilla" = "^1.0.0"

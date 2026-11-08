@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 58ef0c35f02ee803
+// Schema hash: 25b2c961ad0ac277
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2812,6 +2812,15 @@ template <> struct custom_traits<::refrain::services::runtime::runtime_config> {
         refrain::reflect::custom_field{"content_gc_keep_days", &::refrain::services::runtime::runtime_config::content_gc_keep_days},
         refrain::reflect::custom_field{"content_gc_budget_ms", &::refrain::services::runtime::runtime_config::content_gc_budget_ms},
         refrain::reflect::custom_field{"content_gc_interval_ticks", &::refrain::services::runtime::runtime_config::content_gc_interval_ticks});
+};
+
+/// Generated RIDL struct 'refrain::services::session::session_descriptor'.
+template <> struct custom_traits<::refrain::services::session::session_descriptor> {
+    static constexpr std::string_view type_name = "refrain::services::session::session_descriptor";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"family", &::refrain::services::session::session_descriptor::family},
+        refrain::reflect::custom_field{"edition", &::refrain::services::session::session_descriptor::edition},
+        refrain::reflect::custom_field{"capabilities", &::refrain::services::session::session_descriptor::capabilities});
 };
 
 /// Generated RIDL struct 'refrain::services::session_status::status_request'.

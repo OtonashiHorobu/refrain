@@ -12,6 +12,7 @@
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/net_protocol.hpp>
 #include <refrain/contracts/services/runtime_abi.h>
+#include <refrain/contracts/services/session_abi.h>
 #include <refrain/contracts/services/session_status.hpp>
 #include <refrain/contracts/services/session_tab.hpp>
 #include <refrain/contracts/services/transport.hpp>
@@ -341,6 +342,32 @@ auto runtime_vtable() -> const refrain_services_runtime_vtable & {
     return table;
 }
 
+void session_descriptor(void *self,
+                        refrain_services_session_session_descriptor *out) {
+    static_cast<void>(self);
+    if (out == nullptr) {
+        return;
+    }
+    out->struct_size = REFRAIN_SERVICES_SESSION_SESSION_DESCRIPTOR_SIZE;
+    static constexpr std::string_view family{"minecraft-java"};
+    out->family = refrain::contracts::to_borrowed(family);
+    static constexpr std::string_view edition{"java"};
+    out->edition = refrain::contracts::to_borrowed(edition);
+    static constexpr std::string_view capabilities{"tick,console"};
+    out->capabilities = refrain::contracts::to_borrowed(capabilities);
+}
+
+const refrain_services_session_vtable &session_vtable() {
+    static const refrain_services_session_vtable table{
+        .struct_size = REFRAIN_SERVICES_SESSION_VTABLE_SIZE,
+        .abi_major = REFRAIN_SERVICES_SESSION_ABI_MAJOR,
+        .abi_minor = REFRAIN_SERVICES_SESSION_ABI_MINOR,
+        .abi_patch = REFRAIN_SERVICES_SESSION_ABI_PATCH,
+        .descriptor = &session_descriptor,
+    };
+    return table;
+}
+
 auto make_server_vanilla(refrain::mod::host &host) -> refrain::status {
     static std::unique_ptr<runtime_provider> provider{};
     provider = std::make_unique<runtime_provider>();
@@ -366,6 +393,17 @@ auto make_server_vanilla(refrain::mod::host &host) -> refrain::status {
         .abi_major = REFRAIN_SERVICES_RUNTIME_ABI_MAJOR,
     };
     auto status{host.register_provider("refrain:runtime", api, "1.0.0")};
+    if (!status) {
+        provider.reset();
+        return status;
+    }
+    const refrain::mod::provider_api session_api{
+        .vtable = &session_vtable(),
+        .self = provider.get(),
+        .abi_major = REFRAIN_SERVICES_SESSION_ABI_MAJOR,
+    };
+    status = host.register_provider("refrain:session", "minecraft", session_api,
+                                    "1.0.0");
     if (!status) {
         provider.reset();
         return status;

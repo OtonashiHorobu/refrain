@@ -48,6 +48,6 @@ storage = "refrain.storage.rwf@^1.0.0"
 protocol = { default = "java_777", instances = { java_777 = "refrain.proto.vanilla@^1.0.0" } }
 transport = { default = "asio_tcp", instances = { "asio_tcp" = "refrain.transport.asio.tcp@^1.0.0" } }
 runtime = "refrain.server.vanilla@^1.0.0"
-session = "refrain.session.vanilla@^1.0.0"
+session = { default = "minecraft", instances = { "minecraft" = "refrain.server.vanilla@^1.0.0" } }
 admin = "refrain.admin.vanilla@^1.0.0"
 data = "refrain.data.vanilla@^1.0.0"
