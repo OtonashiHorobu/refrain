@@ -295,6 +295,7 @@ struct server::impl {
     void send_tab_list(std::uint64_t id);
     void set_game_mode(std::uint64_t id, game_mode mode);
     void send_system_chat(std::uint64_t id, std::string_view text);
+    void execute_chat_command(std::uint64_t id, std::string_view command);
     void broadcast_system_chat(std::string_view text);
     void send_initial_chunks(std::uint64_t id);
     void queue_chunk_views();
@@ -366,7 +367,10 @@ auto server::impl::start() -> status {
     if (auto listening{socket->listen(config.bind)}; !listening) {
         return listening;
     }
-    keepalive_thread = std::thread{[this] { keepalive_loop(); }};
+    keepalive_thread = std::thread{[this] {
+        log::set_thread_name("net-keepalive");
+        keepalive_loop();
+    }};
     return status_ok();
 }
 
@@ -1510,6 +1514,37 @@ void server::impl::send_tab_list(std::uint64_t id) {
                 play_cb::encode_tab_list);
 }
 
+void server::impl::execute_chat_command(std::uint64_t id,
+                                        std::string_view command) {
+    if (!command.empty() && command.front() == '/') {
+        command.remove_prefix(1);
+    }
+    if (command.empty() || !commands.execute) {
+        return;
+    }
+    std::string name;
+    uuid profile{};
+    {
+        const std::lock_guard lock{connections_mutex};
+        const auto found{connections.find(id)};
+        if (found == connections.end() || found->second.closed) {
+            return;
+        }
+        name = found->second.name;
+        profile = found->second.profile;
+    }
+    const player_identity identity{
+        .connection = id,
+        .id = profile,
+        .name = name,
+        .world = {},
+    };
+    const auto feedback{commands.execute(identity, command)};
+    if (feedback.handled && !feedback.message.empty()) {
+        send_system_chat(id, feedback.message);
+    }
+}
+
 void server::impl::send_system_chat(std::uint64_t id, std::string_view text) {
     play_cb::system_chat packet{};
     packet.content.text = std::string{text};
@@ -2325,34 +2360,17 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        std::string_view command{packet.command};
-        if (!command.empty() && command.front() == '/') {
-            command.remove_prefix(1);
-        }
-        if (command.empty() || !commands.execute) {
+        execute_chat_command(id, packet.command);
+        return;
+    }
+    case play_sb::chat_command_signed::packet_id: {
+        play_sb::chat_command_signed packet{};
+        if (auto decoded{play_sb::decode_chat_command_signed(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
             return;
         }
-        std::string name;
-        uuid profile{};
-        {
-            const std::lock_guard lock{connections_mutex};
-            const auto found{connections.find(id)};
-            if (found == connections.end() || found->second.closed) {
-                return;
-            }
-            name = found->second.name;
-            profile = found->second.profile;
-        }
-        const player_identity identity{
-            .connection = id,
-            .id = profile,
-            .name = name,
-            .world = {},
-        };
-        const auto feedback{commands.execute(identity, command)};
-        if (feedback.handled && !feedback.message.empty()) {
-            send_system_chat(id, feedback.message);
-        }
+        execute_chat_command(id, packet.command);
         return;
     }
     case play_sb::command_suggestion::packet_id: {
