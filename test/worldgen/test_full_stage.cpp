@@ -434,14 +434,33 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                     return biome;
                 },
                 .height_at =
-                    [&chunk](jint x, jint z, heightmap_kind kind) {
+                    [&chunk, &region](jint x, jint z, heightmap_kind kind) {
                         const jint local_x = x - chunk.chunk_x() * 16;
                         const jint local_z = z - chunk.chunk_z() * 16;
-                        if (local_x < 0 || local_x > 15 || local_z < 0 ||
-                            local_z > 15) {
+                        if (local_x >= 0 && local_x <= 15 && local_z >= 0 &&
+                            local_z <= 15) {
+                            return chunk.first_available(kind, local_x,
+                                                         local_z);
+                        }
+                        const auto neighbour =
+                            chunk_payload(*region, x >> 4, z >> 4);
+                        if (!neighbour) {
                             return chunk.min_y();
                         }
-                        return chunk.first_available(kind, local_x, local_z);
+                        const auto neighbour_document = data::nbt::read(
+                            *neighbour, data::nbt::compression::zlib);
+                        if (!neighbour_document) {
+                            return chunk.min_y();
+                        }
+                        const std::string_view key =
+                            kind == heightmap_kind::ocean_floor_wg
+                                ? "OCEAN_FLOOR"
+                                : "WORLD_SURFACE";
+                        return reference_heightmap(
+                                   *neighbour_document, key,
+                                   static_cast<std::size_t>((z & 15) * 16 +
+                                                            (x & 15)))
+                            .value_or(chunk.min_y());
                     },
                 .templates = &manager,
             };
@@ -497,6 +516,21 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                             .spider = piece.spider,
                             .two_floored = piece.two_floored,
                             .mesa = piece.mesa,
+                            .portal_valid = piece.portal.has_value(),
+                            .portal_placement = piece.portal
+                                                    ? piece.portal->placement
+                                                    : std::string{},
+                            .portal_mossiness =
+                                piece.portal ? piece.portal->mossiness : 0.0F,
+                            .portal_air_pocket =
+                                piece.portal && piece.portal->air_pocket,
+                            .portal_overgrown =
+                                piece.portal && piece.portal->overgrown,
+                            .portal_vines = piece.portal && piece.portal->vines,
+                            .portal_blackstone =
+                                piece.portal &&
+                                piece.portal->replace_with_blackstone,
+                            .portal_cold = piece.portal && piece.portal->cold,
                         });
                 }
                 record.pieces = piece_records;
