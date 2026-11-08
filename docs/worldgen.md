@@ -71,6 +71,29 @@ templates from the extracted directory. Tests and oracles take both
 locations from the environment so the same code paths run against the
 files an installation would use.
 
+## Dimensions
+
+`dimension_profile_for(dimension_kind)` supplies the fixed parameters of the
+overworld, the nether and the end: the level bounds, sea level, coordinate
+scale, noise-settings path and material-rule path. The generator reads the
+noise settings the profile names and uses their default block, default fluid
+and generation geometry, so no dimension literal lives in the generation code.
+
+The noise settings of the nether and the end are 128 blocks tall while their
+level is 256 blocks tall. Fill and surface therefore run over y 0..127 and the
+level above can only be air; heightmaps and the stored chunk still cover the
+whole 256-block level. Their settings also select the legacy positional random
+source, which the loader takes from the document rather than the caller.
+
+The biome source is dimension-specific: the overworld and the nether select a
+biome from their climate parameter report (`reports/biome_parameters/`), and
+the end selects from its island bands. A fixed-biome source backs reference
+worlds whose preset declares a single biome.
+
+The nether and the end have no carver stage; carvers belong to the overworld
+pipeline. The nether temples and the end cities are not generated yet, so the
+structure generator runs in the overworld only.
+
 ## Custom feature reference worlds
 
 The feature oracle compares a generated chunk against a reference world
@@ -114,6 +137,8 @@ The reference-backed suites currently cover:
 
 - terrain fill, biome selection, surface rules, carvers and feature
   decoration, including a whole-chunk feature oracle;
+- nether and end terrain fill and surface rules against reference worlds of
+  those dimensions, plus deterministic fixed-biome chunks of both dimensions;
 - structure starts, payload trees, piece placement and full-stage
   generation for jungle temple, warm ocean ruin, beached shipwreck,
   buried treasure, mineshaft, ocean monument, stronghold and a plains
@@ -127,7 +152,11 @@ The reference-backed suites currently cover:
 
 Known gaps: structure feature placement has no climate source, so snow and
 freeze feature modifiers are inert there. Capped processor lists,
-block-entity rule modifiers and template entities are not implemented.
+block-entity rule modifiers and template entities are not implemented. The
+nether climate samplers use the standard noise layout, while the reference
+builds the temperature and vegetation noises of that dimension with the legacy
+nether-biome initializer, so a nether world's biome selection can differ from
+the reference even though the parameter table it selects from does not.
 
 Ruined portal starts place the template at the reference position and
 orientation. A dry reference candidate at chunk (-65, 0) matches block for
@@ -139,4 +168,11 @@ piece matches the reference world in the sixteen chunks the building covers.
 A stronghold start plus every fitted corridor and room matches the reference
 world in the sixty-three chunks the pieces cover, and the ring placement
 reproduces the reference candidate chunks.
+
+The dimension oracle of seed 1 matches nether chunks `(0,0)`, `(1,0)` and
+`(0,1)` and end chunks `(0,0)` and `(1,1)` block for block and in all four
+final heightmaps. Both reference worlds fix a real biome and strip its carvers
+and features, so they contain exactly the fill and surface output of that
+dimension. The deterministic dimension test repeats the fixed-biome chunks
+without a reference world, using the snapshot this repository ships.
 
