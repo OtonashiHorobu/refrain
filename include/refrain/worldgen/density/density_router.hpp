@@ -35,9 +35,18 @@ struct noise_router {
 /// Decoded `noise_settings` document (the subset terrain generation needs).
 struct noise_settings {
     noise_router router{};
+    /// Generation geometry of the `noise` field. The level may be taller; the
+    /// fill and the surface pass run over this range only.
+    jint min_y{0};
+    jint height{0};
     std::string default_block{}; ///< `minecraft:stone`
     std::string default_fluid{}; ///< `minecraft:water`
-    jint sea_level{63};
+    /// Material-rule document id (`minecraft:overworld`).
+    std::string material_rule{};
+    jint sea_level{0};
+    /// Whether the document selects the legacy random source for its
+    /// positional draws. The nether and the end use it; the overworld does not.
+    bool legacy_random_source{false};
     bool aquifers{false};
     aquifer_config aquifer{}; ///< set when `aquifers` is present
     /// The loaded documents, so callers can decode further functions (ore vein

@@ -62,8 +62,10 @@ auto write_text_file(const std::filesystem::path &path, std::string_view text)
 
 auto make_settings_json(std::string_view final_density) -> std::string {
     return std::string{"{"
+                       "\"noise\":{\"min_y\":-64,\"height\":384},"
                        "\"default_block\":\"minecraft:stone\","
                        "\"default_fluid\":\"minecraft:water\","
+                       "\"material_rule\":\"minecraft:overworld\","
                        "\"sea_level\":63,"
 
                        "\"noise_router\":{"
