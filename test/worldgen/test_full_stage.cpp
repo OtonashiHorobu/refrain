@@ -14,6 +14,7 @@
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
 #include <refrain/worldgen/structure/generation.hpp>
+#include <refrain/worldgen/structure/generator.hpp>
 #include <refrain/worldgen/structure/placement_stage.hpp>
 #include <refrain/worldgen/structure/stage.hpp>
 #include <refrain/worldgen/structure/start.hpp>
@@ -675,5 +676,61 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
         }
         expect(heightmap_mismatches == 0);
         expect(mismatches == 0);
+
+        auto generator = structure::structure_generator::create(
+            structure::structure_generator_config{
+                .data_root = data_root,
+                .templates_root = templates_root,
+                .biome = biome,
+                .seed = seed,
+                .min_y = oracle_min_y,
+                .height = oracle_height,
+                .sea_level = settings->sea_level,
+                .known_blocks =
+                    [&states] {
+                        std::vector<std::string> names;
+                        names.reserve(states.size());
+                        for (std::size_t id = 0; id < states.size(); ++id) {
+                            names.emplace_back(
+                                states.name(static_cast<block_state_id>(id)));
+                        }
+                        return names;
+                    }(),
+            });
+        expect(generator.has_value());
+        if (generator) {
+            const auto service =
+                (*generator)->generate(chunk_pos{.x = chunk_x, .z = chunk_z});
+            expect(service.has_value());
+            if (service) {
+                std::size_t service_mismatches = 0;
+                for (jint y = oracle_min_y; y < oracle_min_y + oracle_height;
+                     ++y) {
+                    for (jint z = 0; z < 16; ++z) {
+                        for (jint x = 0; x < 16; ++x) {
+                            if (canonical(std::string{
+                                    states.name(chunk.state_at(x, y, z))}) !=
+                                canonical(std::string{(*service)->table().name(
+                                    (*service)->state_at(x, y, z))})) {
+                                ++service_mismatches;
+                            }
+                        }
+                    }
+                }
+                expect(service_mismatches == 0);
+                for (const auto kind :
+                     {heightmap_kind::world_surface,
+                      heightmap_kind::ocean_floor,
+                      heightmap_kind::motion_blocking,
+                      heightmap_kind::motion_blocking_no_leaves}) {
+                    for (jint z = 0; z < 16; ++z) {
+                        for (jint x = 0; x < 16; ++x) {
+                            expect(chunk.first_available(kind, x, z) ==
+                                   (*service)->first_available(kind, x, z));
+                        }
+                    }
+                }
+            }
+        }
     };
 };
