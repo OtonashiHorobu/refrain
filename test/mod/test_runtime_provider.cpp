@@ -112,10 +112,9 @@ refrain_status fake_run_exit(void *,
             }
             const auto erased{std::erase_if(
                 plan->providers, [](const mod::resolved_provider &provider) {
-                    return provider.service == "runtime" ||
-                           provider.service == "session";
+                    return provider.service == "runtime";
                 })};
-            expect(erased == 2U);
+            expect(erased == 1U);
 
             mod::host host{};
             auto loaded{host.load(*plan, builtin_bytes())};
@@ -128,9 +127,6 @@ refrain_status fake_run_exit(void *,
             // selected provider), but the host has no runtime provider to call.
             expect(!host.services()
                         .active_provider("refrain:runtime")
-                        .has_value());
-            expect(!host.services()
-                        .active_provider("refrain:session")
                         .has_value());
             const auto *runtime_mod{host.find("refrain.server.vanilla")};
             expect(runtime_mod != nullptr);

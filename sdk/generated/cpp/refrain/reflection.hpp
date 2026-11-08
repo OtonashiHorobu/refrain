@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: b6025b8dffb79efe
+// Schema hash: 927eab4ffcbbd2c4
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2850,24 +2850,6 @@ template <> struct custom_traits<::refrain::services::runtime::runtime_config> {
         refrain::reflect::custom_field{"content_gc_keep_days", &::refrain::services::runtime::runtime_config::content_gc_keep_days},
         refrain::reflect::custom_field{"content_gc_budget_ms", &::refrain::services::runtime::runtime_config::content_gc_budget_ms},
         refrain::reflect::custom_field{"content_gc_interval_ticks", &::refrain::services::runtime::runtime_config::content_gc_interval_ticks});
-};
-
-/// Generated RIDL struct 'refrain::services::session::session_player'.
-template <> struct custom_traits<::refrain::services::session::session_player> {
-    static constexpr std::string_view type_name = "refrain::services::session::session_player";
-    static constexpr auto fields = std::make_tuple(
-        refrain::reflect::custom_field{"connection", &::refrain::services::session::session_player::connection},
-        refrain::reflect::custom_field{"name", &::refrain::services::session::session_player::name},
-        refrain::reflect::custom_field{"world", &::refrain::services::session::session_player::world});
-};
-
-/// Generated RIDL struct 'refrain::services::session::session_descriptor'.
-template <> struct custom_traits<::refrain::services::session::session_descriptor> {
-    static constexpr std::string_view type_name = "refrain::services::session::session_descriptor";
-    static constexpr auto fields = std::make_tuple(
-        refrain::reflect::custom_field{"family", &::refrain::services::session::session_descriptor::family},
-        refrain::reflect::custom_field{"edition", &::refrain::services::session::session_descriptor::edition},
-        refrain::reflect::custom_field{"capabilities", &::refrain::services::session::session_descriptor::capabilities});
 };
 
 /// Generated RIDL struct 'refrain::services::session_lifecycle::player_info'.

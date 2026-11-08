@@ -21,7 +21,7 @@ version-build           | stdout | 0       | build: | refrain-tools version
 gamepack-check          | stdout | 0       | gamepack refrain.vanilla@26.3.0 | refrain-tools gamepack check -f {root}/gamepack/gamepack.toml
 gamepack-check-provider | stdout | 0       | refrain.worldgen.vanilla@1.0.0 | refrain-tools gamepack check -f {root}/gamepack/gamepack.toml
 gamepack-dump-plan      | stdout | 0       | # resolved plan | refrain-tools gamepack dump -f {root}/gamepack/gamepack.toml
-gamepack-dump-providers | stdout | 0       | providers: 11 | refrain-tools gamepack dump -f {root}/gamepack/gamepack.toml
+gamepack-dump-providers | stdout | 0       | providers: 10 | refrain-tools gamepack dump -f {root}/gamepack/gamepack.toml
 mods-check-content      | stdout | 0       | refrain.content.vanilla@1.0.0 | refrain-tools mods check --mods {root}/mods --gamepack {root}/gamepack/gamepack.toml
 mods-check-data         | stdout | 0       | refrain.data.vanilla@1.0.0 | refrain-tools mods check --mods {root}/mods --gamepack {root}/gamepack/gamepack.toml
 mods-list-candidate     | stdout | 0       | mods: 1 candidate(s) | refrain-tools mods list --mods {root}/test/fixtures/instance
