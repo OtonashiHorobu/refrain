@@ -149,6 +149,68 @@ suite bot_tests = [] {
         std::filesystem::remove_all(dir, error);
     };
 
+    "net/server announces a second player as an entity"_test = [] {
+        const auto dir{make_temp_dir()};
+        {
+            std::ofstream stream{dir / "network.toml",
+                                 std::ios::binary | std::ios::trunc};
+            stream << "bind_host = \"127.0.0.1\"\nport = 0\n";
+        }
+        auto store{config::store::empty()};
+        expect(static_cast<bool>(store.mount(
+            {.name = "network", .path = (dir / "network.toml").string()})));
+        expect(static_cast<bool>(store.load_all()));
+        auto view{store.module("network")};
+        expect(static_cast<bool>(view));
+        if (!view) {
+            std::error_code error;
+            std::filesystem::remove_all(dir, error);
+            return;
+        }
+        auto server{net::server::start(net::server_inputs{}, *view)};
+        expect(static_cast<bool>(server));
+        if (!server) {
+            std::error_code error;
+            std::filesystem::remove_all(dir, error);
+            return;
+        }
+        const auto target{net::endpoint{.host = "127.0.0.1",
+                                        .port = (*server)->local_port()}};
+        std::thread first{[&] {
+            static_cast<void>(net::run_bot(net::bot_options{
+                .target = target,
+                .username = "BotOne",
+                .timeout = std::chrono::milliseconds{5000},
+                .linger = std::chrono::milliseconds{3000},
+            }));
+        }};
+        std::this_thread::sleep_for(std::chrono::milliseconds{800});
+        auto second{net::run_bot(net::bot_options{
+            .target = target,
+            .username = "BotTwo",
+            .timeout = std::chrono::milliseconds{5000},
+            .linger = std::chrono::milliseconds{300},
+            .capture = true,
+        })};
+        expect(static_cast<bool>(second));
+        if (second) {
+            const auto has_id = [&](std::uint32_t id) {
+                for (const auto &packet : second->capture) {
+                    if (packet.id == id) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            expect(has_id(1U));  // add_entity
+            expect(has_id(71U)); // player_info_update
+        }
+        first.join();
+        (*server)->stop();
+        std::error_code error;
+        std::filesystem::remove_all(dir, error);
+    };
+
     "net/bot completes online-mode encryption with a fake verifier"_test = [] {
         const auto dir{make_temp_dir()};
         {
