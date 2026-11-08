@@ -57,13 +57,20 @@ auto resolve_state(block_state_registry &states, std::string_view key)
     // A snow layer has no collision shape until it reaches a full block.
     const bool snow_layer = block == "minecraft:snow" &&
                             key.find("layers=8") == std::string_view::npos;
+    const bool non_solid =
+        block == "minecraft:end_portal" || block == "minecraft:end_gateway" ||
+        block == "minecraft:torch" || block == "minecraft:wall_torch" ||
+        block == "minecraft:soul_torch" ||
+        block == "minecraft:soul_wall_torch" ||
+        block == "minecraft:glow_lichen" || block == "minecraft:sculk_vein";
     return states.intern(
-        key, state_traits{.air = air,
-                          .fluid = fluid,
-                          .water = water,
-                          .blocks_motion = !air && !fluid && !snow_layer,
-                          .blocks_motion_no_leaves =
-                              !air && !fluid && !leaves && !snow_layer});
+        key, state_traits{
+                 .air = air,
+                 .fluid = fluid,
+                 .water = water,
+                 .blocks_motion = !air && !fluid && !snow_layer && !non_solid,
+                 .blocks_motion_no_leaves =
+                     !air && !fluid && !leaves && !snow_layer && !non_solid});
 }
 
 auto decode_simple_state(const data::json::value &provider,
