@@ -1,0 +1,112 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:transport` service contract.
+//
+// A transport provider moves bytes or messages between the host and remote
+// peers. It knows nothing about Minecraft packets, framing, compression,
+// encryption or session state. The provider reports its carrying protocol and
+// capabilities so a protocol provider can reject an incompatible transport
+// before a connection is accepted.
+
+module refrain::services::transport;
+version 1.0.0;
+
+import refrain::core;
+
+enum transport_error : u32 {
+    invalid_argument = 1,
+    not_found = 2,
+    already_exists = 3,
+    permission_denied = 4,
+    io_error = 5,
+    out_of_memory = 6,
+    unsupported = 7,
+    closed = 8,
+}
+
+/// Carrying protocol. A protocol provider declares the subset it accepts.
+enum transport_protocol : u32 {
+    tcp = 0,
+    tls_tcp = 1,
+    raknet = 2,
+    unix_stream = 3,
+    memory_stream = 4,
+    memory_message = 5,
+    custom = 6,
+}
+
+enum transport_event_kind : u32 {
+    opened = 1,
+    data = 2,
+    closed = 3,
+    error = 4,
+}
+
+struct transport_endpoint {
+    string host;
+    u16 port;
+}
+
+struct transport_descriptor {
+    /// Stable provider id, for example "refrain.transport.asio.tcp".
+    string provider;
+    transport_protocol protocol;
+    bool reliable;
+    bool ordered;
+    bool message_oriented;
+    u32 mtu;
+    bool backpressure;
+}
+
+/// One queued transport event. `data` is borrowed from the provider and stays
+/// valid until the next poll() call on that provider instance.
+struct transport_event {
+    transport_event_kind kind;
+    u64 connection;
+    bytes data;
+    string error;
+}
+
+service transport : 1.0.0 {
+    side = server;
+    thread = worker;
+    composition = instanced;
+    provides = [ "refrain:transport" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "stream", "message", "reliable" ];
+
+    #[thread(any)]
+    fn descriptor(out transport_descriptor value);
+
+    #[thread(any)] #[can_fail]
+    fn listen(in transport_endpoint address)
+        -> result<void, transport_error>;
+
+    #[thread(any)] #[can_fail]
+    fn connect(in transport_endpoint address)
+        -> result<u64, transport_error>;
+
+    #[thread(any)] #[can_fail]
+    fn send(u64 connection, in bytes data)
+        -> result<void, transport_error>;
+
+    #[thread(any)]
+    fn close(u64 connection);
+
+    /// Blocking poll with a bounded timeout. Returns false on timeout.
+    /// Provides at most one event per call.
+    #[thread(worker)] #[can_fail]
+    fn poll(u32 timeout_ms, out transport_event event)
+        -> result<bool, transport_error>;
+
+    #[thread(any)]
+    fn local_port() -> u16;
+
+    #[thread(any)]
+    fn connection_count() -> u64;
+
+    #[thread(any)]
+    fn stop();
+}

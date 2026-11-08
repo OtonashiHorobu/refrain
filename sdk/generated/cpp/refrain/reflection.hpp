@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: d8b792e342ba3012
+// Schema hash: dde5b4dbceca0c8c
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2811,6 +2811,37 @@ template <> struct custom_traits<::refrain::services::storage::chunk_read_result
         refrain::reflect::custom_field{"bytes_read", &::refrain::services::storage::chunk_read_result::bytes_read},
         refrain::reflect::custom_field{"format_version", &::refrain::services::storage::chunk_read_result::format_version},
         refrain::reflect::custom_field{"record_version", &::refrain::services::storage::chunk_read_result::record_version});
+};
+
+/// Generated RIDL struct 'refrain::services::transport::transport_endpoint'.
+template <> struct custom_traits<::refrain::services::transport::transport_endpoint> {
+    static constexpr std::string_view type_name = "refrain::services::transport::transport_endpoint";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"host", &::refrain::services::transport::transport_endpoint::host},
+        refrain::reflect::custom_field{"port", &::refrain::services::transport::transport_endpoint::port});
+};
+
+/// Generated RIDL struct 'refrain::services::transport::transport_descriptor'.
+template <> struct custom_traits<::refrain::services::transport::transport_descriptor> {
+    static constexpr std::string_view type_name = "refrain::services::transport::transport_descriptor";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"provider", &::refrain::services::transport::transport_descriptor::provider},
+        refrain::reflect::custom_field{"protocol", &::refrain::services::transport::transport_descriptor::protocol},
+        refrain::reflect::custom_field{"reliable", &::refrain::services::transport::transport_descriptor::reliable},
+        refrain::reflect::custom_field{"ordered", &::refrain::services::transport::transport_descriptor::ordered},
+        refrain::reflect::custom_field{"message_oriented", &::refrain::services::transport::transport_descriptor::message_oriented},
+        refrain::reflect::custom_field{"mtu", &::refrain::services::transport::transport_descriptor::mtu},
+        refrain::reflect::custom_field{"backpressure", &::refrain::services::transport::transport_descriptor::backpressure});
+};
+
+/// Generated RIDL struct 'refrain::services::transport::transport_event'.
+template <> struct custom_traits<::refrain::services::transport::transport_event> {
+    static constexpr std::string_view type_name = "refrain::services::transport::transport_event";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"kind", &::refrain::services::transport::transport_event::kind},
+        refrain::reflect::custom_field{"connection", &::refrain::services::transport::transport_event::connection},
+        refrain::reflect::custom_field{"data", &::refrain::services::transport::transport_event::data},
+        refrain::reflect::custom_field{"error", &::refrain::services::transport::transport_event::error});
 };
 
 /// Generated RIDL struct 'refrain::services::world::world_config'.
