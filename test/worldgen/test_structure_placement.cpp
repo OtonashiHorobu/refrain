@@ -1200,3 +1200,72 @@ suite<"worldgen/structure-content-index"> structure_content_index_tests = [] {
         expect(!index("minecraft:missing_structure").has_value());
     };
 };
+
+suite<"worldgen/ruined-portal"> ruined_portal_tests = [] {
+    "the portal start carries its setup and template"_test = [&] {
+        structure::structure_data_set data;
+        data.structures.emplace(
+            "test:portal",
+            structure::structure_document{
+                .id = "test:portal",
+                .type = "minecraft:ruined_portal",
+                .step = "surface_structures",
+                .biome_ids = {"minecraft:plains"},
+                .config = refrain::data::json::value::parse(R"({"setups":[{
+                    "placement":"on_land_surface",
+                    "air_pocket_probability":0.0,
+                    "mossiness":0.5,
+                    "overgrown":true,
+                    "vines":false,
+                    "can_be_cold":false,
+                    "replace_with_blackstone":true,
+                    "weight":1.0}]})")
+                              .value(),
+            });
+        data.sets.emplace(
+            "test:portals",
+            structure::structure_set{
+                .id = "test:portals",
+                .structures = {{.structure = "test:portal", .weight = 1}},
+                .random_spread =
+                    structure::random_spread_placement{
+                        .spacing = 1,
+                        .separation = 0,
+                        .salt = 0,
+                        .spread = structure::spread_type::linear,
+                        .frequency = 1.0F},
+            });
+        block_state_registry registry;
+        structure::structure_template_manager manager{"/nonexistent", registry};
+        const structure::structure_start_context context{
+            .seed = 4,
+            .data = &data,
+            .min_y = -64,
+            .world_height = 384,
+            .sea_level = 63,
+            .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+            .biome_name = [](std::uint16_t) -> std::string_view {
+                return "minecraft:plains";
+            },
+            .height_at = [](jint, jint, heightmap_kind) { return jint{70}; },
+            .opaque_at = [](jint, jint y, jint) { return y < 70; },
+            .templates = &manager,
+        };
+        const auto starts = structure::generate_structure_starts(
+            chunk_pos{.x = 0, .z = 0}, context);
+        expect(starts.size() == 1U);
+        if (starts.empty() || starts.front().pieces.empty()) {
+            return;
+        }
+        const auto &piece = starts.front().pieces.front();
+        expect(piece.type == "minecraft:ruined_portal");
+        expect(piece.portal.has_value());
+        if (piece.portal) {
+            expect(piece.portal->placement == "on_land_surface");
+            expect(piece.portal->mossiness == 0.5F);
+            expect(piece.portal->overgrown);
+            expect(piece.portal->replace_with_blackstone);
+        }
+        expect(piece.template_id.starts_with("minecraft/ruined_portal/"));
+    };
+};
