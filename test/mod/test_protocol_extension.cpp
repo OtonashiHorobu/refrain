@@ -76,6 +76,14 @@ suite protocol_extension_tests = [] {
         if (!codec) {
             return;
         }
+        provider.create_connection(7);
+        provider.notify_state(7, net_protocol::connection_state::play);
+        expect(provider.state_of(refrain::core::connection{7}) ==
+               net_protocol::connection_state::play);
+        provider.close_connection(7);
+        expect(provider.state_of(refrain::core::connection{7}) ==
+               net_protocol::connection_state::handshake);
+
         auto packet{net_protocol::make_encoded_packet()};
         const auto encoded{codec->encode_tab("Header", "Footer", packet)};
         expect(encoded.has_value());

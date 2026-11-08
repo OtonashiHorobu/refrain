@@ -387,6 +387,7 @@ void server::impl::on_open(std::uint64_t id) {
     }
     log::debug("net: connection opened id={}", id);
     protocol->create_connection(id);
+    protocol->notify_state(id, connection_state::handshake);
     const std::lock_guard lock{connections_mutex};
     auto &connection{connections[id]};
     connection.limiter.configure(config.rate_limit);
@@ -515,6 +516,7 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
     }
 
     if (state == connection_state::handshake) {
+        connection_state next_state{connection_state::handshake};
         if (*packet_id != ::refrain::protocol::current::handshake::serverbound::
                               intention::packet_id) {
             reject(id, "malformed or unexpected packet");
@@ -540,9 +542,14 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             live.handshake_port = intention.port;
             if (intention.next == 1) {
                 live.state = connection_state::status;
+                next_state = connection_state::status;
             } else if (intention.next == 2) {
                 live.state = connection_state::login;
+                next_state = connection_state::login;
             }
+        }
+        if (next_state != connection_state::handshake) {
+            protocol->notify_state(id, next_state);
         }
         log::debug("net: handshake id={} protocol={} next={}", id,
                    intention.protocol, intention.next);
@@ -715,6 +722,7 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 }
                 found->second.state = connection_state::configuration;
             }
+            protocol->notify_state(id, connection_state::configuration);
             log::info("net: login complete id={} name={}", id, name);
             send_configuration(id);
             return;
@@ -757,6 +765,7 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 }
                 found->second.state = connection_state::play;
             }
+            protocol->notify_state(id, connection_state::play);
             send_play_login(id);
             return;
         }

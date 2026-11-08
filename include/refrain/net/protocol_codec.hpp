@@ -5,6 +5,7 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
+#include <refrain/net/base.hpp>
 
 #include <cstdint>
 #include <span>
@@ -48,6 +49,9 @@ class protocol_codec {
     /// valid until the next call on this connection.
     virtual auto take_outbound(std::uint64_t connection,
                                std::span<const std::byte> &data) -> bool = 0;
+
+    virtual void notify_state(std::uint64_t connection,
+                              connection_state state) = 0;
 };
 
 } // namespace refrain::net

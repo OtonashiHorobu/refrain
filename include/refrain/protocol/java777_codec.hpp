@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <refrain/net/base.hpp>
 #include <refrain/net/protocol_codec.hpp>
 
 #include <cstdint>
@@ -43,6 +44,8 @@ class java777_codec final : public net::protocol_codec {
     [[nodiscard]] auto take_outbound(std::uint64_t connection,
                                      std::span<const std::byte> &data)
         -> bool override;
+    void notify_state(std::uint64_t connection,
+                      net::connection_state state) override;
 
   private:
     struct impl;

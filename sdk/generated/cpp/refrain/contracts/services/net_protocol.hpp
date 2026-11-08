@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 8aa1fe7cac60c1a3
+// Schema hash: 9a9c3f62f2fea89b
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_HPP
@@ -407,6 +407,12 @@ class provider final {
     [[nodiscard]] auto take_outbound(std::uint64_t connection, ::refrain::services::net_protocol::frame_chunk &chunk) const -> bool {
         ::refrain::contracts::init_struct(chunk);
         return (table_->take_outbound(self_, connection, &chunk) != 0);
+    }
+
+    /// Report a state transition observed by the session shell. The provider
+    /// keeps the state for `state_of`; it does not drive transitions.
+    auto notify_state(std::uint64_t connection, ::refrain::services::net_protocol::connection_state state) const -> void {
+        table_->notify_state(self_, connection, static_cast<refrain_services_net_protocol_connection_state>(state));
     }
 
     [[nodiscard]] auto state_of(::refrain::core::connection conn) const -> ::refrain::services::net_protocol::connection_state {

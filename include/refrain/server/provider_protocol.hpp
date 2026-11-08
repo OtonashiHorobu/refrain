@@ -43,6 +43,8 @@ class provider_protocol final : public net::protocol_codec {
     [[nodiscard]] auto take_outbound(std::uint64_t connection,
                                      std::span<const std::byte> &data)
         -> bool override;
+    void notify_state(std::uint64_t connection,
+                      net::connection_state state) override;
 
   private:
     std::unique_ptr<services::net_protocol::provider> provider_;

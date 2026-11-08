@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <unordered_map>
 
 namespace {
 
@@ -26,6 +27,9 @@ using refrain::contracts::as_string_view;
 struct protocol_state {
     refrain::protocol::java777_codec codec{};
     std::vector<std::byte> current_tab{};
+    std::unordered_map<std::uint64_t,
+                       refrain_services_net_protocol_connection_state>
+        states{};
 };
 
 void protocol_descriptor(
@@ -59,11 +63,21 @@ auto accepts_version(void *self, std::uint32_t protocol) -> std::uint8_t {
 }
 
 void create_connection(void *self, std::uint64_t connection) {
-    static_cast<protocol_state *>(self)->codec.create_connection(connection);
+    auto &state{*static_cast<protocol_state *>(self)};
+    state.codec.create_connection(connection);
+    state.states[connection] =
+        REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_HANDSHAKE;
+}
+
+void notify_state(void *self, std::uint64_t connection,
+                  refrain_services_net_protocol_connection_state state) {
+    static_cast<protocol_state *>(self)->states[connection] = state;
 }
 
 void close_connection(void *self, std::uint64_t connection) {
-    static_cast<protocol_state *>(self)->codec.close_connection(connection);
+    auto &state{*static_cast<protocol_state *>(self)};
+    state.codec.close_connection(connection);
+    state.states.erase(connection);
 }
 
 auto set_compression(void *self, std::uint64_t connection,
@@ -169,9 +183,13 @@ auto take_outbound(void *self, std::uint64_t connection,
     return 1;
 }
 
-auto state_of(void *, refrain_core_handle_connection)
+auto state_of(void *self, refrain_core_handle_connection connection)
     -> refrain_services_net_protocol_connection_state {
-    return REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_HANDSHAKE;
+    const auto &state{*static_cast<protocol_state *>(self)};
+    const auto found{state.states.find(connection)};
+    return found == state.states.end()
+               ? REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_HANDSHAKE
+               : found->second;
 }
 
 auto encode_tab(void *self, refrain_str header, refrain_str footer,
@@ -244,6 +262,7 @@ const refrain_services_net_protocol_vtable &vtable() {
         .next_packet = &next_packet,
         .send_packet = &send_packet,
         .take_outbound = &take_outbound,
+        .notify_state = &notify_state,
         .state_of = &state_of,
         .query_extension = &query_extension,
     };

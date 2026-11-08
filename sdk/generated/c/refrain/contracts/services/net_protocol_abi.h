@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 8aa1fe7cac60c1a3
+// Schema hash: 9a9c3f62f2fea89b
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_ABI_H
@@ -212,6 +212,10 @@ typedef struct refrain_services_net_protocol_vtable {
     // next take_outbound call on that connection.
     // attributes: #[thread(sim)]
     uint8_t (*take_outbound)(void *self, uint64_t connection, refrain_services_net_protocol_frame_chunk *chunk);
+    // Report a state transition observed by the session shell. The provider
+    // keeps the state for `state_of`; it does not drive transitions.
+    // attributes: #[thread(net)]
+    void (*notify_state)(void *self, uint64_t connection, refrain_services_net_protocol_connection_state state);
     // attributes: #[thread(sim)]
     refrain_services_net_protocol_connection_state (*state_of)(void *self, refrain_core_handle_connection conn);
     // Extension query. Returns REFRAIN_EXTENSION_NOT_FOUND when the

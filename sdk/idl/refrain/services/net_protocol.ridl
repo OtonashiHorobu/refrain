@@ -9,7 +9,7 @@
 // through the service vtable.
 
 module refrain::services::net_protocol;
-version 4.0.0;
+version 5.0.0;
 
 import refrain::core;
 
@@ -146,6 +146,11 @@ service net_protocol : 2.0.0 {
     /// next take_outbound call on that connection.
     #[thread(sim)]
     fn take_outbound(u64 connection, out frame_chunk chunk) -> bool;
+
+    /// Report a state transition observed by the session shell. The provider
+    /// keeps the state for `state_of`; it does not drive transitions.
+    #[thread(net)]
+    fn notify_state(u64 connection, connection_state state);
 
     #[thread(sim)]
     fn state_of(connection conn) -> connection_state;

@@ -171,6 +171,12 @@ auto java777_codec::send_packet(std::uint64_t connection,
     return status_ok();
 }
 
+void java777_codec::notify_state(std::uint64_t connection,
+                                 net::connection_state state) {
+    static_cast<void>(connection);
+    static_cast<void>(state);
+}
+
 auto java777_codec::take_outbound(std::uint64_t connection,
                                   std::span<const std::byte> &data) -> bool {
     const std::lock_guard lock{impl_->mutex};
