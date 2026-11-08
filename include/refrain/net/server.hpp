@@ -81,6 +81,10 @@ struct tab_view {
 using status_provider =
     std::function<status_info(const status_request_context &)>;
 using tab_provider = std::function<tab_view(const player_identity &)>;
+/// Optional protocol-owned encoder for the tab_list packet body. The network
+/// layer falls back to its generated encoder when empty.
+using tab_encoder = std::function<result<std::vector<std::byte>>(
+    std::string_view header, std::string_view footer)>;
 
 /// World-level policy that is part of the login handshake.
 struct server_policy {
@@ -156,6 +160,7 @@ struct server_inputs {
     command_bridge commands{};
     status_provider status{};
     tab_provider tab{};
+    tab_encoder encode_tab{};
     /// Optional transport provider. Empty uses the built-in Asio TCP
     /// transport.
     transport_factory make_transport{};

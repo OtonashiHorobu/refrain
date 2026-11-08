@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 01de959e836fba16
+// Schema hash: f206f877bdcce707
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_ABI_H
@@ -63,6 +63,7 @@ typedef struct refrain_services_net_protocol_decoded_packet refrain_services_net
 typedef struct refrain_services_net_protocol_protocol_version refrain_services_net_protocol_protocol_version;
 typedef struct refrain_services_net_protocol_frame_header refrain_services_net_protocol_frame_header;
 typedef struct refrain_services_net_protocol_packet_view refrain_services_net_protocol_packet_view;
+typedef struct refrain_services_net_protocol_encoded_packet refrain_services_net_protocol_encoded_packet;
 
 typedef uint32_t refrain_services_net_protocol_protocol_edition; // enum 'protocol_edition'
 #define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_EDITION_JAVA ((refrain_services_net_protocol_protocol_edition)(0))
@@ -137,6 +138,31 @@ struct refrain_services_net_protocol_protocol_version {
 }; // refrain_services_net_protocol_protocol_version size = 24
 #define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_VERSION_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_protocol_version))
 
+struct refrain_services_net_protocol_encoded_packet {
+    uint32_t struct_size;
+    uint8_t reserved_0[4];
+    // Borrowed encoded packet body (packet id included).
+    refrain_bytes data;
+}; // refrain_services_net_protocol_encoded_packet size = 24
+#define REFRAIN_SERVICES_NET_PROTOCOL_ENCODED_PACKET_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_encoded_packet))
+
+// Optional tab-list packet encoder. A protocol provider that exposes this
+// extension owns the version-specific text-component encoding.
+#define REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ID "refrain:net.protocol/tab_codec"
+#define REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_MAJOR 1u
+#define REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_MINOR 0u
+#define REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_PATCH 0u
+#define REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_CAPABILITY "tab-codec"
+#define REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_EXTENDS "refrain:net.protocol"
+
+typedef struct refrain_services_net_protocol_tab_codec_vtable {
+    uint32_t struct_size;
+    // attributes: #[thread(worker)] #[can_fail]
+    refrain_status (*encode_tab)(void *self, refrain_str header, refrain_str footer, refrain_services_net_protocol_encoded_packet *packet);
+} refrain_services_net_protocol_tab_codec_vtable; // extension refrain:net.protocol/tab_codec
+
+#define REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_VTABLE_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_tab_codec_vtable))
+
 // Optional chunk-to-buffer codec implemented by chunk-aware providers.
 #define REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_ID "refrain:net.protocol/chunk_codec"
 #define REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_ABI_MAJOR 1u
@@ -164,7 +190,7 @@ typedef struct refrain_services_net_protocol_chunk_codec_vtable {
 #define REFRAIN_SERVICES_NET_PROTOCOL_CAPABILITIES "frame-compression,registry-sync"
 #define REFRAIN_SERVICES_NET_PROTOCOL_REQUIRES "refrain:core>=1.0.0"
 #define REFRAIN_SERVICES_NET_PROTOCOL_SERVICE_IDS "refrain:net.protocol"
-#define REFRAIN_SERVICES_NET_PROTOCOL_EXTENSION_IDS "refrain:net.protocol/chunk_codec"
+#define REFRAIN_SERVICES_NET_PROTOCOL_EXTENSION_IDS "refrain:net.protocol/chunk_codec,refrain:net.protocol/tab_codec"
 
 typedef struct refrain_services_net_protocol_vtable {
     uint32_t struct_size;

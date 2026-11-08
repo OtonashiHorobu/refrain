@@ -237,6 +237,29 @@ struct runtime_provider {
             auto descriptor{
                 refrain::services::net_protocol::make_protocol_descriptor()};
             protocol_service.descriptor(descriptor);
+            auto tab_codec{
+                protocol_service
+                    .extension<refrain::services::net_protocol::tab_codec>()};
+            if (tab_codec) {
+                options.encode_tab = [codec =
+                                          *tab_codec](std::string_view header,
+                                                      std::string_view footer)
+                    -> refrain::result<std::vector<std::byte>> {
+                    auto packet{
+                        refrain::services::net_protocol::make_encoded_packet()};
+                    auto encoded{codec.encode_tab(header, footer, packet)};
+                    if (!encoded) {
+                        return std::unexpected{refrain::make_error(
+                            refrain::error_code::parse_error,
+                            "protocol tab encoder failed")};
+                    }
+                    const auto bytes{refrain::contracts::as_bytes(packet.data)};
+                    return std::vector<std::byte>{
+                        reinterpret_cast<const std::byte *>(bytes.data()),
+                        reinterpret_cast<const std::byte *>(bytes.data()) +
+                            bytes.size()};
+                };
+            }
             if (descriptor.canonical_version != 777U ||
                 descriptor.transport_protocol != 0U ||
                 descriptor.requires_stream == 0) {

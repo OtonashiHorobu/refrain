@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 01de959e836fba16
+// Schema hash: f206f877bdcce707
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_HPP
@@ -94,6 +94,13 @@ using packet_view = ::refrain_services_net_protocol_packet_view;
     ::refrain::contracts::init_struct(value);
     return value;
 }
+using encoded_packet = ::refrain_services_net_protocol_encoded_packet;
+/// Zero-initialized `encoded_packet` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
+[[nodiscard]] inline auto make_encoded_packet() noexcept -> encoded_packet {
+    encoded_packet value{};
+    ::refrain::contracts::init_struct(value);
+    return value;
+}
 
 static_assert(sizeof(protocol_descriptor) == 72);
 static_assert(alignof(protocol_descriptor) == 8);
@@ -129,6 +136,59 @@ static_assert(alignof(packet_view) == 8);
 static_assert(offsetof(packet_view, struct_size) == 0);
 static_assert(offsetof(packet_view, packet_id) == 4);
 static_assert(offsetof(packet_view, payload) == 8);
+static_assert(sizeof(encoded_packet) == 24);
+static_assert(alignof(encoded_packet) == 8);
+static_assert(offsetof(encoded_packet, struct_size) == 0);
+static_assert(offsetof(encoded_packet, data) == 8);
+
+/// Optional tab-list packet encoder. A protocol provider that exposes this
+/// extension owns the version-specific text-component encoding.
+/// Provider-implemented extension extending 'refrain:net.protocol'.
+/// A host binds the reference once through `provider::extension<T>()`;
+/// method calls below dispatch through the bound vtable.
+class tab_codec final {
+  public:
+    using vtable = ::refrain_services_net_protocol_tab_codec_vtable;
+    static constexpr std::string_view extension_id =
+        "refrain:net.protocol/tab_codec";
+    static constexpr std::string_view extends_service =
+        "refrain:net.protocol";
+    static constexpr std::string_view capability =
+        "tab-codec";
+    static constexpr std::uint32_t abi_major = 1;
+    static constexpr std::uint32_t abi_minor = 0;
+    static constexpr std::uint32_t abi_patch = 0;
+    /// Packed minimum version requested from a provider:
+    /// (major << 16) | minor.
+    static constexpr std::uint32_t abi_version =
+        (1u << 16u) | 0u;
+
+    tab_codec(const vtable &table, void *self) noexcept
+        : table_{&table}, self_{self} {}
+
+    [[nodiscard]] auto table() const noexcept
+        -> const vtable & {
+        return *table_;
+    }
+
+    [[nodiscard]] auto self() const noexcept -> void * {
+        return self_;
+    }
+
+    [[nodiscard]] auto encode_tab(std::string_view header, std::string_view footer, ::refrain::services::net_protocol::encoded_packet &packet) const -> std::expected<void, ::refrain::services::net_protocol::protocol_error> {
+        ::refrain::contracts::init_struct(packet);
+        if (const auto code = table_->encode_tab(self_, ::refrain::contracts::to_borrowed(header), ::refrain::contracts::to_borrowed(footer), &packet); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::net_protocol::protocol_error>(code));
+        }
+        return {};
+    }
+
+  private:
+    const vtable *table_;
+    void *self_;
+};
+
+static_assert(offsetof(::refrain_services_net_protocol_tab_codec_vtable, struct_size) == 0);
 
 /// Optional chunk-to-buffer codec implemented by chunk-aware providers.
 /// Provider-implemented extension extending 'refrain:net.protocol'.
@@ -191,7 +251,7 @@ inline constexpr std::string_view capabilities = "frame-compression,registry-syn
 inline constexpr std::string_view required_services = "refrain:core>=1.0.0";
 inline constexpr std::string_view service_ids[] = {"refrain:net.protocol"};
 inline constexpr std::string_view extension_ids[] = {
-"refrain:net.protocol/chunk_codec"};
+"refrain:net.protocol/chunk_codec", "refrain:net.protocol/tab_codec"};
 
 namespace detail {
 [[nodiscard]] inline auto extension_failure(::refrain_status status,

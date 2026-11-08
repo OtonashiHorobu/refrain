@@ -10,6 +10,8 @@
 #include <refrain/contracts/services/net_protocol_abi.h>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/static_mod.hpp>
+#include <refrain/net/base.hpp>
+#include <refrain/protocol/current.hpp>
 #include <refrain/protocol/java777_codec.hpp>
 
 #include <cstdint>
@@ -23,6 +25,7 @@ using refrain::contracts::as_string_view;
 
 struct protocol_state {
     refrain::protocol::java777_codec codec{};
+    std::vector<std::byte> current_tab{};
 };
 
 void protocol_descriptor(
@@ -171,9 +174,57 @@ auto state_of(void *, refrain_core_handle_connection)
     return REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_HANDSHAKE;
 }
 
-auto query_extension(void *, refrain_str, std::uint32_t,
-                     refrain_extension_ref *) -> refrain_status {
-    return REFRAIN_EXTENSION_NOT_FOUND;
+auto encode_tab(void *self, refrain_str header, refrain_str footer,
+                refrain_services_net_protocol_encoded_packet *out)
+    -> refrain_status {
+    auto &state{*static_cast<protocol_state *>(self)};
+    refrain::protocol::current::play::clientbound::tab_list packet{};
+    packet.header.text = std::string{as_string_view(header)};
+    packet.footer.text = std::string{as_string_view(footer)};
+    state.current_tab.clear();
+    refrain::net::writer writer{state.current_tab};
+    writer.write_varint(
+        refrain::protocol::current::play::clientbound::tab_list::packet_id);
+    if (auto encoded{
+            refrain::protocol::current::play::clientbound::encode_tab_list(
+                writer, packet)};
+        !encoded) {
+        return REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_ERROR_MALFORMED_PACKET;
+    }
+    out->struct_size = REFRAIN_SERVICES_NET_PROTOCOL_ENCODED_PACKET_SIZE;
+    out->data = refrain::contracts::to_borrowed(std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t *>(state.current_tab.data()),
+        state.current_tab.size()});
+    return REFRAIN_STATUS_OK;
+}
+
+auto query_extension(void *self, refrain_str id, std::uint32_t min_version,
+                     refrain_extension_ref *out) -> refrain_status {
+    if (self == nullptr || out == nullptr) {
+        return REFRAIN_EXTENSION_INVALID;
+    }
+    static const refrain_services_net_protocol_tab_codec_vtable tab_vtable{
+        .struct_size = REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_VTABLE_SIZE,
+        .encode_tab = &encode_tab,
+    };
+    if (as_string_view(id) != REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ID) {
+        return REFRAIN_EXTENSION_NOT_FOUND;
+    }
+    const auto version{
+        (REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_MAJOR << 16U) |
+        REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_MINOR};
+    if (min_version > version) {
+        return REFRAIN_EXTENSION_VERSION_MISMATCH;
+    }
+    out->struct_size = REFRAIN_EXTENSION_REF_SIZE;
+    out->abi_major = REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_MAJOR;
+    out->abi_minor = REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_MINOR;
+    out->abi_patch = REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_PATCH;
+    out->id = refrain::contracts::to_borrowed(
+        REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ID);
+    out->vtable = &tab_vtable;
+    out->self = self;
+    return REFRAIN_STATUS_OK;
 }
 
 const refrain_services_net_protocol_vtable &vtable() {

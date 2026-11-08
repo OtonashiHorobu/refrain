@@ -74,6 +74,22 @@ struct packet_view {
     bytes payload;
 }
 
+struct encoded_packet {
+    /// Borrowed encoded packet body (packet id included).
+    bytes data;
+}
+
+/// Optional tab-list packet encoder. A protocol provider that exposes this
+/// extension owns the version-specific text-component encoding.
+extension tab_codec : 1.0.0 {
+    extends = "refrain:net.protocol";
+    capability = "tab-codec";
+
+    #[thread(worker)] #[can_fail]
+    fn encode_tab(in string header, in string footer, out encoded_packet packet)
+        -> result<void, protocol_error>;
+}
+
 /// Optional chunk-to-buffer codec implemented by chunk-aware providers.
 extension chunk_codec : 1.0.0 {
     extends = "refrain:net.protocol";
@@ -92,7 +108,7 @@ service net_protocol : 2.0.0 {
     provides = [ "refrain:net.protocol" ];
     requires = [ "refrain:core>=1.0.0" ];
     capabilities = [ "frame-compression", "registry-sync" ];
-    extensions = [ chunk_codec ];
+    extensions = [ chunk_codec, tab_codec ];
 
     #[thread(any)]
     fn descriptor(out protocol_descriptor value);

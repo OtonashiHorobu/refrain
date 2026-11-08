@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 01de959e836fba16
+// Schema hash: f206f877bdcce707
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2779,6 +2779,13 @@ template <> struct custom_traits<::refrain::services::net_protocol::packet_view>
         refrain::reflect::custom_field{"payload", &::refrain::services::net_protocol::packet_view::payload});
 };
 
+/// Generated RIDL struct 'refrain::services::net_protocol::encoded_packet'.
+template <> struct custom_traits<::refrain::services::net_protocol::encoded_packet> {
+    static constexpr std::string_view type_name = "refrain::services::net_protocol::encoded_packet";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"data", &::refrain::services::net_protocol::encoded_packet::data});
+};
+
 /// Generated RIDL struct 'refrain::services::runtime::runtime_config'.
 template <> struct custom_traits<::refrain::services::runtime::runtime_config> {
     static constexpr std::string_view type_name = "refrain::services::runtime::runtime_config";
@@ -3017,6 +3024,16 @@ template <> struct custom_traits<::refrain::storage::chunk> {
         refrain::reflect::custom_field{"extensions", &::refrain::storage::chunk::extensions},
         refrain::reflect::custom_field{"y_pos", &::refrain::storage::chunk::y_pos},
         refrain::reflect::custom_field{"light_sections", &::refrain::storage::chunk::light_sections});
+};
+
+/// Generated RIDL extension 'refrain:net.protocol/tab_codec'.
+template <> struct custom_extension_traits<::refrain::services::net_protocol::tab_codec> {
+    static constexpr std::string_view id = "refrain:net.protocol/tab_codec";
+    static constexpr std::string_view extends = "refrain:net.protocol";
+    static constexpr std::string_view capability = "tab-codec";
+    static constexpr std::uint32_t abi_major = 1;
+    static constexpr std::uint32_t abi_minor = 0;
+    static constexpr std::uint32_t abi_patch = 0;
 };
 
 /// Generated RIDL extension 'refrain:net.protocol/chunk_codec'.

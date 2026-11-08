@@ -238,6 +238,7 @@ struct server::impl {
     command_bridge commands{};
     status_provider status_hook{};
     tab_provider tab_hook{};
+    tab_encoder tab_encoder_hook{};
     transport_factory make_transport{};
     std::shared_ptr<protocol_codec> protocol{};
     std::mutex command_cache_mutex{};
@@ -1451,6 +1452,12 @@ void server::impl::send_tab_list(std::uint64_t id) {
         .world = {},
     };
     const auto view{tab_hook(identity)};
+    if (tab_encoder_hook) {
+        if (auto encoded{tab_encoder_hook(view.header, view.footer)}; encoded) {
+            send(id, *encoded);
+            return;
+        }
+    }
     play_cb::tab_list packet{};
     packet.header.text = view.header;
     packet.footer.text = view.footer;
@@ -2562,6 +2569,7 @@ auto server::start(server_inputs inputs, core::config::view view)
     state->commands = std::move(inputs.commands);
     state->status_hook = std::move(inputs.status);
     state->tab_hook = std::move(inputs.tab);
+    state->tab_encoder_hook = std::move(inputs.encode_tab);
     state->make_transport = std::move(inputs.make_transport);
     state->protocol = std::move(inputs.protocol);
     state->verify_session = std::move(inputs.verify_session);
