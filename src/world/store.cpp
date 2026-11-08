@@ -37,6 +37,77 @@ constexpr std::size_t max_palette_bytes{4ULL << 20U};
     return std::unexpected{make_error(code, message)};
 }
 
+/// Inclusive bounds of the vanilla enumerations projected into `level_info`.
+constexpr std::int32_t max_game_mode{3};
+constexpr std::int32_t max_difficulty{3};
+
+[[nodiscard]] auto valid_enumeration(std::int32_t value, std::int32_t upper)
+    -> bool {
+    return value >= 0 && value <= upper;
+}
+
+/// Read an integer-valued `level` tag. Vanilla stores enumeration fields as
+/// either TAG_Int or TAG_Byte depending on the field and the world version, so
+/// both are accepted; every other tag type is ignored.
+[[nodiscard]] auto stored_integer(const data::nbt::value &level,
+                                  std::string_view key)
+    -> std::optional<std::int32_t> {
+    const auto *field{level.get(key)};
+    if (field == nullptr) {
+        return std::nullopt;
+    }
+    if (const auto value{field->as_int()}) {
+        return *value;
+    }
+    if (const auto value{field->as_byte()}) {
+        return static_cast<std::int32_t>(*value);
+    }
+    return std::nullopt;
+}
+
+/// Fill the gameplay fields of `info` from a `level` compound. Missing,
+/// mistyped or out-of-range tags keep the field defaults so that opening an
+/// older or foreign world never fails on them.
+void project_gameplay(const data::nbt::value &level, level_info &info) {
+    if (const auto value{stored_integer(level, "GameType")};
+        value.has_value() && valid_enumeration(*value, max_game_mode)) {
+        info.game_mode = *value;
+    }
+    if (const auto value{stored_integer(level, "hardcore")};
+        value.has_value()) {
+        info.hardcore = *value != 0;
+    }
+    if (const auto value{stored_integer(level, "Difficulty")};
+        value.has_value() && valid_enumeration(*value, max_difficulty)) {
+        info.difficulty = *value;
+    }
+    if (const auto value{stored_integer(level, "DifficultyLocked")};
+        value.has_value()) {
+        info.difficulty_locked = *value != 0;
+    }
+}
+
+/// Replace one gameplay tag of a `level` compound. A field already stored as
+/// TAG_Byte or TAG_Int keeps that width; otherwise `canonical` (the vanilla
+/// type) is used.
+[[nodiscard]] auto
+set_gameplay_integer(data::nbt::value &level, std::string_view key,
+                     std::int32_t value, data::nbt::tag_type canonical)
+    -> status {
+    auto kind{canonical};
+    if (const auto *existing{level.get(key)}; existing != nullptr) {
+        if (existing->is(data::nbt::tag_type::byte) ||
+            existing->is(data::nbt::tag_type::int_)) {
+            kind = existing->type();
+        }
+    }
+    if (kind == data::nbt::tag_type::byte) {
+        return level.set(std::string{key},
+                         data::nbt::make_byte(static_cast<std::int8_t>(value)));
+    }
+    return level.set(std::string{key}, data::nbt::make_int(value));
+}
+
 [[nodiscard]] auto valid_dimension_component(std::string_view value) -> bool {
     return !value.empty() && value != "." && value != ".." &&
            value.find('\0') == std::string_view::npos &&
@@ -656,7 +727,84 @@ auto world_store::level() -> result<level_info> {
             info.level_name = std::string{*text};
         }
     }
+    project_gameplay(*level, info);
     return info;
+}
+
+auto world_store::read_gameplay() -> result<gameplay_settings> {
+    auto info{level()};
+    if (!info) {
+        return std::unexpected{info.error()};
+    }
+    return gameplay_settings{
+        .game_mode = info->game_mode,
+        .hardcore = info->hardcore,
+        .difficulty = info->difficulty,
+        .difficulty_locked = info->difficulty_locked,
+    };
+}
+
+auto world_store::write_gameplay(const gameplay_settings &settings) -> status {
+    if (!valid()) {
+        return failing(error_code::not_initialized, "world store is closed");
+    }
+    if (!valid_enumeration(settings.game_mode, max_game_mode)) {
+        return failing(error_code::invalid_argument,
+                       fmt::format("game mode {} is outside [0, {}]",
+                                   settings.game_mode, max_game_mode));
+    }
+    if (!valid_enumeration(settings.difficulty, max_difficulty)) {
+        return failing(error_code::invalid_argument,
+                       fmt::format("difficulty {} is outside [0, {}]",
+                                   settings.difficulty, max_difficulty));
+    }
+    const auto path{join_path(impl_->root, "meta.rfw")};
+    if (!core::io::exists(path)) {
+        return failing(error_code::not_found, "meta.rfw is missing");
+    }
+    auto payload{rwf::read_record_file(path)};
+    if (!payload) {
+        return std::unexpected{payload.error()};
+    }
+    auto document{data::nbt::read(*payload)};
+    if (!document) {
+        return std::unexpected{document.error()};
+    }
+    auto *level{document->get("level")};
+    if (level == nullptr || level->as_compound() == nullptr) {
+        return failing(error_code::parse_error,
+                       "meta.rfw has no 'level' compound");
+    }
+    // Vanilla stores GameType as an int and the other three as bytes; an
+    // existing byte/int width is kept so unrelated tags are not retyped.
+    if (auto written{set_gameplay_integer(
+            *level, "GameType", settings.game_mode, data::nbt::tag_type::int_)};
+        !written) {
+        return written;
+    }
+    if (auto written{set_gameplay_integer(*level, "hardcore",
+                                          settings.hardcore ? 1 : 0,
+                                          data::nbt::tag_type::byte)};
+        !written) {
+        return written;
+    }
+    if (auto written{set_gameplay_integer(*level, "Difficulty",
+                                          settings.difficulty,
+                                          data::nbt::tag_type::byte)};
+        !written) {
+        return written;
+    }
+    if (auto written{set_gameplay_integer(*level, "DifficultyLocked",
+                                          settings.difficulty_locked ? 1 : 0,
+                                          data::nbt::tag_type::byte)};
+        !written) {
+        return written;
+    }
+    auto bytes{data::nbt::write(*document, "", data::nbt::compression::none)};
+    if (!bytes) {
+        return std::unexpected{bytes.error()};
+    }
+    return rwf::write_record_file(path, *bytes);
 }
 
 auto world_store::validate_level() -> result<level_info> {
