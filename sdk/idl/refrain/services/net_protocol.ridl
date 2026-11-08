@@ -9,7 +9,7 @@
 // through the service vtable.
 
 module refrain::services::net_protocol;
-version 2.0.0;
+version 3.0.0;
 
 import refrain::core;
 
@@ -46,6 +46,16 @@ struct protocol_descriptor {
     u32 transport_protocol;
     bool requires_stream;
     string capabilities;
+}
+
+struct frame_chunk {
+    /// Borrowed framed bytes, valid until the next call.
+    bytes data;
+}
+
+struct decoded_packet {
+    frame_header header;
+    packet_view packet;
 }
 
 struct protocol_version {
@@ -94,15 +104,43 @@ service net_protocol : 2.0.0 {
     #[thread(any)]
     fn accepts_version(u32 protocol) -> bool;
 
-    /// Decode one packet from a connection's inbound buffer.
+    /// Create/close the framing, compression and cipher state for one
+    /// connection. `next_packet`/`send_packet` operate on this state.
+    #[thread(any)]
+    fn create_connection(u64 connection);
+
+    #[thread(any)]
+    fn close_connection(u64 connection);
+
+    #[thread(any)] #[can_fail]
+    fn set_compression(u64 connection, i32 threshold)
+        -> result<void, protocol_error>;
+
+    #[thread(any)] #[can_fail]
+    fn set_cipher(u64 connection, in bytes key, in bytes iv)
+        -> result<void, protocol_error>;
+
+    /// Feed inbound transport bytes. They are decrypted and framed lazily by
+    /// next_packet.
     #[thread(worker)] #[can_fail]
-    fn next_packet(connection conn, out packet_view packet)
-        -> result<frame_header, protocol_error>;
+    fn feed(u64 connection, in bytes data)
+        -> result<void, protocol_error>;
+
+    /// Decode one packet from a connection's inbound buffer. Returns false
+    /// when more transport bytes are needed.
+    #[thread(worker)] #[can_fail]
+    fn next_packet(u64 connection, out decoded_packet packet)
+        -> result<bool, protocol_error>;
 
     /// Encode and enqueue one packet on the connection.
     #[thread(sim)] #[can_fail]
-    fn send_packet(connection conn, in packet_view packet)
+    fn send_packet(u64 connection, in packet_view packet)
         -> result<void, protocol_error>;
+
+    /// Pop one framed/encrypted outbound chunk. `data` is borrowed until the
+    /// next take_outbound call on that connection.
+    #[thread(sim)]
+    fn take_outbound(u64 connection, out frame_chunk chunk) -> bool;
 
     #[thread(sim)]
     fn state_of(connection conn) -> connection_state;

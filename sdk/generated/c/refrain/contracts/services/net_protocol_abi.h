@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: c51c38b6cd952844
+// Schema hash: 4d4424e4f6b78480
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_ABI_H
@@ -58,6 +58,8 @@ typedef struct refrain_extension_ref {
 #endif // REFRAIN_EXTENSION_ABI_DEFINED
 
 typedef struct refrain_services_net_protocol_protocol_descriptor refrain_services_net_protocol_protocol_descriptor;
+typedef struct refrain_services_net_protocol_frame_chunk refrain_services_net_protocol_frame_chunk;
+typedef struct refrain_services_net_protocol_decoded_packet refrain_services_net_protocol_decoded_packet;
 typedef struct refrain_services_net_protocol_protocol_version refrain_services_net_protocol_protocol_version;
 typedef struct refrain_services_net_protocol_frame_header refrain_services_net_protocol_frame_header;
 typedef struct refrain_services_net_protocol_packet_view refrain_services_net_protocol_packet_view;
@@ -98,12 +100,13 @@ struct refrain_services_net_protocol_protocol_descriptor {
 }; // refrain_services_net_protocol_protocol_descriptor size = 72
 #define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_DESCRIPTOR_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_protocol_descriptor))
 
-struct refrain_services_net_protocol_protocol_version {
+struct refrain_services_net_protocol_frame_chunk {
     uint32_t struct_size;
-    uint32_t protocol;
-    refrain_str name;
-}; // refrain_services_net_protocol_protocol_version size = 24
-#define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_VERSION_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_protocol_version))
+    uint8_t reserved_0[4];
+    // Borrowed framed bytes, valid until the next call.
+    refrain_bytes data;
+}; // refrain_services_net_protocol_frame_chunk size = 24
+#define REFRAIN_SERVICES_NET_PROTOCOL_FRAME_CHUNK_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_frame_chunk))
 
 struct refrain_services_net_protocol_frame_header {
     uint32_t struct_size;
@@ -119,6 +122,20 @@ struct refrain_services_net_protocol_packet_view {
     refrain_bytes payload;
 }; // refrain_services_net_protocol_packet_view size = 24
 #define REFRAIN_SERVICES_NET_PROTOCOL_PACKET_VIEW_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_packet_view))
+
+struct refrain_services_net_protocol_decoded_packet {
+    uint32_t struct_size;
+    refrain_services_net_protocol_frame_header header;
+    refrain_services_net_protocol_packet_view packet;
+}; // refrain_services_net_protocol_decoded_packet size = 40
+#define REFRAIN_SERVICES_NET_PROTOCOL_DECODED_PACKET_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_decoded_packet))
+
+struct refrain_services_net_protocol_protocol_version {
+    uint32_t struct_size;
+    uint32_t protocol;
+    refrain_str name;
+}; // refrain_services_net_protocol_protocol_version size = 24
+#define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_VERSION_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_protocol_version))
 
 // Optional chunk-to-buffer codec implemented by chunk-aware providers.
 #define REFRAIN_SERVICES_NET_PROTOCOL_CHUNK_CODEC_ID "refrain:net.protocol/chunk_codec"
@@ -161,12 +178,31 @@ typedef struct refrain_services_net_protocol_vtable {
     uint32_t (*protocol_id)(void *self);
     // attributes: #[thread(any)]
     uint8_t (*accepts_version)(void *self, uint32_t protocol);
-    // Decode one packet from a connection's inbound buffer.
+    // Create/close the framing, compression and cipher state for one
+    // connection. `next_packet`/`send_packet` operate on this state.
+    // attributes: #[thread(any)]
+    void (*create_connection)(void *self, uint64_t connection);
+    // attributes: #[thread(any)]
+    void (*close_connection)(void *self, uint64_t connection);
+    // attributes: #[thread(any)] #[can_fail]
+    refrain_status (*set_compression)(void *self, uint64_t connection, int32_t threshold);
+    // attributes: #[thread(any)] #[can_fail]
+    refrain_status (*set_cipher)(void *self, uint64_t connection, refrain_bytes key, refrain_bytes iv);
+    // Feed inbound transport bytes. They are decrypted and framed lazily by
+    // next_packet.
     // attributes: #[thread(worker)] #[can_fail]
-    refrain_status (*next_packet)(void *self, refrain_core_handle_connection conn, refrain_services_net_protocol_packet_view *packet, refrain_services_net_protocol_frame_header *out_value);
+    refrain_status (*feed)(void *self, uint64_t connection, refrain_bytes data);
+    // Decode one packet from a connection's inbound buffer. Returns false
+    // when more transport bytes are needed.
+    // attributes: #[thread(worker)] #[can_fail]
+    refrain_status (*next_packet)(void *self, uint64_t connection, refrain_services_net_protocol_decoded_packet *packet, uint8_t *out_value);
     // Encode and enqueue one packet on the connection.
     // attributes: #[thread(sim)] #[can_fail]
-    refrain_status (*send_packet)(void *self, refrain_core_handle_connection conn, const refrain_services_net_protocol_packet_view *packet);
+    refrain_status (*send_packet)(void *self, uint64_t connection, const refrain_services_net_protocol_packet_view *packet);
+    // Pop one framed/encrypted outbound chunk. `data` is borrowed until the
+    // next take_outbound call on that connection.
+    // attributes: #[thread(sim)]
+    uint8_t (*take_outbound)(void *self, uint64_t connection, refrain_services_net_protocol_frame_chunk *chunk);
     // attributes: #[thread(sim)]
     refrain_services_net_protocol_connection_state (*state_of)(void *self, refrain_core_handle_connection conn);
     // Extension query. Returns REFRAIN_EXTENSION_NOT_FOUND when the

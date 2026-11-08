@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: c51c38b6cd952844
+// Schema hash: 4d4424e4f6b78480
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2738,6 +2738,21 @@ template <> struct custom_traits<::refrain::services::net_protocol::protocol_des
         refrain::reflect::custom_field{"transport_protocol", &::refrain::services::net_protocol::protocol_descriptor::transport_protocol},
         refrain::reflect::custom_field{"requires_stream", &::refrain::services::net_protocol::protocol_descriptor::requires_stream},
         refrain::reflect::custom_field{"capabilities", &::refrain::services::net_protocol::protocol_descriptor::capabilities});
+};
+
+/// Generated RIDL struct 'refrain::services::net_protocol::frame_chunk'.
+template <> struct custom_traits<::refrain::services::net_protocol::frame_chunk> {
+    static constexpr std::string_view type_name = "refrain::services::net_protocol::frame_chunk";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"data", &::refrain::services::net_protocol::frame_chunk::data});
+};
+
+/// Generated RIDL struct 'refrain::services::net_protocol::decoded_packet'.
+template <> struct custom_traits<::refrain::services::net_protocol::decoded_packet> {
+    static constexpr std::string_view type_name = "refrain::services::net_protocol::decoded_packet";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"header", &::refrain::services::net_protocol::decoded_packet::header},
+        refrain::reflect::custom_field{"packet", &::refrain::services::net_protocol::decoded_packet::packet});
 };
 
 /// Generated RIDL struct 'refrain::services::net_protocol::protocol_version'.

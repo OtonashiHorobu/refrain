@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: c51c38b6cd952844
+// Schema hash: 4d4424e4f6b78480
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_HPP
@@ -58,6 +58,20 @@ using protocol_descriptor = ::refrain_services_net_protocol_protocol_descriptor;
     ::refrain::contracts::init_struct(value);
     return value;
 }
+using frame_chunk = ::refrain_services_net_protocol_frame_chunk;
+/// Zero-initialized `frame_chunk` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
+[[nodiscard]] inline auto make_frame_chunk() noexcept -> frame_chunk {
+    frame_chunk value{};
+    ::refrain::contracts::init_struct(value);
+    return value;
+}
+using decoded_packet = ::refrain_services_net_protocol_decoded_packet;
+/// Zero-initialized `decoded_packet` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
+[[nodiscard]] inline auto make_decoded_packet() noexcept -> decoded_packet {
+    decoded_packet value{};
+    ::refrain::contracts::init_struct(value);
+    return value;
+}
 using protocol_version = ::refrain_services_net_protocol_protocol_version;
 /// Zero-initialized `protocol_version` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
 [[nodiscard]] inline auto make_protocol_version() noexcept -> protocol_version {
@@ -91,6 +105,15 @@ static_assert(offsetof(protocol_descriptor, accepted_versions) == 32);
 static_assert(offsetof(protocol_descriptor, transport_protocol) == 48);
 static_assert(offsetof(protocol_descriptor, requires_stream) == 52);
 static_assert(offsetof(protocol_descriptor, capabilities) == 56);
+static_assert(sizeof(frame_chunk) == 24);
+static_assert(alignof(frame_chunk) == 8);
+static_assert(offsetof(frame_chunk, struct_size) == 0);
+static_assert(offsetof(frame_chunk, data) == 8);
+static_assert(sizeof(decoded_packet) == 40);
+static_assert(alignof(decoded_packet) == 8);
+static_assert(offsetof(decoded_packet, struct_size) == 0);
+static_assert(offsetof(decoded_packet, header) == 4);
+static_assert(offsetof(decoded_packet, packet) == 16);
 static_assert(sizeof(protocol_version) == 24);
 static_assert(alignof(protocol_version) == 8);
 static_assert(offsetof(protocol_version, struct_size) == 0);
@@ -316,24 +339,64 @@ class provider final {
         return (table_->accepts_version(self_, protocol) != 0);
     }
 
-    /// Decode one packet from a connection's inbound buffer.
-    [[nodiscard]] auto next_packet(::refrain::core::connection conn, ::refrain::services::net_protocol::packet_view &packet) const -> std::expected<::refrain::services::net_protocol::frame_header, ::refrain::services::net_protocol::protocol_error> {
-        ::refrain::contracts::init_struct(packet);
-        ::refrain_services_net_protocol_frame_header value{};
-        ::refrain::contracts::init_struct(value);
-        if (const auto code = table_->next_packet(self_, conn.raw(), &packet, &value); code != REFRAIN_STATUS_OK) {
-            return std::unexpected(static_cast<::refrain::services::net_protocol::protocol_error>(code));
-        }
-        return value;
+    /// Create/close the framing, compression and cipher state for one
+    /// connection. `next_packet`/`send_packet` operate on this state.
+    auto create_connection(std::uint64_t connection) const -> void {
+        table_->create_connection(self_, connection);
     }
 
-    /// Encode and enqueue one packet on the connection.
-    [[nodiscard]] auto send_packet(::refrain::core::connection conn, const ::refrain::services::net_protocol::packet_view &packet) const -> std::expected<void, ::refrain::services::net_protocol::protocol_error> {
-        const auto abi_packet = ::refrain::contracts::with_struct_size(packet);
-        if (const auto code = table_->send_packet(self_, conn.raw(), &abi_packet); code != REFRAIN_STATUS_OK) {
+    auto close_connection(std::uint64_t connection) const -> void {
+        table_->close_connection(self_, connection);
+    }
+
+    [[nodiscard]] auto set_compression(std::uint64_t connection, std::int32_t threshold) const -> std::expected<void, ::refrain::services::net_protocol::protocol_error> {
+        if (const auto code = table_->set_compression(self_, connection, threshold); code != REFRAIN_STATUS_OK) {
             return std::unexpected(static_cast<::refrain::services::net_protocol::protocol_error>(code));
         }
         return {};
+    }
+
+    [[nodiscard]] auto set_cipher(std::uint64_t connection, std::span<const std::uint8_t> key, std::span<const std::uint8_t> iv) const -> std::expected<void, ::refrain::services::net_protocol::protocol_error> {
+        if (const auto code = table_->set_cipher(self_, connection, ::refrain::contracts::to_borrowed(key), ::refrain::contracts::to_borrowed(iv)); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::net_protocol::protocol_error>(code));
+        }
+        return {};
+    }
+
+    /// Feed inbound transport bytes. They are decrypted and framed lazily by
+    /// next_packet.
+    [[nodiscard]] auto feed(std::uint64_t connection, std::span<const std::uint8_t> data) const -> std::expected<void, ::refrain::services::net_protocol::protocol_error> {
+        if (const auto code = table_->feed(self_, connection, ::refrain::contracts::to_borrowed(data)); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::net_protocol::protocol_error>(code));
+        }
+        return {};
+    }
+
+    /// Decode one packet from a connection's inbound buffer. Returns false
+    /// when more transport bytes are needed.
+    [[nodiscard]] auto next_packet(std::uint64_t connection, ::refrain::services::net_protocol::decoded_packet &packet) const -> std::expected<bool, ::refrain::services::net_protocol::protocol_error> {
+        ::refrain::contracts::init_struct(packet);
+        ::uint8_t value{};
+        if (const auto code = table_->next_packet(self_, connection, &packet, &value); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::net_protocol::protocol_error>(code));
+        }
+        return (value != 0);
+    }
+
+    /// Encode and enqueue one packet on the connection.
+    [[nodiscard]] auto send_packet(std::uint64_t connection, const ::refrain::services::net_protocol::packet_view &packet) const -> std::expected<void, ::refrain::services::net_protocol::protocol_error> {
+        const auto abi_packet = ::refrain::contracts::with_struct_size(packet);
+        if (const auto code = table_->send_packet(self_, connection, &abi_packet); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::net_protocol::protocol_error>(code));
+        }
+        return {};
+    }
+
+    /// Pop one framed/encrypted outbound chunk. `data` is borrowed until the
+    /// next take_outbound call on that connection.
+    [[nodiscard]] auto take_outbound(std::uint64_t connection, ::refrain::services::net_protocol::frame_chunk &chunk) const -> bool {
+        ::refrain::contracts::init_struct(chunk);
+        return (table_->take_outbound(self_, connection, &chunk) != 0);
     }
 
     [[nodiscard]] auto state_of(::refrain::core::connection conn) const -> ::refrain::services::net_protocol::connection_state {
