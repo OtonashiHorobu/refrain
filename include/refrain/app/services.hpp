@@ -42,6 +42,14 @@ struct vanilla_info_options {
     std::string tables{};
 };
 
+struct protocol_bot_options {
+    std::string target{};
+    std::string username{"Bot"};
+    int timeout_ms{10000};
+    std::size_t wait_chunks{0};
+    int linger_ms{0};
+};
+
 struct config_import_options {
     std::string properties{};
     std::string config_dir{"config"};
@@ -163,6 +171,7 @@ struct builtin_image_options {
 [[nodiscard]] auto run_vanilla_info(const vanilla_info_options &options) -> int;
 [[nodiscard]] auto
 run_config_import_properties(const config_import_options &options) -> int;
+[[nodiscard]] auto run_protocol_bot(const protocol_bot_options &options) -> int;
 [[nodiscard]] auto run_schema_gen(const std::string &output_root,
                                   const std::vector<std::string> &roots,
                                   bool check) -> int;

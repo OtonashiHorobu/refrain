@@ -471,6 +471,7 @@ int main(int argc, char **argv) {
         ->required();
     std::string protocol_target{};
     int protocol_timeout_ms{5000};
+    protocol_bot_options protocol_bot{};
     auto *protocol_cmd =
         app.add_subcommand("protocol", "Protocol 777 client tools");
     auto *protocol_ping_cmd = protocol_cmd->add_subcommand(
@@ -480,6 +481,20 @@ int main(int argc, char **argv) {
         ->required();
     protocol_ping_cmd->add_option("--timeout-ms", protocol_timeout_ms,
                                   "Whole exchange timeout in milliseconds");
+
+    auto *protocol_bot_cmd = protocol_cmd->add_subcommand(
+        "bot", "Offline-mode protocol bot (handshake to play)");
+    protocol_bot_cmd
+        ->add_option("--host", protocol_bot.target, "host:port (required)")
+        ->required();
+    protocol_bot_cmd->add_option("--username", protocol_bot.username,
+                                 "Bot username");
+    protocol_bot_cmd->add_option("--timeout-ms", protocol_bot.timeout_ms,
+                                 "Connect/read timeout in milliseconds");
+    protocol_bot_cmd->add_option("--wait-chunks", protocol_bot.wait_chunks,
+                                 "Wait for N level_chunk_with_light packets");
+    protocol_bot_cmd->add_option("--linger-ms", protocol_bot.linger_ms,
+                                 "Stay in play for N milliseconds after join");
 
     auto *wasm_cmd = app.add_subcommand("wasm", "WASM runtime smoke tests");
     auto *wasm_smoke_cmd =
@@ -712,6 +727,9 @@ int main(int argc, char **argv) {
     }
     if (crash_smoke_cmd->parsed()) {
         return app_services::run_crash_smoke(crash_out, crash_handler);
+    }
+    if (protocol_bot_cmd->parsed()) {
+        return app_services::run_protocol_bot(protocol_bot);
     }
     if (protocol_ping_cmd->parsed()) {
         const auto separator{protocol_target.rfind(':')};

@@ -50,6 +50,20 @@ Tests that cover the simulation compare the state hash across two runs, or
 across an encode and a decode. A change that alters the hash must come with a
 format or behavior change that explains it.
 
+## Protocol bot
+
+`refrain-tools protocol bot` connects to an offline-mode server and walks the
+handshake -> login -> configuration -> play sequence:
+
+```bash
+build/Release/bin/refrain-tools protocol bot \
+    --host 127.0.0.1:25565 --username Bot --wait-chunks 1
+```
+
+`--wait-chunks` waits for that many chunk packets before reporting success;
+`--linger-ms` keeps the connection in play. Online-mode servers are reported as
+unsupported.
+
 ## Adding a suite
 
 Create a file under the matching directory in `test/`, for example

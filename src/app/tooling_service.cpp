@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <compare>
 #include <cstddef>
@@ -48,6 +49,7 @@
 #include <refrain/mod/manifest.hpp>
 #include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
+#include <refrain/net/bot.hpp>
 #include <refrain/script/wasm.hpp>
 #include <refrain/server/server_properties.hpp>
 #include <schema/schema.hpp>
@@ -94,6 +96,40 @@ auto run_vanilla_import(const vanilla_import_options &options) -> int {
               << result->tables_bytes << " bytes, blake3 "
               << result->tables_digest << ")\n";
     std::cout << "  manifest: " << result->manifest_path << '\n';
+    return 0;
+}
+
+auto run_protocol_bot(const protocol_bot_options &options) -> int {
+    const auto separator{options.target.rfind(':')};
+    if (separator == std::string::npos ||
+        separator + 1 >= options.target.size()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol bot: expected host:port"));
+    }
+    std::uint16_t port{0};
+    const auto port_text{options.target.substr(separator + 1)};
+    const auto parsed{std::from_chars(
+        port_text.data(), port_text.data() + port_text.size(), port)};
+    if (parsed.ec != std::errc{} ||
+        parsed.ptr != port_text.data() + port_text.size()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol bot: invalid port"));
+    }
+    refrain::net::bot_options bot{};
+    bot.target.host = options.target.substr(0, separator);
+    bot.target.port = port;
+    bot.username = options.username;
+    bot.timeout = std::chrono::milliseconds{options.timeout_ms};
+    bot.wait_chunks = options.wait_chunks;
+    bot.linger = std::chrono::milliseconds{options.linger_ms};
+    auto result{refrain::net::run_bot(bot)};
+    if (!result) {
+        return report_error(result.error());
+    }
+    fmt::print("bot: joined as '{}' after {} packet(s), {} chunk(s)\n",
+               result->name, result->packets, result->chunks);
     return 0;
 }
 
