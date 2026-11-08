@@ -48,6 +48,8 @@ struct protocol_bot_options {
     int timeout_ms{10000};
     std::size_t wait_chunks{0};
     int linger_ms{0};
+    std::string command{};
+    std::size_t wait_messages{0};
 };
 
 struct config_import_options {

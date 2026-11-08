@@ -124,12 +124,19 @@ auto run_protocol_bot(const protocol_bot_options &options) -> int {
     bot.timeout = std::chrono::milliseconds{options.timeout_ms};
     bot.wait_chunks = options.wait_chunks;
     bot.linger = std::chrono::milliseconds{options.linger_ms};
+    bot.command = options.command;
+    bot.wait_messages = options.wait_messages;
     auto result{refrain::net::run_bot(bot)};
     if (!result) {
         return report_error(result.error());
     }
-    fmt::print("bot: joined as '{}' after {} packet(s), {} chunk(s)\n",
-               result->name, result->packets, result->chunks);
+    fmt::print("bot: joined as '{}' after {} packet(s), {} chunk(s), {} "
+               "message(s)\n",
+               result->name, result->packets, result->chunks,
+               result->messages.size());
+    if (!result->messages.empty()) {
+        fmt::print("bot: first message: {}\n", result->messages.front());
+    }
     return 0;
 }
 

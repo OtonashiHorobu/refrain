@@ -495,6 +495,10 @@ int main(int argc, char **argv) {
                                  "Wait for N level_chunk_with_light packets");
     protocol_bot_cmd->add_option("--linger-ms", protocol_bot.linger_ms,
                                  "Stay in play for N milliseconds after join");
+    protocol_bot_cmd->add_option("--command", protocol_bot.command,
+                                 "Play command to send after join");
+    protocol_bot_cmd->add_option("--wait-messages", protocol_bot.wait_messages,
+                                 "Wait for N system_chat messages");
 
     auto *wasm_cmd = app.add_subcommand("wasm", "WASM runtime smoke tests");
     auto *wasm_smoke_cmd =

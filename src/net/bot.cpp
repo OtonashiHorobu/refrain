@@ -19,6 +19,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <mutex>
 #include <random>
 #include <string>
@@ -124,8 +125,10 @@ class bot_session {
             return std::unexpected{
                 make_error(error_code::io_error, std::move(error_))};
         }
-        return bot_report{
-            .packets = packets_, .chunks = chunks_, .name = std::move(name_)};
+        return bot_report{.packets = packets_,
+                          .chunks = chunks_,
+                          .name = std::move(name_),
+                          .messages = std::move(messages_)};
     }
 
   private:
@@ -203,9 +206,6 @@ class bot_session {
             {
                 std::lock_guard lock{mutex_};
                 ++packets_;
-                if (done_) {
-                    return;
-                }
             }
             handle(body);
         }
@@ -307,20 +307,37 @@ class bot_session {
         if (packet_id == play_cb::level_chunk_with_light::packet_id) {
             std::lock_guard lock{mutex_};
             ++chunks_;
-            if (joined_ && chunks_ >= options_.wait_chunks) {
+            if (joined_ && chunks_ >= options_.wait_chunks &&
+                messages_.size() >= options_.wait_messages) {
+                done_ = true;
+                condition_.notify_one();
+            }
+            return;
+        }
+        if (packet_id == play_cb::system_chat::packet_id) {
+            play_cb::system_chat message_packet{};
+            if (auto decoded{play_cb::decode_system_chat(in, message_packet)};
+                !decoded) {
+                fail("malformed system_chat");
+                return;
+            }
+            std::lock_guard lock{mutex_};
+            messages_.push_back(message_packet.content.text);
+            if (joined_ && chunks_ >= options_.wait_chunks &&
+                messages_.size() >= options_.wait_messages) {
                 done_ = true;
                 condition_.notify_one();
             }
             return;
         }
         if (packet_id == play_cb::keep_alive::packet_id) {
-            play_cb::keep_alive packet{};
-            if (auto decoded{play_cb::decode_keep_alive(in, packet)};
+            play_cb::keep_alive keepalive_packet{};
+            if (auto decoded{play_cb::decode_keep_alive(in, keepalive_packet)};
                 !decoded) {
                 fail("malformed play keep_alive");
                 return;
             }
-            play_sb::keep_alive response{.id = packet.id};
+            play_sb::keep_alive response{.id = keepalive_packet.id};
             send_packet(play_sb::keep_alive::packet_id, response,
                         play_sb::encode_keep_alive);
             return;
@@ -331,11 +348,23 @@ class bot_session {
                 fail("malformed play login");
                 return;
             }
-            std::lock_guard lock{mutex_};
-            joined_ = true;
-            if (options_.wait_chunks == 0) {
-                done_ = true;
-                condition_.notify_one();
+            {
+                std::lock_guard lock{mutex_};
+                joined_ = true;
+                if (options_.wait_chunks == 0 && options_.wait_messages == 0) {
+                    done_ = true;
+                    condition_.notify_one();
+                }
+            }
+            if (!options_.command.empty()) {
+                std::string command{options_.command};
+                if (!command.empty() && command.front() == '/') {
+                    command.erase(command.begin());
+                }
+                play_sb::chat_command command_packet{};
+                command_packet.command = std::move(command);
+                send_packet(play_sb::chat_command::packet_id, command_packet,
+                            play_sb::encode_chat_command);
             }
         }
     }
@@ -368,6 +397,7 @@ class bot_session {
     std::size_t chunks_{0};
     std::string error_{};
     std::string name_{};
+    std::vector<std::string> messages_{};
 };
 
 } // namespace

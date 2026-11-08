@@ -10,11 +10,13 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -77,6 +79,14 @@ suite bot_tests = [] {
         const auto port{(*server)->local_port()};
         expect(port != 0);
 
+        std::atomic<bool> ticking{true};
+        std::thread ticker{[&] {
+            while (ticking.load(std::memory_order_relaxed)) {
+                (*server)->tick();
+                std::this_thread::sleep_for(std::chrono::milliseconds{5});
+            }
+        }};
+
         auto report{net::run_bot(net::bot_options{
             .target = {.host = "127.0.0.1", .port = port},
             .username = "Bot",
@@ -89,6 +99,28 @@ suite bot_tests = [] {
             expect(report->packets > 0);
             expect(report->chunks >= 1);
         }
+        auto chat_report{net::run_bot(net::bot_options{
+            .target = {.host = "127.0.0.1", .port = port},
+            .username = "ChatBot",
+            .timeout = std::chrono::milliseconds{5000},
+            .command = "say hello",
+            .wait_messages = 1,
+        })};
+        if (!chat_report) {
+            std::fprintf(stderr, "chat bot error: %s\n",
+                         chat_report.error().message.c_str());
+        }
+        expect(static_cast<bool>(chat_report));
+        if (chat_report) {
+            expect(chat_report->messages.size() == 1);
+            if (!chat_report->messages.empty()) {
+                expect(chat_report->messages.front().find("hello") !=
+                       std::string::npos);
+            }
+        }
+
+        ticking.store(false, std::memory_order_relaxed);
+        ticker.join();
         (*server)->stop();
         std::error_code error;
         std::filesystem::remove_all(dir, error);

@@ -61,8 +61,9 @@ build/Release/bin/refrain-tools protocol bot \
 ```
 
 `--wait-chunks` waits for that many chunk packets before reporting success;
-`--linger-ms` keeps the connection in play. Online-mode servers are reported as
-unsupported.
+`--command` sends a play command (for example `say hello`), `--wait-messages`
+waits for system chat replies, and `--linger-ms` keeps the connection in play.
+Online-mode servers are reported as unsupported.
 
 ## Adding a suite
 

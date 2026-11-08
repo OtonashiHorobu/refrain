@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace refrain::net {
 
@@ -25,12 +26,18 @@ struct bot_options {
     /// Keep the connection in play for this long after the join condition is
     /// met (useful for multi-client tests).
     std::chrono::milliseconds linger{0};
+    /// Optional play command (leading slash optional) sent after the play
+    /// login.
+    std::string command{};
+    /// Finish only after this many system_chat messages.
+    std::size_t wait_messages{0};
 };
 
 struct bot_report {
     std::size_t packets{0};
     std::size_t chunks{0};
     std::string name{};
+    std::vector<std::string> messages{};
 };
 
 /// Offline-mode protocol bot: handshake -> login -> configuration -> play.

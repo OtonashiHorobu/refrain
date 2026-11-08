@@ -28,6 +28,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <map>
 #include <memory>
@@ -1861,6 +1862,7 @@ void server::impl::handle_play(std::uint64_t id,
         if (tokens.empty()) {
             return;
         }
+        refrain::log::info("chat: command '/{}' executed", tokens[0]);
         if (tokens[0] == "help") {
             send_system_chat(id, "Commands: /help, /list, /say <message>");
         } else if (tokens[0] == "list") {
