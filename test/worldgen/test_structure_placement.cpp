@@ -4,6 +4,7 @@
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/json.hpp>
+#include <refrain/data/nbt.hpp>
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/structure/generation.hpp>
@@ -14,7 +15,11 @@
 #include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/structure_set.hpp>
 
+#include <array>
 #include <filesystem>
+#include <map>
+#include <optional>
+#include <span>
 
 #include <boost/ut.hpp>
 
@@ -593,67 +598,81 @@ suite<"worldgen/igloo-piece"> igloo_piece_tests = [] {
             std::filesystem::create_directories(directory / "minecraft" /
                                                 "structure" / "igloo");
 
-            data::nbt::compound root;
-            auto size = data::nbt::make_list(data::nbt::tag_type::int_);
+            refrain::data::nbt::compound root;
+            auto size = refrain::data::nbt::make_list(
+                refrain::data::nbt::tag_type::int_);
             for (const jint value : {3, 3, 3}) {
-                (void)size.push(data::nbt::value{value});
+                (void)size.push(refrain::data::nbt::value{value});
             }
             root["size"] = std::move(size);
-            auto palette = data::nbt::make_list(data::nbt::tag_type::compound);
-            data::nbt::compound stone_entry;
+            auto palette = refrain::data::nbt::make_list(
+                refrain::data::nbt::tag_type::compound);
+            refrain::data::nbt::compound stone_entry;
             stone_entry["id"] =
-                data::nbt::value{std::string{"minecraft:stone"}};
-            (void)palette.push(data::nbt::value{stone_entry});
-            data::nbt::compound chest_entry;
+                refrain::data::nbt::value{std::string{"minecraft:stone"}};
+            (void)palette.push(refrain::data::nbt::value{stone_entry});
+            refrain::data::nbt::compound chest_entry;
             chest_entry["id"] =
-                data::nbt::value{std::string{"minecraft:chest"}};
-            data::nbt::compound chest_properties;
-            chest_properties["facing"] = data::nbt::value{std::string{"north"}};
-            chest_properties["type"] = data::nbt::value{std::string{"single"}};
+                refrain::data::nbt::value{std::string{"minecraft:chest"}};
+            refrain::data::nbt::compound chest_properties;
+            chest_properties["facing"] =
+                refrain::data::nbt::value{std::string{"north"}};
+            chest_properties["type"] =
+                refrain::data::nbt::value{std::string{"single"}};
             chest_properties["waterlogged"] =
-                data::nbt::value{std::string{"false"}};
-            chest_entry["properties"] = data::nbt::value{chest_properties};
-            (void)palette.push(data::nbt::value{chest_entry});
-            data::nbt::compound marker_entry;
-            marker_entry["id"] =
-                data::nbt::value{std::string{"minecraft:structure_block"}};
-            data::nbt::compound marker_properties;
-            marker_properties["mode"] = data::nbt::value{std::string{"data"}};
-            marker_entry["properties"] = data::nbt::value{marker_properties};
-            (void)palette.push(data::nbt::value{marker_entry});
+                refrain::data::nbt::value{std::string{"false"}};
+            chest_entry["properties"] =
+                refrain::data::nbt::value{chest_properties};
+            (void)palette.push(refrain::data::nbt::value{chest_entry});
+            refrain::data::nbt::compound marker_entry;
+            marker_entry["id"] = refrain::data::nbt::value{
+                std::string{"minecraft:structure_block"}};
+            refrain::data::nbt::compound marker_properties;
+            marker_properties["mode"] =
+                refrain::data::nbt::value{std::string{"data"}};
+            marker_entry["properties"] =
+                refrain::data::nbt::value{marker_properties};
+            (void)palette.push(refrain::data::nbt::value{marker_entry});
             root["palette"] = std::move(palette);
 
-            auto blocks = data::nbt::make_list(data::nbt::tag_type::compound);
+            auto blocks = refrain::data::nbt::make_list(
+                refrain::data::nbt::tag_type::compound);
             const auto make_block = [&](std::initializer_list<jint> pos,
-                                        jint state, data::nbt::compound nbt) {
-                data::nbt::compound entry;
-                auto pos_list = data::nbt::make_list(data::nbt::tag_type::int_);
+                                        jint state,
+                                        refrain::data::nbt::compound nbt) {
+                refrain::data::nbt::compound entry;
+                auto pos_list = refrain::data::nbt::make_list(
+                    refrain::data::nbt::tag_type::int_);
                 for (const jint value : pos) {
-                    (void)pos_list.push(data::nbt::value{value});
+                    (void)pos_list.push(refrain::data::nbt::value{value});
                 }
                 entry["pos"] = std::move(pos_list);
-                entry["state"] = data::nbt::value{state};
+                entry["state"] = refrain::data::nbt::value{state};
                 if (!nbt.empty()) {
-                    entry["nbt"] = data::nbt::value{std::move(nbt)};
+                    entry["nbt"] = refrain::data::nbt::value{std::move(nbt)};
                 }
                 return entry;
             };
-            (void)blocks.push(data::nbt::value{make_block({0, 0, 0}, 0, {})});
-            data::nbt::compound chest_nbt;
-            chest_nbt["id"] = data::nbt::value{std::string{"minecraft:chest"}};
             (void)blocks.push(
-                data::nbt::value{make_block({1, 0, 1}, 1, chest_nbt)});
-            data::nbt::compound marker_nbt;
-            marker_nbt["mode"] = data::nbt::value{std::string{"data"}};
-            marker_nbt["metadata"] = data::nbt::value{std::string{"chest"}};
+                refrain::data::nbt::value{make_block({0, 0, 0}, 0, {})});
+            refrain::data::nbt::compound chest_nbt;
+            chest_nbt["id"] =
+                refrain::data::nbt::value{std::string{"minecraft:chest"}};
             (void)blocks.push(
-                data::nbt::value{make_block({1, 1, 1}, 2, marker_nbt)});
+                refrain::data::nbt::value{make_block({1, 0, 1}, 1, chest_nbt)});
+            refrain::data::nbt::compound marker_nbt;
+            marker_nbt["mode"] = refrain::data::nbt::value{std::string{"data"}};
+            marker_nbt["metadata"] =
+                refrain::data::nbt::value{std::string{"chest"}};
+            (void)blocks.push(refrain::data::nbt::value{
+                make_block({1, 1, 1}, 2, marker_nbt)});
             root["blocks"] = std::move(blocks);
 
-            const auto written = data::nbt::write_file(
+            const auto written = refrain::data::nbt::write_file(
                 (directory / "minecraft" / "structure" / "igloo" / "bottom.nbt")
                     .string(),
-                data::nbt::value{root}, "", data::nbt::compression::gzip);
+                refrain::data::nbt::value{root}, "",
+                refrain::data::nbt::compression::gzip);
             expect(written.has_value());
 
             structure::structure_template_manager manager{directory.string(),
@@ -1011,5 +1030,136 @@ suite<"worldgen/structure-locate"> structure_locate_tests = [] {
         expect(!structure::locate_structure(
                     "test:hut", chunk_pos{.x = 0, .z = 0}, -1, context)
                     .has_value());
+    };
+};
+
+namespace {
+
+auto structure_region_payload(std::span<const std::byte> region, jint x, jint z)
+    -> std::optional<std::span<const std::byte>> {
+    if (region.size() < 8192) {
+        return std::nullopt;
+    }
+    const auto index = static_cast<std::size_t>((x & 31) + (z & 31) * 32);
+    const auto *entry = region.data() + index * 4U;
+    const auto offset = (static_cast<std::size_t>(entry[0]) << 16U) |
+                        (static_cast<std::size_t>(entry[1]) << 8U) |
+                        static_cast<std::size_t>(entry[2]);
+    if (offset == 0) {
+        return std::nullopt;
+    }
+    const auto start = offset * 4096U;
+    if (start + 5U > region.size()) {
+        return std::nullopt;
+    }
+    const auto length = (static_cast<std::size_t>(region[start]) << 24U) |
+                        (static_cast<std::size_t>(region[start + 1]) << 16U) |
+                        (static_cast<std::size_t>(region[start + 2]) << 8U) |
+                        static_cast<std::size_t>(region[start + 3]);
+    if (length < 1U || start + 4U + length > region.size()) {
+        return std::nullopt;
+    }
+    if (static_cast<std::uint8_t>(region[start + 4U]) != 2U) {
+        return std::nullopt;
+    }
+    return region.subspan(start + 5U, length - 1U);
+}
+
+auto field(const refrain::data::nbt::compound *root, std::string_view key)
+    -> const refrain::data::nbt::value * {
+    if (root == nullptr) {
+        return nullptr;
+    }
+    const auto found = root->find(key);
+    return found == root->end() ? nullptr : &found->second;
+}
+
+} // namespace
+
+suite<"worldgen/locate-oracle"> locate_oracle_tests = [] {
+    "locate finds the jungle pyramid in the reference world"_test = [] {
+        const char *region_path = std::getenv("REFRAIN_FULL_STAGE_REGION");
+        const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+        const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
+        if (region_path == nullptr || data_root == nullptr ||
+            templates_root == nullptr ||
+            std::getenv("REFRAIN_LOCATE_JUNGLE") == nullptr) {
+            return;
+        }
+        const auto bytes = refrain::core::io::read_file(region_path);
+        expect(bytes.has_value());
+        if (!bytes) {
+            return;
+        }
+        std::map<std::pair<jint, jint>, std::array<jint, 256>> cache;
+        const auto height_at = [&](jint x, jint z) -> jint {
+            const jint chunk_x = x >> 4;
+            const jint chunk_z = z >> 4;
+            const auto key = std::make_pair(chunk_x, chunk_z);
+            auto found = cache.find(key);
+            if (found == cache.end()) {
+                std::array<jint, 256> heights{};
+                heights.fill(-64);
+                const auto payload =
+                    structure_region_payload(*bytes, chunk_x, chunk_z);
+                if (payload) {
+                    const auto document = refrain::data::nbt::read(
+                        *payload, refrain::data::nbt::compression::zlib);
+                    if (document) {
+                        const auto *maps =
+                            field(document->as_compound(), "Heightmaps");
+                        const auto *surface =
+                            maps == nullptr
+                                ? nullptr
+                                : field(maps->as_compound(), "WORLD_SURFACE");
+                        const auto longs = surface == nullptr
+                                               ? std::nullopt
+                                               : surface->as_long_array();
+                        if (longs) {
+                            for (std::size_t i = 0; i < 256; ++i) {
+                                const auto word = i / 7;
+                                const auto shift = (i % 7) * 9;
+                                if (word < longs->size()) {
+                                    heights[i] = static_cast<jint>(
+                                                     ((*longs)[word] >> shift) &
+                                                     0x1FFU) +
+                                                 (-64);
+                                }
+                            }
+                        }
+                    }
+                }
+                found = cache.emplace(key, heights).first;
+            }
+            return found
+                ->second[static_cast<std::size_t>((z & 15) * 16 + (x & 15))];
+        };
+        auto data = structure::load_structure_data(data_root);
+        expect(data.has_value());
+        if (!data) {
+            return;
+        }
+        block_state_registry registry;
+        structure::structure_template_manager manager{templates_root, registry};
+        const structure::structure_start_context context{
+            .seed = 2,
+            .data = &*data,
+            .min_y = -64,
+            .world_height = 384,
+            .sea_level = 63,
+            .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+            .biome_name = [](std::uint16_t) -> std::string_view {
+                return "minecraft:jungle";
+            },
+            .height_at = [&](jint x, jint z,
+                             heightmap_kind) { return height_at(x, z); },
+            .templates = &manager,
+        };
+        const auto found = structure::locate_structure(
+            "minecraft:jungle_pyramid", chunk_pos{.x = 0, .z = 0}, 12, context);
+        expect(found.has_value());
+        if (found) {
+            expect(found->chunk.x == 9 && found->chunk.z == 2);
+        }
     };
 };
