@@ -52,6 +52,16 @@ FIXED_BIOMES = {
     "the_nether": "minecraft:nether_wastes",
     "the_end": "minecraft:the_end",
 }
+STRUCTURE_BIOMES = {
+    "the_nether": "minecraft:nether_wastes",
+    # End cities only select from the highlands and midlands tags.
+    "the_end": "minecraft:end_highlands",
+}
+MATERIAL_RULES = {
+    "minecraft:overworld": "overworld",
+    "minecraft:the_nether": "nether",
+    "minecraft:the_end": "end",
+}
 
 
 def read_pack_data(server_jar: pathlib.Path, path: str) -> dict:
@@ -109,7 +119,8 @@ def write_pack(preset: dict, biome: dict, pack: pathlib.Path,
     if empty_material_rule:
         rules = pack / "data/minecraft/worldgen/material_rule"
         rules.mkdir(parents=True)
-        (rules / "overworld.json").write_text(
+        rule_name = MATERIAL_RULES[dimension]
+        (rules / f"{rule_name}.json").write_text(
             json.dumps({"type": "minecraft:sequence", "sequence": []}) + "\n"
         )
 
@@ -306,6 +317,12 @@ def main() -> int:
         "surface materials",
     )
     parser.add_argument(
+        "--only-structure-set",
+        default=None,
+        help="with --structures or a dimension structure run, empty every "
+        "other structure set in the generated datapack",
+    )
+    parser.add_argument(
         "--fixed-biome",
         default="oracle:terrain",
         help="biome of the fixed source used by --surface (default "
@@ -333,7 +350,6 @@ def main() -> int:
                 args.carvers,
                 args.features,
                 args.features_real,
-                args.structures,
             )
             if flag
         ]
@@ -341,9 +357,16 @@ def main() -> int:
             parser.error("--dimension only combines with the default mode")
         # The dimension references keep the real material rule and only strip
         # the fixed biome's carvers and features, which is the surface oracle.
-        args.surface = True
+        # A structure run uses the same fixed biome but an empty rule so the
+        # compared chunk contains only terrain fill and structure pieces.
+        if not args.structures:
+            args.surface = True
         if args.fixed_biome == "oracle:terrain":
-            args.fixed_biome = FIXED_BIOMES[args.dimension]
+            args.fixed_biome = (
+                STRUCTURE_BIOMES[args.dimension]
+                if args.structures
+                else FIXED_BIOMES[args.dimension]
+            )
 
     root = args.output.resolve()
     shutil.rmtree(root, ignore_errors=True)
@@ -1770,7 +1793,27 @@ def main() -> int:
             override["features"] = []
         write_pack(preset, biome, root / "world/datapacks/t2oracle",
                    empty_material_rule=not args.keep_features,
-                   fixed_biome=args.fixed_biome, biome_override=override)
+                   fixed_biome=args.fixed_biome, biome_override=override,
+                   dimension=dimension)
+        if args.only_structure_set is not None:
+            only = args.only_structure_set
+            if ":" not in only:
+                only = f"minecraft:{only}"
+            target_dir = (
+                root / "world/datapacks/t2oracle/data/minecraft/worldgen/"
+                "structure_set"
+            )
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for name, document in read_pack_entries(
+                args.server_jar, "data/minecraft/worldgen/structure_set/"
+            ).items():
+                set_name = name.rsplit("/", 1)[-1][:-5]
+                if f"minecraft:{set_name}" == only:
+                    continue
+                document["structures"] = []
+                (target_dir / f"{set_name}.json").write_text(
+                    json.dumps(document, indent=2) + "\n"
+                )
     elif not args.plain:
         preset = read_pack_data(
             args.server_jar, "data/minecraft/worldgen/world_preset/normal.json"
@@ -1812,6 +1855,7 @@ def main() -> int:
             force_load_box=tuple(args.force_load_box)
             if args.force_load_box is not None
             else (-64, -64, 191, 191),
+            dimension=dimension,
         )
     elif args.plain:
         run_server(
@@ -1822,6 +1866,7 @@ def main() -> int:
             force_load_box=tuple(args.force_load_box)
             if args.force_load_box is not None
             else (-64, -64, 191, 191),
+            dimension=dimension,
         )
     else:
         run_server(root, args.server_jar, args.settle, dimension=dimension)

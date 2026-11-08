@@ -107,6 +107,61 @@ and `(0,0)` and `(1,1)` of the end block for block and all four final
 heightmaps. `--fixed-biome` overrides the real biome, and the dimension mode
 rejects the overworld-only reference flags.
 
+`--structures` combines with `--dimension`: the targeted dimension gets a real
+fixed biome whose carvers and features are stripped, the material rule is
+emptied, structures stay enabled and the force-load box runs inside the
+dimension. `--only-structure-set` empties every other structure set so a
+compared chunk contains one structure type only. The nether run below uses the
+fortress candidate in set `minecraft:nether_complexes`; the end run fixes
+`minecraft:end_highlands` because end cities only select from the end highlands
+and midlands tags:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --dimension the_nether --only-structure-set nether_complexes \
+    --fixed-biome minecraft:nether_wastes --settle 40 \
+    --force-load-box 208 -256 463 -1 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2nether-fortress
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_ORACLE_SEED=1 REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_VANILLA_FORTRESS_REGION=/tmp/t2nether-fortress/world/dimensions/minecraft/the_nether/region/r.0.-1.mca \
+REFRAIN_VANILLA_FORTRESS_CHUNK_X=21 REFRAIN_VANILLA_FORTRESS_CHUNK_Z=-8 \
+    ./build/Release/bin/refrain-tests "the fortress piece list matches the reference start"
+
+REFRAIN_FULL_STAGE_STRUCTURES=1 REFRAIN_FULL_STAGE_DIMENSION=the_nether \
+REFRAIN_FULL_STAGE_REGION=/tmp/t2nether-fortress/world/dimensions/minecraft/the_nether/region/r.0.-1.mca \
+REFRAIN_FULL_STAGE_CHUNK_X=21 REFRAIN_FULL_STAGE_CHUNK_Z=-8 \
+REFRAIN_FULL_STAGE_START_CHUNK_X=21 REFRAIN_FULL_STAGE_START_CHUNK_Z=-8 \
+REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:nether_wastes \
+    ./build/Release/bin/refrain-tests "fill and structure placement reproduce the reference chunk"
+
+python3 tools/worldgen/oracle/generate.py --structures \
+    --dimension the_end --only-structure-set end_cities \
+    --fixed-biome minecraft:end_highlands --settle 60 \
+    --force-load-box -1296 -368 -1056 -128 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2end-city
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_ORACLE_SEED=1 REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_VANILLA_END_CITY_REGION=/tmp/t2end-city/world/dimensions/minecraft/the_end/region/r.-3.-1.mca \
+REFRAIN_VANILLA_END_CITY_CHUNK_X=-73 REFRAIN_VANILLA_END_CITY_CHUNK_Z=-15 \
+    ./build/Release/bin/refrain-tests "the end city piece list matches the reference start"
+
+REFRAIN_FULL_STAGE_STRUCTURES=1 REFRAIN_FULL_STAGE_DIMENSION=the_end \
+REFRAIN_FULL_STAGE_REGION=/tmp/t2end-city/world/dimensions/minecraft/the_end/region/r.-3.-1.mca \
+REFRAIN_FULL_STAGE_CHUNK_X=-73 REFRAIN_FULL_STAGE_CHUNK_Z=-15 \
+REFRAIN_FULL_STAGE_START_CHUNK_X=-73 REFRAIN_FULL_STAGE_START_CHUNK_Z=-15 \
+REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:end_highlands \
+    ./build/Release/bin/refrain-tests "fill and structure placement reproduce the reference chunk"
+```
+
+The start tests compare the complete piece list (bounds, orientation, piece id,
+template name, rotation and overwrite flag) against the reference chunk. The
+full-stage run compares the selected chunk block for block and all four final
+heightmaps, including the `structure_generator` service path. The end city
+world uses a fixed highlands biome, so its start anchors are the same terrain
+corners the reference queries; the compared chunk has no block or heightmap
+gap. Entity markers (shulkers and elytra) are outside the block comparison.
+
 The structure oracle keeps the normal world preset and generates structures
 for a fixed biome. `--force-load-box` moves the force-loaded area when the
 structure candidates are not near the origin:
