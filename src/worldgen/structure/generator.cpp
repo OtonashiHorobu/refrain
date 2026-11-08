@@ -290,6 +290,12 @@ auto structure_generator::generate(const chunk_pos &pos)
                 .adjusted_heights = &adjusted_heights,
             };
             for (const auto &piece : records[start_index]) {
+                if (piece.max_x < chunks[chunk_index]->chunk_x() * 16 ||
+                    piece.min_x > chunks[chunk_index]->chunk_x() * 16 + 15 ||
+                    piece.max_z < chunks[chunk_index]->chunk_z() * 16 ||
+                    piece.min_z > chunks[chunk_index]->chunk_z() * 16 + 15) {
+                    continue;
+                }
                 worldgen_random random{
                     std::make_unique<xoroshiro_random_source>(config_.seed)};
                 place_structure_piece(neighbour_context, piece, random);

@@ -2473,9 +2473,17 @@ void place_structures(proto_chunk &chunk,
         context.states == nullptr) {
         return;
     }
+    const jint chunk_min_x = context.chunk->chunk_x() * 16;
+    const jint chunk_min_z = context.chunk->chunk_z() * 16;
     const auto place_pieces =
         [&](const ::refrain::worldgen::structure_start &start) {
             for (const auto &piece : start.pieces) {
+                if (piece.max_x < chunk_min_x ||
+                    piece.min_x > chunk_min_x + 15 ||
+                    piece.max_z < chunk_min_z ||
+                    piece.min_z > chunk_min_z + 15) {
+                    continue;
+                }
                 place_structure_piece(context, piece, random);
             }
         };

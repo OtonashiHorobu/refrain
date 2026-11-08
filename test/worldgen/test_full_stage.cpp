@@ -656,6 +656,12 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                         .adjusted_heights = &adjusted_heights,
                     };
                     for (const auto &piece : all_records[start_index]) {
+                        if (piece.max_x < neighbour->chunk_x() * 16 ||
+                            piece.min_x > neighbour->chunk_x() * 16 + 15 ||
+                            piece.max_z < neighbour->chunk_z() * 16 ||
+                            piece.min_z > neighbour->chunk_z() * 16 + 15) {
+                            continue;
+                        }
                         auto neighbour_random = worldgen_random{
                             std::make_unique<xoroshiro_random_source>(seed)};
                         structure::place_structure_piece(
