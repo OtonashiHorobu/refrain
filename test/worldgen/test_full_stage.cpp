@@ -648,6 +648,7 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                         .templates = &manager,
                         .registry = &states,
                         .seed = seed,
+                        .adjusted_heights = &adjusted_heights,
                     };
                     for (const auto &piece : all_records[start_index]) {
                         auto neighbour_random = worldgen_random{
