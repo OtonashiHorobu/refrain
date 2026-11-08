@@ -94,7 +94,8 @@ The reference-backed suites currently cover:
   decoration, including a whole-chunk feature oracle;
 - structure starts, payload trees, piece placement and full-stage
   generation for jungle temple, warm ocean ruin, beached shipwreck,
-  buried treasure, mineshaft, ocean monument and stronghold;
+  buried treasure, mineshaft, ocean monument, stronghold and a plains
+  village start;
 - `locate_structure` against real seeds and reference heightmaps;
 - the storage bridge, RWF round trip and Anvil export/import;
 - parallel fill determinism and fixed-biome structure generator
@@ -102,15 +103,19 @@ The reference-backed suites currently cover:
 - benchmarks for fill, parallel fill, structure selection, corridor
   placement, template placement, feature freeze and decoration.
 
-Known gaps: the generated-start mineshaft full-stage case has a small
-remaining difference in one corridor. Ruined portal starts place the
-template at the reference position and orientation. A dry reference
-candidate at chunk (-65, 0) matches block for block and heightmap for
-heightmap; a candidate that intersects flowing lava is not a stable
-oracle after the reference world settles. Woodland mansion pieces match
-the reference list exactly and its block oracle matches the reference
-chunk. An ocean monument start plus every room, wing and penthouse piece
-matches the reference world in the sixteen chunks the building covers.
+Known gaps: jigsaw feature pool elements are recorded as pieces but their
+placed features are not generated yet, so a village chunk inside a feature's
+reach is not a stable block oracle; the village start and a chunk outside
+those features match the reference. Capped processor lists, block-entity rule
+modifiers and template entities are not implemented.
+
+Ruined portal starts place the template at the reference position and
+orientation. A dry reference candidate at chunk (-65, 0) matches block for
+block and heightmap for heightmap; a candidate that intersects flowing lava
+is not a stable oracle after the reference world settles. Woodland mansion
+pieces match the reference list exactly and its block oracle matches the
+reference chunk. An ocean monument start plus every room, wing and penthouse
+piece matches the reference world in the sixteen chunks the building covers.
 A stronghold start plus every fitted corridor and room matches the reference
 world in the sixty-three chunks the pieces cover, and the ring placement
 reproduces the reference candidate chunks.

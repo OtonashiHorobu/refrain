@@ -31,6 +31,7 @@ variables and reads the data and template roots from the caller.
 | woodland mansion | yes | yes | yes |
 | ocean monument | yes | yes | yes |
 | stronghold | yes | yes | yes |
+| plains village | yes | yes | partial |
 
 The mineshaft full-stage oracle matches the 141-piece reference start,
 including the corridor random stream. The ruined portal full-stage oracle
@@ -53,6 +54,15 @@ generation depth, door type and room flags. Seed 1 with `minecraft:plains`
 places the first stronghold at chunk `(108, 51)`; chunks `(104..110, 49..57)`
 match the reference blocks and heightmaps. With the other structure sets
 enabled, chunk `(104, 50)` references only the stronghold and also matches.
+
+The plains village start at chunk `(15, 8)` of seed 1 matches the reference
+start's 119 pieces field for field: bounds, template origin, rotation, element,
+ground level delta and junctions. Chunk `(17, 8)` matches the reference blocks
+and all four heightmaps, including the `beard_thin` terrain adaptation. The
+start chunk itself still differs by 64 blocks and 81 heightmap entries, all
+caused by the eighteen `minecraft:oak`, `minecraft:flower_plain` and
+`minecraft:pile_hay` feature pool elements whose placed features are not
+generated; chunks outside their reach are clean.
 
 ## Storage and runtime
 
