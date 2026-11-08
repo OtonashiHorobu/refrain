@@ -13,6 +13,7 @@
 #include <refrain/worldgen/chunk/block_state.hpp>
 #include <refrain/worldgen/chunk/heightmap.hpp>
 #include <refrain/worldgen/chunk/status.hpp>
+#include <refrain/worldgen/structure/bbox.hpp>
 
 #include <array>
 #include <compare>
@@ -57,6 +58,12 @@ struct structure_piece_record {
     float integrity{1.0F};
     bool large{false};
     bool beached{false};
+    std::vector<structure::structure_bbox> entrances{};
+    jint sections{0};
+    bool rails{false};
+    bool spider{false};
+    bool two_floored{false};
+    bool mesa{false};
 };
 
 struct structure_start {

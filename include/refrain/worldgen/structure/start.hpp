@@ -9,25 +9,12 @@
 
 #include <refrain/worldgen/chunk/chunk_region.hpp>
 #include <refrain/worldgen/core/java_compat.hpp>
+#include <refrain/worldgen/structure/bbox.hpp>
 
 #include <string>
 #include <vector>
 
 namespace refrain::worldgen::structure {
-
-struct structure_bbox {
-    jint min_x{0};
-    jint min_y{0};
-    jint min_z{0};
-    jint max_x{0};
-    jint max_y{0};
-    jint max_z{0};
-
-    [[nodiscard]] auto intersects(const structure_bbox &other) const -> bool;
-    [[nodiscard]] auto is_close_to(const chunk_pos &chunk, jint radius) const
-        -> bool;
-    [[nodiscard]] auto intersects_chunk(const chunk_pos &chunk) const -> bool;
-};
 
 struct structure_piece {
     std::string type{};
@@ -46,6 +33,12 @@ struct structure_piece {
     float integrity{1.0F};
     bool large{false};
     bool beached{false};
+    std::vector<structure_bbox> entrances{};
+    jint sections{0};
+    bool rails{false};
+    bool spider{false};
+    bool two_floored{false};
+    bool mesa{false};
 };
 
 struct structure_start {

@@ -1628,6 +1628,179 @@ auto piece_local_to_world(const structure_piece_record &piece, jint base_y,
     return block_pos{.x = wx, .y = base_y + local_y, .z = wz};
 }
 
+struct mineshaft_access {
+    const structure_place_context &context;
+    const structure_piece_record &piece;
+    block_state_id air{no_block_state};
+    block_state_id cave_air{no_block_state};
+    block_state_id planks{no_block_state};
+
+    [[nodiscard]] auto inside(jint x, jint y, jint z) const -> bool {
+        return (x >> 4) == context.chunk->chunk_x() &&
+               (z >> 4) == context.chunk->chunk_z() &&
+               y >= context.chunk->min_y() &&
+               y < context.chunk->min_y() + context.chunk->height();
+    }
+
+    [[nodiscard]] auto get(jint x, jint y, jint z) const -> block_state_id {
+        return inside(x, y, z) ? context.region->state_at(x, y, z) : air;
+    }
+
+    void set(jint x, jint y, jint z, block_state_id state) const {
+        if (inside(x, y, z)) {
+            (void)context.region->set_block_state(x, y, z, state);
+        }
+    }
+
+    void fill(jint x0, jint y0, jint z0, jint x1, jint y1, jint z1,
+              block_state_id state, bool skip_air = false) const {
+        for (jint y = y0; y <= y1; ++y) {
+            for (jint x = x0; x <= x1; ++x) {
+                for (jint z = z0; z <= z1; ++z) {
+                    if (!inside(x, y, z)) {
+                        continue;
+                    }
+                    if (skip_air && context.states->traits(get(x, y, z)).air) {
+                        continue;
+                    }
+                    set(x, y, z, state);
+                }
+            }
+        }
+    }
+
+    void fill_local(jint x0, jint y0, jint z0, jint x1, jint y1, jint z1,
+                    block_state_id state) const {
+        const auto first = piece_local_to_world(piece, piece.min_y, x0, y0, z0);
+        const auto last = piece_local_to_world(piece, piece.min_y, x1, y1, z1);
+        fill(first.x, first.y, first.z, last.x, last.y, last.z, state);
+    }
+
+    [[nodiscard]] auto interior(jint x, jint y, jint z) const -> bool {
+        if (!inside(x, y + 1, z)) {
+            return false;
+        }
+        auto *chunk = context.region->find(x >> 4, z >> 4);
+        if (chunk == nullptr) {
+            return false;
+        }
+        return y + 1 < chunk->first_available(heightmap_kind::ocean_floor_wg,
+                                              x & 15, z & 15);
+    }
+
+    [[nodiscard]] auto sturdy_up(jint x, jint y, jint z) const -> bool {
+        return context.states->traits(get(x, y, z)).blocks_motion;
+    }
+
+    void planks_block(jint x, jint y, jint z) const {
+        if (interior(x, y, z) && !sturdy_up(x, y, z)) {
+            set(x, y, z, planks);
+        }
+    }
+
+    void support_pillar(jint x, jint y0, jint z, jint y1) const {
+        if (!context.states->traits(get(x, y1 + 1, z)).air) {
+            fill(x, y0, z, x, y1, z, planks);
+        }
+    }
+};
+
+auto mineshaft_access_for(const structure_place_context &context,
+                          const structure_piece_record &piece)
+    -> mineshaft_access {
+    mineshaft_access access{.context = context, .piece = piece};
+    access.air = context.state("minecraft:air");
+    access.cave_air = context.state("minecraft:cave_air");
+    access.planks = context.state(piece.mesa ? "minecraft:dark_oak_planks"
+                                             : "minecraft:oak_planks");
+    return access;
+}
+
+void place_mineshaft_room(const structure_place_context &context,
+                          const structure_piece_record &piece) {
+    const auto access = mineshaft_access_for(context, piece);
+    access.fill(piece.min_x, piece.min_y + 1, piece.min_z, piece.max_x,
+                std::min(piece.min_y + 3, piece.max_y), piece.max_z,
+                access.cave_air);
+    for (const auto &entrance : piece.entrances) {
+        access.fill(entrance.min_x, entrance.max_y - 2, entrance.min_z,
+                    entrance.max_x, entrance.max_y, entrance.max_z,
+                    access.cave_air);
+    }
+    const jint x0 = piece.min_x;
+    const jint y0 = piece.min_y + 4;
+    const jint z0 = piece.min_z;
+    const jint x1 = piece.max_x;
+    const jint y1 = piece.max_y;
+    const jint z1 = piece.max_z;
+    const float diag_x = static_cast<float>(x1 - x0 + 1);
+    const float diag_y = static_cast<float>(y1 - y0 + 1);
+    const float diag_z = static_cast<float>(z1 - z0 + 1);
+    const float center_x = static_cast<float>(x0) + diag_x / 2.0F;
+    const float center_z = static_cast<float>(z0) + diag_z / 2.0F;
+    for (jint y = y0; y <= y1; ++y) {
+        const float ny = static_cast<float>(y - y0) / diag_y;
+        for (jint x = x0; x <= x1; ++x) {
+            const float nx =
+                (static_cast<float>(x) - center_x) / (diag_x * 0.5F);
+            for (jint z = z0; z <= z1; ++z) {
+                const float nz =
+                    (static_cast<float>(z) - center_z) / (diag_z * 0.5F);
+                if (nx * nx + ny * ny + nz * nz <= 1.05F) {
+                    access.set(x, y, z, access.cave_air);
+                }
+            }
+        }
+    }
+}
+
+void place_mineshaft_crossing(const structure_place_context &context,
+                              const structure_piece_record &piece) {
+    const auto access = mineshaft_access_for(context, piece);
+    if (piece.two_floored) {
+        access.fill(piece.min_x + 1, piece.min_y, piece.min_z, piece.max_x - 1,
+                    piece.min_y + 2, piece.max_z, access.cave_air);
+        access.fill(piece.min_x, piece.min_y, piece.min_z + 1, piece.max_x,
+                    piece.min_y + 2, piece.max_z - 1, access.cave_air);
+        access.fill(piece.min_x + 1, piece.max_y - 2, piece.min_z,
+                    piece.max_x - 1, piece.max_y, piece.max_z, access.cave_air);
+        access.fill(piece.min_x, piece.max_y - 2, piece.min_z + 1, piece.max_x,
+                    piece.max_y, piece.max_z - 1, access.cave_air);
+        access.fill(piece.min_x + 1, piece.min_y + 3, piece.min_z + 1,
+                    piece.max_x - 1, piece.min_y + 3, piece.max_z - 1,
+                    access.cave_air);
+    } else {
+        access.fill(piece.min_x + 1, piece.min_y, piece.min_z, piece.max_x - 1,
+                    piece.max_y, piece.max_z, access.cave_air);
+        access.fill(piece.min_x, piece.min_y, piece.min_z + 1, piece.max_x,
+                    piece.max_y, piece.max_z - 1, access.cave_air);
+    }
+    access.support_pillar(piece.min_x + 1, piece.min_y, piece.min_z + 1,
+                          piece.max_y);
+    access.support_pillar(piece.min_x + 1, piece.min_y, piece.max_z - 1,
+                          piece.max_y);
+    access.support_pillar(piece.max_x - 1, piece.min_y, piece.min_z + 1,
+                          piece.max_y);
+    access.support_pillar(piece.max_x - 1, piece.min_y, piece.max_z - 1,
+                          piece.max_y);
+    for (jint x = piece.min_x; x <= piece.max_x; ++x) {
+        for (jint z = piece.min_z; z <= piece.max_z; ++z) {
+            access.planks_block(x, piece.min_y - 1, z);
+        }
+    }
+}
+
+void place_mineshaft_stairs(const structure_place_context &context,
+                            const structure_piece_record &piece) {
+    const auto access = mineshaft_access_for(context, piece);
+    access.fill_local(0, 5, 0, 2, 7, 1, access.cave_air);
+    access.fill_local(0, 0, 7, 2, 2, 8, access.cave_air);
+    for (jint i = 0; i < 5; ++i) {
+        const jint y0 = 5 - i - (i < 4 ? 1 : 0);
+        access.fill_local(0, y0, 2 + i, 2, 7 - i, 2 + i, access.cave_air);
+    }
+}
+
 void place_structure_piece(const structure_place_context &context,
                            const structure_piece_record &piece,
                            worldgen_random &random) {
@@ -1645,6 +1818,12 @@ void place_structure_piece(const structure_place_context &context,
         place_ocean_ruin_piece(context, piece, random);
     } else if (piece.type == "minecraft:tejp") {
         place_jungle_temple(context, piece, random);
+    } else if (piece.type == "minecraft:msroom") {
+        place_mineshaft_room(context, piece);
+    } else if (piece.type == "minecraft:mscrossing") {
+        place_mineshaft_crossing(context, piece);
+    } else if (piece.type == "minecraft:msstairs") {
+        place_mineshaft_stairs(context, piece);
     }
 }
 

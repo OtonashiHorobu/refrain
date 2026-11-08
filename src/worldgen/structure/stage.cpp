@@ -410,7 +410,13 @@ void write_structure_stage(proto_chunk &chunk,
                 .height_offset = piece.height_offset,
                 .integrity = piece.integrity,
                 .large = piece.large,
-                .beached = piece.beached});
+                .beached = piece.beached,
+                .entrances = piece.entrances,
+                .sections = piece.sections,
+                .rails = piece.rails,
+                .spider = piece.spider,
+                .two_floored = piece.two_floored,
+                .mesa = piece.mesa});
         }
         chunk.add_structure_start(std::move(record));
     }
