@@ -2639,3 +2639,65 @@ suite<"worldgen/feature/end-podium"> end_podium_tests = [] {
         expect(chunk.state_at(8, 10, 9) == torches[0]);
     };
 };
+
+suite<"worldgen/feature/chorus-plant"> chorus_plant_tests = [] {
+    "the chorus plant grows upwards from a supported origin"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        (void)states.intern("minecraft:air", {.air = true});
+        const auto end_stone = states.intern("minecraft:end_stone",
+                                             {.air = false,
+                                              .blocks_motion = true,
+                                              .blocks_motion_no_leaves = true});
+        const auto plant =
+            states.intern("minecraft:chorus_plant", {.air = false});
+        const auto flower =
+            states.intern("minecraft:chorus_flower[age=5]", {.air = false});
+        expect(end_stone.has_value() && plant.has_value() &&
+               flower.has_value());
+        if (!end_stone || !plant || !flower) {
+            return;
+        }
+        proto_chunk chunk{states, 0, 0, 0, 32};
+        chunk.set_state(8, 4, 8, *end_stone);
+        chunk_region region{chunk, 0};
+        const auto resolve = [&](std::string_view key) {
+            if (const auto found = states.find(key); found) {
+                return *found;
+            }
+            return states
+                .intern(key, {.air = false,
+                              .blocks_motion = false,
+                              .blocks_motion_no_leaves = false})
+                .value_or(no_block_state);
+        };
+        feature::placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &states,
+            .generation = provider::generation_context{.min_y = 0,
+                                                       .height = 32,
+                                                       .sea_level = 8},
+            .resolve_state = resolve,
+        };
+        feature::feature_context context{.placement = placement};
+        const feature::chorus_plant_feature feature{*plant, *flower};
+        worldgen_random random{std::make_unique<legacy_random_source>(1)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 5, .z = 8}));
+        expect(states.name(chunk.state_at(8, 5, 8))
+                   .starts_with("minecraft:chorus_plant"));
+        std::size_t flowers = 0;
+        for (jint y = 0; y < 32; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    if (states.name(chunk.state_at(x, y, z)) ==
+                        "minecraft:chorus_flower[age=5]") {
+                        ++flowers;
+                    }
+                }
+            }
+        }
+        expect(flowers > 0);
+    };
+};
