@@ -2005,6 +2005,74 @@ auto chorus_plant_feature::place(feature_context &context,
     return true;
 }
 
+auto bonus_chest_feature::place(feature_context &context,
+                                worldgen_random &random,
+                                const block_pos &origin) const -> bool {
+    auto &region = *context.placement.region;
+    const jint chunk_x = origin.x >> 4;
+    const jint chunk_z = origin.z >> 4;
+    std::array<jint, 16> xs{};
+    std::array<jint, 16> zs{};
+    for (jint i = 0; i < 16; ++i) {
+        xs[static_cast<std::size_t>(i)] = chunk_x * 16 + i;
+        zs[static_cast<std::size_t>(i)] = chunk_z * 16 + i;
+    }
+    for (jint i = 16; i > 1; --i) {
+        const jint swap = random.next_int(i);
+        std::swap(xs[static_cast<std::size_t>(i - 1)],
+                  xs[static_cast<std::size_t>(swap)]);
+    }
+    for (jint i = 16; i > 1; --i) {
+        const jint swap = random.next_int(i);
+        std::swap(zs[static_cast<std::size_t>(i - 1)],
+                  zs[static_cast<std::size_t>(swap)]);
+    }
+    const auto air_at = [&](jint x, jint y, jint z) {
+        return context.placement.states->traits(region.state_at(x, y, z)).air;
+    };
+    const auto height_at = [&](jint x, jint z) {
+        if (context.placement.height) {
+            return context.placement.height(
+                heightmap_kind::motion_blocking_no_leaves, x, z);
+        }
+        return context.placement.chunk->first_available(
+            heightmap_kind::motion_blocking_no_leaves, x & 15, z & 15);
+    };
+    for (const auto x : xs) {
+        for (const auto z : zs) {
+            const jint y = height_at(x, z);
+            const auto chest_traits =
+                context.placement.states->traits(region.state_at(x, y, z));
+            if (!chest_traits.air && chest_traits.blocks_motion) {
+                continue;
+            }
+            (void)region.set_block_state(x, y, z, chest_);
+            const auto loot_seed = random.next_long();
+            data::nbt::compound entity{};
+            entity["id"] = data::nbt::value{std::string{"minecraft:chest"}};
+            entity["LootTable"] = data::nbt::value{
+                std::string{"minecraft:chests/spawn_bonus_chest"}};
+            entity["LootTableSeed"] = data::nbt::value{loot_seed};
+            entity["x"] = data::nbt::value{x};
+            entity["y"] = data::nbt::value{y};
+            entity["z"] = data::nbt::value{z};
+            (void)region.set_block_entity(x, y, z, std::move(entity));
+            const std::array<std::pair<jint, jint>, 4> directions{
+                {{1, 0}, {-1, 0}, {0, 1}, {0, -1}}};
+            for (const auto &[dx, dz] : directions) {
+                if (air_at(x + dx, y, z + dz) &&
+                    context.placement.states
+                        ->traits(region.state_at(x + dx, y - 1, z + dz))
+                        .blocks_motion) {
+                    (void)region.set_block_state(x + dx, y, z + dz, torch_);
+                }
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
 void chorus_plant_feature::set_plant(feature_context &context,
                                      const block_pos &pos) const {
     auto &region = *context.placement.region;

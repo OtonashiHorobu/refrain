@@ -529,6 +529,20 @@ class end_gateway_feature final : public feature {
     block_state_id bedrock_{no_block_state};
 };
 
+/// `BonusChestFeature`: the spawn chest with four torches.
+class bonus_chest_feature final : public feature {
+  public:
+    bonus_chest_feature(block_state_id chest, block_state_id torch)
+        : chest_{chest}, torch_{torch} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    block_state_id chest_{no_block_state};
+    block_state_id torch_{no_block_state};
+};
+
 /// `ChorusPlantFeature`: grows a chorus plant from the origin.
 class chorus_plant_feature final : public feature {
   public:
