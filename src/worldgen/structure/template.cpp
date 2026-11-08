@@ -953,6 +953,8 @@ auto block_age_processor::process(const block_state_registry &states,
                                   worldgen_random *random) const
     -> std::optional<template_block_info> {
     (void)region;
+    // Positional processors randomise from the transformed world position, not
+    // from the template-local position carried by the block info.
     worldgen_random local{std::make_unique<legacy_random_source>(
         mth_get_seed(world.x, world.y, world.z))};
     auto &rng = random == nullptr ? local : *random;
