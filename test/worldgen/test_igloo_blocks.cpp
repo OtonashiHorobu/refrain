@@ -1961,3 +1961,281 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
         expect(best_mismatches == 0);
     };
 };
+namespace {
+
+auto byte_flag(const data::nbt::value &tag) -> bool {
+    if (const auto value = tag.as_byte(); value.has_value()) {
+        return *value != 0;
+    }
+    if (const auto value = tag.as_int(); value.has_value()) {
+        return *value != 0;
+    }
+    return false;
+}
+
+auto bbox_of(const data::nbt::compound &compound)
+    -> std::optional<structure::structure_bbox> {
+    const auto read = [&](std::string_view key) -> std::optional<jint> {
+        const auto *tag = child(&compound, key);
+        return tag == nullptr ? std::nullopt : int_value(*tag);
+    };
+    const auto min_x = read("minX");
+    const auto min_y = read("minY");
+    const auto min_z = read("minZ");
+    const auto max_x = read("maxX");
+    const auto max_y = read("maxY");
+    const auto max_z = read("maxZ");
+    if (!min_x || !min_y || !min_z || !max_x || !max_y || !max_z) {
+        return std::nullopt;
+    }
+    return structure::structure_bbox{.min_x = *min_x,
+                                     .min_y = *min_y,
+                                     .min_z = *min_z,
+                                     .max_x = *max_x,
+                                     .max_y = *max_y,
+                                     .max_z = *max_z};
+}
+
+auto mineshaft_canonical(std::string key) -> std::string {
+    key = canonical_key(key);
+    if (key.ends_with("_log[axis=y]")) {
+        return key.substr(0, key.find('['));
+    }
+    return key;
+}
+
+} // namespace
+
+suite<"worldgen/mineshaft-blocks"> mineshaft_block_tests = [] {
+    "the mineshaft pieces match the reference chunk"_test = [&] {
+        const char *region_path = std::getenv("REFRAIN_VANILLA_MINE_REGION");
+        if (region_path == nullptr) {
+            return;
+        }
+        constexpr jint center_x = -4;
+        constexpr jint center_z = 0;
+        constexpr jlong seed = 1;
+        auto reference = read_chunk(region_path, center_x, center_z);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        decoded_chunk decoded;
+        expect(decode_chunk(*reference, decoded));
+        block_state_registry states;
+        std::map<std::string, block_state_id, std::less<>> ids;
+        const auto intern = [&](std::string_view name) -> block_state_id {
+            const std::string key{name};
+            if (const auto found = ids.find(key); found != ids.end()) {
+                return found->second;
+            }
+            const auto block = state_block_name(key);
+            const bool air = is_air_block_name(block);
+            const bool fluid =
+                block == "minecraft:water" || block == "minecraft:lava";
+            const bool leaves = block.ends_with("_leaves");
+            const auto id =
+                states
+                    .intern(key, {.air = air,
+                                  .fluid = fluid,
+                                  .water = block == "minecraft:water",
+                                  .blocks_motion = !air && !fluid,
+                                  .blocks_motion_no_leaves =
+                                      !air && !fluid && !leaves})
+                    .value_or(no_block_state);
+            ids.emplace(key, id);
+            return id;
+        };
+        for (std::size_t id = 0; id < decoded.registry.size(); ++id) {
+            (void)intern(
+                decoded.registry.name(static_cast<block_state_id>(id)));
+        }
+        const auto fill_chunk = [&](proto_chunk &chunk,
+                                    const decoded_chunk &source) {
+            for (jint y = -64; y < 320; ++y) {
+                for (jint z = 0; z < 16; ++z) {
+                    for (jint x = 0; x < 16; ++x) {
+                        const auto index =
+                            static_cast<std::size_t>(y + 64) * 256U +
+                            static_cast<std::size_t>(z * 16 + x);
+                        chunk.set_state(
+                            x, y, z,
+                            intern(source.registry.name(source.blocks[index])));
+                    }
+                }
+            }
+        };
+        proto_chunk chunk{states, center_x, center_z, -64, 384};
+        fill_chunk(chunk, decoded);
+        chunk.set_status(chunk_status::terrain);
+
+        const auto *structures = child(reference->as_compound(), "structures");
+        const auto *starts = structures == nullptr
+                                 ? nullptr
+                                 : child(structures->as_compound(), "starts");
+        if (starts == nullptr || starts->as_compound() == nullptr) {
+            return;
+        }
+        const auto *start_compound =
+            child(starts->as_compound(), "minecraft:mineshaft");
+        const auto *children =
+            start_compound == nullptr
+                ? nullptr
+                : child(start_compound->as_compound(), "Children");
+        const auto *children_list =
+            children == nullptr ? nullptr : children->as_list();
+        expect(children_list != nullptr && !children_list->items.empty());
+        if (children_list == nullptr || children_list->items.empty()) {
+            return;
+        }
+        ::refrain::worldgen::structure_start start{};
+        start.structure = "minecraft:mineshaft";
+        start.step = "underground_structures";
+        start.chunk_x = center_x;
+        start.chunk_z = center_z;
+        for (const auto &piece_value : children_list->items) {
+            const auto *piece = piece_value.as_compound();
+            const auto *type_tag = child(piece, "id");
+            const auto type =
+                type_tag == nullptr ? std::nullopt : type_tag->as_string();
+            if (!type) {
+                continue;
+            }
+            const auto *bb_tag = child(piece, "BB");
+            const auto *bb =
+                bb_tag == nullptr ? nullptr : bb_tag->as_compound();
+            const auto bounds = bb == nullptr ? std::nullopt : bbox_of(*bb);
+            if (!bounds) {
+                continue;
+            }
+            auto *orientation_tag = child(piece, "O");
+            const auto orientation = orientation_tag == nullptr
+                                         ? std::optional<jint>{}
+                                         : int_value(*orientation_tag);
+            auto &record = start.pieces.emplace_back();
+            record.type = std::string{type->data(), type->size()};
+            record.min_x = bounds->min_x;
+            record.min_y = bounds->min_y;
+            record.min_z = bounds->min_z;
+            record.max_x = bounds->max_x;
+            record.max_y = bounds->max_y;
+            record.max_z = bounds->max_z;
+            record.orientation = orientation.value_or(-1);
+            record.mesa = false;
+            if (const auto *entrances = child(piece, "Entrances");
+                entrances != nullptr && entrances->as_list() != nullptr) {
+                for (const auto &entrance_value : entrances->as_list()->items) {
+                    const auto *entrance = entrance_value.as_compound();
+                    if (entrance == nullptr) {
+                        continue;
+                    }
+                    if (const auto entrance_box = bbox_of(*entrance);
+                        entrance_box) {
+                        record.entrances.push_back(*entrance_box);
+                    }
+                }
+            }
+            if (const auto *sections = child(piece, "Sections");
+                sections != nullptr) {
+                record.sections = int_value(*sections).value_or(0);
+            }
+            if (const auto *rails = child(piece, "Rails"); rails != nullptr) {
+                record.rails = byte_flag(*rails);
+            }
+            if (const auto *spider = child(piece, "Spider");
+                spider != nullptr) {
+                record.spider = byte_flag(*spider);
+            }
+            if (const auto *tf = child(piece, "tf"); tf != nullptr) {
+                record.two_floored = byte_flag(*tf);
+            }
+            if (start.pieces.size() == 1) {
+                start.min_x = record.min_x;
+                start.min_y = record.min_y;
+                start.min_z = record.min_z;
+                start.max_x = record.max_x;
+                start.max_y = record.max_y;
+                start.max_z = record.max_z;
+            }
+            start.min_x = std::min(start.min_x, record.min_x);
+            start.min_y = std::min(start.min_y, record.min_y);
+            start.min_z = std::min(start.min_z, record.min_z);
+            start.max_x = std::max(start.max_x, record.max_x);
+            start.max_y = std::max(start.max_y, record.max_y);
+            start.max_z = std::max(start.max_z, record.max_z);
+        }
+        chunk.add_structure_start(std::move(start));
+
+        std::vector<std::unique_ptr<proto_chunk>> neighbours;
+        chunk_region region_view{chunk, 1};
+        for (jint dz = -1; dz <= 1; ++dz) {
+            for (jint dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dz == 0) {
+                    continue;
+                }
+                auto payload =
+                    read_chunk(region_path, center_x + dx, center_z + dz);
+                if (!payload) {
+                    continue;
+                }
+                decoded_chunk neighbour_decoded;
+                if (!decode_chunk(*payload, neighbour_decoded)) {
+                    continue;
+                }
+                auto neighbour = std::make_unique<proto_chunk>(
+                    states, center_x + dx, center_z + dz, -64, 384);
+                fill_chunk(*neighbour, neighbour_decoded);
+                neighbour->set_status(chunk_status::terrain);
+                region_view.attach(*neighbour);
+                neighbours.push_back(std::move(neighbour));
+            }
+        }
+        const auto resolve = [&](std::string_view key) -> block_state_id {
+            return intern(key);
+        };
+        const structure::structure_place_context context{
+            .region = &region_view,
+            .chunk = &chunk,
+            .states = &states,
+            .state = resolve,
+            .registry = &states,
+            .seed = seed,
+        };
+        worldgen_random decoration{
+            std::make_unique<xoroshiro_random_source>(seed)};
+        const jlong decoration_seed =
+            decoration.set_decoration_seed(seed, center_x * 16, center_z * 16);
+        worldgen_random placement{std::make_unique<xoroshiro_random_source>(0)};
+        placement.set_feature_seed(decoration_seed, 1, 3);
+        structure::place_structures(chunk, context, "underground_structures",
+                                    placement);
+
+        std::size_t mismatches = 0;
+        for (jint y = -64; y < 320; ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    const auto index = static_cast<std::size_t>(y + 64) * 256U +
+                                       static_cast<std::size_t>(z * 16 + x);
+                    const auto expected = mineshaft_canonical(std::string{
+                        decoded.registry.name(decoded.blocks[index])});
+                    const auto actual = mineshaft_canonical(
+                        std::string{states.name(chunk.state_at(x, y, z))});
+                    if (expected == actual) {
+                        continue;
+                    }
+                    if (mismatches < 10) {
+                        std::fprintf(
+                            stderr,
+                            "mineshaft mismatch (%d,%d,%d): got %s want %s\n",
+                            static_cast<int>(x), static_cast<int>(y),
+                            static_cast<int>(z), actual.c_str(),
+                            expected.c_str());
+                    }
+                    ++mismatches;
+                }
+            }
+        }
+        std::fprintf(stderr, "mineshaft block mismatches=%zu\n", mismatches);
+        expect(mismatches == 0);
+    };
+};
