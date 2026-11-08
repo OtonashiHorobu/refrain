@@ -86,3 +86,24 @@ surface position and compare a single chunk. Set
 `REFRAIN_VANILLA_FEATURE_REGION` and `REFRAIN_VANILLA_FEATURE_DATA` at the
 generated world.
 
+## Verification status
+
+The reference-backed suites currently cover:
+
+- terrain fill, biome selection, surface rules, carvers and feature
+  decoration, including a whole-chunk feature oracle;
+- structure starts, payload trees, piece placement and full-stage
+  generation for jungle temple, warm ocean ruin, beached shipwreck,
+  buried treasure and mineshaft;
+- `locate_structure` against real seeds and reference heightmaps;
+- the storage bridge, RWF round trip and Anvil export/import;
+- parallel fill determinism and fixed-biome structure generator
+  determinism;
+- benchmarks for fill, parallel fill, structure selection, corridor
+  placement, template placement, feature freeze and decoration.
+
+Known gaps: the generated-start mineshaft full-stage case has a small
+remaining difference in one corridor, and ocean monuments, strongholds,
+woodland mansions and ruined portals do not have start or block
+implementations yet.
+
