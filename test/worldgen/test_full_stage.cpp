@@ -108,6 +108,7 @@ auto canonical(std::string name) -> std::string {
     const bool slab = base.ends_with("_slab");
     const bool leaves = base.ends_with("_leaves");
     const bool bars = base == "minecraft:iron_bars";
+    const bool fence = base.ends_with("_fence");
     std::vector<std::string> parts;
     std::string_view body{name.data() + open + 1, close - open - 1};
     while (true) {
@@ -120,7 +121,9 @@ auto canonical(std::string name) -> std::string {
             (slab && part == "type=bottom") ||
             (leaves && (part == "distance=7" || part == "persistent=false")) ||
             (bars && (part == "east=false" || part == "north=false" ||
-                      part == "south=false" || part == "west=false"));
+                      part == "south=false" || part == "west=false")) ||
+            (fence && (part == "east=false" || part == "north=false" ||
+                       part == "south=false" || part == "west=false"));
         if (!default_property) {
             parts.emplace_back(part);
         }
@@ -665,10 +668,12 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                         static_cast<std::size_t>(y - oracle_min_y) * 256U +
                         static_cast<std::size_t>(z) * 16U +
                         static_cast<std::size_t>(x);
-                    const auto expected = canonical(std::string{
-                        reference->registry.name(reference->blocks[index])});
-                    const auto actual = canonical(
-                        std::string{states.name(chunk.state_at(x, y, z))});
+                    const std::string expected_raw{
+                        reference->registry.name(reference->blocks[index])};
+                    const std::string actual_raw{
+                        states.name(chunk.state_at(x, y, z))};
+                    const auto expected = canonical(expected_raw);
+                    const auto actual = canonical(actual_raw);
                     if (expected == actual) {
                         continue;
                     }
