@@ -462,3 +462,89 @@ void mansion_grid::identify_rooms(const mansion_simple_grid &from,
 }
 
 } // namespace refrain::worldgen::structure
+
+namespace refrain::worldgen::structure {
+
+auto mansion_rotate_2d(template_rotation rotation, jint x, jint z)
+    -> block_pos {
+    switch (rotation) {
+    case template_rotation::clockwise_90:
+        return {.x = -z, .y = 0, .z = x};
+    case template_rotation::clockwise_180:
+        return {.x = -x, .y = 0, .z = -z};
+    case template_rotation::counterclockwise_90:
+        return {.x = z, .y = 0, .z = -x};
+    case template_rotation::none:
+    default:
+        return {.x = x, .y = 0, .z = z};
+    }
+}
+
+auto mansion_relative(const block_pos &origin, template_rotation rotation,
+                      mansion_direction direction, jint amount) -> block_pos {
+    const auto rotated = mansion_rotate_2d(rotation, mansion_step_x(direction),
+                                           mansion_step_z(direction));
+    return {.x = origin.x + rotated.x * amount,
+            .y = origin.y,
+            .z = origin.z + rotated.z * amount};
+}
+
+auto mansion_room_collection::room_1x1(worldgen_random &random) const
+    -> std::string {
+    if (floor_ == 0) {
+        return "1x1_a" + std::to_string(random.next_int(5) + 1);
+    }
+    return "1x1_b" + std::to_string(random.next_int(5) + 1);
+}
+
+auto mansion_room_collection::room_1x1_secret(worldgen_random &random) const
+    -> std::string {
+    return "1x1_as" + std::to_string(random.next_int(4) + 1);
+}
+
+auto mansion_room_collection::room_1x2_side(worldgen_random &random,
+                                            bool stairs_room) const
+    -> std::string {
+    if (floor_ == 0) {
+        return "1x2_a" + std::to_string(random.next_int(9) + 1);
+    }
+    if (stairs_room) {
+        return "1x2_c_stairs";
+    }
+    return "1x2_c" + std::to_string(random.next_int(4) + 1);
+}
+
+auto mansion_room_collection::room_1x2_front(worldgen_random &random,
+                                             bool stairs_room) const
+    -> std::string {
+    if (floor_ == 0) {
+        return "1x2_b" + std::to_string(random.next_int(5) + 1);
+    }
+    if (stairs_room) {
+        return "1x2_d_stairs";
+    }
+    return "1x2_d" + std::to_string(random.next_int(5) + 1);
+}
+
+auto mansion_room_collection::room_1x2_secret(worldgen_random &random) const
+    -> std::string {
+    if (floor_ == 0) {
+        return "1x2_s" + std::to_string(random.next_int(2) + 1);
+    }
+    return "1x2_se" + std::to_string(random.next_int(1) + 1);
+}
+
+auto mansion_room_collection::room_2x2(worldgen_random &random) const
+    -> std::string {
+    if (floor_ == 0) {
+        return "2x2_a" + std::to_string(random.next_int(4) + 1);
+    }
+    return "2x2_b" + std::to_string(random.next_int(5) + 1);
+}
+
+auto mansion_room_collection::room_2x2_secret(
+    worldgen_random & /*random*/) const -> std::string {
+    return "2x2_s1";
+}
+
+} // namespace refrain::worldgen::structure

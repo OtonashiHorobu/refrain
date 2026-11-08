@@ -10,6 +10,7 @@
 
 #include <refrain/worldgen/core/java_compat.hpp>
 #include <refrain/worldgen/core/rng.hpp>
+#include <refrain/worldgen/structure/template.hpp>
 
 #include <array>
 #include <optional>
@@ -28,6 +29,12 @@ enum class mansion_direction : std::uint8_t { north, east, south, west };
 [[nodiscard]] auto mansion_counter_clockwise(mansion_direction direction)
     -> mansion_direction;
 [[nodiscard]] auto mansion_from_2d_data(jint data) -> mansion_direction;
+[[nodiscard]] auto mansion_rotate_2d(template_rotation rotation, jint x, jint z)
+    -> block_pos;
+[[nodiscard]] auto mansion_relative(const block_pos &origin,
+                                    template_rotation rotation,
+                                    mansion_direction direction, jint amount)
+    -> block_pos;
 
 class mansion_simple_grid {
   public:
@@ -49,6 +56,27 @@ class mansion_simple_grid {
     jint height_{0};
     jint outside_{0};
     std::vector<jint> cells_{};
+};
+
+class mansion_room_collection {
+  public:
+    explicit mansion_room_collection(jint floor) : floor_{floor} {}
+
+    [[nodiscard]] auto room_1x1(worldgen_random &random) const -> std::string;
+    [[nodiscard]] auto room_1x1_secret(worldgen_random &random) const
+        -> std::string;
+    [[nodiscard]] auto room_1x2_side(worldgen_random &random,
+                                     bool stairs_room) const -> std::string;
+    [[nodiscard]] auto room_1x2_front(worldgen_random &random,
+                                      bool stairs_room) const -> std::string;
+    [[nodiscard]] auto room_1x2_secret(worldgen_random &random) const
+        -> std::string;
+    [[nodiscard]] auto room_2x2(worldgen_random &random) const -> std::string;
+    [[nodiscard]] auto room_2x2_secret(worldgen_random &random) const
+        -> std::string;
+
+  private:
+    jint floor_{0};
 };
 
 class mansion_grid {

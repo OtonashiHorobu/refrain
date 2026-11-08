@@ -1401,4 +1401,19 @@ suite<"worldgen/mansion-grid"> mansion_grid_tests = [] {
         expect(has_room);
         expect(has_third);
     };
+
+    "mansion room names come from the floor collection"_test = [] {
+        auto random =
+            worldgen_random{std::make_unique<legacy_random_source>(3)};
+        const structure::mansion_room_collection first{0};
+        const structure::mansion_room_collection second{1};
+        const auto a = first.room_1x1(random);
+        expect(a.starts_with("1x1_a") && a.size() == 6);
+        const auto b = second.room_1x1(random);
+        expect(b.starts_with("1x1_b") && b.size() == 6);
+        expect(second.room_1x2_side(random, true) == "1x2_c_stairs");
+        expect(second.room_1x2_front(random, true) == "1x2_d_stairs");
+        expect(first.room_2x2_secret(random) == "2x2_s1");
+        expect(second.room_2x2_secret(random) == "2x2_s1");
+    };
 };
