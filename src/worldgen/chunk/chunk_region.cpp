@@ -84,4 +84,14 @@ auto chunk_region::first_available(heightmap_kind kind, jint x, jint z) const
     return center_->first_available(kind, x, z);
 }
 
+auto chunk_region::height_at(heightmap_kind kind, jint x, jint z) const
+    -> jint {
+    const chunk_pos pos{.x = floor_div16(x), .z = floor_div16(z)};
+    const auto *chunk = find(pos);
+    if (chunk == nullptr) {
+        return center_->min_y();
+    }
+    return chunk->first_available(kind, x - pos.x * 16, z - pos.z * 16);
+}
+
 } // namespace refrain::worldgen

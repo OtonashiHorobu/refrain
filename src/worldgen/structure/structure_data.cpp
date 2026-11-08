@@ -199,6 +199,15 @@ auto decode_structure_document(std::string_view id,
         }
         decoded.adaptation = adaptation_from(*name);
     }
+    if (decoded.type == "minecraft:jigsaw") {
+        auto jigsaw = decode_jigsaw_structure_config(document);
+        if (!jigsaw) {
+            return std::unexpected{
+                make_error(jigsaw.error().code, jigsaw.error().message + " (" +
+                                                    std::string{id} + ")")};
+        }
+        decoded.jigsaw = std::move(*jigsaw);
+    }
     return decoded;
 }
 
@@ -303,6 +312,34 @@ auto load_structure_data(std::string_view data_root)
                 return std::unexpected{decoded.error()};
             }
             result.sets.emplace(full_id, std::move(*decoded));
+        }
+        std::unordered_map<std::string, data::json::value> pools;
+        if (core::io::is_directory(worldgen + "/template_pool")) {
+            if (const auto collected =
+                    collect_documents(worldgen + "/template_pool", "", pools);
+                !collected) {
+                return std::unexpected{collected.error()};
+            }
+        }
+        for (auto &[id, document] : pools) {
+            const auto full_id = name + ":" + id;
+            auto decoded = decode_template_pool(full_id, document);
+            if (!decoded) {
+                return std::unexpected{decoded.error()};
+            }
+            result.template_pools.emplace(full_id, std::move(*decoded));
+        }
+        std::unordered_map<std::string, data::json::value> processors;
+        if (core::io::is_directory(worldgen + "/processor_list")) {
+            if (const auto collected = collect_documents(
+                    worldgen + "/processor_list", "", processors);
+                !collected) {
+                return std::unexpected{collected.error()};
+            }
+        }
+        for (auto &[id, document] : processors) {
+            result.processor_lists.emplace(name + ":" + id,
+                                           std::move(document));
         }
     }
     return result;

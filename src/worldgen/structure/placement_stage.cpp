@@ -1056,12 +1056,11 @@ void place_shipwreck_piece(const structure_place_context &context,
         if (base_size == 0) {
             origin.y = height_at(origin.x, origin.z).value_or(origin.y);
         } else {
-            const auto corner = transform_position(
-                block_pos{.x = templ.size_x - 1, .y = 0, .z = templ.size_z - 1},
-                settings.transform);
-            const block_pos corner_world{.x = origin.x + corner.x,
+            // The reference samples the template's unrotated footprint and
+            // divides by the template area, even when the placement is rotated.
+            const block_pos corner_world{.x = origin.x + templ.size_x - 1,
                                          .y = origin.y,
-                                         .z = origin.z + corner.z};
+                                         .z = origin.z + templ.size_z - 1};
             jint min_y = 1 << 30;
             jint total = 0;
             jint count = 0;
@@ -2143,27 +2142,32 @@ void place_ruined_portal(const structure_place_context &context,
             ? std::vector<std::string>{"minecraft:structure_block"}
             : std::vector<std::string>{"minecraft:structure_block",
                                        "minecraft:air"}};
+    const auto random_block = [](std::string block, float probability) {
+        return rule_test{.type = rule_test_type::random_block_match,
+                         .blocks = {std::move(block)},
+                         .probability = probability};
+    };
+    const auto block = [](std::string name) {
+        return rule_test{.type = rule_test_type::block_match,
+                         .blocks = {std::move(name)}};
+    };
     std::vector<template_rule> rules;
-    rules.push_back(template_rule{.blocks = {"minecraft:gold_block"},
-                                  .probability = 0.3F,
-                                  .output = air});
+    rules.push_back(template_rule{
+        .input = random_block("minecraft:gold_block", 0.3F), .output = air});
     if (props.portal_placement == "on_ocean_floor") {
-        rules.push_back(template_rule{.blocks = {"minecraft:lava"},
-                                      .probability = -1.0F,
-                                      .output = magma});
+        rules.push_back(
+            template_rule{.input = block("minecraft:lava"), .output = magma});
     } else if (props.portal_cold) {
-        rules.push_back(template_rule{.blocks = {"minecraft:lava"},
-                                      .probability = -1.0F,
+        rules.push_back(template_rule{.input = block("minecraft:lava"),
                                       .output = netherrack});
     } else {
-        rules.push_back(template_rule{.blocks = {"minecraft:lava"},
-                                      .probability = 0.2F,
-                                      .output = magma});
+        rules.push_back(template_rule{
+            .input = random_block("minecraft:lava", 0.2F), .output = magma});
     }
     if (!props.portal_cold) {
-        rules.push_back(template_rule{.blocks = {"minecraft:netherrack"},
-                                      .probability = 0.07F,
-                                      .output = magma});
+        rules.push_back(
+            template_rule{.input = random_block("minecraft:netherrack", 0.07F),
+                          .output = magma});
     }
     rule_processor rule_processor_{std::move(rules)};
     block_age_processor age{props.portal_mossiness};
@@ -2416,10 +2420,133 @@ void place_woodland_mansion(const structure_place_context &context,
     }
 }
 
+namespace {
+
+void place_jigsaw_element(const structure_place_context &context,
+                          const structure_piece_record &piece,
+                          const jigsaw_element_info &element,
+                          worldgen_random &random);
+
+void place_jigsaw_template(const structure_place_context &context,
+                           const structure_piece_record &piece,
+                           const jigsaw_element_info &element,
+                           const structure_processor_list *processors,
+                           worldgen_random &random) {
+    if (context.templates == nullptr || context.registry == nullptr ||
+        context.chunk == nullptr || context.region == nullptr) {
+        return;
+    }
+    const auto &templ = context.templates->get_or_create(element.template_id);
+    if (templ.palettes.empty()) {
+        return;
+    }
+    const bool legacy = element.kind == pool_element_kind::legacy_single;
+    block_ignore_processor ignore{
+        legacy ? std::vector<std::string>{"minecraft:air",
+                                          "minecraft:structure_block"}
+               : std::vector<std::string>{"minecraft:structure_block"}};
+    jigsaw_replacement_processor replacement;
+    gravity_processor gravity{heightmap_kind::world_surface_wg, -1};
+    std::vector<const template_block_processor *> stack;
+    stack.push_back(&ignore);
+    stack.push_back(&replacement);
+    if (processors != nullptr) {
+        for (const auto *processor : processors->processors) {
+            stack.push_back(processor);
+        }
+    }
+    if (element.projection == pool_projection::terrain_matching) {
+        stack.push_back(&gravity);
+    }
+    template_place_settings settings{};
+    settings.transform = template_transform{
+        .mirror = template_mirror::none,
+        .rotation = static_cast<template_rotation>(piece.template_rotation),
+        .pivot = block_pos{},
+    };
+    settings.bounds = template_bounds{
+        .min_x = context.chunk->chunk_x() * 16,
+        .min_y = context.chunk->min_y(),
+        .min_z = context.chunk->chunk_z() * 16,
+        .max_x = context.chunk->chunk_x() * 16 + 15,
+        .max_y = context.chunk->min_y() + context.chunk->height() - 1,
+        .max_z = context.chunk->chunk_z() * 16 + 15,
+    };
+    settings.processors = stack;
+    settings.liquids = element.liquid_override.value_or(
+        piece.jigsaw.has_value() ? piece.jigsaw->liquid
+                                 : liquid_settings::apply_waterlogging);
+    settings.level_seed = context.seed;
+    settings.loot_random = &random;
+    (void)place_template(*context.region, *context.registry, templ,
+                         block_pos{.x = piece.template_x,
+                                   .y = piece.template_y,
+                                   .z = piece.template_z},
+                         settings);
+}
+
+void place_jigsaw_element(const structure_place_context &context,
+                          const structure_piece_record &piece,
+                          const jigsaw_element_info &element,
+                          worldgen_random &random) {
+    switch (element.kind) {
+    case pool_element_kind::empty:
+        return;
+    case pool_element_kind::list:
+        for (const auto &child : element.elements) {
+            place_jigsaw_element(context, piece, child, random);
+        }
+        return;
+    case pool_element_kind::feature:
+        if (context.place_feature) {
+            (void)context.place_feature(element.feature, random,
+                                        block_pos{.x = piece.template_x,
+                                                  .y = piece.template_y,
+                                                  .z = piece.template_z});
+        }
+        return;
+    case pool_element_kind::single:
+    case pool_element_kind::legacy_single:
+        break;
+    }
+    const structure_processor_list *processors = nullptr;
+    std::shared_ptr<structure_processor_list> inline_processors;
+    if (element.inline_processors != nullptr && context.registry != nullptr) {
+        if (auto decoded = decode_processor_list(*context.registry,
+                                                 *element.inline_processors);
+            decoded) {
+            inline_processors = std::move(*decoded);
+            processors = inline_processors.get();
+        }
+    } else if (!element.processor_list.empty() && context.data != nullptr &&
+               context.templates != nullptr) {
+        const auto found =
+            context.data->processor_lists.find(element.processor_list);
+        if (found != context.data->processor_lists.end()) {
+            processors = &context.templates->processor_list(
+                element.processor_list, found->second);
+        }
+    }
+    place_jigsaw_template(context, piece, element, processors, random);
+}
+
+} // namespace
+
+void place_jigsaw_piece(const structure_place_context &context,
+                        const structure_piece_record &piece,
+                        worldgen_random &random) {
+    if (!piece.jigsaw.has_value()) {
+        return;
+    }
+    place_jigsaw_element(context, piece, piece.jigsaw->element, random);
+}
+
 void place_structure_piece(const structure_place_context &context,
                            const structure_piece_record &piece,
                            worldgen_random &random) {
-    if (piece.type == "minecraft:btp") {
+    if (piece.jigsaw.has_value()) {
+        place_jigsaw_piece(context, piece, random);
+    } else if (piece.type == "minecraft:btp") {
         place_buried_treasure(context, piece, random);
     } else if (piece.type == "minecraft:igl") {
         place_igloo_piece(context, piece, random);

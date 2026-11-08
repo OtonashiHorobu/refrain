@@ -12,6 +12,7 @@
 #include <refrain/worldgen/structure/start.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/template.hpp>
+#include <refrain/worldgen/terrain/beardifier.hpp>
 
 #include <functional>
 #include <string>
@@ -47,6 +48,21 @@ struct structure_start_context {
     /// leaves those types ungenerated.
     structure_template_manager *templates{nullptr};
 };
+
+/// The beardifier inputs one chunk sees: the rigid pieces and junction sources
+/// of every adapted start whose adapted bounding box reaches the chunk.
+struct structure_beard {
+    std::vector<beardifier_rigid> pieces{};
+    std::vector<jigsaw_junction> junctions{};
+    std::optional<bounding_box> affected_box{};
+};
+
+/// `Beardifier.forStructuresInChunk`: pieces within twelve blocks of `chunk`,
+/// rigid jigsaw pieces only, plus every junction source in the chunk window.
+/// The affected box is the union of the included boxes inflated by 24.
+[[nodiscard]] auto collect_beard(const std::vector<structure_start> &starts,
+                                 const structure_data_set &data,
+                                 const chunk_pos &chunk) -> structure_beard;
 
 /// One structure found by `locate_structure`.
 struct located_structure {

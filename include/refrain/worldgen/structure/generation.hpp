@@ -12,6 +12,7 @@
 #include <refrain/worldgen/structure/template.hpp>
 
 #include <functional>
+#include <optional>
 
 namespace refrain::worldgen::structure {
 
@@ -109,5 +110,31 @@ class structure_template_manager;
 [[nodiscard]] auto igloo_start(const chunk_pos &chunk, jlong seed,
                                structure_template_manager &templates)
     -> structure_start;
+
+/// The world access `minecraft:jigsaw` start generation needs. Pools come from
+/// the structure data set; template sizes and jigsaw blocks come from the
+/// template manager. Heights are the unbearded `getFirstFreeHeight` values the
+/// reference queries while expanding terrain-matched pieces.
+struct jigsaw_generation_context {
+    const structure_document *structure{nullptr};
+    const structure_data_set *data{nullptr};
+    structure_template_manager *templates{nullptr};
+    jlong seed{0};
+    jint min_y{-64};
+    jint world_height{384};
+    jint sea_level{63};
+    std::function<jint(jint, jint, heightmap_kind)> height_at{};
+    /// `GenerationContext.isValidBiome` at the generated start anchor.
+    std::function<bool(const block_pos &)> valid_biome{};
+    /// `GenerationContext.couldStructureExistInColumn` for the projected
+    /// start column.
+    std::function<bool(jint, jint)> column_allowed{};
+};
+
+/// `JigsawStructure.findGenerationPoint`: chooses the centre piece, projects it
+/// to the start heightmap and expands the pool graph through its connectors.
+[[nodiscard]] auto jigsaw_start(const chunk_pos &chunk,
+                                const jigsaw_generation_context &context)
+    -> std::optional<structure_start>;
 
 } // namespace refrain::worldgen::structure

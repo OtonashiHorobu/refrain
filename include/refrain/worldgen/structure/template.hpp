@@ -17,6 +17,7 @@
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/core/java_compat.hpp>
 #include <refrain/worldgen/core/rng.hpp>
+#include <refrain/worldgen/structure/placement_types.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -26,24 +27,6 @@
 #include <vector>
 
 namespace refrain::worldgen::structure {
-
-enum class template_mirror : std::uint8_t {
-    none = 0,
-    left_right = 1,
-    front_back = 2
-};
-
-enum class template_rotation : std::uint8_t {
-    none = 0,
-    clockwise_90 = 1,
-    clockwise_180 = 2,
-    counterclockwise_90 = 3
-};
-
-enum class liquid_settings : std::uint8_t {
-    apply_waterlogging = 0,
-    ignore_waterlogging = 1
-};
 
 /// One template block. `nbt` is present exactly when the file marks a block
 /// entity; the tag is shared by every placement of the template.
@@ -122,6 +105,17 @@ class template_block_processor {
             const template_block_info &info, const block_pos &world,
             worldgen_random *random) const
         -> std::optional<template_block_info> = 0;
+    /// `GravityProcessor` and processors that move a block override this. It
+    /// runs after `process` and later processors see the moved position.
+    [[nodiscard]] virtual auto
+    adjust_position(const block_state_registry &states,
+                    const chunk_region &region, const template_block_info &info,
+                    const block_pos &world) const -> block_pos {
+        (void)states;
+        (void)region;
+        (void)info;
+        return world;
+    }
     [[nodiscard]] virtual auto evaluates_entire_piece_state() const -> bool {
         return false;
     }
@@ -190,13 +184,36 @@ class block_ignore_processor final : public template_block_processor {
     std::vector<std::string> blocks_{};
 };
 
-/// One rule of a `RuleProcessor`: a block-name or tag test with an optional
-/// probability (the `random_block_match` form).
-struct template_rule {
+/// `RuleTest` kinds a processor rule can use. `block_state_match` compares the
+/// full state, `random_*` variants consume one positional draw once the block
+/// test passes.
+enum class rule_test_type : std::uint8_t {
+    always_true,
+    block_match,
+    random_block_match,
+    block_state_match,
+    random_block_state_match,
+    tag_match,
+    all_of,
+    any_of,
+    not_test,
+};
+
+struct rule_test {
+    rule_test_type type{rule_test_type::always_true};
     std::vector<std::string> blocks{};
+    /// Canonical state key for the `block_state_match` forms.
+    std::string state{};
     std::string tag{};
-    /// Negative means the rule matches unconditionally after the block test.
     float probability{-1.0F};
+    std::vector<rule_test> children{};
+};
+
+/// One rule of a `RuleProcessor`: an input state test, a location test against
+/// the world and the replacement state.
+struct template_rule {
+    rule_test input{};
+    rule_test location{};
     block_state_id output{no_block_state};
 };
 
@@ -274,6 +291,46 @@ class blackstone_replace_processor final : public template_block_processor {
             const template_block_info &info, const block_pos &world,
             worldgen_random *random) const
         -> std::optional<template_block_info> override;
+};
+
+/// `JigsawReplacementProcessor`: replaces a jigsaw block with the `final_state`
+/// recorded in its NBT, or drops it for `minecraft:structure_void`.
+class jigsaw_replacement_processor final : public template_block_processor {
+  public:
+    [[nodiscard]] auto
+    process(block_state_registry &states, const chunk_region &region,
+            const template_block_info &info, const block_pos &world,
+            worldgen_random *random) const
+        -> std::optional<template_block_info> override;
+};
+
+/// `GravityProcessor`: moves every processed block to the column height plus
+/// the template-local y, used by the `terrain_matching` projection.
+class gravity_processor final : public template_block_processor {
+  public:
+    gravity_processor(heightmap_kind kind, jint offset)
+        : kind_{kind}, offset_{offset} {}
+
+    [[nodiscard]] auto
+    process(block_state_registry &states, const chunk_region &region,
+            const template_block_info &info, const block_pos &world,
+            worldgen_random *random) const
+        -> std::optional<template_block_info> override {
+        (void)states;
+        (void)region;
+        (void)world;
+        (void)random;
+        return info;
+    }
+    [[nodiscard]] auto adjust_position(const block_state_registry &states,
+                                       const chunk_region &region,
+                                       const template_block_info &info,
+                                       const block_pos &world) const
+        -> block_pos override;
+
+  private:
+    heightmap_kind kind_{heightmap_kind::world_surface_wg};
+    jint offset_{0};
 };
 
 /// `BlockRotProcessor`: drops a fraction of the blocks using the placement
@@ -372,10 +429,21 @@ struct structure_processor_list {
 };
 
 /// Decodes `worldgen/processor_list` JSON. Supported processor types are
-/// `block_rot`, `protected_blocks` and `block_ignore`; `nop` yields nothing.
+/// `rule`, `block_rot`, `protected_blocks`, `block_ignore` and `nop`.
 [[nodiscard]] auto decode_processor_list(block_state_registry &states,
                                          const data::json::value &document)
     -> result<std::shared_ptr<structure_processor_list>>;
+
+/// Resolves a JSON block state (`"minecraft:stone"` or
+/// `{"id": ..., "properties": {...}}`) to a state id, interning the canonical
+/// key with the block's derived traits when it is unknown.
+[[nodiscard]] auto decode_block_state(block_state_registry &states,
+                                      const data::json::value &document)
+    -> block_state_id;
+
+/// Resolves a block-state key such as `minecraft:oak_stairs[facing=north]`.
+[[nodiscard]] auto resolve_block_state(block_state_registry &states,
+                                       std::string_view key) -> block_state_id;
 
 /// `StructureTemplate.getSize(rotation)`.
 [[nodiscard]] auto rotated_template_size(const structure_template &templ,
@@ -397,10 +465,24 @@ class structure_template_manager {
     [[nodiscard]] auto get_or_create(std::string_view id) const
         -> const structure_template &;
 
+    /// Decodes and caches `worldgen/processor_list` document `document` for
+    /// `id`. A document that fails to decode yields the empty list.
+    [[nodiscard]] auto processor_list(std::string_view id,
+                                      const data::json::value &document) const
+        -> const structure_processor_list &;
+
+    /// The registry the manager resolves template states against.
+    [[nodiscard]] auto states() const noexcept -> block_state_registry & {
+        return *states_;
+    }
+
   private:
     std::string root_{};
     block_state_registry *states_{nullptr};
     mutable std::unordered_map<std::string, structure_template> cache_{};
+    mutable std::unordered_map<std::string,
+                               std::shared_ptr<structure_processor_list>>
+        processor_cache_{};
 };
 
 /// `StructureTemplate.load`: resolves the palette against `states` (unknown or

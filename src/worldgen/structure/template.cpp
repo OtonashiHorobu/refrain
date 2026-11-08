@@ -310,6 +310,74 @@ auto find_state(
     return no_block_state;
 }
 
+auto state_key_matches(const block_state_registry &states, block_state_id state,
+                       std::string_view key) -> bool {
+    const auto actual = parse_state(states.name(state));
+    const auto expected = parse_state(key);
+    if (actual.name != expected.name ||
+        actual.properties.size() != expected.properties.size()) {
+        return false;
+    }
+    for (const auto &[property, value] : expected.properties) {
+        const auto found = std::find_if(
+            actual.properties.begin(), actual.properties.end(),
+            [&](const auto &entry) { return entry.first == property; });
+        if (found == actual.properties.end() || found->second != value) {
+            return false;
+        }
+    }
+    return true;
+}
+
+auto rule_matches(const rule_test &test, block_state_registry &states,
+                  block_state_id state, worldgen_random &random) -> bool {
+    switch (test.type) {
+    case rule_test_type::always_true:
+        return true;
+    case rule_test_type::block_match:
+    case rule_test_type::random_block_match: {
+        const auto name = state_block_name(states.name(state));
+        if (std::find(test.blocks.begin(), test.blocks.end(), name) ==
+            test.blocks.end()) {
+            return false;
+        }
+        if (test.type == rule_test_type::random_block_match) {
+            return test.probability < 0.0F ||
+                   random.next_float() < test.probability;
+        }
+        return true;
+    }
+    case rule_test_type::block_state_match:
+    case rule_test_type::random_block_state_match:
+        if (!state_key_matches(states, state, test.state)) {
+            return false;
+        }
+        return test.type != rule_test_type::random_block_state_match ||
+               test.probability < 0.0F ||
+               random.next_float() < test.probability;
+    case rule_test_type::tag_match:
+        return states.in_tag(state, test.tag);
+    case rule_test_type::all_of:
+        for (const auto &child : test.children) {
+            if (!rule_matches(child, states, state, random)) {
+                return false;
+            }
+        }
+        return true;
+    case rule_test_type::any_of:
+        for (const auto &child : test.children) {
+            if (rule_matches(child, states, state, random)) {
+                return true;
+            }
+        }
+        return false;
+    case rule_test_type::not_test:
+        return test.children.size() != 1 ||
+               !rule_matches(test.children.front(), states, state, random);
+    }
+    return false;
+}
+
 auto direction_opposite(std::string_view direction) -> std::string_view {
     if (direction == "north") {
         return "south";
@@ -364,6 +432,48 @@ auto rotate_direction(std::string_view direction, template_rotation rotation)
         return direction_opposite(direction);
     }
     return clockwise(clockwise(clockwise(direction)));
+}
+
+struct front_top_pair {
+    std::string_view name;
+    std::string_view front;
+    std::string_view top;
+};
+
+constexpr std::array<front_top_pair, 12> front_top_pairs{{
+    {"down_east", "down", "east"},
+    {"down_north", "down", "north"},
+    {"down_south", "down", "south"},
+    {"down_west", "down", "west"},
+    {"up_east", "up", "east"},
+    {"up_north", "up", "north"},
+    {"up_south", "up", "south"},
+    {"up_west", "up", "west"},
+    {"west_up", "west", "up"},
+    {"east_up", "east", "up"},
+    {"north_up", "north", "up"},
+    {"south_up", "south", "up"},
+}};
+
+/// `FrontAndTop` after a mirror followed by a rotation; the pair stays
+/// orthogonal, so it always names one of the twelve values.
+auto transform_orientation(std::string_view value, template_mirror mirror,
+                           template_rotation rotation) -> std::string {
+    for (const auto &entry : front_top_pairs) {
+        if (value != entry.name) {
+            continue;
+        }
+        const auto front =
+            rotate_direction(mirror_direction(entry.front, mirror), rotation);
+        const auto top =
+            rotate_direction(mirror_direction(entry.top, mirror), rotation);
+        for (const auto &candidate : front_top_pairs) {
+            if (front == candidate.front && top == candidate.top) {
+                return std::string{candidate.name};
+            }
+        }
+    }
+    return std::string{value};
 }
 
 auto transform_rotation_value(std::string_view value, template_mirror mirror,
@@ -423,6 +533,64 @@ auto build_state_key(
 }
 
 } // namespace
+
+auto resolve_block_state(block_state_registry &states, std::string_view key)
+    -> block_state_id {
+    if (const auto found = states.find(key); found.has_value()) {
+        return *found;
+    }
+    const auto block = state_block_name(key);
+    const bool air = is_air_block_name(block);
+    const bool fluid = block == "minecraft:water" || block == "minecraft:lava";
+    const bool leaves = block.ends_with("_leaves");
+    const auto interned = states.intern(
+        key, {.air = air,
+              .fluid = fluid,
+              .water = block == "minecraft:water",
+              .blocks_motion = !air && !fluid,
+              .blocks_motion_no_leaves = !air && !fluid && !leaves});
+    return interned.has_value() ? *interned : no_block_state;
+}
+
+auto decode_block_state(block_state_registry &states,
+                        const data::json::value &document) -> block_state_id {
+    if (const auto text = document.as_string(); text.has_value()) {
+        return resolve_block_state(states, *text);
+    }
+    if (!document.is_object()) {
+        return no_block_state;
+    }
+    const auto *name_value = document.find("id");
+    if (name_value == nullptr) {
+        name_value = document.find("Name");
+    }
+    if (name_value == nullptr) {
+        return no_block_state;
+    }
+    const auto name = name_value->as_string();
+    if (!name) {
+        return no_block_state;
+    }
+    std::vector<std::pair<std::string, std::string>> properties;
+    const auto *properties_value = document.find("properties");
+    if (properties_value == nullptr) {
+        properties_value = document.find("Properties");
+    }
+    if (properties_value != nullptr && properties_value->is_object()) {
+        const auto entries = properties_value->as_object();
+        if (entries) {
+            for (const auto &[property, value] : entries->get()) {
+                properties.emplace_back(property,
+                                        value.as_string().value_or(""));
+            }
+        }
+    }
+    const auto found = find_state(states, *name, properties);
+    if (found != no_block_state) {
+        return found;
+    }
+    return resolve_block_state(states, build_state_key(*name, properties));
+}
 
 auto load_structure_template(block_state_registry &states,
                              const data::nbt::value &root)
@@ -504,6 +672,23 @@ auto structure_template_manager::get_or_create(std::string_view id) const
         }
     }
     return cache_.emplace(key, std::move(loaded)).first->second;
+}
+
+auto structure_template_manager::processor_list(
+    std::string_view id, const data::json::value &document) const
+    -> const structure_processor_list & {
+    const std::string key{id};
+    if (const auto found = processor_cache_.find(key);
+        found != processor_cache_.end()) {
+        return *found->second;
+    }
+    std::shared_ptr<structure_processor_list> decoded;
+    if (auto result = decode_processor_list(*states_, document); result) {
+        decoded = std::move(*result);
+    } else {
+        decoded = std::make_shared<structure_processor_list>();
+    }
+    return *processor_cache_.emplace(key, std::move(decoded)).first->second;
 }
 
 auto rotated_template_size(const structure_template &templ,
@@ -598,6 +783,180 @@ void capped_rule_processor::finalize_processing(
     }
 }
 
+namespace {
+
+auto test_string(const data::json::value &document, const char *key)
+    -> std::optional<std::string> {
+    const auto *value = document.find(key);
+    if (value == nullptr) {
+        return std::nullopt;
+    }
+    const auto text = value->as_string();
+    if (!text) {
+        return std::nullopt;
+    }
+    return std::string{*text};
+}
+
+auto decode_rule_test(block_state_registry &states,
+                      const data::json::value &document) -> result<rule_test> {
+    const auto type = test_string(document, "predicate_type");
+    if (!type) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "rule test has no type")};
+    }
+    rule_test test;
+    const auto block_of = [&]() -> result<std::string> {
+        const auto block = test_string(document, "block");
+        if (!block) {
+            return std::unexpected{
+                make_error(error_code::parse_error, "rule test has no block")};
+        }
+        return *block;
+    };
+    if (*type == "minecraft:always_true") {
+        test.type = rule_test_type::always_true;
+        return test;
+    }
+    if (*type == "minecraft:block_match") {
+        auto block = block_of();
+        if (!block) {
+            return std::unexpected{block.error()};
+        }
+        test.type = rule_test_type::block_match;
+        test.blocks.push_back(std::move(*block));
+        return test;
+    }
+    if (*type == "minecraft:random_block_match") {
+        auto block = block_of();
+        if (!block) {
+            return std::unexpected{block.error()};
+        }
+        const auto *probability = document.find("probability");
+        const auto decoded = probability == nullptr
+                                 ? result<double>{std::unexpected{make_error(
+                                       error_code::parse_error,
+                                       "random block test has no probability")}}
+                                 : probability->as_double();
+        if (!decoded) {
+            return std::unexpected{decoded.error()};
+        }
+        const double number = *decoded;
+        test.type = rule_test_type::random_block_match;
+        test.blocks.push_back(std::move(*block));
+        test.probability = static_cast<float>(number);
+        return test;
+    }
+    if (*type == "minecraft:block_state_match" ||
+        *type == "minecraft:random_block_state_match") {
+        const auto *state = document.find("block_state");
+        if (state == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "block state test has no state")};
+        }
+        const auto id = decode_block_state(states, *state);
+        if (id == no_block_state) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "block state test state is invalid")};
+        }
+        test.state = std::string{states.name(id)};
+        if (*type == "minecraft:block_state_match") {
+            test.type = rule_test_type::block_state_match;
+        } else {
+            const auto *probability = document.find("probability");
+            const auto decoded =
+                probability == nullptr
+                    ? result<double>{std::unexpected{
+                          make_error(error_code::parse_error,
+                                     "random block state test has no "
+                                     "probability")}}
+                    : probability->as_double();
+            if (!decoded) {
+                return std::unexpected{decoded.error()};
+            }
+            test.type = rule_test_type::random_block_state_match;
+            test.probability = static_cast<float>(*decoded);
+        }
+        return test;
+    }
+    if (*type == "minecraft:tag_match") {
+        auto tag = test_string(document, "tag");
+        if (!tag) {
+            return std::unexpected{
+                make_error(error_code::parse_error, "tag test has no tag")};
+        }
+        if (tag->starts_with('#')) {
+            tag->erase(0, 1);
+        }
+        test.type = rule_test_type::tag_match;
+        test.tag = std::move(*tag);
+        return test;
+    }
+    if (*type == "minecraft:all_of" || *type == "minecraft:any_of") {
+        const auto *predicates = document.find("predicates");
+        if (predicates == nullptr || !predicates->is_array()) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "composite rule test has no predicates")};
+        }
+        test.type = *type == "minecraft:all_of" ? rule_test_type::all_of
+                                                : rule_test_type::any_of;
+        for (const auto &entry : *predicates->as_array()) {
+            auto child = decode_rule_test(states, entry);
+            if (!child) {
+                return std::unexpected{child.error()};
+            }
+            test.children.push_back(std::move(*child));
+        }
+        return test;
+    }
+    if (*type == "minecraft:not") {
+        const auto *predicate = document.find("predicate");
+        if (predicate == nullptr) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "not rule test has no predicate")};
+        }
+        auto child = decode_rule_test(states, *predicate);
+        if (!child) {
+            return std::unexpected{child.error()};
+        }
+        test.type = rule_test_type::not_test;
+        test.children.push_back(std::move(*child));
+        return test;
+    }
+    return std::unexpected{
+        make_error(error_code::unsupported, "unsupported rule test type")};
+}
+
+auto decode_rule(const data::json::value &document,
+                 block_state_registry &states) -> result<template_rule> {
+    const auto *input = document.find("input_predicate");
+    const auto *location = document.find("location_predicate");
+    const auto *output = document.find("output_state");
+    if (input == nullptr || location == nullptr || output == nullptr) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "rule is incomplete")};
+    }
+    auto input_test = decode_rule_test(states, *input);
+    if (!input_test) {
+        return std::unexpected{input_test.error()};
+    }
+    auto location_test = decode_rule_test(states, *location);
+    if (!location_test) {
+        return std::unexpected{location_test.error()};
+    }
+    const auto output_state = decode_block_state(states, *output);
+    if (output_state == no_block_state) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "rule output state is invalid")};
+    }
+    return template_rule{.input = std::move(*input_test),
+                         .location = std::move(*location_test),
+                         .output = output_state};
+}
+
+} // namespace
+
 auto decode_processor_list(block_state_registry &states,
                            const data::json::value &document)
     -> result<std::shared_ptr<structure_processor_list>> {
@@ -634,7 +993,6 @@ auto decode_processor_list(block_state_registry &states,
         }
         return *array;
     };
-    (void)states;
     const auto *processors = document.find("processors");
     const auto entries = array_of(processors);
     if (!entries) {
@@ -684,6 +1042,25 @@ auto decode_processor_list(block_state_registry &states,
             }
             list->owned.push_back(
                 std::make_unique<protected_blocks_processor>(std::move(tag)));
+            list->processors.push_back(list->owned.back().get());
+        } else if (*type == "minecraft:rule") {
+            const auto *rules_value = entry.find("rules");
+            const auto rules = array_of(rules_value);
+            if (!rules) {
+                return std::unexpected{
+                    make_error(error_code::parse_error, "rule has no rules")};
+            }
+            std::vector<template_rule> decoded;
+            decoded.reserve(rules->size());
+            for (const auto &rule : *rules) {
+                auto parsed = decode_rule(rule, states);
+                if (!parsed) {
+                    return std::unexpected{parsed.error()};
+                }
+                decoded.push_back(std::move(*parsed));
+            }
+            list->owned.push_back(
+                std::make_unique<rule_processor>(std::move(decoded)));
             list->processors.push_back(list->owned.back().get());
         } else if (*type == "minecraft:block_ignore") {
             std::vector<std::string> blocks;
@@ -962,27 +1339,17 @@ auto rule_processor::process(block_state_registry &states,
                              const block_pos &world,
                              worldgen_random *random) const
     -> std::optional<template_block_info> {
-    (void)region;
-    worldgen_random local{std::make_unique<legacy_random_source>(
+    (void)random;
+    // `RuleProcessor` always seeds a positional source at the world position;
+    // the input and location tests share it.
+    worldgen_random rng{std::make_unique<legacy_random_source>(
         mth_get_seed(world.x, world.y, world.z))};
-    auto &rng = random == nullptr ? local : *random;
-    const auto name = state_block_name(states.name(info.state));
+    const auto world_state = region.state_at(world.x, world.y, world.z);
     for (const auto &rule : rules_) {
-        bool matches = false;
-        if (!rule.tag.empty()) {
-            matches = states.in_tag(info.state, rule.tag);
-        } else {
-            for (const auto &block : rule.blocks) {
-                matches = matches || block == name;
-                if (matches) {
-                    break;
-                }
-            }
-        }
-        if (!matches) {
+        if (!rule_matches(rule.input, states, info.state, rng)) {
             continue;
         }
-        if (rule.probability >= 0.0F && rng.next_float() >= rule.probability) {
+        if (!rule_matches(rule.location, states, world_state, rng)) {
             continue;
         }
         auto result = info;
@@ -990,6 +1357,47 @@ auto rule_processor::process(block_state_registry &states,
         return result;
     }
     return info;
+}
+
+auto jigsaw_replacement_processor::process(block_state_registry &states,
+                                           const chunk_region &region,
+                                           const template_block_info &info,
+                                           const block_pos &world,
+                                           worldgen_random *random) const
+    -> std::optional<template_block_info> {
+    (void)region;
+    (void)world;
+    (void)random;
+    if (state_block_name(states.name(info.state)) != "minecraft:jigsaw" ||
+        info.nbt == nullptr) {
+        return info;
+    }
+    std::string final_state = "minecraft:air";
+    if (const auto found = info.nbt->find("final_state");
+        found != info.nbt->end()) {
+        final_state = found->second.as_string().value_or("minecraft:air");
+    }
+    const auto state = resolve_block_state(states, final_state);
+    if (state == no_block_state ||
+        state_block_name(states.name(state)) == "minecraft:structure_void") {
+        return std::nullopt;
+    }
+    auto result = info;
+    result.state = state;
+    result.nbt = nullptr;
+    return result;
+}
+
+auto gravity_processor::adjust_position(const block_state_registry &states,
+                                        const chunk_region &region,
+                                        const template_block_info &info,
+                                        const block_pos &world) const
+    -> block_pos {
+    (void)states;
+    return block_pos{.x = world.x,
+                     .y = region.height_at(kind_, world.x, world.z) + offset_ +
+                          info.y,
+                     .z = world.z};
 }
 
 auto protected_block_processor::process(block_state_registry &states,
@@ -1269,9 +1677,9 @@ auto place_template(chunk_region &region, block_state_registry &states,
     for (const auto &block : palette) {
         const auto relative = transform_position(
             block_pos{.x = block.x, .y = block.y, .z = block.z}, transform);
-        const block_pos world{.x = origin.x + relative.x,
-                              .y = origin.y + relative.y,
-                              .z = origin.z + relative.z};
+        block_pos world{.x = origin.x + relative.x,
+                        .y = origin.y + relative.y,
+                        .z = origin.z + relative.z};
         if (!whole_piece && settings.bounds.has_value() &&
             !settings.bounds->contains(world)) {
             continue;
@@ -1286,6 +1694,8 @@ auto place_template(chunk_region &region, block_state_registry &states,
                 break;
             }
             processed = *result;
+            world =
+                processor->adjust_position(states, region, processed, world);
         }
         if (dropped) {
             continue;
@@ -1579,6 +1989,10 @@ auto transform_state(block_state_registry &states, block_state_id state,
             properties.emplace_back(
                 property, transform_rotation_value(value, transform.mirror,
                                                    transform.rotation));
+        } else if (property == "orientation") {
+            properties.emplace_back(
+                property, transform_orientation(value, transform.mirror,
+                                                transform.rotation));
         } else if (is_face(property)) {
             const auto target =
                 rotate_direction(mirror_direction(property, transform.mirror),

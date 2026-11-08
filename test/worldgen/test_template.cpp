@@ -1098,10 +1098,13 @@ suite<"worldgen/template"> template_tests = [] {
         const block_pos world{.x = 8, .y = 5, .z = 8};
         template_block_info info{.x = 0, .y = 5, .z = 0, .state = *gold};
 
-        const structure::rule_processor rule{
-            {{.blocks = {"minecraft:gold_block"},
-              .probability = -1.0F,
-              .output = *netherrack}}};
+        const structure::rule_processor rule{{{
+            .input =
+                structure::rule_test{.type =
+                                         structure::rule_test_type::block_match,
+                                     .blocks = {"minecraft:gold_block"}},
+            .output = *netherrack,
+        }}};
         const auto replaced =
             rule.process(states, region, info, world, nullptr);
         expect(replaced.has_value());

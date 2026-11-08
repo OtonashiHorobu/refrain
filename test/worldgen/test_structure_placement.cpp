@@ -204,7 +204,7 @@ suite<"worldgen/structure-start"> structure_start_tests = [] {
 suite<"worldgen/structure-data"> structure_data_tests = [] {
     "a structure document decodes its type, step, biomes and adaptation"_test = [] {
         auto document = refrain::data::json::value::parse(
-            R"({"type":"minecraft:jigsaw","biomes":"#minecraft:has_structure/village_plains","step":"surface_structures","terrain_adaptation":"beard_thin","spawn_overrides":{},"start_pool":"minecraft:village/plains/town_centers"})");
+            R"({"type":"minecraft:jigsaw","biomes":"#minecraft:has_structure/village_plains","max_distance_from_center":80,"project_start_to_heightmap":"WORLD_SURFACE_WG","size":6,"spawn_overrides":{},"start_height":{"absolute":0},"start_pool":"minecraft:village/plains/town_centers","step":"surface_structures","terrain_adaptation":"beard_thin","use_expansion_hack":true})");
         expect(document.has_value());
         if (!document) {
             return;
@@ -221,6 +221,15 @@ suite<"worldgen/structure-data"> structure_data_tests = [] {
                structure::terrain_adaptation::beard_thin);
         expect(decoded->biome_tag == "minecraft:has_structure/village_plains");
         expect(decoded->biome_ids.empty());
+        expect(decoded->jigsaw.has_value());
+        if (decoded->jigsaw) {
+            expect(decoded->jigsaw->start_pool ==
+                   "minecraft:village/plains/town_centers");
+            expect(decoded->jigsaw->max_depth == 6);
+            expect(decoded->jigsaw->use_expansion_hack);
+            expect(decoded->jigsaw->project_start_to_heightmap ==
+                   "WORLD_SURFACE_WG");
+        }
     };
     "the reference data resolves structure biome tags"_test = [] {
         const char *root = std::getenv("REFRAIN_VANILLA_WORLDGEN");

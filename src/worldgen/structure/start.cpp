@@ -43,6 +43,7 @@ auto to_piece_record(const structure_piece &piece)
         .mesa = piece.mesa,
         .monument = piece.monument,
         .stronghold = piece.stronghold,
+        .jigsaw = piece.jigsaw,
     };
     if (piece.portal) {
         record.portal_valid = true;

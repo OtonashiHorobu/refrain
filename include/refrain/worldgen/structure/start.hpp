@@ -12,6 +12,7 @@
 #include <optional>
 #include <refrain/worldgen/core/java_compat.hpp>
 #include <refrain/worldgen/structure/bbox.hpp>
+#include <refrain/worldgen/structure/jigsaw.hpp>
 #include <refrain/worldgen/structure/monument.hpp>
 #include <refrain/worldgen/structure/stronghold.hpp>
 
@@ -64,6 +65,9 @@ struct structure_piece {
     /// Stronghold pieces are flat start pieces; the payload carries the
     /// constructor random choices their interiors read.
     std::optional<stronghold_piece_data> stronghold{};
+    /// `minecraft:jigsaw` pieces: the pool element, ground level delta,
+    /// liquid setting and the junctions both sides of a connection record.
+    std::optional<jigsaw_piece_data> jigsaw{};
     /// The monument building carries its child pieces so its `postProcess`
     /// can run them before the outer piece loop runs them again.
     std::vector<structure_piece> children{};

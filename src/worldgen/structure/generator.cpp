@@ -113,30 +113,106 @@ auto structure_generator::generate(const chunk_pos &pos)
                                               .air = 0};
     const auto options = terrain::proto_fill_options{
         .air = 0, .default_block = 1, .default_fluid = 2, .lava = 3};
-    const density::sampler_context sampler_context;
+
+    // The starts stage reads `getFirstFreeHeight` from the unbearded noise.
+    std::map<chunk_pos, std::unique_ptr<proto_chunk>> height_cache;
+    const auto height_at = [&](jint x, jint z, heightmap_kind kind) -> jint {
+        const chunk_pos target{.x = x >> 4, .z = z >> 4};
+        auto found = height_cache.find(target);
+        if (found == height_cache.end()) {
+            auto column = std::make_unique<proto_chunk>(
+                states_, target.x, target.z, config_.min_y, config_.height);
+            column->set_status(chunk_status::biomes);
+            const density::sampler_context context;
+            auto random =
+                new_positional_factory(algorithm::xoroshiro, config_.seed);
+            auto aquifer_factory =
+                random->from_hash_of("minecraft:aquifer")->fork_positional();
+            const volume column_volume{
+                16,           config_.height, 16, target.x * 16, config_.min_y,
+                target.z * 16};
+            terrain::noise_aquifer aquifer{settings_.aquifer,
+                                           *aquifer_factory,
+                                           column_volume,
+                                           picker,
+                                           ids,
+                                           context};
+            terrain::fill_proto_chunk(*column, options,
+                                      *settings_.router.final_density, context,
+                                      aquifer);
+            found = height_cache.emplace(target, std::move(column)).first;
+        }
+        return found->second->first_available(kind, x & 15, z & 15);
+    };
+
+    const structure_start_context start_context{
+        .seed = config_.seed,
+        .data = &data_,
+        .min_y = config_.min_y,
+        .world_height = config_.height,
+        .sea_level = config_.sea_level,
+        .fixed_biome = true,
+        .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+        .biome_name = [this](std::uint16_t) -> std::string_view {
+            return config_.biome;
+        },
+        .height_at = height_at,
+        .templates = templates_.get(),
+    };
+    // The beardifier of the target chunk includes starts up to eight chunks
+    // away; scan a little wider so every compared neighbour sees its own set.
+    constexpr jint scan_radius = 9;
+    std::vector<structure_start> area_starts;
+    for (jint dx = -scan_radius; dx <= scan_radius; ++dx) {
+        for (jint dz = -scan_radius; dz <= scan_radius; ++dz) {
+            auto generated = generate_structure_starts(
+                chunk_pos{.x = pos.x + dx, .z = pos.z + dz}, start_context);
+            for (auto &entry : generated) {
+                area_starts.push_back(std::move(entry));
+            }
+        }
+    }
+    std::vector<structure_start> starts;
+    for (const auto &start : area_starts) {
+        if (start.chunk.x == pos.x && start.chunk.z == pos.z) {
+            starts.push_back(start);
+        }
+    }
+
     std::vector<std::unique_ptr<proto_chunk>> chunks;
     chunks.reserve(9);
     for (jint dz = -1; dz <= 1; ++dz) {
         for (jint dx = -1; dx <= 1; ++dx) {
+            const chunk_pos target{.x = pos.x + dx, .z = pos.z + dz};
+            auto chunk = std::make_unique<proto_chunk>(
+                states_, target.x, target.z, config_.min_y, config_.height);
+            chunk->set_status(chunk_status::biomes);
+            const auto beard = collect_beard(area_starts, data_, target);
+            density::sampler_context context;
+            std::optional<beardifier> beardifier;
+            if (!beard.pieces.empty() || !beard.junctions.empty() ||
+                beard.affected_box.has_value()) {
+                beardifier.emplace(beard.pieces, beard.junctions,
+                                   beard.affected_box);
+                context.set_field(density::context_key::beardifier,
+                                  &*beardifier);
+            }
             auto factory =
                 new_positional_factory(algorithm::xoroshiro, config_.seed);
             auto aquifer_factory =
                 factory->from_hash_of("minecraft:aquifer")->fork_positional();
-            auto chunk = std::make_unique<proto_chunk>(
-                states_, pos.x + dx, pos.z + dz, config_.min_y, config_.height);
-            chunk->set_status(chunk_status::biomes);
-            const volume chunk_volume{16,
-                                      config_.height,
-                                      16,
-                                      (pos.x + dx) * 16,
-                                      config_.min_y,
-                                      (pos.z + dz) * 16};
-            terrain::noise_aquifer aquifer{
-                settings_.aquifer, *aquifer_factory, chunk_volume, picker, ids,
-                sampler_context};
+            const volume chunk_volume{
+                16,           config_.height, 16, target.x * 16, config_.min_y,
+                target.z * 16};
+            terrain::noise_aquifer aquifer{settings_.aquifer,
+                                           *aquifer_factory,
+                                           chunk_volume,
+                                           picker,
+                                           ids,
+                                           context};
             terrain::fill_proto_chunk(*chunk, options,
-                                      *settings_.router.final_density,
-                                      sampler_context, aquifer);
+                                      *settings_.router.final_density, context,
+                                      aquifer);
             chunk->set_status(chunk_status::terrain);
             chunks.push_back(std::move(chunk));
         }
@@ -162,28 +238,6 @@ auto structure_generator::generate(const chunk_pos &pos)
                           .blocks_motion_no_leaves = !air && !leaves})
             .value_or(no_block_state);
     };
-    const structure_start_context start_context{
-        .seed = config_.seed,
-        .data = &data_,
-        .min_y = config_.min_y,
-        .world_height = config_.height,
-        .sea_level = config_.sea_level,
-        .fixed_biome = true,
-        .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
-        .biome_name = [this](std::uint16_t) -> std::string_view {
-            return config_.biome;
-        },
-        .height_at =
-            [&](jint x, jint z, heightmap_kind kind) {
-                if (auto *column = region.find(x >> 4, z >> 4);
-                    column != nullptr) {
-                    return column->first_available(kind, x & 15, z & 15);
-                }
-                return center->min_y();
-            },
-        .templates = templates_.get(),
-    };
-    const auto starts = generate_structure_starts(pos, start_context);
     std::vector<std::vector<::refrain::worldgen::structure_piece_record>>
         records;
     for (const auto &start : starts) {
@@ -203,6 +257,7 @@ auto structure_generator::generate(const chunk_pos &pos)
         .seed = config_.seed,
         .sea_level = config_.sea_level,
         .adjusted_heights = &adjusted_heights,
+        .data = &data_,
     };
     worldgen_random decoration{
         std::make_unique<xoroshiro_random_source>(config_.seed)};
@@ -252,6 +307,7 @@ auto structure_generator::generate(const chunk_pos &pos)
                 .seed = config_.seed,
                 .sea_level = config_.sea_level,
                 .adjusted_heights = &adjusted_heights,
+                .data = &data_,
             };
             for (const auto &piece : records[start_index]) {
                 if (piece.max_x < chunks[chunk_index]->chunk_x() * 16 ||

@@ -70,6 +70,11 @@ class chunk_region {
     [[nodiscard]] auto first_available(heightmap_kind kind, jint x,
                                        jint z) const -> jint;
 
+    /// Height of the heightmap of the chunk that owns the world column. An
+    /// unattached chunk reads as `min_y`.
+    [[nodiscard]] auto height_at(heightmap_kind kind, jint x, jint z) const
+        -> jint;
+
   private:
     [[nodiscard]] auto within_write_zone(const chunk_pos &pos) const -> bool;
 

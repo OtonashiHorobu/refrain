@@ -11,6 +11,7 @@
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 
 #include <refrain/worldgen/core/rng.hpp>
+#include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/template.hpp>
 #include <unordered_map>
 
@@ -36,6 +37,13 @@ struct structure_place_context {
     worldgen_random *level_random{nullptr};
     /// Per-piece adjusted heights shared by the owner and neighbour sections.
     std::unordered_map<std::string, jint> *adjusted_heights{nullptr};
+    /// Processor-list documents for jigsaw pieces; null leaves the element
+    /// processor lists empty.
+    const structure_data_set *data{nullptr};
+    /// Places a `feature_pool_element` by placed-feature id. Null skips the
+    /// feature piece.
+    std::function<bool(std::string_view, worldgen_random &, const block_pos &)>
+        place_feature{};
 };
 
 /// Places one already generated piece into `context.chunk`. Template and
@@ -54,6 +62,12 @@ void place_monument_piece(const structure_place_context &context,
 void place_stronghold_piece(const structure_place_context &context,
                             const structure_piece_record &piece,
                             worldgen_random &random);
+
+/// Places one `minecraft:jigsaw` piece: every element in the piece's element
+/// tree is placed at the piece origin with its processors and projection.
+void place_jigsaw_piece(const structure_place_context &context,
+                        const structure_piece_record &piece,
+                        worldgen_random &random);
 
 /// `StructurePiece.createChest` with an explicit loot table. Returns false
 /// when the position is occupied by a chest or the write is clipped.

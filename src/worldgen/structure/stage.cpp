@@ -151,6 +151,32 @@ auto surface_start(const structure_start_context &context,
 auto try_generate(const structure_start_context &context,
                   const structure_document &structure, const chunk_pos &chunk)
     -> std::optional<structure_start> {
+    if (structure.type == "minecraft:jigsaw") {
+        if (context.templates == nullptr || context.data == nullptr) {
+            return std::nullopt;
+        }
+        return jigsaw_start(
+            chunk, jigsaw_generation_context{
+                       .structure = &structure,
+                       .data = context.data,
+                       .templates = context.templates,
+                       .seed = context.seed,
+                       .min_y = context.min_y,
+                       .world_height = context.world_height,
+                       .sea_level = context.sea_level,
+                       .height_at = context.height_at,
+                       .valid_biome =
+                           [&](const block_pos &pos) {
+                               return biome_allowed(context, structure, pos.x,
+                                                    pos.y, pos.z);
+                           },
+                       .column_allowed =
+                           [&](jint x, jint z) {
+                               return biome_column_allowed(context, structure,
+                                                           x, z);
+                           },
+                   });
+    }
     if (structure.type == "minecraft:buried_treasure") {
         if (!biome_column_allowed(context, structure, chunk.x * 16 + 8,
                                   chunk.z * 16 + 8)) {
