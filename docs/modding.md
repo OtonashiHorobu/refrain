@@ -119,7 +119,7 @@ provider:
 |---|---|---|
 | `refrain:session.status` | `session_status.ridl` | dynamic MOTD, online and max player counts |
 | `refrain:session.tab` | `session_tab.ridl` | tab-list header and footer |
-| `refrain:session.lifecycle` | `session_lifecycle.ridl` | player join/leave notifications |
+| `refrain:session.lifecycle` | `session_lifecycle.ridl` | player join/leave and per-tick notifications |
 
 Each service is `instanced`; select the mod under the matching gamepack
 provider key (`session_status`, `session_tab`, `session_lifecycle`). The runtime

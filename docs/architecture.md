@@ -75,7 +75,7 @@ network code:
 - `refrain:session.status` supplies server-list description, online and max
   counts.
 - `refrain:session.tab` supplies tab-list header and footer.
-- `refrain:session.lifecycle` receives player join and leave notifications.
+- `refrain:session.lifecycle` receives player join/leave and per-tick notifications.
 
 The runtime enumerates every active instance in deterministic order. An empty
 service list keeps the static `network.toml` status, sends no tab packet and

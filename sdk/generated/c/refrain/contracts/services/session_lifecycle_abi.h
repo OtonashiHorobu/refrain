@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: acd81df87ec06a09
+// Schema hash: 8aa1fe7cac60c1a3
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_SESSION_LIFECYCLE_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_SESSION_LIFECYCLE_ABI_H
@@ -48,6 +48,9 @@ typedef struct refrain_services_session_lifecycle_vtable {
     void (*player_join)(void *self, const refrain_services_session_lifecycle_player_info *player);
     // attributes: #[thread(sim)]
     void (*player_leave)(void *self, const refrain_services_session_lifecycle_player_info *player);
+    // Called once per simulation tick after the world advanced.
+    // attributes: #[thread(sim)]
+    void (*tick)(void *self, uint64_t tick);
 } refrain_services_session_lifecycle_vtable; // service refrain:session.lifecycle
 
 #define REFRAIN_SERVICES_SESSION_LIFECYCLE_VTABLE_SIZE ((uint32_t)sizeof(refrain_services_session_lifecycle_vtable))

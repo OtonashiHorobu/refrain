@@ -244,7 +244,7 @@ struct runtime_provider {
             }
             if (!lifecycle_hooks.empty()) {
                 const auto dispatch =
-                    [hooks = std::move(lifecycle_hooks)](
+                    [hooks = lifecycle_hooks](
                         const refrain::net::player_identity &identity,
                         bool joining) {
                         for (const auto &[vtable, hook_self] : hooks) {
@@ -272,6 +272,14 @@ struct runtime_provider {
                     [dispatch](const refrain::net::player_identity &identity) {
                         dispatch(identity, false);
                     };
+                options.on_tick = [hooks =
+                                       lifecycle_hooks](std::uint64_t tick) {
+                    for (const auto &[vtable, hook_self] : hooks) {
+                        const refrain::services::session_lifecycle::provider
+                            lifecycle{*vtable, hook_self};
+                        lifecycle.tick(tick);
+                    }
+                };
             }
             const auto protocol{provider->host->services().active_provider(
                 "refrain:net.protocol", protocol_instance)};

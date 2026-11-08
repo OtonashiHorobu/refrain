@@ -30,4 +30,8 @@ service session_lifecycle : 1.0.0 {
 
     #[thread(sim)]
     fn player_leave(in player_info player);
+
+    /// Called once per simulation tick after the world advanced.
+    #[thread(sim)]
+    fn tick(u64 tick);
 }

@@ -1621,6 +1621,9 @@ auto run_server(const server_run_options &options) -> int {
         if (tick_elapsed_ns > max_tick_ns) {
             max_tick_ns = tick_elapsed_ns;
         }
+        if (options.on_tick) {
+            options.on_tick(static_cast<std::uint64_t>(ticks_run));
+        }
         if (options.hash_every > 0 &&
             (ticks_run % static_cast<std::int64_t>(options.hash_every)) == 0) {
             refrain::log::info("replay: tick={} hash={}", ticks_run,

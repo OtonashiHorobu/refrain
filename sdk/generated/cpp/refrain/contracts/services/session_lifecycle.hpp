@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: acd81df87ec06a09
+// Schema hash: 8aa1fe7cac60c1a3
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_SESSION_LIFECYCLE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_SESSION_LIFECYCLE_HPP
@@ -77,6 +77,11 @@ class provider final {
     auto player_leave(const ::refrain::services::session_lifecycle::player_info &player) const -> void {
         const auto abi_player = ::refrain::contracts::with_struct_size(player);
         table_->player_leave(self_, &abi_player);
+    }
+
+    /// Called once per simulation tick after the world advanced.
+    auto tick(std::uint64_t tick) const -> void {
+        table_->tick(self_, tick);
     }
 
   private:
