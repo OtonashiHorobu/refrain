@@ -862,15 +862,15 @@ auto update_template_block(block_state_registry &states, chunk_region &region,
                                           .z = pos.z + offset.second};
             const auto neighbour =
                 region.state_at(target.x, target.y, target.z);
-            const bool wall =
-                state_block_name(states.name(neighbour)).ends_with("_wall");
+            const auto neighbour_name =
+                state_block_name(states.name(neighbour));
+            const bool connects = neighbour_name.ends_with("_wall") ||
+                                  neighbour_name.ends_with("_fence_gate") ||
+                                  states.traits(neighbour).blocks_motion;
             std::string value = "none";
-            if (wall) {
-                const auto above =
-                    region.state_at(target.x, target.y + 1, target.z);
-                value = state_block_name(states.name(above)).ends_with("_wall")
-                            ? "tall"
-                            : "low";
+            if (connects) {
+                const auto above = region.state_at(pos.x, pos.y + 1, pos.z);
+                value = states.traits(above).blocks_motion ? "tall" : "low";
             }
             if (replace(name, value)) {
                 changed = true;
@@ -895,6 +895,11 @@ auto update_template_block(block_state_registry &states, chunk_region &region,
 }
 
 } // namespace
+
+auto refresh_block_shape(block_state_registry &states, chunk_region &region,
+                         const block_pos &pos) -> bool {
+    return update_template_block(states, region, pos);
+}
 
 namespace {
 

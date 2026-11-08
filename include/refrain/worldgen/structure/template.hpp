@@ -344,6 +344,10 @@ struct template_place_settings {
                                    const template_transform &transform)
     -> block_state_id;
 
+[[nodiscard]] auto refresh_block_shape(block_state_registry &states,
+                                       chunk_region &region,
+                                       const block_pos &pos) -> bool;
+
 /// Places palette 0 (or the palette chosen from the template position) into
 /// `region`. Blocks are mirrored then rotated, block entities are written after
 /// their block, and writes outside the writable region are dropped. Returns

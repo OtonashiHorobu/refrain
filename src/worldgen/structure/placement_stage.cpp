@@ -2460,6 +2460,31 @@ void place_structures(proto_chunk &chunk,
             place_pieces(start);
         }
     }
+    if (static_cast<const block_state_table *>(context.registry) ==
+        &context.chunk->table()) {
+        const auto &states = *context.registry;
+        for (jint y = context.chunk->min_y();
+             y < context.chunk->min_y() + context.chunk->height(); ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    const auto state = context.chunk->state_at(x, y, z);
+                    if (state >= states.size()) {
+                        continue;
+                    }
+                    const std::string name{
+                        state_block_name(states.name(state))};
+                    if (name.ends_with("_wall") || name.ends_with("_fence") ||
+                        name.ends_with("_stairs")) {
+                        (void)refresh_block_shape(
+                            *context.registry, *context.region,
+                            block_pos{.x = context.chunk->chunk_x() * 16 + x,
+                                      .y = y,
+                                      .z = context.chunk->chunk_z() * 16 + z});
+                    }
+                }
+            }
+        }
+    }
 }
 
 } // namespace refrain::worldgen::structure
