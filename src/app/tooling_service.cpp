@@ -126,6 +126,11 @@ auto run_protocol_bot(const protocol_bot_options &options) -> int {
     bot.linger = std::chrono::milliseconds{options.linger_ms};
     bot.command = options.command;
     bot.wait_messages = options.wait_messages;
+    bot.move_dx = options.move_dx;
+    bot.move_dy = options.move_dy;
+    bot.move_dz = options.move_dz;
+    bot.move_delay = std::chrono::milliseconds{options.move_delay_ms};
+    bot.command_delay = std::chrono::milliseconds{options.command_delay_ms};
     auto result{refrain::net::run_bot(bot)};
     if (!result) {
         return report_error(result.error());

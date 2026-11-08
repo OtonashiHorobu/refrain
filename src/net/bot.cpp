@@ -118,6 +118,12 @@ class bot_session {
         if (joined_ && options_.linger.count() > 0) {
             std::this_thread::sleep_for(options_.linger);
         }
+        if (command_thread_.joinable()) {
+            command_thread_.join();
+        }
+        if (move_thread_.joinable()) {
+            move_thread_.join();
+        }
         transport_->stop();
         transport_.reset();
 
@@ -391,6 +397,19 @@ class bot_session {
                         play_sb::encode_keep_alive);
             return;
         }
+        if (packet_id == play_cb::player_position::packet_id) {
+            play_cb::player_position packet{};
+            if (auto decoded{play_cb::decode_player_position(in, packet)};
+                !decoded) {
+                fail("malformed player_position");
+                return;
+            }
+            std::lock_guard lock{mutex_};
+            spawn_x_ = packet.x;
+            spawn_y_ = packet.y;
+            spawn_z_ = packet.z;
+            return;
+        }
         if (packet_id == play_cb::login::packet_id) {
             play_cb::login packet{};
             if (auto decoded{play_cb::decode_login(in, packet)}; !decoded) {
@@ -405,17 +424,55 @@ class bot_session {
                     condition_.notify_one();
                 }
             }
+            play_sb::player_loaded loaded{};
+            send_packet(play_sb::player_loaded::packet_id, loaded,
+                        play_sb::encode_player_loaded);
             if (!options_.command.empty()) {
-                std::string command{options_.command};
-                if (!command.empty() && command.front() == '/') {
-                    command.erase(command.begin());
+                if (options_.command_delay.count() == 0) {
+                    send_command();
+                } else {
+                    command_thread_ = std::thread{[this] {
+                        std::this_thread::sleep_for(options_.command_delay);
+                        send_command();
+                    }};
                 }
-                play_sb::chat_command command_packet{};
-                command_packet.command = std::move(command);
-                send_packet(play_sb::chat_command::packet_id, command_packet,
-                            play_sb::encode_chat_command);
+            }
+            if (options_.move_dx != 0.0 || options_.move_dy != 0.0 ||
+                options_.move_dz != 0.0) {
+                move_thread_ = std::thread{[this] {
+                    if (options_.move_delay.count() > 0) {
+                        std::this_thread::sleep_for(options_.move_delay);
+                    }
+                    send_move();
+                }};
             }
         }
+    }
+
+    void send_command() {
+        if (options_.command.empty()) {
+            return;
+        }
+        std::string command{options_.command};
+        if (!command.empty() && command.front() == '/') {
+            command.erase(command.begin());
+        }
+        play_sb::chat_command packet{};
+        packet.command = std::move(command);
+        send_packet(play_sb::chat_command::packet_id, packet,
+                    play_sb::encode_chat_command);
+    }
+
+    void send_move() {
+        play_sb::move_player_pos_rot packet{};
+        packet.x = spawn_x_ + options_.move_dx;
+        packet.y = spawn_y_ + options_.move_dy;
+        packet.z = spawn_z_ + options_.move_dz;
+        packet.y_rot = 0.0F;
+        packet.x_rot = 0.0F;
+        packet.flags = 1U;
+        send_packet(play_sb::move_player_pos_rot::packet_id, packet,
+                    play_sb::encode_move_player_pos_rot);
     }
 
     void fail(std::string message) {
@@ -448,6 +505,11 @@ class bot_session {
     std::string error_{};
     std::string name_{};
     std::vector<std::string> messages_{};
+    double spawn_x_{0.0};
+    double spawn_y_{64.0};
+    double spawn_z_{0.0};
+    std::thread command_thread_{};
+    std::thread move_thread_{};
 };
 
 } // namespace

@@ -31,6 +31,13 @@ struct bot_options {
     std::string command{};
     /// Finish only after this many system_chat messages.
     std::size_t wait_messages{0};
+    /// Send a play move packet after the join (offsets from the spawn
+    /// position sent by the server).
+    double move_dx{0.0};
+    double move_dy{0.0};
+    double move_dz{0.0};
+    std::chrono::milliseconds move_delay{0};
+    std::chrono::milliseconds command_delay{0};
 };
 
 struct bot_report {

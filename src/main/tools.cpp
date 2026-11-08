@@ -499,6 +499,17 @@ int main(int argc, char **argv) {
                                  "Play command to send after join");
     protocol_bot_cmd->add_option("--wait-messages", protocol_bot.wait_messages,
                                  "Wait for N system_chat messages");
+    protocol_bot_cmd->add_option("--command-delay-ms",
+                                 protocol_bot.command_delay_ms,
+                                 "Delay the play command by N milliseconds");
+    protocol_bot_cmd->add_option("--move-dx", protocol_bot.move_dx,
+                                 "Move this many blocks along X after join");
+    protocol_bot_cmd->add_option("--move-dy", protocol_bot.move_dy,
+                                 "Move this many blocks along Y after join");
+    protocol_bot_cmd->add_option("--move-dz", protocol_bot.move_dz,
+                                 "Move this many blocks along Z after join");
+    protocol_bot_cmd->add_option("--move-delay-ms", protocol_bot.move_delay_ms,
+                                 "Delay the move packet by N milliseconds");
 
     auto *wasm_cmd = app.add_subcommand("wasm", "WASM runtime smoke tests");
     auto *wasm_smoke_cmd =

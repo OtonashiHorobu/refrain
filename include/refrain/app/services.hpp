@@ -50,6 +50,11 @@ struct protocol_bot_options {
     int linger_ms{0};
     std::string command{};
     std::size_t wait_messages{0};
+    double move_dx{0.0};
+    double move_dy{0.0};
+    double move_dz{0.0};
+    int move_delay_ms{0};
+    int command_delay_ms{0};
 };
 
 struct config_import_options {
