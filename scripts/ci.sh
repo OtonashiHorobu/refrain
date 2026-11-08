@@ -854,7 +854,7 @@ cmp "$EXTRACT_DIR/gc-bad-table-before.idx" \
 echo "  content: 4 file(s) -> 3 blob(s) (2 in segments), deterministic RFRX, where/verify/gc+compact OK"
 "$BIN_DIR/refrain-tools" wasm smoke
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/presets/minimal-flat.toml" \
-    --dump-gamepack | grep -q 'worldgen -> refrain.worldgen.flat@1.0.0' \
+    --dump-gamepack | grep -Eq 'worldgen[[:space:]]*-> refrain.worldgen.flat@1.0.0' \
     || die "server did not resolve the flat-worldgen preset"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --dump-gamepack 2>&1 | grep -q 'builtin image: files=12' \
@@ -867,7 +867,7 @@ echo "  content: 4 file(s) -> 3 blob(s) (2 in segments), deterministic RFRX, whe
 # line on stdout would corrupt machine-readable output.
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --dump-gamepack >"$EXTRACT_DIR/stream-out.txt" 2>"$EXTRACT_DIR/stream-err.txt"
-grep -q 'worldgen -> ' "$EXTRACT_DIR/stream-out.txt" \
+grep -Eq 'worldgen[[:space:]]*-> ' "$EXTRACT_DIR/stream-out.txt" \
     || die "stream split: dump plan missing from stdout"
 if grep -Eq '\[[^]]*/(info|warn|error|debug|critical)\]' \
     "$EXTRACT_DIR/stream-out.txt"; then
