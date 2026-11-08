@@ -50,6 +50,13 @@ Tests that cover the simulation compare the state hash across two runs, or
 across an encode and a decode. A change that alters the hash must come with a
 format or behavior change that explains it.
 
+## Fuzz smoke
+
+`test/net/test_fuzz_smoke.cpp` feeds deterministic pseudo-random bytes to the
+frame decoder (compressed and uncompressed), the text-component NBT decoder and
+selected generated packet decoders. It runs in CI and asserts only that no input
+crashes or hangs the decoder; malformed input is expected to return an error.
+
 ## Protocol bot
 
 `refrain-tools protocol bot` connects to an offline-mode server and walks the
