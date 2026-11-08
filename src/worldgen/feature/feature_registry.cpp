@@ -899,6 +899,58 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 id, std::make_unique<chorus_plant_feature>(*plant, *flower));
             continue;
         }
+        if (*type == "minecraft:vegetation_patch" ||
+            *type == "minecraft:waterlogged_vegetation_patch") {
+            const auto *nested = document.document.find("vegetation_feature");
+            const auto *ground = document.document.find("ground_state");
+            const auto *depth = document.document.find("depth");
+            const auto *radius = document.document.find("xz_radius");
+            const auto *replaceable = document.document.find("replaceable");
+            const auto *surface = document.document.find("surface");
+            if (nested == nullptr || ground == nullptr || depth == nullptr ||
+                radius == nullptr || replaceable == nullptr ||
+                surface == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "vegetation patch config is incomplete")};
+            }
+            auto nested_id = nested_reference(*nested);
+            auto ground_state = decode_provider(*ground);
+            auto depth_provider = provider::int_provider::decode(*depth);
+            auto radius_provider = provider::int_provider::decode(*radius);
+            if (!nested_id || !ground_state || !depth_provider ||
+                !radius_provider) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "vegetation patch config is invalid")};
+            }
+            const auto surface_name = surface->as_string().value_or("floor");
+            const auto read_float = [&](const char *key) {
+                const auto *value = document.document.find(key);
+                return value == nullptr ? 0.0F
+                                        : static_cast<float>(
+                                              value->as_double().value_or(0.0));
+            };
+            const auto read_int = [&](const char *key, jint fallback) {
+                const auto *value = document.document.find(key);
+                return value == nullptr
+                           ? fallback
+                           : static_cast<jint>(
+                                 value->as_int64().value_or(fallback));
+            };
+            features_.emplace(
+                id,
+                std::make_unique<vegetation_patch_feature>(
+                    std::move(*nested_id), std::move(*ground_state),
+                    std::string{replaceable->as_string().value_or("")},
+                    std::move(*depth_provider), std::move(*radius_provider),
+                    surface_name == "ceiling", read_int("vertical_range", 5),
+                    read_float("vegetation_chance"),
+                    read_float("extra_bottom_block_chance"),
+                    read_float("extra_edge_column_chance"),
+                    *type == "minecraft:waterlogged_vegetation_patch"));
+            continue;
+        }
         if (*type == "minecraft:end_podium") {
             const auto *active = document.document.find("active");
             const bool is_active =

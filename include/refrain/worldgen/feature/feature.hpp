@@ -515,6 +515,52 @@ class end_platform_feature final : public feature {
                              const block_pos &origin) const -> bool override;
 };
 
+/// `VegetationPatchFeature`: a ground patch with optional nested vegetation.
+class vegetation_patch_feature final : public feature {
+  public:
+    vegetation_patch_feature(std::string nested_feature,
+                             std::unique_ptr<state_provider> ground_state,
+                             std::string replaceable,
+                             std::unique_ptr<provider::int_provider> depth,
+                             std::unique_ptr<provider::int_provider> xz_radius,
+                             bool ceiling, jint vertical_range,
+                             float vegetation_chance,
+                             float extra_bottom_block_chance,
+                             float extra_edge_column_chance, bool waterlogged)
+        : nested_feature_{std::move(nested_feature)},
+          ground_state_{std::move(ground_state)},
+          replaceable_{std::move(replaceable)}, depth_{std::move(depth)},
+          xz_radius_{std::move(xz_radius)}, ceiling_{ceiling},
+          vertical_range_{vertical_range},
+          vegetation_chance_{vegetation_chance},
+          extra_bottom_block_chance_{extra_bottom_block_chance},
+          extra_edge_column_chance_{extra_edge_column_chance},
+          waterlogged_{waterlogged} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    [[nodiscard]] auto replaceable(feature_context &context,
+                                   block_state_id state) const -> bool;
+    void place_ground(feature_context &context, worldgen_random &random,
+                      block_pos &below, jint depth) const;
+    void distribute(feature_context &context, worldgen_random &random,
+                    const std::vector<block_pos> &surface) const;
+
+    std::string nested_feature_{};
+    std::unique_ptr<state_provider> ground_state_{};
+    std::string replaceable_{};
+    std::unique_ptr<provider::int_provider> depth_{};
+    std::unique_ptr<provider::int_provider> xz_radius_{};
+    bool ceiling_{false};
+    jint vertical_range_{5};
+    float vegetation_chance_{0.0F};
+    float extra_bottom_block_chance_{0.0F};
+    float extra_edge_column_chance_{0.0F};
+    bool waterlogged_{false};
+};
+
 /// `EndGatewayFeature`: the bedrock frame around an end gateway block.
 class end_gateway_feature final : public feature {
   public:

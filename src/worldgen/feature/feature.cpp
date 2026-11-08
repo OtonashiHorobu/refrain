@@ -3825,4 +3825,116 @@ auto overlay_feature::place(feature_context &context, worldgen_random &random,
     return placed;
 }
 
+auto vegetation_patch_feature::replaceable(feature_context &context,
+                                           block_state_id state) const -> bool {
+    const auto &states = *context.placement.states;
+    if (!replaceable_.empty() && replaceable_.front() == '#') {
+        return states.in_tag(state, replaceable_.substr(1));
+    }
+    return !replaceable_.empty() && states.name(state) == replaceable_;
+}
+
+void vegetation_patch_feature::place_ground(feature_context &context,
+                                            worldgen_random &random,
+                                            block_pos &below,
+                                            jint depth) const {
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
+    const jint direction = ceiling_ ? 1 : -1;
+    for (jint i = 0; i < depth; ++i) {
+        const auto state = ground_state_->get(context.placement, random, below);
+        const auto current = region.state_at(below.x, below.y, below.z);
+        if (states.name(state) != states.name(current)) {
+            if (!replaceable(context, current)) {
+                return;
+            }
+            (void)region.set_block_state(below.x, below.y, below.z, state);
+            below.y += direction;
+        }
+    }
+}
+
+void vegetation_patch_feature::distribute(
+    feature_context &context, worldgen_random &random,
+    const std::vector<block_pos> &surface) const {
+    const jint outwards = ceiling_ ? -1 : 1;
+    for (const auto &position : surface) {
+        if (vegetation_chance_ > 0.0F &&
+            random.next_float() < vegetation_chance_) {
+            if (context.place_by_id) {
+                (void)context.place_by_id(nested_feature_, random,
+                                          block_pos{.x = position.x,
+                                                    .y = position.y + outwards,
+                                                    .z = position.z});
+            }
+        }
+    }
+}
+
+auto vegetation_patch_feature::place(feature_context &context,
+                                     worldgen_random &random,
+                                     const block_pos &origin) const -> bool {
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
+    const jint x_radius = xz_radius_->sample(random) + 1;
+    const jint z_radius = xz_radius_->sample(random) + 1;
+    const jint inwards = ceiling_ ? 1 : -1;
+    const jint outwards = -inwards;
+    std::vector<block_pos> surface;
+    for (jint dx = -x_radius; dx <= x_radius; ++dx) {
+        const bool x_edge = dx == -x_radius || dx == x_radius;
+        for (jint dz = -z_radius; dz <= z_radius; ++dz) {
+            const bool z_edge = dz == -z_radius || dz == z_radius;
+            const bool corner = x_edge && z_edge;
+            const bool edge = x_edge || z_edge;
+            if (corner) {
+                continue;
+            }
+            if (edge && extra_edge_column_chance_ != 0.0F &&
+                random.next_float() > extra_edge_column_chance_) {
+                continue;
+            }
+            block_pos pos{
+                .x = origin.x + dx, .y = origin.y, .z = origin.z + dz};
+            for (jint offset = 0;
+                 states.traits(region.state_at(pos.x, pos.y, pos.z)).air &&
+                 offset < vertical_range_;
+                 ++offset) {
+                pos.y += inwards;
+            }
+            for (jint offset = 0;
+                 !states.traits(region.state_at(pos.x, pos.y, pos.z)).air &&
+                 offset < vertical_range_;
+                 ++offset) {
+                pos.y += outwards;
+            }
+            const block_pos below{.x = pos.x, .y = pos.y + inwards, .z = pos.z};
+            if (!states.traits(region.state_at(pos.x, pos.y, pos.z)).air ||
+                !states.traits(region.state_at(below.x, below.y, below.z))
+                     .blocks_motion) {
+                continue;
+            }
+            const jint depth =
+                depth_->sample(random) +
+                (extra_bottom_block_chance_ > 0.0F &&
+                         random.next_float() < extra_bottom_block_chance_
+                     ? 1
+                     : 0);
+            place_ground(context, random, const_cast<block_pos &>(below),
+                         depth);
+            surface.push_back(below);
+        }
+    }
+    if (waterlogged_) {
+        for (const auto &position : surface) {
+            (void)region.set_block_state(
+                position.x, position.y, position.z,
+                context.placement.resolve_state
+                    ? context.placement.resolve_state("minecraft:water")
+                    : no_block_state);
+        }
+    }
+    distribute(context, random, surface);
+    return !surface.empty();
+}
 } // namespace refrain::worldgen::feature
