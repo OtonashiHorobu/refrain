@@ -875,8 +875,7 @@ auto update_template_block(block_state_registry &states, chunk_region &region,
             const auto neighbour_name =
                 state_block_name(states.name(neighbour));
             const bool connects = neighbour_name.ends_with("_wall") ||
-                                  neighbour_name.ends_with("_fence_gate") ||
-                                  states.traits(neighbour).blocks_motion;
+                                  fence_connects(states, neighbour);
             std::string value = "none";
             if (connects) {
                 const auto above = region.state_at(pos.x, pos.y + 1, pos.z);
