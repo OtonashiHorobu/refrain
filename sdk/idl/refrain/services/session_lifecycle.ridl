@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// Optional session lifecycle observer. A mod implements this service to receive
+// player join/leave notifications without owning packet handling; the session
+// dispatches every active instance in deterministic order.
+
+module refrain::services::session_lifecycle;
+version 1.0.0;
+
+import refrain::core;
+
+struct player_info {
+    u64 connection;
+    string name;
+    string world;
+}
+
+service session_lifecycle : 1.0.0 {
+    side = server;
+    thread = sim;
+    composition = instanced;
+    provides = [ "refrain:session.lifecycle" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "player-lifecycle" ];
+
+    #[thread(sim)]
+    fn player_join(in player_info player);
+
+    #[thread(sim)]
+    fn player_leave(in player_info player);
+}

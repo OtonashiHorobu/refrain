@@ -41,6 +41,8 @@ struct server_run_options {
     net::status_provider status{};
     net::tab_provider tab{};
     net::tab_encoder encode_tab{};
+    net::player_event player_join{};
+    net::player_event player_leave{};
     /// Host-owned store used by the console `/config` commands and the
     /// shutdown save. Null disables both.
     core::config::store *config{nullptr};

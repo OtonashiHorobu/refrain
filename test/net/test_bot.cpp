@@ -8,6 +8,8 @@
 
 #include <boost/ut.hpp>
 
+#include <atomic>
+
 #include "test_protocol.hpp"
 
 #include <chrono>
@@ -80,6 +82,16 @@ suite bot_tests = [] {
         };
         inputs.tab = [](const net::player_identity &) {
             return net::tab_view{.header = "Header", .footer = "Footer"};
+        };
+        std::atomic<int> joins{0};
+        std::atomic<int> leaves{0};
+        inputs.player_join = [&joins](const net::player_identity &identity) {
+            if (!identity.name.empty()) {
+                ++joins;
+            }
+        };
+        inputs.player_leave = [&leaves](const net::player_identity &) {
+            ++leaves;
         };
         net::server *server_ptr{nullptr};
         inputs.commands.execute =
@@ -180,6 +192,8 @@ suite bot_tests = [] {
         ticking.store(false, std::memory_order_relaxed);
         ticker.join();
         (*server)->stop();
+        expect(joins.load() >= 1);
+        expect(leaves.load() >= 1);
         std::error_code error;
         std::filesystem::remove_all(dir, error);
     };

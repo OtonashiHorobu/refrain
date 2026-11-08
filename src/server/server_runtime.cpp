@@ -1136,6 +1136,8 @@ auto run_server(const server_run_options &options) -> int {
     network_inputs.status = options.status;
     network_inputs.tab = options.tab;
     network_inputs.encode_tab = options.encode_tab;
+    network_inputs.player_join = options.player_join;
+    network_inputs.player_leave = options.player_leave;
     network_inputs.seed = level->seed;
     network_inputs.spawn_x = static_cast<double>(level->spawn_x) + 0.5;
     network_inputs.spawn_y = static_cast<double>(level->spawn_y);

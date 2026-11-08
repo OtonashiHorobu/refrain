@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 25b2c961ad0ac277
+// Schema hash: acd81df87ec06a09
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2821,6 +2821,15 @@ template <> struct custom_traits<::refrain::services::session::session_descripto
         refrain::reflect::custom_field{"family", &::refrain::services::session::session_descriptor::family},
         refrain::reflect::custom_field{"edition", &::refrain::services::session::session_descriptor::edition},
         refrain::reflect::custom_field{"capabilities", &::refrain::services::session::session_descriptor::capabilities});
+};
+
+/// Generated RIDL struct 'refrain::services::session_lifecycle::player_info'.
+template <> struct custom_traits<::refrain::services::session_lifecycle::player_info> {
+    static constexpr std::string_view type_name = "refrain::services::session_lifecycle::player_info";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"connection", &::refrain::services::session_lifecycle::player_info::connection},
+        refrain::reflect::custom_field{"name", &::refrain::services::session_lifecycle::player_info::name},
+        refrain::reflect::custom_field{"world", &::refrain::services::session_lifecycle::player_info::world});
 };
 
 /// Generated RIDL struct 'refrain::services::session_status::status_request'.

@@ -81,6 +81,9 @@ struct tab_view {
 using status_provider =
     std::function<status_info(const status_request_context &)>;
 using tab_provider = std::function<tab_view(const player_identity &)>;
+/// Optional lifecycle observer. The network layer reports the event but never
+/// interprets it.
+using player_event = std::function<void(const player_identity &)>;
 /// Optional protocol-owned encoder for the tab_list packet body. The network
 /// layer falls back to its generated encoder when empty.
 using tab_encoder = std::function<result<std::vector<std::byte>>(
@@ -161,6 +164,8 @@ struct server_inputs {
     status_provider status{};
     tab_provider tab{};
     tab_encoder encode_tab{};
+    player_event player_join{};
+    player_event player_leave{};
     /// Optional transport provider. Empty uses the built-in Asio TCP
     /// transport.
     transport_factory make_transport{};

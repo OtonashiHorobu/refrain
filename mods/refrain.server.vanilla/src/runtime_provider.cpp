@@ -13,6 +13,7 @@
 #include <refrain/contracts/services/net_protocol.hpp>
 #include <refrain/contracts/services/runtime_abi.h>
 #include <refrain/contracts/services/session_abi.h>
+#include <refrain/contracts/services/session_lifecycle.hpp>
 #include <refrain/contracts/services/session_status.hpp>
 #include <refrain/contracts/services/session_tab.hpp>
 #include <refrain/contracts/services/transport.hpp>
@@ -219,6 +220,58 @@ struct runtime_provider {
                     }
                     return refrain::net::tab_view{};
                 };
+            }
+            std::vector<std::pair<
+                const refrain_services_session_lifecycle_vtable *, void *>>
+                lifecycle_hooks{};
+            for (const auto &instance :
+                 provider->host->services().active_instances(
+                     "refrain:session.lifecycle")) {
+                const auto info{provider->host->services().active_provider(
+                    "refrain:session.lifecycle", instance)};
+                if (!info || info->instance == nullptr) {
+                    continue;
+                }
+                const auto *api{static_cast<const refrain::mod::provider_api *>(
+                    info->instance)};
+                if (api->vtable != nullptr) {
+                    lifecycle_hooks.emplace_back(
+                        static_cast<
+                            const refrain_services_session_lifecycle_vtable *>(
+                            api->vtable),
+                        api->self);
+                }
+            }
+            if (!lifecycle_hooks.empty()) {
+                const auto dispatch =
+                    [hooks = std::move(lifecycle_hooks)](
+                        const refrain::net::player_identity &identity,
+                        bool joining) {
+                        for (const auto &[vtable, hook_self] : hooks) {
+                            const refrain::services::session_lifecycle::provider
+                                lifecycle{*vtable, hook_self};
+                            auto request{refrain::services::session_lifecycle::
+                                             make_player_info()};
+                            request.connection = identity.connection;
+                            request.name =
+                                refrain::contracts::to_borrowed(identity.name);
+                            request.world =
+                                refrain::contracts::to_borrowed(identity.world);
+                            if (joining) {
+                                lifecycle.player_join(request);
+                            } else {
+                                lifecycle.player_leave(request);
+                            }
+                        }
+                    };
+                options.player_join =
+                    [dispatch](const refrain::net::player_identity &identity) {
+                        dispatch(identity, true);
+                    };
+                options.player_leave =
+                    [dispatch](const refrain::net::player_identity &identity) {
+                        dispatch(identity, false);
+                    };
             }
             const auto protocol{provider->host->services().active_provider(
                 "refrain:net.protocol", protocol_instance)};

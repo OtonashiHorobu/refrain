@@ -201,6 +201,7 @@ struct server::impl {
         game_mode mode{game_mode::creative};
         bool login_started{false};
         bool status_requested{false};
+        bool leave_reported{false};
         bool closed{false};
         std::int64_t keepalive_sent_ms{0};
         std::int64_t keepalive_challenge{0};
@@ -239,6 +240,8 @@ struct server::impl {
     status_provider status_hook{};
     tab_provider tab_hook{};
     tab_encoder tab_encoder_hook{};
+    player_event player_join_hook{};
+    player_event player_leave_hook{};
     transport_factory make_transport{};
     std::shared_ptr<protocol_codec> protocol{};
     std::mutex command_cache_mutex{};
@@ -396,6 +399,8 @@ void server::impl::on_open(std::uint64_t id) {
 void server::impl::on_close(std::uint64_t id, std::string_view /*reason*/) {
     std::uint64_t left_id{0};
     uuid left_profile{};
+    std::string left_name{};
+    bool report_leave{false};
     {
         const std::lock_guard lock{connections_mutex};
         const auto found{connections.find(id)};
@@ -404,10 +409,21 @@ void server::impl::on_close(std::uint64_t id, std::string_view /*reason*/) {
             !found->second.name.empty()) {
             left_id = id;
             left_profile = found->second.profile;
+            left_name = found->second.name;
+            report_leave = !found->second.leave_reported;
+            found->second.leave_reported = true;
         }
         connections.erase(id);
     }
     if (left_id != 0) {
+        if (report_leave && player_leave_hook) {
+            player_leave_hook(player_identity{
+                .connection = left_id,
+                .id = left_profile,
+                .name = left_name,
+                .world = {},
+            });
+        }
         announce_leave(left_id, left_profile);
     }
 }
@@ -1842,6 +1858,20 @@ void server::impl::announce_join(std::uint64_t id) {
                         joining, play_cb::encode_add_entity);
         }
     }
+    if (player_join_hook) {
+        const auto self{std::find_if(players.begin(), players.end(),
+                                     [id](const player_snapshot &player) {
+                                         return player.connection == id;
+                                     })};
+        if (self != players.end()) {
+            player_join_hook(player_identity{
+                .connection = self->connection,
+                .id = self->profile,
+                .name = self->name,
+                .world = {},
+            });
+        }
+    }
 }
 
 void server::impl::set_game_mode(std::uint64_t id, game_mode mode) {
@@ -2413,6 +2443,9 @@ void server::impl::reject(std::uint64_t id, std::string_view reason) {
 void server::impl::close(std::uint64_t id) {
     std::string name;
     connection_state state{connection_state::handshake};
+    std::uint64_t leave_id{0};
+    uuid leave_profile{};
+    bool notify_leave{false};
     {
         const std::lock_guard lock{connections_mutex};
         const auto found{connections.find(id)};
@@ -2422,6 +2455,21 @@ void server::impl::close(std::uint64_t id) {
         found->second.closed = true;
         name = found->second.name;
         state = found->second.state;
+        if (state == connection_state::play && !name.empty() &&
+            !found->second.leave_reported) {
+            found->second.leave_reported = true;
+            leave_id = id;
+            leave_profile = found->second.profile;
+            notify_leave = true;
+        }
+    }
+    if (notify_leave && player_leave_hook) {
+        player_leave_hook(player_identity{
+            .connection = leave_id,
+            .id = leave_profile,
+            .name = name,
+            .world = {},
+        });
     }
     if (name.empty()) {
         log::debug("net: connection closed id={} state={}", id,
@@ -2570,6 +2618,8 @@ auto server::start(server_inputs inputs, core::config::view view)
     state->status_hook = std::move(inputs.status);
     state->tab_hook = std::move(inputs.tab);
     state->tab_encoder_hook = std::move(inputs.encode_tab);
+    state->player_join_hook = std::move(inputs.player_join);
+    state->player_leave_hook = std::move(inputs.player_leave);
     state->make_transport = std::move(inputs.make_transport);
     state->protocol = std::move(inputs.protocol);
     state->verify_session = std::move(inputs.verify_session);
