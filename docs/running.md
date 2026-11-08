@@ -106,6 +106,16 @@ commands with a leading tick number. Dirty configuration is saved on shutdown;
 `config reload` changes the store but running subsystems keep their startup
 snapshot until restart.
 
+## In-game commands
+
+The server announces a small command tree after joining:
+
+| Command | Effect |
+|---|---|
+| `/help` | list the available commands |
+| `/list` | show connected players |
+| `/say <message>` | broadcast a message to every player |
+
 | Command | Effect |
 |---|---|
 | `stop` | stop after the current tick |

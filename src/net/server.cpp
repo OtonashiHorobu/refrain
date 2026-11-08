@@ -54,7 +54,6 @@ namespace play_sb = ::refrain::protocol::v777::play::serverbound;
 
 /// Packets whose payload contains NBT keep hand-written codecs; only their
 /// protocol ids are shared with the schema-generated packet table.
-inline constexpr std::uint16_t raw_system_chat_id = 124;
 
 [[nodiscard]] auto overworld() -> const data::resource_location & {
     static const auto location{
@@ -111,13 +110,6 @@ inline constexpr std::uint16_t raw_system_chat_id = 124;
             static_cast<std::uint8_t>((low_bits >> (56U - index * 8U)) & 0xFFU);
     }
     return value;
-}
-
-[[nodiscard]] auto component_nbt(std::string_view text)
-    -> result<std::vector<std::byte>> {
-    data::nbt::compound members{};
-    members.emplace("text", data::nbt::value{std::string{text}});
-    return data::nbt::write(data::nbt::make_compound(std::move(members)), "");
 }
 
 [[nodiscard]] auto valid_name(std::string_view name) noexcept -> bool {
@@ -201,6 +193,37 @@ struct server_settings {
     std::int32_t auth_timeout_ms{5000};
 };
 
+[[nodiscard]] auto make_command_tree() -> refrain::net::command_tree {
+    using refrain::net::command_node;
+    command_node root{};
+    root.flags = 0;
+    root.children = {1U, 2U, 3U};
+
+    command_node help{};
+    help.flags = static_cast<std::uint8_t>(1U | 4U); // literal + executable
+    help.name = "help";
+
+    command_node list{};
+    list.flags = static_cast<std::uint8_t>(1U | 4U);
+    list.name = "list";
+
+    command_node say{};
+    say.flags = static_cast<std::uint8_t>(1U | 4U);
+    say.name = "say";
+    say.children = {4U};
+
+    command_node message{};
+    message.flags = static_cast<std::uint8_t>(2U | 4U); // argument + executable
+    message.name = "message";
+    message.parser_id = 5U;   // brigadier:string
+    message.string_type = 2U; // greedy phrase
+
+    refrain::net::command_tree tree{};
+    tree.nodes = {root, help, list, say, message};
+    tree.root_index = 0;
+    return tree;
+}
+
 struct server::impl {
     struct connection_state_data {
         frame_decoder decoder{-1};
@@ -269,6 +292,9 @@ struct server::impl {
     void send_login_finished(std::uint64_t id);
     void send_configuration(std::uint64_t id);
     void send_play_login(std::uint64_t id);
+    void send_commands(std::uint64_t id);
+    void send_system_chat(std::uint64_t id, std::string_view text);
+    void broadcast_system_chat(std::string_view text);
     void send_initial_chunks(std::uint64_t id);
     void send_keepalive(std::uint64_t id);
     void keepalive_loop();
@@ -1144,6 +1170,41 @@ void server::impl::send_play_login(std::uint64_t id) {
     send_keepalive(id);
 }
 
+void server::impl::send_commands(std::uint64_t id) {
+    play_cb::commands packet{};
+    packet.tree = make_command_tree();
+    send_packet(id, play_cb::commands::packet_id, packet,
+                play_cb::encode_commands);
+}
+
+void server::impl::send_system_chat(std::uint64_t id, std::string_view text) {
+    play_cb::system_chat packet{};
+    packet.content.text = std::string{text};
+    packet.overlay = false;
+    send_packet(id, play_cb::system_chat::packet_id, packet,
+                play_cb::encode_system_chat);
+}
+
+void server::impl::broadcast_system_chat(std::string_view text) {
+    play_cb::system_chat packet{};
+    packet.content.text = std::string{text};
+    packet.overlay = false;
+    std::vector<std::uint64_t> targets;
+    {
+        const std::lock_guard lock{connections_mutex};
+        targets.reserve(connections.size());
+        for (const auto &[id, state] : connections) {
+            if (!state.closed && state.state == connection_state::play) {
+                targets.push_back(id);
+            }
+        }
+    }
+    for (const auto target : targets) {
+        send_packet(target, play_cb::system_chat::packet_id, packet,
+                    play_cb::encode_system_chat);
+    }
+}
+
 void server::impl::send_initial_chunks(std::uint64_t id) {
     play_cb::chunk_batch_start start{};
     send_packet(id, play_cb::chunk_batch_start::packet_id, start,
@@ -1386,19 +1447,7 @@ void server::impl::handle_play(std::uint64_t id,
             }
             name = found->second.name;
         }
-        auto component{
-            component_nbt(fmt::format("<{}> {}", name, packet.message))};
-        if (!component) {
-            return;
-        }
-        // system_chat carries an NBT component, so its body stays
-        // hand-written; the packet id is fixed by protocol 777.
-        std::vector<std::byte> chat;
-        writer out{chat};
-        out.write_varint(raw_system_chat_id);
-        out.write_bytes(std::span<const std::byte>{*component});
-        out.write_bool(false);
-        send(id, chat);
+        broadcast_system_chat(fmt::format("<{}> {}", name, packet.message));
         return;
     }
     case play_sb::chat_command::packet_id: {
@@ -1407,17 +1456,72 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        auto component{component_nbt(fmt::format(
-            "Refrain: command '/{}' is not implemented", packet.command))};
-        if (!component) {
+        std::string command{packet.command};
+        if (!command.empty() && command.front() == '/') {
+            command.erase(command.begin());
+        }
+        std::vector<std::string_view> tokens;
+        std::size_t position{0};
+        while (position < command.size()) {
+            while (position < command.size() && command[position] == ' ') {
+                ++position;
+            }
+            const auto start{position};
+            while (position < command.size() && command[position] != ' ') {
+                ++position;
+            }
+            if (position > start) {
+                tokens.emplace_back(command.data() + start, position - start);
+            }
+        }
+        if (tokens.empty()) {
             return;
         }
-        std::vector<std::byte> chat;
-        writer out{chat};
-        out.write_varint(raw_system_chat_id);
-        out.write_bytes(std::span<const std::byte>{*component});
-        out.write_bool(false);
-        send(id, chat);
+        if (tokens[0] == "help") {
+            send_system_chat(id, "Commands: /help, /list, /say <message>");
+        } else if (tokens[0] == "list") {
+            std::string names;
+            std::size_t count{0};
+            {
+                const std::lock_guard lock{connections_mutex};
+                for (const auto &[other, state] : connections) {
+                    static_cast<void>(other);
+                    if (state.closed || state.state != connection_state::play) {
+                        continue;
+                    }
+                    if (!names.empty()) {
+                        names += ", ";
+                    }
+                    names += state.name;
+                    ++count;
+                }
+            }
+            send_system_chat(id, fmt::format("Players ({}): {}", count, names));
+        } else if (tokens[0] == "say") {
+            std::string message;
+            for (std::size_t index{1}; index < tokens.size(); ++index) {
+                if (!message.empty()) {
+                    message += ' ';
+                }
+                message += tokens[index];
+            }
+            if (message.empty()) {
+                send_system_chat(id, "Usage: /say <message>");
+            } else {
+                std::string name;
+                {
+                    const std::lock_guard lock{connections_mutex};
+                    const auto found{connections.find(id)};
+                    if (found != connections.end()) {
+                        name = found->second.name;
+                    }
+                }
+                broadcast_system_chat(fmt::format("[{}] {}", name, message));
+            }
+        } else {
+            send_system_chat(id,
+                             fmt::format("Unknown command: /{}", tokens[0]));
+        }
         return;
     }
     case play_sb::player_loaded::packet_id: {
