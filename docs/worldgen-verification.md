@@ -20,7 +20,7 @@ variables and reads the data and template roots from the caller.
 | Structure | Start | Blocks | Full stage |
 |---|---|---|---|
 | buried treasure | yes | yes | yes |
-| mineshaft | yes | yes | a single corridor still differs |
+| mineshaft | yes | yes | yes |
 | jungle temple | yes | yes | yes |
 | swamp hut | yes | synthetic | no |
 | desert pyramid | yes | synthetic | no |
@@ -30,7 +30,9 @@ variables and reads the data and template roots from the caller.
 | ruined portal | yes | yes | yes |
 | woodland mansion | yes | yes | yes |
 
-The ruined portal full-stage oracle uses a dry candidate. A portal that
+The mineshaft full-stage oracle matches the 141-piece reference start,
+including the corridor random stream. The ruined portal full-stage oracle
+uses a dry candidate. A portal that
 intersects flowing lava or water is not stable after the reference world
 settles.
 
