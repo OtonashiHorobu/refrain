@@ -6,6 +6,8 @@
 
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/chunk_region.hpp>
+#include <refrain/worldgen/feature/feature_data.hpp>
+#include <refrain/worldgen/structure/feature_placement.hpp>
 #include <refrain/worldgen/structure/generation.hpp>
 #include <refrain/worldgen/structure/placement_stage.hpp>
 #include <refrain/worldgen/structure/stage.hpp>
@@ -15,7 +17,9 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <memory>
+#include <set>
 #include <vector>
 
 namespace refrain::worldgen::structure {
@@ -37,6 +41,19 @@ auto make_registry() -> block_state_registry {
 auto make_piece_record(const structure_piece &piece)
     -> ::refrain::worldgen::structure_piece_record {
     return to_piece_record(piece);
+}
+
+auto tag_names(const block_tag_set &tags, std::string_view tag)
+    -> std::set<std::string, std::less<>> {
+    std::set<std::string, std::less<>> names;
+    if (!tags.has(tag)) {
+        return names;
+    }
+    auto resolved = tags.resolve(tag);
+    if (resolved) {
+        names.insert(resolved->begin(), resolved->end());
+    }
+    return names;
 }
 
 auto make_start_record(const structure_start &start)
@@ -62,27 +79,39 @@ auto make_start_record(const structure_start &start)
 
 structure_generator::structure_generator(structure_generator_config config,
                                          density::noise_settings settings,
-                                         structure_data_set data)
+                                         structure_data_set data,
+                                         block_tag_set tags)
     : config_{std::move(config)}, settings_{std::move(settings)},
-      data_{std::move(data)}, states_{make_registry()} {
+      data_{std::move(data)}, tags_{std::move(tags)}, states_{make_registry()} {
+    motion_ = tag_names(tags_, "minecraft:blocks_motion_in_heightmap");
+    motion_no_leaves_ =
+        tag_names(tags_, "minecraft:blocks_motion_in_heightmap_no_leaves");
     for (const auto &key : config_.known_blocks) {
         if (states_.find(key).has_value()) {
             continue;
         }
-        const auto block = state_block_name(key);
-        const bool air = is_air_block_name(block);
-        const bool fluid =
-            block == "minecraft:water" || block == "minecraft:lava";
-        const bool leaves = block.ends_with("_leaves");
-        (void)states_.intern(
-            key, {.air = air,
-                  .fluid = fluid,
-                  .water = block == "minecraft:water",
-                  .blocks_motion = !air && !fluid,
-                  .blocks_motion_no_leaves = !air && !fluid && !leaves});
+        (void)states_.intern(key, inferred_traits(key));
     }
     templates_ = std::make_unique<structure_template_manager>(
         config_.templates_root, states_);
+}
+
+auto structure_generator::inferred_traits(std::string_view key) const
+    -> state_traits {
+    const auto block = state_block_name(key);
+    const bool air = is_air_block_name(block);
+    const bool water = block == "minecraft:water" ||
+                       key.find("waterlogged=true") != std::string_view::npos;
+    const bool fluid = water || block == "minecraft:lava" ||
+                       block == "minecraft:bubble_column";
+    return state_traits{
+        .air = air,
+        .fluid = fluid,
+        .water = water,
+        .blocks_motion = motion_.contains(std::string{block}),
+        .blocks_motion_no_leaves =
+            motion_no_leaves_.contains(std::string{block}),
+    };
 }
 
 auto structure_generator::create(const structure_generator_config &config)
@@ -97,9 +126,13 @@ auto structure_generator::create(const structure_generator_config &config)
     if (!data) {
         return std::unexpected{data.error()};
     }
+    auto tags = load_block_tags(config.data_root);
+    if (!tags) {
+        return std::unexpected{tags.error()};
+    }
     auto generator =
         std::unique_ptr<structure_generator>{new structure_generator{
-            config, std::move(*settings), std::move(*data)}};
+            config, std::move(*settings), std::move(*data), std::move(*tags)}};
     return generator;
 }
 
@@ -229,13 +262,7 @@ auto structure_generator::generate(const chunk_pos &pos)
         if (const auto found = states_.find(key); found) {
             return *found;
         }
-        const auto block = state_block_name(key);
-        const bool air = is_air_block_name(block);
-        const bool leaves = block.ends_with("_leaves");
-        return states_
-            .intern(key, {.air = air,
-                          .blocks_motion = !air,
-                          .blocks_motion_no_leaves = !air && !leaves})
+        return states_.intern(key, inferred_traits(key))
             .value_or(no_block_state);
     };
     std::vector<std::vector<::refrain::worldgen::structure_piece_record>>
@@ -246,8 +273,26 @@ auto structure_generator::generate(const chunk_pos &pos)
         center->add_structure_start(std::move(record));
     }
 
+    std::vector<std::string> feature_ids;
+    for (const auto &piece_records : records) {
+        for (const auto &piece : piece_records) {
+            collect_feature_ids(piece, feature_ids);
+        }
+    }
+    std::optional<feature::feature_data_set> feature_data;
+    if (!feature_ids.empty()) {
+        auto loaded_features = feature::load_feature_data(config_.data_root);
+        if (!loaded_features) {
+            return std::unexpected{loaded_features.error()};
+        }
+        feature_data = std::move(*loaded_features);
+        if (const auto tagged = apply_block_tags(states_, tags_); !tagged) {
+            return std::unexpected{tagged.error()};
+        }
+    }
+
     std::unordered_map<std::string, jint> adjusted_heights;
-    const structure_place_context place_context{
+    structure_place_context place_context{
         .region = &region,
         .chunk = center,
         .states = &states_,
@@ -259,6 +304,21 @@ auto structure_generator::generate(const chunk_pos &pos)
         .adjusted_heights = &adjusted_heights,
         .data = &data_,
     };
+    std::optional<structure_feature_placer> feature_placer;
+    std::function<bool(std::string_view, worldgen_random &, const block_pos &)>
+        place_feature;
+    if (feature_data) {
+        feature_placer.emplace(place_context, *feature_data);
+        if (const auto loaded = feature_placer->load(feature_ids); !loaded) {
+            return std::unexpected{loaded.error()};
+        }
+        place_feature = [&feature_placer](std::string_view id,
+                                          worldgen_random &random,
+                                          const block_pos &position) {
+            return feature_placer->place(id, random, position);
+        };
+        place_context.place_feature = place_feature;
+    }
     worldgen_random decoration{
         std::make_unique<xoroshiro_random_source>(config_.seed)};
     const jlong decoration_seed =
@@ -308,7 +368,25 @@ auto structure_generator::generate(const chunk_pos &pos)
                 .sea_level = config_.sea_level,
                 .adjusted_heights = &adjusted_heights,
                 .data = &data_,
+                .place_feature = place_feature,
             };
+            const auto index =
+                structure_step_index(data_, starts[start_index].structure);
+            if (!index) {
+                continue;
+            }
+            jint step = 0;
+            if (starts[start_index].step == "surface_structures") {
+                step = 4;
+            } else if (starts[start_index].step == "underground_structures") {
+                step = 3;
+            }
+            worldgen_random random{
+                std::make_unique<xoroshiro_random_source>(0)};
+            const jlong neighbour_decoration_seed = random.set_decoration_seed(
+                config_.seed, chunks[chunk_index]->chunk_x() * 16,
+                chunks[chunk_index]->chunk_z() * 16);
+            random.set_feature_seed(neighbour_decoration_seed, *index, step);
             for (const auto &piece : records[start_index]) {
                 if (piece.max_x < chunks[chunk_index]->chunk_x() * 16 ||
                     piece.min_x > chunks[chunk_index]->chunk_x() * 16 + 15 ||
@@ -316,8 +394,6 @@ auto structure_generator::generate(const chunk_pos &pos)
                     piece.min_z > chunks[chunk_index]->chunk_z() * 16 + 15) {
                     continue;
                 }
-                worldgen_random random{
-                    std::make_unique<xoroshiro_random_source>(config_.seed)};
                 place_structure_piece(neighbour_context, piece, random);
             }
         }

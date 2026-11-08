@@ -5,8 +5,10 @@
 #include <refrain/worldgen/feature/block_predicate.hpp>
 
 #include <refrain/data/json.hpp>
+#include <refrain/worldgen/chunk/block_state_codec.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -161,6 +163,36 @@ class matching_fluids final : public block_predicate {
     bool lava_{false};
 };
 
+/// `WouldSurvivePredicate`: asks whether `state` could stay at the offset
+/// position. The structure generator only decodes vegetation states, whose
+/// survival rule is the reference `VegetationBlock` ground check; other block
+/// families have no support model here and are rejected at decode time.
+class would_survive final : public block_predicate {
+  public:
+    would_survive(bool hanging, block_pos offset)
+        : hanging_{hanging}, offset_{offset} {}
+    [[nodiscard]] auto test(const chunk_region &region,
+                            const block_state_table &states,
+                            const block_pos &pos) const -> bool override {
+        const block_pos at{.x = pos.x + offset_.x,
+                           .y = pos.y + offset_.y,
+                           .z = pos.z + offset_.z};
+        if (hanging_) {
+            const block_pos above{.x = at.x, .y = at.y + 1, .z = at.z};
+            return states.in_tag(
+                region.state_at(above.x, above.y, above.z),
+                "minecraft:supports_hanging_mangrove_propagule");
+        }
+        const block_pos below{.x = at.x, .y = at.y - 1, .z = at.z};
+        return states.in_tag(region.state_at(below.x, below.y, below.z),
+                             "minecraft:supports_vegetation");
+    }
+
+  private:
+    bool hanging_{false};
+    block_pos offset_{};
+};
+
 class all_of final : public block_predicate {
   public:
     explicit all_of(std::vector<std::unique_ptr<block_predicate>> rules)
@@ -242,6 +274,56 @@ auto decode_block_predicate(const data::json::value &document,
                 *direction_text, block_pos{.x = static_cast<jint>(*x),
                                            .y = static_cast<jint>(*y),
                                            .z = static_cast<jint>(*z)})};
+    }
+    if (*type == "minecraft:would_survive") {
+        const auto *state_value = document.find("state");
+        if (state_value == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "would_survive has no state")};
+        }
+        const auto key = decode_state_key(*state_value);
+        if (!key) {
+            return std::unexpected{key.error()};
+        }
+        const auto block = std::string{state_block_name(*key)};
+        const bool sapling = block.ends_with("_sapling");
+        const bool firefly = block == "minecraft:firefly_bush";
+        const bool mangrove = block == "minecraft:mangrove_propagule";
+        if (!sapling && !firefly && !mangrove) {
+            return std::unexpected{make_error(
+                error_code::unsupported,
+                "would_survive has no survival rule for '" + block + "'")};
+        }
+        block_pos offset{};
+        if (const auto *offset_value = document.find("offset");
+            offset_value != nullptr) {
+            const auto values = offset_value->as_array();
+            if (!values || values->size() != 3) {
+                return std::unexpected{make_error(
+                    error_code::parse_error,
+                    "would_survive offset is not a three-element array")};
+            }
+            const auto x = (*values)[0].as_int64();
+            const auto y = (*values)[1].as_int64();
+            const auto z = (*values)[2].as_int64();
+            if (!x || !y || !z) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "would_survive offset is invalid")};
+            }
+            if (std::abs(*x) > 16 || std::abs(*y) > 16 || std::abs(*z) > 16) {
+                return std::unexpected{
+                    make_error(error_code::invalid_argument,
+                               "would_survive offset exceeds sixteen blocks")};
+            }
+            offset = block_pos{.x = static_cast<jint>(*x),
+                               .y = static_cast<jint>(*y),
+                               .z = static_cast<jint>(*z)};
+        }
+        const bool hanging =
+            mangrove && key->find("hanging=true") != std::string::npos;
+        return std::unique_ptr<block_predicate>{
+            std::make_unique<would_survive>(hanging, offset)};
     }
     if (*type == "minecraft:solid") {
         return std::unique_ptr<block_predicate>{

@@ -14,6 +14,9 @@
 #include <refrain/worldgen/feature/feature_stage.hpp>
 
 #include <memory>
+#include <optional>
+#include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -30,6 +33,14 @@ class feature_registry {
 
     [[nodiscard]] auto load(const feature_data_set &data) -> status;
 
+    /// Loads `ids` and the configured-feature closure they reference instead
+    /// of the whole data set. Placed features that are not listed, and state
+    /// providers that the selected features do not use, are not decoded. A
+    /// missing placed feature or configured reference is reported as
+    /// `not_found`.
+    [[nodiscard]] auto load_placed(const feature_data_set &data,
+                                   std::span<const std::string> ids) -> status;
+
     [[nodiscard]] auto placed() const
         -> const std::unordered_map<std::string, placed_feature_runtime> & {
         return placed_;
@@ -44,6 +55,8 @@ class feature_registry {
 
     [[nodiscard]] auto decode_provider(const data::json::value &document)
         -> result<std::unique_ptr<state_provider>>;
+    [[nodiscard]] auto resolve_provider(std::string_view id)
+        -> const state_provider *;
     [[nodiscard]] auto nested_reference(const data::json::value &input)
         -> result<std::string>;
     [[nodiscard]] auto decode_fallen_decorators(const data::json::value &list)
@@ -55,6 +68,8 @@ class feature_registry {
     std::unordered_map<std::string, std::unique_ptr<state_provider>>
         providers_{};
     std::vector<nested_placed_entry> nested_placed_{};
+    std::set<std::string> decoding_providers_{};
+    std::optional<error> provider_error_{};
     jint next_nested_{0};
     std::unordered_map<std::string, std::unique_ptr<feature>> features_{};
     std::unordered_map<std::string, placed_feature_runtime> placed_{};

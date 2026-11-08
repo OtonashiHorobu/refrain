@@ -9,6 +9,7 @@
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/feature/block_predicate.hpp>
 #include <refrain/worldgen/feature/placement.hpp>
+#include <refrain/worldgen/noise/noise.hpp>
 #include <refrain/worldgen/provider.hpp>
 
 #include <array>
@@ -145,6 +146,51 @@ class weighted_provider final : public state_provider {
   private:
     std::vector<std::pair<jint, block_state_id>> entries_;
     jint total_{0};
+};
+
+/// `NoiseThresholdProvider`: one NormalNoise sample selects the low, high or
+/// default branch; the high branch also draws the chance roll.
+class noise_threshold_provider final : public state_provider {
+  public:
+    noise_threshold_provider(noise_stack noise, float scale, float threshold,
+                             float high_chance, block_state_id default_state,
+                             std::vector<block_state_id> low_states,
+                             std::vector<block_state_id> high_states)
+        : noise_{std::move(noise)}, scale_{scale}, threshold_{threshold},
+          high_chance_{high_chance}, default_state_{default_state},
+          low_states_{std::move(low_states)},
+          high_states_{std::move(high_states)} {}
+
+    [[nodiscard]] auto get(const placement_context &, worldgen_random &random,
+                           const block_pos &pos) const
+        -> block_state_id override {
+        const auto local = noise_.get(
+            static_cast<double>(pos.x) * static_cast<double>(scale_),
+            static_cast<double>(pos.y) * static_cast<double>(scale_),
+            static_cast<double>(pos.z) * static_cast<double>(scale_));
+        if (local < threshold_) {
+            return pick(low_states_, random);
+        }
+        if (random.next_float() < high_chance_) {
+            return pick(high_states_, random);
+        }
+        return default_state_;
+    }
+
+  private:
+    [[nodiscard]] static auto pick(const std::vector<block_state_id> &states,
+                                   worldgen_random &random) -> block_state_id {
+        return states[static_cast<std::size_t>(
+            random.next_int(static_cast<jint>(states.size())))];
+    }
+
+    noise_stack noise_{};
+    float scale_{1.0F};
+    float threshold_{0.0F};
+    float high_chance_{0.0F};
+    block_state_id default_state_{no_block_state};
+    std::vector<block_state_id> low_states_{};
+    std::vector<block_state_id> high_states_{};
 };
 
 class rotated_provider final : public state_provider {
@@ -386,6 +432,133 @@ auto decode_state_provider(const data::json::value &document,
         return std::unique_ptr<state_provider>{
             std::make_unique<rule_based_provider>(std::move(fallback),
                                                   std::move(rules))};
+    }
+    if (*type == "minecraft:noise_threshold") {
+        const auto *seed = document.find("seed");
+        const auto *noise_document = document.find("noise");
+        const auto *scale = document.find("scale");
+        const auto *threshold = document.find("threshold");
+        const auto *high_chance = document.find("high_chance");
+        const auto *default_state = document.find("default_state");
+        const auto *low_states = document.find("low_states");
+        const auto *high_states = document.find("high_states");
+        if (seed == nullptr || noise_document == nullptr || scale == nullptr ||
+            threshold == nullptr || high_chance == nullptr ||
+            default_state == nullptr || low_states == nullptr ||
+            high_states == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "noise_threshold is incomplete")};
+        }
+        const auto seed_value = seed->as_int64();
+        const auto scale_value = scale->as_double();
+        const auto threshold_value = threshold->as_double();
+        const auto high_chance_value = high_chance->as_double();
+        if (!seed_value || !scale_value || !threshold_value ||
+            !high_chance_value) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "noise_threshold numbers are invalid")};
+        }
+        if (!noise_document->is_object() || !low_states->is_array() ||
+            !high_states->is_array()) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "noise_threshold lists are invalid")};
+        }
+        normal_noise_parameters parameters;
+        if (const auto *value = noise_document->find("base_amplitude");
+            value != nullptr) {
+            const auto number = value->as_double();
+            if (!number) {
+                return std::unexpected{number.error()};
+            }
+            parameters.base_amplitude = *number;
+        }
+        if (const auto *value = noise_document->find("base_octave");
+            value != nullptr) {
+            const auto number = value->as_int64();
+            if (!number) {
+                return std::unexpected{number.error()};
+            }
+            parameters.base_octave = static_cast<jint>(*number);
+        }
+        if (const auto *value = noise_document->find("octave_count");
+            value != nullptr) {
+            const auto number = value->as_int64();
+            if (!number) {
+                return std::unexpected{number.error()};
+            }
+            parameters.octave_count = static_cast<jint>(*number);
+        }
+        if (const auto *value = noise_document->find("normalize");
+            value != nullptr) {
+            const auto enabled = value->as_bool();
+            if (!enabled) {
+                return std::unexpected{
+                    make_error(error_code::unsupported,
+                               "noise_threshold normalize must be a boolean")};
+            }
+            parameters.normalize = *enabled;
+        }
+        if (const auto *value = noise_document->find("amplitude_modifiers");
+            value != nullptr) {
+            const auto list = value->as_array();
+            if (!list) {
+                return std::unexpected{list.error()};
+            }
+            for (const auto &entry : *list) {
+                const auto number = entry.as_double();
+                if (!number) {
+                    return std::unexpected{number.error()};
+                }
+                parameters.amplitude_modifiers.push_back(*number);
+            }
+        }
+        const auto default_key = decode_state_key(*default_state);
+        if (!default_key) {
+            return std::unexpected{default_key.error()};
+        }
+        const auto default_resolved = resolve_state(states, *default_key);
+        if (!default_resolved) {
+            return std::unexpected{default_resolved.error()};
+        }
+        const auto decode_list = [&](const data::json::value &list)
+            -> result<std::vector<block_state_id>> {
+            std::vector<block_state_id> out;
+            for (const auto &entry : *list.as_array()) {
+                const auto key = decode_state_key(entry);
+                if (!key) {
+                    return std::unexpected{key.error()};
+                }
+                auto state = resolve_state(states, *key);
+                if (!state) {
+                    return std::unexpected{state.error()};
+                }
+                out.push_back(*state);
+            }
+            if (out.empty()) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "noise_threshold state list is empty")};
+            }
+            return out;
+        };
+        auto low = decode_list(*low_states);
+        if (!low) {
+            return std::unexpected{low.error()};
+        }
+        auto high = decode_list(*high_states);
+        if (!high) {
+            return std::unexpected{high.error()};
+        }
+        const normal_noise noise{parameters};
+        legacy_random_source source{static_cast<jlong>(*seed_value)};
+        auto stack = noise.create(source);
+        return std::unique_ptr<state_provider>{
+            std::make_unique<noise_threshold_provider>(
+                std::move(stack), static_cast<float>(*scale_value),
+                static_cast<float>(*threshold_value),
+                static_cast<float>(*high_chance_value), *default_resolved,
+                std::move(*low), std::move(*high))};
     }
     return std::unexpected{
         make_error(error_code::unsupported, "unsupported state provider")};

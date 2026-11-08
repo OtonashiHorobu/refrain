@@ -12,22 +12,20 @@
 
 namespace refrain::worldgen::feature {
 
-namespace {
-
-void place_placed(feature_context &context,
+auto place_placed(feature_context &context,
                   const placed_feature_runtime &placed, worldgen_random &random,
-                  const block_pos &origin) {
+                  const block_pos &origin) -> bool {
     if (placed.configured == nullptr) {
-        return;
+        return false;
     }
     if (placed.placement.empty()) {
-        (void)placed.configured->place(context, random, origin);
-        return;
+        return placed.configured->place(context, random, origin);
     }
 
     std::vector<block_pos> positions{origin};
     std::vector<std::size_t> modifier_indices{0};
     std::vector<block_pos> modified;
+    bool placed_any = false;
 
     while (!positions.empty()) {
         const block_pos position = positions.back();
@@ -45,13 +43,14 @@ void place_placed(feature_context &context,
             }
         } else {
             for (const auto &next_position : modified) {
-                (void)placed.configured->place(context, random, next_position);
+                placed_any =
+                    placed.configured->place(context, random, next_position) ||
+                    placed_any;
             }
         }
     }
+    return placed_any;
 }
-
-} // namespace
 
 void decorate(
     feature_context &context, const std::vector<step_features> &plan,
@@ -71,7 +70,7 @@ void decorate(
         if (found == placed.end()) {
             return false;
         }
-        place_placed(context, found->second, random, position);
+        (void)place_placed(context, found->second, random, position);
         return true;
     };
     const block_pos origin{.x = context.placement.chunk->chunk_x() * 16,
@@ -115,7 +114,7 @@ void decorate(
             }
             random.set_feature_seed(decoration_seed, index,
                                     static_cast<jint>(step));
-            place_placed(context, found->second, random, origin);
+            (void)place_placed(context, found->second, random, origin);
         }
     }
 }

@@ -10,12 +10,14 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
+#include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/template.hpp>
 
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -46,11 +48,17 @@ class structure_generator {
   private:
     structure_generator(structure_generator_config config,
                         density::noise_settings settings,
-                        structure_data_set data);
+                        structure_data_set data, block_tag_set tags);
+
+    [[nodiscard]] auto inferred_traits(std::string_view key) const
+        -> state_traits;
 
     structure_generator_config config_{};
     density::noise_settings settings_{};
     structure_data_set data_{};
+    block_tag_set tags_{};
+    std::set<std::string, std::less<>> motion_{};
+    std::set<std::string, std::less<>> motion_no_leaves_{};
     block_state_registry states_{};
     std::unique_ptr<structure_template_manager> templates_{};
 };

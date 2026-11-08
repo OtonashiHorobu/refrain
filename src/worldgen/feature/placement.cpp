@@ -41,14 +41,6 @@ auto field(const data::json::value &input, std::string_view name)
     return found;
 }
 
-auto as_int(const data::json::value &input) -> result<jint> {
-    const auto value = input.as_int64();
-    if (!value) {
-        return std::unexpected{value.error()};
-    }
-    return static_cast<jint>(*value);
-}
-
 auto as_float(const data::json::value &input) -> result<float> {
     const auto value = input.as_double();
     if (!value) {
@@ -163,18 +155,25 @@ class rarity_filter final : public placement_modifier {
 
 class offset_placement final : public placement_modifier {
   public:
-    offset_placement(jint x, jint y, jint z) : x_{x}, y_{y}, z_{z} {}
-    void modify(const placement_context &, worldgen_random &,
+    offset_placement(std::unique_ptr<provider::int_provider> x,
+                     std::unique_ptr<provider::int_provider> y,
+                     std::unique_ptr<provider::int_provider> z)
+        : x_{std::move(x)}, y_{std::move(y)}, z_{std::move(z)} {}
+    void modify(const placement_context &, worldgen_random &random,
                 const block_pos &origin,
                 std::vector<block_pos> &out) const override {
-        out.push_back(block_pos{
-            .x = origin.x + x_, .y = origin.y + y_, .z = origin.z + z_});
+        // `OffsetPlacement.modify` samples x, then y, then z.
+        const auto x = x_->sample(random);
+        const auto y = y_->sample(random);
+        const auto z = z_->sample(random);
+        out.push_back(
+            block_pos{.x = origin.x + x, .y = origin.y + y, .z = origin.z + z});
     }
 
   private:
-    jint x_{0};
-    jint y_{0};
-    jint z_{0};
+    std::unique_ptr<provider::int_provider> x_{};
+    std::unique_ptr<provider::int_provider> y_{};
+    std::unique_ptr<provider::int_provider> z_{};
 };
 
 class random_chance final : public placement_modifier {
@@ -431,21 +430,38 @@ auto decode_placement(const data::json::value &document,
             std::make_unique<rarity_filter>(*chance)};
     }
     if (*type == "minecraft:offset") {
-        jint x = 0;
-        jint y = 0;
-        jint z = 0;
+        std::unique_ptr<provider::int_provider> x;
+        std::unique_ptr<provider::int_provider> y;
+        std::unique_ptr<provider::int_provider> z;
         for (const auto &[name, slot] :
              {std::pair{"x", &x}, std::pair{"y", &y}, std::pair{"z", &z}}) {
-            if (const auto *value = document.find(name); value != nullptr) {
-                auto parsed = as_int(*value);
-                if (!parsed) {
-                    return std::unexpected{parsed.error()};
-                }
-                *slot = *parsed;
+            const auto *value = document.find(name);
+            if (value == nullptr) {
+                continue;
             }
+            auto parsed = provider::int_provider::decode(*value);
+            if (!parsed) {
+                return std::unexpected{parsed.error()};
+            }
+            *slot = std::move(*parsed);
+        }
+        const auto constant_zero = [] {
+            auto decoded = provider::int_provider::decode(data::json::value{0});
+            return decoded ? std::move(*decoded)
+                           : std::unique_ptr<provider::int_provider>{};
+        };
+        if (!x) {
+            x = constant_zero();
+        }
+        if (!y) {
+            y = constant_zero();
+        }
+        if (!z) {
+            z = constant_zero();
         }
         return std::unique_ptr<placement_modifier>{
-            std::make_unique<offset_placement>(x, y, z)};
+            std::make_unique<offset_placement>(std::move(x), std::move(y),
+                                               std::move(z))};
     }
     if (*type == "minecraft:environment_scan") {
         const auto *direction = document.find("direction_of_search");

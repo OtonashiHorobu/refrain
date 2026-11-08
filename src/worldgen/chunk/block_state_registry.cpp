@@ -2,6 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/content.hpp>
 
@@ -164,6 +165,59 @@ auto load_block_tags(std::string_view data_root) -> result<block_tag_set> {
     return tags;
 }
 
+auto apply_block_tags(block_state_registry &states, const block_tag_set &tags)
+    -> status {
+    const auto resolve_names = [&](std::string_view tag) {
+        std::set<std::string, std::less<>> names;
+        if (!tags.has(tag)) {
+            return names;
+        }
+        auto resolved = tags.resolve(tag);
+        if (resolved) {
+            names.insert(resolved->begin(), resolved->end());
+        }
+        return names;
+    };
+    const auto motion = resolve_names("minecraft:blocks_motion_in_heightmap");
+    const auto motion_no_leaves =
+        resolve_names("minecraft:blocks_motion_in_heightmap_no_leaves");
+    for (const auto &[tag, entries] : tags.entries()) {
+        (void)entries;
+        auto names = tags.resolve(tag);
+        if (!names) {
+            return std::unexpected{names.error()};
+        }
+        std::vector<block_state_id> ids;
+        ids.reserve(names->size());
+        for (const auto &name : *names) {
+            if (const auto found = states.find(name); found.has_value()) {
+                ids.push_back(*found);
+                continue;
+            }
+            const auto block = state_block_name(name);
+            const bool air = is_air_block_name(block);
+            const bool water = block == "minecraft:water";
+            const bool fluid = water || block == "minecraft:lava" ||
+                               block == "minecraft:bubble_column";
+            const auto interned =
+                states.intern(name, state_traits{
+                                        .air = air,
+                                        .fluid = fluid,
+                                        .water = water,
+                                        .blocks_motion = motion.contains(name),
+                                        .blocks_motion_no_leaves =
+                                            motion_no_leaves.contains(name),
+                                    });
+            if (!interned) {
+                return std::unexpected{interned.error()};
+            }
+            ids.push_back(*interned);
+        }
+        states.add_tag(tag, ids);
+    }
+    return status_ok();
+}
+
 block_state_registry::block_state_registry() {
     (void)intern("minecraft:air", state_traits{.air = true}, 0, 0);
 }
@@ -210,6 +264,14 @@ void block_state_registry::add_tag(std::string_view tag,
     stored.assign(states.begin(), states.end());
     std::sort(stored.begin(), stored.end());
     stored.erase(std::unique(stored.begin(), stored.end()), stored.end());
+    // Block tags name blocks, not one property variant. Keep the block names so
+    // a state variant interned after the tag was registered still matches.
+    auto &names = tag_names_[std::string{tag}];
+    for (const auto id : states) {
+        if (id < keys_.size()) {
+            names.emplace(state_block_name(keys_[id]));
+        }
+    }
 }
 
 auto block_state_registry::air() const -> block_state_id {
@@ -228,8 +290,13 @@ auto block_state_registry::name(block_state_id id) const -> std::string_view {
 auto block_state_registry::in_tag(block_state_id id, std::string_view tag) const
     -> bool {
     const auto found = tags_.find(tag);
-    return found != tags_.end() &&
-           std::binary_search(found->second.begin(), found->second.end(), id);
+    if (found != tags_.end() &&
+        std::binary_search(found->second.begin(), found->second.end(), id)) {
+        return true;
+    }
+    const auto names = tag_names_.find(tag);
+    return names != tag_names_.end() && id < keys_.size() &&
+           names->second.contains(std::string{state_block_name(keys_[id])});
 }
 
 auto build_block_state_registry(const data::vanilla_tables &tables,

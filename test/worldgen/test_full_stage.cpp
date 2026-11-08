@@ -14,6 +14,8 @@
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/density/density.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
+#include <refrain/worldgen/feature/feature_data.hpp>
+#include <refrain/worldgen/structure/feature_placement.hpp>
 #include <refrain/worldgen/structure/generation.hpp>
 #include <refrain/worldgen/structure/generator.hpp>
 #include <refrain/worldgen/structure/placement_stage.hpp>
@@ -36,9 +38,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -176,7 +180,10 @@ auto canonical(std::string name) -> std::string {
     return rebuilt;
 }
 
-auto decode(const data::nbt::value &document) -> std::optional<decoded> {
+auto decode(const data::nbt::value &document,
+            const std::set<std::string> &motion,
+            const std::set<std::string> &motion_no_leaves)
+    -> std::optional<decoded> {
     const auto *sections = child(document.as_compound(), "sections");
     if (sections == nullptr || sections->as_list() == nullptr) {
         return std::nullopt;
@@ -254,11 +261,18 @@ auto decode(const data::nbt::value &document) -> std::optional<decoded> {
             }
             const auto block = state_block_name(name);
             const bool air = is_air_block_name(block);
-            const bool leaves = block.ends_with("_leaves");
+            const bool water =
+                block == "minecraft:water" ||
+                name.find("waterlogged=true") != std::string::npos;
+            const bool fluid = water || block == "minecraft:lava" ||
+                               block == "minecraft:bubble_column";
             const auto interned = out.registry.intern(
                 name, {.air = air,
-                       .blocks_motion = !air,
-                       .blocks_motion_no_leaves = !air && !leaves});
+                       .fluid = fluid,
+                       .water = water,
+                       .blocks_motion = motion.contains(std::string{block}),
+                       .blocks_motion_no_leaves =
+                           motion_no_leaves.contains(std::string{block})});
             if (!interned) {
                 return std::nullopt;
             }
@@ -391,7 +405,28 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
         if (!document) {
             return;
         }
-        const auto reference = decode(*document);
+        const auto block_tags = load_block_tags(data_root);
+        expect(block_tags.has_value()) << block_tags.error().message;
+        if (!block_tags) {
+            return;
+        }
+        const auto resolve_tag_names = [&](std::string_view tag) {
+            std::set<std::string> names;
+            if (!block_tags->has(tag)) {
+                return names;
+            }
+            auto resolved = block_tags->resolve(tag);
+            expect(resolved.has_value());
+            if (resolved) {
+                names.insert(resolved->begin(), resolved->end());
+            }
+            return names;
+        };
+        const auto motion =
+            resolve_tag_names("minecraft:blocks_motion_in_heightmap");
+        const auto motion_no_leaves =
+            resolve_tag_names("minecraft:blocks_motion_in_heightmap_no_leaves");
+        const auto reference = decode(*document, motion, motion_no_leaves);
         expect(reference.has_value());
         if (!reference) {
             return;
@@ -422,6 +457,17 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                                            .default_fluid = 2,
                                            .lava = 3,
                                            .air = 0};
+        // Reference states colour the registry before the templates intern
+        // their palettes: template state inference is coarser, so a flower or
+        // grass block first seen in a palette would keep wrong heightmap
+        // traits.
+        for (std::size_t id = 0; id < reference->registry.size(); ++id) {
+            const auto state = static_cast<block_state_id>(id);
+            const std::string name{reference->registry.name(state)};
+            if (!states.find(name).has_value()) {
+                (void)states.intern(name, reference->registry.traits(state));
+            }
+        }
         test_support::prime_template_states(states, templates_root,
                                             "minecraft/structure/village");
         proto_chunk chunk{states, chunk_x, chunk_z, oracle_min_y,
@@ -504,13 +550,10 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
             if (!data) {
                 return;
             }
-            for (std::size_t id = 0; id < reference->registry.size(); ++id) {
-                const auto state = static_cast<block_state_id>(id);
-                const std::string name{reference->registry.name(state)};
-                if (!states.find(name).has_value()) {
-                    (void)states.intern(name,
-                                        reference->registry.traits(state));
-                }
+            const auto tagged = apply_block_tags(states, *block_tags);
+            expect(tagged.has_value()) << tagged.error().message;
+            if (!tagged) {
+                return;
             }
             structure::structure_template_manager manager{templates_root,
                                                           states};
@@ -600,6 +643,26 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 }
                 all_records.push_back(std::move(piece_records));
             }
+            std::vector<std::string> feature_ids;
+            for (const auto &piece_records : all_records) {
+                for (const auto &piece : piece_records) {
+                    structure::collect_feature_ids(piece, feature_ids);
+                }
+            }
+            std::optional<feature::feature_data_set> feature_data;
+            std::optional<structure::structure_feature_placer> feature_placer;
+            std::function<bool(std::string_view, worldgen_random &,
+                               const block_pos &)>
+                place_feature;
+            if (!feature_ids.empty()) {
+                auto loaded_features = feature::load_feature_data(data_root);
+                expect(loaded_features.has_value())
+                    << loaded_features.error().message;
+                if (!loaded_features) {
+                    return;
+                }
+                feature_data = std::move(*loaded_features);
+            }
             const auto resolve = [&](std::string_view key) -> block_state_id {
                 if (const auto value = states.find(key); value) {
                     return *value;
@@ -614,7 +677,7 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 return interned.has_value() ? *interned : no_block_state;
             };
             std::unordered_map<std::string, jint> adjusted_heights;
-            const structure::structure_place_context place_context{
+            structure::structure_place_context place_context{
                 .region = &region_view,
                 .chunk = &chunk,
                 .states = &states,
@@ -626,6 +689,21 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 .adjusted_heights = &adjusted_heights,
                 .data = &*data,
             };
+            if (feature_data) {
+                feature_placer.emplace(place_context, *feature_data);
+                const auto loaded_features = feature_placer->load(feature_ids);
+                expect(loaded_features.has_value())
+                    << loaded_features.error().message;
+                if (!loaded_features) {
+                    return;
+                }
+                place_feature = [&feature_placer](std::string_view id,
+                                                  worldgen_random &random,
+                                                  const block_pos &position) {
+                    return feature_placer->place(id, random, position);
+                };
+                place_context.place_feature = place_feature;
+            }
             worldgen_random decoration_random{
                 std::make_unique<xoroshiro_random_source>(seed)};
             const jlong decoration_seed = decoration_random.set_decoration_seed(
@@ -694,7 +772,29 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                         .sea_level = settings->sea_level,
                         .adjusted_heights = &adjusted_heights,
                         .data = &*data,
+                        .place_feature = place_feature,
                     };
+                    worldgen_random neighbour_random{
+                        std::make_unique<xoroshiro_random_source>(0)};
+                    const jlong neighbour_decoration_seed =
+                        neighbour_random.set_decoration_seed(
+                            seed, neighbour->chunk_x() * 16,
+                            neighbour->chunk_z() * 16);
+                    const auto start_index_value =
+                        structure::structure_step_index(
+                            *data, starts[start_index].structure);
+                    if (!start_index_value) {
+                        continue;
+                    }
+                    const auto &start = starts[start_index];
+                    jint step = 0;
+                    if (start.step == "surface_structures") {
+                        step = 4;
+                    } else if (start.step == "underground_structures") {
+                        step = 3;
+                    }
+                    neighbour_random.set_feature_seed(neighbour_decoration_seed,
+                                                      *start_index_value, step);
                     for (const auto &piece : all_records[start_index]) {
                         if (piece.max_x < neighbour->chunk_x() * 16 ||
                             piece.min_x > neighbour->chunk_x() * 16 + 15 ||
@@ -702,8 +802,6 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                             piece.min_z > neighbour->chunk_z() * 16 + 15) {
                             continue;
                         }
-                        auto neighbour_random = worldgen_random{
-                            std::make_unique<xoroshiro_random_source>(seed)};
                         structure::place_structure_piece(
                             neighbour_context, piece, neighbour_random);
                     }

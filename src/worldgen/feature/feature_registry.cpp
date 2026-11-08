@@ -102,12 +102,48 @@ auto decode_simple_state(const data::json::value &provider,
 
 auto feature_registry::decode_provider(const data::json::value &document)
     -> result<std::unique_ptr<state_provider>> {
-    return decode_state_provider(
+    provider_error_.reset();
+    auto decoded = decode_state_provider(
         document, *states_,
         [this](std::string_view id) -> const state_provider * {
-            const auto found = providers_.find(std::string{id});
-            return found == providers_.end() ? nullptr : found->second.get();
+            return resolve_provider(id);
         });
+    if (provider_error_) {
+        return std::unexpected{*provider_error_};
+    }
+    return decoded;
+}
+
+auto feature_registry::resolve_provider(std::string_view id)
+    -> const state_provider * {
+    const std::string key{id};
+    if (const auto found = providers_.find(key); found != providers_.end()) {
+        return found->second.get();
+    }
+    const auto document = provider_documents_.find(key);
+    if (document == provider_documents_.end()) {
+        return nullptr;
+    }
+    if (!decoding_providers_.insert(key).second) {
+        if (!provider_error_) {
+            provider_error_ = make_error(error_code::parse_error,
+                                         "state provider reference cycle");
+        }
+        return nullptr;
+    }
+    auto decoded = decode_state_provider(
+        document->second.document, *states_,
+        [this](std::string_view nested) -> const state_provider * {
+            return resolve_provider(nested);
+        });
+    decoding_providers_.erase(key);
+    if (!decoded) {
+        if (!provider_error_) {
+            provider_error_ = decoded.error();
+        }
+        return nullptr;
+    }
+    return providers_.emplace(key, std::move(*decoded)).first->second.get();
 }
 
 auto feature_registry::nested_reference(const data::json::value &input)
@@ -246,46 +282,95 @@ auto feature_registry::decode_fallen_decorators(const data::json::value &list)
     return out;
 }
 
+namespace {
+
+/// Collects string values that name a configured feature. Selectors, nested
+/// feature lists and overlay documents spell their configured references as
+/// plain strings, so a structural walk finds the closure without decoding the
+/// documents first.
+void collect_feature_references(
+    const data::json::value &document,
+    const std::unordered_map<std::string, configured_feature_document>
+        &features,
+    std::set<std::string> &out) {
+    if (document.is_string()) {
+        const auto text = document.as_string();
+        if (!text) {
+            return;
+        }
+        const std::string id{*text};
+        if (features.contains(id)) {
+            out.insert(id);
+        }
+        return;
+    }
+    if (document.is_array()) {
+        const auto values = document.as_array();
+        if (!values) {
+            return;
+        }
+        for (const auto &entry : *values) {
+            collect_feature_references(entry, features, out);
+        }
+        return;
+    }
+    if (document.is_object()) {
+        const auto members = document.as_object();
+        if (!members) {
+            return;
+        }
+        for (const auto &[key, value] : members->get()) {
+            (void)key;
+            collect_feature_references(value, features, out);
+        }
+    }
+}
+
+} // namespace
+
+auto feature_registry::load_placed(const feature_data_set &data,
+                                   std::span<const std::string> ids) -> status {
+    feature_data_set subset;
+    subset.state_providers = data.state_providers;
+    std::set<std::string> pending;
+    for (const auto &id : ids) {
+        const auto found = data.placed.find(id);
+        if (found == data.placed.end()) {
+            return std::unexpected{make_error(error_code::not_found,
+                                              "placed feature '" + id +
+                                                  "' is not in the data pack")};
+        }
+        subset.placed.emplace(found->first, found->second);
+        pending.insert(found->second.feature);
+    }
+    std::set<std::string> decoded;
+    while (!pending.empty()) {
+        const std::string feature = *pending.begin();
+        pending.erase(pending.begin());
+        if (!decoded.insert(feature).second) {
+            continue;
+        }
+        const auto found = data.features.find(feature);
+        if (found == data.features.end()) {
+            return std::unexpected{
+                make_error(error_code::not_found,
+                           "placed feature names missing configured feature '" +
+                               feature + "'")};
+        }
+        subset.features.emplace(found->first, found->second);
+        collect_feature_references(found->second.document, data.features,
+                                   pending);
+    }
+    return load(subset);
+}
+
 auto feature_registry::load(const feature_data_set &data) -> status {
     nested_placed_.clear();
     next_nested_ = 0;
     providers_.clear();
+    decoding_providers_.clear();
+    provider_error_.reset();
     provider_documents_ = data.state_providers;
-    std::set<std::string> visiting;
-    std::optional<error> provider_failure;
-    std::function<const state_provider *(std::string_view)> resolve =
-        [&](std::string_view id) -> const state_provider * {
-        const auto found = providers_.find(std::string{id});
-        if (found != providers_.end()) {
-            return found->second.get();
-        }
-        const auto document = provider_documents_.find(std::string{id});
-        if (document == provider_documents_.end()) {
-            return nullptr;
-        }
-        if (visiting.contains(std::string{id})) {
-            provider_failure = make_error(error_code::parse_error,
-                                          "state provider reference cycle");
-            return nullptr;
-        }
-        visiting.insert(std::string{id});
-        auto decoded =
-            decode_state_provider(document->second.document, *states_, resolve);
-        visiting.erase(std::string{id});
-        if (!decoded) {
-            provider_failure = decoded.error();
-            return nullptr;
-        }
-        const auto inserted =
-            providers_.emplace(std::string{id}, std::move(*decoded));
-        return inserted.first->second.get();
-    };
-    for (const auto &[id, document] : provider_documents_) {
-        if (resolve(id) == nullptr && provider_failure) {
-            return std::unexpected{*provider_failure};
-        }
-    }
-
     for (const auto &[id, document] : data.features) {
         const auto type = type_of(document.document);
         if (!type) {

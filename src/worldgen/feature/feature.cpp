@@ -69,6 +69,17 @@ auto simple_block_feature::place(feature_context &context,
     if (state == no_block_state) {
         return false;
     }
+    // `SimpleBlockFeature.place` writes only when the state survives at the
+    // position. Small flowers are vegetation blocks: their sole support rule
+    // is the block below being in the vegetation substrate tag. States outside
+    // that family keep the default can-survive result.
+    const auto &states = *context.placement.states;
+    if (states.in_tag(state, "minecraft:small_flowers") &&
+        !states.in_tag(context.placement.region->state_at(
+                           origin.x, origin.y - 1, origin.z),
+                       "minecraft:supports_vegetation")) {
+        return false;
+    }
     (void)schedule_tick_;
     return context.placement.region->set_block_state(origin.x, origin.y,
                                                      origin.z, state);

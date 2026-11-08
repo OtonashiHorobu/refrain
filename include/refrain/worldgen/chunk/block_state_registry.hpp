@@ -16,6 +16,7 @@
 #include <deque>
 #include <map>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -99,7 +100,16 @@ class block_state_registry final : public block_state_table {
     std::vector<std::uint16_t> vanilla_ids_{};
     std::unordered_map<std::string_view, block_state_id> index_{};
     std::map<std::string, std::vector<block_state_id>, std::less<>> tags_{};
+    std::map<std::string, std::set<std::string, std::less<>>, std::less<>>
+        tag_names_{};
 };
+
+/// Registers every tag target on `states`, interning target names that are not
+/// present with traits inferred from the name. Data readers that build a
+/// registry from generation output rather than the vanilla block table use it
+/// so predicates can query block tags.
+[[nodiscard]] auto apply_block_tags(block_state_registry &states,
+                                    const block_tag_set &tags) -> status;
 
 /// Builds a registry from an RVTB block table and the data pack's block tags.
 /// The tags supply the two motion-blocking traits; `waterlogged=true` and the

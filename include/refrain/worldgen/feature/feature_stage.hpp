@@ -29,6 +29,15 @@ struct placed_feature_runtime {
 using structure_placer =
     std::function<bool(jint step, jint index, worldgen_random &random)>;
 
+/// Runs one placed feature at `origin`. Placement modifiers are applied with
+/// the reference work-stack order; nested placed features resolve through
+/// `context.place_by_id`. This is the entry point both the decoration stage and
+/// structure feature pieces use.
+[[nodiscard]] auto place_placed(feature_context &context,
+                                const placed_feature_runtime &placed,
+                                worldgen_random &random,
+                                const block_pos &origin) -> bool;
+
 /// Runs every step's candidate features. `biomes` are the biome keys of the
 /// 3x3 neighbourhood; `lists` supplies their feature lists.
 void decorate(
