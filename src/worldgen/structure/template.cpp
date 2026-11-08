@@ -752,6 +752,24 @@ auto is_shape_sensitive(block_state_registry &states, block_state_id state)
            block.ends_with("_wall");
 }
 
+auto fence_connects(const block_state_registry &states, block_state_id state)
+    -> bool {
+    const auto name = state_block_name(states.name(state));
+    if (name.ends_with("_fence")) {
+        return true;
+    }
+    if (name.ends_with("_carpet") || name.ends_with("_leaves") ||
+        name.ends_with("_stairs") || name.ends_with("_slab") ||
+        name.ends_with("_door") || name.ends_with("_trapdoor") ||
+        name.ends_with("_wall") || name.ends_with("_fence_gate") ||
+        name.ends_with("_pane") || name.ends_with("_bars") ||
+        name == "minecraft:air" || name == "minecraft:water" ||
+        name == "minecraft:lava") {
+        return false;
+    }
+    return states.traits(state).blocks_motion;
+}
+
 auto update_template_block(block_state_registry &states, chunk_region &region,
                            const block_pos &pos) -> bool {
     const auto current = region.state_at(pos.x, pos.y, pos.z);
@@ -783,9 +801,8 @@ auto update_template_block(block_state_registry &states, chunk_region &region,
         for (const auto *direction : {"north", "east", "south", "west"}) {
             const auto target = neighbour_pos(pos, direction);
             const auto state = region.state_at(target.x, target.y, target.z);
-            const auto name = state_block_name(states.name(state));
             if (replace(direction,
-                        name.ends_with("_fence") ? "true" : "false")) {
+                        fence_connects(states, state) ? "true" : "false")) {
                 changed = true;
             }
         }
