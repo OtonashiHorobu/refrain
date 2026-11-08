@@ -171,11 +171,13 @@ auto resolve_palette_state(block_state_registry &states,
     // the template's properties instead of collapsing to the default state.
     const bool fluid =
         parsed.name == "minecraft:water" || parsed.name == "minecraft:lava";
+    const bool leaves = parsed.name.ends_with("_leaves");
     const auto inserted =
         states.intern(*key, {.air = false,
                              .fluid = fluid,
                              .water = parsed.name == "minecraft:water",
-                             .blocks_motion = !fluid});
+                             .blocks_motion = !fluid,
+                             .blocks_motion_no_leaves = !fluid && !leaves});
     return inserted.has_value() ? *inserted : states.air();
 }
 
