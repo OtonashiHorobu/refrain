@@ -164,10 +164,8 @@ auto create_random(ms_state &state, jint foot_x, jint foot_y, jint foot_z,
         box.move(foot_x, foot_y, foot_z);
         if (!find_collision(state, box)) {
             const bool rails = random.next_int(3) == 0;
-            const bool spider =
-                !rails && random.next_int(23) == 0;
-            const auto index =
-                add(ms_kind::corridor, box, direction, false);
+            const bool spider = !rails && random.next_int(23) == 0;
+            const auto index = add(ms_kind::corridor, box, direction, false);
             auto &corridor = state.pieces[index];
             corridor.sections = length;
             corridor.rails = rails;
@@ -534,20 +532,20 @@ auto mineshaft_start(const chunk_pos &chunk, jlong seed, jint min_y,
                 (piece.kind == ms_kind::room || piece.kind == ms_kind::crossing)
                     ? -1
                     : direction_orientation(piece.direction),
-            .entrances = [&piece] {
-                std::vector<structure_bbox> boxes;
-                boxes.reserve(piece.entrances.size());
-                for (const auto &entrance : piece.entrances) {
-                    boxes.push_back(
-                        {.min_x = entrance.min_x,
-                         .min_y = entrance.min_y,
-                         .min_z = entrance.min_z,
-                         .max_x = entrance.max_x,
-                         .max_y = entrance.max_y,
-                         .max_z = entrance.max_z});
-                }
-                return boxes;
-            }(),
+            .entrances =
+                [&piece] {
+                    std::vector<structure_bbox> boxes;
+                    boxes.reserve(piece.entrances.size());
+                    for (const auto &entrance : piece.entrances) {
+                        boxes.push_back({.min_x = entrance.min_x,
+                                         .min_y = entrance.min_y,
+                                         .min_z = entrance.min_z,
+                                         .max_x = entrance.max_x,
+                                         .max_y = entrance.max_y,
+                                         .max_z = entrance.max_z});
+                    }
+                    return boxes;
+                }(),
             .sections = piece.sections,
             .rails = piece.rails,
             .spider = piece.spider,

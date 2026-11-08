@@ -1662,8 +1662,8 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
                 const auto *num = child(piece, "Num");
                 const auto *hr = child(piece, "hr");
                 const auto *sc = child(piece, "sc");
-                expect(num != nullptr && num->as_int().value_or(-1) ==
-                                           actual.sections);
+                expect(num != nullptr &&
+                       num->as_int().value_or(-1) == actual.sections);
                 expect(hr != nullptr &&
                        (hr->as_byte().value_or(0) != 0) == actual.rails);
                 expect(sc != nullptr &&
@@ -1679,8 +1679,7 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
                      list != nullptr && entrance_index < list->items.size() &&
                      entrance_index < actual.entrances.size();
                      ++entrance_index) {
-                    const auto *box =
-                        list->items[entrance_index].as_compound();
+                    const auto *box = list->items[entrance_index].as_compound();
                     const auto *bb2 =
                         box == nullptr ? nullptr : child(box, "BB");
                     const auto vals2 =
@@ -1706,8 +1705,7 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             } else if (type == "minecraft:mscrossing") {
                 const auto *tf = child(piece, "tf");
                 expect(tf != nullptr &&
-                       (tf->as_byte().value_or(0) != 0) ==
-                           actual.two_floored);
+                       (tf->as_byte().value_or(0) != 0) == actual.two_floored);
             }
         }
     };

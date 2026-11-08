@@ -1671,8 +1671,7 @@ struct mineshaft_access {
 
     void fill_local(jint x0, jint y0, jint z0, jint x1, jint y1, jint z1,
                     block_state_id state) const {
-        const auto first = piece_local_to_world(piece, piece.min_y, x0, y0,
-                                                z0);
+        const auto first = piece_local_to_world(piece, piece.min_y, x0, y0, z0);
         const auto last = piece_local_to_world(piece, piece.min_y, x1, y1, z1);
         fill(std::min(first.x, last.x), std::min(first.y, last.y),
              std::min(first.z, last.z), std::max(first.x, last.x),
