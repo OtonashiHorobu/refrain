@@ -18,6 +18,7 @@ comparison tooling.
 # 1. Capture a locally owned vanilla server (accept its EULA yourself).
 python3 tools/net/oracle/run_vanilla.py \
     --server-jar /path/to/server-26.3.jar \
+    --libraries /path/to/vanilla/libraries \
     --accept-eula \
     --port 25566 \
     --out /tmp/vanilla.rfcap
@@ -31,6 +32,10 @@ python3 tools/net/oracle/run_vanilla.py \
 python3 tools/net/oracle/compare.py \
     --payload /tmp/vanilla.rfcap /tmp/refrain.rfcap
 ```
+
+`run_vanilla.py` supports both self-contained server jars (`-jar`) and the
+Mojang-style split layout (`--libraries` adds every library jar to the
+classpath and launches `net.minecraft.server.Main`).
 
 `compare.py` reports the first state/id or payload mismatch and unique packet
 id sets. Payload comparison is intentionally raw: timestamps, UUIDs, player

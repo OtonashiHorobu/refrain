@@ -39,6 +39,8 @@ PROPERTIES = {
     "spawn-protection": "0",
     "sync-chunk-writes": "false",
     "view-distance": "3",
+    "white-list": "false",
+    "enforce-whitelist": "false",
 }
 
 
@@ -71,6 +73,12 @@ def wait_for_done(process: subprocess.Popen[str], timeout: float) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server-jar", type=pathlib.Path, required=True)
+    parser.add_argument(
+        "--libraries",
+        type=pathlib.Path,
+        default=None,
+        help="directory with the vanilla server library jars",
+    )
     parser.add_argument("--accept-eula", action="store_true")
     parser.add_argument("--port", type=int, default=25566)
     parser.add_argument("--out", type=pathlib.Path, required=True)
@@ -100,8 +108,20 @@ def main() -> int:
             for key, value in PROPERTIES.items()
         )
         (work / "server.properties").write_text(properties + "\n", encoding="utf-8")
+        command = [args.java]
+        if args.libraries is not None:
+            classpath = [str(args.server_jar)]
+            classpath.extend(
+                str(path) for path in sorted(args.libraries.rglob("*.jar"))
+            )
+            command.extend(
+                ["-cp", os.pathsep.join(classpath), "net.minecraft.server.Main"]
+            )
+        else:
+            command.extend(["-jar", str(args.server_jar)])
+        command.append("--nogui")
         process = subprocess.Popen(
-            [args.java, "-jar", str(args.server_jar), "--nogui"],
+            command,
             cwd=work,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
