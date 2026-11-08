@@ -16,6 +16,19 @@
 
 namespace refrain::net {
 
+/// One request to (re)center a connection's chunk view. The runtime owns the
+/// world and encodes the missing chunks; the network layer only reports the
+/// viewport and sends the resulting batches.
+struct chunk_view_request {
+    std::uint64_t connection{0};
+    std::int32_t chunk_x{0};
+    std::int32_t chunk_z{0};
+    std::int32_t radius{0};
+    /// Already-sent square around the center (spawn chunks); the runtime seeds
+    /// its known set with it so those chunks are not resent.
+    std::int32_t seed_radius{0};
+};
+
 /// Runtime values the network layer cannot take from configuration: world
 /// spawn state, pre-encoded chunks and world callbacks.
 struct server_inputs {
@@ -57,6 +70,21 @@ class server {
     /// thread, play packets are applied here.
     void tick();
     [[nodiscard]] auto local_port() const -> std::uint16_t;
+
+    /// Drain viewport changes observed since the previous call.
+    [[nodiscard]] auto take_chunk_view_requests()
+        -> std::vector<chunk_view_request>;
+
+    /// Send one chunk batch (bodies include their packet id). `update_center`
+    /// also emits `set_chunk_cache_center`; an empty batch with a center
+    /// update is valid.
+    void send_chunk_batch(std::uint64_t connection, std::int32_t chunk_x,
+                          std::int32_t chunk_z,
+                          std::span<const std::vector<std::byte>> packets,
+                          bool update_center);
+
+    /// Connections currently in play (closed connections excluded).
+    [[nodiscard]] auto active_connections() const -> std::vector<std::uint64_t>;
 
   private:
     struct impl;

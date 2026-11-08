@@ -249,6 +249,10 @@ struct server::impl {
         bool client_loaded{false};
         std::int32_t client_view_distance{0};
         std::uint32_t held_slot{0};
+        std::int32_t last_chunk_x{0};
+        std::int32_t last_chunk_z{0};
+        std::int32_t last_chunk_radius{0};
+        bool chunk_initialized{false};
         std::unique_ptr<aes128_cfb8> cipher{};
         std::vector<std::byte> verify_token{};
         bool online_pending{false};
@@ -272,6 +276,8 @@ struct server::impl {
     std::mutex connections_mutex{};
     std::mutex inbound_mutex{};
     std::deque<queued_packet> inbound{};
+    std::mutex chunk_requests_mutex{};
+    std::vector<chunk_view_request> chunk_requests{};
     std::thread keepalive_thread{};
 
     [[nodiscard]] auto start() -> status;
@@ -296,6 +302,7 @@ struct server::impl {
     void send_system_chat(std::uint64_t id, std::string_view text);
     void broadcast_system_chat(std::string_view text);
     void send_initial_chunks(std::uint64_t id);
+    void queue_chunk_views();
     void send_keepalive(std::uint64_t id);
     void keepalive_loop();
     [[nodiscard]] auto build_configuration() -> status;
@@ -1205,6 +1212,107 @@ void server::impl::broadcast_system_chat(std::string_view text) {
     }
 }
 
+void server::impl::queue_chunk_views() {
+    std::vector<chunk_view_request> pending;
+    {
+        const std::lock_guard lock{connections_mutex};
+        for (auto &[id, live] : connections) {
+            if (live.closed || live.state != connection_state::play) {
+                continue;
+            }
+            const auto chunk_x{
+                static_cast<std::int32_t>(std::floor(live.x / 16.0))};
+            const auto chunk_z{
+                static_cast<std::int32_t>(std::floor(live.z / 16.0))};
+            auto radius{config.view_distance};
+            if (live.client_view_distance > 0) {
+                radius = std::min(radius, live.client_view_distance);
+            }
+            radius = std::max(radius, 1);
+            const auto seed_radius{live.chunk_initialized ? 0 : 3};
+            if (live.chunk_initialized && chunk_x == live.last_chunk_x &&
+                chunk_z == live.last_chunk_z &&
+                radius == live.last_chunk_radius) {
+                continue;
+            }
+            live.chunk_initialized = true;
+            live.last_chunk_x = chunk_x;
+            live.last_chunk_z = chunk_z;
+            live.last_chunk_radius = radius;
+            pending.push_back({.connection = id,
+                               .chunk_x = chunk_x,
+                               .chunk_z = chunk_z,
+                               .radius = radius,
+                               .seed_radius = seed_radius});
+        }
+    }
+    if (!pending.empty()) {
+        const std::lock_guard lock{chunk_requests_mutex};
+        chunk_requests.insert(chunk_requests.end(), pending.begin(),
+                              pending.end());
+    }
+}
+
+auto server::take_chunk_view_requests() -> std::vector<chunk_view_request> {
+    if (!impl_) {
+        return {};
+    }
+    std::vector<chunk_view_request> pending;
+    {
+        const std::lock_guard lock{impl_->chunk_requests_mutex};
+        pending.swap(impl_->chunk_requests);
+    }
+    return pending;
+}
+
+void server::send_chunk_batch(std::uint64_t connection, std::int32_t chunk_x,
+                              std::int32_t chunk_z,
+                              std::span<const std::vector<std::byte>> packets,
+                              bool update_center) {
+    if (!impl_) {
+        return;
+    }
+    auto &state{*impl_};
+    if (update_center) {
+        play_cb::set_chunk_cache_center center{
+            .chunk_x = chunk_x,
+            .chunk_z = chunk_z,
+        };
+        state.send_packet(connection,
+                          play_cb::set_chunk_cache_center::packet_id, center,
+                          play_cb::encode_set_chunk_cache_center);
+    }
+    if (packets.empty()) {
+        return;
+    }
+    play_cb::chunk_batch_start start{};
+    state.send_packet(connection, play_cb::chunk_batch_start::packet_id, start,
+                      play_cb::encode_chunk_batch_start);
+    for (const auto &body : packets) {
+        state.send(connection, body);
+    }
+    play_cb::chunk_batch_finished finished{
+        .batch_size = static_cast<std::uint32_t>(packets.size()),
+    };
+    state.send_packet(connection, play_cb::chunk_batch_finished::packet_id,
+                      finished, play_cb::encode_chunk_batch_finished);
+}
+
+auto server::active_connections() const -> std::vector<std::uint64_t> {
+    if (!impl_) {
+        return {};
+    }
+    std::vector<std::uint64_t> ids;
+    const std::lock_guard lock{impl_->connections_mutex};
+    ids.reserve(impl_->connections.size());
+    for (const auto &[id, state] : impl_->connections) {
+        if (!state.closed && state.state == connection_state::play) {
+            ids.push_back(id);
+        }
+    }
+    return ids;
+}
+
 void server::impl::send_initial_chunks(std::uint64_t id) {
     play_cb::chunk_batch_start start{};
     send_packet(id, play_cb::chunk_batch_start::packet_id, start,
@@ -1691,6 +1799,7 @@ void server::impl::tick() {
     for (const auto &packet : local) {
         handle_play(packet.connection, packet.body);
     }
+    queue_chunk_views();
 }
 
 server::server(std::unique_ptr<impl> state) : impl_{std::move(state)} {}

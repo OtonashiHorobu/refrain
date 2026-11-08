@@ -33,11 +33,13 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -1155,6 +1157,132 @@ auto run_server(const server_run_options &options) -> int {
                            listener->local_port());
     }
 
+    // Chunk streaming: the network layer reports viewport changes, the
+    // simulation thread encodes the missing chunks in bounded batches.
+    struct chunk_stream_state {
+        std::int32_t center_x{0};
+        std::int32_t center_z{0};
+        std::int32_t radius{0};
+        bool center_dirty{false};
+        bool seeded{false};
+        bool reported{false};
+        std::size_t sent{0};
+        std::set<std::pair<std::int32_t, std::int32_t>> known{};
+        std::deque<std::pair<std::int32_t, std::int32_t>> pending{};
+    };
+    std::unordered_map<std::uint64_t, chunk_stream_state> chunk_streams{};
+    refrain::server::chunk_packet_source stream_source{};
+    bool stream_chunks{false};
+    if (tables && registries) {
+        stream_source = refrain::server::chunk_packet_source{
+            .world = &*store,
+            .tables = &*tables,
+            .registries = &*registries,
+        };
+        stream_chunks = true;
+    }
+    const auto process_chunk_streams = [&]() {
+        if (!listener || !stream_chunks) {
+            return;
+        }
+        const auto active_ids{listener->active_connections()};
+        const std::set<std::uint64_t> active{active_ids.begin(),
+                                             active_ids.end()};
+        for (auto iterator = chunk_streams.begin();
+             iterator != chunk_streams.end();) {
+            if (!active.contains(iterator->first)) {
+                iterator = chunk_streams.erase(iterator);
+            } else {
+                ++iterator;
+            }
+        }
+        for (const auto &request : listener->take_chunk_view_requests()) {
+            auto &stream{chunk_streams[request.connection]};
+            const auto center_changed{stream.radius != request.radius ||
+                                      stream.center_x != request.chunk_x ||
+                                      stream.center_z != request.chunk_z};
+            stream.center_x = request.chunk_x;
+            stream.center_z = request.chunk_z;
+            stream.radius = request.radius;
+            if (request.seed_radius > 0 && !stream.seeded) {
+                for (std::int32_t dz{-request.seed_radius};
+                     dz <= request.seed_radius; ++dz) {
+                    for (std::int32_t dx{-request.seed_radius};
+                         dx <= request.seed_radius; ++dx) {
+                        stream.known.emplace(stream.center_x + dx,
+                                             stream.center_z + dz);
+                    }
+                }
+                stream.seeded = true;
+            }
+            if (center_changed || stream.pending.empty()) {
+                stream.pending.clear();
+                for (std::int32_t distance{0}; distance <= stream.radius;
+                     ++distance) {
+                    for (std::int32_t dz{-distance}; dz <= distance; ++dz) {
+                        for (std::int32_t dx{-distance}; dx <= distance; ++dx) {
+                            if (std::max(std::abs(dx), std::abs(dz)) !=
+                                distance) {
+                                continue;
+                            }
+                            const auto x{stream.center_x + dx};
+                            const auto z{stream.center_z + dz};
+                            if (!stream.known.contains({x, z})) {
+                                stream.pending.emplace_back(x, z);
+                            }
+                        }
+                    }
+                }
+            }
+            stream.center_dirty = stream.center_dirty || center_changed;
+            stream.reported = false;
+        }
+        for (const auto id : active_ids) {
+            auto match{chunk_streams.find(id)};
+            if (match == chunk_streams.end()) {
+                continue;
+            }
+            auto &stream{match->second};
+            std::vector<std::vector<std::byte>> packets;
+            constexpr std::size_t batch_budget{8};
+            packets.reserve(batch_budget);
+            while (!stream.pending.empty() && packets.size() < batch_budget) {
+                const auto [x, z]{stream.pending.front()};
+                stream.pending.pop_front();
+                if (stream.known.contains({x, z})) {
+                    continue;
+                }
+                auto encoded{refrain::server::encode_full_chunk(
+                    stream_source, refrain::sim::chunk_pos{x, z})};
+                if (!encoded) {
+                    // The world may not have this chunk generated; remember
+                    // it so the same coordinate is not retried every tick.
+                    refrain::log::debug(
+                        "network: chunk ({}, {}) encode failed: {}", x, z,
+                        encoded.error().message);
+                    stream.known.emplace(x, z);
+                    continue;
+                }
+                packets.push_back(std::move(*encoded));
+                stream.known.emplace(x, z);
+                ++stream.sent;
+            }
+            const auto update_center{stream.center_dirty};
+            if (update_center || !packets.empty()) {
+                listener->send_chunk_batch(id, stream.center_x, stream.center_z,
+                                           packets, update_center);
+                stream.center_dirty = false;
+            }
+            if (stream.pending.empty() && !stream.reported) {
+                refrain::log::info(
+                    "network: chunk view ready for connection {} ({} "
+                    "chunk(s) streamed)",
+                    id, stream.sent);
+                stream.reported = true;
+            }
+        }
+    };
+
     snapshot_writer writer{*store};
     // One background deleter, only for an applying GC policy. `--content-gc
     // off|dry-run` must never delete: no worker is started and a queue left by
@@ -1314,6 +1442,7 @@ auto run_server(const server_run_options &options) -> int {
         if (listener) {
             listener->tick();
         }
+        process_chunk_streams();
         store->tick();
         ++ticks_run;
         scheduler.run(refrain::core::schedule::phase::post_tick, ticks_run);
