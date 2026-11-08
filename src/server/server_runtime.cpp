@@ -15,7 +15,6 @@
 #include <refrain/net/registry.hpp>
 #include <refrain/net/server.hpp>
 #include <refrain/server/chunk_packet.hpp>
-#include <refrain/server/server_properties.hpp>
 #include <refrain/sim/replay.hpp>
 #include <refrain/sim/world.hpp>
 #include <refrain/world/store.hpp>
@@ -214,27 +213,6 @@ void start_console_thread(const std::shared_ptr<runtime_state> &state) {
     // touches the shared state, so it is safe to detach at shutdown and let
     // process exit reclaim it.
     console.detach();
-}
-
-[[nodiscard]] auto load_properties(const std::string &path,
-                                   server_properties &out) -> status {
-    if (path.empty()) {
-        return status_ok();
-    }
-    if (!refrain::core::io::exists(path)) {
-        return status_ok();
-    }
-    auto text{refrain::core::io::read_text(
-        path, {.max_bytes = max_console_file_bytes, .allow_symlink = false})};
-    if (!text) {
-        return std::unexpected{std::move(text.error())};
-    }
-    auto parsed{parse_server_properties(*text)};
-    if (!parsed) {
-        return std::unexpected{std::move(parsed.error())};
-    }
-    out = std::move(*parsed);
-    return status_ok();
 }
 
 /// Delay between two bounded drain passes when the queue still holds
@@ -811,16 +789,17 @@ auto run_server(const server_run_options &options) -> int {
             "refrain-server: --world is required to start the tick loop"));
     }
 
-    server_properties properties{};
-    if (auto loaded{
-            load_properties(options.server_properties_path, properties)};
-        !loaded) {
-        return report_error(loaded.error());
-    }
-    refrain::log::info("properties: level={} view={} sim={} max_players={}{}",
-                       properties.level_name, properties.view_distance,
-                       properties.simulation_distance, properties.max_players,
-                       properties.online_mode ? "" : " offline");
+    const auto level_name{options.world.get_string("level_name", "world")};
+    const auto view_distance{static_cast<std::int32_t>(
+        options.network.get_int64("view_distance", 10))};
+    const auto simulation_distance{static_cast<std::int32_t>(
+        options.network.get_int64("simulation_distance", 10))};
+    const auto max_players{options.network.get_int64("status.max_players", 20)};
+    const auto online_mode{options.network.get_bool("online_mode", false)};
+    refrain::log::info(
+        "config: level={} view={} sim={} max_players={} online_mode={}",
+        level_name, view_distance, simulation_distance, max_players,
+        online_mode);
 
     auto store{refrain::sim::world::open(options.world_path)};
     if (!store) {
@@ -914,31 +893,17 @@ auto run_server(const server_run_options &options) -> int {
                                spawn_chunks.size());
         }
     }
-    refrain::net::server_config network_config{};
-    network_config.bind.host = properties.server_ip;
-    network_config.bind.port =
-        static_cast<std::uint16_t>(properties.server_port);
-    network_config.compression_threshold =
-        properties.network_compression_threshold;
-    network_config.status.description = properties.motd;
-    network_config.status.max_players = properties.max_players;
-    network_config.status.online_players = 0;
-    network_config.status.enforces_secure_chat =
-        properties.enforce_secure_profile;
-    network_config.status.replies_to_status = properties.enable_status;
-    network_config.view_distance = properties.view_distance;
-    network_config.simulation_distance = properties.simulation_distance;
-    network_config.online_mode = properties.online_mode;
-    network_config.seed = level->seed;
-    network_config.spawn_x = static_cast<double>(level->spawn_x) + 0.5;
-    network_config.spawn_y = static_cast<double>(level->spawn_y);
-    network_config.spawn_z = static_cast<double>(level->spawn_z) + 0.5;
-    network_config.registry_catalog_path =
+    refrain::net::server_inputs network_inputs{};
+    network_inputs.seed = level->seed;
+    network_inputs.spawn_x = static_cast<double>(level->spawn_x) + 0.5;
+    network_inputs.spawn_y = static_cast<double>(level->spawn_y);
+    network_inputs.spawn_z = static_cast<double>(level->spawn_z) + 0.5;
+    network_inputs.registry_catalog_path =
         "content/vanilla/26.3/protocol_registry.json";
-    network_config.spawn_chunks =
+    network_inputs.spawn_chunks =
         std::make_shared<const std::vector<std::vector<std::byte>>>(
             std::move(spawn_chunks));
-    network_config.break_block =
+    network_inputs.break_block =
         [world = &*store](std::int32_t x, std::int32_t y, std::int32_t z) {
             if (y < std::numeric_limits<std::int16_t>::min() ||
                 y > std::numeric_limits<std::int16_t>::max()) {
@@ -950,7 +915,7 @@ auto run_server(const server_run_options &options) -> int {
                     refrain::sim::air_block)
                 .has_value();
         };
-    network_config.place_block =
+    network_inputs.place_block =
         [world = &*store](std::int32_t x, std::int32_t y, std::int32_t z) {
             if (y < std::numeric_limits<std::int16_t>::min() ||
                 y > std::numeric_limits<std::int16_t>::max()) {
@@ -964,14 +929,16 @@ auto run_server(const server_run_options &options) -> int {
                     stone)
                 .has_value();
         };
-    auto network{refrain::net::server::start(network_config)};
+    auto network{refrain::net::server::start(std::move(network_inputs),
+                                             options.network)};
     std::unique_ptr<refrain::net::server> listener{};
     if (!network) {
         refrain::log::error("network: listener failed: {}",
                             network.error().message);
     } else {
         listener = std::move(*network);
-        refrain::log::info("network: listening on {}:{}", properties.server_ip,
+        refrain::log::info("network: listening on {}:{}",
+                           options.network.get_string("bind_host", "0.0.0.0"),
                            listener->local_port());
     }
 

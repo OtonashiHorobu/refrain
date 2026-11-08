@@ -10,6 +10,7 @@
 // here.
 
 #include <refrain/contracts/services/runtime_abi.h>
+#include <refrain/core/config.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/static_mod.hpp>
 #include <refrain/server/server_runtime.hpp>
@@ -37,10 +38,18 @@ namespace {
 /// keep this the only translation point so a new CLI option cannot
 /// silently diverge between the contract and the runtime.
 [[nodiscard]] auto
-make_options(const refrain_services_runtime_runtime_config &config)
+make_options(const refrain_services_runtime_runtime_config &config,
+             const refrain::core::config::view &network,
+             const refrain::core::config::view &world,
+             const refrain::core::config::view &storage,
+             const refrain::core::config::view &runtime)
     -> refrain::server::server_run_options {
     refrain::server::server_run_options options{};
     options.world_path = string_of(config.world_path);
+    options.network = network;
+    options.world = world;
+    options.storage = storage;
+    options.runtime = runtime;
     options.server_properties_path = string_of(config.server_properties);
     options.ticks = config.ticks;
     options.command_file = string_of(config.command_file);
@@ -67,6 +76,11 @@ make_options(const refrain_services_runtime_runtime_config &config)
 }
 
 struct runtime_provider {
+    refrain::core::config::view network{};
+    refrain::core::config::view world{};
+    refrain::core::config::view storage{};
+    refrain::core::config::view runtime{};
+
     static auto run(void *self,
                     const refrain_services_runtime_runtime_config *config,
                     std::int32_t *out_value) -> refrain_status {
@@ -75,7 +89,9 @@ struct runtime_provider {
                 REFRAIN_SERVICES_RUNTIME_RUNTIME_CONFIG_SIZE) {
             return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
         }
-        auto options{make_options(*config)};
+        auto *provider{static_cast<runtime_provider *>(self)};
+        auto options{make_options(*config, provider->network, provider->world,
+                                  provider->storage, provider->runtime)};
         if (options.world_path.empty()) {
             return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
         }
@@ -102,6 +118,20 @@ auto runtime_vtable() -> const refrain_services_runtime_vtable & {
 auto make_server_vanilla(refrain::mod::host &host) -> refrain::status {
     static std::unique_ptr<runtime_provider> provider{};
     provider = std::make_unique<runtime_provider>();
+    if (auto *store{host.config()}; store != nullptr) {
+        if (auto view{store->module("network")}) {
+            provider->network = *view;
+        }
+        if (auto view{store->module("world")}) {
+            provider->world = *view;
+        }
+        if (auto view{store->module("storage")}) {
+            provider->storage = *view;
+        }
+        if (auto view{store->module("runtime")}) {
+            provider->runtime = *view;
+        }
+    }
     const refrain::mod::provider_api api{
         .vtable = &runtime_vtable(),
         .self = provider.get(),

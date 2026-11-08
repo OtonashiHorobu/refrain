@@ -177,6 +177,30 @@ template <typename Packet>
 
 } // namespace
 
+/// Concrete network settings resolved from the `network` namespace view at
+/// startup. The store remains the source of truth; this snapshot keeps the I/O
+/// threads independent of it.
+struct server_settings {
+    endpoint bind{};
+    status_info status{};
+    int compression_threshold{256};
+    std::int32_t view_distance{10};
+    std::int32_t simulation_distance{10};
+    bool online_mode{false};
+    bool hardcore{false};
+    std::int32_t game_mode{1};
+    double spawn_x{0.0};
+    double spawn_y{64.0};
+    double spawn_z{0.0};
+    std::int64_t seed{0};
+    std::string registry_catalog_path{};
+    std::shared_ptr<const std::vector<std::vector<std::byte>>> spawn_chunks{};
+    std::function<bool(std::int32_t, std::int32_t, std::int32_t)> break_block{};
+    std::function<bool(std::int32_t, std::int32_t, std::int32_t)> place_block{};
+    std::string session_server{"https://sessionserver.mojang.com"};
+    std::int32_t auth_timeout_ms{5000};
+};
+
 struct server::impl {
     struct connection_state_data {
         frame_decoder decoder{-1};
@@ -207,7 +231,7 @@ struct server::impl {
         bool online_pending{false};
     };
 
-    server_config config{};
+    server_settings config{};
     std::unique_ptr<transport> socket{};
     std::unordered_map<std::uint64_t, connection_state_data> connections{};
     std::string status_json{};
@@ -1568,7 +1592,51 @@ void server::impl::tick() {
 server::server(std::unique_ptr<impl> state) : impl_{std::move(state)} {}
 server::~server() { stop(); }
 
-auto server::start(server_config config) -> result<std::unique_ptr<server>> {
+auto server::start(server_inputs inputs, core::config::view view)
+    -> result<std::unique_ptr<server>> {
+    const auto port{view.get_int64("port", 25565)};
+    if (port < 0 || port > 65535) {
+        return std::unexpected{make_error(error_code::invalid_argument,
+                                          "network.port is out of range")};
+    }
+    const auto compression{view.get_int64("compression_threshold", 256)};
+    if (compression < -1 || compression > 2147483647LL) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "network.compression_threshold is out of range")};
+    }
+    server_settings config{};
+    config.bind.host = view.get_string("bind_host", "0.0.0.0");
+    config.bind.port = static_cast<std::uint16_t>(port);
+    config.compression_threshold = static_cast<int>(compression);
+    config.view_distance =
+        static_cast<std::int32_t>(view.get_int64("view_distance", 10));
+    config.simulation_distance =
+        static_cast<std::int32_t>(view.get_int64("simulation_distance", 10));
+    config.online_mode = view.get_bool("online_mode", false);
+    config.status.description =
+        view.get_string("status.motd", "A Refrain Server");
+    config.status.max_players =
+        static_cast<std::int32_t>(view.get_int64("status.max_players", 20));
+    config.status.online_players = 0;
+    config.status.replies_to_status = view.get_bool("status.enabled", true);
+    config.status.enforces_secure_chat =
+        view.get_bool("enforce_secure_profile", true);
+    config.session_server =
+        view.get_string("session_server", "https://sessionserver.mojang.com");
+    config.auth_timeout_ms =
+        static_cast<std::int32_t>(view.get_int64("auth_timeout_ms", 5000));
+    config.spawn_x = inputs.spawn_x;
+    config.spawn_y = inputs.spawn_y;
+    config.spawn_z = inputs.spawn_z;
+    config.seed = inputs.seed;
+    config.game_mode = inputs.game_mode;
+    config.hardcore = inputs.hardcore;
+    config.registry_catalog_path = std::move(inputs.registry_catalog_path);
+    config.spawn_chunks = std::move(inputs.spawn_chunks);
+    config.break_block = std::move(inputs.break_block);
+    config.place_block = std::move(inputs.place_block);
+
     auto state{std::make_unique<impl>()};
     state->config = std::move(config);
     if (auto started{state->start()}; !started) {

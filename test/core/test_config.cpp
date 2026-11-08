@@ -513,6 +513,31 @@ name = "x"
         expect(read_text_file(dir / "network.toml").find("1234") ==
                std::string::npos);
 
+        // fallback sits below user and override, and is never persisted.
+        expect(static_cast<bool>(
+            store.set_int64("network", "port", 5, layer::fallback)));
+        auto layered{store.module("network")};
+        expect(static_cast<bool>(layered));
+        if (layered) {
+            expect(layered->get_int64("port", 0) == 1234);
+        }
+        expect(
+            static_cast<bool>(store.erase("network", "port", layer::override)));
+        auto user_layer{store.module("network")};
+        expect(static_cast<bool>(user_layer));
+        if (user_layer) {
+            expect(user_layer->get_int64("port", 0) == 25566);
+        }
+        expect(static_cast<bool>(store.erase("network", "port", layer::user)));
+        auto fallback_layer{store.module("network")};
+        expect(static_cast<bool>(fallback_layer));
+        if (fallback_layer) {
+            expect(fallback_layer->get_int64("port", 0) == 5);
+        }
+        expect(static_cast<bool>(store.save("network")));
+        expect(read_text_file(dir / "network.toml").find("port") ==
+               std::string::npos);
+
         // A parent leaf and its descendants cannot coexist.
         expect(static_cast<bool>(store.set_string("world", "status", "x")));
         auto conflict{store.set_string("world", "status.motd", "y")};

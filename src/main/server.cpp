@@ -14,6 +14,7 @@
 #include <refrain/builtin/image.hpp>
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/runtime.hpp>
+#include <refrain/core/config.hpp>
 #include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/core/version.hpp>
@@ -173,6 +174,9 @@ int main(int argc, char **argv) {
     std::string world_path;
     app.add_option("--world", world_path,
                    "RWF world directory to run (enables the tick loop)");
+    std::string config_dir{"config"};
+    app.add_option("--config-dir", config_dir,
+                   "Directory with per-namespace TOML configuration files");
     std::string server_properties_path{"server.properties"};
     app.add_option("--server-properties", server_properties_path,
                    "Java server.properties path (missing file keeps defaults)");
@@ -629,7 +633,59 @@ int main(int argc, char **argv) {
     // Load the resolved gamepack's internal mods through the mod host
     // (manifest gates -> static factories -> service providers). Composition is
     // frozen on success; a failure aborts startup with the offending mod.
+    refrain::core::config::store config_store{};
+    {
+        const std::filesystem::path root{config_dir};
+        const auto mount_namespace = [&](std::string name,
+                                         const std::filesystem::path &path) {
+            return config_store.mount(
+                {.name = std::move(name), .path = path.string()});
+        };
+        if (auto status{mount_namespace("host", root / "refrain.toml")};
+            !status) {
+            return report_error(status.error());
+        }
+        for (const auto *name : {"runtime", "network", "world", "storage"}) {
+            if (auto status{mount_namespace(
+                    name, root / (std::string{name} + ".toml"))};
+                !status) {
+                return report_error(status.error());
+            }
+        }
+        for (const auto &provider : plan->providers) {
+            auto id{provider.provider};
+            if (const auto at{id.find('@')}; at != std::string::npos) {
+                id.resize(at);
+            }
+            const auto path{root / "providers" / (id + ".toml")};
+            std::error_code error;
+            if (!std::filesystem::exists(path, error)) {
+                continue;
+            }
+            if (auto status{mount_namespace("provider/" + id, path)}; !status) {
+                return report_error(status.error());
+            }
+        }
+        for (const auto &selected : plan->mods) {
+            const auto path{root / "mods" / (selected.id + ".toml")};
+            std::error_code error;
+            if (!std::filesystem::exists(path, error)) {
+                continue;
+            }
+            if (auto status{mount_namespace("mod/" + selected.id, path)};
+                !status) {
+                return report_error(status.error());
+            }
+        }
+        if (auto status{config_store.load_all()}; !status) {
+            return report_error(status.error());
+        }
+        refrain::log::info("config: {} namespace(s) from {}",
+                           config_store.names().size(), config_dir);
+    }
+
     refrain::mod::host mods{};
+    mods.set_config(config_store);
     auto mods_loaded{
         refrain::app::activate_server_mods(mods, *plan, image_bytes)};
     if (!mods_loaded) {

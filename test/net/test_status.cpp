@@ -2,6 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/core/config.hpp>
 #include <refrain/net/ping.hpp>
 #include <refrain/net/server.hpp>
 #include <refrain/net/status.hpp>
@@ -11,6 +12,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -18,6 +23,16 @@ namespace {
 using namespace boost::ut;
 
 namespace net = refrain::net;
+
+[[nodiscard]] auto make_temp_dir() -> std::filesystem::path {
+    const auto stamp{
+        std::chrono::steady_clock::now().time_since_epoch().count()};
+    const auto path{std::filesystem::temp_directory_path() /
+                    ("refrain_status_" + std::to_string(stamp))};
+    std::error_code error;
+    std::filesystem::create_directories(path, error);
+    return path;
+}
 
 const suite tests = [] {
     "net/status JSON round trips its fields"_test = [] {
@@ -66,13 +81,24 @@ const suite tests = [] {
     };
 
     "net/status server answers a ping"_test = [] {
-        net::server_config config{};
-        config.bind = net::endpoint{.host = "127.0.0.1", .port = 0};
-        config.status.description = "Refrain test";
-        config.status.max_players = 7;
-        config.status.online_players = 1;
+        const auto dir{make_temp_dir()};
+        {
+            std::ofstream stream{dir / "network.toml",
+                                 std::ios::binary | std::ios::trunc};
+            stream << "bind_host = \"127.0.0.1\"\nport = 0\n"
+                      "[status]\nmotd = \"Refrain test\"\nmax_players = 7\n";
+        }
+        auto store{refrain::core::config::store::empty()};
+        expect(static_cast<bool>(store.mount(
+            {.name = "network", .path = (dir / "network.toml").string()})));
+        expect(static_cast<bool>(store.load_all()));
+        auto view{store.module("network")};
+        expect(static_cast<bool>(view));
+        if (!view) {
+            return;
+        }
 
-        auto running{net::server::start(config)};
+        auto running{net::server::start({}, *view)};
         expect(running.has_value());
         if (!running) {
             return;
@@ -86,9 +112,11 @@ const suite tests = [] {
         if (result) {
             expect(result->status.description == "Refrain test");
             expect(result->status.max_players == 7);
-            expect(result->status.online_players == 1);
+            expect(result->status.online_players == 0);
         }
         (*running)->stop();
+        std::error_code error;
+        std::filesystem::remove_all(dir, error);
     };
 };
 

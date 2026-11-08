@@ -204,9 +204,10 @@ struct mount_options {
     std::string defaults_path{};
 };
 
-/// Which layer a write targets. `user` is persisted by save(); `override`
-/// models CLI overrides and is never written to disk.
-enum class layer : std::uint8_t { user, override };
+/// Which layer a write targets. `fallback` holds imported or legacy values
+/// below the user file; `user` is persisted by save(); `override` models CLI
+/// overrides and is never written to disk.
+enum class layer : std::uint8_t { fallback, user, override };
 
 /// Host-owned configuration store composed of one TOML file per namespace.
 ///

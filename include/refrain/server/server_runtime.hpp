@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <refrain/core/config.hpp>
+
 #include <cstdint>
 #include <string>
 
@@ -17,8 +19,14 @@ namespace refrain::server {
 struct server_run_options {
     /// RWF world directory (`world_store::open`).
     std::string world_path{};
-    /// Optional Java `server.properties`; missing file keeps defaults.
-    std::string server_properties_path{"server.properties"};
+    /// Per-namespace configuration views supplied by the host. Empty views
+    /// fall back to the built-in defaults.
+    core::config::view network{};
+    core::config::view world{};
+    core::config::view storage{};
+    core::config::view runtime{};
+    /// Legacy Java `server.properties` import path. Empty disables it.
+    std::string server_properties_path{};
     /// Run exactly this many ticks, then stop. 0 = until `stop`/EOF.
     std::int64_t ticks{0};
     /// Optional batch command file (one console command per line, all at tick

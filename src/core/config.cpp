@@ -940,6 +940,7 @@ struct store::impl {
         std::string path;
         std::string defaults_path;
         flat_table defaults;
+        flat_table fallback;
         flat_table user;
         flat_table overrides;
         bool dirty{false};
@@ -972,6 +973,7 @@ struct store::impl {
 
     static void rebuild(entry &value) {
         auto merged{value.defaults};
+        merge_flat(merged, value.fallback);
         merge_flat(merged, value.user);
         merge_flat(merged, value.overrides);
         auto state{std::make_shared<view::impl>()};
@@ -1023,6 +1025,7 @@ auto store::load_all() -> status {
             return std::unexpected{std::move(user.error())};
         }
         entry.defaults = std::move(*defaults);
+        entry.fallback = flat_table{};
         entry.user = std::move(*user);
         entry.overrides = flat_table{};
         entry.dirty = false;
@@ -1061,8 +1064,10 @@ auto store::impl::set(std::string_view name, std::string_view key,
             error_code::not_found,
             "config: namespace '" + std::string{name} + "' is not mounted")};
     }
-    auto &table{target == layer::user ? target_entry->user
-                                      : target_entry->overrides};
+    auto &table{target == layer::fallback
+                    ? target_entry->fallback
+                    : (target == layer::user ? target_entry->user
+                                             : target_entry->overrides)};
     auto status{set_flat(table, key, std::move(value))};
     if (!status) {
         return status;
@@ -1108,7 +1113,9 @@ auto store::erase(std::string_view name, std::string_view key, layer target)
             error_code::not_found,
             "config: namespace '" + std::string{name} + "' is not mounted")};
     }
-    auto &table{target == layer::user ? entry->user : entry->overrides};
+    auto &table{target == layer::fallback
+                    ? entry->fallback
+                    : (target == layer::user ? entry->user : entry->overrides)};
     auto status{erase_flat(table, key)};
     if (!status) {
         return status;
