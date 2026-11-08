@@ -20,6 +20,28 @@ python3 tools/worldgen/pack_content.py \
 The snapshot is game-derived data and is covered by the notice in
 `content/vanilla/`; it is not part of the repository license.
 
+## Biome parameter reports
+
+The overworld and nether biome selection tables are game data. They are
+committed next to the datapack snapshot under
+`content/vanilla/<version>/reports/biome_parameters/`:
+
+```text
+reports/biome_parameters/
+  MANIFEST.json   game/data version, entry counts, sha256 of each report
+  overworld.json  overworld climate parameter points, in selection order
+  nether.json     nether climate parameter points, in selection order
+```
+
+Each report records the game version, data version, dimension id, entry count
+and the ordered entries. An entry carries the biome id, the quantized minimum
+and maximum of the six climate parameters, and the quantized offset. Worldgen
+loads a report with `load_biome_parameters(data_root, dimension)`, where
+`data_root` is the sibling `data` directory. The loader rejects a report whose
+metadata, entry count, dimension or entries do not decode exactly, so a table
+cannot silently drift. The reports are covered by the notice in
+`content/vanilla/`.
+
 ## Structure templates
 
 Structure templates are binary assets and are not part of the
