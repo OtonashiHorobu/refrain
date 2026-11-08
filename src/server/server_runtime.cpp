@@ -15,6 +15,7 @@
 #include <refrain/net/registry.hpp>
 #include <refrain/net/server.hpp>
 #include <refrain/server/chunk_packet.hpp>
+#include <refrain/server/inventory_menu.hpp>
 #include <refrain/sim/replay.hpp>
 #include <refrain/sim/world.hpp>
 #include <refrain/world/store.hpp>
@@ -1286,6 +1287,7 @@ auto run_server(const server_run_options &options) -> int {
     // Player inventory: map runtime item keys to protocol item ids once, then
     // mirror the simulation inventory into the player inventory container.
     std::unordered_map<std::string, std::uint32_t> item_ids{};
+    std::unordered_map<std::uint32_t, std::string> item_names{};
     if (tables) {
         if (const auto registry{tables->find_registry("minecraft:item")}) {
             const auto count{tables->registry_entry_count(*registry)};
@@ -1293,9 +1295,10 @@ auto run_server(const server_run_options &options) -> int {
             for (std::uint32_t index{0}; index < count; ++index) {
                 const auto entry{tables->registry_entry(*registry, index)};
                 if (entry.protocol_id >= 0) {
-                    item_ids.emplace(
-                        std::string{entry.name},
-                        static_cast<std::uint32_t>(entry.protocol_id));
+                    const auto id{
+                        static_cast<std::uint32_t>(entry.protocol_id)};
+                    item_ids.emplace(std::string{entry.name}, id);
+                    item_names.emplace(id, std::string{entry.name});
                 }
             }
         }
@@ -1304,9 +1307,26 @@ auto run_server(const server_run_options &options) -> int {
         refrain::log::info("inventory: minecraft:stone -> {}", stone->second);
     }
     std::set<std::uint64_t> inventory_initialized{};
+    std::set<std::uint64_t> inventory_forced{};
+    std::unordered_map<std::uint64_t, refrain::sim::item_stack> carried_items{};
     std::uint64_t last_inventory_hash{0};
     bool have_inventory_hash{false};
     std::int32_t inventory_state{0};
+    const auto process_container_clicks = [&]() {
+        if (!listener) {
+            return;
+        }
+        for (const auto &click : listener->take_container_clicks()) {
+            if (click.container_id != 0 || click.mode != 0) {
+                continue;
+            }
+            auto &carried{carried_items[click.connection]};
+            static_cast<void>(refrain::server::apply_player_click(
+                store->player().inventory, carried, click.slot, click.button));
+            inventory_forced.insert(click.connection);
+        }
+    };
+
     const auto process_inventory = [&]() {
         if (!listener) {
             return;
@@ -1354,7 +1374,7 @@ auto run_server(const server_run_options &options) -> int {
                 break;
             }
         }
-        if (!changed && !any_new) {
+        if (!changed && !any_new && inventory_forced.empty()) {
             return;
         }
         if (changed) {
@@ -1363,12 +1383,33 @@ auto run_server(const server_run_options &options) -> int {
             ++inventory_state;
         }
         for (const auto id : active_ids) {
-            if (!changed && inventory_initialized.contains(id)) {
+            const auto forced{inventory_forced.contains(id)};
+            if (!changed && !forced && inventory_initialized.contains(id)) {
                 continue;
             }
+            auto carried{refrain::net::item_stack{}};
+            if (const auto stack{carried_items.find(id)};
+                stack != carried_items.end() && stack->second.count > 0) {
+                if (const auto item{item_ids.find(stack->second.item)};
+                    item != item_ids.end()) {
+                    carried = refrain::net::item_stack{
+                        .count = stack->second.count,
+                        .item_id = item->second,
+                    };
+                }
+            }
             listener->send_container_content(id, 0, inventory_state, slots,
-                                             refrain::net::item_stack{});
+                                             carried);
             inventory_initialized.insert(id);
+        }
+        inventory_forced.clear();
+        for (auto iterator = carried_items.begin();
+             iterator != carried_items.end();) {
+            if (!active.contains(iterator->first)) {
+                iterator = carried_items.erase(iterator);
+            } else {
+                ++iterator;
+            }
         }
     };
 
@@ -1532,6 +1573,7 @@ auto run_server(const server_run_options &options) -> int {
             listener->tick();
         }
         process_chunk_streams();
+        process_container_clicks();
         process_inventory();
         store->tick();
         ++ticks_run;

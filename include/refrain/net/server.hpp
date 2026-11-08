@@ -26,6 +26,15 @@ struct session_profile {
 using session_verifier = std::function<result<session_profile>(
     std::string_view name, std::string_view server_hash)>;
 
+/// One player-inventory click observed on a play connection.
+struct container_click_event {
+    std::uint64_t connection{0};
+    std::int32_t container_id{0};
+    std::int16_t slot{0};
+    std::int8_t button{0};
+    std::uint32_t mode{0};
+};
+
 /// One request to (re)center a connection's chunk view. The runtime owns the
 /// world and encodes the missing chunks; the network layer only reports the
 /// viewport and sends the resulting batches.
@@ -99,6 +108,10 @@ class server {
 
     /// Connections currently in play (closed connections excluded).
     [[nodiscard]] auto active_connections() const -> std::vector<std::uint64_t>;
+
+    /// Drain container clicks observed since the previous call.
+    [[nodiscard]] auto take_container_clicks()
+        -> std::vector<container_click_event>;
 
     /// Send a full container snapshot (player inventory uses container 0).
     void send_container_content(std::uint64_t connection,

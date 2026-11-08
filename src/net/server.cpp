@@ -292,6 +292,8 @@ struct server::impl {
     std::deque<queued_packet> inbound{};
     std::mutex chunk_requests_mutex{};
     std::vector<chunk_view_request> chunk_requests{};
+    std::mutex click_mutex{};
+    std::vector<container_click_event> container_clicks{};
     std::thread keepalive_thread{};
 
     [[nodiscard]] auto start() -> status;
@@ -1375,6 +1377,18 @@ void server::send_chunk_batch(std::uint64_t connection, std::int32_t chunk_x,
                       finished, play_cb::encode_chunk_batch_finished);
 }
 
+auto server::take_container_clicks() -> std::vector<container_click_event> {
+    if (!impl_) {
+        return {};
+    }
+    std::vector<container_click_event> clicks;
+    {
+        const std::lock_guard lock{impl_->click_mutex};
+        clicks.swap(impl_->container_clicks);
+    }
+    return clicks;
+}
+
 void server::send_container_content(std::uint64_t connection,
                                     std::int32_t container_id,
                                     std::int32_t state_id,
@@ -1947,6 +1961,26 @@ void server::impl::handle_play(std::uint64_t id,
             return;
         }
         static_cast<void>(packet);
+        return;
+    }
+    case play_sb::container_click::packet_id: {
+        play_sb::container_click packet{};
+        if (auto decoded{play_sb::decode_container_click(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
+            return;
+        }
+        if (packet.container_id != 0) {
+            return;
+        }
+        const std::lock_guard lock{click_mutex};
+        container_clicks.push_back(container_click_event{
+            .connection = id,
+            .container_id = packet.container_id,
+            .slot = packet.slot_num,
+            .button = packet.button_num,
+            .mode = packet.container_input,
+        });
         return;
     }
     case play_sb::set_carried_item::packet_id: {
