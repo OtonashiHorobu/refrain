@@ -108,8 +108,13 @@ auto from_proto_chunk(const worldgen::proto_chunk &source,
         record.block_count = block_count;
         record.palette.reserve(palette.size());
         for (const auto state : palette) {
+            const auto raw_key = states.name(state);
+            std::string key{raw_key};
+            if (const auto parsed = parse_block_state_key(raw_key); parsed) {
+                key = format_block_state_key(*parsed);
+            }
             record.palette.push_back(
-                {.key = std::string{states.name(state)},
+                {.key = std::move(key),
                  .count = 0,
                  .state = static_cast<std::uint32_t>(state)});
         }
