@@ -783,16 +783,9 @@ auto update_template_block(block_state_registry &states, chunk_region &region,
         for (const auto *direction : {"north", "east", "south", "west"}) {
             const auto target = neighbour_pos(pos, direction);
             const auto state = region.state_at(target.x, target.y, target.z);
-            const auto name = std::string{states.name(state)};
-            const auto traits = states.traits(state);
-            const bool solid =
-                traits.blocks_motion && !name.ends_with("_fence") &&
-                !name.ends_with("_stairs") && !name.ends_with("_slab") &&
-                !name.ends_with("_door") && !name.ends_with("_trapdoor") &&
-                !name.ends_with("_fence_gate") && !name.ends_with("_wall") &&
-                name != "minecraft:water";
+            const auto name = state_block_name(states.name(state));
             if (replace(direction,
-                        (is_fence(name) || solid) ? "true" : "false")) {
+                        name.ends_with("_fence") ? "true" : "false")) {
                 changed = true;
             }
         }
@@ -870,14 +863,24 @@ auto update_template_block(block_state_registry &states, chunk_region &region,
             std::string value = "none";
             if (connects) {
                 const auto above = region.state_at(pos.x, pos.y + 1, pos.z);
-                const auto above_name = state_block_name(states.name(above));
-                const bool covers = states.traits(above).blocks_motion &&
-                                    !above_name.ends_with("_wall") &&
-                                    !above_name.ends_with("_fence") &&
-                                    !above_name.ends_with("_stairs") &&
-                                    !above_name.ends_with("_slab") &&
-                                    !above_name.ends_with("_door") &&
-                                    !above_name.ends_with("_trapdoor");
+                const auto above_parsed = parse_state(states.name(above));
+                const auto above_name = above_parsed.name;
+                bool covers = false;
+                if (above_name.ends_with("_wall")) {
+                    for (const auto &[property, property_value] :
+                         above_parsed.properties) {
+                        if (property == name) {
+                            covers = property_value != "none";
+                        }
+                    }
+                } else if (states.traits(above).blocks_motion &&
+                           !above_name.ends_with("_fence") &&
+                           !above_name.ends_with("_stairs") &&
+                           !above_name.ends_with("_slab") &&
+                           !above_name.ends_with("_door") &&
+                           !above_name.ends_with("_trapdoor")) {
+                    covers = true;
+                }
                 value = covers ? "tall" : "low";
             }
             if (replace(name, value)) {
