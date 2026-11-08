@@ -91,10 +91,10 @@ the end selects from its island bands. A fixed-biome source backs reference
 worlds whose preset declares a single biome.
 
 The nether and the end have no carver stage; carvers belong to the overworld
-pipeline. Structure starts run in every dimension: the nether generates
-fortresses and the end generates end cities, next to the overworld structure
-types. A structure start reads the dimension's noise settings through the same
-profile the terrain stages use.
+pipeline. The structure generator runs starts in every dimension: the nether
+generates fortresses and the end generates end cities, next to the overworld
+structure types. A structure start reads the dimension's noise settings through
+the same profile the terrain stages use.
 
 ## Custom feature reference worlds
 
