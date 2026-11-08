@@ -3937,4 +3937,147 @@ auto vegetation_patch_feature::place(feature_context &context,
     distribute(context, random, surface);
     return !surface.empty();
 }
+
+auto root_system_feature::replaceable(feature_context &context,
+                                      block_state_id state) const -> bool {
+    const auto &states = *context.placement.states;
+    if (!replaceable_tag_.empty() && replaceable_tag_.front() == '#') {
+        return states.in_tag(state, replaceable_tag_.substr(1));
+    }
+    return !replaceable_tag_.empty() && states.name(state) == replaceable_tag_;
+}
+
+auto root_system_feature::space_for_tree(feature_context &context,
+                                         const block_pos &pos) const -> bool {
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
+    for (jint i = 1; i <= required_vertical_space_; ++i) {
+        const auto traits =
+            states.traits(region.state_at(pos.x, pos.y + i, pos.z));
+        const bool allowed_water =
+            traits.fluid && i + 1 <= allowed_vertical_water_;
+        if (!traits.air && !allowed_water) {
+            return false;
+        }
+    }
+    if (level_test_distance_ > 0) {
+        const std::array<std::pair<jint, jint>, 4> directions{
+            {{1, 0}, {-1, 0}, {0, 1}, {0, -1}}};
+        for (const auto &[dx, dz] : directions) {
+            const jint x = pos.x + dx * level_test_distance_;
+            const jint z = pos.z + dz * level_test_distance_;
+            if (states
+                    .traits(region.state_at(x, pos.y - max_level_deviation_, z))
+                    .air ||
+                !states
+                     .traits(
+                         region.state_at(x, pos.y + max_level_deviation_, z))
+                     .air) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+auto root_system_feature::place_dirt_and_tree(feature_context &context,
+                                              worldgen_random &random,
+                                              block_pos &working,
+                                              const block_pos &origin) const
+    -> bool {
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
+    for (jint y = 0; y < root_column_max_height_; ++y) {
+        ++working.y;
+        const jint surface =
+            context.placement.height
+                ? context.placement.height(heightmap_kind::world_surface,
+                                           working.x, working.z)
+                : context.placement.chunk->first_available(
+                      heightmap_kind::world_surface, working.x & 15,
+                      working.z & 15);
+        if (surface < working.y) {
+            return false;
+        }
+        if (!allowed_tree_position_ ||
+            !allowed_tree_position_->test(region, states, working) ||
+            !space_for_tree(context, working)) {
+            continue;
+        }
+        const auto below = region.state_at(working.x, working.y - 1, working.z);
+        if (states.name(below) == "minecraft:lava" ||
+            !states.traits(below).blocks_motion) {
+            return false;
+        }
+        if (context.place_by_id &&
+            context.place_by_id(nested_feature_, random, working)) {
+            place_dirt(context, random, origin, origin.y + y);
+            return true;
+        }
+    }
+    return false;
+}
+
+void root_system_feature::place_dirt(feature_context &context,
+                                     worldgen_random &random,
+                                     const block_pos &origin,
+                                     jint target_height) const {
+    auto &region = *context.placement.region;
+    for (jint y = origin.y; y < target_height; ++y) {
+        for (jint attempt = 0; attempt < root_placement_attempts_; ++attempt) {
+            const jint x = origin.x + random.next_int(root_radius_) -
+                           random.next_int(root_radius_);
+            const jint z = origin.z + random.next_int(root_radius_) -
+                           random.next_int(root_radius_);
+            if (!replaceable(context, region.state_at(x, y, z))) {
+                continue;
+            }
+            (void)region.set_block_state(
+                x, y, z,
+                root_state_->get(context.placement, random,
+                                 block_pos{.x = x, .y = y, .z = z}));
+        }
+    }
+}
+
+void root_system_feature::place_roots(feature_context &context,
+                                      worldgen_random &random,
+                                      const block_pos &origin) const {
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
+    for (jint attempt = 0; attempt < hanging_root_placement_attempts_;
+         ++attempt) {
+        const jint x = origin.x + random.next_int(hanging_root_radius_) -
+                       random.next_int(hanging_root_radius_);
+        const jint y = origin.y +
+                       random.next_int(hanging_roots_vertical_span_) -
+                       random.next_int(hanging_roots_vertical_span_);
+        const jint z = origin.z + random.next_int(hanging_root_radius_) -
+                       random.next_int(hanging_root_radius_);
+        if (!states.traits(region.state_at(x, y, z)).air ||
+            !states.traits(region.state_at(x, y + 1, z)).blocks_motion) {
+            continue;
+        }
+        (void)region.set_block_state(
+            x, y, z,
+            hanging_state_->get(context.placement, random,
+                                block_pos{.x = x, .y = y, .z = z}));
+    }
+}
+
+auto root_system_feature::place(feature_context &context,
+                                worldgen_random &random,
+                                const block_pos &origin) const -> bool {
+    auto &region = *context.placement.region;
+    if (!context.placement.states
+             ->traits(region.state_at(origin.x, origin.y, origin.z))
+             .air) {
+        return false;
+    }
+    block_pos working = origin;
+    if (place_dirt_and_tree(context, random, working, origin)) {
+        place_roots(context, random, origin);
+    }
+    return true;
+}
 } // namespace refrain::worldgen::feature

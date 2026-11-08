@@ -899,6 +899,62 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 id, std::make_unique<chorus_plant_feature>(*plant, *flower));
             continue;
         }
+        if (*type == "minecraft:root_system") {
+            const auto *feature_field = document.document.find("feature");
+            if (feature_field == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "root system has no nested feature")};
+            }
+            auto nested = nested_reference(*feature_field);
+            const auto *root_provider =
+                document.document.find("root_state_provider");
+            const auto *hanging_provider =
+                document.document.find("hanging_root_state_provider");
+            const auto *predicate =
+                document.document.find("allowed_tree_position");
+            if (root_provider == nullptr || hanging_provider == nullptr ||
+                predicate == nullptr) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "root system states are missing")};
+            }
+            auto root_state = decode_provider(*root_provider);
+            auto hanging_state = decode_provider(*hanging_provider);
+            auto allowed = decode_block_predicate(*predicate, *states_);
+            if (!nested || !root_state || !hanging_state || !allowed) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "root system states are invalid")};
+            }
+            const auto *replaceable_field =
+                document.document.find("root_replaceable");
+            const std::string replaceable =
+                replaceable_field == nullptr
+                    ? std::string{}
+                    : std::string{replaceable_field->as_string().value_or("")};
+            const auto read_int = [&](const char *key, jint fallback) {
+                const auto *value = document.document.find(key);
+                return value == nullptr
+                           ? fallback
+                           : static_cast<jint>(
+                                 value->as_int64().value_or(fallback));
+            };
+            features_.emplace(
+                id,
+                std::make_unique<root_system_feature>(
+                    std::move(*nested), std::move(*root_state),
+                    std::move(*hanging_state), std::move(*allowed), replaceable,
+                    read_int("required_vertical_space_for_tree", 3),
+                    read_int("level_test_distance", 0),
+                    read_int("max_level_deviation", 0),
+                    read_int("root_radius", 3),
+                    read_int("root_placement_attempts", 20),
+                    read_int("root_column_max_height", 100),
+                    read_int("hanging_root_radius", 3),
+                    read_int("hanging_roots_vertical_span", 2),
+                    read_int("hanging_root_placement_attempts", 20),
+                    read_int("allowed_vertical_water_for_tree", 2)));
+            continue;
+        }
         if (*type == "minecraft:vegetation_patch" ||
             *type == "minecraft:waterlogged_vegetation_patch") {
             const auto *nested = document.document.find("vegetation_feature");

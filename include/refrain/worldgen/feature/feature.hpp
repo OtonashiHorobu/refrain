@@ -561,6 +561,67 @@ class vegetation_patch_feature final : public feature {
     bool waterlogged_{false};
 };
 
+/// `RootSystemFeature`: places rooted dirt and hanging roots around a nested
+/// placed feature.
+class root_system_feature final : public feature {
+  public:
+    root_system_feature(
+        std::string nested_feature, std::unique_ptr<state_provider> root_state,
+        std::unique_ptr<state_provider> hanging_state,
+        std::unique_ptr<block_predicate> allowed_tree_position,
+        std::string replaceable_tag, jint required_vertical_space,
+        jint level_test_distance, jint max_level_deviation, jint root_radius,
+        jint root_placement_attempts, jint root_column_max_height,
+        jint hanging_root_radius, jint hanging_roots_vertical_span,
+        jint hanging_root_placement_attempts, jint allowed_vertical_water)
+        : nested_feature_{std::move(nested_feature)},
+          root_state_{std::move(root_state)},
+          hanging_state_{std::move(hanging_state)},
+          allowed_tree_position_{std::move(allowed_tree_position)},
+          replaceable_tag_{std::move(replaceable_tag)},
+          required_vertical_space_{required_vertical_space},
+          level_test_distance_{level_test_distance},
+          max_level_deviation_{max_level_deviation}, root_radius_{root_radius},
+          root_placement_attempts_{root_placement_attempts},
+          root_column_max_height_{root_column_max_height},
+          hanging_root_radius_{hanging_root_radius},
+          hanging_roots_vertical_span_{hanging_roots_vertical_span},
+          hanging_root_placement_attempts_{hanging_root_placement_attempts},
+          allowed_vertical_water_{allowed_vertical_water} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    [[nodiscard]] auto space_for_tree(feature_context &context,
+                                      const block_pos &pos) const -> bool;
+    [[nodiscard]] auto replaceable(feature_context &context,
+                                   block_state_id state) const -> bool;
+    auto place_dirt_and_tree(feature_context &context, worldgen_random &random,
+                             block_pos &working, const block_pos &origin) const
+        -> bool;
+    void place_dirt(feature_context &context, worldgen_random &random,
+                    const block_pos &origin, jint target_height) const;
+    void place_roots(feature_context &context, worldgen_random &random,
+                     const block_pos &origin) const;
+
+    std::string nested_feature_{};
+    std::unique_ptr<state_provider> root_state_{};
+    std::unique_ptr<state_provider> hanging_state_{};
+    std::unique_ptr<block_predicate> allowed_tree_position_{};
+    std::string replaceable_tag_{};
+    jint required_vertical_space_{3};
+    jint level_test_distance_{0};
+    jint max_level_deviation_{0};
+    jint root_radius_{3};
+    jint root_placement_attempts_{20};
+    jint root_column_max_height_{100};
+    jint hanging_root_radius_{3};
+    jint hanging_roots_vertical_span_{2};
+    jint hanging_root_placement_attempts_{20};
+    jint allowed_vertical_water_{2};
+};
+
 /// `EndGatewayFeature`: the bedrock frame around an end gateway block.
 class end_gateway_feature final : public feature {
   public:
