@@ -414,8 +414,25 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    // CLI --log-level wins; otherwise refrain.toml [logging].level is read
+    // before the full store exists so early startup logs already honor it.
+    std::string effective_log_level{log_level};
+    if (app.get_option("--log-level")->count() == 0) {
+        const auto path{std::filesystem::path{config_dir} / "refrain.toml"};
+        if (std::filesystem::exists(path)) {
+            auto host_config{
+                refrain::core::config::document::parse_file(path.string())};
+            if (!host_config) {
+                fmt::println(stderr, "refrain-server: {}",
+                             host_config.error().message);
+                return 1;
+            }
+            effective_log_level =
+                host_config->get_string("logging.level", log_level);
+        }
+    }
     refrain::log::config cfg{};
-    cfg.console_level = refrain::log::level_from_string(log_level);
+    cfg.console_level = refrain::log::level_from_string(effective_log_level);
     if (!refrain::log::init(cfg)) {
         fmt::println(stderr, "refrain-server: failed to initialize logging");
         return 1;
