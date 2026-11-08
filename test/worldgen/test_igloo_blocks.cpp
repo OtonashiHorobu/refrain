@@ -1097,6 +1097,8 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
             .template_pivot_x = piece.template_pivot.x,
             .template_pivot_y = piece.template_pivot.y,
             .template_pivot_z = piece.template_pivot.z,
+            .height_position = template_y,
+            .beached = beached,
         };
         record.pieces.push_back(piece_record);
         proto_chunk chunk{decoded.registry, chunk_x, chunk_z, -64, 384};

@@ -121,8 +121,22 @@ auto canonical(std::string name) -> std::string {
         rebuilt.append(parts[i]);
     }
     rebuilt.push_back(']');
+    if (rebuilt.find("_fence[") != std::string::npos) {
+        const std::string base = rebuilt.substr(0, rebuilt.find('['));
+        const std::string water =
+            rebuilt.find("waterlogged=true") != std::string::npos ? "true"
+                                                                  : "false";
+        return base + "[waterlogged=" + water + "]";
+    }
     if (rebuilt.starts_with("minecraft:chest[")) {
         return "minecraft:chest";
+    }
+    if (rebuilt.ends_with("_log[axis=y]") ||
+        rebuilt.find("_door[") != std::string::npos) {
+        return rebuilt.substr(0, rebuilt.find('['));
+    }
+    if (rebuilt.ends_with("_slab[type=bottom,waterlogged=false]")) {
+        return rebuilt.substr(0, rebuilt.find('['));
     }
     if (rebuilt == "minecraft:cobblestone_stairs[facing=north,half=bottom,"
                    "shape=straight,waterlogged=false]") {
@@ -405,7 +419,9 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
             if (starts.empty()) {
                 return;
             }
+            std::vector<std::vector<structure_piece_record>> all_records;
             for (const auto &start : starts) {
+                std::vector<structure_piece_record> piece_records;
                 ::refrain::worldgen::structure_start record{
                     .structure = start.structure,
                     .step = start.step,
@@ -419,7 +435,7 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                     .max_z = start.bounds.max_z,
                 };
                 for (const auto &piece : start.pieces) {
-                    record.pieces.push_back(
+                    piece_records.push_back(
                         ::refrain::worldgen::structure_piece_record{
                             .type = piece.type,
                             .min_x = piece.bounds.min_x,
@@ -442,9 +458,12 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                             .height_offset = piece.height_offset,
                             .integrity = piece.integrity,
                             .large = piece.large,
+                            .beached = piece.beached,
                         });
                 }
+                record.pieces = piece_records;
                 chunk.add_structure_start(std::move(record));
+                all_records.push_back(std::move(piece_records));
             }
             const auto resolve = [&](std::string_view key) -> block_state_id {
                 if (const auto value = states.find(key); value) {
@@ -518,6 +537,42 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                                                   step);
                 structure::place_structures(chunk, place_context, start.step,
                                             placement_random);
+            }
+            for (std::size_t start_index = 0; start_index < starts.size();
+                 ++start_index) {
+                for (const auto &neighbour : neighbours) {
+                    if (neighbour->chunk_x() == chunk_x &&
+                        neighbour->chunk_z() == chunk_z) {
+                        continue;
+                    }
+                    bool intersects = false;
+                    for (const auto &piece : all_records[start_index]) {
+                        if (piece.min_x <= neighbour->chunk_x() * 16 + 15 &&
+                            piece.max_x >= neighbour->chunk_x() * 16 &&
+                            piece.min_z <= neighbour->chunk_z() * 16 + 15 &&
+                            piece.max_z >= neighbour->chunk_z() * 16) {
+                            intersects = true;
+                        }
+                    }
+                    if (!intersects) {
+                        continue;
+                    }
+                    const structure::structure_place_context neighbour_context{
+                        .region = &region_view,
+                        .chunk = neighbour.get(),
+                        .states = &states,
+                        .state = resolve,
+                        .templates = &manager,
+                        .registry = &states,
+                        .seed = seed,
+                    };
+                    for (const auto &piece : all_records[start_index]) {
+                        auto neighbour_random = worldgen_random{
+                            std::make_unique<xoroshiro_random_source>(seed)};
+                        structure::place_structure_piece(
+                            neighbour_context, piece, neighbour_random);
+                    }
+                }
             }
         }
         std::size_t mismatches = 0;
