@@ -213,13 +213,11 @@ auto structure_generator::generate(const chunk_pos &pos)
         },
         .height_at =
             [&](jint x, jint z, heightmap_kind kind) {
-                const jint local_x = x - pos.x * 16;
-                const jint local_z = z - pos.z * 16;
-                if (local_x < 0 || local_x > 15 || local_z < 0 ||
-                    local_z > 15) {
-                    return center->min_y();
+                if (auto *column = region.find(x >> 4, z >> 4);
+                    column != nullptr) {
+                    return column->first_available(kind, x & 15, z & 15);
                 }
-                return center->first_available(kind, local_x, local_z);
+                return center->min_y();
             },
         .templates = templates_.get(),
     };
