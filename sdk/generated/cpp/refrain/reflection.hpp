@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 8a20087cf2517c49
+// Schema hash: b6025b8dffb79efe
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2784,6 +2784,15 @@ template <> struct custom_traits<::refrain::services::net_protocol::encoded_pack
     static constexpr std::string_view type_name = "refrain::services::net_protocol::encoded_packet";
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"data", &::refrain::services::net_protocol::encoded_packet::data});
+};
+
+/// Generated RIDL struct 'refrain::services::net_session::session_profile'.
+template <> struct custom_traits<::refrain::services::net_session::session_profile> {
+    static constexpr std::string_view type_name = "refrain::services::net_session::session_profile";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"id", &::refrain::services::net_session::session_profile::id},
+        refrain::reflect::custom_field{"name", &::refrain::services::net_session::session_profile::name},
+        refrain::reflect::custom_field{"properties", &::refrain::services::net_session::session_profile::properties});
 };
 
 /// Generated RIDL struct 'refrain::services::net_translator::translator_descriptor'.

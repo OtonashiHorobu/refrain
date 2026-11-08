@@ -11,6 +11,7 @@
 
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/net_protocol.hpp>
+#include <refrain/contracts/services/net_session.hpp>
 #include <refrain/contracts/services/runtime_abi.h>
 #include <refrain/contracts/services/session_abi.h>
 #include <refrain/contracts/services/session_lifecycle.hpp>
@@ -339,6 +340,64 @@ struct runtime_provider {
                         *static_cast<const refrain_services_net_protocol_vtable
                                          *>(protocol_api->vtable),
                         protocol_api->self))};
+            const auto session_auth{provider->host->services().active_provider(
+                "refrain:net.session")};
+            if (session_auth && session_auth->instance != nullptr) {
+                const auto *session_api{
+                    static_cast<const refrain::mod::provider_api *>(
+                        session_auth->instance)};
+                if (session_api->vtable != nullptr) {
+                    const auto *session_vtable{static_cast<
+                        const refrain_services_net_session_vtable *>(
+                        session_api->vtable)};
+                    void *session_self{session_api->self};
+                    options.verify_session = [session_vtable, session_self](
+                                                 std::string_view name,
+                                                 std::string_view server_hash)
+                        -> refrain::result<refrain::net::session_profile> {
+                        const refrain::services::net_session::provider session{
+                            *session_vtable, session_self};
+                        auto profile{refrain::services::net_session::
+                                         make_session_profile()};
+                        const auto joined{session.joined_profile(
+                            name, server_hash, {}, profile)};
+                        if (!joined) {
+                            auto code{refrain::error_code::io_error};
+                            switch (joined.error()) {
+                            case refrain::services::net_session::session_error::
+                                invalid_argument:
+                                code = refrain::error_code::invalid_argument;
+                                break;
+                            case refrain::services::net_session::session_error::
+                                not_joined:
+                                code = refrain::error_code::not_found;
+                                break;
+                            case refrain::services::net_session::session_error::
+                                malformed_profile:
+                                code = refrain::error_code::parse_error;
+                                break;
+                            default:
+                                break;
+                            }
+                            return std::unexpected{refrain::make_error(
+                                code, "session server rejected the login")};
+                        }
+                        auto id{refrain::net::uuid::parse(
+                            refrain::contracts::as_string_view(profile.id))};
+                        if (!id) {
+                            return std::unexpected{refrain::make_error(
+                                refrain::error_code::parse_error,
+                                "session server returned an invalid profile")};
+                        }
+                        return refrain::net::session_profile{
+                            .id = *id,
+                            .name =
+                                std::string{refrain::contracts::as_string_view(
+                                    profile.name)},
+                        };
+                    };
+                }
+            }
             const auto transport{provider->host->services().active_provider(
                 "refrain:transport", transport_instance)};
             if (transport) {

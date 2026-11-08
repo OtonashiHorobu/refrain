@@ -1,0 +1,44 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// Optional authentication/session service. Offline mode does not require a
+// provider; online mode resolves the Mojang `hasJoined` profile through it.
+
+module refrain::services::net_session;
+version 1.0.0;
+
+import refrain::core;
+
+enum session_error : u32 {
+    invalid_argument = 1,
+    not_joined = 2,
+    unavailable = 3,
+    malformed_profile = 4,
+}
+
+struct session_profile {
+    /// Canonical UUID string (`8-4-4-4-12`).
+    string id;
+    string name;
+    /// Borrowed JSON array of profile properties; empty means none.
+    bytes properties;
+}
+
+service net_session : 1.0.0 {
+    side = server;
+    thread = any;
+    composition = exclusive;
+    provides = [ "refrain:net.session" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "offline-profile", "online-profile" ];
+
+    #[thread(any)] #[can_fail]
+    fn offline_profile(string name, out session_profile profile)
+        -> result<void, session_error>;
+
+    #[thread(worker)] #[can_fail]
+    fn joined_profile(string name, string server_hash, string remote_ip,
+                      out session_profile profile)
+        -> result<void, session_error>;
+}
