@@ -1252,6 +1252,36 @@ void server::impl::send_play_login(std::uint64_t id) {
         send_packet(id, play_cb::game_event::packet_id, event,
                     play_cb::encode_game_event);
     }
+    {
+        play_cb::update_recipes recipes{};
+        send_packet(id, play_cb::update_recipes::packet_id, recipes,
+                    play_cb::encode_update_recipes);
+    }
+    {
+        play_cb::server_data data{
+            .motd = {.text = config.status.description},
+            .icon_bytes = std::nullopt,
+        };
+        send_packet(id, play_cb::server_data::packet_id, data,
+                    play_cb::encode_server_data);
+    }
+    {
+        play_cb::set_health health{
+            .health = 20.0F, .food = 20, .saturation = 5.0F};
+        send_packet(id, play_cb::set_health::packet_id, health,
+                    play_cb::encode_set_health);
+    }
+    {
+        play_cb::set_experience experience{
+            .experience_progress = 0.0F,
+            .experience_level = 0,
+            .total_experience = 0,
+        };
+        send_packet(id, play_cb::set_experience::packet_id, experience,
+                    play_cb::encode_set_experience);
+    }
+    send_commands(id);
+    announce_join(id);
     send_initial_chunks(id);
     send_keepalive(id);
 }

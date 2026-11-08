@@ -119,6 +119,29 @@ suite bot_tests = [] {
             }
         }
 
+        auto capture_report{net::run_bot(net::bot_options{
+            .target = {.host = "127.0.0.1", .port = port},
+            .username = "CaptureBot",
+            .timeout = std::chrono::milliseconds{5000},
+            .linger = std::chrono::milliseconds{200},
+            .capture = true,
+        })};
+        expect(static_cast<bool>(capture_report));
+        if (capture_report) {
+            const auto has_id = [&](std::uint32_t id) {
+                for (const auto &packet : capture_report->capture) {
+                    if (packet.id == id) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            expect(has_id(16U));  // commands
+            expect(has_id(71U));  // player_info_update
+            expect(has_id(88U));  // server_data
+            expect(has_id(106U)); // set_health
+            expect(has_id(136U)); // update_recipes
+        }
         ticking.store(false, std::memory_order_relaxed);
         ticker.join();
         (*server)->stop();
