@@ -78,3 +78,26 @@ The generator needs a JDK (26.3 requires Java 25 or newer) and a locally owned
 `server.jar`; it never ships game data. The world it writes is a normal
 vanilla world directory under `--output`, with the region files in
 `world/dimensions/minecraft/overworld/region/`.
+
+The structure oracle keeps the normal world preset and generates structures
+for a fixed biome. `--force-load-box` moves the force-loaded area when the
+structure candidates are not near the origin:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:plains --settle 60 \
+    --force-load-box -272 -592 -240 -560 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2portal
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_FULL_STAGE_REGION=/tmp/t2portal/world/dimensions/minecraft/overworld/region/r.-1.-2.mca \
+REFRAIN_FULL_STAGE_CHUNK_X=-16 REFRAIN_FULL_STAGE_CHUNK_Z=-36 \
+REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:plains \
+    ./build/Release/bin/refrain-tests "fill and structure placement reproduce the reference chunk"
+```
+
+`REFRAIN_VANILLA_STRUCTURES` points at a directory containing the extracted
+`<namespace>/structure/...nbt` templates. The full-stage test fills the chunk
+and its neighbours, generates the starts, places the pieces and compares both
+blocks and the final heightmaps.
