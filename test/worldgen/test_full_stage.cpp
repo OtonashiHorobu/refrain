@@ -586,6 +586,7 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                     neighbours.push_back(std::move(neighbour));
                 }
             }
+            std::unordered_map<std::string, jint> adjusted_heights;
             const structure::structure_place_context place_context{
                 .region = &region_view,
                 .chunk = &chunk,
@@ -594,6 +595,7 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 .templates = &manager,
                 .registry = &states,
                 .seed = seed,
+                .adjusted_heights = &adjusted_heights,
             };
             worldgen_random decoration_random{
                 std::make_unique<xoroshiro_random_source>(seed)};

@@ -1049,7 +1049,23 @@ void place_shipwreck_piece(const structure_place_context &context,
     settings.processors = {&ignore};
     block_pos origin{
         .x = piece.template_x, .y = piece.template_y, .z = piece.template_z};
-    if (piece.height_position < 0 && templ.size_x <= 32 && templ.size_y <= 32) {
+    const std::string height_key = piece.template_id + ":" +
+                                   std::to_string(piece.template_x) + "," +
+                                   std::to_string(piece.template_y) + "," +
+                                   std::to_string(piece.template_z) + "," +
+                                   std::to_string(piece.template_rotation) +
+                                   "," + std::to_string(piece.template_mirror);
+    if (context.adjusted_heights != nullptr) {
+        if (const auto found = context.adjusted_heights->find(height_key);
+            found != context.adjusted_heights->end()) {
+            origin.y = found->second;
+        }
+    }
+    if (context.adjusted_heights != nullptr &&
+        context.adjusted_heights->contains(height_key)) {
+        // Height already resolved by the owner section.
+    } else if (piece.height_position < 0 && templ.size_x <= 32 &&
+               templ.size_y <= 32) {
         const auto kind = piece.beached ? heightmap_kind::world_surface_wg
                                         : heightmap_kind::ocean_floor_wg;
         const auto height_at = [&](jint x, jint z) -> std::optional<jint> {

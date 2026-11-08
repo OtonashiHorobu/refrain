@@ -230,6 +230,7 @@ auto structure_generator::generate(const chunk_pos &pos)
         center->add_structure_start(std::move(record));
     }
 
+    std::unordered_map<std::string, jint> adjusted_heights;
     const structure_place_context place_context{
         .region = &region,
         .chunk = center,
@@ -238,6 +239,7 @@ auto structure_generator::generate(const chunk_pos &pos)
         .templates = templates_.get(),
         .registry = &states_,
         .seed = config_.seed,
+        .adjusted_heights = &adjusted_heights,
     };
     worldgen_random decoration{
         std::make_unique<xoroshiro_random_source>(config_.seed)};
@@ -285,6 +287,7 @@ auto structure_generator::generate(const chunk_pos &pos)
                 .templates = templates_.get(),
                 .registry = &states_,
                 .seed = config_.seed,
+                .adjusted_heights = &adjusted_heights,
             };
             for (const auto &piece : records[start_index]) {
                 worldgen_random random{

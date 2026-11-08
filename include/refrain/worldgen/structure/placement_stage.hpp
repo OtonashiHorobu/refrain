@@ -9,8 +9,10 @@
 
 #include <refrain/worldgen/chunk/chunk_region.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
+
 #include <refrain/worldgen/core/rng.hpp>
 #include <refrain/worldgen/structure/template.hpp>
+#include <unordered_map>
 
 #include <functional>
 #include <string_view>
@@ -31,6 +33,8 @@ struct structure_place_context {
     /// The chunk's `worldgen_region_random` stream, consumed by pieces that
     /// read `level.getRandom()`.
     worldgen_random *level_random{nullptr};
+    /// Per-piece adjusted heights shared by the owner and neighbour sections.
+    std::unordered_map<std::string, jint> *adjusted_heights{nullptr};
 };
 
 /// Places one already generated piece into `context.chunk`. Template and
