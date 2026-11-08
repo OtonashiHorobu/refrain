@@ -141,7 +141,8 @@ auto canonical(std::string name) -> std::string {
         const auto comma = body.find(',');
         const std::string part{body.substr(0, comma)};
         const bool default_property =
-            part == "waterlogged=false" || (fluid && part == "level=0") ||
+            part == "waterlogged=false" || part == "hanging=false" ||
+            (fluid && part == "level=0") ||
             (stairs && (part == "facing=north" || part == "half=bottom" ||
                         part == "shape=straight")) ||
             (slab && part == "type=bottom") ||
@@ -190,10 +191,9 @@ auto canonical(std::string name) -> std::string {
         rebuilt == "minecraft:ladder[facing=north]") {
         return base;
     }
-    if (rebuilt.ends_with("_log[axis=y]") ||
-        rebuilt.ends_with("_pillar[axis=y]") ||
+    if (rebuilt == base + "[axis=y]" ||
         rebuilt.find("_door[") != std::string::npos) {
-        return rebuilt.substr(0, rebuilt.find('['));
+        return base;
     }
     return rebuilt;
 }
@@ -520,6 +520,12 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                                             "minecraft/structure/village");
         test_support::prime_template_states(states, templates_root,
                                             "minecraft/structure/end_city");
+        if (dimension == dimension_kind::nether) {
+            test_support::prime_template_states(states, templates_root,
+                                                "minecraft/structure/bastion");
+            test_support::prime_template_states(
+                states, templates_root, "minecraft/structure/nether_fossils");
+        }
         proto_chunk chunk{states, chunk_x, chunk_z, profile.min_y,
                           profile.height};
         chunk.set_status(chunk_status::biomes);
@@ -609,6 +615,15 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
             }
             return found->second->first_available(kind, x & 15, z & 15);
         };
+        const auto block_at = [&](jint x, jint y, jint z) -> block_state_id {
+            const chunk_pos pos{.x = x >> 4, .z = z >> 4};
+            (void)height_at(x, z, heightmap_kind::world_surface_wg);
+            const auto found = height_cache.find(pos);
+            if (found == height_cache.end()) {
+                return states.air();
+            }
+            return found->second->state_at(x & 15, y, z & 15);
+        };
 
         {
             const auto data = structure::load_structure_data(data_root);
@@ -629,12 +644,16 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                 .min_y = profile.min_y,
                 .world_height = profile.height,
                 .sea_level = settings->sea_level,
+                .generation_min_y = generation_min_y,
+                .generation_height = generation_height,
                 .fixed_biome = true,
                 .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
                 .biome_name = [&biome](std::uint16_t) -> std::string_view {
                     return biome;
                 },
                 .height_at = height_at,
+                .block_at = block_at,
+                .states = &states,
                 .templates = &manager,
             };
             // The beardifier sees every start whose adapted bounding box

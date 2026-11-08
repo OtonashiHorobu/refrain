@@ -441,7 +441,8 @@ class jigsaw_placer {
     void expand();
 
   private:
-    void try_placing_children(std::size_t source_index, jint depth);
+    void try_placing_children(std::size_t source_index, jint depth,
+                              const std::shared_ptr<free_space> &context_free);
 
     [[nodiscard]] auto try_place_target(
         std::size_t source_index, jint depth,
@@ -477,7 +478,7 @@ void jigsaw_placer::expand() {
     if (pieces_.empty()) {
         return;
     }
-    try_placing_children(0, 0);
+    try_placing_children(0, 0, context_free_);
     while (!placing_.empty()) {
         auto queue = placing_.begin();
         auto state = queue->second.front();
@@ -485,11 +486,13 @@ void jigsaw_placer::expand() {
         if (queue->second.empty()) {
             placing_.erase(queue);
         }
-        try_placing_children(state.piece, state.depth);
+        try_placing_children(state.piece, state.depth, state.free);
     }
 }
 
-void jigsaw_placer::try_placing_children(std::size_t source_index, jint depth) {
+void jigsaw_placer::try_placing_children(
+    std::size_t source_index, jint depth,
+    const std::shared_ptr<free_space> &context_free) {
     const auto source_bounds = pieces_[source_index].bounds;
     const auto source_position = pieces_[source_index].template_origin;
     const auto source_rotation =
@@ -526,7 +529,10 @@ void jigsaw_placer::try_placing_children(std::size_t source_index, jint depth) {
             source_jigsaw.position.y - source_box_y;
         const bool attach_inside =
             box_contains(source_bounds, target_jigsaw_pos);
-        std::shared_ptr<free_space> children_free = context_free_;
+        // A piece placed inside its parent inherits the parent's box as the
+        // space its children must fit in; every other piece inherits the
+        // context that was current when it was queued.
+        std::shared_ptr<free_space> children_free = context_free;
         if (attach_inside) {
             if (!source_free) {
                 source_free = std::make_shared<free_space>();
@@ -776,8 +782,14 @@ auto jigsaw_start(const chunk_pos &chunk,
     const auto &config = *context.structure->jigsaw;
     worldgen_random random{std::make_unique<legacy_random_source>(0)};
     random.set_large_feature_seed(context.seed, chunk.x, chunk.z);
+    const jint provider_min = context.generation_height > 0
+                                  ? context.generation_min_y
+                                  : context.min_y;
+    const jint provider_height = context.generation_height > 0
+                                     ? context.generation_height
+                                     : context.world_height;
     const jint height = config.start_height.sample(
-        random, context.min_y, context.world_height, context.sea_level);
+        random, provider_min, provider_height, context.sea_level);
     const block_pos start_position{
         .x = chunk.x * 16, .y = height, .z = chunk.z * 16};
     const auto center_rotation =

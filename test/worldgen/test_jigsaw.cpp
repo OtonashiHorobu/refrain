@@ -375,6 +375,47 @@ auto write_connector_template(std::string_view root, std::string_view name,
     return written.has_value();
 }
 
+struct jigsaw_spec {
+    jint x{0};
+    jint y{0};
+    jint z{0};
+    std::string orientation{};
+    data::nbt::compound tag{};
+};
+
+auto write_multi_jigsaw_template(std::string_view root, std::string_view name,
+                                 jint size_x, jint size_y, jint size_z,
+                                 const std::vector<jigsaw_spec> &jigsaws)
+    -> bool {
+    data::nbt::compound root_tag;
+    root_tag["size"] = ints({size_x, size_y, size_z});
+    auto palette = data::nbt::make_list(data::nbt::tag_type::compound);
+    (void)palette.push(
+        data::nbt::value{named_palette_entry("minecraft:stone")});
+    for (const auto &jigsaw : jigsaws) {
+        data::nbt::compound properties;
+        properties["orientation"] =
+            data::nbt::value{std::string{jigsaw.orientation}};
+        (void)palette.push(data::nbt::value{
+            named_palette_entry("minecraft:jigsaw", std::move(properties))});
+    }
+    root_tag["palette"] = std::move(palette);
+    auto blocks = data::nbt::make_list(data::nbt::tag_type::compound);
+    for (std::size_t index = 0; index < jigsaws.size(); ++index) {
+        const auto &jigsaw = jigsaws[index];
+        (void)blocks.push(data::nbt::value{
+            palette_block({jigsaw.x, jigsaw.y, jigsaw.z},
+                          static_cast<jint>(index) + 1, jigsaw.tag)});
+    }
+    root_tag["blocks"] = std::move(blocks);
+    const auto directory = std::filesystem::path{root} / "test" / "structure";
+    std::filesystem::create_directories(directory);
+    return data::nbt::write_file(
+               (directory / (std::string{name} + ".nbt")).string(),
+               data::nbt::value{root_tag}, "", data::nbt::compression::gzip)
+        .has_value();
+}
+
 auto connector(structure::jigsaw_front front, structure::jigsaw_front top,
                bool rollable, std::string target,
                std::string name = "test:connector")
@@ -602,6 +643,144 @@ suite<"worldgen/jigsaw"> jigsaw_tests = [] {
         expect(rejected.has_value());
         if (rejected) {
             expect(rejected->pieces.size() == 1);
+        }
+    };
+
+    "a child of an inside piece expands against the parent free box"_test = [] {
+        const auto directory =
+            std::filesystem::path{core::io::temp_directory()} /
+            "refrain-jigsaw-inherited-free";
+        std::filesystem::remove_all(directory);
+        expect(write_multi_jigsaw_template(
+            directory.string(), "parent", 7, 7, 7,
+            {jigsaw_spec{.x = 3,
+                         .y = 0,
+                         .z = 3,
+                         .orientation = "up_north",
+                         .tag = jigsaw_nbt("test:source", "test:child",
+                                           "test:children", "aligned")}}));
+        expect(write_multi_jigsaw_template(
+            directory.string(), "child", 3, 3, 3,
+            {jigsaw_spec{.x = 1,
+                         .y = 0,
+                         .z = 1,
+                         .orientation = "down_north",
+                         .tag = jigsaw_nbt("test:child", "test:source",
+                                           "test:empty", "aligned")},
+             jigsaw_spec{.x = 2,
+                         .y = 2,
+                         .z = 2,
+                         .orientation = "east_up",
+                         .tag = jigsaw_nbt("test:child_exit", "test:grandchild",
+                                           "test:grandchildren", "aligned")}}));
+        expect(write_multi_jigsaw_template(
+            directory.string(), "grandchild", 1, 1, 1,
+            {jigsaw_spec{.x = 0,
+                         .y = 0,
+                         .z = 0,
+                         .orientation = "west_up",
+                         .tag = jigsaw_nbt("test:grandchild", "test:child_exit",
+                                           "test:empty", "aligned")}}));
+
+        block_state_registry states;
+        (void)states.intern("minecraft:air", {.air = true});
+        for (const auto *key :
+             {"minecraft:stone", "minecraft:jigsaw[orientation=up_north]",
+              "minecraft:jigsaw[orientation=down_north]",
+              "minecraft:jigsaw[orientation=east_up]",
+              "minecraft:jigsaw[orientation=west_up]"}) {
+            expect(structure::resolve_block_state(states, key) !=
+                   no_block_state);
+        }
+        structure::structure_template_manager manager{directory.string(),
+                                                      states};
+        structure::structure_data_set data;
+        const auto add_pool =
+            [&data](std::string id, std::string fallback,
+                    std::vector<structure::pool_element> elements) {
+                structure::jigsaw_template_pool pool;
+                pool.id = id;
+                pool.fallback = std::move(fallback);
+                for (auto &element : elements) {
+                    pool.raw_elements.push_back(
+                        structure::weighted_pool_element{
+                            .element = std::move(element), .weight = 1});
+                }
+                pool.build_index();
+                data.template_pools.insert_or_assign(std::move(id),
+                                                     std::move(pool));
+            };
+        const auto single = [](std::string template_id) {
+            return structure::pool_element{
+                .kind = structure::pool_element_kind::single,
+                .projection = structure::pool_projection::rigid,
+                .template_id = std::move(template_id)};
+        };
+        add_pool("test:start", "test:empty", {single("test:parent")});
+        add_pool("test:children", "test:empty", {single("test:child")});
+        add_pool("test:grandchildren", "test:empty",
+                 {single("test:grandchild")});
+        add_pool("test:empty", "test:empty", {});
+        structure::structure_document document_value{
+            .id = "test:jigsaw",
+            .type = "minecraft:jigsaw",
+            .step = "surface_structures",
+            .jigsaw =
+                structure::jigsaw_structure_config{
+                    .start_pool = "test:start",
+                    .max_depth = 2,
+                    .use_expansion_hack = false,
+                    .max_distance_horizontal = 80,
+                    .max_distance_vertical = 80,
+                },
+        };
+        document_value.jigsaw->start_height = structure::height_provider{
+            .type = structure::height_provider::kind::constant,
+            .min = structure::height_bound{.value = 0},
+            .max = structure::height_bound{.value = 0},
+        };
+        data.structures.emplace("test:jigsaw", document_value);
+        const auto start = structure::jigsaw_start(
+            chunk_pos{.x = 0, .z = 0},
+            structure::jigsaw_generation_context{
+                .structure = &data.structures.at("test:jigsaw"),
+                .data = &data,
+                .templates = &manager,
+                .seed = 7,
+                .min_y = -64,
+                .world_height = 384,
+                .sea_level = 63,
+                .height_at = [](jint, jint, heightmap_kind) { return 0; },
+            });
+        expect(start.has_value());
+        if (!start) {
+            return;
+        }
+        expect(start->pieces.size() == 3U);
+        if (start->pieces.size() == 3U) {
+            expect(start->pieces[1].jigsaw.has_value());
+            expect(start->pieces[2].jigsaw.has_value());
+            if (start->pieces[1].jigsaw && start->pieces[2].jigsaw) {
+                expect(start->pieces[1].jigsaw->element.template_id ==
+                       "test:child");
+                expect(start->pieces[2].jigsaw->element.template_id ==
+                       "test:grandchild");
+                const auto &grand = start->pieces[2].bounds;
+                const auto &child_bounds = start->pieces[1].bounds;
+                const auto &parent_bounds = start->pieces[0].bounds;
+                expect(grand.min_x >= parent_bounds.min_x &&
+                       grand.max_x <= parent_bounds.max_x &&
+                       grand.min_y >= parent_bounds.min_y &&
+                       grand.max_y <= parent_bounds.max_y &&
+                       grand.min_z >= parent_bounds.min_z &&
+                       grand.max_z <= parent_bounds.max_z);
+                expect(grand.min_x < child_bounds.min_x ||
+                       grand.max_x > child_bounds.max_x ||
+                       grand.min_y < child_bounds.min_y ||
+                       grand.max_y > child_bounds.max_y ||
+                       grand.min_z < child_bounds.min_z ||
+                       grand.max_z > child_bounds.max_z);
+            }
         }
     };
 

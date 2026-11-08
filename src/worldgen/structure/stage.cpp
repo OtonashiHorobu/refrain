@@ -399,6 +399,30 @@ auto try_generate(const structure_start_context &context,
         }
         return start;
     }
+    if (structure.type == "minecraft:nether_fossil") {
+        if (context.templates == nullptr || !context.block_at ||
+            context.states == nullptr) {
+            return std::nullopt;
+        }
+        return nether_fossil_start(
+            chunk, nether_fossil_generation_context{
+                       .structure = &structure,
+                       .templates = context.templates,
+                       .states = context.states,
+                       .block_at = context.block_at,
+                       .seed = context.seed,
+                       .min_y = context.min_y,
+                       .world_height = context.world_height,
+                       .sea_level = context.sea_level,
+                       .generation_min_y = context.generation_min_y,
+                       .generation_height = context.generation_height,
+                       .valid_biome =
+                           [&](const block_pos &pos) {
+                               return biome_allowed(context, structure, pos.x,
+                                                    pos.y, pos.z);
+                           },
+                   });
+    }
     if (structure.type == "minecraft:fortress") {
         if (!biome_allowed(context, structure, chunk.x * 16, 64,
                            chunk.z * 16)) {

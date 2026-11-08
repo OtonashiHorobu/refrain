@@ -481,6 +481,60 @@ auto decode_pool_alias_binding(const data::json::value &document)
     return decode_alias_binding(document);
 }
 
+auto decode_height_provider(const data::json::value &document)
+    -> result<height_provider> {
+    if (const auto constant = decode_height_bound(document); constant) {
+        return height_provider{
+            .type = height_provider::kind::constant,
+            .min = *constant,
+            .max = *constant,
+        };
+    }
+    const auto type = string_field(document, "type");
+    if (!type) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "height has no type")};
+    }
+    if (*type == "minecraft:constant") {
+        const auto *value = document.find("value");
+        if (value == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "constant height has no value")};
+        }
+        const auto bound = decode_height_bound(*value);
+        if (!bound) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "constant height is invalid")};
+        }
+        return height_provider{
+            .type = height_provider::kind::constant,
+            .min = *bound,
+            .max = *bound,
+        };
+    }
+    if (*type == "minecraft:uniform") {
+        const auto *min = document.find("min_inclusive");
+        const auto *max = document.find("max_inclusive");
+        if (min == nullptr || max == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "uniform height is incomplete")};
+        }
+        const auto low = decode_height_bound(*min);
+        const auto high = decode_height_bound(*max);
+        if (!low || !high) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "uniform height is invalid")};
+        }
+        return height_provider{
+            .type = height_provider::kind::uniform,
+            .min = *low,
+            .max = *high,
+        };
+    }
+    return std::unexpected{
+        make_error(error_code::unsupported, "unsupported height provider")};
+}
+
 auto decode_jigsaw_structure_config(const data::json::value &document)
     -> result<jigsaw_structure_config> {
     jigsaw_structure_config config;
@@ -509,57 +563,11 @@ auto decode_jigsaw_structure_config(const data::json::value &document)
         return std::unexpected{
             make_error(error_code::parse_error, "jigsaw has no start height")};
     }
-    if (const auto constant = decode_height_bound(*height); constant) {
-        config.start_height = height_provider{
-            .type = height_provider::kind::constant,
-            .min = *constant,
-            .max = *constant,
-        };
-    } else {
-        const auto type = string_field(*height, "type");
-        if (!type) {
-            return std::unexpected{make_error(error_code::parse_error,
-                                              "start height has no type")};
-        }
-        if (*type == "minecraft:constant") {
-            const auto *value = height->find("value");
-            if (value == nullptr) {
-                return std::unexpected{make_error(
-                    error_code::parse_error, "constant height has no value")};
-            }
-            const auto bound = decode_height_bound(*value);
-            if (!bound) {
-                return std::unexpected{make_error(
-                    error_code::parse_error, "constant height is invalid")};
-            }
-            config.start_height = height_provider{
-                .type = height_provider::kind::constant,
-                .min = *bound,
-                .max = *bound,
-            };
-        } else if (*type == "minecraft:uniform") {
-            const auto *min = height->find("min_inclusive");
-            const auto *max = height->find("max_inclusive");
-            if (min == nullptr || max == nullptr) {
-                return std::unexpected{make_error(
-                    error_code::parse_error, "uniform height is incomplete")};
-            }
-            const auto low = decode_height_bound(*min);
-            const auto high = decode_height_bound(*max);
-            if (!low || !high) {
-                return std::unexpected{make_error(error_code::parse_error,
-                                                  "uniform height is invalid")};
-            }
-            config.start_height = height_provider{
-                .type = height_provider::kind::uniform,
-                .min = *low,
-                .max = *high,
-            };
-        } else {
-            return std::unexpected{make_error(
-                error_code::unsupported, "unsupported start height provider")};
-        }
+    auto provider = decode_height_provider(*height);
+    if (!provider) {
+        return std::unexpected{provider.error()};
     }
+    config.start_height = std::move(*provider);
     const auto *distance = document.find("max_distance_from_center");
     if (distance != nullptr) {
         if (const auto number = distance->as_int64(); number) {

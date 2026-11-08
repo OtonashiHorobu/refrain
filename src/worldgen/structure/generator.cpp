@@ -237,18 +237,34 @@ auto structure_generator::generate(const chunk_pos &pos)
         return found->second->first_available(kind, x & 15, z & 15);
     };
 
+    const auto block_at = [&](jint x, jint y, jint z) -> block_state_id {
+        const chunk_pos target{.x = x >> 4, .z = z >> 4};
+        auto found = height_cache.find(target);
+        if (found == height_cache.end()) {
+            (void)height_at(x, z, heightmap_kind::world_surface_wg);
+            found = height_cache.find(target);
+            if (found == height_cache.end()) {
+                return air_state_;
+            }
+        }
+        return found->second->state_at(x & 15, y, z & 15);
+    };
     const structure_start_context start_context{
         .seed = config_.seed,
         .data = &data_,
         .min_y = min_y_,
         .world_height = height_,
         .sea_level = sea_level_,
+        .generation_min_y = generation_min_y_,
+        .generation_height = generation_height_,
         .fixed_biome = true,
         .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
         .biome_name = [this](std::uint16_t) -> std::string_view {
             return config_.biome;
         },
         .height_at = height_at,
+        .block_at = block_at,
+        .states = &states_,
         .templates = templates_.get(),
     };
     // The beardifier of the target chunk includes starts up to eight chunks

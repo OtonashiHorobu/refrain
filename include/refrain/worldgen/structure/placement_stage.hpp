@@ -73,6 +73,12 @@ void place_end_city_piece(const structure_place_context &context,
                           const structure_piece_record &piece,
                           worldgen_random &random);
 
+/// Places one nether fossil template: air and structure blocks are ignored,
+/// and the piece may add a dried ghast at its floor.
+void place_nether_fossil_piece(const structure_place_context &context,
+                               const structure_piece_record &piece,
+                               worldgen_random &random);
+
 /// Places one `minecraft:jigsaw` piece: every element in the piece's element
 /// tree is placed at the piece origin with its processors and projection.
 void place_jigsaw_piece(const structure_place_context &context,

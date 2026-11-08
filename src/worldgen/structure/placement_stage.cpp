@@ -2533,6 +2533,85 @@ void place_jigsaw_element(const structure_place_context &context,
 
 } // namespace
 
+void place_nether_fossil_piece(const structure_place_context &context,
+                               const structure_piece_record &piece,
+                               worldgen_random &random) {
+    (void)random;
+    if (context.templates == nullptr || context.registry == nullptr ||
+        context.region == nullptr || context.chunk == nullptr ||
+        context.states == nullptr || !context.state) {
+        return;
+    }
+    const auto &templ = context.templates->get_or_create(piece.template_id);
+    if (templ.palettes.empty()) {
+        return;
+    }
+    const std::string marker = "fossil:" + piece.template_id + ":" +
+                               std::to_string(piece.template_x) + ":" +
+                               std::to_string(piece.template_y) + ":" +
+                               std::to_string(piece.template_z);
+    if (context.adjusted_heights != nullptr) {
+        if (context.adjusted_heights->contains(marker)) {
+            return;
+        }
+        (*context.adjusted_heights)[marker] = 1;
+    }
+    const block_pos origin{
+        .x = piece.template_x, .y = piece.template_y, .z = piece.template_z};
+    const template_transform transform{
+        .mirror = template_mirror::none,
+        .rotation = static_cast<template_rotation>(piece.template_rotation),
+        .pivot = block_pos{},
+    };
+    // The fossil piece ignores air and structure blocks, and writes its whole
+    // template before the structure-block and jigsaw passes.
+    block_ignore_processor ignore{
+        std::vector<std::string>{"minecraft:air", "minecraft:structure_block"}};
+    template_place_settings settings{};
+    settings.transform = transform;
+    settings.processors = {&ignore};
+    settings.liquids = liquid_settings::apply_waterlogging;
+    settings.level_seed = context.seed;
+    (void)place_template(*context.region, *context.registry, templ, origin,
+                         settings);
+
+    const auto bounds = template_bounding_box(templ, transform, origin);
+    const block_pos center{
+        .x = bounds.min_x + (bounds.max_x - bounds.min_x + 1) / 2,
+        .y = bounds.min_y + (bounds.max_y - bounds.min_y + 1) / 2,
+        .z = bounds.min_z + (bounds.max_z - bounds.min_z + 1) / 2,
+    };
+    auto factory = new_positional_factory(algorithm::legacy, context.seed);
+    auto positional = factory->at(center.x, center.y, center.z);
+    if (positional->next_float() >= 0.5F) {
+        return;
+    }
+    const jint x =
+        bounds.min_x + positional->next_int(bounds.max_x - bounds.min_x + 1);
+    const jint y = bounds.min_y;
+    const jint z =
+        bounds.min_z + positional->next_int(bounds.max_z - bounds.min_z + 1);
+    const auto existing = context.region->state_at(x, y, z);
+    if (!is_air_block_name(state_block_name(context.states->name(existing)))) {
+        return;
+    }
+    const auto rotation =
+        static_cast<template_rotation>(positional->next_int(4));
+    const auto default_state =
+        context.state("minecraft:dried_ghast[facing=north,hydration=0,"
+                      "waterlogged=false]");
+    if (default_state == no_block_state) {
+        return;
+    }
+    const auto state = transform_state(*context.registry, default_state,
+                                       template_transform{
+                                           .mirror = template_mirror::none,
+                                           .rotation = rotation,
+                                           .pivot = block_pos{},
+                                       });
+    (void)context.region->set_block_state(x, y, z, state);
+}
+
 void place_jigsaw_piece(const structure_place_context &context,
                         const structure_piece_record &piece,
                         worldgen_random &random) {
@@ -2581,6 +2660,8 @@ void place_structure_piece(const structure_place_context &context,
         place_fortress_piece(context, piece, random);
     } else if (piece.type == "minecraft:end_city") {
         place_end_city_piece(context, piece, random);
+    } else if (piece.type == "minecraft:nether_fossil") {
+        place_nether_fossil_piece(context, piece, random);
     }
 }
 

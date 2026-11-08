@@ -164,6 +164,11 @@ struct height_provider {
                               jint sea_level) const -> jint;
 };
 
+/// Decodes a height provider: a bare vertical anchor (constant height) or a
+/// constant/uniform provider document.
+[[nodiscard]] auto decode_height_provider(const data::json::value &document)
+    -> result<height_provider>;
+
 /// Decoded fields of a `minecraft:jigsaw` structure document.
 struct jigsaw_structure_config {
     std::string start_pool{};

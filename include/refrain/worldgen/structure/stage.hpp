@@ -30,6 +30,11 @@ struct structure_start_context {
     jint min_y{-64};
     jint world_height{384};
     jint sea_level{63};
+    /// Generation depth a height provider samples over. The noise settings of
+    /// the nether and the end are shorter than their level; zero means "same
+    /// as the level bounds".
+    jint generation_min_y{0};
+    jint generation_height{0};
     /// True when the biome source returns one biome everywhere; ring
     /// placement then uses the fixed-biome search shape instead of sampling
     /// the biome grid.
@@ -38,6 +43,13 @@ struct structure_start_context {
         biome_at{};
     std::function<std::string_view(std::uint16_t)> biome_name{};
     std::function<jint(jint block_x, jint block_z, heightmap_kind)> height_at{};
+    /// Unbearded base-column block states, read by the nether fossil scan.
+    /// Null leaves nether fossils ungenerated.
+    std::function<block_state_id(jint block_x, jint block_y, jint block_z)>
+        block_at{};
+    /// State table for the base-column states; null leaves nether fossils
+    /// ungenerated.
+    const block_state_table *states{nullptr};
     /// Terrain opacity used by structures that probe corner columns. Null
     /// makes those structures fall back to the height map.
     std::function<bool(jint block_x, jint block_y, jint block_z)> opaque_at{};

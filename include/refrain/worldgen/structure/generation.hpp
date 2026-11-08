@@ -9,6 +9,7 @@
 
 #include <refrain/worldgen/structure/end_city.hpp>
 #include <refrain/worldgen/structure/fortress.hpp>
+#include <refrain/worldgen/structure/nether_fossil.hpp>
 #include <refrain/worldgen/structure/start.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/template.hpp>
@@ -128,6 +129,10 @@ struct jigsaw_generation_context {
     jint min_y{-64};
     jint world_height{384};
     jint sea_level{63};
+    /// Height-provider sampling range; zero generation height falls back to
+    /// the level bounds.
+    jint generation_min_y{0};
+    jint generation_height{0};
     std::function<jint(jint, jint, heightmap_kind)> height_at{};
     /// Biome validity at the generated start anchor.
     std::function<bool(const block_pos &)> valid_biome{};
