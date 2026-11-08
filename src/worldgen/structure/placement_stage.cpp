@@ -2364,6 +2364,8 @@ void place_woodland_mansion(const structure_place_context &context,
                          settings);
 
     const auto &states = *context.registry;
+    const jint foundation_y =
+        piece.height_position >= 0 ? piece.height_position : piece.min_y;
     const jint min_x = std::max(piece.min_x, context.chunk->chunk_x() * 16);
     const jint max_x =
         std::min(piece.max_x, context.chunk->chunk_x() * 16 + 15);
@@ -2372,11 +2374,11 @@ void place_woodland_mansion(const structure_place_context &context,
         std::min(piece.max_z, context.chunk->chunk_z() * 16 + 15);
     for (jint x = min_x; x <= max_x; ++x) {
         for (jint z = min_z; z <= max_z; ++z) {
-            const auto bottom = context.region->state_at(x, piece.min_y, z);
+            const auto bottom = context.region->state_at(x, foundation_y, z);
             if (states.traits(bottom).air || states.traits(bottom).fluid) {
                 continue;
             }
-            for (jint y = piece.min_y - 1; y > context.chunk->min_y(); --y) {
+            for (jint y = foundation_y - 1; y > context.chunk->min_y(); --y) {
                 const auto current = context.region->state_at(x, y, z);
                 if (!states.traits(current).air &&
                     !states.traits(current).fluid) {

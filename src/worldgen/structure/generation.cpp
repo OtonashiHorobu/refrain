@@ -840,6 +840,9 @@ auto woodland_mansion_start(
         start.bounds.max_y = std::max(start.bounds.max_y, piece.bounds.max_y);
         start.bounds.max_z = std::max(start.bounds.max_z, piece.bounds.max_z);
     }
+    for (auto &piece : start.pieces) {
+        piece.height_position = start.bounds.min_y;
+    }
     return start;
 }
 } // namespace refrain::worldgen::structure

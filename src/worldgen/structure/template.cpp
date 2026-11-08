@@ -748,7 +748,8 @@ auto opposite_direction(std::string_view direction) -> std::string_view {
 auto is_shape_sensitive(block_state_registry &states, block_state_id state)
     -> bool {
     const auto block = state_block_name(states.name(state));
-    return block.ends_with("_fence") || block.ends_with("_stairs");
+    return block.ends_with("_fence") || block.ends_with("_stairs") ||
+           block.ends_with("_wall");
 }
 
 auto update_template_block(block_state_registry &states, chunk_region &region,
@@ -845,6 +846,35 @@ auto update_template_block(block_state_registry &states, chunk_region &region,
         }
         if (replace("shape", shape)) {
             changed = true;
+        }
+    } else if (parsed.name.ends_with("_wall")) {
+        static constexpr std::array<
+            std::pair<const char *, std::pair<jint, jint>>, 4>
+            directions{{
+                {"north", {0, -1}},
+                {"east", {1, 0}},
+                {"south", {0, 1}},
+                {"west", {-1, 0}},
+            }};
+        for (const auto &[name, offset] : directions) {
+            const auto target = block_pos{.x = pos.x + offset.first,
+                                          .y = pos.y,
+                                          .z = pos.z + offset.second};
+            const auto neighbour =
+                region.state_at(target.x, target.y, target.z);
+            const bool wall =
+                state_block_name(states.name(neighbour)).ends_with("_wall");
+            std::string value = "none";
+            if (wall) {
+                const auto above =
+                    region.state_at(target.x, target.y + 1, target.z);
+                value = state_block_name(states.name(above)).ends_with("_wall")
+                            ? "tall"
+                            : "low";
+            }
+            if (replace(name, value)) {
+                changed = true;
+            }
         }
     }
     if (!changed) {
