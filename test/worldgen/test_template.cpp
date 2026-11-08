@@ -1072,4 +1072,68 @@ suite<"worldgen/template"> template_tests = [] {
                            block_pos{.x = 0, .y = 1, .z = 0}, nullptr)
                    .has_value());
     };
+
+    "ruined portal processors replace, protect and restore blocks"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        (void)states.intern("minecraft:air", {.air = true});
+        const auto gold = states.intern("minecraft:gold_block",
+                                        {.air = false, .blocks_motion = true});
+        const auto stone = states.intern("minecraft:stone",
+                                         {.air = false, .blocks_motion = true});
+        const auto polished =
+            states.intern("minecraft:polished_blackstone",
+                          {.air = false, .blocks_motion = true});
+        const auto netherrack = states.intern(
+            "minecraft:netherrack", {.air = false, .blocks_motion = true});
+        const auto lava =
+            states.intern("minecraft:lava", {.air = false, .fluid = true});
+        expect(gold && stone && polished && netherrack && lava);
+        if (!gold || !stone || !polished || !netherrack || !lava) {
+            return;
+        }
+        proto_chunk chunk{states, 0, 0, 0, 32};
+        chunk.set_state(8, 5, 8, *gold);
+        chunk_region region{chunk, 0};
+        const block_pos world{.x = 8, .y = 5, .z = 8};
+        template_block_info info{.x = 0, .y = 5, .z = 0, .state = *gold};
+
+        const structure::rule_processor rule{
+            {{.blocks = {"minecraft:gold_block"},
+              .probability = -1.0F,
+              .output = *netherrack}}};
+        const auto replaced =
+            rule.process(states, region, info, world, nullptr);
+        expect(replaced.has_value());
+        if (replaced) {
+            expect(replaced->state == *netherrack);
+        }
+
+        const std::array<block_state_id, 1> tag_states{*gold};
+        states.add_tag("test:protected", tag_states);
+        const structure::protected_block_processor protected_blocks{
+            "test:protected"};
+        expect(!protected_blocks.process(states, region, info, world, nullptr)
+                    .has_value());
+
+        chunk.set_state(8, 5, 8, *lava);
+        const structure::lava_submerged_processor submerged{*lava};
+        template_block_info non_full{.x = 0, .y = 5, .z = 0, .state = 0};
+        const auto restored =
+            submerged.process(states, region, non_full, world, nullptr);
+        expect(restored.has_value());
+        if (restored) {
+            expect(restored->state == *lava);
+        }
+
+        chunk.set_state(8, 5, 8, *stone);
+        const structure::blackstone_replace_processor blackstone;
+        template_block_info stone_info{.x = 0, .y = 5, .z = 0, .state = *stone};
+        const auto black =
+            blackstone.process(states, region, stone_info, world, nullptr);
+        expect(black.has_value());
+        if (black) {
+            expect(black->state == *polished);
+        }
+    };
 };
