@@ -1185,4 +1185,35 @@ suite<"worldgen/template"> template_tests = [] {
         }
         expect(changed > 0);
     };
+
+    "the age processor uses the world position for its random"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        const auto stone_bricks = states.intern(
+            "minecraft:stone_bricks", {.air = false, .blocks_motion = true});
+        const auto cracked =
+            states.intern("minecraft:cracked_stone_bricks",
+                          {.air = false, .blocks_motion = true});
+        const auto mossy = states.intern("minecraft:mossy_stone_bricks",
+                                         {.air = false, .blocks_motion = true});
+        (void)states.intern(
+            "minecraft:stone_brick_stairs[facing=north,half=bottom]",
+            {.air = false, .blocks_motion = true});
+        expect(stone_bricks && cracked && mossy);
+        if (!stone_bricks || !cracked || !mossy) {
+            return;
+        }
+        proto_chunk chunk{states, -16, -36, -64, 384};
+        chunk_region region{chunk, 0};
+        const structure::block_age_processor age{0.2F};
+        const template_block_info info{
+            .x = 1, .y = 1, .z = 3, .state = *stone_bricks};
+        const auto result =
+            age.process(states, region, info,
+                        block_pos{.x = -253, .y = 63, .z = -569}, nullptr);
+        expect(result.has_value());
+        if (result) {
+            expect(result->state == *cracked);
+        }
+    };
 };
