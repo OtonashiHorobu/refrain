@@ -9,6 +9,7 @@
 #include <refrain/worldgen/feature/feature.hpp>
 #include <refrain/worldgen/feature/placement.hpp>
 #include <refrain/worldgen/structure/placement.hpp>
+#include <refrain/worldgen/structure/placement_stage.hpp>
 #include <refrain/worldgen/structure/stage.hpp>
 #include <refrain/worldgen/structure/start.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
@@ -282,7 +283,68 @@ void chunk_fill_parallel(benchmark::State &state) {
     state.counters["chunks_per_iteration"] = static_cast<double>(workers) * 4.0;
 }
 
+void structure_corridor(benchmark::State &state) {
+    block_state_registry registry;
+    (void)registry.intern("minecraft:air", {.air = true});
+    (void)registry.intern("minecraft:cave_air", {.air = true});
+    const auto stone = registry.intern(
+        "minecraft:stone",
+        {.air = false, .blocks_motion = true, .blocks_motion_no_leaves = true});
+    const auto planks = registry.intern(
+        "minecraft:oak_planks",
+        {.air = false, .blocks_motion = true, .blocks_motion_no_leaves = true});
+    if (!stone || !planks) {
+        return;
+    }
+    proto_chunk chunk{registry, 0, 0, 0, 32};
+    for (jint y = 0; y < 32; ++y) {
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                chunk.set_state(x, y, z, *stone);
+            }
+        }
+    }
+    chunk.set_status(chunk_status::terrain);
+    chunk_region region{chunk, 0};
+    const auto resolve = [&](std::string_view key) -> block_state_id {
+        if (const auto found = registry.find(key); found) {
+            return *found;
+        }
+        return registry
+            .intern(key, {.air = false,
+                          .blocks_motion = false,
+                          .blocks_motion_no_leaves = false})
+            .value_or(no_block_state);
+    };
+    const structure::structure_place_context context{
+        .region = &region,
+        .chunk = &chunk,
+        .states = &registry,
+        .state = resolve,
+        .registry = &registry,
+        .seed = 1,
+    };
+    const ::refrain::worldgen::structure_piece_record corridor{
+        .type = "minecraft:mscorridor",
+        .min_x = 0,
+        .min_y = 10,
+        .min_z = 0,
+        .max_x = 2,
+        .max_y = 12,
+        .max_z = 19,
+        .orientation = 0,
+        .sections = 4,
+        .rails = true,
+    };
+    for (auto _ : state) {
+        worldgen_random random{std::make_unique<xoroshiro_random_source>(1)};
+        structure::place_structure_piece(context, corridor, random);
+        benchmark::DoNotOptimize(chunk.state_at(1, 10, 2));
+    }
+}
+
 BENCHMARK(structure_area);
+BENCHMARK(structure_corridor);
 BENCHMARK(template_place);
 BENCHMARK(feature_freeze);
 BENCHMARK(chunk_fill);
