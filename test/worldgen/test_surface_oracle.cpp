@@ -484,16 +484,28 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             possible_biomes.insert(fixed_biome);
         }
 
-        constexpr std::array<std::array<jint, 2>, 5> chunks{{
+        std::vector<std::array<jint, 2>> chunks{{
             {0, 0},
             {1, 0},
             {0, 1},
             {1, 1},
             {2, 2},
         }};
+        if (const char *chunk_x_raw =
+                std::getenv("REFRAIN_VANILLA_FEATURE_CHUNK_X");
+            chunk_x_raw != nullptr) {
+            const char *chunk_z_raw =
+                std::getenv("REFRAIN_VANILLA_FEATURE_CHUNK_Z");
+            chunks = {{std::atoi(chunk_x_raw),
+                       chunk_z_raw == nullptr ? 0 : std::atoi(chunk_z_raw)}};
+        }
         std::size_t mismatches = 0;
         std::size_t map_mismatches = 0;
         std::size_t compared = 0;
+        std::size_t compared_chunks = 0;
+        const char *border_block =
+            std::getenv("REFRAIN_VANILLA_FEATURE_BORDER_BLOCK");
+        bool skip_border_chunks = border_block != nullptr;
         for (const auto &coordinates : chunks) {
             const jint chunk_x = coordinates[0];
             const jint chunk_z = coordinates[1];
@@ -1057,6 +1069,30 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                                   candidate_biomes, feature_data->biomes, seed);
             }
 
+            if (skip_border_chunks) {
+                bool dirty = false;
+                for (jint y = oracle_min_y;
+                     y < oracle_min_y + oracle_height && !dirty; ++y) {
+                    for (jint z = 0; z < 16 && !dirty; ++z) {
+                        for (jint x = 0; x < 16; ++x) {
+                            if (x != 0 && x != 15 && z != 0 && z != 15) {
+                                continue;
+                            }
+                            const auto index = static_cast<std::size_t>(
+                                (y - oracle_min_y) * 256 + z * 16 + x);
+                            if (block_registry.name((*expected)[index]) ==
+                                border_block) {
+                                dirty = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (dirty) {
+                    continue;
+                }
+            }
+            ++compared_chunks;
             for (jint y = oracle_min_y; y < oracle_min_y + oracle_height; ++y) {
                 for (jint z = 0; z < 16; ++z) {
                     for (jint x = 0; x < 16; ++x) {
@@ -1138,7 +1174,8 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 }
             }
         }
-        expect(compared == 5U * 384U * 256U);
+        expect(compared_chunks > 0);
+        expect(compared == compared_chunks * 384U * 256U);
         expect(mismatches == 0) << "surface mismatches: " << mismatches;
         expect(map_mismatches == 0)
             << "heightmap mismatches: " << map_mismatches;
