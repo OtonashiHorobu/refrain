@@ -48,3 +48,28 @@ The worldgen layer loads the datapack snapshot from a data root and
 templates from the extracted directory. Tests and oracles take both
 locations from the environment so the same code paths run against the
 files an installation would use.
+
+## Custom feature reference worlds
+
+The feature oracle compares a generated chunk against a reference world
+whose biome lists curated placed features. To validate a feature that is not
+part of that list, point the generator at a small datapack containing the
+configured and placed feature and append it to the generated biome:
+
+```bash
+python3 tools/worldgen/oracle/generate.py \
+    --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/reference --features --features-only-extra \
+    --extra-feature-pack /path/to/pack \
+    --extra-feature oracle:my_feature
+```
+
+`--extra-feature-pack` merges the pack's `data` tree into the reference
+world. `--features-only-extra` drops the curated list so the new feature
+keeps its own decoration index and random stream. Run the feature oracle
+with the same `REFRAIN_VANILLA_FEATURE_*` variables used by the curated
+world; `REFRAIN_VANILLA_FEATURE_CHUNK_X`/`_Z` select one chunk and
+`REFRAIN_VANILLA_FEATURE_BORDER_BLOCK` skips chunks whose reference output
+touches a border, where features from neighbouring chunks write across the
+chunk boundary and a single-chunk oracle cannot reproduce them.
+
