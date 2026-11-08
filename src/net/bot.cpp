@@ -5,6 +5,7 @@
 #include <refrain/net/bot.hpp>
 
 #include <refrain/net/base.hpp>
+#include <refrain/net/crypto.hpp>
 #include <refrain/net/frame.hpp>
 #include <refrain/net/wire.hpp>
 #include <refrain/schema/protocol/777/common.hpp>
@@ -183,11 +184,31 @@ class bot_session {
             fail_locked(framed.error().message);
             return;
         }
+        if (cipher_) {
+            auto encrypted{cipher_->encrypt(frame)};
+            if (!encrypted) {
+                std::lock_guard lock{mutex_};
+                fail_locked(encrypted.error().message);
+                return;
+            }
+            frame = std::move(*encrypted);
+        }
         transport_->send(connection_, frame);
     }
 
     void on_data(std::span<const std::byte> bytes) {
-        if (auto pushed{decoder_.push(bytes)}; !pushed) {
+        std::vector<std::byte> plain;
+        std::span<const std::byte> framed{bytes};
+        if (cipher_) {
+            auto decrypted{cipher_->decrypt(bytes)};
+            if (!decrypted) {
+                fail("decryption failed");
+                return;
+            }
+            plain = std::move(*decrypted);
+            framed = plain;
+        }
+        if (auto pushed{decoder_.push(framed)}; !pushed) {
             std::lock_guard lock{mutex_};
             fail_locked(pushed.error().message);
             return;
@@ -262,7 +283,35 @@ class bot_session {
             return;
         }
         if (packet_id == login_cb::hello::packet_id) {
-            fail("online-mode encryption is not supported by the bot");
+            login_cb::hello packet{};
+            if (auto decoded{login_cb::decode_hello(in, packet)}; !decoded) {
+                fail("malformed login hello");
+                return;
+            }
+            std::vector<std::byte> secret(aes128_key_bytes);
+            std::random_device device{};
+            for (auto &byte : secret) {
+                byte = static_cast<std::byte>(device() & 0xFFU);
+            }
+            auto encrypted_secret{
+                rsa_encrypt_pkcs1_v1_5(packet.public_key, secret)};
+            auto encrypted_challenge{
+                rsa_encrypt_pkcs1_v1_5(packet.public_key, packet.challenge)};
+            if (!encrypted_secret || !encrypted_challenge) {
+                fail("failed to encrypt the login key");
+                return;
+            }
+            login_sb::key key_packet{};
+            key_packet.keybytes = std::move(*encrypted_secret);
+            key_packet.encrypted_challenge = std::move(*encrypted_challenge);
+            send_packet(login_sb::key::packet_id, key_packet,
+                        login_sb::encode_key);
+            auto cipher{aes128_cfb8::create(secret, secret)};
+            if (!cipher) {
+                fail("failed to create the connection cipher");
+                return;
+            }
+            cipher_ = std::make_unique<aes128_cfb8>(std::move(*cipher));
         }
     }
 
@@ -388,6 +437,7 @@ class bot_session {
     std::uint64_t connection_{0};
     frame_encoder encoder_{-1};
     frame_decoder decoder_{-1};
+    std::unique_ptr<aes128_cfb8> cipher_{};
     bot_state state_{bot_state::login};
     std::mutex mutex_{};
     std::condition_variable condition_{};

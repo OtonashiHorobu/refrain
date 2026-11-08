@@ -272,6 +272,7 @@ struct server::impl {
     };
 
     server_settings config{};
+    session_verifier verify_session{};
     std::unique_ptr<transport> socket{};
     std::unordered_map<std::uint64_t, connection_state_data> connections{};
     std::string status_json{};
@@ -343,6 +344,8 @@ auto server::impl::start() -> status {
             return std::unexpected{std::move(key.error())};
         }
         server_key = std::move(*key);
+    }
+    if (config.online_mode && !verify_session) {
         auto transport{make_curl_transport()};
         if (!transport) {
             return std::unexpected{std::move(transport.error())};
@@ -914,14 +917,26 @@ void server::impl::handle_login_key(std::uint64_t id, reader &in) {
         live.cipher = std::make_unique<aes128_cfb8>(std::move(*cipher));
         name = live.name;
     }
-    if (!auth) {
+    session_profile profile{};
+    if (verify_session) {
+        auto verified{verify_session(name, *digest)};
+        if (!verified) {
+            send_login_disconnect(id, "Failed to verify username");
+            reject(id, "malformed or unexpected packet");
+            return;
+        }
+        profile = std::move(*verified);
+    } else if (auth) {
+        auto verified{auth->has_joined(name, *digest)};
+        if (!verified) {
+            send_login_disconnect(id, "Failed to verify username");
+            reject(id, "malformed or unexpected packet");
+            return;
+        }
+        profile.id = verified->id;
+        profile.name = verified->name;
+    } else {
         send_login_disconnect(id, "Authentication is unavailable");
-        reject(id, "malformed or unexpected packet");
-        return;
-    }
-    auto profile{auth->has_joined(name, *digest)};
-    if (!profile) {
-        send_login_disconnect(id, "Failed to verify username");
         reject(id, "malformed or unexpected packet");
         return;
     }
@@ -932,8 +947,8 @@ void server::impl::handle_login_key(std::uint64_t id, reader &in) {
             return;
         }
         auto &live{found->second};
-        live.profile = profile->id;
-        live.name = profile->name;
+        live.profile = profile.id;
+        live.name = std::move(profile.name);
     }
     complete_login(id);
 }
@@ -2152,6 +2167,7 @@ auto server::start(server_inputs inputs, core::config::view view)
     config.place_block = std::move(inputs.place_block);
 
     auto state{std::make_unique<impl>()};
+    state->verify_session = std::move(inputs.verify_session);
     state->config = std::move(config);
     if (auto started{state->start()}; !started) {
         return std::unexpected{std::move(started.error())};

@@ -125,6 +125,104 @@ suite bot_tests = [] {
         std::error_code error;
         std::filesystem::remove_all(dir, error);
     };
+
+    "net/bot completes online-mode encryption with a fake verifier"_test = [] {
+        const auto dir{make_temp_dir()};
+        {
+            std::ofstream stream{dir / "network.toml",
+                                 std::ios::binary | std::ios::trunc};
+            stream << "bind_host = \"127.0.0.1\"\nport = 0\n"
+                      "online_mode = true\n";
+        }
+        auto store{config::store::empty()};
+        expect(static_cast<bool>(store.mount(
+            {.name = "network", .path = (dir / "network.toml").string()})));
+        expect(static_cast<bool>(store.load_all()));
+        auto view{store.module("network")};
+        expect(static_cast<bool>(view));
+        if (!view) {
+            std::error_code error;
+            std::filesystem::remove_all(dir, error);
+            return;
+        }
+        net::server_inputs inputs{};
+        inputs.verify_session =
+            [](std::string_view,
+               std::string_view) -> refrain::result<net::session_profile> {
+            net::uuid id{};
+            for (std::size_t index{0}; index < id.bytes.size(); ++index) {
+                id.bytes[index] = static_cast<std::uint8_t>(index + 1U);
+            }
+            return net::session_profile{.id = id, .name = "Verified"};
+        };
+        auto server{net::server::start(std::move(inputs), *view)};
+        expect(static_cast<bool>(server));
+        if (!server) {
+            std::error_code error;
+            std::filesystem::remove_all(dir, error);
+            return;
+        }
+        const auto port{(*server)->local_port()};
+        auto report{net::run_bot(net::bot_options{
+            .target = {.host = "127.0.0.1", .port = port},
+            .username = "OnlineBot",
+            .timeout = std::chrono::milliseconds{5000},
+        })};
+        expect(static_cast<bool>(report));
+        if (report) {
+            expect(report->name == "Verified");
+        }
+        (*server)->stop();
+        std::error_code error;
+        std::filesystem::remove_all(dir, error);
+    };
+
+    "net/bot rejects a failed session verification"_test = [] {
+        const auto dir{make_temp_dir()};
+        {
+            std::ofstream stream{dir / "network.toml",
+                                 std::ios::binary | std::ios::trunc};
+            stream << "bind_host = \"127.0.0.1\"\nport = 0\n"
+                      "online_mode = true\n";
+        }
+        auto store{config::store::empty()};
+        expect(static_cast<bool>(store.mount(
+            {.name = "network", .path = (dir / "network.toml").string()})));
+        expect(static_cast<bool>(store.load_all()));
+        auto view{store.module("network")};
+        expect(static_cast<bool>(view));
+        if (!view) {
+            std::error_code error;
+            std::filesystem::remove_all(dir, error);
+            return;
+        }
+        net::server_inputs inputs{};
+        inputs.verify_session =
+            [](std::string_view,
+               std::string_view) -> refrain::result<net::session_profile> {
+            return std::unexpected{refrain::make_error(
+                refrain::error_code::not_found, "unknown session")};
+        };
+        auto server{net::server::start(std::move(inputs), *view)};
+        expect(static_cast<bool>(server));
+        if (!server) {
+            std::error_code error;
+            std::filesystem::remove_all(dir, error);
+            return;
+        }
+        auto report{net::run_bot(net::bot_options{
+            .target = {.host = "127.0.0.1", .port = (*server)->local_port()},
+            .username = "Rejected",
+            .timeout = std::chrono::milliseconds{5000},
+        })};
+        expect(!report);
+        if (!report) {
+            expect(report.error().code == refrain::error_code::io_error);
+        }
+        (*server)->stop();
+        std::error_code error;
+        std::filesystem::remove_all(dir, error);
+    };
 };
 
 } // namespace

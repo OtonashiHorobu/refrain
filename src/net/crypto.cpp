@@ -553,4 +553,47 @@ auto aes128_cfb8::decrypt(std::span<const std::byte> ciphertext)
 #endif
 }
 
+auto rsa_encrypt_pkcs1_v1_5(std::span<const std::byte> public_key_der,
+                            std::span<const std::byte> plaintext)
+    -> result<std::vector<std::byte>> {
+#if REFRAIN_WITH_OPENSSL
+    if (public_key_der.empty()) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument, "public key is empty")};
+    }
+    const auto *cursor{as_unsigned(public_key_der.data())};
+    std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key{
+        d2i_PUBKEY(nullptr, &cursor, static_cast<long>(public_key_der.size())),
+        &EVP_PKEY_free};
+    if (key == nullptr) {
+        return std::unexpected{unknown_error("invalid RSA public key")};
+    }
+    std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> context{
+        EVP_PKEY_CTX_new_from_pkey(nullptr, key.get(), nullptr),
+        &EVP_PKEY_CTX_free};
+    if (context == nullptr || EVP_PKEY_encrypt_init(context.get()) <= 0 ||
+        EVP_PKEY_CTX_set_rsa_padding(context.get(), RSA_PKCS1_PADDING) <= 0) {
+        return std::unexpected{unknown_error("RSA encrypt init failed")};
+    }
+    std::size_t output_length{0};
+    if (EVP_PKEY_encrypt(context.get(), nullptr, &output_length,
+                         as_unsigned(plaintext.data()),
+                         plaintext.size()) <= 0) {
+        return std::unexpected{unknown_error("RSA encrypt size failed")};
+    }
+    std::vector<std::byte> output(output_length);
+    if (EVP_PKEY_encrypt(context.get(), as_unsigned(output.data()),
+                         &output_length, as_unsigned(plaintext.data()),
+                         plaintext.size()) <= 0) {
+        return std::unexpected{unknown_error("RSA encrypt failed")};
+    }
+    output.resize(output_length);
+    return output;
+#else
+    static_cast<void>(public_key_der);
+    static_cast<void>(plaintext);
+    return std::unexpected{unsupported_error()};
+#endif
+}
+
 } // namespace refrain::net

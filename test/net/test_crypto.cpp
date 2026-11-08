@@ -21,11 +21,12 @@ using namespace boost::ut;
 
 namespace net = refrain::net;
 
-[[maybe_unused, nodiscard]] auto bytes_of(std::string_view text) -> std::vector<std::byte> {
+[[maybe_unused, nodiscard]] auto bytes_of(std::string_view text)
+    -> std::vector<std::byte> {
     std::vector<std::byte> bytes(text.size());
     for (std::size_t index{0}; index < text.size(); ++index) {
-        bytes[index] = static_cast<std::byte>(
-            static_cast<unsigned char>(text[index]));
+        bytes[index] =
+            static_cast<std::byte>(static_cast<unsigned char>(text[index]));
     }
     return bytes;
 }
@@ -90,9 +91,9 @@ template <std::size_t size>
 
 const suite tests = [] {
     "crypto/secure zero clears the whole buffer"_test = [] {
-        std::array<std::byte, 5> secret{
-            std::byte{0x12}, std::byte{0x34}, std::byte{0x56},
-            std::byte{0x78}, std::byte{0x9A}};
+        std::array<std::byte, 5> secret{std::byte{0x12}, std::byte{0x34},
+                                        std::byte{0x56}, std::byte{0x78},
+                                        std::byte{0x9A}};
         net::secure_zero(std::span<std::byte>{secret});
         for (const auto byte : secret) {
             expect(byte == std::byte{0});
@@ -142,15 +143,13 @@ const suite tests = [] {
         const auto abc{net::sha1("abc")};
         expect(abc.has_value());
         if (abc) {
-            expect(hex_of(*abc) ==
-                   "a9993e364706816aba3e25717850c26c9cd0d89d");
+            expect(hex_of(*abc) == "a9993e364706816aba3e25717850c26c9cd0d89d");
         }
         const auto text{net::sha1("The quick brown fox jumps over the lazy "
                                   "dog")};
         expect(text.has_value());
         if (text) {
-            expect(hex_of(*text) ==
-                   "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12");
+            expect(hex_of(*text) == "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12");
         }
     };
 
@@ -190,8 +189,7 @@ const suite tests = [] {
         if (!net::crypto_available()) {
             expect(!cipher.has_value());
             if (!cipher) {
-                expect(cipher.error().code ==
-                       refrain::error_code::unsupported);
+                expect(cipher.error().code == refrain::error_code::unsupported);
             }
             return;
         }
@@ -224,8 +222,8 @@ const suite tests = [] {
         if (!cipher) {
             return;
         }
-        const auto first{cipher->encrypt(
-            std::span<const std::byte>{plaintext.data(), 1U})};
+        const auto first{
+            cipher->encrypt(std::span<const std::byte>{plaintext.data(), 1U})};
         const auto second{cipher->encrypt(std::span<const std::byte>{
             plaintext.data() + 1, plaintext.size() - 1U})};
         expect(first.has_value());
@@ -236,8 +234,8 @@ const suite tests = [] {
 
         // The decrypt stream is independent of the encrypt stream, so it
         // still starts at the IV even after the encrypt calls above.
-        const auto first_plain{cipher->decrypt(
-            std::span<const std::byte>{ciphertext.data(), 4U})};
+        const auto first_plain{
+            cipher->decrypt(std::span<const std::byte>{ciphertext.data(), 4U})};
         const auto second_plain{cipher->decrypt(std::span<const std::byte>{
             ciphertext.data() + 4, ciphertext.size() - 4U})};
         expect(first_plain.has_value());
@@ -250,7 +248,9 @@ const suite tests = [] {
     "crypto/aes128 rejects wrong key or IV sizes"_test = [] {
         for (const auto &[key_size, iv_size] :
              {std::pair<std::size_t, std::size_t>{15U, 16U},
-              {16U, 15U}, {0U, 0U}, {17U, 16U}}) {
+              {16U, 15U},
+              {0U, 0U},
+              {17U, 16U}}) {
             const std::vector<std::byte> key(key_size);
             const std::vector<std::byte> iv(iv_size);
             const auto cipher{net::aes128_cfb8::create(key, iv)};
@@ -308,6 +308,38 @@ const suite tests = [] {
                 expect(decrypted->size() <= 117U);
             }
         };
+
+    "crypto/rsa public key encrypts a block the keypair decrypts"_test = [] {
+        if (!net::crypto_available()) {
+            return;
+        }
+        auto key{net::rsa_keypair::generate()};
+        expect(key.has_value());
+        if (!key) {
+            return;
+        }
+        const auto der{key->public_key_der()};
+        expect(der.has_value());
+        if (!der) {
+            return;
+        }
+        std::vector<std::byte> secret(net::aes128_key_bytes);
+        for (std::size_t index{0}; index < secret.size(); ++index) {
+            secret[index] = static_cast<std::byte>(index + 1U);
+        }
+        auto encrypted{net::rsa_encrypt_pkcs1_v1_5(*der, secret)};
+        expect(encrypted.has_value());
+        if (!encrypted) {
+            return;
+        }
+        expect(encrypted->size() == net::rsa_ciphertext_bytes);
+        auto decrypted{key->decrypt_pkcs1_v1_5(*encrypted)};
+        expect(decrypted.has_value());
+        if (decrypted) {
+            const bool same{*decrypted == secret};
+            expect(same);
+        }
+    };
 
     "crypto/rsa and aes report unsupported without a backend"_test = [] {
         if (net::crypto_available()) {

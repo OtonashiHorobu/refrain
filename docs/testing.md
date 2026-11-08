@@ -63,7 +63,8 @@ build/Release/bin/refrain-tools protocol bot \
 `--wait-chunks` waits for that many chunk packets before reporting success;
 `--command` sends a play command (for example `say hello`), `--wait-messages`
 waits for system chat replies, and `--linger-ms` keeps the connection in play.
-Online-mode servers are reported as unsupported.
+The bot also performs the online-mode RSA/AES handshake; whether the session is
+accepted is decided by the server's verifier.
 
 ## Adding a suite
 

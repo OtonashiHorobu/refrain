@@ -17,6 +17,15 @@
 
 namespace refrain::net {
 
+/// Profile returned by an injected session verifier (online mode tests).
+struct session_profile {
+    uuid id{};
+    std::string name{};
+};
+
+using session_verifier = std::function<result<session_profile>(
+    std::string_view name, std::string_view server_hash)>;
+
 /// One request to (re)center a connection's chunk view. The runtime owns the
 /// world and encodes the missing chunks; the network layer only reports the
 /// viewport and sends the resulting batches.
@@ -47,6 +56,10 @@ struct server_inputs {
     std::function<bool(std::int32_t, std::int32_t, std::int32_t)> break_block{};
     /// Called on the simulation thread for a block placement.
     std::function<bool(std::int32_t, std::int32_t, std::int32_t)> place_block{};
+    /// Optional online-mode session verifier. When set, the server does not
+    /// create the HTTP session client, which makes online login testable
+    /// without the Mojang service.
+    session_verifier verify_session{};
 };
 
 /// Minimal protocol server. It currently answers the status/list ping and

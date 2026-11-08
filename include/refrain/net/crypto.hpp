@@ -192,6 +192,16 @@ class rsa_keypair {
     std::unique_ptr<impl> impl_;
 };
 
+/// Encrypt one block with an X.509 SubjectPublicKeyInfo RSA public key.
+///
+/// The protocol uses this on the client side: the shared secret and verify
+/// token are RSA/PKCS#1 v1.5 encrypted with the server's public key. The
+/// plaintext must be at most `rsa_ciphertext_bytes - 11` bytes.
+[[nodiscard]] auto
+rsa_encrypt_pkcs1_v1_5(std::span<const std::byte> public_key_der,
+                       std::span<const std::byte> plaintext)
+    -> result<std::vector<std::byte>>;
+
 /// AES-128-CFB8 stream cipher for one encrypted connection.
 ///
 /// The Java Edition protocol runs one AES/CFB8 cipher per direction and seeds
