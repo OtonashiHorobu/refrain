@@ -2433,7 +2433,8 @@ void refresh_chunk_shapes(proto_chunk &chunk, const chunk_region &region,
                     continue;
                 }
                 const std::string name{state_block_name(states.name(state))};
-                if (name.ends_with("_wall") || name.ends_with("_stairs")) {
+                if (name.ends_with("_wall") || name.ends_with("_fence") ||
+                    name.ends_with("_stairs")) {
                     (void)refresh_block_shape(
                         states, const_cast<chunk_region &>(region),
                         block_pos{.x = chunk.chunk_x() * 16 + x,
