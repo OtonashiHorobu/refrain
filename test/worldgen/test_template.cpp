@@ -1136,4 +1136,53 @@ suite<"worldgen/template"> template_tests = [] {
             expect(black->state == *polished);
         }
     };
+
+    "the age processor only produces cracked or mossy variants"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        const auto stone_bricks = states.intern(
+            "minecraft:stone_bricks", {.air = false, .blocks_motion = true});
+        const auto cracked =
+            states.intern("minecraft:cracked_stone_bricks",
+                          {.air = false, .blocks_motion = true});
+        const auto mossy = states.intern("minecraft:mossy_stone_bricks",
+                                         {.air = false, .blocks_motion = true});
+        for (const auto *stairs :
+             {"minecraft:stone_brick_stairs[facing=north,half=bottom]",
+              "minecraft:mossy_stone_brick_stairs[facing=north,half=bottom]"}) {
+            (void)states.intern(stairs, {.air = false, .blocks_motion = true});
+        }
+        expect(stone_bricks && cracked && mossy);
+        if (!stone_bricks || !cracked || !mossy) {
+            return;
+        }
+        proto_chunk chunk{states, 0, 0, 0, 32};
+        chunk_region region{chunk, 0};
+        const structure::block_age_processor dry{0.0F};
+        const structure::block_age_processor wet{1.0F};
+        template_block_info info{
+            .x = 0, .y = 5, .z = 0, .state = *stone_bricks};
+        std::size_t changed = 0;
+        for (jint x = 0; x < 256; ++x) {
+            const block_pos world{.x = x, .y = 5, .z = 0};
+            const auto dry_result =
+                dry.process(states, region, info, world, nullptr);
+            const auto wet_result =
+                wet.process(states, region, info, world, nullptr);
+            expect(dry_result.has_value() && wet_result.has_value());
+            if (!dry_result || !wet_result) {
+                return;
+            }
+            const auto dry_name = states.name(dry_result->state);
+            const auto wet_name = states.name(wet_result->state);
+            expect(dry_name == "minecraft:stone_bricks" ||
+                   dry_name == "minecraft:cracked_stone_bricks" ||
+                   dry_name.starts_with("minecraft:stone_brick_stairs"));
+            expect(wet_name == "minecraft:stone_bricks" ||
+                   wet_name == "minecraft:mossy_stone_bricks" ||
+                   wet_name.starts_with("minecraft:mossy_stone_brick_stairs"));
+            changed += dry_name != "minecraft:stone_bricks" ? 1U : 0U;
+        }
+        expect(changed > 0);
+    };
 };
