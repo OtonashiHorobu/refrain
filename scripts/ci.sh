@@ -138,7 +138,7 @@ grep -q 'refrain.data.vanilla@1.0.0' "$EXTRACT_DIR/mods-check.txt" \
     -o "$EXTRACT_DIR/builtin-a.image" >"$EXTRACT_DIR/builtin-image.txt"
 "$BIN_DIR/refrain-tools" builtin image --mods "$ROOT/mods" \
     -o "$EXTRACT_DIR/builtin-b.image" >/dev/null
-grep -Eq '^builtin image: 11 file\(s\), [0-9]+ byte\(s\), BLAKE3 [0-9a-f]{64} -> ' \
+grep -Eq '^builtin image: 12 file\(s\), [0-9]+ byte\(s\), BLAKE3 [0-9a-f]{64} -> ' \
     "$EXTRACT_DIR/builtin-image.txt" \
     || die "builtin image: unexpected summary line"
 cmp "$EXTRACT_DIR/builtin-a.image" "$EXTRACT_DIR/builtin-b.image" \
