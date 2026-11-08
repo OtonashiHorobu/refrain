@@ -28,16 +28,15 @@ variables and reads the data and template roots from the caller.
 | shipwreck | yes | yes | yes |
 | ocean ruin | yes | yes | yes |
 | ruined portal | yes | yes | yes |
-| woodland mansion | yes | piece list pinned | fence connection states open |
+| woodland mansion | yes | yes | yes |
 
 The ruined portal full-stage oracle uses a dry candidate. A portal that
 intersects flowing lava or water is not stable after the reference world
 settles.
 
 The woodland mansion piece list is pinned by a digest over the template,
-origin, rotation and mirror of all 484 pieces. The remaining block difference
-is the connection state of a small number of fences, which needs the reference
-collision-shape coverage model.
+origin, rotation and mirror of all 484 pieces. Its block oracle matches the
+reference chunk.
 
 ## Storage and runtime
 
