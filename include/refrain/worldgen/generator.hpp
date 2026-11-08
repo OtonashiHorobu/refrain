@@ -24,6 +24,10 @@ struct generator_stages {
     std::function<void(proto_chunk &)> fill{};
     std::function<status(proto_chunk &)> surface{};
     std::function<status(proto_chunk &)> carve{};
+    /// Structure placement for the target chunk, run before features.
+    std::function<status(proto_chunk &)> structures{};
+    /// Feature decoration for the target chunk.
+    std::function<status(proto_chunk &)> features{};
 };
 
 class generator {
