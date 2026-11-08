@@ -13,6 +13,8 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace refrain::net {
@@ -35,6 +37,74 @@ struct container_click_event {
     std::uint32_t mode{0};
 };
 
+/// Protocol game mode. The network layer only encodes this value; the
+/// gameplay layer owns the policy and the current per-player state.
+enum class game_mode : std::uint8_t {
+    survival = 0,
+    creative = 1,
+    adventure = 2,
+    spectator = 3,
+};
+
+/// Identity passed to gameplay callbacks after authentication.
+struct player_identity {
+    std::uint64_t connection{0};
+    uuid id{};
+    std::string_view name{};
+    /// Opaque world key; empty for the default world. The network layer never
+    /// interprets it.
+    std::string_view world{};
+};
+
+/// State the gameplay layer assigns to a joining player.
+struct join_state {
+    game_mode mode{game_mode::creative};
+};
+
+/// World-level policy that is part of the login handshake.
+struct server_policy {
+    bool hardcore{false};
+};
+
+using join_state_provider = std::function<join_state(const player_identity &)>;
+
+/// Feedback returned by the gameplay command handler.
+struct command_feedback {
+    bool handled{false};
+    bool success{true};
+    std::string message{};
+};
+
+/// One completion entry. Views must stay valid until the response is encoded;
+/// implementations normally point into the immutable command tree.
+struct suggestion_entry {
+    std::string text{};
+    std::string tooltip{};
+};
+
+/// Completion result for one client request.
+struct suggestion_result {
+    std::int32_t request_id{0};
+    std::int32_t start{0};
+    std::int32_t length{0};
+    std::vector<suggestion_entry> entries{};
+};
+
+/// Gameplay-owned command surface. The network layer never parses or executes
+/// commands itself: it forwards the raw input on the simulation thread and
+/// encodes the returned tree/feedback/suggestions.
+struct command_bridge {
+    std::function<std::shared_ptr<const command_tree>(const player_identity &)>
+        tree{};
+    std::function<command_feedback(const player_identity &, std::string_view)>
+        execute{};
+    std::function<suggestion_result(const player_identity &, std::string_view,
+                                    std::int32_t)>
+        suggest{};
+    /// Monotonic command/permission revision for tree cache invalidation.
+    std::function<std::uint64_t()> revision{};
+};
+
 /// One request to (re)center a connection's chunk view. The runtime owns the
 /// world and encodes the missing chunks; the network layer only reports the
 /// viewport and sends the resulting batches.
@@ -55,8 +125,9 @@ struct server_inputs {
     double spawn_y{64.0};
     double spawn_z{0.0};
     std::int64_t seed{0};
-    std::int32_t game_mode{1};
-    bool hardcore{false};
+    server_policy policy{};
+    join_state_provider join_state{};
+    command_bridge commands{};
     /// Generated registry/tag catalog (JSON). Empty disables registry sync.
     std::string registry_catalog_path{};
     /// Pre-encoded `level_chunk_with_light` bodies around the spawn point.
@@ -112,6 +183,29 @@ class server {
     /// Drain container clicks observed since the previous call.
     [[nodiscard]] auto take_container_clicks()
         -> std::vector<container_click_event>;
+
+    /// Re-send the command tree to every play connection or one connection.
+    /// Call after the gameplay bridge changes commands or permissions.
+    void resend_commands();
+    void resend_commands(std::uint64_t connection);
+
+    /// Send one system chat line to a connection.
+    void send_system_chat(std::uint64_t connection, std::string_view text);
+    /// Send one system chat line to every play connection.
+    void broadcast_system_chat(std::string_view text);
+
+    struct player_name {
+        std::uint64_t connection{0};
+        std::string name{};
+    };
+
+    /// Snapshot of players currently in play.
+    [[nodiscard]] auto player_names() const -> std::vector<player_name>;
+
+    /// Push a gameplay-owned game mode change. The network layer updates its
+    /// cached value, sends abilities to the target and broadcasts the player
+    /// info entry. No configuration is read or written.
+    void set_player_game_mode(std::uint64_t connection, game_mode mode);
 
     /// Send a full container snapshot (player inventory uses container 0).
     void send_container_content(std::uint64_t connection,

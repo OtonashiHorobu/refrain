@@ -182,8 +182,6 @@ struct server_settings {
     std::int32_t view_distance{10};
     std::int32_t simulation_distance{10};
     bool online_mode{false};
-    bool hardcore{false};
-    std::int32_t game_mode{1};
     double spawn_x{0.0};
     double spawn_y{64.0};
     double spawn_z{0.0};
@@ -198,37 +196,6 @@ struct server_settings {
     std::int32_t idle_timeout_seconds{0};
 };
 
-[[nodiscard]] auto make_command_tree() -> refrain::net::command_tree {
-    using refrain::net::command_node;
-    command_node root{};
-    root.flags = 0;
-    root.children = {1U, 2U, 3U};
-
-    command_node help{};
-    help.flags = static_cast<std::uint8_t>(1U | 4U); // literal + executable
-    help.name = "help";
-
-    command_node list{};
-    list.flags = static_cast<std::uint8_t>(1U | 4U);
-    list.name = "list";
-
-    command_node say{};
-    say.flags = static_cast<std::uint8_t>(1U | 4U);
-    say.name = "say";
-    say.children = {4U};
-
-    command_node message{};
-    message.flags = static_cast<std::uint8_t>(2U | 4U); // argument + executable
-    message.name = "message";
-    message.parser_id = 5U;   // brigadier:string
-    message.string_type = 2U; // greedy phrase
-
-    refrain::net::command_tree tree{};
-    tree.nodes = {root, help, list, say, message};
-    tree.root_index = 0;
-    return tree;
-}
-
 struct server::impl {
     struct connection_state_data {
         frame_decoder decoder{-1};
@@ -238,6 +205,7 @@ struct server::impl {
         std::string name{};
         uuid profile{};
         uuid session{};
+        game_mode mode{game_mode::creative};
         bool login_started{false};
         bool status_requested{false};
         bool closed{false};
@@ -272,6 +240,12 @@ struct server::impl {
     };
 
     server_settings config{};
+    server_policy policy{};
+    join_state_provider join_state{};
+    command_bridge commands{};
+    std::mutex command_cache_mutex{};
+    std::shared_ptr<const command_tree> cached_tree{};
+    std::shared_ptr<const std::vector<std::byte>> cached_commands{};
     session_verifier verify_session{};
     std::unique_ptr<transport> socket{};
     std::unordered_map<std::uint64_t, connection_state_data> connections{};
@@ -315,6 +289,7 @@ struct server::impl {
     void send_configuration(std::uint64_t id);
     void send_play_login(std::uint64_t id);
     void send_commands(std::uint64_t id);
+    void set_game_mode(std::uint64_t id, game_mode mode);
     void send_system_chat(std::uint64_t id, std::string_view text);
     void broadcast_system_chat(std::string_view text);
     void send_initial_chunks(std::uint64_t id);
@@ -1109,8 +1084,32 @@ auto server::impl::build_configuration() -> status {
     return status_ok();
 }
 
+namespace {
+
+[[nodiscard]] constexpr auto protocol_game_mode(game_mode mode)
+    -> std::uint32_t {
+    return static_cast<std::uint32_t>(mode);
+}
+
+/// Ability flag bits: invulnerable=1, flying=2, allow_flying=4, creative=8.
+[[nodiscard]] constexpr auto ability_flags(game_mode mode) -> std::uint8_t {
+    switch (mode) {
+    case game_mode::creative:
+        return 0x0DU; // invulnerable | allow_flying | creative
+    case game_mode::spectator:
+        return 0x07U; // invulnerable | flying | allow_flying
+    case game_mode::survival:
+    case game_mode::adventure:
+        break;
+    }
+    return 0x00U;
+}
+
+} // namespace
+
 void server::impl::send_play_login(std::uint64_t id) {
     std::string name;
+    uuid profile{};
     {
         const std::lock_guard lock{connections_mutex};
         const auto found{connections.find(id)};
@@ -1123,11 +1122,30 @@ void server::impl::send_play_login(std::uint64_t id) {
         live.z = config.spawn_z;
         live.awaiting_teleport = true;
         name = live.name;
+        profile = live.profile;
+    }
+    game_mode mode{game_mode::creative};
+    if (join_state) {
+        const player_identity identity{
+            .connection = id,
+            .id = profile,
+            .name = name,
+            .world = {},
+        };
+        mode = join_state(identity).mode;
+    }
+    {
+        const std::lock_guard lock{connections_mutex};
+        const auto found{connections.find(id)};
+        if (found == connections.end() || found->second.closed) {
+            return;
+        }
+        found->second.mode = mode;
     }
     log::info("net: player joined id={} name={}", id, name);
     play_cb::login packet{};
     packet.player_id = static_cast<std::int32_t>(id);
-    packet.hardcore = config.hardcore;
+    packet.hardcore = policy.hardcore;
     packet.levels = {overworld()};
     packet.max_players = static_cast<std::uint32_t>(config.status.max_players);
     packet.chunk_radius = static_cast<std::uint32_t>(config.view_distance);
@@ -1139,7 +1157,7 @@ void server::impl::send_play_login(std::uint64_t id) {
     packet.spawn.dimension_type = 0;
     packet.spawn.dimension = overworld();
     packet.spawn.seed = config.seed;
-    packet.spawn.game_type = static_cast<std::uint32_t>(config.game_mode);
+    packet.spawn.game_type = static_cast<std::uint32_t>(mode);
     packet.spawn.previous_game_type = std::nullopt;
     packet.spawn.debug = false;
     packet.spawn.flat = false;
@@ -1157,8 +1175,7 @@ void server::impl::send_play_login(std::uint64_t id) {
     }
     {
         play_cb::player_abilities abilities{
-            .flags =
-                static_cast<std::uint8_t>(config.game_mode == 1 ? 0x0D : 0x00),
+            .flags = ability_flags(mode),
             .flying_speed = 0.05F,
             .walking_speed = 0.1F,
         };
@@ -1339,10 +1356,52 @@ void server::impl::send_play_login(std::uint64_t id) {
 }
 
 void server::impl::send_commands(std::uint64_t id) {
-    play_cb::commands packet{};
-    packet.tree = make_command_tree();
-    send_packet(id, play_cb::commands::packet_id, packet,
-                play_cb::encode_commands);
+    if (!commands.tree) {
+        return;
+    }
+    std::string name;
+    uuid profile{};
+    {
+        const std::lock_guard lock{connections_mutex};
+        const auto found{connections.find(id)};
+        if (found == connections.end() || found->second.closed) {
+            return;
+        }
+        name = found->second.name;
+        profile = found->second.profile;
+    }
+    const player_identity identity{
+        .connection = id,
+        .id = profile,
+        .name = name,
+        .world = {},
+    };
+    auto tree{commands.tree(identity)};
+    if (!tree) {
+        return;
+    }
+    std::shared_ptr<const std::vector<std::byte>> body;
+    {
+        const std::lock_guard lock{command_cache_mutex};
+        if (cached_tree == tree && cached_commands) {
+            body = cached_commands;
+        }
+    }
+    if (!body) {
+        play_cb::commands packet{};
+        packet.tree = *tree;
+        auto encoded{encode_packet(play_cb::commands::packet_id, packet,
+                                   play_cb::encode_commands)};
+        if (!encoded) {
+            return;
+        }
+        body =
+            std::make_shared<const std::vector<std::byte>>(std::move(*encoded));
+        const std::lock_guard lock{command_cache_mutex};
+        cached_tree = std::move(tree);
+        cached_commands = body;
+    }
+    send(id, *body);
 }
 
 void server::impl::send_system_chat(std::uint64_t id, std::string_view text) {
@@ -1488,6 +1547,65 @@ void server::send_container_content(std::uint64_t connection,
                        packet, play_cb::encode_container_set_content);
 }
 
+void server::resend_commands() {
+    if (!impl_) {
+        return;
+    }
+    {
+        const std::lock_guard lock{impl_->command_cache_mutex};
+        impl_->cached_tree.reset();
+        impl_->cached_commands.reset();
+    }
+    for (const auto id : active_connections()) {
+        impl_->send_commands(id);
+    }
+}
+
+void server::resend_commands(std::uint64_t connection) {
+    if (!impl_) {
+        return;
+    }
+    {
+        const std::lock_guard lock{impl_->command_cache_mutex};
+        impl_->cached_tree.reset();
+        impl_->cached_commands.reset();
+    }
+    impl_->send_commands(connection);
+}
+
+void server::send_system_chat(std::uint64_t connection, std::string_view text) {
+    if (impl_) {
+        impl_->send_system_chat(connection, text);
+    }
+}
+
+void server::broadcast_system_chat(std::string_view text) {
+    if (impl_) {
+        impl_->broadcast_system_chat(text);
+    }
+}
+
+void server::set_player_game_mode(std::uint64_t connection, game_mode mode) {
+    if (impl_) {
+        impl_->set_game_mode(connection, mode);
+    }
+}
+
+auto server::player_names() const -> std::vector<player_name> {
+    if (!impl_) {
+        return {};
+    }
+    std::vector<player_name> players;
+    const std::lock_guard lock{impl_->connections_mutex};
+    players.reserve(impl_->connections.size());
+    for (const auto &[connection, state] : impl_->connections) {
+        if (!state.closed && state.state == connection_state::play) {
+            players.push_back({.connection = connection, .name = state.name});
+        }
+    }
+    return players;
+}
+
 auto server::active_connections() const -> std::vector<std::uint64_t> {
     if (!impl_) {
         return {};
@@ -1527,6 +1645,7 @@ void server::impl::announce_join(std::uint64_t id) {
         double z{0.0};
         float yaw{0.0F};
         float pitch{0.0F};
+        game_mode mode{game_mode::creative};
     };
     std::vector<player_snapshot> players;
     {
@@ -1542,14 +1661,15 @@ void server::impl::announce_join(std::uint64_t id) {
                                .y = live.y,
                                .z = live.z,
                                .yaw = live.yaw,
-                               .pitch = live.pitch});
+                               .pitch = live.pitch,
+                               .mode = live.mode});
         }
     }
     const auto make_entry = [&](const player_snapshot &player) {
         player_info_entry entry{};
         entry.id = player.profile;
         entry.name = player.name;
-        entry.game_mode = static_cast<std::uint32_t>(config.game_mode);
+        entry.game_mode = protocol_game_mode(player.mode);
         entry.listed = true;
         entry.latency = 0U;
         return entry;
@@ -1613,6 +1733,47 @@ void server::impl::announce_join(std::uint64_t id) {
             send_packet(player.connection, play_cb::add_entity::packet_id,
                         joining, play_cb::encode_add_entity);
         }
+    }
+}
+
+void server::impl::set_game_mode(std::uint64_t id, game_mode mode) {
+    player_info_entry entry{};
+    std::vector<std::uint64_t> targets;
+    {
+        const std::lock_guard lock{connections_mutex};
+        const auto found{connections.find(id)};
+        if (found == connections.end() || found->second.closed ||
+            found->second.state != connection_state::play) {
+            return;
+        }
+        auto &live{found->second};
+        live.mode = mode;
+        entry.id = live.profile;
+        entry.name = live.name;
+        entry.game_mode = protocol_game_mode(mode);
+        entry.listed = true;
+        entry.latency = 0U;
+        for (const auto &[other, state] : connections) {
+            if (!state.closed && state.state == connection_state::play) {
+                targets.push_back(other);
+            }
+        }
+    }
+    {
+        play_cb::player_abilities abilities{
+            .flags = ability_flags(mode),
+            .flying_speed = 0.05F,
+            .walking_speed = 0.1F,
+        };
+        send_packet(id, play_cb::player_abilities::packet_id, abilities,
+                    play_cb::encode_player_abilities);
+    }
+    play_cb::player_info_update update{};
+    update.payload.actions = player_info_game_mode;
+    update.payload.entries.push_back(std::move(entry));
+    for (const auto target : targets) {
+        send_packet(target, play_cb::player_info_update::packet_id, update,
+                    play_cb::encode_player_info_update);
     }
 }
 
@@ -1952,73 +2113,85 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        std::string command{packet.command};
+        std::string_view command{packet.command};
         if (!command.empty() && command.front() == '/') {
-            command.erase(command.begin());
+            command.remove_prefix(1);
         }
-        std::vector<std::string_view> tokens;
-        std::size_t position{0};
-        while (position < command.size()) {
-            while (position < command.size() && command[position] == ' ') {
-                ++position;
-            }
-            const auto start{position};
-            while (position < command.size() && command[position] != ' ') {
-                ++position;
-            }
-            if (position > start) {
-                tokens.emplace_back(command.data() + start, position - start);
-            }
-        }
-        if (tokens.empty()) {
+        if (command.empty() || !commands.execute) {
             return;
         }
-        refrain::log::info("chat: command '/{}' executed", tokens[0]);
-        if (tokens[0] == "help") {
-            send_system_chat(id, "Commands: /help, /list, /say <message>");
-        } else if (tokens[0] == "list") {
-            std::string names;
-            std::size_t count{0};
-            {
-                const std::lock_guard lock{connections_mutex};
-                for (const auto &[other, state] : connections) {
-                    static_cast<void>(other);
-                    if (state.closed || state.state != connection_state::play) {
-                        continue;
-                    }
-                    if (!names.empty()) {
-                        names += ", ";
-                    }
-                    names += state.name;
-                    ++count;
-                }
+        std::string name;
+        uuid profile{};
+        {
+            const std::lock_guard lock{connections_mutex};
+            const auto found{connections.find(id)};
+            if (found == connections.end() || found->second.closed) {
+                return;
             }
-            send_system_chat(id, fmt::format("Players ({}): {}", count, names));
-        } else if (tokens[0] == "say") {
-            std::string message;
-            for (std::size_t index{1}; index < tokens.size(); ++index) {
-                if (!message.empty()) {
-                    message += ' ';
-                }
-                message += tokens[index];
-            }
-            if (message.empty()) {
-                send_system_chat(id, "Usage: /say <message>");
-            } else {
-                std::string name;
-                {
-                    const std::lock_guard lock{connections_mutex};
-                    const auto found{connections.find(id)};
-                    if (found != connections.end()) {
-                        name = found->second.name;
-                    }
-                }
-                broadcast_system_chat(fmt::format("[{}] {}", name, message));
-            }
-        } else {
-            send_system_chat(id,
-                             fmt::format("Unknown command: /{}", tokens[0]));
+            name = found->second.name;
+            profile = found->second.profile;
         }
+        const player_identity identity{
+            .connection = id,
+            .id = profile,
+            .name = name,
+            .world = {},
+        };
+        const auto feedback{commands.execute(identity, command)};
+        if (feedback.handled && !feedback.message.empty()) {
+            send_system_chat(id, feedback.message);
+        }
+        return;
+    }
+    case play_sb::command_suggestion::packet_id: {
+        play_sb::command_suggestion packet{};
+        if (auto decoded{play_sb::decode_command_suggestion(in, packet)};
+            !decoded) {
+            reject(id, "malformed or unexpected packet");
+            return;
+        }
+        if (!commands.suggest) {
+            return;
+        }
+        std::string name;
+        uuid profile{};
+        {
+            const std::lock_guard lock{connections_mutex};
+            const auto found{connections.find(id)};
+            if (found == connections.end() || found->second.closed) {
+                return;
+            }
+            name = found->second.name;
+            profile = found->second.profile;
+        }
+        const player_identity identity{
+            .connection = id,
+            .id = profile,
+            .name = name,
+            .world = {},
+        };
+        auto result{
+            commands.suggest(identity, packet.command,
+                             static_cast<std::int32_t>(packet.command.size()))};
+        if (result.entries.size() > 1024U) {
+            result.entries.resize(1024U);
+        }
+        play_cb::command_suggestions response{};
+        response.id = packet.id;
+        response.start = result.start;
+        response.length = result.length;
+        response.suggestions.reserve(result.entries.size());
+        for (const auto &entry : result.entries) {
+            refrain::protocol::v777::wire::wire_entry suggestion{};
+            suggestion.text = std::string{entry.text};
+            if (!entry.tooltip.empty()) {
+                suggestion.tooltip =
+                    text_component{.text = std::string{entry.tooltip}};
+            }
+            response.suggestions.push_back(std::move(suggestion));
+        }
+        send_packet(id, play_cb::command_suggestions::packet_id, response,
+                    play_cb::encode_command_suggestions);
         return;
     }
     case play_sb::player_loaded::packet_id: {
@@ -2275,15 +2448,15 @@ auto server::start(server_inputs inputs, core::config::view view)
     config.spawn_y = inputs.spawn_y;
     config.spawn_z = inputs.spawn_z;
     config.seed = inputs.seed;
-    config.game_mode = static_cast<std::int32_t>(
-        view.get_int64("game_mode", inputs.game_mode));
-    config.hardcore = view.get_bool("hardcore", inputs.hardcore);
     config.registry_catalog_path = std::move(inputs.registry_catalog_path);
     config.spawn_chunks = std::move(inputs.spawn_chunks);
     config.break_block = std::move(inputs.break_block);
     config.place_block = std::move(inputs.place_block);
 
     auto state{std::make_unique<impl>()};
+    state->policy = std::move(inputs.policy);
+    state->join_state = std::move(inputs.join_state);
+    state->commands = std::move(inputs.commands);
     state->verify_session = std::move(inputs.verify_session);
     state->config = std::move(config);
     if (auto started{state->start()}; !started) {

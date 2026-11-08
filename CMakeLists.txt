@@ -492,7 +492,8 @@ add_library(Refrain::App ALIAS refrain-app)
 file(GLOB REFRAIN_SERVER_RUNTIME_SOURCES CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/server/*.cpp")
 refrain_add_library(refrain-server-runtime ${REFRAIN_SERVER_RUNTIME_SOURCES})
-target_link_libraries(refrain-server-runtime PUBLIC refrain-app refrain-net)
+target_link_libraries(refrain-server-runtime PUBLIC refrain-app refrain-net
+                                               refrain-command)
 add_library(Refrain::ServerRuntime ALIAS refrain-server-runtime)
 
 # --- tools -----------------------------------------------------------------

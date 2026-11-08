@@ -69,7 +69,35 @@ suite bot_tests = [] {
         inputs.spawn_chunks =
             std::make_shared<const std::vector<std::vector<std::byte>>>(
                 std::vector<std::vector<std::byte>>{chunk_body});
+        auto tree{std::make_shared<net::command_tree>()};
+        tree->nodes.push_back(net::command_node{});
+        tree->root_index = 0;
+        inputs.commands.tree = [tree](const net::player_identity &) {
+            return tree;
+        };
+        net::server *server_ptr{nullptr};
+        inputs.commands.execute =
+            [&server_ptr](const net::player_identity &identity,
+                          std::string_view input) -> net::command_feedback {
+            if (input == "help") {
+                return {.handled = true,
+                        .success = true,
+                        .message = "Commands: /help, /list, /say <message>"};
+            }
+            if (input.starts_with("say ")) {
+                std::string message{"["};
+                message += identity.name;
+                message += "] ";
+                message += input.substr(4);
+                server_ptr->broadcast_system_chat(message);
+                return {.handled = true, .success = true};
+            }
+            return {.handled = true,
+                    .success = false,
+                    .message = "Unknown command"};
+        };
         auto server{net::server::start(std::move(inputs), *view)};
+        server_ptr = server ? server->get() : nullptr;
         expect(static_cast<bool>(server));
         if (!server) {
             std::error_code error;

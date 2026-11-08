@@ -15,6 +15,7 @@
 #include <refrain/net/registry.hpp>
 #include <refrain/net/server.hpp>
 #include <refrain/server/chunk_packet.hpp>
+#include <refrain/server/command_bridge.hpp>
 #include <refrain/server/inventory_menu.hpp>
 #include <refrain/sim/replay.hpp>
 #include <refrain/sim/world.hpp>
@@ -1109,7 +1110,11 @@ auto run_server(const server_run_options &options) -> int {
                                spawn_chunks.size());
         }
     }
+    auto command_environment{
+        std::make_shared<refrain::server::command_environment>()};
     refrain::net::server_inputs network_inputs{};
+    network_inputs.commands =
+        refrain::server::make_command_bridge(command_environment);
     network_inputs.seed = level->seed;
     network_inputs.spawn_x = static_cast<double>(level->spawn_x) + 0.5;
     network_inputs.spawn_y = static_cast<double>(level->spawn_y);
@@ -1153,6 +1158,7 @@ auto run_server(const server_run_options &options) -> int {
                             network.error().message);
     } else {
         listener = std::move(*network);
+        command_environment->listener = listener.get();
         refrain::log::info("network: listening on {}:{}",
                            options.network.get_string("bind_host", "0.0.0.0"),
                            listener->local_port());
