@@ -106,6 +106,9 @@ inline auto canonical_state_name(std::string_view input) -> std::string {
     if (name == "minecraft:tall_seagrass[half=lower]") {
         return "minecraft:tall_seagrass";
     }
+    if (name == "minecraft:sculk_catalyst[bloom=false]") {
+        return "minecraft:sculk_catalyst";
+    }
     if (name == "minecraft:sea_pickle[pickles=1,waterlogged=true]") {
         return "minecraft:sea_pickle";
     }

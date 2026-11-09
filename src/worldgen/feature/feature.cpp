@@ -92,16 +92,43 @@ auto simple_block_feature::place(feature_context &context,
         return false;
     }
     (void)schedule_tick_;
-    // Double plants place both halves. The lower state carries `half=lower`;
-    // the upper half replaces the air or fluid above it and keeps every other
+    // Double plants place both halves. A state that spells `half=lower` maps
+    // directly to its upper counterpart; a bare block name is a default state,
+    // and the default-state report says whether that state is the lower half.
+    // The upper half replaces the air or fluid above it and keeps every other
     // property of the placed state.
     std::optional<block_state_id> upper_state;
     const std::string_view state_name = states.name(state);
+    std::string upper_key;
     if (const auto half = state_name.find("half=lower");
         half != std::string_view::npos) {
-        std::string upper_key{state_name};
+        upper_key = state_name;
         upper_key.replace(half, std::string_view{"half=lower"}.size(),
                           "half=upper");
+    } else if (state_name.find('[') == std::string_view::npos) {
+        const auto defaults = states.default_properties(state);
+        const auto lower = std::find_if(
+            defaults.begin(), defaults.end(),
+            [](const block_default_property &property) {
+                return property.name == "half" && property.value == "lower";
+            });
+        if (lower != defaults.end()) {
+            upper_key = state_block_name(state_name);
+            upper_key.push_back('[');
+            for (std::size_t index = 0; index < defaults.size(); ++index) {
+                if (index != 0) {
+                    upper_key.push_back(',');
+                }
+                upper_key.append(defaults[index].name);
+                upper_key.push_back('=');
+                upper_key.append(defaults[index].name == "half"
+                                     ? std::string_view{"upper"}
+                                     : std::string_view{defaults[index].value});
+            }
+            upper_key.push_back(']');
+        }
+    }
+    if (!upper_key.empty()) {
         const auto resolved = context.placement.resolve_state
                                   ? context.placement.resolve_state(upper_key)
                                   : no_block_state;

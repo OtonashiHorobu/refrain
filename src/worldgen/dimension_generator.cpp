@@ -8,6 +8,7 @@
 #include <refrain/worldgen/biome/biome_view.hpp>
 #include <refrain/worldgen/carver/carver_data.hpp>
 #include <refrain/worldgen/carver/carver_stage.hpp>
+#include <refrain/worldgen/chunk/block_defaults.hpp>
 #include <refrain/worldgen/chunk/chunk_region.hpp>
 #include <refrain/worldgen/terrain/aquifer.hpp>
 
@@ -87,6 +88,7 @@ struct dimension_shared_data {
     biome_temperatures temperatures{};
     surface::noise_registry noises;
     std::set<std::string> possible_biomes{};
+    block_default_map block_defaults{};
     jint generation_min_y{0};
     jint generation_height{0};
 };
@@ -165,6 +167,17 @@ auto dimension_generator::load_shared(dimension_generator_config config)
     if (!tags) {
         return std::unexpected{tags.error()};
     }
+    // A snapshot that also ships the block default report lets a bare state
+    // key answer state-dependent questions. Older snapshots omit it, and the
+    // generator keeps the spelling-only behaviour. The report is loaded once
+    // per shared instance so batch workers do not parse it again.
+    auto block_defaults = load_block_defaults(config.data_root);
+    if (!block_defaults) {
+        if (block_defaults.error().code != error_code::not_found) {
+            return std::unexpected{block_defaults.error()};
+        }
+        block_defaults = block_default_map{};
+    }
     auto documents = surface::load_material_documents(config.data_root);
     if (!documents) {
         return std::unexpected{documents.error()};
@@ -209,6 +222,7 @@ auto dimension_generator::load_shared(dimension_generator_config config)
     if (const auto loaded = shared->noises.load(config.data_root); !loaded) {
         return std::unexpected{loaded.error()};
     }
+    shared->block_defaults = std::move(*block_defaults);
     return std::shared_ptr<const dimension_shared_data>{std::move(shared)};
 }
 
@@ -241,6 +255,12 @@ auto dimension_generator::create(
     block_state_registry states;
     if (const auto applied = apply_block_tags(states, shared->tags); !applied) {
         return std::unexpected{applied.error()};
+    }
+    // A snapshot that also ships the block default report lets a bare state
+    // key answer state-dependent questions. Older snapshots omit it, and the
+    // generator keeps the spelling-only behaviour.
+    if (!shared->block_defaults.empty()) {
+        states.set_block_defaults(shared->block_defaults);
     }
     return std::unique_ptr<dimension_generator>{
         new dimension_generator{std::move(config), std::move(shared),

@@ -271,6 +271,7 @@ suite<"worldgen/block-state-registry"> block_state_registry_tests = [] {
         const auto water = registry->find("minecraft:water[level=0]");
         const auto slab =
             registry->find("minecraft:oak_slab[waterlogged=true]");
+        const auto slab_default = registry->find("minecraft:oak_slab");
         const auto bedrock = registry->find("minecraft:bedrock");
         expect(stone.has_value());
         expect(leaves.has_value());
@@ -290,6 +291,18 @@ suite<"worldgen/block-state-registry"> block_state_registry_tests = [] {
         expect(registry->traits(*water).air == false);
         expect(registry->traits(*slab).fluid);
         expect(registry->in_tag(*bedrock, "minecraft:uncarvable"));
+        expect(slab_default.has_value());
+        if (slab_default) {
+            expect(*slab_default != *slab);
+            expect(registry->name(*slab_default) ==
+                   "minecraft:oak_slab[waterlogged=false]");
+            const auto properties = registry->default_properties(*slab);
+            expect(properties.size() == 1U);
+            if (properties.size() == 1U) {
+                expect(properties[0].name == "waterlogged");
+                expect(properties[0].value == "false");
+            }
+        }
         expect(!registry->in_tag(*stone, "minecraft:uncarvable"));
         expect(registry->name(registry->air()) == "minecraft:air");
         expect(registry->vanilla_id(*stone) == 1);

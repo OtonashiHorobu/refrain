@@ -75,6 +75,9 @@ class block_state_registry final : public block_state_table {
                               std::uint16_t vanilla_id = no_block_state)
         -> result<block_state_id>;
 
+    /// Looks a state up by its canonical key. A bare block name resolves to
+    /// the block's default state, which is how the datapack spells a state
+    /// when it names no properties.
     [[nodiscard]] auto find(std::string_view key) const
         -> std::optional<block_state_id>;
     [[nodiscard]] auto size() const noexcept -> std::size_t {
@@ -82,6 +85,15 @@ class block_state_registry final : public block_state_table {
     }
     [[nodiscard]] auto block(block_state_id id) const -> std::uint16_t;
     [[nodiscard]] auto vanilla_id(block_state_id id) const -> std::uint16_t;
+
+    /// Records the default state of `block`. `find` resolves a bare block
+    /// name to it, and the registry builder fills it from the block table.
+    void add_default_state(std::string_view block, block_state_id state);
+
+    /// Replaces the default-property table. A datapack state key that names a
+    /// block without properties can then answer the state-dependent questions
+    /// the reference asks its default state.
+    void set_block_defaults(block_default_map defaults);
 
     void add_tag(std::string_view tag, std::span<const block_state_id> states);
 
@@ -104,6 +116,8 @@ class block_state_registry final : public block_state_table {
         -> std::string_view override;
     [[nodiscard]] auto in_tag(block_state_id id, std::string_view tag) const
         -> bool override;
+    [[nodiscard]] auto default_properties(block_state_id id) const
+        -> std::span<const block_default_property> override;
 
   private:
     std::deque<std::string> keys_{};
@@ -111,6 +125,8 @@ class block_state_registry final : public block_state_table {
     std::vector<std::uint16_t> blocks_{};
     std::vector<std::uint16_t> vanilla_ids_{};
     std::unordered_map<std::string_view, block_state_id> index_{};
+    std::map<std::string, block_state_id, std::less<>> defaults_{};
+    block_default_map default_properties_{};
     std::map<std::string, std::vector<block_state_id>, std::less<>> tags_{};
     std::map<std::string, std::vector<block_state_id>, std::less<>>
         ordered_tags_{};

@@ -178,6 +178,12 @@ auto is_sturdy_face(const block_state_table &states, block_state_id state,
         name == "minecraft:vine" || name == "minecraft:resin_clump") {
         return false;
     }
+    // Amethyst clusters and buds are thin growths: their collision shape
+    // never reaches a whole block face.
+    if (name == "minecraft:amethyst_cluster" ||
+        name.ends_with("_amethyst_bud")) {
+        return false;
+    }
     if (states.in_tag(state, "minecraft:slabs")) {
         return slab_face(states, state, face);
     }

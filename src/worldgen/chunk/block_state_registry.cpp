@@ -274,11 +274,42 @@ auto block_state_registry::intern(std::string_view key,
     return id;
 }
 
+void block_state_registry::add_default_state(std::string_view block,
+                                             block_state_id state) {
+    defaults_.emplace(std::string{block}, state);
+}
+
+void block_state_registry::set_block_defaults(block_default_map defaults) {
+    default_properties_ = std::move(defaults);
+}
+
+auto block_state_registry::default_properties(block_state_id id) const
+    -> std::span<const block_default_property> {
+    if (id >= keys_.size()) {
+        return {};
+    }
+    const auto found =
+        default_properties_.find(std::string{state_block_name(keys_[id])});
+    if (found == default_properties_.end()) {
+        return {};
+    }
+    return found->second;
+}
+
 auto block_state_registry::find(std::string_view key) const
     -> std::optional<block_state_id> {
-    const auto found = index_.find(key);
-    return found == index_.end() ? std::nullopt
-                                 : std::optional<block_state_id>{found->second};
+    if (const auto found = index_.find(key); found != index_.end()) {
+        return found->second;
+    }
+    // A datapack names a plain block when it wants that block's default
+    // state; the canonical key of that state spells its properties out.
+    if (key.find('[') != std::string_view::npos) {
+        return std::nullopt;
+    }
+    const auto found = defaults_.find(std::string{key});
+    return found == defaults_.end()
+               ? std::nullopt
+               : std::optional<block_state_id>{found->second};
 }
 
 auto block_state_registry::block(block_state_id id) const -> std::uint16_t {
@@ -370,6 +401,7 @@ auto build_block_state_registry(const data::vanilla_tables &tables,
     }
 
     block_state_registry registry;
+    block_default_map default_properties;
     std::unordered_map<std::string, std::vector<block_state_id>> by_block;
     for (std::uint32_t index = 0; index < tables.state_count(); ++index) {
         const auto state = tables.state_at(index);
@@ -402,6 +434,22 @@ auto build_block_state_registry(const data::vanilla_tables &tables,
         if (!id) {
             return std::unexpected{id.error()};
         }
+        if (index == block.default_state) {
+            registry.add_default_state(block.name, *id);
+            block_default_properties defaults_for_block;
+            const auto property_ids = tables.block_properties(state.block);
+            for (std::size_t property = 0; property < property_ids.size();
+                 ++property) {
+                defaults_for_block.push_back(block_default_property{
+                    .name = std::string{tables.property_name(
+                        property_ids[property])},
+                    .value = std::string{tables.property_value(
+                        property_ids[property], state.values[property])},
+                });
+            }
+            default_properties.emplace(block.name,
+                                       std::move(defaults_for_block));
+        }
         by_block[block_name].push_back(*id);
     }
 
@@ -421,6 +469,7 @@ auto build_block_state_registry(const data::vanilla_tables &tables,
         }
         registry.add_tag(tag, ids);
     }
+    registry.set_block_defaults(std::move(default_properties));
     return registry;
 }
 

@@ -934,6 +934,36 @@ suite<"worldgen/feature-sculk"> sculk_feature_tests = [] {
             expect(environment.name_at(8, 11, 8) == "minecraft:air");
         };
 
+    "a bare double-plant name resolves its default half from the report"_test =
+        [] {
+            fixture environment;
+            const auto grass = environment.resolve("minecraft:grass_block");
+            expect(grass != no_block_state);
+            const std::array<block_state_id, 1> motion{grass};
+            environment.registry.add_tag("minecraft:blocks_motion_in_heightmap",
+                                         motion);
+            environment.chunk.set_state(8, 10, 8, grass);
+            const auto tall_grass = environment.resolve("minecraft:tall_grass");
+            expect(tall_grass != no_block_state);
+            block_default_map defaults;
+            defaults.emplace(
+                "minecraft:tall_grass",
+                block_default_properties{{.name = "half", .value = "lower"}});
+            environment.registry.set_block_defaults(std::move(defaults));
+            decoded_feature feature{environment.registry};
+            if (!feature.load(
+                    R"({"type":"minecraft:simple_block",
+                        "to_place":{"id":"minecraft:tall_grass"}})")) {
+                return;
+            }
+            auto random = make_random(9);
+            expect(feature.place(environment.context, random,
+                                 block_pos{.x = 8, .y = 11, .z = 8}));
+            expect(environment.name_at(8, 11, 8) == "minecraft:tall_grass");
+            expect(environment.name_at(8, 12, 8).find("half=upper") !=
+                   std::string_view::npos);
+        };
+
     "a simple block feature places both halves of a double plant"_test = [] {
         fixture environment;
         const auto grass = environment.resolve("minecraft:grass_block");
