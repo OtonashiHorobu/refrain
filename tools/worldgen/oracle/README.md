@@ -365,6 +365,160 @@ REFRAIN_RUNTIME_STRONGHOLD_STRUCTURE_SET=minecraft:strongholds \
     ./build/Release/bin/refrain-tests "the runtime service reproduces"
 ```
 
+### Jigsaw coverage: outpost, taiga village, ancient city and trial chambers
+
+Four further jigsaw structures have reference starts and full-stage chunks.
+The candidates come from `locate structure` in a probe world with the same
+fixed biome; the force-load boxes below cover the start and the pieces the
+compared chunk needs.
+
+A pillager outpost uses the plains tag. Seed 1 places its start at chunk
+`(5, 20)`; the box covers chunks `(0..11, 16..27)` and the start chunk holds
+the base plate, the watchtower list element and every feature plate:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:plains --only-structure-set pillager_outposts \
+    --settle 30 --force-load-box 0 256 191 447 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2outpost
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_PILLAGER_OUTPOST_REGION=/tmp/t2outpost/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_PILLAGER_OUTPOST_CHUNK_X=5 \
+REFRAIN_JIGSAW_PILLAGER_OUTPOST_CHUNK_Z=20 \
+REFRAIN_JIGSAW_PILLAGER_OUTPOST_SEED=1 \
+    ./build/Release/bin/refrain-tests \
+    "the pillager outpost start matches the reference piece list"
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_REGION=/tmp/t2outpost/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_CHUNK_X=5 \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_CHUNK_Z=20 \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_START_CHUNK_X=5 \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_START_CHUNK_Z=20 \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_SEED=1 \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_BIOME=minecraft:plains \
+    ./build/Release/bin/refrain-tests \
+    "a pillager outpost chunk matches the reference full-stage world"
+```
+
+A taiga village only selects the taiga biome. Seed 1 places its start at
+chunk `(15, 8)`. The full-stage case compares chunk `(15, 9)`, one chunk south
+of the start, where every piece comes from the village templates; the patch of
+taiga grass at the start chunk corner reads neighbouring structure blocks and
+depends on the reference world's chunk generation order:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:taiga --only-structure-set villages \
+    --settle 30 --force-load-box 128 0 303 159 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2village-taiga
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_VILLAGE_TAIGA_REGION=/tmp/t2village-taiga/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_VILLAGE_TAIGA_CHUNK_X=15 \
+REFRAIN_JIGSAW_VILLAGE_TAIGA_CHUNK_Z=8 \
+REFRAIN_JIGSAW_VILLAGE_TAIGA_SEED=1 \
+    ./build/Release/bin/refrain-tests \
+    "the taiga village start matches the reference piece list"
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_REGION=/tmp/t2village-taiga/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_CHUNK_X=15 \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_CHUNK_Z=9 \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_START_CHUNK_X=15 \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_START_CHUNK_Z=8 \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_SEED=1 \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_BIOME=minecraft:taiga \
+    ./build/Release/bin/refrain-tests \
+    "a taiga village chunk matches the reference full-stage world"
+```
+
+An ancient city only selects the deep dark. Seed 1 places its start at chunk
+`(9, 11)` and the box covers chunks `(0..11, 4..14)`. The start chunk contains
+the city's water and lava pools, and the reference world lets those fluids
+flow after saving, so the start chunk is not a stable block oracle. The
+full-stage case therefore compares chunk `(11, 12)`, a dry chunk the start's
+pieces cover:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:deep_dark --only-structure-set ancient_cities \
+    --settle 40 --force-load-box 0 64 191 239 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2ancient
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_ANCIENT_CITY_REGION=/tmp/t2ancient/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_ANCIENT_CITY_CHUNK_X=9 \
+REFRAIN_JIGSAW_ANCIENT_CITY_CHUNK_Z=11 \
+REFRAIN_JIGSAW_ANCIENT_CITY_SEED=1 \
+    ./build/Release/bin/refrain-tests \
+    "the ancient city start matches the reference piece list"
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_REGION=/tmp/t2ancient/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_CHUNK_X=11 \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_CHUNK_Z=12 \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_START_CHUNK_X=9 \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_START_CHUNK_Z=11 \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_SEED=1 \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_BIOME=minecraft:deep_dark \
+    ./build/Release/bin/refrain-tests \
+    "an ancient city chunk matches the reference full-stage world"
+```
+
+Trial chambers select from every overworld biome except oceans, mushroom
+fields and the deep dark. Seed 1 places its start at chunk `(18, 14)`; the
+structure uses a uniform start height, pool aliases and encapsulating terrain
+adaptation, and the start chunk is dry:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:plains --only-structure-set trial_chambers \
+    --settle 40 --force-load-box 224 160 367 303 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2trial
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_TRIAL_CHAMBERS_REGION=/tmp/t2trial/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_TRIAL_CHAMBERS_CHUNK_X=18 \
+REFRAIN_JIGSAW_TRIAL_CHAMBERS_CHUNK_Z=14 \
+REFRAIN_JIGSAW_TRIAL_CHAMBERS_SEED=1 \
+    ./build/Release/bin/refrain-tests \
+    "the trial chambers start matches the reference piece list"
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_REGION=/tmp/t2trial/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_CHUNK_X=18 \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_CHUNK_Z=14 \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_START_CHUNK_X=18 \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_START_CHUNK_Z=14 \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_SEED=1 \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_BIOME=minecraft:plains \
+    ./build/Release/bin/refrain-tests \
+    "a trial chambers chunk matches the reference full-stage world"
+```
+
+The start cases read `_STRUCTURE`, `_BIOME` and `_TEMPLATE_DIRS` overrides when
+the structure document differs from the defaults. Every candidate value comes
+from the environment, so no seed or chunk coordinate is fixed in the tests.
+
+The full-stage runs compare blocks and all four final heightmaps; the full
+heightmap and runtime-service checks only run when the compared chunk owns the
+start, as in the outpost case. `REFRAIN_FULL_STAGE_MISMATCHES` raises the
+number of differing positions a failing comparison prints.
+
 Other structure sets generate starts in neighbouring chunks of the reference
 world. For a whole-structure sweep, replace every other
 `worldgen/structure_set/*.json` in the generated datapack with an empty

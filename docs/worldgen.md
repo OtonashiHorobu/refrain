@@ -236,15 +236,17 @@ The reference-backed suites currently cover:
 - structure starts, payload trees, piece placement and full-stage
   generation for jungle temple, warm ocean ruin, beached shipwreck,
   buried treasure, mineshaft, ocean monument, stronghold, nether fortress,
-  bastion remnant, nether fossil, end city and a plains village start,
-  including its feature pool elements;
+  bastion remnant, nether fossil, end city, a plains village start, a
+  pillager outpost, a taiga village, an ancient city and trial chambers,
+  including their feature pool elements;
 - `locate_structure` against real seeds and reference heightmaps;
 - the storage bridge, RWF round trip and Anvil export/import;
 - parallel fill determinism and fixed-biome structure generator
   determinism;
 - the full-chunk generator against the reference full-stage worlds of a
-  plains village, a woodland mansion and a stronghold, plus batch equality
-  and the terrain/features/full status ladder;
+  plains village, a woodland mansion, a stronghold, a pillager outpost, a
+  taiga village, an ancient city and trial chambers, plus batch equality and
+  the terrain/features/full status ladder;
 - the configured feature, placement modifier, block predicate, state provider
   and tree placer families the standard biomes name, through synthetic unit
   tests and a content-driven test that creates one generator and generates one
@@ -255,7 +257,10 @@ The reference-backed suites currently cover:
 Known gaps: the feature registry decodes every configured feature, placement
 modifier, block predicate and state-provider type the shipped snapshot uses,
 including the cherry, poplar, bending and upwards-branching tree placers, the
-mangrove root placer and the pale moss and creaking heart decorators. A biome
+mangrove root placer and the pale moss and creaking heart decorators. The pine
+and mega pine foliage placers read their canopy height provider under the name
+each documents (`height` and `crown_height`); a pine placed feature that lacks
+the provider places nothing instead of falling back to a default height. A biome
 whose plan names an unknown type still fails `chunk_generator::create` with an
 `unsupported` error instead of silently dropping that feature, and the
 content-driven test fails when that happens. Predicates whose reference
@@ -266,7 +271,8 @@ entities, and the biome membership predicate accepts explicit biome ids but not
 biome tags. Structure feature placement has no climate source, so snow and
 freeze feature modifiers are inert there. Capped processor lists, block-entity rule
 modifiers and template entities are not implemented; end city shulker and
-elytra data markers therefore leave no entities behind. End gateways and the
+elytra data markers, pillager cages and village animal markers therefore leave
+no entities behind. End gateways and the
 obsidian end platform are not implemented.
 
 Ruined portal starts place the template at the reference position and
@@ -279,6 +285,23 @@ piece matches the reference world in the sixteen chunks the building covers.
 A stronghold start plus every fitted corridor and room matches the reference
 world in the sixty-three chunks the pieces cover, and the ring placement
 reproduces the reference candidate chunks.
+
+The jigsaw framework is validated on the overworld structures the structure
+oracle adds: seed 1 places a pillager outpost start at chunk `(5, 20)`, a taiga
+village start at chunk `(15, 8)`, an ancient city start at chunk `(9, 11)` and
+a trial chambers start at chunk `(18, 14)`. The start piece lists match the
+reference children exactly, including list elements, the outpost feature
+plates, the ancient city's start anchor and the trial chambers pool aliases.
+A full-stage reference chunk of each structure matches block for block and in
+all four final heightmaps: the outpost and trial chambers start chunks, a taiga
+village chunk one chunk south of the start and an ancient city chunk away from
+its fluid pools.
+The clean chunks are chosen deliberately: reference worlds settle flowing
+water and lava after saving, so a chunk whose pieces place fluids cannot be
+compared block for block, and a feature element that writes into the compared
+chunk from a neighbouring chunk depends on the order those chunks were
+generated. The commands and environment variables are recorded in
+`tools/worldgen/oracle/README.md`.
 
 The nether structure oracle also compares a full-stage bastion remnant chunk
 and a full-stage nether fossil chunk block for block and in all four final
