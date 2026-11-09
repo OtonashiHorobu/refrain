@@ -79,6 +79,7 @@ struct movement_event {
     double z{0.0};
     float yaw{0.0F};
     float pitch{0.0F};
+    bool on_ground{false};
 };
 
 /// State the gameplay layer assigns to a joining player.

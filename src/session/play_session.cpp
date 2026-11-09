@@ -55,6 +55,15 @@ auto play_session::update_position(std::uint64_t connection, double x, double y,
     return true;
 }
 
+auto play_session::set_on_ground(std::uint64_t connection, bool value) -> bool {
+    const auto found{players_.find(connection)};
+    if (found == players_.end()) {
+        return false;
+    }
+    found->second.on_ground = value;
+    return true;
+}
+
 auto play_session::set_health(std::uint64_t connection, float health) -> bool {
     const auto found{players_.find(connection)};
     if (found == players_.end()) {

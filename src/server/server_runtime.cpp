@@ -1140,6 +1140,55 @@ void announce_session_leave(refrain::net::server &listener,
     }
 }
 
+void broadcast_session_moves(
+    refrain::net::server &listener,
+    const refrain::session::play_session &players,
+    std::unordered_map<std::uint64_t, refrain::net::movement_event> &last) {
+    const auto snapshot{players.all()};
+    for (const auto &mover : snapshot) {
+        const refrain::net::movement_event current{
+            .connection = mover.connection,
+            .x = mover.x,
+            .y = mover.y,
+            .z = mover.z,
+            .yaw = mover.yaw,
+            .pitch = mover.pitch,
+            .on_ground = mover.on_ground,
+        };
+        const auto previous{last.find(mover.connection)};
+        if (previous != last.end() && previous->second.x == current.x &&
+            previous->second.y == current.y &&
+            previous->second.z == current.z &&
+            previous->second.yaw == current.yaw &&
+            previous->second.pitch == current.pitch) {
+            continue;
+        }
+        last[mover.connection] = current;
+        refrain::protocol::current::play::clientbound::teleport_entity packet{};
+        packet.id = static_cast<std::int32_t>(mover.entity_id);
+        packet.change.position = {.x = mover.x, .y = mover.y, .z = mover.z};
+        packet.change.delta_movement = {};
+        packet.change.y_rot = mover.yaw;
+        packet.change.x_rot = mover.pitch;
+        packet.relatives = 0;
+        packet.on_ground = mover.on_ground;
+        auto body{encode_play_body(refrain::protocol::current::play::
+                                       clientbound::teleport_entity::packet_id,
+                                   packet,
+                                   refrain::protocol::current::play::
+                                       clientbound::encode_teleport_entity)};
+        if (body.empty()) {
+            continue;
+        }
+        for (const auto &target : snapshot) {
+            if (target.connection != mover.connection &&
+                target.world == mover.world) {
+                listener.send_raw(target.connection, body);
+            }
+        }
+    }
+}
+
 } // namespace
 
 auto run_server(const server_run_options &options) -> int {
@@ -1314,6 +1363,8 @@ auto run_server(const server_run_options &options) -> int {
             : refrain::net::game_mode::creative};
     command_environment->default_mode = initial_mode;
     refrain::session::play_session players{};
+    std::unordered_map<std::uint64_t, refrain::net::movement_event>
+        last_moves{};
     refrain::net::server *active_listener{nullptr};
     const auto external_join{options.player_join};
     const auto external_leave{options.player_leave};
@@ -1362,7 +1413,7 @@ auto run_server(const server_run_options &options) -> int {
             }
         };
     network_inputs.player_leave =
-        [&players, &active_listener,
+        [&players, &last_moves, &active_listener,
          external_leave](const refrain::net::player_identity &identity) {
             const auto leaving{players.player_of(identity.connection)};
             const auto copy{
@@ -1370,6 +1421,7 @@ auto run_server(const server_run_options &options) -> int {
                     ? std::nullopt
                     : std::optional<refrain::session::player>{*leaving}};
             static_cast<void>(players.remove_player(identity.connection));
+            last_moves.erase(identity.connection);
             if (copy && active_listener != nullptr) {
                 announce_session_leave(*active_listener, *copy, players);
             }
@@ -1883,6 +1935,7 @@ auto run_server(const server_run_options &options) -> int {
         scheduler.run(refrain::core::schedule::phase::pre_tick, ticks_run);
         if (listener) {
             listener->tick();
+            broadcast_session_moves(*listener, players, last_moves);
         }
         process_chunk_streams();
         process_container_clicks();

@@ -28,6 +28,7 @@ struct player {
     double z{0.0};
     float yaw{0.0F};
     float pitch{0.0F};
+    bool on_ground{false};
     std::uint32_t game_mode{0};
     float health{20.0F};
 };
@@ -62,6 +63,9 @@ class play_session {
     [[nodiscard]] auto update_position(std::uint64_t connection, double x,
                                        double y, double z, float yaw,
                                        float pitch) -> bool;
+
+    [[nodiscard]] auto set_on_ground(std::uint64_t connection, bool value)
+        -> bool;
 
     [[nodiscard]] auto set_health(std::uint64_t connection, float health)
         -> bool;

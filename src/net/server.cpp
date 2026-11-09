@@ -221,12 +221,6 @@ struct server::impl {
         std::int32_t last_chunk_z{0};
         std::int32_t last_chunk_radius{0};
         bool chunk_initialized{false};
-        double broadcast_x{0.0};
-        double broadcast_y{0.0};
-        double broadcast_z{0.0};
-        float broadcast_yaw{0.0F};
-        float broadcast_pitch{0.0F};
-        bool broadcast_initialized{false};
         std::vector<std::byte> verify_token{};
         bool online_pending{false};
         token_bucket limiter{};
@@ -305,7 +299,6 @@ struct server::impl {
     void send_initial_chunks(std::uint64_t id);
     void queue_chunk_views();
     void broadcast_animation(std::uint64_t id, std::int8_t action);
-    void broadcast_entity_moves();
     void send_keepalive(std::uint64_t id);
     void keepalive_loop();
     [[nodiscard]] auto build_configuration() -> status;
@@ -1960,68 +1953,6 @@ void server::impl::broadcast_animation(std::uint64_t id, std::int8_t action) {
     }
 }
 
-void server::impl::broadcast_entity_moves() {
-    struct move_event {
-        std::uint64_t connection{0};
-        double x{0.0};
-        double y{0.0};
-        double z{0.0};
-        float yaw{0.0F};
-        float pitch{0.0F};
-        bool on_ground{false};
-    };
-    std::vector<move_event> moves;
-    std::vector<std::uint64_t> targets;
-    {
-        const std::lock_guard lock{connections_mutex};
-        for (const auto &[id, live] : connections) {
-            if (live.closed || live.state != connection_state::play) {
-                continue;
-            }
-            targets.push_back(id);
-            const bool moved{
-                !live.broadcast_initialized || live.x != live.broadcast_x ||
-                live.y != live.broadcast_y || live.z != live.broadcast_z ||
-                live.yaw != live.broadcast_yaw ||
-                live.pitch != live.broadcast_pitch};
-            if (!moved) {
-                continue;
-            }
-            auto &mutable_live{connections.at(id)};
-            mutable_live.broadcast_initialized = true;
-            mutable_live.broadcast_x = live.x;
-            mutable_live.broadcast_y = live.y;
-            mutable_live.broadcast_z = live.z;
-            mutable_live.broadcast_yaw = live.yaw;
-            mutable_live.broadcast_pitch = live.pitch;
-            moves.push_back({.connection = id,
-                             .x = live.x,
-                             .y = live.y,
-                             .z = live.z,
-                             .yaw = live.yaw,
-                             .pitch = live.pitch,
-                             .on_ground = live.on_ground});
-        }
-    }
-    for (const auto &move : moves) {
-        play_cb::teleport_entity packet{};
-        packet.id = static_cast<std::int32_t>(move.connection);
-        packet.change.position = {.x = move.x, .y = move.y, .z = move.z};
-        packet.change.delta_movement = {};
-        packet.change.y_rot = move.yaw;
-        packet.change.x_rot = move.pitch;
-        packet.relatives = 0;
-        packet.on_ground = move.on_ground;
-        for (const auto target : targets) {
-            if (target == move.connection) {
-                continue;
-            }
-            send_packet(target, play_cb::teleport_entity::packet_id, packet,
-                        play_cb::encode_teleport_entity);
-        }
-    }
-}
-
 void server::impl::send_initial_chunks(std::uint64_t id) {
     play_cb::chunk_batch_start start{};
     send_packet(id, play_cb::chunk_batch_start::packet_id, start,
@@ -2097,7 +2028,8 @@ void server::impl::handle_play(std::uint64_t id,
                                          .y = packet.y,
                                          .z = packet.z,
                                          .yaw = packet.y_rot,
-                                         .pitch = packet.x_rot});
+                                         .pitch = packet.x_rot,
+                                         .on_ground = live.on_ground});
         }
         return;
     }
@@ -2139,12 +2071,14 @@ void server::impl::handle_play(std::uint64_t id,
         const auto pitch{live.pitch};
         lock.unlock();
         if (movement_hook) {
-            movement_hook(movement_event{.connection = id,
-                                         .x = packet.x,
-                                         .y = packet.y,
-                                         .z = packet.z,
-                                         .yaw = yaw,
-                                         .pitch = pitch});
+            movement_hook(
+                movement_event{.connection = id,
+                               .x = packet.x,
+                               .y = packet.y,
+                               .z = packet.z,
+                               .yaw = yaw,
+                               .pitch = pitch,
+                               .on_ground = (packet.flags & 1U) != 0});
         }
         return;
     }
@@ -2169,12 +2103,14 @@ void server::impl::handle_play(std::uint64_t id,
         live.on_ground = (packet.flags & 1U) != 0;
         lock.unlock();
         if (movement_hook) {
-            movement_hook(movement_event{.connection = id,
-                                         .x = packet.x,
-                                         .y = packet.y,
-                                         .z = packet.z,
-                                         .yaw = packet.y_rot,
-                                         .pitch = packet.x_rot});
+            movement_hook(
+                movement_event{.connection = id,
+                               .x = packet.x,
+                               .y = packet.y,
+                               .z = packet.z,
+                               .yaw = packet.y_rot,
+                               .pitch = packet.x_rot,
+                               .on_ground = (packet.flags & 1U) != 0});
         }
         return;
     }
@@ -2199,7 +2135,8 @@ void server::impl::handle_play(std::uint64_t id,
                                    .y = live.y,
                                    .z = live.z,
                                    .yaw = live.yaw,
-                                   .pitch = live.pitch};
+                                   .pitch = live.pitch,
+                                   .on_ground = live.on_ground};
         lock.unlock();
         if (movement_hook) {
             movement_hook(event);
@@ -2224,7 +2161,8 @@ void server::impl::handle_play(std::uint64_t id,
                                    .y = found->second.y,
                                    .z = found->second.z,
                                    .yaw = found->second.yaw,
-                                   .pitch = found->second.pitch};
+                                   .pitch = found->second.pitch,
+                                   .on_ground = found->second.on_ground};
         lock.unlock();
         if (movement_hook) {
             movement_hook(event);
@@ -2878,7 +2816,6 @@ void server::impl::tick() {
         }
     }
     queue_chunk_views();
-    broadcast_entity_moves();
 }
 
 server::server(std::unique_ptr<impl> state) : impl_{std::move(state)} {}
