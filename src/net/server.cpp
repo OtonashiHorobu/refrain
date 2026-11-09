@@ -851,11 +851,24 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             }
             return;
         }
+        case config_sb::cookie_response::packet_id:
+            parse_only<config_sb::cookie_response>(
+                id, in, config_sb::decode_cookie_response);
+            return;
+        case config_sb::resource_pack::packet_id:
+            parse_only<config_sb::resource_pack>(
+                id, in, config_sb::decode_resource_pack);
+            return;
+        case config_sb::custom_click_action::packet_id:
+            parse_only<config_sb::custom_click_action>(
+                id, in, config_sb::decode_custom_click_action);
+            return;
+        case config_sb::accept_code_of_conduct::packet_id:
+            parse_only<config_sb::accept_code_of_conduct>(
+                id, in, config_sb::decode_accept_code_of_conduct);
+            return;
         default:
-            // Cookie and resource-pack replies are only expected after the
-            // server sends the matching request, which it does not yet do.
-            log::debug("net: ignored configuration packet id={} packet={}", id,
-                       *packet_id);
+            reject(id, "unknown configuration packet");
             return;
         }
     }
