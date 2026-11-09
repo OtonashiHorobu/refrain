@@ -19,10 +19,14 @@ struct feature_data {
 
     friend auto operator<(const feature_data &left, const feature_data &right)
         -> bool {
-        if (left.step != right.step) {
-            return left.step < right.step;
+        // The reference orders its feature graph by the global feature index
+        // first and the step second; the depth-first walk and every edge set
+        // inherit that order, so it decides which feature wins an overlap and
+        // which stream index each placed feature receives.
+        if (left.index != right.index) {
+            return left.index < right.index;
         }
-        return left.index < right.index;
+        return left.step < right.step;
     }
     friend auto operator==(const feature_data &, const feature_data &)
         -> bool = default;
