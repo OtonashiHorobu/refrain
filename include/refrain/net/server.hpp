@@ -120,6 +120,11 @@ using attack_handler = std::function<void(const attack_event &)>;
 using animation_handler =
     std::function<void(std::uint64_t connection, std::int8_t action)>;
 using respawn_handler = std::function<void(std::uint64_t connection)>;
+
+struct view_distance_event {
+    std::uint64_t connection{0};
+    std::int32_t distance{0};
+};
 /// Optional protocol-owned encoder for the tab_list packet body. The network
 /// layer falls back to its generated encoder when empty.
 using tab_encoder = std::function<result<std::vector<std::byte>>(
@@ -216,6 +221,7 @@ struct server_inputs {
     animation_handler animation{};
     player_event play_ready{};
     respawn_handler respawn{};
+    std::function<void(const view_distance_event &)> view_distance{};
     /// Optional transport provider. Empty uses the built-in Asio TCP
     /// transport.
     transport_factory make_transport{};

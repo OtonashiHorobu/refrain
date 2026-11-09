@@ -6,6 +6,7 @@
 #include <refrain/server/server_properties.hpp>
 #include <refrain/server/server_runtime.hpp>
 
+#include <refrain/session/chunk_tracker.hpp>
 #include <refrain/session/play_session.hpp>
 
 #include <refrain/app/services.hpp>
@@ -1461,6 +1462,7 @@ auto run_server(const server_run_options &options) -> int {
             : refrain::net::game_mode::creative};
     command_environment->default_mode = initial_mode;
     refrain::session::play_session players{};
+    refrain::session::chunk_tracker views{};
     std::unordered_map<std::uint64_t, refrain::net::movement_event>
         last_moves{};
     refrain::net::server *active_listener{nullptr};
@@ -1496,12 +1498,18 @@ auto run_server(const server_run_options &options) -> int {
     network_inputs.status = options.status;
     network_inputs.tab = options.tab;
     network_inputs.encode_tab = options.encode_tab;
+    const auto spawn_chunk_x{static_cast<std::int32_t>(level->spawn_x / 16)};
+    const auto spawn_chunk_z{static_cast<std::int32_t>(level->spawn_z / 16)};
     network_inputs.player_join =
-        [&players, &active_listener,
-         external_join](const refrain::net::player_identity &identity) {
+        [&players, &views, &active_listener, external_join, spawn_chunk_x,
+         spawn_chunk_z](const refrain::net::player_identity &identity) {
             const auto added{players.add_player(
                 identity.connection, identity.id, std::string{identity.name},
                 std::string{identity.world}, 0.0, 64.0, 0.0, 1)};
+            if (added) {
+                static_cast<void>(views.update(
+                    identity.connection, spawn_chunk_x, spawn_chunk_z, 10));
+            }
             if (added && active_listener != nullptr) {
                 announce_session_join(*active_listener, players,
                                       identity.connection);
@@ -1511,7 +1519,7 @@ auto run_server(const server_run_options &options) -> int {
             }
         };
     network_inputs.player_leave =
-        [&players, &last_moves, &active_listener,
+        [&players, &views, &last_moves, &active_listener,
          external_leave](const refrain::net::player_identity &identity) {
             const auto leaving{players.player_of(identity.connection)};
             const auto copy{
@@ -1519,6 +1527,7 @@ auto run_server(const server_run_options &options) -> int {
                     ? std::nullopt
                     : std::optional<refrain::session::player>{*leaving}};
             static_cast<void>(players.remove_player(identity.connection));
+            static_cast<void>(views.remove(identity.connection));
             last_moves.erase(identity.connection);
             if (copy && active_listener != nullptr) {
                 announce_session_leave(*active_listener, *copy, players);
@@ -1528,10 +1537,23 @@ auto run_server(const server_run_options &options) -> int {
             }
         };
     network_inputs.movement =
-        [&players](const refrain::net::movement_event &event) {
+        [&players, &views](const refrain::net::movement_event &event) {
             static_cast<void>(players.update_position(event.connection, event.x,
                                                       event.y, event.z,
                                                       event.yaw, event.pitch));
+        };
+    network_inputs.view_distance =
+        [&players, &views](const refrain::net::view_distance_event &event) {
+            static_cast<void>(
+                players.set_view_distance(event.connection, event.distance));
+            const auto player{players.player_of(event.connection)};
+            if (player != nullptr) {
+                static_cast<void>(views.update(
+                    event.connection,
+                    static_cast<std::int32_t>(std::floor(player->x / 16.0)),
+                    static_cast<std::int32_t>(std::floor(player->z / 16.0)),
+                    event.distance));
+            }
         };
     network_inputs.attack =
         [&players, &active_listener](const refrain::net::attack_event &event) {
@@ -1655,7 +1677,7 @@ auto run_server(const server_run_options &options) -> int {
                 ++iterator;
             }
         }
-        for (const auto &request : listener->take_chunk_view_requests()) {
+        for (const auto &request : views.take_requests()) {
             auto &stream{chunk_streams[request.connection]};
             const auto center_changed{stream.radius != request.radius ||
                                       stream.center_x != request.chunk_x ||

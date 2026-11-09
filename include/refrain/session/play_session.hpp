@@ -31,6 +31,7 @@ struct player {
     bool on_ground{false};
     std::uint32_t game_mode{0};
     float health{20.0F};
+    std::int32_t view_distance{10};
 };
 
 struct visibility_entry {
@@ -68,6 +69,9 @@ class play_session {
 
     [[nodiscard]] auto set_on_ground(std::uint64_t connection, bool value)
         -> bool;
+
+    [[nodiscard]] auto set_view_distance(std::uint64_t connection,
+                                         std::int32_t distance) -> bool;
 
     [[nodiscard]] auto set_health(std::uint64_t connection, float health)
         -> bool;

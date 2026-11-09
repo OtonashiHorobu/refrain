@@ -214,12 +214,7 @@ struct server::impl {
         bool on_ground{false};
         bool awaiting_teleport{true};
         bool client_loaded{false};
-        std::int32_t client_view_distance{0};
         std::uint32_t held_slot{0};
-        std::int32_t last_chunk_x{0};
-        std::int32_t last_chunk_z{0};
-        std::int32_t last_chunk_radius{0};
-        bool chunk_initialized{false};
         std::vector<std::byte> verify_token{};
         bool online_pending{false};
         token_bucket limiter{};
@@ -241,6 +236,7 @@ struct server::impl {
     animation_handler animation_hook{};
     player_event play_ready_hook{};
     respawn_handler respawn_hook{};
+    std::function<void(const view_distance_event &)> view_distance_hook{};
     transport_factory make_transport{};
     std::shared_ptr<protocol_codec> protocol{};
     std::mutex command_cache_mutex{};
@@ -263,8 +259,6 @@ struct server::impl {
     std::mutex connections_mutex{};
     std::mutex inbound_mutex{};
     std::deque<queued_packet> inbound{};
-    std::mutex chunk_requests_mutex{};
-    std::vector<chunk_view_request> chunk_requests{};
     std::mutex click_mutex{};
     std::vector<container_click_event> container_clicks{};
     std::vector<container_close_event> container_closes{};
@@ -300,7 +294,6 @@ struct server::impl {
     void execute_chat_command(std::uint64_t id, std::string_view command);
     void broadcast_system_chat(std::string_view text);
     void send_initial_chunks(std::uint64_t id);
-    void queue_chunk_views();
     void send_keepalive(std::uint64_t id);
     void keepalive_loop();
     [[nodiscard]] auto build_configuration() -> status;
@@ -763,8 +756,6 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             if (found == connections.end() || found->second.closed) {
                 return;
             }
-            found->second.client_view_distance =
-                packet.information.view_distance;
             return;
         }
         case config_sb::finish_configuration::packet_id: {
@@ -1569,59 +1560,6 @@ void server::impl::broadcast_system_chat(std::string_view text) {
     }
 }
 
-void server::impl::queue_chunk_views() {
-    std::vector<chunk_view_request> pending;
-    {
-        const std::lock_guard lock{connections_mutex};
-        for (auto &[id, live] : connections) {
-            if (live.closed || live.state != connection_state::play) {
-                continue;
-            }
-            const auto chunk_x{
-                static_cast<std::int32_t>(std::floor(live.x / 16.0))};
-            const auto chunk_z{
-                static_cast<std::int32_t>(std::floor(live.z / 16.0))};
-            auto radius{config.view_distance};
-            if (live.client_view_distance > 0) {
-                radius = std::min(radius, live.client_view_distance);
-            }
-            radius = std::max(radius, 1);
-            const auto seed_radius{live.chunk_initialized ? 0 : 3};
-            if (live.chunk_initialized && chunk_x == live.last_chunk_x &&
-                chunk_z == live.last_chunk_z &&
-                radius == live.last_chunk_radius) {
-                continue;
-            }
-            live.chunk_initialized = true;
-            live.last_chunk_x = chunk_x;
-            live.last_chunk_z = chunk_z;
-            live.last_chunk_radius = radius;
-            pending.push_back({.connection = id,
-                               .chunk_x = chunk_x,
-                               .chunk_z = chunk_z,
-                               .radius = radius,
-                               .seed_radius = seed_radius});
-        }
-    }
-    if (!pending.empty()) {
-        const std::lock_guard lock{chunk_requests_mutex};
-        chunk_requests.insert(chunk_requests.end(), pending.begin(),
-                              pending.end());
-    }
-}
-
-auto server::take_chunk_view_requests() -> std::vector<chunk_view_request> {
-    if (!impl_) {
-        return {};
-    }
-    std::vector<chunk_view_request> pending;
-    {
-        const std::lock_guard lock{impl_->chunk_requests_mutex};
-        pending.swap(impl_->chunk_requests);
-    }
-    return pending;
-}
-
 void server::send_chunk_batch(std::uint64_t connection, std::int32_t chunk_x,
                               std::int32_t chunk_z,
                               std::span<const std::vector<std::byte>> packets,
@@ -2360,10 +2298,6 @@ void server::impl::handle_play(std::uint64_t id,
             live.x = config.spawn_x;
             live.y = config.spawn_y;
             live.z = config.spawn_z;
-            live.chunk_initialized = false;
-            live.last_chunk_x = 0;
-            live.last_chunk_z = 0;
-            live.last_chunk_radius = 0;
             mode = live.mode;
         }
         play_cb::respawn respawn{};
@@ -2456,12 +2390,19 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        const std::lock_guard lock{connections_mutex};
+        std::unique_lock lock{connections_mutex};
         const auto found{connections.find(id)};
         if (found == connections.end() || found->second.closed) {
             return;
         }
-        found->second.client_view_distance = packet.information.view_distance;
+        const auto distance =
+            static_cast<std::int32_t>(packet.information.view_distance);
+        const auto connection = id;
+        lock.unlock();
+        if (view_distance_hook) {
+            view_distance_hook(view_distance_event{.connection = connection,
+                                                   .distance = distance});
+        }
         return;
     }
     case play_sb::punch::packet_id: {
@@ -2759,7 +2700,6 @@ void server::impl::tick() {
             close(id);
         }
     }
-    queue_chunk_views();
 }
 
 server::server(std::unique_ptr<impl> state) : impl_{std::move(state)} {}
@@ -2840,6 +2780,7 @@ auto server::start(server_inputs inputs, core::config::view view)
     state->animation_hook = std::move(inputs.animation);
     state->play_ready_hook = std::move(inputs.play_ready);
     state->respawn_hook = std::move(inputs.respawn);
+    state->view_distance_hook = std::move(inputs.view_distance);
     state->make_transport = std::move(inputs.make_transport);
     state->protocol = std::move(inputs.protocol);
     state->verify_session = std::move(inputs.verify_session);

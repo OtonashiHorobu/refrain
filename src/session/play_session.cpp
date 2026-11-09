@@ -75,6 +75,16 @@ auto play_session::set_on_ground(std::uint64_t connection, bool value) -> bool {
     return true;
 }
 
+auto play_session::set_view_distance(std::uint64_t connection,
+                                     std::int32_t distance) -> bool {
+    const auto found{players_.find(connection)};
+    if (found == players_.end() || distance < 0) {
+        return false;
+    }
+    found->second.view_distance = distance;
+    return true;
+}
+
 auto play_session::set_health(std::uint64_t connection, float health) -> bool {
     const auto found{players_.find(connection)};
     if (found == players_.end()) {
