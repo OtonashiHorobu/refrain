@@ -416,6 +416,15 @@ target_compile_definitions(refrain-net PRIVATE ASIO_NO_DEPRECATED=1
                                               REFRAIN_WITH_CURL=1)
 add_library(Refrain::Net ALIAS refrain-net)
 
+# --- session: gameplay player table and entity visibility ------------------
+# Sits above the network shell: transport/protocol provide bytes and packets,
+# while the session owns player entities, visibility and gameplay state.
+file(GLOB_RECURSE REFRAIN_SESSION_SOURCES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/session/*.cpp")
+refrain_add_library(refrain-session ${REFRAIN_SESSION_SOURCES})
+target_link_libraries(refrain-session PUBLIC refrain-kernel refrain-net)
+add_library(Refrain::Session ALIAS refrain-session)
+
 # --- mod host: loads built-in mods against the embedded archive ------------
 # The host needs the data layer (RFSI/RFBT reader), so it is a separate library
 # on top of kernel; the kernel itself stays data-free.
@@ -581,7 +590,7 @@ if(REFRAIN_BUILD_TESTS)
                                               refrain-world refrain-sim
                                               refrain-command
                                               refrain-net refrain-protocol
-                                              refrain-worldgen
+                                              refrain-session refrain-worldgen
                                               refrain-builtin
                                               refrain-mod-host
                                               refrain-first-party-mods
