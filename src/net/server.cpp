@@ -1430,7 +1430,6 @@ void server::impl::send_play_login(std::uint64_t id) {
     send_vitals();
     send_entity_state();
     send_tab_list(id);
-    send_keepalive(id);
 }
 
 void server::impl::send_commands(std::uint64_t id) {

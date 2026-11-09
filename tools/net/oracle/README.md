@@ -30,7 +30,7 @@ python3 tools/net/oracle/run_vanilla.py \
 
 # 3. Compare packet sequence and (optionally) payload bytes.
 python3 tools/net/oracle/compare.py \
-    --payload /tmp/vanilla.rfcap /tmp/refrain.rfcap
+    --states 2 --limit 20 --payload /tmp/vanilla.rfcap /tmp/refrain.rfcap
 ```
 
 `run_vanilla.py` supports both self-contained server jars (`-jar`) and the
@@ -38,7 +38,9 @@ Mojang-style split layout (`--libraries` adds every library jar to the
 classpath and launches `net.minecraft.server.Main`).
 
 `compare.py` reports the first state/id or payload mismatch and unique packet
-id sets. Payload comparison is intentionally raw: timestamps, UUIDs, player
+id sets. `--states`, `--limit` and `--ignore state:id,...` narrow the comparison
+to the deterministic login prefix while world-content packets are normalized
+separately. Payload comparison is intentionally raw: timestamps, UUIDs, player
 counts and registry cache ids are expected to differ until a normalizer is
 added for that packet.
 

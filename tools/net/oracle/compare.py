@@ -64,11 +64,51 @@ def main() -> int:
         action="store_true",
         help="compare packet payload bytes as well as ids",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="compare only the first N packets (0 = all)",
+    )
+    parser.add_argument(
+        "--states",
+        default="",
+        help="comma-separated states to compare (for example 2)",
+    )
+    parser.add_argument(
+        "--ignore",
+        default="",
+        help="comma-separated state:id pairs to skip, for example 2:0,2:46",
+    )
     args = parser.parse_args()
 
-    left = read_capture(args.left)
-    right = read_capture(args.right)
-    print(f"oracle: left {len(left)} packet(s), right {len(right)} packet(s)")
+    ignored = {
+        tuple(int(part, 0) for part in item.split(":"))
+        for item in args.ignore.split(",")
+        if item
+    }
+    left_all = read_capture(args.left)
+    right_all = read_capture(args.right)
+    states = {int(item, 0) for item in args.states.split(",") if item}
+    left = [
+        packet
+        for packet in left_all
+        if (packet.state, packet.packet_id) not in ignored
+        and (not states or packet.state in states)
+    ]
+    right = [
+        packet
+        for packet in right_all
+        if (packet.state, packet.packet_id) not in ignored
+        and (not states or packet.state in states)
+    ]
+    if args.limit > 0:
+        left = left[: args.limit]
+        right = right[: args.limit]
+    print(
+        f"oracle: left {len(left_all)} packet(s), right {len(right_all)} packet(s); "
+        f"comparing {len(left)} vs {len(right)}"
+    )
 
     mismatches = 0
     for index, (a, b) in enumerate(zip(left, right, strict=False)):
