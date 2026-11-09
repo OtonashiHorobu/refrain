@@ -74,6 +74,19 @@ def read_i64(data: bytes, offset: int) -> tuple[int, int]:
     return struct.unpack_from("<q", data, offset)[0], offset + 8
 
 
+def registry_summary(entries: list[Packet]) -> list[tuple[str, int]]:
+    """Registry id and declared entry count for each configuration registry."""
+    summary = []
+    for packet in entries:
+        if packet.state != 1 or packet.packet_id != 7:
+            continue
+        _, offset = read_varint(packet.body, 0)
+        registry, offset = read_string(packet.body, offset)
+        count, _ = read_varint(packet.body, offset)
+        summary.append((registry, count))
+    return summary
+
+
 def login_fields(body: bytes) -> dict[str, object]:
     _, offset = read_varint(body, 0)  # packet id
     fields: dict[str, object] = {}
@@ -135,6 +148,16 @@ def main() -> int:
     parser.add_argument("left", type=Path)
     parser.add_argument("right", type=Path)
     parser.add_argument(
+        "--login-ignore",
+        default="player_id,seed",
+        help="comma-separated login fields normalized away",
+    )
+    parser.add_argument(
+        "--registries",
+        action="store_true",
+        help="compare configuration registry ids and entry counts",
+    )
+    parser.add_argument(
         "--login",
         action="store_true",
         help="compare decoded play login fields instead of raw bytes",
@@ -189,6 +212,33 @@ def main() -> int:
         f"oracle: left {len(left_all)} packet(s), right {len(right_all)} packet(s); "
         f"comparing {len(left)} vs {len(right)}"
     )
+    if args.registries:
+        left_registries = registry_summary(left_all)
+        right_registries = registry_summary(right_all)
+        failures = 0
+        for index in range(max(len(left_registries), len(right_registries))):
+            left_entry = (
+                left_registries[index] if index < len(left_registries) else None
+            )
+            right_entry = (
+                right_registries[index]
+                if index < len(right_registries)
+                else None
+            )
+            if left_entry != right_entry:
+                print(
+                    f"oracle: registry[{index}] differs: "
+                    f"left={left_entry!r} right={right_entry!r}"
+                )
+                failures += 1
+        if failures == 0:
+            print(
+                f"oracle: {len(left_registries)} registry headers match "
+                "(ids and entry counts)"
+            )
+            return 0
+        return 1
+
     if args.login:
         left_login = next(
             (packet for packet in left_all if packet.state == 2 and packet.packet_id == 50),
@@ -203,9 +253,30 @@ def main() -> int:
             return 1
         left_fields = login_fields(left_login.body)
         right_fields = login_fields(right_login.body)
+        ignored_fields = {
+            field.strip()
+            for field in args.login_ignore.split(",")
+            if field.strip()
+        }
         failures = 0
         for key, value in left_fields.items():
-            if key == "player_id":
+            if key in ignored_fields:
+                continue
+            if key == "levels":
+                # M4 opens only the overworld; vanilla still lists every
+                # registered level key even when the nether is disabled.
+                value = [level for level in value if level == "minecraft:overworld"]
+                right_levels = [
+                    level
+                    for level in right_fields.get("levels", [])
+                    if level == "minecraft:overworld"
+                ]
+                if value != right_levels:
+                    print(
+                        f"oracle: login field 'levels' differs: "
+                        f"left={value!r} right={right_levels!r}"
+                    )
+                    failures += 1
                 continue
             if value != right_fields.get(key):
                 print(
