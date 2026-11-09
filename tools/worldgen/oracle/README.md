@@ -79,6 +79,18 @@ terrain plus the real feature writes. The runtime compares it with
   neighbours that precede the target in ascending x and then z decorate first,
   then the target, then the rest. Features that write across a chunk border
   resolve contacts the way the saved reference chunk did.
+* `<PREFIX>_NEIGHBOUR_RADIUS` sets how many chunks around the target decorate.
+  The default is one; two also decorates the ring beyond the eight neighbours,
+  whose chunks a neighbour feature can read even though they cannot write into
+  the target, and makes the runtime attach one further terrain ring. The radius
+  is limited to eight chunks.
+* `<PREFIX>_NEIGHBOUR_BOX` gives the reference world's generated chunk
+  rectangle as `min_x,min_z,max_x,max_z` in absolute chunk coordinates. The
+  whole rectangle decorates in force-load order and chunks outside it stay
+  terrain only. A feature that spreads across more than one border, such as a
+  sculk patch, needs this form rather than the symmetric radius. The reported
+  rectangle is the force-loaded area the reference world generated; the spawn
+  area and dependency rings are visible in the saved chunk statuses.
 
 The four chunks below match block for block and in all four final heightmaps.
 The terrain is ocean at the spawn area of seed 1, so the surface vegetation of
@@ -155,21 +167,55 @@ REFRAIN_FEATURE_WARM_OCEAN_NEIGHBOURS_ORDER=1 \
 The other target biomes do not yield a stable single chunk oracle yet. The
 best scanned chunks and the remaining differences are:
 
-* `minecraft:lush_caves`: chunk `(-1,0)` has 16 block and 0 heightmap
-  mismatches with neighbour decoration in force-load order. The vegetation
-  patch distributes its columns in the reference hash-set order, floods and
-  plants a waterlogged patch the way the reference does, and skips edge
-  columns when the patch declares no edge chance. Two patch boundary columns
-  differ and shift the nine vegetation draws that follow them.
-* `minecraft:deep_dark`: the best of sixteen scanned chunks has 118 block and
-  30 heightmap mismatches. The sculk spreader reproduces the reference charge
-  cursor, decay, movement, face choice, vein merging and state writes exactly
-  in isolated traces, including three sequential patches over water, gravel,
-  tuff and an existing vein field. The remaining field difference comes from
-  neighbour decoration running every neighbourhood chunk inside the target
-  chunk's region: a neighbour feature that reads a chunk outside that region
-  sees air and consumes a different number of random draws, which shifts the
-  later patch origins in that chunk.
+* `minecraft:lush_caves`: chunk `(-1,0)` matches block for block and in all
+  four final heightmaps with `REFRAIN_FEATURE_LUSH_CAVES_NEIGHBOUR_RADIUS=2`.
+  The wider region lets the vegetation patches read the chunks their own
+  generation regions cover, so their edge-column draws and hash-set vegetation
+  order match; the block-default report then supplies the default `half=lower`
+  of the bare tall-grass placement so the upper half is placed as well.
+```bash
+python3 tools/worldgen/oracle/generate.py --fixed-biome minecraft:lush_caves \
+    --keep-features --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2feature-lush
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_FEATURE_LUSH_CAVES_REGION=/tmp/t2feature-lush/world/dimensions/minecraft/overworld/region/r.-1.0.mca \
+REFRAIN_FEATURE_LUSH_CAVES_CHUNK_X=-1 \
+REFRAIN_FEATURE_LUSH_CAVES_CHUNK_Z=0 \
+REFRAIN_FEATURE_LUSH_CAVES_SEED=1 \
+REFRAIN_FEATURE_LUSH_CAVES_BIOME=minecraft:lush_caves \
+REFRAIN_FEATURE_LUSH_CAVES_NEIGHBOURS=1 \
+REFRAIN_FEATURE_LUSH_CAVES_NEIGHBOURS_ORDER=1 \
+REFRAIN_FEATURE_LUSH_CAVES_NEIGHBOUR_RADIUS=2 \
+    ./build/Release/bin/refrain-tests \
+    "the runtime feature oracle reproduces a lush caves chunk"
+```
+
+```bash
+python3 tools/worldgen/oracle/generate.py --fixed-biome minecraft:deep_dark \
+    --keep-features --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2feature-deep-dark
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_FEATURE_DEEP_DARK_REGION=/tmp/t2feature-deep-dark/world/dimensions/minecraft/overworld/region/r.0.-1.mca \
+REFRAIN_FEATURE_DEEP_DARK_CHUNK_X=1 \
+REFRAIN_FEATURE_DEEP_DARK_CHUNK_Z=-2 \
+REFRAIN_FEATURE_DEEP_DARK_SEED=1 \
+REFRAIN_FEATURE_DEEP_DARK_BIOME=minecraft:deep_dark \
+REFRAIN_FEATURE_DEEP_DARK_NEIGHBOURS=1 \
+REFRAIN_FEATURE_DEEP_DARK_NEIGHBOURS_ORDER=1 \
+REFRAIN_FEATURE_DEEP_DARK_NEIGHBOUR_RADIUS=2 \
+    ./build/Release/bin/refrain-tests \
+    "the runtime feature oracle reproduces a deep dark chunk"
+```
+
+* `minecraft:deep_dark`: chunk `(1,-2)` matches block for block and in all
+  four final heightmaps with `REFRAIN_FEATURE_DEEP_DARK_NEIGHBOUR_RADIUS=2`.
+  The sculk spreader reproduces the reference charge cursor, decay, movement,
+  face choice, vein merging and state writes exactly in isolated traces,
+  including three sequential patches over water, gravel, tuff and an existing
+  vein field. Each patch moves its charge cursors at most twelve blocks from
+  the origin, so a neighbour chunk's patches must read the chunks their own
+  generation regions cover; the wider radius attaches those chunks and gives
+  every decoration its own write region.
 * `minecraft:basalt_deltas`: chunk `(0,0)` has 2556 block and 2 heightmap
   mismatches. Delta, small/large basalt column and basalt blob placement
   differ across the chunk, so the feature family itself needs more work
@@ -181,7 +227,13 @@ Lush caves, deep dark and basalt deltas use their own
 generated with `--dimension the_nether` and its test sets
 `REFRAIN_FEATURE_BASALT_DELTAS_DIMENSION=the_nether`. The deep dark and basalt
 deltas chunks above use the default target order; the lush caves chunk uses
-the default target order as well.
+force-load order as well.
+
+The default-state report is part of the datapack snapshot the tests load
+(`content/vanilla/<version>/reports/block_defaults/`). Regenerate it after a
+game update with the data generator's `blocks.json` report:
+`python3 tools/worldgen/block_defaults.py --blocks generated/reports/blocks.json
+--out content/vanilla/<version>/reports/block_defaults`.
 
 `--force-load-box` also applies to the default fixed-biome mode, so a feature
 reference can be generated away from the spawn area.

@@ -71,6 +71,23 @@ templates from the extracted directory. Tests and oracles take both
 locations from the environment so the same code paths run against the
 files an installation would use.
 
+## Block default states
+
+A datapack names a plain block when a feature places the block's default
+state, and a reference chunk palette writes that default state as the bare
+block name. The property values of the default are not part of the datapack,
+so the snapshot ships a derived report next to it:
+`reports/block_defaults/defaults.json` maps every block whose default state
+carries properties to those values, and its `MANIFEST.json` records the game
+version, data version, size and digest. `tools/worldgen/block_defaults.py`
+reduces the data generator's `blocks.json` report to that document.
+
+The generator loads the report when it is installed. A bare state key then
+answers the state-dependent questions the reference asks its default state:
+the simple-block feature places the second half of a double plant, and shape
+families read the default properties a state key omits. Without the report the
+generator keeps the spelling-only behaviour, so an older snapshot still loads.
+
 ## Dimensions
 
 `dimension_profile_for(dimension_kind)` supplies the fixed parameters of the
@@ -118,14 +135,26 @@ final status). `structure_sets` restricts starts to the listed sets for oracle
 runs, and an empty list enables every set. An empty template root still
 generates procedural pieces and features; template-backed pieces stay empty.
 Three reference-only switches reproduce a saved reference chunk that contains
-its neighbours' feature writes: `decorate_neighbours` decorates the eight
-neighbour chunks through the same region, `neighbours_before_target` selects
-whether their writes come before or after the target's own features, and
+its neighbours' feature writes: `decorate_neighbours` decorates the neighbour
+chunks through the same region, `neighbours_before_target` selects whether
+their writes come before or after the target's own features, and
 `neighbours_in_generation_order` follows the order a force-load uses: every
 chunk that precedes the target in ascending x and z decorates first, then the
 target, then the rest. A mixed order matters for any feature that writes across
 a border, such as an ore vein or a vegetation patch. A fixed biome is required
 because every decorated chunk uses the target's biome plan.
+
+`neighbour_radius` widens the decorated neighbourhood: zero decorates only the
+target, one the eight surrounding chunks (the default), and each further step
+adds a ring. The runtime attaches one more terrain ring than it decorates,
+because a decorated chunk reads the chunks its own generation region covers,
+and it confines every decoration's writes to that chunk's eight neighbours, as
+the reference generation region does. `neighbour_box` names the reference
+world's generated chunk rectangle in absolute chunk coordinates: the whole
+rectangle decorates in force-load order and chunks outside it stay terrain
+only. A feature that spreads across more than one border needs the rectangle
+form; a sculk patch is the example, because its charge cursors move up to
+twelve blocks from the patch origin.
 
 One object owns the block state registry and its tags, the dimension profile,
 the biome source, the surface rule state, the loaded carvers' runtime objects,
@@ -275,23 +304,23 @@ The reference-backed suites currently cover:
   cross-border writes of both. Heightmap placements read the heightmap of the
   chunk that holds the candidate column, so a candidate the offset modifier
   spreads into a neighbour uses that neighbour's height;
-- fixed-biome feature worlds for lush caves, deep dark and basalt deltas do
-  not reach zero yet. Lush caves has 16 remaining blocks in its best chunk:
-  the vegetation patch distributes its columns in the reference hash-set
-  order, floods and plants a waterlogged patch the way the reference does, and
-  skips edge columns when the patch declares no edge chance, but two patch
-  boundary columns differ and shift the later vegetation draws. The deep-dark
-  sculk patch has 118 remaining blocks and 30 heightmap entries in its best
-  chunk. Its charge cursor, decay, spread attempts, movement, face choice and
-  vein merging reproduce a reference trace exactly in isolated scenarios,
-  including three sequential patches over water, gravel, tuff and an existing
-  vein field. The residual field difference comes from the neighbour
-  decoration mode: it runs every neighbourhood chunk inside the target chunk's
-  region, so a neighbour feature that reads a chunk outside that region sees
-  air, consumes a different number of random draws, and shifts the patch
-  origins that follow. The basalt delta and column features place different
-  shapes. The best scanned chunks, their remaining mismatch counts and the
-  commands are recorded in `tools/worldgen/oracle/README.md`;
+- a fixed-biome lush caves world reaches zero with a two-chunk neighbour
+  radius: the wider region lets the vegetation patches read the chunks their
+  own generation regions cover, and the default-state report lets a bare
+  tall-grass placement emit the upper half of the double plant. The chunk
+  exercises the patch edge-column draws, the reference hash-set vegetation
+  order, waterlogged patch flooding and the double-plant placement;
+- a fixed-biome deep dark world reaches zero with a two-chunk neighbour
+  radius and force-load order. Its charge cursor, decay, spread attempts,
+  movement, face choice and vein merging reproduce a reference trace exactly
+  in isolated scenarios, including three sequential patches over water,
+  gravel, tuff and an existing vein field. Each sculk patch moves its charge
+  cursors at most twelve blocks from the origin, so the patches of a
+  neighbour chunk must see the chunks their own generation regions cover; the
+  wider radius provides them, and each decoration writes through its own
+  generation region again. The basalt delta and column features place
+  different shapes. The scanned chunks and commands are recorded in
+  `tools/worldgen/oracle/README.md`;
 - benchmarks for fill, parallel fill, structure selection, corridor
   placement, template placement, feature freeze and decoration.
 
@@ -309,8 +338,9 @@ definition reads collision geometry (sturdy faces and multiface attachment)
 derive a full face from the block tags and the state shape: slabs, stairs,
 trapdoors, doors, walls, fences, fence gates, panes, bars, carpets, snow
 layers, paths, farmland, speleothems, cave vines, multiface layers and sculk
-sensors answer per direction. States outside those families still fall back to
-the heightmap motion-blocking tags. The unobstructed predicate admits every
+sensors answer per direction; a bare state key takes the properties its
+default state carries from the default-state report. States outside those
+families still fall back to the heightmap motion-blocking tags. The unobstructed predicate admits every
 position because generation has no entities, and the biome membership
 predicate accepts explicit biome ids but not biome tags. Structure feature placement has no climate source, so snow and
 freeze feature modifiers are inert there. Template entities are not placed;
