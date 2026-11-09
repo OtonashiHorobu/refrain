@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -190,6 +191,17 @@ struct server_inputs {
     /// Optional transport provider. Empty uses the built-in Asio TCP
     /// transport.
     transport_factory make_transport{};
+    /// Optional Java `server.properties` fallbacks. A key explicitly present
+    /// in the network config namespace wins.
+    std::optional<std::string> fallback_bind_host{};
+    std::optional<std::uint16_t> fallback_port{};
+    std::optional<std::int32_t> fallback_compression{};
+    std::optional<std::int32_t> fallback_view_distance{};
+    std::optional<std::int32_t> fallback_simulation_distance{};
+    std::optional<std::int32_t> fallback_max_players{};
+    std::optional<bool> fallback_online_mode{};
+    std::optional<bool> fallback_secure_chat{};
+    std::optional<std::string> fallback_motd{};
     /// Optional protocol codec provider. Empty keeps the built-in 777 codec
     /// for net-only tests.
     std::shared_ptr<protocol_codec> protocol{};

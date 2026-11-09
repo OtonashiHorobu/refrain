@@ -2957,34 +2957,47 @@ server::~server() { stop(); }
 
 auto server::start(server_inputs inputs, core::config::view view)
     -> result<std::unique_ptr<server>> {
-    const auto port{view.get_int64("port", 25565)};
+    const auto int_or = [&view](std::string_view key, std::int64_t fallback) {
+        return view.contains(key) ? view.get_int64(key, fallback) : fallback;
+    };
+    const auto bool_or = [&view](std::string_view key, bool fallback) {
+        return view.contains(key) ? view.get_bool(key, fallback) : fallback;
+    };
+    const auto port{int_or("port", inputs.fallback_port.value_or(25565))};
     if (port < 0 || port > 65535) {
         return std::unexpected{make_error(error_code::invalid_argument,
                                           "network.port is out of range")};
     }
-    const auto compression{view.get_int64("compression_threshold", 256)};
+    const auto compression{int_or("compression_threshold",
+                                  inputs.fallback_compression.value_or(256))};
     if (compression < -1 || compression > 2147483647LL) {
         return std::unexpected{
             make_error(error_code::invalid_argument,
                        "network.compression_threshold is out of range")};
     }
     server_settings config{};
-    config.bind.host = view.get_string("bind_host", "0.0.0.0");
+    config.bind.host = view.contains("bind_host")
+                           ? view.get_string("bind_host", "0.0.0.0")
+                           : inputs.fallback_bind_host.value_or("0.0.0.0");
     config.bind.port = static_cast<std::uint16_t>(port);
     config.compression_threshold = static_cast<int>(compression);
-    config.view_distance =
-        static_cast<std::int32_t>(view.get_int64("view_distance", 10));
-    config.simulation_distance =
-        static_cast<std::int32_t>(view.get_int64("simulation_distance", 10));
-    config.online_mode = view.get_bool("online_mode", false);
+    config.view_distance = static_cast<std::int32_t>(
+        int_or("view_distance", inputs.fallback_view_distance.value_or(10)));
+    config.simulation_distance = static_cast<std::int32_t>(
+        int_or("simulation_distance",
+               inputs.fallback_simulation_distance.value_or(10)));
+    config.online_mode =
+        bool_or("online_mode", inputs.fallback_online_mode.value_or(false));
     config.status.description =
-        view.get_string("status.motd", "A Refrain Server");
-    config.status.max_players =
-        static_cast<std::int32_t>(view.get_int64("status.max_players", 20));
+        view.contains("status.motd")
+            ? view.get_string("status.motd", "A Refrain Server")
+            : inputs.fallback_motd.value_or("A Refrain Server");
+    config.status.max_players = static_cast<std::int32_t>(
+        int_or("status.max_players", inputs.fallback_max_players.value_or(20)));
     config.status.online_players = 0;
     config.status.replies_to_status = view.get_bool("status.enabled", true);
-    config.status.enforces_secure_chat =
-        view.get_bool("enforce_secure_profile", true);
+    config.status.enforces_secure_chat = bool_or(
+        "enforce_secure_profile", inputs.fallback_secure_chat.value_or(true));
     config.session_server =
         view.get_string("session_server", "https://sessionserver.mojang.com");
     config.auth_timeout_ms =
