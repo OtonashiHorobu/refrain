@@ -74,6 +74,77 @@ def read_i64(data: bytes, offset: int) -> tuple[int, int]:
     return struct.unpack_from("<q", data, offset)[0], offset + 8
 
 
+def skip_nbt(data: bytes, offset: int) -> int:
+    # Network NBT in packed registry entries has an unnamed root tag.
+    tag = data[offset]
+    offset += 1
+    if tag == 0:
+        return offset
+    return skip_nbt_payload(data, offset, tag, 0)
+
+
+def skip_nbt_payload(data: bytes, offset: int, tag: int, depth: int) -> int:
+    if depth > 512:
+        raise ValueError("nbt nesting is too deep")
+    if tag == 1:
+        return offset + 1
+    if tag == 2:
+        return offset + 2
+    if tag in (3, 5):
+        return offset + 4
+    if tag in (4, 6):
+        return offset + 8
+    if tag == 7:
+        length = int.from_bytes(data[offset : offset + 4], "big", signed=True)
+        return offset + 4 + max(length, 0)
+    if tag == 8:
+        length = int.from_bytes(data[offset : offset + 2], "big")
+        return offset + 2 + length
+    if tag == 9:
+        element = data[offset]
+        count = int.from_bytes(data[offset + 1 : offset + 5], "big", signed=True)
+        offset += 5
+        for _ in range(max(count, 0)):
+            offset = skip_nbt_payload(data, offset, element, depth + 1)
+        return offset
+    if tag == 10:
+        while True:
+            child = data[offset]
+            offset += 1
+            if child == 0:
+                return offset
+            name_length = int.from_bytes(data[offset : offset + 2], "big")
+            offset += 2 + name_length
+            offset = skip_nbt_payload(data, offset, child, depth + 1)
+    if tag == 11:
+        length = int.from_bytes(data[offset : offset + 4], "big", signed=True)
+        return offset + 4 + 4 * max(length, 0)
+    if tag == 12:
+        length = int.from_bytes(data[offset : offset + 4], "big", signed=True)
+        return offset + 4 + 8 * max(length, 0)
+    raise ValueError(f"unknown NBT tag {tag}")
+
+
+def registry_entries(entries: list[Packet]) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for packet in entries:
+        if packet.state != 1 or packet.packet_id != 7:
+            continue
+        _, offset = read_varint(packet.body, 0)
+        registry, offset = read_string(packet.body, offset)
+        count, offset = read_varint(packet.body, offset)
+        names = []
+        for _ in range(count):
+            name, offset = read_string(packet.body, offset)
+            names.append(name)
+            present = packet.body[offset]
+            offset += 1
+            if present:
+                offset = skip_nbt(packet.body, offset)
+        result[registry] = names
+    return result
+
+
 def registry_summary(entries: list[Packet]) -> list[tuple[str, int]]:
     """Registry id and declared entry count for each configuration registry."""
     summary = []
@@ -153,6 +224,11 @@ def main() -> int:
         help="comma-separated login fields normalized away",
     )
     parser.add_argument(
+        "--registry-entries",
+        action="store_true",
+        help="compare configuration registry entry ids",
+    )
+    parser.add_argument(
         "--registries",
         action="store_true",
         help="compare configuration registry ids and entry counts",
@@ -212,6 +288,40 @@ def main() -> int:
         f"oracle: left {len(left_all)} packet(s), right {len(right_all)} packet(s); "
         f"comparing {len(left)} vs {len(right)}"
     )
+    if args.registry_entries:
+        left_entries = registry_entries(left_all)
+        right_entries = registry_entries(right_all)
+        failures = 0
+        for registry in sorted(set(left_entries) | set(right_entries)):
+            left_names = left_entries.get(registry)
+            right_names = right_entries.get(registry)
+            if left_names != right_names:
+                if left_names is None or right_names is None:
+                    print(f"oracle: registry '{registry}' is missing on one side")
+                else:
+                    for index, (left_name, right_name) in enumerate(
+                        zip(left_names, right_names, strict=False)
+                    ):
+                        if left_name != right_name:
+                            print(
+                                f"oracle: registry '{registry}' entry[{index}] "
+                                f"differs: left={left_name!r} right={right_name!r}"
+                            )
+                            break
+                    if len(left_names) != len(right_names):
+                        print(
+                            f"oracle: registry '{registry}' entry count differs "
+                            f"({len(left_names)} vs {len(right_names)})"
+                        )
+                failures += 1
+        if failures == 0:
+            print(
+                f"oracle: {len(left_entries)} registry entry lists match "
+                "(ids and order)"
+            )
+            return 0
+        return 1
+
     if args.registries:
         left_registries = registry_summary(left_all)
         right_registries = registry_summary(right_all)

@@ -38,7 +38,8 @@ Mojang-style split layout (`--libraries` adds every library jar to the
 classpath and launches `net.minecraft.server.Main`).
 
 `compare.py` reports the first state/id or payload mismatch and unique packet
-id sets. `--states`, `--limit` and `--ignore state:id,...` narrow the comparison
+id sets. `--registries` compares the 32 registry headers; `--registry-entries`
+skips each entry NBT and compares the registry entry ids and order. `--states`, `--limit` and `--ignore state:id,...` narrow the comparison
 to the deterministic login prefix while world-content packets are normalized
 separately. Payload comparison is intentionally raw: timestamps, UUIDs, player
 counts and registry cache ids are expected to differ until a normalizer is
