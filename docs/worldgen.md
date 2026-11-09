@@ -75,25 +75,31 @@ files an installation would use.
 
 `dimension_profile_for(dimension_kind)` supplies the fixed parameters of the
 overworld, the nether and the end: the level bounds, sea level, coordinate
-scale, noise-settings path and material-rule path. The generator reads the
-noise settings the profile names and uses their default block, default fluid
-and generation geometry, so no dimension literal lives in the generation code.
+scale, noise-settings path, material-rule path and whether the dimension has a
+carver stage. The generator reads the noise settings the profile names and uses
+their default block, default fluid and generation geometry, so no dimension
+literal lives in the generation code.
 
-The noise settings of the nether and the end are 128 blocks tall while their
-level is 256 blocks tall. Fill and surface therefore run over y 0..127 and the
-level above can only be air; heightmaps and the stored chunk still cover the
-whole 256-block level. Their settings also select the legacy positional random
+The nether and the end have 128-block noise settings while their level is 256
+blocks tall. Fill and surface therefore run over y 0..127 and the level above
+can only be air; heightmaps and the stored chunk still cover the whole
+256-block level. Their settings also select the legacy positional random
 source, which the loader takes from the document rather than the caller.
+
+The nether runs the carvers its biomes declare: the `nether_cave` document is a
+cave carver with the nether generation bounds, a floor level and a large start
+vertical radius. The end declares no carvers, so its pipeline has none. The
+carver stage runs after the surface pass over the generation depth, not over the
+full level height, and applies the resulting mask to the filled chunk.
 
 The biome source is dimension-specific: the overworld and the nether select a
 biome from their climate parameter report (`reports/biome_parameters/`), and
 the end selects from its island bands. A fixed-biome source backs reference
 worlds whose preset declares a single biome.
 
-The nether and the end have no carver stage; carvers belong to the overworld
-pipeline. The structure generator runs starts in every dimension: the nether
-generates fortresses, bastion remnants and fossils, and the end generates end
-cities, next to the overworld structure types. A structure start reads the
+The structure generator runs starts in every dimension: the nether generates
+fortresses, bastion remnants and fossils, and the end generates end cities,
+next to the overworld structure types. A structure start reads the
 dimension's noise settings through the same profile the terrain stages use.
 Height providers sample over the generator's generation depth, which is shorter
 than the level for the nether and the end, while jigsaw padding and distance
@@ -174,7 +180,12 @@ the same start as a freshly generated one.
 
 `reference_world` reproduces the structure oracle's reference worlds: fill and
 structure pieces only, with the surface pass, carvers and features omitted.
-The chunk still reaches the configured target status.
+The chunk still reaches the configured target status. `reference_carvers` is a
+second reference mode for `reference_world` runs: it keeps the real surface
+pass and the dimension's carvers, while features stay off. Selecting
+`generation_target::terrain` with it also disables structures, so the chunk is
+exactly the fill, surface and carving output of the dimension. A production run
+(without `reference_world`) always executes the dimension's carvers.
 
 ## Custom feature reference worlds
 
@@ -220,7 +231,8 @@ The reference-backed suites currently cover:
 - terrain fill, biome selection, surface rules, carvers and feature
   decoration, including a whole-chunk feature oracle;
 - nether and end terrain fill and surface rules against reference worlds of
-  those dimensions, plus deterministic fixed-biome chunks of both dimensions;
+  those dimensions, a carved nether reference chunk compared through the
+  runtime service, plus deterministic fixed-biome chunks of both dimensions;
 - structure starts, payload trees, piece placement and full-stage
   generation for jungle temple, warm ocean ruin, beached shipwreck,
   buried treasure, mineshaft, ocean monument, stronghold, nether fortress,
@@ -278,10 +290,17 @@ heightmaps. The bastion start list and junctions match the reference for the
 treasure, bridge, stable and housing/units branches; the fossil start and its
 dried ghast placement match a soul-sand-valley reference chunk. The dimension
 oracle of seed 1 matches nether chunks `(0,0)`, `(1,0)` and `(0,1)` and end
-chunks `(0,0)` and `(1,1)` block for block and in all four final heightmaps. Both reference worlds fix a real biome and strip its carvers
-and features, so they contain exactly the fill and surface output of that
-dimension. The deterministic dimension test repeats the fixed-biome chunks
-without a reference world, using the snapshot this repository ships.
+chunks `(0,0)` and `(1,1)` block for block and in all four final heightmaps.
+Both reference worlds fix a real biome and strip its carvers and features, so
+they contain exactly the fill and surface output of that dimension. The
+deterministic dimension test repeats the fixed-biome chunks without a reference
+world, using the snapshot this repository ships.
+
+A nether reference world keeps the fixed biome's real carvers and the real
+material rule while features and structures stay off. The runtime service
+reproduces a chunk with visible cave carving block for block and in all four
+final heightmaps. `tools/worldgen/oracle/README.md` records the command and the
+environment variables of that case.
 
 A second dimension reference world keeps one structure set and uses an empty
 material rule, so a compared chunk contains terrain fill plus structure pieces
