@@ -243,6 +243,7 @@ struct server::impl {
     tab_encoder tab_encoder_hook{};
     player_event player_join_hook{};
     player_event player_leave_hook{};
+    movement_handler movement_hook{};
     transport_factory make_transport{};
     std::shared_ptr<protocol_codec> protocol{};
     std::mutex command_cache_mutex{};
@@ -1735,6 +1736,33 @@ void server::send_container_content(std::uint64_t connection,
                        packet, play_cb::encode_container_set_content);
 }
 
+void server::send_raw(std::uint64_t connection,
+                      std::span<const std::byte> body) {
+    if (impl_) {
+        impl_->send(connection, body);
+    }
+}
+
+void server::broadcast_raw(std::span<const std::byte> body,
+                           std::uint64_t except) {
+    if (!impl_) {
+        return;
+    }
+    std::vector<std::uint64_t> targets;
+    {
+        const std::lock_guard lock{impl_->connections_mutex};
+        for (const auto &[connection, state] : impl_->connections) {
+            if (connection != except && !state.closed &&
+                state.state == connection_state::play) {
+                targets.push_back(connection);
+            }
+        }
+    }
+    for (const auto target : targets) {
+        impl_->send(target, body);
+    }
+}
+
 void server::refresh_tab() {
     if (!impl_) {
         return;
@@ -2198,7 +2226,7 @@ void server::impl::handle_play(std::uint64_t id,
         if (packet.id != 1) {
             return;
         }
-        const std::lock_guard lock{connections_mutex};
+        std::unique_lock lock{connections_mutex};
         const auto found{connections.find(id)};
         if (found == connections.end() || found->second.closed) {
             return;
@@ -2210,6 +2238,15 @@ void server::impl::handle_play(std::uint64_t id,
         live.z = packet.z;
         live.yaw = packet.y_rot;
         live.pitch = packet.x_rot;
+        lock.unlock();
+        if (movement_hook) {
+            movement_hook(movement_event{.connection = id,
+                                         .x = packet.x,
+                                         .y = packet.y,
+                                         .z = packet.z,
+                                         .yaw = packet.y_rot,
+                                         .pitch = packet.x_rot});
+        }
         return;
     }
     case play_sb::keep_alive::packet_id: {
@@ -2236,7 +2273,7 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        const std::lock_guard lock{connections_mutex};
+        std::unique_lock lock{connections_mutex};
         const auto found{connections.find(id)};
         if (found == connections.end() || found->second.closed) {
             return;
@@ -2246,6 +2283,17 @@ void server::impl::handle_play(std::uint64_t id,
         live.y = packet.y;
         live.z = packet.z;
         live.on_ground = (packet.flags & 1U) != 0;
+        const auto yaw{live.yaw};
+        const auto pitch{live.pitch};
+        lock.unlock();
+        if (movement_hook) {
+            movement_hook(movement_event{.connection = id,
+                                         .x = packet.x,
+                                         .y = packet.y,
+                                         .z = packet.z,
+                                         .yaw = yaw,
+                                         .pitch = pitch});
+        }
         return;
     }
     case play_sb::move_player_pos_rot::packet_id: {
@@ -2255,7 +2303,7 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        const std::lock_guard lock{connections_mutex};
+        std::unique_lock lock{connections_mutex};
         const auto found{connections.find(id)};
         if (found == connections.end() || found->second.closed) {
             return;
@@ -2267,6 +2315,15 @@ void server::impl::handle_play(std::uint64_t id,
         live.yaw = packet.y_rot;
         live.pitch = packet.x_rot;
         live.on_ground = (packet.flags & 1U) != 0;
+        lock.unlock();
+        if (movement_hook) {
+            movement_hook(movement_event{.connection = id,
+                                         .x = packet.x,
+                                         .y = packet.y,
+                                         .z = packet.z,
+                                         .yaw = packet.y_rot,
+                                         .pitch = packet.x_rot});
+        }
         return;
     }
     case play_sb::move_player_rot::packet_id: {
@@ -2276,7 +2333,7 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        const std::lock_guard lock{connections_mutex};
+        std::unique_lock lock{connections_mutex};
         const auto found{connections.find(id)};
         if (found == connections.end() || found->second.closed) {
             return;
@@ -2285,6 +2342,16 @@ void server::impl::handle_play(std::uint64_t id,
         live.yaw = packet.y_rot;
         live.pitch = packet.x_rot;
         live.on_ground = (packet.flags & 1U) != 0;
+        const movement_event event{.connection = id,
+                                   .x = live.x,
+                                   .y = live.y,
+                                   .z = live.z,
+                                   .yaw = live.yaw,
+                                   .pitch = live.pitch};
+        lock.unlock();
+        if (movement_hook) {
+            movement_hook(event);
+        }
         return;
     }
     case play_sb::move_player_status_only::packet_id: {
@@ -2294,12 +2361,22 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        const std::lock_guard lock{connections_mutex};
+        std::unique_lock lock{connections_mutex};
         const auto found{connections.find(id)};
         if (found == connections.end() || found->second.closed) {
             return;
         }
         found->second.on_ground = (packet.flags & 1U) != 0;
+        const movement_event event{.connection = id,
+                                   .x = found->second.x,
+                                   .y = found->second.y,
+                                   .z = found->second.z,
+                                   .yaw = found->second.yaw,
+                                   .pitch = found->second.pitch};
+        lock.unlock();
+        if (movement_hook) {
+            movement_hook(event);
+        }
         return;
     }
     case play_sb::player_action::packet_id: {
@@ -3025,6 +3102,7 @@ auto server::start(server_inputs inputs, core::config::view view)
     state->tab_encoder_hook = std::move(inputs.encode_tab);
     state->player_join_hook = std::move(inputs.player_join);
     state->player_leave_hook = std::move(inputs.player_leave);
+    state->movement_hook = std::move(inputs.movement);
     state->make_transport = std::move(inputs.make_transport);
     state->protocol = std::move(inputs.protocol);
     state->verify_session = std::move(inputs.verify_session);

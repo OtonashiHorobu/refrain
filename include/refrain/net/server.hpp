@@ -70,6 +70,17 @@ struct player_identity {
     std::string_view world{};
 };
 
+/// Connection-scoped movement report. The network layer does not own entity
+/// state; the session/gameplay layer decides what to do with it.
+struct movement_event {
+    std::uint64_t connection{0};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    float yaw{0.0F};
+    float pitch{0.0F};
+};
+
 /// State the gameplay layer assigns to a joining player.
 struct join_state {
     game_mode mode{game_mode::creative};
@@ -97,6 +108,7 @@ using tab_provider = std::function<tab_view(const player_identity &)>;
 /// Optional lifecycle observer. The network layer reports the event but never
 /// interprets it.
 using player_event = std::function<void(const player_identity &)>;
+using movement_handler = std::function<void(const movement_event &)>;
 /// Optional protocol-owned encoder for the tab_list packet body. The network
 /// layer falls back to its generated encoder when empty.
 using tab_encoder = std::function<result<std::vector<std::byte>>(
@@ -188,6 +200,7 @@ struct server_inputs {
     tab_encoder encode_tab{};
     player_event player_join{};
     player_event player_leave{};
+    movement_handler movement{};
     /// Optional transport provider. Empty uses the built-in Asio TCP
     /// transport.
     transport_factory make_transport{};
@@ -272,6 +285,13 @@ class server {
     /// connection after the session view changed.
     void refresh_tab();
     void refresh_tab(std::uint64_t connection);
+
+    /// Send an already encoded packet body (packet id included) to one
+    /// connection. Used by the session/gameplay layer.
+    void send_raw(std::uint64_t connection, std::span<const std::byte> body);
+    /// Broadcast an encoded body to every play connection except `except`.
+    void broadcast_raw(std::span<const std::byte> body,
+                       std::uint64_t except = 0);
 
     /// Re-send the command tree to every play connection or one connection.
     /// Call after the gameplay bridge changes commands or permissions.

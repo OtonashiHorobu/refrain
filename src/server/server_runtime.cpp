@@ -4,6 +4,8 @@
 
 #include <refrain/server/server_runtime.hpp>
 
+#include <refrain/session/play_session.hpp>
+
 #include <refrain/app/services.hpp>
 #include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
@@ -1167,6 +1169,9 @@ auto run_server(const server_run_options &options) -> int {
             ? static_cast<refrain::net::game_mode>(level->game_mode)
             : refrain::net::game_mode::creative};
     command_environment->default_mode = initial_mode;
+    refrain::session::play_session players{};
+    const auto external_join{options.player_join};
+    const auto external_leave{options.player_leave};
     refrain::net::server_inputs network_inputs{};
     network_inputs.commands =
         refrain::server::make_command_bridge(command_environment);
@@ -1197,8 +1202,30 @@ auto run_server(const server_run_options &options) -> int {
     network_inputs.status = options.status;
     network_inputs.tab = options.tab;
     network_inputs.encode_tab = options.encode_tab;
-    network_inputs.player_join = options.player_join;
-    network_inputs.player_leave = options.player_leave;
+    network_inputs.player_join =
+        [&players,
+         external_join](const refrain::net::player_identity &identity) {
+            static_cast<void>(players.add_player(
+                identity.connection, identity.id, std::string{identity.name},
+                std::string{identity.world}, 0.0, 64.0, 0.0, 1));
+            if (external_join) {
+                external_join(identity);
+            }
+        };
+    network_inputs.player_leave =
+        [&players,
+         external_leave](const refrain::net::player_identity &identity) {
+            static_cast<void>(players.remove_player(identity.connection));
+            if (external_leave) {
+                external_leave(identity);
+            }
+        };
+    network_inputs.movement =
+        [&players](const refrain::net::movement_event &event) {
+            static_cast<void>(players.update_position(event.connection, event.x,
+                                                      event.y, event.z,
+                                                      event.yaw, event.pitch));
+        };
     network_inputs.verify_session = options.verify_session;
     network_inputs.seed = level->seed;
     network_inputs.spawn_x = static_cast<double>(level->spawn_x) + 0.5;
