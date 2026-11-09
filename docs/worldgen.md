@@ -113,10 +113,14 @@ runs, and an empty list enables every set. An empty template root still
 generates procedural pieces and features; template-backed pieces stay empty.
 
 One object owns the block state registry and its tags, the dimension profile,
-the noise settings, the biome source, the surface material rules, the loaded
-carvers, the feature data registry and per-step plan, the structure data and
-template manager, and the terrain engine. `create` validates the data once;
-`generate` returns a `proto_chunk`.
+the biome source, the surface rule state, the loaded carvers' runtime objects,
+the feature registry, the structure data and template manager, and the terrain
+engine. The immutable half of the datapack load — noise settings and their
+density documents, material rule documents, climates, noise functions, block
+tags, carvers, the feature data set and per-step plan, and the structure data —
+is loaded once by `create` and shared by reference with every worker of a
+batch. A worker keeps only its mutable state: the block state registry, the
+multi-noise search, the template cache and the start-probe caches.
 
 The stages run in the order the full-stage oracle uses. Structure starts are
 resolved before fill because their terrain adaptation reaches the fill through
@@ -125,16 +129,21 @@ the terrain stages. Targets that include structures or features fill the
 target chunk and its eight neighbours; pieces of the target chunk's starts are
 clipped into the owner and the neighbours so the fence, wall and stair repair
 sees the complete building, and feature decoration runs last through the same
-region. The final heightmaps
-are primed when the terrain status is reached and updated by every piece and
-feature write, so they cover the finished chunk.
+region. The final heightmaps are primed in one top-down pass per column when
+the terrain status is reached and updated by every piece and feature write, so
+they cover the finished chunk.
 
 The multi-noise search is reset before each chunk, which makes a chunk
 independent of the chunks generated before it. `generate_batch` creates one
 independent generator per worker and returns chunks in input order. Workers
 are retained by the calling object because a returned chunk borrows its
 block state table; the same applies to `generate`, whose chunk must not
-outlive the generator.
+outlive the generator. A batch hands each worker runs of consecutive
+positions rather than single chunks, so the bounded per-worker start-probe
+caches stay warm: each cached column holds the six unbearded heightmap rows
+a start reads, or the vertical block column the fossil start scans. Those
+columns are pure functions of the seed and data, so a cached probe produces
+the same start as a freshly generated one.
 
 `reference_world` reproduces the structure oracle's reference worlds: fill and
 structure pieces only, with the surface pass, carvers and features omitted.
