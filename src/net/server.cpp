@@ -214,6 +214,8 @@ struct server::impl {
         bool on_ground{false};
         bool awaiting_teleport{true};
         bool client_loaded{false};
+        bool knows_core_pack{false};
+        bool registries_sent{false};
         std::uint32_t held_slot{0};
         std::vector<std::byte> verify_token{};
         bool online_pending{false};
@@ -250,6 +252,7 @@ struct server::impl {
     std::unique_ptr<auth_service> auth{};
     std::optional<registry_catalog> catalog{};
     std::vector<std::vector<std::byte>> configuration_packets{};
+    std::vector<std::vector<std::byte>> configuration_registries{};
     std::vector<std::byte> finish_packet{};
     std::atomic<bool> stopped{false};
     struct queued_packet {
@@ -286,6 +289,7 @@ struct server::impl {
     void handle_login_key(std::uint64_t id, reader &in);
     void send_login_finished(std::uint64_t id);
     void send_configuration(std::uint64_t id);
+    void send_configuration_registries(std::uint64_t id);
     void send_play_login(std::uint64_t id);
     void send_commands(std::uint64_t id);
     void send_tab_list(std::uint64_t id);
@@ -803,6 +807,29 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             if (auto decoded{config_sb::decode_select_known_packs(in, packet)};
                 !decoded) {
                 reject(id, "malformed or unexpected packet");
+                return;
+            }
+            const auto knows_core{std::any_of(
+                packet.packs.begin(), packet.packs.end(), [](const auto &pack) {
+                    return pack.pack_namespace == "minecraft" &&
+                           pack.id == "core";
+                })};
+            bool send_registries{false};
+            {
+                const std::lock_guard lock{connections_mutex};
+                const auto found{connections.find(id)};
+                if (found == connections.end() || found->second.closed) {
+                    return;
+                }
+                auto &live{found->second};
+                if (!live.registries_sent) {
+                    live.knows_core_pack = knows_core;
+                    live.registries_sent = true;
+                    send_registries = true;
+                }
+            }
+            if (send_registries) {
+                send_configuration_registries(id);
             }
             return;
         }
@@ -1019,6 +1046,12 @@ void server::impl::send_configuration(std::uint64_t id) {
     for (const auto &packet : configuration_packets) {
         send(id, packet);
     }
+}
+
+void server::impl::send_configuration_registries(std::uint64_t id) {
+    for (const auto &packet : configuration_registries) {
+        send(id, packet);
+    }
     send(id, finish_packet);
 }
 
@@ -1091,7 +1124,7 @@ auto server::impl::build_configuration() -> status {
                     fmt::format("registry_data '{}' exceeds the frame limit",
                                 registry.key))};
             }
-            add_packet(std::move(packet));
+            configuration_registries.push_back(std::move(packet));
         }
 
         std::map<std::string, std::vector<const tag_definition *>> grouped{};
@@ -1128,7 +1161,7 @@ auto server::impl::build_configuration() -> status {
                 }
             }
         }
-        add_packet(std::move(packet));
+        configuration_registries.push_back(std::move(packet));
     }
 
     config_cb::finish_configuration packet{};
