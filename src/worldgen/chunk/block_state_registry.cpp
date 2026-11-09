@@ -222,6 +222,38 @@ block_state_registry::block_state_registry() {
     (void)intern("minecraft:air", state_traits{.air = true}, 0, 0);
 }
 
+auto block_state_registry::infer_traits(std::string_view key) const
+    -> state_traits {
+    const auto block = state_block_name(key);
+    const bool air = is_air_block_name(block);
+    const bool water = block == "minecraft:water" ||
+                       key.find("waterlogged=true") != std::string_view::npos;
+    const bool fluid = water || block == "minecraft:lava" ||
+                       block == "minecraft:bubble_column";
+    const auto motion = tag_names_.find("minecraft:blocks_motion_in_heightmap");
+    if (motion != tag_names_.end()) {
+        const auto no_leaves =
+            tag_names_.find("minecraft:blocks_motion_in_heightmap_no_leaves");
+        return state_traits{
+            .air = air,
+            .fluid = fluid,
+            .water = water,
+            .blocks_motion = motion->second.contains(std::string{block}),
+            .blocks_motion_no_leaves =
+                no_leaves != tag_names_.end() &&
+                no_leaves->second.contains(std::string{block}),
+        };
+    }
+    const bool leaves = block.ends_with("_leaves");
+    return state_traits{
+        .air = air,
+        .fluid = fluid,
+        .water = water,
+        .blocks_motion = !air && !fluid,
+        .blocks_motion_no_leaves = !air && !fluid && !leaves,
+    };
+}
+
 auto block_state_registry::intern(std::string_view key,
                                   const state_traits &traits,
                                   std::uint16_t block, std::uint16_t vanilla)

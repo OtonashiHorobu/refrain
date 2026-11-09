@@ -539,16 +539,7 @@ auto resolve_block_state(block_state_registry &states, std::string_view key)
     if (const auto found = states.find(key); found.has_value()) {
         return *found;
     }
-    const auto block = state_block_name(key);
-    const bool air = is_air_block_name(block);
-    const bool fluid = block == "minecraft:water" || block == "minecraft:lava";
-    const bool leaves = block.ends_with("_leaves");
-    const auto interned = states.intern(
-        key, {.air = air,
-              .fluid = fluid,
-              .water = block == "minecraft:water",
-              .blocks_motion = !air && !fluid,
-              .blocks_motion_no_leaves = !air && !fluid && !leaves});
+    const auto interned = states.intern(key, states.infer_traits(key));
     return interned.has_value() ? *interned : no_block_state;
 }
 

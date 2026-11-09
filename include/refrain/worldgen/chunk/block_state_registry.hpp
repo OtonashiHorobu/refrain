@@ -85,6 +85,13 @@ class block_state_registry final : public block_state_table {
 
     void add_tag(std::string_view tag, std::span<const block_state_id> states);
 
+    /// Traits for a state key that is not interned yet. When the registry
+    /// carries the heightmap motion tags, membership is decided by the block
+    /// name the tags list, matching how reference worlds classify states.
+    /// Without those tags the name alone decides: air and fluids never block,
+    /// leaves are excluded from the leaf-less variant.
+    [[nodiscard]] auto infer_traits(std::string_view key) const -> state_traits;
+
     // block_state_table
     [[nodiscard]] auto air() const -> block_state_id override;
     [[nodiscard]] auto traits(block_state_id id) const -> state_traits override;

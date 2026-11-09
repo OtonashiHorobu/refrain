@@ -2355,6 +2355,67 @@ suite<"worldgen/spring"> spring_tests = [] {
     };
 };
 
+suite<"worldgen/feature/disk"> disk_feature_tests = [] {
+    "a rule based disk state provider resolves at each position"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(stone.has_value());
+        if (!stone) {
+            return;
+        }
+        feature_data_set data;
+        data.features.emplace(
+            "oracle:disk",
+            configured_feature_document{
+                .id = "oracle:disk",
+                .document = parse(
+                    R"({"type":"minecraft:disk","state_provider":{"type":"minecraft:rule_based","fallback":{"id":"minecraft:dirt"},"rules":[{"if_true":{"type":"minecraft:matching_blocks","blocks":["minecraft:stone"]},"then":{"id":"minecraft:grass_block"}}]},"target":{"type":"minecraft:matching_blocks","blocks":["minecraft:stone"]},"radius":1,"half_height":0})")});
+        data.placed.emplace(
+            "oracle:disk_placed",
+            placed_feature_document{
+                .id = "oracle:disk_placed",
+                .feature = "oracle:disk",
+                .placement = parse(
+                    R"([{"type":"minecraft:fixed_placement","positions":[[8,5,8]]}])")});
+        data.biomes.push_back(biome_feature_list{
+            .biome = "oracle:test", .steps = {{"oracle:disk_placed"}}});
+
+        feature_registry features{registry};
+        const auto loaded = features.load(data);
+        expect(loaded.has_value()) << loaded.error().message;
+        if (!loaded) {
+            return;
+        }
+        const auto plan = feature_sorter::build({"oracle:test"}, data.biomes);
+        expect(plan.has_value());
+        if (!plan) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::terrain);
+        (void)chunk.set_state(8, 5, 8, *stone);
+        chunk_region region{chunk, 1};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 32,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        decorate(context, *plan, features.placed(), {"oracle:test"},
+                 data.biomes, 12345);
+        expect(chunk.table().name(chunk.state_at(8, 5, 8)) ==
+               "minecraft:grass_block");
+    };
+};
+
 suite<"worldgen/overlay"> overlay_tests = [] {
     "an overlay places its inline and referenced features"_test = [] {
         block_state_registry registry;

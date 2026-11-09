@@ -472,7 +472,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 return std::unexpected{make_error(
                     error_code::parse_error, "disk feature is incomplete")};
             }
-            auto state = decode_simple_state(*state_provider, *states_);
+            auto state = decode_provider(*state_provider);
             auto predicate = decode_block_predicate(*target, *states_);
             auto radius_provider = provider::int_provider::decode(*radius);
             const auto half = half_height->as_int64();
@@ -481,7 +481,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                                   "disk feature is invalid")};
             }
             features_.emplace(id, std::make_unique<disk_feature>(
-                                      *state, std::move(*predicate),
+                                      std::move(*state), std::move(*predicate),
                                       std::move(*radius_provider),
                                       static_cast<jint>(*half)));
             continue;
