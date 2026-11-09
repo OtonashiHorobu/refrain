@@ -724,3 +724,43 @@ suite<"worldgen/feature-closure"> feature_closure_tests = [] {
         }
     };
 };
+
+suite<"worldgen/feature-sculk"> sculk_feature_tests = [] {
+    "a sculk patch spreads charges over its substrate"_test = [] {
+        fixture environment;
+        const auto stone = environment.resolve("minecraft:stone");
+        const auto sculk = environment.resolve("minecraft:sculk");
+        environment.fill_layer(4, stone);
+        (void)environment.chunk.set_state(5, 5, 5, sculk);
+        (void)environment.chunk.set_state(9, 5, 9, sculk);
+        const std::array<block_state_id, 2> replaceable{stone, sculk};
+        environment.registry.add_tag("minecraft:sculk_replaceable_world_gen",
+                                     replaceable);
+        environment.registry.add_tag("minecraft:sculk_replaceable",
+                                     replaceable);
+        decoded_feature feature{environment.registry};
+        if (!feature.load(R"({"type":"minecraft:sculk_patch",
+                              "charge_count":8,
+                              "amount_per_charge":100,
+                              "spread_attempts":16,
+                              "growth_rounds":4,
+                              "spread_rounds":1})")) {
+            return;
+        }
+        auto random = make_random(41);
+        expect(feature.place(environment.context, random,
+                             block_pos{.x = 5, .y = 5, .z = 5}));
+        jint sculk_blocks = 0;
+        for (jint y = 0; y < 32; ++y) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint z = 0; z < 16; ++z) {
+                    if (environment.name_at(x, y, z).starts_with(
+                            "minecraft:sculk")) {
+                        ++sculk_blocks;
+                    }
+                }
+            }
+        }
+        expect(sculk_blocks > 2) << sculk_blocks;
+    };
+};
