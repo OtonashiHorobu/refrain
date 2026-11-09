@@ -62,6 +62,123 @@ REFRAIN_VANILLA_SURFACE_FIXED_BIOME=minecraft:eroded_badlands \
     ./build/Release/bin/refrain-tests
 ```
 
+### Fixed-biome feature worlds
+
+`--keep-features` keeps the fixed real biome's surface pass, carvers and
+features and leaves structures disabled, so the saved chunk is the production
+terrain plus the real feature writes. The runtime compares it with
+`reference_world=false`, one `structure_sets` entry that names no shipped set
+(so no start is placed) and neighbour decoration enabled:
+
+* `<PREFIX>_NEIGHBOURS` decorates the target chunk and then its eight
+  neighbours through the same region, which reproduces the feature writes a
+  saved reference chunk receives from the chunks next to it;
+* `<PREFIX>_NEIGHBOURS_FIRST` reverses that order, which matches a target the
+  reference generated before its neighbours.
+
+The four chunks below match block for block and in all four final heightmaps.
+The terrain is ocean at the spawn area of seed 1, so the surface vegetation of
+the target biomes does not place there; the compared chunks exercise the
+underground feature families of the fixed biome (ores, disks, geodes, lava
+lakes and springs) together with their fluid placement. The tests take every
+input from the environment, so no seed or coordinate is fixed in them.
+
+```bash
+python3 tools/worldgen/oracle/generate.py --fixed-biome minecraft:cherry_grove \
+    --keep-features --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2feature-cherry
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_FEATURE_CHERRY_GROVE_REGION=/tmp/t2feature-cherry/world/dimensions/minecraft/overworld/region/r.-1.0.mca \
+REFRAIN_FEATURE_CHERRY_GROVE_CHUNK_X=-2 \
+REFRAIN_FEATURE_CHERRY_GROVE_CHUNK_Z=1 \
+REFRAIN_FEATURE_CHERRY_GROVE_SEED=1 \
+REFRAIN_FEATURE_CHERRY_GROVE_BIOME=minecraft:cherry_grove \
+REFRAIN_FEATURE_CHERRY_GROVE_NEIGHBOURS=1 \
+    ./build/Release/bin/refrain-tests \
+    "the runtime feature oracle reproduces a cherry grove chunk"
+
+for biome in plains desert badlands; do
+    python3 tools/worldgen/oracle/generate.py --fixed-biome minecraft:$biome \
+        --keep-features --server-jar /path/to/server.jar --seed 1 \
+        --output /tmp/t2feature-$biome
+done
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_FEATURE_PLAINS_REGION=/tmp/t2feature-plains/world/dimensions/minecraft/overworld/region/r.-1.0.mca \
+REFRAIN_FEATURE_PLAINS_CHUNK_X=-1 REFRAIN_FEATURE_PLAINS_CHUNK_Z=1 \
+REFRAIN_FEATURE_PLAINS_SEED=1 \
+REFRAIN_FEATURE_PLAINS_BIOME=minecraft:plains \
+REFRAIN_FEATURE_PLAINS_NEIGHBOURS=1 \
+REFRAIN_FEATURE_PLAINS_NEIGHBOURS_FIRST=1 \
+    ./build/Release/bin/refrain-tests \
+    "the runtime feature oracle reproduces a plains chunk"
+```
+
+Repeat the second block for `minecraft:desert` and `minecraft:badlands` with
+the same chunk and region coordinates; the test titles are `a desert chunk`
+and `a badlands chunk`. The desert and badlands cases use their own
+`REFRAIN_FEATURE_DESERT_*` and `REFRAIN_FEATURE_BADLANDS_*` prefixes.
+
+`--force-load-box` moves the feature reference area. A land area chosen with a
+probe run is a much stronger test of the surface feature families, but the
+chunks compared there are not yet stable: a plains land chunk at seed 1
+(`--force-load-box -114752 -8256 -114625 -8145`, chunk `(-7169,-511)`) has one
+remaining granite/iron overlap after all other blocks match. Trees and large
+surface patches write across chunk borders and depend on the reference
+world's generation order, so a single-chunk comparison only matches when the
+order reproduced by the neighbour mode is the one the server used.
+
+The other target biomes do not yield a stable single chunk oracle yet. The
+best scanned chunks and the remaining differences are:
+
+* `minecraft:lush_caves`: chunk `(-1,0)` has 103 block and 0 heightmap
+  mismatches. The vegetation patches differ in ground and distribution: the
+  surface positions form a Java hash set in the reference, the face-sturdy
+  check that selects a patch column is approximated by the motion-blocking
+  trait, and neighbour patches write up to seven blocks across a border.
+  Cave vines, clay/sand disks and a few ore overlaps remain as well.
+* `minecraft:deep_dark`: the best of sixteen scanned chunks has 414 block and
+  11 heightmap mismatches. The sculk patch spread and sculk vein faces differ
+  from the reference, and the patches reach across chunk borders.
+* `minecraft:warm_ocean`: chunk `(0,-1)` has 54 block and 0 heightmap
+  mismatches. The weighted tall/short seagrass selection differs at a handful
+  of columns (the reference places tall seagrass where the runtime places
+  none and the other way round), and neighbour seagrass writes depend on the
+  chunk generation order around the water column.
+* `minecraft:basalt_deltas`: chunk `(0,0)` has 2531 block and 2 heightmap
+  mismatches. Delta, small/large basalt column and basalt blob placement
+  differ across the chunk, so the feature family itself needs more work
+  before a chunk can match.
+
+The failing cases use the same command shape as the passing ones. For
+example, the warm ocean chunk above:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --fixed-biome minecraft:warm_ocean \
+    --keep-features --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2feature-warm
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_FEATURE_WARM_OCEAN_REGION=/tmp/t2feature-warm/world/dimensions/minecraft/overworld/region/r.0.-1.mca \
+REFRAIN_FEATURE_WARM_OCEAN_CHUNK_X=0 \
+REFRAIN_FEATURE_WARM_OCEAN_CHUNK_Z=-1 \
+REFRAIN_FEATURE_WARM_OCEAN_SEED=1 \
+REFRAIN_FEATURE_WARM_OCEAN_BIOME=minecraft:warm_ocean \
+REFRAIN_FEATURE_WARM_OCEAN_NEIGHBOURS=1 \
+REFRAIN_FEATURE_WARM_OCEAN_NEIGHBOURS_FIRST=1 \
+    ./build/Release/bin/refrain-tests \
+    "the runtime feature oracle reproduces a warm ocean chunk"
+```
+
+Lush caves, deep dark and basalt deltas use their own
+`REFRAIN_FEATURE_LUSH_CAVES_*`, `REFRAIN_FEATURE_DEEP_DARK_*` and
+`REFRAIN_FEATURE_BASALT_DELTAS_*` prefixes. The basalt deltas world is
+generated with `--dimension the_nether` and its test sets
+`REFRAIN_FEATURE_BASALT_DELTAS_DIMENSION=the_nether`. The deep dark and basalt
+deltas chunks above use the default target order; the lush caves chunk uses
+the default target order as well.
+
+`--force-load-box` also applies to the default fixed-biome mode, so a feature
+reference can be generated away from the spawn area.
+
 The biome oracle uses a plain overworld instead: `--plain` skips the data pack,
 so the normal multi-noise biome source writes real biomes (surface rules,
 features and structures still run but do not affect the biome grid):

@@ -117,6 +117,12 @@ pieces and feature decoration), or at `full` (the features target plus the
 final status). `structure_sets` restricts starts to the listed sets for oracle
 runs, and an empty list enables every set. An empty template root still
 generates procedural pieces and features; template-backed pieces stay empty.
+Two reference-only switches reproduce a saved reference chunk that contains
+its neighbours' feature writes: `decorate_neighbours` decorates the eight
+neighbour chunks through the same region, and `neighbours_before_target`
+selects whether their writes come before or after the target's own features.
+A fixed biome is required because every decorated chunk uses the target's
+biome plan.
 
 One object owns the block state registry and its tags, the dimension profile,
 the biome source, the surface rule state, the loaded carvers' runtime objects,
@@ -251,6 +257,21 @@ The reference-backed suites currently cover:
   and tree placer families the standard biomes name, through synthetic unit
   tests and a content-driven test that creates one generator and generates one
   full chunk for every standard overworld, nether and end biome;
+- fixed-biome feature reference worlds for cherry grove, plains, desert and
+  badlands: the runtime runs the real features with structure starts disabled
+  and decorates the target chunk and its eight neighbours, and the compared
+  chunk matches the reference block for block and in all four final
+  heightmaps. The spawn terrain of those worlds is ocean, so the chunks cover
+  the underground families (ores, disks, geodes, lava lakes, springs) and
+  their fluids. The reference command and environment variables are recorded
+  in `tools/worldgen/oracle/README.md`;
+- fixed-biome feature worlds for lush caves, deep dark, warm ocean and basalt
+  deltas do not yield a stable chunk yet. Vegetation and sculk patches write
+  across chunk borders and their column set and spread differ from the
+  reference, warm-ocean seagrass chooses the tall and short variants in a
+  different order, and the basalt delta and column features place different
+  shapes. The best scanned chunks, their remaining mismatch counts and the
+  commands are recorded in `tools/worldgen/oracle/README.md`;
 - benchmarks for fill, parallel fill, structure selection, corridor
   placement, template placement, feature freeze and decoration.
 
