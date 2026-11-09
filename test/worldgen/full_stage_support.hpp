@@ -113,6 +113,9 @@ inline auto canonical(std::string name) -> std::string {
                              base == "minecraft:podzol";
     const bool fence_gate = base.ends_with("_fence_gate");
     const bool pointed_dripstone = base == "minecraft:pointed_dripstone";
+    const bool glazed_terracotta = base.ends_with("_glazed_terracotta");
+    const bool bed = base.ends_with("_bed");
+    const bool cactus = base == "minecraft:cactus";
     std::vector<std::string> parts;
     std::string_view body{name.data() + open + 1, close - open - 1};
     while (true) {
@@ -134,7 +137,11 @@ inline auto canonical(std::string name) -> std::string {
             (fence_gate && (part == "facing=north" || part == "in_wall=false" ||
                             part == "open=false" || part == "powered=false")) ||
             (pointed_dripstone &&
-             (part == "thickness=tip" || part == "vertical_direction=up"));
+             (part == "thickness=tip" || part == "vertical_direction=up")) ||
+            (glazed_terracotta && part == "facing=north") ||
+            (bed && (part == "facing=north" || part == "occupied=false" ||
+                     part == "part=foot")) ||
+            (cactus && part == "age=0");
         if (!default_property) {
             parts.emplace_back(part);
         }

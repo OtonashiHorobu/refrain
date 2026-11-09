@@ -69,7 +69,8 @@ void run_full_stage_case(std::string_view prefix,
                          std::optional<jint> default_chunk_z,
                          std::optional<jlong> default_seed,
                          std::string_view default_biome,
-                         std::string_view default_template_dirs) {
+                         std::string_view default_template_dirs,
+                         bool compare_block_entities = false) {
     const std::string base{"REFRAIN_" + std::string{prefix}};
     const auto env = [&base](std::string_view suffix) -> std::string {
         const std::string key = base + "_" + std::string{suffix};
@@ -619,6 +620,96 @@ void run_full_stage_case(std::string_view prefix,
     expect(comparison.heightmap_mismatches == 0);
     expect(comparison.block_mismatches == 0);
 
+    if (compare_block_entities || !env("BLOCK_ENTITIES").empty()) {
+        // Loot-bearing block entities are the strongest observation of the
+        // piece random stream: both the table and the seed it stored must
+        // match. The chunk serialiser adds coordinates and the block entity
+        // id, so only the two loot fields are compared.
+        std::map<block_pos, std::pair<std::string, jlong>> expected_loot;
+        const auto *block_entities =
+            child(document->as_compound(), "block_entities");
+        if (block_entities != nullptr && block_entities->as_list() != nullptr) {
+            for (const auto &entry : block_entities->as_list()->items) {
+                const auto *tag = entry.as_compound();
+                if (tag == nullptr) {
+                    continue;
+                }
+                const auto *table = child(tag, "LootTable");
+                const auto *seed_tag = child(tag, "LootTableSeed");
+                const auto *x = child(tag, "x");
+                const auto *y = child(tag, "y");
+                const auto *z = child(tag, "z");
+                if (table == nullptr || seed_tag == nullptr || x == nullptr ||
+                    y == nullptr || z == nullptr) {
+                    continue;
+                }
+                const auto table_name = table->as_string();
+                const auto seed_value = seed_tag->as_long();
+                if (!table_name || !seed_value) {
+                    continue;
+                }
+                expected_loot[block_pos{.x = *x->as_int() & 15,
+                                        .y = *y->as_int(),
+                                        .z = *z->as_int() & 15}] =
+                    std::make_pair(std::string(*table_name), *seed_value);
+            }
+        }
+        std::size_t loot_mismatches = 0;
+        for (const auto &[pos, expected] : expected_loot) {
+            const auto *entity = chunk.block_entity_at(pos);
+            if (entity == nullptr) {
+                std::fprintf(stderr,
+                             "loot mismatch (%d,%d,%d): missing entity, want "
+                             "%s/%lld\n",
+                             static_cast<int>(pos.x), static_cast<int>(pos.y),
+                             static_cast<int>(pos.z), expected.first.c_str(),
+                             static_cast<long long>(expected.second));
+                ++loot_mismatches;
+                continue;
+            }
+            const auto table = entity->find("LootTable");
+            const auto seed_tag = entity->find("LootTableSeed");
+            if (table == entity->end() || seed_tag == entity->end() ||
+                table->second.as_string().value_or("") != expected.first ||
+                seed_tag->second.as_long().value_or(0) != expected.second) {
+                std::fprintf(
+                    stderr,
+                    "loot mismatch (%d,%d,%d): got %s/%lld want %s/%lld\n",
+                    static_cast<int>(pos.x), static_cast<int>(pos.y),
+                    static_cast<int>(pos.z),
+                    table == entity->end()
+                        ? "<none>"
+                        : std::string{table->second.as_string().value_or("")}
+                              .c_str(),
+                    static_cast<long long>(
+                        seed_tag == entity->end()
+                            ? 0
+                            : seed_tag->second.as_long().value_or(0)),
+                    expected.first.c_str(),
+                    static_cast<long long>(expected.second));
+                ++loot_mismatches;
+            }
+        }
+        for (const auto &[pos, entity] : chunk.block_entities()) {
+            if (entity.find("LootTable") != entity.end() &&
+                !expected_loot.contains(pos)) {
+                const auto table = entity.find("LootTable");
+                std::fprintf(stderr,
+                             "loot mismatch (%d,%d,%d): unexpected entity %s\n",
+                             static_cast<int>(pos.x), static_cast<int>(pos.y),
+                             static_cast<int>(pos.z),
+                             std::string{table->second.as_string().value_or("")}
+                                 .c_str());
+                ++loot_mismatches;
+            }
+        }
+        std::fprintf(stderr,
+                     "full-stage: %zu loot block entity mismatches over %zu "
+                     "reference entities\n",
+                     loot_mismatches, expected_loot.size());
+        expect(loot_mismatches == 0);
+    }
+
     if (!own_start) {
         return;
     }
@@ -663,6 +754,8 @@ void run_full_stage_case(std::string_view prefix,
                     }
                 }
             }
+            std::fprintf(stderr, "full-stage: %zu service mismatches\n",
+                         service_mismatches);
             expect(service_mismatches == 0);
             for (const auto kind :
                  {heightmap_kind::world_surface, heightmap_kind::ocean_floor,
@@ -711,4 +804,17 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                             std::nullopt, std::nullopt, "minecraft:plains",
                             "minecraft/structure/trial_chambers");
     };
+
+    "a trail ruins chunk matches the reference full-stage world"_test = [] {
+        run_full_stage_case("TRAIL_RUINS_FULL_STAGE", std::nullopt,
+                            std::nullopt, std::nullopt, "minecraft:taiga",
+                            "minecraft/structure/trail_ruins", true);
+    };
+
+    "a trial chambers chest chunk matches the reference loot block entities"_test =
+        [] {
+            run_full_stage_case("JIGSAW_TRIAL_LOOT_FULL_STAGE", std::nullopt,
+                                std::nullopt, std::nullopt, "minecraft:plains",
+                                "minecraft/structure/trial_chambers", true);
+        };
 };
