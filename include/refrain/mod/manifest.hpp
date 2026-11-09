@@ -134,6 +134,13 @@ struct mod_manifest {
     /// Service contract ids this mod can provide, e.g. `refrain:data.packs`
     /// (a role declaration, not a mod type).
     std::vector<std::string> provides{};
+    /// Optional host runtime API requirement (full SemVer, for example
+    /// "1.0.0"). The loader rejects a major mismatch and a newer minor.
+    std::string host_api{};
+    /// Optional host runtime capabilities required by the mod (for example
+    /// "log" or "config"). The loader rejects capabilities the host does not
+    /// provide.
+    std::vector<std::string> host_capabilities{};
     /// Present only for external (loadable) mods; absent for internal/static
     /// mods whose code is linked into the host.
     std::optional<manifest_entry_point> entry{};

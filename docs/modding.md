@@ -26,6 +26,8 @@ id = "example.content"
 version = "1.0.0"
 abi = "1"
 side = "both"
+host_api = "1.0.0"          # optional: required host runtime API
+host_capabilities = ["log"] # optional: required host capabilities
 
 [meta]
 display_name = "Example content"
@@ -43,7 +45,11 @@ native = "libexample.so"
 ```
 
 `[mod]` carries the identity, a SemVer 2.0.0 version, the integer ABI major and
-the side (`server`, `client` or `both`). `[meta]` is display metadata and never
+the side (`server`, `client` or `both`). It may also declare `host_api` (a full
+SemVer version of the host runtime API the mod requires) and
+`host_capabilities` (host runtime capability names such as `log` or `config`);
+the loader rejects a major mismatch, a newer minor or an unknown capability
+before any mod code runs. `[meta]` is display metadata and never
 affects composition. `[provides]` lists service keys. `[requires]` maps mod ids
 to version ranges; ranges support `=`, `>`, `>=`, `<`, `<=`, `^`, `~`, space for
 conjunction and `||` for alternation. `[optional_requires]` marks dependencies

@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -633,8 +634,9 @@ auto parse_mod_manifest(const core::config::document &doc,
     // carries loader keys (auto_scan/mods_dir); a mod manifest has the fixed
     // identity quartet, so reject typos here instead of silently ignoring them.
     // `format_version` is the optional container version.
-    constexpr std::array<std::string_view, 5> mod_section_keys{
-        "id", "version", "side", "abi", "format_version"};
+    constexpr std::array<std::string_view, 7> mod_section_keys{
+        "id",       "version",          "side", "abi", "format_version",
+        "host_api", "host_capabilities"};
     for (const auto &key : doc.keys("mod")) {
         const auto known = std::any_of(
             mod_section_keys.begin(), mod_section_keys.end(),
@@ -672,6 +674,56 @@ auto parse_mod_manifest(const core::config::document &doc,
     }
     if (auto entry{parse_entry(doc, manifest.entry)}; !entry) {
         return std::unexpected{entry.error()};
+    }
+
+    const std::array<std::string_view, 2> host_api_path{"mod", "host_api"};
+    if (doc.contains_at(host_api_path)) {
+        auto host_api{
+            required_string(doc, host_api_path, "mod", "mod.host_api")};
+        if (!host_api) {
+            return std::unexpected{host_api.error()};
+        }
+        if (!core::semver::parse(*host_api)) {
+            return std::unexpected{
+                fail(error_code::invalid_argument,
+                     fmt::format("mod: invalid host_api '{}' (expected SemVer "
+                                 "major.minor.patch)",
+                                 *host_api))};
+        }
+        manifest.host_api = std::move(*host_api);
+    }
+
+    const std::array<std::string_view, 2> host_caps_path{"mod",
+                                                         "host_capabilities"};
+    if (doc.contains_at(host_caps_path)) {
+        auto capabilities{doc.get_strings_at(host_caps_path)};
+        if (!capabilities) {
+            return std::unexpected{fail(
+                error_code::parse_error,
+                "mod: [mod].host_capabilities must be an array of strings")};
+        }
+        std::set<std::string> seen;
+        for (auto &capability : *capabilities) {
+            if (capability.empty() ||
+                !std::ranges::all_of(capability, [](char value) {
+                    return (value >= 'a' && value <= 'z') ||
+                           (value >= '0' && value <= '9') || value == '.' ||
+                           value == '_' || value == '-';
+                })) {
+                return std::unexpected{
+                    fail(error_code::invalid_argument,
+                         fmt::format("mod: invalid host capability '{}'",
+                                     capability))};
+            }
+            if (!seen.insert(capability).second) {
+                return std::unexpected{fail(
+                    error_code::already_exists,
+                    fmt::format("mod: host capability '{}' is listed twice",
+                                capability))};
+            }
+        }
+        std::sort(capabilities->begin(), capabilities->end());
+        manifest.host_capabilities = std::move(*capabilities);
     }
 
     // Self-dependency and hard/optional overlap are manifest bugs, not

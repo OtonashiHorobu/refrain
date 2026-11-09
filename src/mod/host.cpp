@@ -4,8 +4,10 @@
 
 #include <refrain/mod/host.hpp>
 
+#include <refrain/contracts/host/core.hpp>
 #include <refrain/core/config.hpp>
 #include <refrain/core/log.hpp>
+#include <refrain/core/semver.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/mod/package.hpp>
@@ -46,6 +48,66 @@ using mod::static_mod_registry;
 
 [[nodiscard]] auto fail(error_code code, std::string message) -> error {
     return make_error(code, std::move(message));
+}
+
+/// Capabilities advertised by the sealed `refrain:host.core` contract.
+[[nodiscard]] auto host_capability_set() -> const std::set<std::string_view> & {
+    static const auto capabilities = [] {
+        std::set<std::string_view> out;
+        std::string_view text{REFRAIN_HOST_CORE_CAPABILITIES};
+        while (!text.empty()) {
+            const auto comma{text.find(',')};
+            const auto token{text.substr(0, comma)};
+            if (!token.empty()) {
+                out.insert(token);
+            }
+            if (comma == std::string_view::npos) {
+                break;
+            }
+            text.remove_prefix(comma + 1);
+        }
+        return out;
+    }();
+    return capabilities;
+}
+
+/// Manifest-declared host runtime requirements. The loader compares the
+/// requested host API major/minor and each capability against the sealed
+/// contract the binary was built with.
+[[nodiscard]] auto check_host_requirements(const mod_manifest &manifest)
+    -> status {
+    if (!manifest.host_api.empty()) {
+        const auto requested{core::semver::parse(manifest.host_api)};
+        if (!requested.has_value()) {
+            return std::unexpected{
+                fail(error_code::version_mismatch,
+                     fmt::format("host_api '{}' is not a valid SemVer",
+                                 manifest.host_api))};
+        }
+        if (requested->major != REFRAIN_HOST_CORE_ABI_MAJOR) {
+            return std::unexpected{fail(
+                error_code::version_mismatch,
+                fmt::format("host_api {} requires major {}, this host is {}",
+                            manifest.host_api, requested->major,
+                            REFRAIN_HOST_CORE_ABI_MAJOR))};
+        }
+        if (requested->minor > REFRAIN_HOST_CORE_ABI_MINOR) {
+            return std::unexpected{fail(
+                error_code::version_mismatch,
+                fmt::format("host_api {} requires a newer host minor {} > {}",
+                            manifest.host_api, requested->minor,
+                            REFRAIN_HOST_CORE_ABI_MINOR))};
+        }
+    }
+    for (const auto &capability : manifest.host_capabilities) {
+        if (!host_capability_set().contains(std::string_view{capability})) {
+            return std::unexpected{fail(
+                error_code::unsupported,
+                fmt::format("host capability '{}' is not provided by this host",
+                            capability))};
+        }
+    }
+    return status_ok();
 }
 
 [[nodiscard]] auto annotate(error original, std::string_view context) -> error {
@@ -267,6 +329,11 @@ auto host::load_one(const composition &plan, const package_source &package,
                  fmt::format("{}: side '{}' cannot run in a '{}' gamepack",
                              entry.path, to_string(manifest->common.side),
                              plan.spec.side))};
+    }
+    if (auto host_requirements{check_host_requirements(*manifest)};
+        !host_requirements) {
+        return std::unexpected{
+            annotate(std::move(host_requirements.error()), entry.path)};
     }
     if (manifest->is_external()) {
         const auto &native{manifest->entry->native};

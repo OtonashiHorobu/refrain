@@ -446,6 +446,67 @@ const suite mod_host_tests = [] {
         }
     };
 
+    "mod_host/rejects an incompatible host_api"_test = [] {
+        mod::static_mod_registry registry{};
+        auto plan{make_gamepack("\"refrain.test.hostapi@1.0.0\"")};
+        expect(static_cast<bool>(plan));
+        if (!plan) {
+            return;
+        }
+        image_builder builder{};
+        auto manifest{make_manifest("refrain.test.hostapi")};
+        manifest += "host_api = \"2.0.0\"\n";
+        builder.add("refrain.test.hostapi", std::move(manifest));
+        refrain::mod::host host{registry};
+        auto loaded{host.load(*plan, builder.build())};
+        expect(!loaded);
+        if (!loaded) {
+            expect(loaded.error().code == error_code::version_mismatch);
+            expect(loaded.error().message.find("host_api") !=
+                   std::string::npos);
+        }
+    };
+
+    "mod_host/rejects an unknown host capability"_test = [] {
+        mod::static_mod_registry registry{};
+        auto plan{make_gamepack("\"refrain.test.hostapi@1.0.0\"")};
+        expect(static_cast<bool>(plan));
+        if (!plan) {
+            return;
+        }
+        image_builder builder{};
+        auto manifest{make_manifest("refrain.test.hostapi")};
+        manifest += "host_capabilities = [\"nope\"]\n";
+        builder.add("refrain.test.hostapi", std::move(manifest));
+        refrain::mod::host host{registry};
+        auto loaded{host.load(*plan, builder.build())};
+        expect(!loaded);
+        if (!loaded) {
+            expect(loaded.error().code == error_code::unsupported);
+            expect(loaded.error().message.find("capability") !=
+                   std::string::npos);
+        }
+    };
+
+    "mod_host/accepts a compatible host_api and capability"_test = [] {
+        mod::static_mod_registry registry{};
+        auto plan{make_gamepack("\"refrain.test.hostapi@1.0.0\"")};
+        expect(static_cast<bool>(plan));
+        if (!plan) {
+            return;
+        }
+        image_builder builder{};
+        auto manifest{make_manifest("refrain.test.hostapi")};
+        manifest += "host_api = \"1.0.0\"\n";
+        manifest += "host_capabilities = [\"log\", \"config\"]\n";
+        builder.add("refrain.test.hostapi", std::move(manifest));
+        refrain::mod::host host{registry};
+        auto loaded{host.load(*plan, builder.build())};
+        expect(static_cast<bool>(loaded))
+            << (loaded ? std::string{"load ok"} : loaded.error().message);
+        expect(host.loaded());
+    };
+
     "mod_host/rejects a declared sealed service before the factory runs"_test =
         [] {
             mod::static_mod_registry registry{};

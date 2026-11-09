@@ -386,6 +386,50 @@ abi = "1"
         }
     };
 
+    "manifest/mod: host_api and host_capabilities are parsed"_test = [] {
+        auto manifest{parse_mod(R"(
+[mod]
+id = "refrain.test.hostapi"
+version = "1.0.0"
+abi = 1
+host_api = "1.2.0"
+host_capabilities = ["log", "config"]
+)")};
+        expect(static_cast<bool>(manifest));
+        if (manifest) {
+            expect(manifest->host_api == "1.2.0");
+            expect(manifest->host_capabilities ==
+                   (std::vector<std::string>{"config", "log"}));
+        }
+    };
+
+    "manifest/mod: invalid host_api or capability is rejected"_test = [] {
+        expect_mod_error(R"(
+[mod]
+id = "refrain.test.hostapi"
+version = "1.0.0"
+abi = 1
+host_api = "1.2"
+)",
+                         error_code::invalid_argument);
+        expect_mod_error(R"(
+[mod]
+id = "refrain.test.hostapi"
+version = "1.0.0"
+abi = 1
+host_capabilities = ["Bad Capability"]
+)",
+                         error_code::invalid_argument);
+        expect_mod_error(R"(
+[mod]
+id = "refrain.test.hostapi"
+version = "1.0.0"
+abi = 1
+host_capabilities = ["log", "log"]
+)",
+                         error_code::already_exists);
+    };
+
     "manifest/mod: load_mod_manifest annotates the path"_test = [] {
         const auto dir{std::filesystem::temp_directory_path() /
                        "refrain-test-manifest"};
