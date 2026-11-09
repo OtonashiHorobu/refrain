@@ -5,6 +5,7 @@
 #include <refrain/mod/host.hpp>
 
 #include <refrain/contracts/host/core.hpp>
+#include <refrain/contracts/host/platform.hpp>
 #include <refrain/core/config.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/core/semver.hpp>
@@ -62,18 +63,21 @@ using mod::static_mod_registry;
 [[nodiscard]] auto host_capability_set() -> const std::set<std::string_view> & {
     static const auto capabilities = [] {
         std::set<std::string_view> out;
-        std::string_view text{REFRAIN_HOST_CORE_CAPABILITIES};
-        while (!text.empty()) {
-            const auto comma{text.find(',')};
-            const auto token{text.substr(0, comma)};
-            if (!token.empty()) {
-                out.insert(token);
+        const auto add = [&out](std::string_view text) {
+            while (!text.empty()) {
+                const auto comma{text.find(',')};
+                const auto token{text.substr(0, comma)};
+                if (!token.empty()) {
+                    out.insert(token);
+                }
+                if (comma == std::string_view::npos) {
+                    break;
+                }
+                text.remove_prefix(comma + 1);
             }
-            if (comma == std::string_view::npos) {
-                break;
-            }
-            text.remove_prefix(comma + 1);
-        }
+        };
+        add(REFRAIN_HOST_CORE_CAPABILITIES);
+        add(REFRAIN_HOST_PLATFORM_CAPABILITIES);
         return out;
     }();
     return capabilities;

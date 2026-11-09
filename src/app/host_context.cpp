@@ -4,10 +4,14 @@
 
 #include <refrain/app/host_context.hpp>
 
+#include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/core/memory.hpp>
 #include <refrain/core/time.hpp>
+#include <refrain/kernel/crash.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/platform/mmap.hpp>
+#include <refrain/platform/random_access_file.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -18,11 +22,15 @@
 #include <memory_resource>
 #include <new>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 
 namespace refrain::app {
 namespace {
+
+namespace host_platform = refrain::host::platform;
+namespace file_api = refrain::platform::file;
 
 constexpr std::uint64_t max_alignment{4096};
 
@@ -231,6 +239,156 @@ void host_context::free(std::span<std::uint8_t> block) noexcept {
     refrain::core::memory::default_resource()->deallocate(
         header->base, static_cast<std::size_t>(header->bytes),
         static_cast<std::size_t>(header->alignment));
+}
+
+auto host_context::file_open(std::string_view path,
+                             host_platform::file_open_flags flags)
+    -> refrain::result<host_platform::file> {
+    const auto bits{static_cast<std::uint32_t>(flags)};
+    const auto read_only{
+        (bits & REFRAIN_HOST_PLATFORM_FILE_OPEN_FLAGS_READ_ONLY) != 0};
+    const auto read_write{
+        (bits & REFRAIN_HOST_PLATFORM_FILE_OPEN_FLAGS_READ_WRITE) != 0};
+    if (read_only == read_write) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::invalid_argument,
+            "file_open requires exactly one of read_only/read_write")};
+    }
+    const file_api::open_options options{
+        .create = (bits & REFRAIN_HOST_PLATFORM_FILE_OPEN_FLAGS_CREATE) != 0,
+        .exclusive =
+            (bits & REFRAIN_HOST_PLATFORM_FILE_OPEN_FLAGS_EXCLUSIVE) != 0,
+        .truncate =
+            (bits & REFRAIN_HOST_PLATFORM_FILE_OPEN_FLAGS_TRUNCATE) != 0,
+        .no_follow =
+            (bits & REFRAIN_HOST_PLATFORM_FILE_OPEN_FLAGS_NO_FOLLOW) != 0,
+    };
+    auto file{file_api::random_access_file::open(
+        path,
+        read_only ? file_api::open_mode::read_only
+                  : file_api::open_mode::read_write,
+        options)};
+    if (!file) {
+        return std::unexpected{std::move(file.error())};
+    }
+    std::scoped_lock lock{platform_mutex_};
+    const auto handle{next_handle_++};
+    files_.emplace(handle, file_entry{std::move(*file), read_only});
+    return host_platform::file{handle};
+}
+
+auto host_context::file_close(host_platform::file handle) -> refrain::status {
+    std::scoped_lock lock{platform_mutex_};
+    const auto erased{files_.erase(handle.raw())};
+    if (erased == 0) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::not_found, "file handle is not open")};
+    }
+    return refrain::status_ok();
+}
+
+auto host_context::file_read(host_platform::file handle, std::uint64_t offset,
+                             std::span<std::uint8_t> buffer)
+    -> refrain::result<std::uint64_t> {
+    std::scoped_lock lock{platform_mutex_};
+    const auto found{files_.find(handle.raw())};
+    if (found == files_.end()) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::not_found, "file handle is not open")};
+    }
+    auto read{
+        found->second.file.read_at(offset, std::as_writable_bytes(buffer))};
+    if (!read) {
+        return std::unexpected{std::move(read.error())};
+    }
+    return static_cast<std::uint64_t>(buffer.size());
+}
+
+auto host_context::file_write(host_platform::file handle, std::uint64_t offset,
+                              std::span<const std::uint8_t> data)
+    -> refrain::result<std::uint64_t> {
+    std::scoped_lock lock{platform_mutex_};
+    const auto found{files_.find(handle.raw())};
+    if (found == files_.end()) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::not_found, "file handle is not open")};
+    }
+    auto written{found->second.file.write_at(offset, std::as_bytes(data))};
+    if (!written) {
+        return std::unexpected{std::move(written.error())};
+    }
+    return static_cast<std::uint64_t>(data.size());
+}
+
+auto host_context::file_size(host_platform::file handle)
+    -> refrain::result<std::uint64_t> {
+    std::scoped_lock lock{platform_mutex_};
+    const auto found{files_.find(handle.raw())};
+    if (found == files_.end()) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::not_found, "file handle is not open")};
+    }
+    return found->second.file.size();
+}
+
+auto host_context::file_sync(host_platform::file handle) -> refrain::status {
+    std::scoped_lock lock{platform_mutex_};
+    const auto found{files_.find(handle.raw())};
+    if (found == files_.end()) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::not_found, "file handle is not open")};
+    }
+    return found->second.file.sync();
+}
+
+auto host_context::file_exists(std::string_view path) -> bool {
+    return refrain::core::io::exists(path);
+}
+
+auto host_context::mmap_open(std::string_view path)
+    -> refrain::result<host_platform::map> {
+    auto mapping{refrain::platform::mapped_file::open(path)};
+    if (!mapping) {
+        return std::unexpected{std::move(mapping.error())};
+    }
+    std::scoped_lock lock{platform_mutex_};
+    const auto handle{next_handle_++};
+    maps_.emplace(handle, std::move(*mapping));
+    return host_platform::map{handle};
+}
+
+auto host_context::mmap_data(host_platform::map handle)
+    -> refrain::result<std::span<const std::uint8_t>> {
+    std::scoped_lock lock{platform_mutex_};
+    const auto found{maps_.find(handle.raw())};
+    if (found == maps_.end()) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::not_found, "mapping handle is not open")};
+    }
+    const auto data{found->second.data()};
+    return std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t *>(data.data()), data.size()};
+}
+
+auto host_context::mmap_close(host_platform::map handle) -> refrain::status {
+    std::scoped_lock lock{platform_mutex_};
+    const auto erased{maps_.erase(handle.raw())};
+    if (erased == 0) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::not_found, "mapping handle is not open")};
+    }
+    return refrain::status_ok();
+}
+
+void host_context::crash_annotation(std::string_view key,
+                                    std::string_view value) noexcept {
+    refrain::kernel::crash_reporter::set_annotation(key, value);
+}
+
+auto host_context::temp_directory() noexcept -> std::string_view {
+    static thread_local std::string path;
+    path = refrain::core::io::temp_directory();
+    return path;
 }
 
 } // namespace refrain::app

@@ -387,7 +387,8 @@ add_library(Refrain::ModHost ALIAS refrain-mod-host)
 # context. It deliberately depends on kernel/contracts only; the concrete
 # context (service registry, config, builtin image) is supplied by the
 # composition root, so tests and embedders can use a fake.
-refrain_add_library(refrain-host src/host/core_api.cpp)
+refrain_add_library(refrain-host src/host/core_api.cpp
+                            src/host/platform_api.cpp)
 target_link_libraries(refrain-host PUBLIC refrain-contracts refrain-kernel)
 add_library(Refrain::Host ALIAS refrain-host)
 

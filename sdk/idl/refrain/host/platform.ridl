@@ -1,0 +1,101 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:host.platform` v1: portable file, mmap and crash-annotation
+// primitives for mods. Sealed like `refrain:host.core`: the host bootstrap
+// registers the only provider and a gamepack/mod cannot replace it.
+//
+// File handles are host-owned table indices. A handle is single-threaded, like
+// the platform random-access file it wraps; callers must not share one handle
+// between threads without their own synchronization.
+
+module refrain::host::platform;
+version 1.0.0;
+
+import refrain::core;
+
+enum platform_error : u32 {
+    invalid_argument = 1,
+    not_found = 2,
+    permission_denied = 3,
+    io_error = 4,
+    out_of_memory = 5,
+    unsupported = 6,
+    already_exists = 7,
+    read_only = 8,
+    limit_exceeded = 9,
+    internal = 10,
+}
+
+flags file_open_flags : u32 {
+    read_only = 1,
+    read_write = 2,
+    create = 4,
+    exclusive = 8,
+    truncate = 16,
+    no_follow = 32,
+}
+
+handle<file>;
+handle<map>;
+
+service platform : 1.0.0 {
+    side = both;
+    thread = any;
+    composition = sealed;
+    provides = [ "refrain:host.platform" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "file", "mmap", "crash" ];
+
+    /// Open a host file. Exactly one of `read_only`/`read_write` must be set.
+    /// `no_follow` refuses a symlink at the final path component.
+    #[thread(any)] #[can_fail]
+    fn file_open(string path, file_open_flags flags)
+        -> result<file, platform_error>;
+
+    #[thread(any)] #[can_fail]
+    fn file_close(file handle) -> result<void, platform_error>;
+
+    /// Read exactly `buffer.len` bytes at `offset` into the caller's buffer.
+    /// Returns the byte count (the whole buffer) on success; a short read is
+    /// `io_error`.
+    #[thread(any)] #[can_fail]
+    fn file_read(file handle, u64 offset, mut_bytes buffer)
+        -> result<u64, platform_error>;
+
+    /// Write `data` at `offset`, extending the file as needed.
+    #[thread(any)] #[can_fail]
+    fn file_write(file handle, u64 offset, bytes data)
+        -> result<u64, platform_error>;
+
+    #[thread(any)] #[can_fail]
+    fn file_size(file handle) -> result<u64, platform_error>;
+
+    /// Flush data and length to stable storage.
+    #[thread(any)] #[can_fail]
+    fn file_sync(file handle) -> result<void, platform_error>;
+
+    #[thread(any)]
+    fn file_exists(string path) -> bool;
+
+    /// Map a file read-only. The returned bytes from `mmap_data` stay valid
+    /// until `mmap_close`.
+    #[thread(any)] #[can_fail]
+    fn mmap_open(string path) -> result<map, platform_error>;
+
+    #[thread(any)] #[can_fail]
+    fn mmap_data(map handle) -> result<bytes, platform_error>;
+
+    #[thread(any)] #[can_fail]
+    fn mmap_close(map handle) -> result<void, platform_error>;
+
+    /// Attach a key/value to the next crash report. Never fails; oversized or
+    /// invalid annotations are dropped by the crash reporter.
+    #[thread(any)]
+    fn crash_annotation(string key, string value) -> void;
+
+    /// Host temporary directory as a borrowed UTF-8 string.
+    #[thread(any)]
+    fn temp_directory() -> string;
+}
