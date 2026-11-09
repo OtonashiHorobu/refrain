@@ -17,6 +17,7 @@ constexpr dimension_profile overworld_profile{
     .coordinate_scale = 1.0,
     .has_skylight = true,
     .has_ceiling = false,
+    .has_carvers = true,
     .noise_settings = "minecraft/overworld",
     .material_rule = "minecraft/overworld",
 };
@@ -30,6 +31,7 @@ constexpr dimension_profile nether_profile{
     .coordinate_scale = 8.0,
     .has_skylight = false,
     .has_ceiling = true,
+    .has_carvers = true,
     .noise_settings = "minecraft/nether",
     .material_rule = "minecraft/nether",
 };
@@ -43,6 +45,7 @@ constexpr dimension_profile end_profile{
     .coordinate_scale = 1.0,
     .has_skylight = true,
     .has_ceiling = false,
+    .has_carvers = false,
     .noise_settings = "minecraft/end",
     .material_rule = "minecraft/end",
 };

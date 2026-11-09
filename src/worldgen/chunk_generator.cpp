@@ -6,7 +6,6 @@
 
 #include <refrain/worldgen/biome/biome_manager.hpp>
 #include <refrain/worldgen/biome/biome_view.hpp>
-#include <refrain/worldgen/carver/carver_data.hpp>
 #include <refrain/worldgen/chunk/chunk_region.hpp>
 #include <refrain/worldgen/chunk/status.hpp>
 #include <refrain/worldgen/core/rng.hpp>
@@ -107,9 +106,9 @@ constexpr std::array<chunk_pos, 9> neighbour_offsets{{
 
 struct chunk_generator::shared_generator_data {
     /// Immutable dimension data: noise settings, material documents and rule,
-    /// climates, noise functions, block tags and possible biomes.
+    /// climates, noise functions, block tags, possible biomes and the
+    /// dimension's carvers.
     std::shared_ptr<const dimension_shared_data> dimension{};
-    carver::loaded_carvers carvers{};
     feature::feature_data_set feature_data{};
     /// The per-step feature order and the flat placed-feature list used to
     /// build every worker's registry.
@@ -139,8 +138,6 @@ auto chunk_generator::create(chunk_generator_config config)
     }
     const bool needs_structures = config.target != generation_target::terrain;
     const bool needs_features = needs_structures && !config.reference_world;
-    const bool needs_carvers =
-        !config.reference_world && config.kind == dimension_kind::overworld;
 
     const auto dimension_config = dimension_config_for(config);
     auto dimension_shared = dimension_generator::load_shared(dimension_config);
@@ -156,13 +153,6 @@ auto chunk_generator::create(chunk_generator_config config)
         return std::unexpected{dimension.error()};
     }
 
-    if (needs_carvers) {
-        auto loaded = carver::load_carvers(config.data_root);
-        if (!loaded) {
-            return std::unexpected{loaded.error()};
-        }
-        shared->carvers = std::move(*loaded);
-    }
     if (needs_structures || needs_features) {
         auto loaded = feature::load_feature_data(config.data_root);
         if (!loaded) {
@@ -456,13 +446,14 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
                                        &*beard);
             }
         }
+        // A reference world strips the surface pass and carvers unless the
+        // carver reference mode asks for the terrain stages of the dimension.
+        const bool reference_terrain =
+            !config_.reference_world || config_.reference_carvers;
         const terrain_stages stages{
             .fill_context = area.has_value() ? &fill_context : nullptr,
-            .carvers = (!config_.reference_world &&
-                        config_.kind == dimension_kind::overworld)
-                           ? &shared_->carvers.biomes
-                           : nullptr,
-            .surface = !config_.reference_world,
+            .carvers = reference_terrain ? dimension_->carvers() : nullptr,
+            .surface = reference_terrain,
         };
         auto generated = dimension_->generate_terrain(target, stages);
         if (!generated) {

@@ -140,6 +140,28 @@ auto same_chunk(const proto_chunk &left, const proto_chunk &right,
     return same_structures(left, right);
 }
 
+/// Counts block-name differences without printing. A test that expects two
+/// chunks to differ uses this instead of the equality helper, whose diagnostic
+/// is meant for unexpected differences.
+auto block_difference_count(const proto_chunk &left, const proto_chunk &right)
+    -> std::size_t {
+    if (left.min_y() != right.min_y() || left.height() != right.height()) {
+        return 1;
+    }
+    std::size_t count = 0;
+    for (jint y = left.min_y(); y < left.min_y() + left.height(); ++y) {
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                if (left.table().name(left.state_at(x, y, z)) !=
+                    right.table().name(right.state_at(x, y, z))) {
+                    ++count;
+                }
+            }
+        }
+    }
+    return count;
+}
+
 /// The structure records are part of the output even though they do not
 /// change the block grid; compare the fields a batch must reproduce.
 auto same_structures(const proto_chunk &left, const proto_chunk &right)
@@ -319,6 +341,70 @@ void run_reference_case(std::string_view prefix) {
         << "heightmap mismatches: " << comparison.heightmap_mismatches;
 }
 
+/// Compares a nether reference chunk whose fixed biome keeps its real carvers
+/// and the real material rule. The reference world disables features and
+/// structures, so the runtime runs the terrain target. Every input comes from
+/// the environment: `REFRAIN_NETHER_CARVER_REGION`, `_CHUNK_X`, `_CHUNK_Z`,
+/// `_SEED` and `_BIOME`.
+void run_carver_reference_case() {
+    const char *region_path = environment("REFRAIN_NETHER_CARVER_REGION");
+    const char *data_root = environment("REFRAIN_VANILLA_WORLDGEN");
+    const char *chunk_x_raw = environment("REFRAIN_NETHER_CARVER_CHUNK_X");
+    const char *chunk_z_raw = environment("REFRAIN_NETHER_CARVER_CHUNK_Z");
+    const char *seed_raw = environment("REFRAIN_NETHER_CARVER_SEED");
+    const char *biome_raw = environment("REFRAIN_NETHER_CARVER_BIOME");
+    if (region_path == nullptr || data_root == nullptr ||
+        chunk_x_raw == nullptr || chunk_z_raw == nullptr ||
+        seed_raw == nullptr || biome_raw == nullptr) {
+        return;
+    }
+    const jint chunk_x = std::atoi(chunk_x_raw);
+    const jint chunk_z = std::atoi(chunk_z_raw);
+    const jlong seed = std::strtoll(seed_raw, nullptr, 10);
+    const std::string biome{biome_raw};
+    const auto &profile = dimension_profile_for(dimension_kind::nether);
+
+    const auto reference =
+        read_reference(region_path, chunk_x, chunk_z, data_root, profile);
+    expect(reference.has_value());
+    if (!reference) {
+        return;
+    }
+
+    auto generator = chunk_generator::create(chunk_generator_config{
+        .data_root = data_root,
+        .templates_root = "",
+        .seed = seed,
+        .kind = dimension_kind::nether,
+        .fixed_biome = biome,
+        .target = generation_target::terrain,
+        .structure_sets = {},
+        .reference_world = true,
+        .reference_carvers = true,
+    });
+    expect(generator.has_value()) << generator.error().message;
+    if (!generator) {
+        return;
+    }
+    const auto chunk =
+        (*generator)->generate(chunk_pos{.x = chunk_x, .z = chunk_z});
+    expect(chunk.has_value()) << chunk.error().message;
+    if (!chunk) {
+        return;
+    }
+    const auto comparison =
+        compare_chunks(**chunk, reference->reference, reference->document,
+                       profile.min_y, profile.height);
+    std::fprintf(stderr,
+                 "nether-carver: %zu block mismatches, %d heightmap "
+                 "mismatches\n",
+                 comparison.block_mismatches, comparison.heightmap_mismatches);
+    expect(comparison.block_mismatches == 0)
+        << "block mismatches: " << comparison.block_mismatches;
+    expect(comparison.heightmap_mismatches == 0)
+        << "heightmap mismatches: " << comparison.heightmap_mismatches;
+}
+
 auto make_terrain_generator(generation_target target,
                             std::vector<std::string> structure_sets)
     -> std::unique_ptr<chunk_generator> {
@@ -349,6 +435,50 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
 
     "the runtime service reproduces a reference stronghold chunk"_test = [] {
         run_reference_case("REFRAIN_RUNTIME_STRONGHOLD");
+    };
+
+    "the runtime service reproduces a reference nether carver chunk"_test = [] {
+        run_carver_reference_case();
+    };
+
+    "the carver reference mode keeps the dimension terrain stages"_test = [] {
+        const auto create_nether = [](bool reference_world,
+                                      bool reference_carvers) {
+            return chunk_generator::create(chunk_generator_config{
+                .data_root = source_data_root(),
+                .templates_root = "",
+                .seed = 1,
+                .kind = dimension_kind::nether,
+                .fixed_biome = "minecraft:nether_wastes",
+                .target = generation_target::terrain,
+                .structure_sets = {},
+                .reference_world = reference_world,
+                .reference_carvers = reference_carvers,
+            });
+        };
+        auto production = create_nether(false, false);
+        auto reference = create_nether(true, true);
+        auto stripped = create_nether(true, false);
+        expect(production.has_value()) << production.error().message;
+        expect(reference.has_value()) << reference.error().message;
+        expect(stripped.has_value()) << stripped.error().message;
+        if (!production || !reference || !stripped) {
+            return;
+        }
+        const chunk_pos position{.x = 0, .z = 0};
+        const auto a = (*production)->generate(position);
+        const auto b = (*reference)->generate(position);
+        const auto c = (*stripped)->generate(position);
+        expect(a.has_value()) << a.error().message;
+        expect(b.has_value()) << b.error().message;
+        expect(c.has_value()) << c.error().message;
+        if (!a || !b || !c) {
+            return;
+        }
+        expect(same_chunk(**a, **b))
+            << "the carver reference mode differs from production";
+        expect(block_difference_count(**a, **c) > 0)
+            << "the stripped reference world still ran the terrain stages";
     };
 
     "serial and parallel batches produce identical chunks"_test = [] {

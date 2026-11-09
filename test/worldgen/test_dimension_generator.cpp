@@ -182,6 +182,54 @@ suite<"worldgen/dimension-generator"> dimension_generator_tests = [] {
         }
     };
 
+    "the nether carver stage changes the fixed-biome terrain"_test = [] {
+        auto generator =
+            make_generator(dimension_kind::nether, "minecraft:nether_wastes");
+        if (generator == nullptr) {
+            return;
+        }
+        expect(generator->carvers() != nullptr);
+        const auto carved = generator->generate(chunk_pos{.x = 0, .z = 0});
+        const auto uncarved = generator->generate_terrain(
+            chunk_pos{.x = 0, .z = 0}, terrain_stages{.carvers = nullptr});
+        expect(carved.has_value()) << carved.error().message;
+        expect(uncarved.has_value()) << uncarved.error().message;
+        if (!carved || !uncarved) {
+            return;
+        }
+        std::size_t changed = 0;
+        std::size_t fluid_or_air = 0;
+        for (jint y = (*carved)->min_y();
+             y < (*carved)->min_y() + (*carved)->height(); ++y) {
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    if ((*carved)->state_at(x, y, z) ==
+                        (*uncarved)->state_at(x, y, z)) {
+                        continue;
+                    }
+                    ++changed;
+                    const auto name =
+                        (*carved)->table().name((*carved)->state_at(x, y, z));
+                    if (name == "minecraft:air" || name == "minecraft:lava") {
+                        ++fluid_or_air;
+                    }
+                }
+            }
+        }
+        expect(changed > 0) << "the nether carver stage wrote no blocks";
+        expect(fluid_or_air == changed)
+            << "a carved block was neither air nor lava";
+    };
+
+    "the end has no carver stage"_test = [] {
+        auto generator =
+            make_generator(dimension_kind::end, "minecraft:the_end");
+        if (generator == nullptr) {
+            return;
+        }
+        expect(generator->carvers() == nullptr);
+    };
+
     "a dimension profile mismatch is rejected"_test = [] {
         // The end report does not exist, so the end never reads a parameter
         // table; a bad data root fails while loading the noise settings.

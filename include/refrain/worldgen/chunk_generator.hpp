@@ -61,6 +61,13 @@ struct chunk_generator_config {
     /// plus structure pieces only, with no surface pass, carvers or features.
     /// The chunk still reaches the configured target status.
     bool reference_world{false};
+    /// Second reference mode for a `reference_world` run: keep the real
+    /// surface pass and the dimension's carvers instead of stripping them.
+    /// Features stay off because `reference_world` already disables them. Use
+    /// `generation_target::terrain` when the reference world disables
+    /// structures as well. A production run always executes the dimension's
+    /// carvers.
+    bool reference_carvers{false};
 };
 
 /// A reusable full-chunk generator. The object is not thread-safe: a single

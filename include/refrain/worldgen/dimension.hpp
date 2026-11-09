@@ -30,6 +30,9 @@ struct dimension_profile {
     double coordinate_scale{1.0};
     bool has_skylight{true};
     bool has_ceiling{false};
+    /// Whether the dimension's biomes declare carvers and the terrain stage
+    /// runs them. The end has no carver data.
+    bool has_carvers{true};
     std::string_view noise_settings{"minecraft/overworld"};
     std::string_view material_rule{"minecraft/overworld"};
 };

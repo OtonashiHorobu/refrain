@@ -448,8 +448,12 @@ void compare(const oracle_inputs &inputs, dimension_kind kind,
         if (!reference) {
             continue;
         }
+        // This reference world strips the biome carvers, so compare the fill
+        // and surface stages only; the carver oracle uses a world that keeps
+        // them.
         const auto generated =
-            generator.generate(chunk_pos{.x = chunk_x, .z = chunk_z});
+            generator.generate_terrain(chunk_pos{.x = chunk_x, .z = chunk_z},
+                                       terrain_stages{.carvers = nullptr});
         expect(generated.has_value()) << generated.error().message;
         if (!generated) {
             continue;

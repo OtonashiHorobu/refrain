@@ -2,12 +2,12 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// Terrain generation of one dimension: biomes, fill and surface, with the
-// generation geometry, biome source, default blocks and material rule that the
-// dimension profile selects. The dimension also selects the positional random
-// algorithm of its noise settings, which is the legacy source for the nether
-// and the end. The nether and the end have no carver stage; carvers belong to
-// the overworld pipeline that owns the carver data.
+// Terrain generation of one dimension: biomes, fill, surface and carvers, with
+// the generation geometry, biome source, default blocks and material rule that
+// the dimension profile selects. The dimension also selects the positional
+// random algorithm of its noise settings, which is the legacy source for the
+// nether and the end. The carver stage runs for the dimensions whose profile
+// declares carvers; the end has none.
 
 #pragma once
 
@@ -38,8 +38,10 @@ struct carver_biomes;
 
 /// The terrain stages after biome selection. `fill_context` carries the
 /// structure beardifier the fill samples; surface and carvers run over the
-/// filled chunk. A caller that needs the reference worlds of the structure
-/// oracle disables the surface pass and passes no carvers.
+/// filled chunk. `carvers` names the table to run and null skips the stage;
+/// `generate` passes the dimension's table. A caller that needs the reference
+/// worlds of the structure oracle disables the surface pass and passes no
+/// carvers.
 struct terrain_stages {
     const density::sampler_context *fill_context{nullptr};
     const carver::carver_biomes *carvers{nullptr};
@@ -81,7 +83,8 @@ class dimension_generator {
                        std::shared_ptr<const dimension_shared_data> shared)
         -> result<std::unique_ptr<dimension_generator>>;
 
-    /// Generates one chunk to `terrain` status: biome cells, fill, surface.
+    /// Generates one chunk to `terrain` status: biome cells, fill, surface and
+    /// the dimension's carvers.
     [[nodiscard]] auto generate(const chunk_pos &pos)
         -> result<std::unique_ptr<proto_chunk>>;
 
@@ -110,6 +113,12 @@ class dimension_generator {
     /// Temperature of `biome` at a world position; null for an unknown biome.
     [[nodiscard]] auto biome_temperature(std::string_view biome, jint x, jint y,
                                          jint z) const -> std::optional<float>;
+
+    /// The dimension's loaded carvers, or null when its profile declares no
+    /// carver stage. The returned table is owned by the shared data and lives
+    /// as long as this generator.
+    [[nodiscard]] auto carvers() const noexcept
+        -> const carver::carver_biomes *;
 
     [[nodiscard]] auto profile() const noexcept -> const dimension_profile & {
         return *profile_;

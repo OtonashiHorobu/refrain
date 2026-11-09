@@ -19,6 +19,7 @@ suite<"worldgen/dimension"> dimension_tests = [] {
         expect(profile.sea_level == 63);
         expect(profile.has_skylight);
         expect(!profile.has_ceiling);
+        expect(profile.has_carvers);
         expect(profile.noise_settings == "minecraft/overworld");
     };
 
@@ -31,6 +32,7 @@ suite<"worldgen/dimension"> dimension_tests = [] {
         expect(profile.coordinate_scale == 8.0);
         expect(!profile.has_skylight);
         expect(profile.has_ceiling);
+        expect(profile.has_carvers);
         expect(profile.noise_settings == "minecraft/nether");
         expect(profile.material_rule == "minecraft/nether");
     };
@@ -43,6 +45,7 @@ suite<"worldgen/dimension"> dimension_tests = [] {
         expect(profile.sea_level == 0);
         expect(profile.has_skylight);
         expect(!profile.has_ceiling);
+        expect(!profile.has_carvers);
         expect(profile.noise_settings == "minecraft/end");
     };
 

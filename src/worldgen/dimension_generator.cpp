@@ -6,6 +6,7 @@
 
 #include <refrain/worldgen/biome/biome_manager.hpp>
 #include <refrain/worldgen/biome/biome_view.hpp>
+#include <refrain/worldgen/carver/carver_data.hpp>
 #include <refrain/worldgen/carver/carver_stage.hpp>
 #include <refrain/worldgen/chunk/chunk_region.hpp>
 #include <refrain/worldgen/terrain/aquifer.hpp>
@@ -62,11 +63,12 @@ struct dimension_shared_data {
                           block_tag_set block_tags,
                           surface::material_documents material_documents,
                           surface::rule rule, biome_climates dimension_climates,
-                          jlong seed)
+                          carver::loaded_carvers dimension_carvers, jlong seed)
         : profile{dimension_profile}, settings{std::move(dimension_settings)},
           tags{std::move(block_tags)}, documents{std::move(material_documents)},
           material_rule{std::move(rule)},
           climates{std::move(dimension_climates)},
+          carvers{std::move(dimension_carvers)},
           noises{settings.legacy_random_source ? algorithm::legacy
                                                : algorithm::xoroshiro,
                  seed},
@@ -81,6 +83,7 @@ struct dimension_shared_data {
     surface::material_documents documents;
     surface::rule material_rule;
     biome_climates climates;
+    carver::loaded_carvers carvers;
     biome_temperatures temperatures{};
     surface::noise_registry noises;
     std::set<std::string> possible_biomes{};
@@ -181,9 +184,18 @@ auto dimension_generator::load_shared(dimension_generator_config config)
         return std::unexpected{loaded.error()};
     }
 
+    carver::loaded_carvers carvers;
+    if (profile.has_carvers) {
+        auto loaded = carver::load_carvers(config.data_root);
+        if (!loaded) {
+            return std::unexpected{loaded.error()};
+        }
+        carvers = std::move(*loaded);
+    }
+
     auto shared = std::make_shared<dimension_shared_data>(
         profile, std::move(*settings), std::move(*tags), std::move(*documents),
-        std::move(*rule), std::move(climates), config.seed);
+        std::move(*rule), std::move(climates), std::move(carvers), config.seed);
     if (shared->generation_height <= 0) {
         return std::unexpected{
             fail("the noise settings fall outside the level height")};
@@ -238,6 +250,11 @@ auto dimension_generator::create(
 auto dimension_generator::settings() const noexcept
     -> const density::noise_settings & {
     return shared_->settings;
+}
+
+auto dimension_generator::carvers() const noexcept
+    -> const carver::carver_biomes * {
+    return profile_->has_carvers ? &shared_->carvers.biomes : nullptr;
 }
 
 auto dimension_generator::material_rule() const noexcept -> std::string_view {
@@ -332,7 +349,7 @@ auto dimension_generator::biome_temperature(std::string_view biome, jint x,
 
 auto dimension_generator::generate(const chunk_pos &pos)
     -> result<std::unique_ptr<proto_chunk>> {
-    return generate_terrain(pos, terrain_stages{});
+    return generate_terrain(pos, terrain_stages{.carvers = carvers()});
 }
 
 auto dimension_generator::generate_terrain(const chunk_pos &pos,
@@ -476,8 +493,8 @@ auto dimension_generator::generate_terrain(const chunk_pos &pos,
                 return biome_name(biome_at_quart(quart_x, 0, quart_z));
             },
             *stages.carvers, config_.seed,
-            provider::generation_context{.min_y = profile_->min_y,
-                                         .height = profile_->height,
+            provider::generation_context{.min_y = shared_->generation_min_y,
+                                         .height = shared_->generation_height,
                                          .sea_level = profile_->sea_level}};
         const auto mask = generator.generate(pos);
         carver::carve_apply_context apply{
