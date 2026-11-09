@@ -157,15 +157,19 @@ best scanned chunks and the remaining differences are:
 
 * `minecraft:lush_caves`: chunk `(-1,0)` has 16 block and 0 heightmap
   mismatches with neighbour decoration in force-load order. The vegetation
-  patch now distributes its columns in the reference hash-set order, floods
-  and plants a waterlogged patch the way the reference does, and skips edge
-  columns when the patch declares no edge chance. The remaining blocks are
-  cave vines whose ceiling scan accepts a block the face-sturdy check rejects,
-  and a few patch boundaries.
-* `minecraft:deep_dark`: the best of sixteen scanned chunks has 447 block and
-  18 heightmap mismatches. The sculk patch starts veins from non-vein sources
-  but its spread order and face tests still differ from the reference, and the
-  patches reach across chunk borders.
+  patch distributes its columns in the reference hash-set order, floods and
+  plants a waterlogged patch the way the reference does, and skips edge
+  columns when the patch declares no edge chance. Two patch boundary columns
+  differ and shift the nine vegetation draws that follow them.
+* `minecraft:deep_dark`: the best of sixteen scanned chunks has 118 block and
+  30 heightmap mismatches. The sculk spreader reproduces the reference charge
+  cursor, decay, movement, face choice, vein merging and state writes exactly
+  in isolated traces, including three sequential patches over water, gravel,
+  tuff and an existing vein field. The remaining field difference comes from
+  neighbour decoration running every neighbourhood chunk inside the target
+  chunk's region: a neighbour feature that reads a chunk outside that region
+  sees air and consumes a different number of random draws, which shifts the
+  later patch origins in that chunk.
 * `minecraft:basalt_deltas`: chunk `(0,0)` has 2556 block and 2 heightmap
   mismatches. Delta, small/large basalt column and basalt blob placement
   differ across the chunk, so the feature family itself needs more work

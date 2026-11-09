@@ -276,16 +276,22 @@ The reference-backed suites currently cover:
   chunk that holds the candidate column, so a candidate the offset modifier
   spreads into a neighbour uses that neighbour's height;
 - fixed-biome feature worlds for lush caves, deep dark and basalt deltas do
-  not reach zero yet. Lush caves improves from 103 to 16 remaining blocks once
-  a vegetation patch distributes its vegetation in the reference hash-set
+  not reach zero yet. Lush caves has 16 remaining blocks in its best chunk:
+  the vegetation patch distributes its columns in the reference hash-set
   order, floods and plants a waterlogged patch the way the reference does, and
-  skips edge columns when the patch declares no edge chance. The residual
-  blocks come from the face-sturdy approximation and a few patch boundaries.
-  The deep-dark sculk patch spreads veins from a non-vein source and grows
-  more of the reference field, but its spread order still differs. The basalt
-  delta and column features place different shapes. The best scanned chunks,
-  their remaining mismatch counts and the commands are recorded in
-  `tools/worldgen/oracle/README.md`;
+  skips edge columns when the patch declares no edge chance, but two patch
+  boundary columns differ and shift the later vegetation draws. The deep-dark
+  sculk patch has 118 remaining blocks and 30 heightmap entries in its best
+  chunk. Its charge cursor, decay, spread attempts, movement, face choice and
+  vein merging reproduce a reference trace exactly in isolated scenarios,
+  including three sequential patches over water, gravel, tuff and an existing
+  vein field. The residual field difference comes from the neighbour
+  decoration mode: it runs every neighbourhood chunk inside the target chunk's
+  region, so a neighbour feature that reads a chunk outside that region sees
+  air, consumes a different number of random draws, and shifts the patch
+  origins that follow. The basalt delta and column features place different
+  shapes. The best scanned chunks, their remaining mismatch counts and the
+  commands are recorded in `tools/worldgen/oracle/README.md`;
 - benchmarks for fill, parallel fill, structure selection, corridor
   placement, template placement, feature freeze and decoration.
 
@@ -300,10 +306,13 @@ whose plan names an unknown type still fails `chunk_generator::create` with an
 `unsupported` error instead of silently dropping that feature, and the
 content-driven test fails when that happens. Predicates whose reference
 definition reads collision geometry (sturdy faces and multiface attachment)
-approximate a full face with the heightmap motion-blocking property, and the
-unobstructed predicate admits every position because generation has no
-entities, and the biome membership predicate accepts explicit biome ids but not
-biome tags. Structure feature placement has no climate source, so snow and
+derive a full face from the block tags and the state shape: slabs, stairs,
+trapdoors, doors, walls, fences, fence gates, panes, bars, carpets, snow
+layers, paths, farmland, speleothems, cave vines, multiface layers and sculk
+sensors answer per direction. States outside those families still fall back to
+the heightmap motion-blocking tags. The unobstructed predicate admits every
+position because generation has no entities, and the biome membership
+predicate accepts explicit biome ids but not biome tags. Structure feature placement has no climate source, so snow and
 freeze feature modifiers are inert there. Template entities are not placed;
 end city shulker and elytra data markers, pillager cages and village animal
 markers therefore leave no entities behind. Capped processor lists decode and
