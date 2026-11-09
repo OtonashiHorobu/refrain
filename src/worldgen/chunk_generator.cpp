@@ -532,6 +532,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
                                                      jint x, jint z) {
             return region.height_at(kind, x, z);
         };
+        feature_context.placement.biome = biome_of;
         feature_context.placement.resolve_state = resolve_state;
         feature_context.placement.should_freeze =
             [&temperature, &world_state, &states](const block_pos &block) {

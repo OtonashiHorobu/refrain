@@ -8,6 +8,7 @@
 #include <refrain/worldgen/feature/rule_test.hpp>
 #include <refrain/worldgen/feature/tree.hpp>
 
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -29,6 +30,115 @@ auto type_of(const data::json::value &input) -> result<std::string_view> {
                                           "feature type is not a string")};
     }
     return *text;
+}
+
+/// Decodes a template feature body. The body is reused for registry entries
+/// and for the inline features an overlay or selector can embed.
+auto decode_template_feature_document(block_state_registry &states,
+                                      const data::json::value &document)
+    -> result<std::unique_ptr<feature>> {
+    const auto *templates = document.find("templates");
+    if (templates == nullptr || !templates->is_array() ||
+        templates->as_array()->empty()) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "template feature needs a non-empty templates list")};
+    }
+    std::vector<std::pair<jint, template_feature::entry>> entries;
+    jint total_weight = 0;
+    for (const auto &raw : *templates->as_array()) {
+        const auto *data = raw.find("data");
+        const auto *weight = raw.find("weight");
+        if (data == nullptr || !data->is_object() || weight == nullptr) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "template entry is missing data or weight")};
+        }
+        const auto weight_value = weight->as_int64();
+        if (!weight_value || *weight_value < 0 ||
+            *weight_value > std::numeric_limits<jint>::max() - total_weight) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "template entry weight is invalid")};
+        }
+        const auto *template_id = data->find("id");
+        if (template_id == nullptr) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "template entry has no template id")};
+        }
+        const auto template_text = template_id->as_string();
+        if (!template_text) {
+            return std::unexpected{template_text.error()};
+        }
+        std::vector<structure::template_rotation> rotations;
+        if (const auto *rotation_list = data->find("rotations");
+            rotation_list != nullptr) {
+            if (!rotation_list->is_array() ||
+                rotation_list->as_array()->empty()) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "template rotations must be a non-empty list")};
+            }
+            for (const auto &rotation : *rotation_list->as_array()) {
+                const auto name = rotation.as_string();
+                if (!name) {
+                    return std::unexpected{name.error()};
+                }
+                if (*name == "none") {
+                    rotations.push_back(structure::template_rotation::none);
+                } else if (*name == "clockwise_90") {
+                    rotations.push_back(
+                        structure::template_rotation::clockwise_90);
+                } else if (*name == "180") {
+                    rotations.push_back(
+                        structure::template_rotation::clockwise_180);
+                } else if (*name == "counterclockwise_90") {
+                    rotations.push_back(
+                        structure::template_rotation::counterclockwise_90);
+                } else {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "template rotation name is invalid")};
+                }
+            }
+        } else {
+            rotations = {structure::template_rotation::none,
+                         structure::template_rotation::clockwise_90,
+                         structure::template_rotation::clockwise_180,
+                         structure::template_rotation::counterclockwise_90};
+        }
+        total_weight += static_cast<jint>(*weight_value);
+        entries.push_back(std::pair{
+            static_cast<jint>(*weight_value),
+            template_feature::entry{.id = std::string{*template_text},
+                                    .rotations = std::move(rotations)}});
+    }
+    if (total_weight == 0) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "template feature has no positive weight")};
+    }
+    std::shared_ptr<structure::structure_processor_list> processors;
+    std::string processor_id;
+    if (const auto *processor_value = document.find("processors");
+        processor_value != nullptr) {
+        if (const auto text = processor_value->as_string(); text.has_value()) {
+            processor_id = std::string{*text};
+        } else if (processor_value->is_object()) {
+            auto decoded =
+                structure::decode_processor_list(states, *processor_value);
+            if (!decoded) {
+                return std::unexpected{decoded.error()};
+            }
+            processors = std::move(*decoded);
+        } else {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "template processors must be a list or an id")};
+        }
+    }
+    return std::unique_ptr<feature>{std::make_unique<template_feature>(
+        std::move(entries), total_weight, std::move(processors),
+        std::move(processor_id))};
 }
 
 auto resolve_state(block_state_registry &states, std::string_view key)
@@ -178,31 +288,42 @@ auto feature_registry::nested_reference(const data::json::value &input)
         if (!type_name) {
             return std::unexpected{type_name.error()};
         }
-        if (*type_name != "minecraft:simple_block") {
-            return std::unexpected{make_error(
-                error_code::unsupported, "unsupported inline feature type")};
-        }
-        const auto *to_place = feature->find("to_place");
-        if (to_place == nullptr) {
-            return std::unexpected{make_error(
-                error_code::parse_error, "inline simple block has no state")};
-        }
-        auto provider = decode_provider(*to_place);
-        if (!provider) {
-            return std::unexpected{provider.error()};
-        }
-        bool schedule_tick = false;
-        if (const auto *field = feature->find("schedule_tick");
-            field != nullptr) {
-            const auto value = field->as_bool();
-            if (!value) {
-                return std::unexpected{value.error()};
+        if (*type_name == "minecraft:simple_block") {
+            const auto *to_place = feature->find("to_place");
+            if (to_place == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "inline simple block has no state")};
             }
-            schedule_tick = *value;
+            auto provider = decode_provider(*to_place);
+            if (!provider) {
+                return std::unexpected{provider.error()};
+            }
+            bool schedule_tick = false;
+            if (const auto *field = feature->find("schedule_tick");
+                field != nullptr) {
+                const auto value = field->as_bool();
+                if (!value) {
+                    return std::unexpected{value.error()};
+                }
+                schedule_tick = *value;
+            }
+            feature_id = "#inline:" + std::to_string(next_nested_++);
+            features_.emplace(feature_id,
+                              std::make_unique<simple_block_feature>(
+                                  std::move(*provider), schedule_tick));
+        } else if (*type_name == "minecraft:template") {
+            auto decoded = decode_template_feature_document(*states_, *feature);
+            if (!decoded) {
+                return std::unexpected{decoded.error()};
+            }
+            feature_id = "#inline:" + std::to_string(next_nested_++);
+            features_.emplace(feature_id, std::move(*decoded));
+        } else {
+            return std::unexpected{make_error(
+                error_code::unsupported, "unsupported inline feature type '" +
+                                             std::string{*type_name} + "'")};
         }
-        feature_id = "#inline:" + std::to_string(next_nested_++);
-        features_.emplace(feature_id, std::make_unique<simple_block_feature>(
-                                          std::move(*provider), schedule_tick));
     } else {
         return std::unexpected{
             make_error(error_code::parse_error, "nested feature is invalid")};
@@ -2203,9 +2324,13 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 kind = trunk_kind::dark_oak;
             } else if (*trunk_name == "minecraft:giant_trunk_placer") {
                 kind = trunk_kind::giant;
+            } else if (*trunk_name == "minecraft:mega_jungle_trunk_placer") {
+                kind = trunk_kind::mega_jungle;
             } else if (*trunk_name != "minecraft:straight_trunk_placer") {
                 return std::unexpected{make_error(error_code::unsupported,
-                                                  "unsupported trunk placer")};
+                                                  "unsupported trunk placer '" +
+                                                      std::string{*trunk_name} +
+                                                      "'")};
             }
             const auto *foliage_type = foliage_placer->find("type");
             if (foliage_type == nullptr || !foliage_type->as_string()) {
@@ -2226,9 +2351,15 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 foliage_type_kind = foliage_kind::fancy;
             } else if (foliage_name == "minecraft:dark_oak_foliage_placer") {
                 foliage_type_kind = foliage_kind::dark_oak;
+            } else if (foliage_name == "minecraft:jungle_foliage_placer") {
+                foliage_type_kind = foliage_kind::jungle;
+            } else if (foliage_name == "minecraft:bush_foliage_placer") {
+                foliage_type_kind = foliage_kind::bush;
             } else if (foliage_name != "minecraft:blob_foliage_placer") {
-                return std::unexpected{make_error(
-                    error_code::unsupported, "unsupported foliage placer")};
+                return std::unexpected{
+                    make_error(error_code::unsupported,
+                               "unsupported foliage placer '" +
+                                   std::string{foliage_name} + "'")};
             }
             const auto *minimum_type = minimum_size->find("type");
             if (minimum_type == nullptr || !minimum_type->as_string()) {
@@ -2389,8 +2520,18 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                     ignore_vines, std::move(decoded_decorators)));
             continue;
         }
+        if (*type == "minecraft:template") {
+            auto decoded =
+                decode_template_feature_document(*states_, document.document);
+            if (!decoded) {
+                return std::unexpected{decoded.error()};
+            }
+            features_.emplace(id, std::move(*decoded));
+            continue;
+        }
         return std::unexpected{
-            make_error(error_code::unsupported, "unsupported feature type")};
+            make_error(error_code::unsupported, "unsupported feature type '" +
+                                                    std::string{*type} + "'")};
     }
 
     for (const auto &[id, document] : data.placed) {

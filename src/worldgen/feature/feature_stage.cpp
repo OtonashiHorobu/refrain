@@ -5,19 +5,47 @@
 #include <refrain/worldgen/feature/feature_stage.hpp>
 
 #include <algorithm>
+#include <memory>
 #include <set>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace refrain::worldgen::feature {
 
+namespace {
+
+/// Publishes the top-level feature for the duration of one placement and
+/// restores the previous value afterwards, so a nested placement that runs
+/// inside a top-level feature is not seen as that feature.
+class top_feature_scope {
+  public:
+    top_feature_scope(placement_context &context, std::string_view feature)
+        : context_{context}, previous_{context.top_feature} {
+        context_.top_feature = feature;
+    }
+    top_feature_scope(const top_feature_scope &) = delete;
+    auto operator=(const top_feature_scope &) -> top_feature_scope & = delete;
+    ~top_feature_scope() { context_.top_feature = previous_; }
+
+  private:
+    placement_context &context_;
+    std::string_view previous_;
+};
+
+} // namespace
+
 auto place_placed(feature_context &context,
                   const placed_feature_runtime &placed, worldgen_random &random,
-                  const block_pos &origin) -> bool {
+                  const block_pos &origin, bool biome_check) -> bool {
     if (placed.configured == nullptr) {
         return false;
     }
+    const top_feature_scope scope{context.placement,
+                                  biome_check ? std::string_view{placed.id}
+                                              : std::string_view{}};
     if (placed.placement.empty()) {
         return placed.configured->place(context, random, origin);
     }
@@ -59,9 +87,23 @@ void decorate(
     const std::vector<biome_feature_list> &lists, jlong seed,
     const structure_placer &structures) {
     std::unordered_map<std::string, const biome_feature_list *> by_biome;
+    auto features_by_biome = std::make_shared<
+        std::unordered_map<std::string, std::unordered_set<std::string>>>();
     for (const auto &list : lists) {
         by_biome.emplace(list.biome, &list);
+        auto &members = (*features_by_biome)[list.biome];
+        for (const auto &step : list.steps) {
+            members.insert(step.begin(), step.end());
+        }
     }
+    context.placement.biome_has_feature =
+        [features_by_biome](std::string_view biome, std::string_view feature) {
+            const auto found = features_by_biome->find(std::string{biome});
+            if (found == features_by_biome->end()) {
+                return false;
+            }
+            return found->second.contains(std::string{feature});
+        };
 
     context.place_by_id = [&context, &placed](std::string_view id,
                                               worldgen_random &random,
@@ -114,7 +156,7 @@ void decorate(
             }
             random.set_feature_seed(decoration_seed, index,
                                     static_cast<jint>(step));
-            (void)place_placed(context, found->second, random, origin);
+            (void)place_placed(context, found->second, random, origin, true);
         }
     }
 }

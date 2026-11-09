@@ -6,10 +6,13 @@
 
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/core/mth.hpp>
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
+#include <numbers>
 #include <set>
 #include <string>
 #include <vector>
@@ -814,6 +817,11 @@ void tree_feature::place_leaves_row(feature_context &context,
                     (random.next_int(2) == 0 || y == 0)) {
                     skip = true;
                 }
+            } else if (foliage_ == foliage_kind::bush) {
+                if (min_dx == radius && min_dz == radius &&
+                    random.next_int(2) == 0) {
+                    skip = true;
+                }
             } else if (foliage_ == foliage_kind::acacia) {
                 if (y == 0
                         ? (min_dx > 1 || min_dz > 1) && dx != 0 && dz != 0
@@ -950,6 +958,24 @@ void tree_feature::place_foliage(feature_context &context,
                 block_pos{.x = attachment.x, .y = yy, .z = attachment.z},
                 jagged, 0, double_trunk, leaves, placed);
             previous = smooth;
+        }
+        return;
+    }
+    if (foliage_ == foliage_kind::jungle) {
+        const jint height =
+            double_trunk ? foliage_height : 1 + random.next_int(2);
+        for (jint yo = offset; yo >= offset - height; --yo) {
+            const jint current = leaf_radius + radius_offset + 1 - yo;
+            place_leaves_row(context, random, attachment, current, yo,
+                             double_trunk, leaves, placed);
+        }
+        return;
+    }
+    if (foliage_ == foliage_kind::bush) {
+        for (jint yo = offset; yo >= offset - foliage_height; --yo) {
+            const jint current = leaf_radius + radius_offset - 1 - yo;
+            place_leaves_row(context, random, attachment, current, yo,
+                             double_trunk, leaves, placed);
         }
         return;
     }
@@ -1478,7 +1504,7 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
                 }
             }
         }
-    } else {
+    } else if (kind_ == trunk_kind::giant || kind_ == trunk_kind::mega_jungle) {
         const std::array<std::array<jint, 2>, 4> below_offsets{{
             {0, 0},
             {1, 0},
@@ -1521,6 +1547,42 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
                                              .y = origin.y + clipped,
                                              .z = origin.z},
                             .double_trunk = true});
+        if (kind_ == trunk_kind::mega_jungle) {
+            // Branch height and direction are drawn in the loop order the
+            // reference uses: one segment height, then one angle per limb.
+            for (jint branch_height = clipped - 2 - random.next_int(4);
+                 branch_height > clipped / 2;
+                 branch_height -= 2 + random.next_int(4)) {
+                const float angle = random.next_float() *
+                                    static_cast<float>(std::numbers::pi * 2.0);
+                jint branch_x = 0;
+                jint branch_z = 0;
+                for (jint step = 0; step < 5; ++step) {
+                    branch_x = static_cast<jint>(
+                        1.5F + mth::cos(angle) * static_cast<float>(step));
+                    branch_z = static_cast<jint>(
+                        1.5F + mth::sin(angle) * static_cast<float>(step));
+                    const block_pos pos{.x = origin.x + branch_x,
+                                        .y = origin.y + branch_height - 3 +
+                                             step / 2,
+                                        .z = origin.z + branch_z};
+                    if (!is_free(context, pos)) {
+                        continue;
+                    }
+                    const auto state =
+                        trunk_provider_->get(context.placement, random, pos);
+                    if (context.placement.region->set_block_state(
+                            pos.x, pos.y, pos.z, state)) {
+                        logs.push_back(pos);
+                    }
+                }
+                attachments.push_back(tree_attachment{
+                    .pos = block_pos{.x = origin.x + branch_x,
+                                     .y = origin.y + branch_height,
+                                     .z = origin.z + branch_z},
+                    .radius_offset = -2});
+            }
+        }
     }
 
     std::vector<block_pos> leaves;

@@ -21,7 +21,8 @@ enum class trunk_kind : std::uint8_t {
     forking,
     fancy,
     dark_oak,
-    giant
+    giant,
+    mega_jungle
 };
 
 class tree_feature;
@@ -188,7 +189,9 @@ enum class foliage_kind : std::uint8_t {
     fancy,
     dark_oak,
     mega_pine,
-    pine
+    pine,
+    jungle,
+    bush
 };
 
 class tree_feature final : public feature {

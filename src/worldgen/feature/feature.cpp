@@ -4129,4 +4129,74 @@ auto root_system_feature::place(feature_context &context,
     }
     return true;
 }
+
+auto template_feature::place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool {
+    if (entries_.empty() || total_weight_ <= 0 ||
+        context.templates == nullptr || context.registry == nullptr ||
+        context.placement.region == nullptr) {
+        return false;
+    }
+    jint draw = random.next_int(total_weight_);
+    const entry *selected = nullptr;
+    for (const auto &[weight, candidate] : entries_) {
+        draw -= weight;
+        if (draw < 0) {
+            selected = &candidate;
+            break;
+        }
+    }
+    if (selected == nullptr || selected->rotations.empty()) {
+        return false;
+    }
+    const auto rotation = selected->rotations[static_cast<std::size_t>(
+        random.next_int(static_cast<jint>(selected->rotations.size())))];
+    const auto &templ = context.templates->get_or_create(selected->id);
+    if (templ.palettes.empty()) {
+        return false;
+    }
+
+    // The template is centred on the origin: each horizontal axis contributes
+    // half of its extent in the direction the rotation maps the negative axis
+    // to.
+    block_pos position = origin;
+    const jint half_x = templ.size_x / 2;
+    const jint half_z = templ.size_z / 2;
+    switch (rotation) {
+    case structure::template_rotation::none:
+        position.x -= half_x;
+        position.z -= half_z;
+        break;
+    case structure::template_rotation::clockwise_90:
+        position.x += half_z;
+        position.z -= half_x;
+        break;
+    case structure::template_rotation::clockwise_180:
+        position.x += half_x;
+        position.z += half_z;
+        break;
+    case structure::template_rotation::counterclockwise_90:
+        position.x -= half_z;
+        position.z += half_x;
+        break;
+    }
+
+    structure::template_place_settings settings{};
+    settings.transform.rotation = rotation;
+    settings.random = &random;
+    settings.loot_random = &random;
+    settings.level_seed = context.placement.generation.world_seed;
+    if (processors_ != nullptr) {
+        settings.processors = processors_->processors;
+    } else if (!processor_id_.empty() && context.processor_list) {
+        if (const auto *list = context.processor_list(processor_id_);
+            list != nullptr) {
+            settings.processors = list->processors;
+        }
+    }
+    return structure::place_template(*context.placement.region,
+                                     *context.registry, templ, position,
+                                     settings) > 0;
+}
+
 } // namespace refrain::worldgen::feature

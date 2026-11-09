@@ -823,4 +823,12 @@ auto normal_noise::parity_expected_deviation(jint octave_span) -> double {
     return 0.1 * (1.0 + 1.0 / static_cast<double>(octave_span + 1));
 }
 
+auto biome_info_noise() -> const noise & {
+    static const auto instance = [] {
+        legacy_random_source random{2345};
+        return std::make_unique<simplex_noise>(random, true);
+    }();
+    return *instance;
+}
+
 } // namespace refrain::worldgen

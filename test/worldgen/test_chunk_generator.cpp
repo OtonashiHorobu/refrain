@@ -428,6 +428,69 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         }
     };
 
+    "the runtime generator creates the reference overworld biomes"_test = [] {
+        constexpr std::array<std::string_view, 9> biomes{{
+            "minecraft:plains",
+            "minecraft:forest",
+            "minecraft:taiga",
+            "minecraft:desert",
+            "minecraft:jungle",
+            "minecraft:ocean",
+            "minecraft:deep_ocean",
+            "minecraft:dark_forest",
+            "minecraft:eroded_badlands",
+        }};
+        for (const auto biome : biomes) {
+            auto created = chunk_generator::create(chunk_generator_config{
+                .data_root = source_data_root(),
+                .templates_root = "",
+                .seed = 1,
+                .kind = dimension_kind::overworld,
+                .fixed_biome = std::string{biome},
+                .target = generation_target::features,
+                .structure_sets = {"oracle:no_structure_set"},
+                .reference_world = false,
+            });
+            expect(created.has_value())
+                << biome << ": "
+                << (created ? std::string{} : created.error().message);
+            if (!created) {
+                expect(created.error().code != error_code::unsupported)
+                    << biome << " reported an unsupported type";
+            }
+        }
+    };
+
+    "a full plains chunk generates at the features and full targets"_test = [] {
+        for (const auto target :
+             {generation_target::features, generation_target::full}) {
+            auto created = chunk_generator::create(chunk_generator_config{
+                .data_root = source_data_root(),
+                .templates_root = "",
+                .seed = 1,
+                .kind = dimension_kind::overworld,
+                .fixed_biome = "minecraft:plains",
+                .target = target,
+                // Structure starts only add cost to this feature case; the
+                // feature stage still runs every step for the fixed biome.
+                .structure_sets = {"oracle:no_structure_set"},
+                .reference_world = false,
+            });
+            expect(created.has_value()) << created.error().message;
+            if (!created) {
+                return;
+            }
+            const auto chunk = (*created)->generate(chunk_pos{.x = 0, .z = 0});
+            expect(chunk.has_value()) << chunk.error().message;
+            if (!chunk) {
+                return;
+            }
+            expect((*chunk)->status() == (target == generation_target::features
+                                              ? chunk_status::features
+                                              : chunk_status::full));
+        }
+    };
+
     "the target ladder advances terrain, features and full"_test = [] {
         auto terrain_generator = make_terrain_generator(
             generation_target::terrain, {"oracle:no_structure_set"});

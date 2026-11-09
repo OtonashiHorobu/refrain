@@ -1153,6 +1153,33 @@ class block_pile_feature final : public feature {
     std::unique_ptr<state_provider> provider_{};
 };
 
+/// Places one weighted `.nbt` template, rotated by a random choice from the
+/// entry's rotation list. The template is centred on the placement origin.
+class template_feature final : public feature {
+  public:
+    struct entry {
+        std::string id{};
+        std::vector<structure::template_rotation> rotations{};
+    };
+
+    template_feature(
+        std::vector<std::pair<jint, entry>> entries, jint total_weight,
+        std::shared_ptr<structure::structure_processor_list> processors,
+        std::string processor_id)
+        : entries_{std::move(entries)}, total_weight_{total_weight},
+          processors_{std::move(processors)},
+          processor_id_{std::move(processor_id)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::vector<std::pair<jint, entry>> entries_{};
+    jint total_weight_{0};
+    std::shared_ptr<structure::structure_processor_list> processors_{};
+    std::string processor_id_{};
+};
+
 /// Places every nested placed feature at the same origin.
 class overlay_feature final : public feature {
   public:

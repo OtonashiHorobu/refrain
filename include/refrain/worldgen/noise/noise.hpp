@@ -144,6 +144,11 @@ class simplex_noise final : public noise {
     double offset_z_{0.0};
 };
 
+/// The shared biome-info noise. Its permutation table is seeded once, so
+/// placement counts and climate edge variation observe the same field for the
+/// lifetime of the process.
+[[nodiscard]] auto biome_info_noise() -> const noise &;
+
 /// A sum of layers at fixed frequencies.
 class noise_stack final : public noise {
   public:

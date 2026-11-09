@@ -66,6 +66,23 @@ using jlong = std::int64_t;
                              static_cast<std::uint32_t>(b));
 }
 
+/// Java's narrowing `(int)` conversion: NaN becomes zero, values outside the
+/// int range saturate at the nearer bound, and the rest truncate toward zero.
+/// C++ leaves out-of-range conversions undefined, so arithmetic that can
+/// overflow a count must pass through this helper.
+[[nodiscard]] inline auto java_int_cast(double value) noexcept -> jint {
+    if (std::isnan(value)) {
+        return 0;
+    }
+    if (value >= static_cast<double>(std::numeric_limits<jint>::max())) {
+        return std::numeric_limits<jint>::max();
+    }
+    if (value <= static_cast<double>(std::numeric_limits<jint>::min())) {
+        return std::numeric_limits<jint>::min();
+    }
+    return static_cast<jint>(value);
+}
+
 /// `Math.floorDiv(int, int)`. `INT32_MIN / -1` returns `INT32_MIN`, as in Java.
 [[nodiscard]] constexpr auto floor_div(jint a, jint b) noexcept -> jint {
     if (b == 0) {

@@ -17,6 +17,7 @@
 
 #include <functional>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 namespace refrain::data::json {
@@ -44,6 +45,15 @@ struct placement_context {
     /// climate and block-survival rules.
     std::function<bool(const block_pos &)> should_freeze{};
     std::function<bool(const block_pos &)> should_snow{};
+    /// Biome at a position and the placed features its lists contain. The
+    /// biome membership filter uses both; either may be unset when a caller
+    /// has no biome source, in which case the filter drops the position.
+    std::function<std::string_view(const block_pos &)> biome{};
+    std::function<bool(std::string_view, std::string_view)> biome_has_feature{};
+    /// Identity of the top-level placed feature currently being placed. It is
+    /// empty outside a biome-checked top-level call, so nested placements do
+    /// not inherit the enclosing feature's membership.
+    std::string_view top_feature{};
 };
 
 class placement_modifier {
