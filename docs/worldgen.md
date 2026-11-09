@@ -99,6 +99,47 @@ Height providers sample over the generator's generation depth, which is shorter
 than the level for the nether and the end, while jigsaw padding and distance
 limits use the level bounds.
 
+## Full-chunk generation
+
+`worldgen::chunk_generator` is the production entry point that runs every
+stage in one reusable object. `chunk_generator_config` names the content data
+root, the extracted template root, the seed and the dimension kind. A fixed
+biome key selects one biome everywhere; an empty key uses the dimension's biome
+source. `generation_target` stops at `terrain` (biomes, fill, surface,
+carvers), at `features` (terrain plus structure starts, references, placed
+pieces and feature decoration), or at `full` (the features target plus the
+final status). `structure_sets` restricts starts to the listed sets for oracle
+runs, and an empty list enables every set. An empty template root still
+generates procedural pieces and features; template-backed pieces stay empty.
+
+One object owns the block state registry and its tags, the dimension profile,
+the noise settings, the biome source, the surface material rules, the loaded
+carvers, the feature data registry and per-step plan, the structure data and
+template manager, and the terrain engine. `create` validates the data once;
+`generate` returns a `proto_chunk`.
+
+The stages run in the order the full-stage oracle uses. Structure starts are
+resolved before fill because their terrain adaptation reaches the fill through
+the beardifier; the start and reference records are written to the chunk after
+the terrain stages. Targets that include structures or features fill the
+target chunk and its eight neighbours; pieces of the target chunk's starts are
+clipped into the owner and the neighbours so the fence, wall and stair repair
+sees the complete building, and feature decoration runs last through the same
+region. The final heightmaps
+are primed when the terrain status is reached and updated by every piece and
+feature write, so they cover the finished chunk.
+
+The multi-noise search is reset before each chunk, which makes a chunk
+independent of the chunks generated before it. `generate_batch` creates one
+independent generator per worker and returns chunks in input order. Workers
+are retained by the calling object because a returned chunk borrows its
+block state table; the same applies to `generate`, whose chunk must not
+outlive the generator.
+
+`reference_world` reproduces the structure oracle's reference worlds: fill and
+structure pieces only, with the surface pass, carvers and features omitted.
+The chunk still reaches the configured target status.
+
 ## Custom feature reference worlds
 
 The feature oracle compares a generated chunk against a reference world
@@ -153,11 +194,17 @@ The reference-backed suites currently cover:
 - the storage bridge, RWF round trip and Anvil export/import;
 - parallel fill determinism and fixed-biome structure generator
   determinism;
+- the full-chunk generator against the reference full-stage worlds of a
+  plains village, a woodland mansion and a stronghold, plus batch equality
+  and the terrain/features/full status ladder;
 - benchmarks for fill, parallel fill, structure selection, corridor
   placement, template placement, feature freeze and decoration.
 
-Known gaps: structure feature placement has no climate source, so snow and
-freeze feature modifiers are inert there. Capped processor lists,
+Known gaps: the feature registry implements a subset of the configured
+feature and placement-modifier types. A biome whose feature plan names an
+unsupported type fails `chunk_generator::create` with an `unsupported` error
+instead of silently dropping that feature. Structure feature placement has no
+climate source, so snow and freeze feature modifiers are inert there. Capped processor lists,
 block-entity rule modifiers and template entities are not implemented; end
 city shulker and elytra data markers therefore leave no entities behind.
 End gateways and the obsidian end platform are not implemented. The nether

@@ -284,6 +284,27 @@ REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:plains \
     ./build/Release/bin/refrain-tests "fill and structure placement reproduce the reference chunk"
 ```
 
+`worldgen/chunk-generator` runs the production service against the same
+reference worlds. It reads the village case from the `REFRAIN_FULL_STAGE_*`
+variables above and the mansion and stronghold cases from
+`REFRAIN_RUNTIME_MANSION_*` and `REFRAIN_RUNTIME_STRONGHOLD_*` variables with
+the same `_REGION`, `_CHUNK_X`, `_CHUNK_Z`, `_SEED`, `_BIOME` and `_DIMENSION`
+suffixes. The optional `_STRUCTURE_SET` suffix restricts the generation to one
+structure set. Each case compares the chunk and its four final heightmaps:
+
+```bash
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_RUNTIME_MANSION_REGION=/tmp/t2mansion/world/dimensions/minecraft/overworld/region/r.1.0.mca \
+REFRAIN_RUNTIME_MANSION_CHUNK_X=46 REFRAIN_RUNTIME_MANSION_CHUNK_Z=5 \
+REFRAIN_RUNTIME_MANSION_SEED=1 REFRAIN_RUNTIME_MANSION_BIOME=minecraft:dark_forest \
+REFRAIN_RUNTIME_STRONGHOLD_REGION=/tmp/t2stronghold/world/dimensions/minecraft/overworld/region/r.3.1.mca \
+REFRAIN_RUNTIME_STRONGHOLD_CHUNK_X=108 REFRAIN_RUNTIME_STRONGHOLD_CHUNK_Z=51 \
+REFRAIN_RUNTIME_STRONGHOLD_SEED=1 REFRAIN_RUNTIME_STRONGHOLD_BIOME=minecraft:plains \
+REFRAIN_RUNTIME_STRONGHOLD_STRUCTURE_SET=minecraft:strongholds \
+    ./build/Release/bin/refrain-tests "the runtime service reproduces"
+```
+
 Other structure sets generate starts in neighbouring chunks of the reference
 world. For a whole-structure sweep, replace every other
 `worldgen/structure_set/*.json` in the generated datapack with an empty
