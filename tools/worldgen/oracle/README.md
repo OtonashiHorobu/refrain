@@ -107,6 +107,30 @@ and `(0,0)` and `(1,1)` of the end block for block and all four final
 heightmaps. `--fixed-biome` overrides the real biome, and the dimension mode
 rejects the overworld-only reference flags.
 
+`--keep-carvers` combines with `--dimension the_nether`: the fixed real biome
+keeps its real carvers while features stay stripped and structures stay
+disabled. The saved chunks are therefore terrain fill, the real surface pass
+and cave carving. The test takes every input from the environment, so no seed
+or chunk coordinate is baked into it:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --dimension the_nether \
+    --keep-carvers --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2nether-caves
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_NETHER_CARVER_REGION=/tmp/t2nether-caves/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+REFRAIN_NETHER_CARVER_CHUNK_X=3 REFRAIN_NETHER_CARVER_CHUNK_Z=0 \
+REFRAIN_NETHER_CARVER_SEED=1 \
+REFRAIN_NETHER_CARVER_BIOME=minecraft:nether_wastes \
+    ./build/Release/bin/refrain-tests \
+    "the runtime service reproduces a reference nether carver chunk"
+```
+
+Chunk `(3,0)` is visibly carved: with the same seed, a reference world whose
+default dimension mode strips the carvers differs in 6404 blocks in that
+chunk. The runtime reproduces the carved chunk block for block and in all four
+final heightmaps.
+
 `--structures` combines with `--dimension`: the targeted dimension gets a real
 fixed biome whose carvers and features are stripped, the material rule is
 emptied, structures stay enabled and the force-load box runs inside the

@@ -17,12 +17,16 @@ oracle test compares against.
 of that dimension: the preset's biome source is replaced with a fixed biome
 whose carvers and features are stripped, the real material rule is kept, and
 the force-load command runs inside the dimension. The region is written under
-`world/dimensions/minecraft/<dimension>/region`.
+`world/dimensions/minecraft/<dimension>/region`. `--keep-carvers` keeps the
+fixed nether biome's real carvers, so the saved chunk is fill, surface and
+carving output; features stay stripped and structures stay disabled.
 
 Usage:
     generate.py --server-jar server.jar --seed 12345 --output /tmp/t2oracle
     generate.py --server-jar server.jar --seed 1 --output /tmp/t2nether \
         --dimension the_nether
+    generate.py --server-jar server.jar --seed 1 --output /tmp/t2nether-caves \
+        --dimension the_nether --keep-carvers
 
 The reference server must be started by a JDK (Java 25 or newer for 26.3).
 """
@@ -293,6 +297,12 @@ def main() -> int:
         "structure generation, no carvers or features, empty surface rules",
     )
     parser.add_argument(
+        "--keep-carvers",
+        action="store_true",
+        help="with --dimension, keep the fixed biome's real carvers (nether "
+        "cave carving) while stripping its features; structures stay off",
+    )
+    parser.add_argument(
         "--extra-feature-pack",
         type=pathlib.Path,
         help="datapack root whose `data` tree is copied into the feature "
@@ -340,6 +350,8 @@ def main() -> int:
 
     dimension = DIMENSIONS[args.dimension]
     dimension_mode = args.dimension != "overworld"
+    if args.keep_carvers and not dimension_mode:
+        parser.error("--keep-carvers requires --dimension")
     if dimension_mode:
         overworld_only = [
             flag
@@ -355,6 +367,8 @@ def main() -> int:
         ]
         if overworld_only:
             parser.error("--dimension only combines with the default mode")
+        if args.keep_carvers and args.structures:
+            parser.error("--keep-carvers does not combine with --structures")
         # The dimension references keep the real material rule and only strip
         # the fixed biome's carvers and features, which is the surface oracle.
         # A structure run uses the same fixed biome but an empty rule so the
@@ -1828,7 +1842,8 @@ def main() -> int:
                 args.server_jar,
                 f"data/{namespace}/worldgen/biome/{path}.json",
             )
-            override["carvers"] = []
+            if not args.keep_carvers:
+                override["carvers"] = []
             override["features"] = []
         write_pack(preset, biome, root / "world/datapacks/t2oracle",
                    empty_material_rule=not args.surface,
