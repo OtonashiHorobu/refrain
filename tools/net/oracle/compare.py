@@ -17,6 +17,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from nbt import NbtError, first_difference, read_root
+
 MAGIC = b"RFCAP1\n"
 
 
@@ -125,6 +127,29 @@ def skip_nbt_payload(data: bytes, offset: int, tag: int, depth: int) -> int:
     raise ValueError(f"unknown NBT tag {tag}")
 
 
+def registry_nbt(entries: list[Packet]) -> dict[str, dict[str, tuple[int, object]]]:
+    result: dict[str, dict[str, tuple[int, object]]] = {}
+    for packet in entries:
+        if packet.state != 1 or packet.packet_id != 7:
+            continue
+        _, offset = read_varint(packet.body, 0)
+        registry, offset = read_string(packet.body, offset)
+        count, offset = read_varint(packet.body, offset)
+        values: dict[str, tuple[int, object]] = {}
+        for _ in range(count):
+            name, offset = read_string(packet.body, offset)
+            present = packet.body[offset]
+            offset += 1
+            if present:
+                try:
+                    value, offset = read_root(packet.body, offset)
+                except NbtError as error:
+                    raise ValueError(f"{registry}/{name}: {error}") from error
+                values[name] = value
+        result[registry] = values
+    return result
+
+
 def registry_entries(entries: list[Packet]) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
     for packet in entries:
@@ -224,6 +249,16 @@ def main() -> int:
         help="comma-separated login fields normalized away",
     )
     parser.add_argument(
+        "--registry-nbt",
+        action="store_true",
+        help="compare registry entry NBT for the selected registries",
+    )
+    parser.add_argument(
+        "--nbt-registries",
+        default="minecraft:worldgen/biome,minecraft:dimension_type,minecraft:damage_type",
+        help="comma-separated registry ids for --registry-nbt",
+    )
+    parser.add_argument(
         "--registry-entries",
         action="store_true",
         help="compare configuration registry entry ids",
@@ -288,6 +323,36 @@ def main() -> int:
         f"oracle: left {len(left_all)} packet(s), right {len(right_all)} packet(s); "
         f"comparing {len(left)} vs {len(right)}"
     )
+    if args.registry_nbt:
+        selected = {
+            item.strip() for item in args.nbt_registries.split(",") if item.strip()
+        }
+        left_nbt = registry_nbt(left_all)
+        right_nbt = registry_nbt(right_all)
+        failures = 0
+        for registry in sorted(selected):
+            left_entries = left_nbt.get(registry, {})
+            right_entries = right_nbt.get(registry, {})
+            if set(left_entries) != set(right_entries):
+                print(f"oracle: registry '{registry}' has different entry ids")
+                failures += 1
+                continue
+            for name in left_entries:
+                difference = first_difference(
+                    left_entries[name], right_entries[name], f"{registry}/{name}"
+                )
+                if difference is not None:
+                    print(f"oracle: registry NBT differs: {difference}")
+                    failures += 1
+                    break
+        if failures == 0:
+            print(
+                f"oracle: {len(selected)} registry entry sets match "
+                "for the selected registries"
+            )
+            return 0
+        return 1
+
     if args.registry_entries:
         left_entries = registry_entries(left_all)
         right_entries = registry_entries(right_all)
