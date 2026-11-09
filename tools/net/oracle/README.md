@@ -38,7 +38,10 @@ Mojang-style split layout (`--libraries` adds every library jar to the
 classpath and launches `net.minecraft.server.Main`).
 
 `compare.py` reports the first state/id or payload mismatch and unique packet
-id sets. `--registries` compares the 32 registry headers; `--registry-entries`
+id sets. `--chunks` decodes every `level_chunk_with_light` body and compares
+section block/biome values, heightmaps, block entities and light data; it is
+the field-level check used for the chunk encoder. Chunks present on only one
+side are reported but skipped; pass `--chunk-strict` to fail on them. `--registries` compares the 32 registry headers; `--registry-entries`
 skips each entry NBT and compares the registry entry ids and order. `--states`, `--limit` and `--ignore state:id,...` narrow the comparison
 to the deterministic login prefix while world-content packets are normalized
 separately. Payload comparison is intentionally raw: timestamps, UUIDs, player

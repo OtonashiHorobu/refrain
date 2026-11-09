@@ -17,6 +17,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from chunk import ChunkError, compare_chunks
 from nbt import NbtError, first_difference, read_root
 
 MAGIC = b"RFCAP1\n"
@@ -249,6 +250,16 @@ def main() -> int:
         help="comma-separated login fields normalized away",
     )
     parser.add_argument(
+        "--chunks",
+        action="store_true",
+        help="compare level_chunk_with_light section, heightmap and light fields",
+    )
+    parser.add_argument(
+        "--chunk-strict",
+        action="store_true",
+        help="fail when a chunk is present on only one side",
+    )
+    parser.add_argument(
         "--registry-nbt",
         action="store_true",
         help="compare registry entry NBT for the selected registries",
@@ -323,6 +334,26 @@ def main() -> int:
         f"oracle: left {len(left_all)} packet(s), right {len(right_all)} packet(s); "
         f"comparing {len(left)} vs {len(right)}"
     )
+    if args.chunks:
+        left_chunks = [
+            packet.body
+            for packet in left_all
+            if packet.state == 2 and packet.packet_id == 46
+        ]
+        right_chunks = [
+            packet.body
+            for packet in right_all
+            if packet.state == 2 and packet.packet_id == 46
+        ]
+        if not left_chunks or not right_chunks:
+            print("oracle: no level_chunk_with_light packets in one capture")
+            return 1
+        try:
+            return compare_chunks(left_chunks, right_chunks, strict=args.chunk_strict)
+        except ChunkError as error:
+            print(f"oracle: {error}", file=sys.stderr)
+            return 2
+
     if args.registry_nbt:
         selected = {
             item.strip() for item in args.nbt_registries.split(",") if item.strip()

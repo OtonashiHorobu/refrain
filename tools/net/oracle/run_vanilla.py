@@ -82,6 +82,12 @@ def main() -> int:
     parser.add_argument("--accept-eula", action="store_true")
     parser.add_argument("--port", type=int, default=25566)
     parser.add_argument("--out", type=pathlib.Path, required=True)
+    parser.add_argument(
+        "--world",
+        type=pathlib.Path,
+        default=None,
+        help="copy an existing Anvil world into the oracle server directory",
+    )
     parser.add_argument("--java", default="java")
     parser.add_argument("--tools", type=pathlib.Path, default=None)
     parser.add_argument("--timeout", type=float, default=120.0)
@@ -102,6 +108,11 @@ def main() -> int:
 
     work = pathlib.Path(tempfile.mkdtemp(prefix="refrain-oracle-"))
     try:
+        if args.world is not None:
+            if not args.world.is_dir():
+                print(f"oracle: world not found: {args.world}", file=sys.stderr)
+                return 2
+            shutil.copytree(args.world, work / "oracle")
         (work / "eula.txt").write_text("eula=true\n", encoding="utf-8")
         properties = "\n".join(
             f"{key}={value.format(port=args.port)}"
