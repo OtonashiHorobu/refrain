@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <limits>
 #include <set>
 #include <string>
 #include <tuple>
@@ -199,9 +200,7 @@ auto load_palette(block_state_registry &states,
                               : resolve_palette_state(states, *value));
     }
 
-    std::vector<template_block_info> full;
-    std::vector<template_block_info> other;
-    std::vector<template_block_info> block_entities;
+    std::vector<template_block_info> loaded;
     if (blocks != nullptr) {
         for (const auto &entry : blocks->items) {
             const auto *value = entry.as_compound();
@@ -225,13 +224,7 @@ auto load_palette(block_state_registry &states,
                 info.nbt = std::make_shared<const data::nbt::compound>(
                     *tag->as_compound());
             }
-            if (info.nbt != nullptr) {
-                block_entities.push_back(std::move(info));
-            } else if (is_full_block(states, info.state)) {
-                full.push_back(std::move(info));
-            } else {
-                other.push_back(std::move(info));
-            }
+            loaded.push_back(std::move(info));
         }
     }
     const auto by_y_x_z = [](const template_block_info &left,
@@ -244,6 +237,54 @@ auto load_palette(block_state_registry &states,
         }
         return left.z < right.z;
     };
+    // The reference writes a template palette as up to three contiguous
+    // sorted runs: full cubes, other shapes, then block entities. A palette
+    // that already has that shape is used verbatim, which keeps processor
+    // order identical to the reference even where the state table cannot
+    // recover a block's collision shape. Anything else is regrouped by the
+    // traits the table does carry.
+    const auto is_sorted = [&](std::size_t begin, std::size_t end) {
+        for (std::size_t index = begin + 1; index < end; ++index) {
+            if (by_y_x_z(loaded[index], loaded[index - 1])) {
+                return false;
+            }
+        }
+        return true;
+    };
+    std::size_t plain = 0;
+    while (plain < loaded.size() && loaded[plain].nbt == nullptr) {
+        ++plain;
+    }
+    bool entities_last = true;
+    for (std::size_t index = plain; index < loaded.size(); ++index) {
+        if (loaded[index].nbt == nullptr) {
+            entities_last = false;
+            break;
+        }
+    }
+    bool canonical = entities_last;
+    if (canonical) {
+        bool split = is_sorted(0, loaded.size());
+        for (std::size_t index = 1; index <= plain && !split; ++index) {
+            split = is_sorted(0, index) && is_sorted(index, plain);
+        }
+        canonical = split && is_sorted(plain, loaded.size());
+    }
+    if (canonical) {
+        return loaded;
+    }
+    std::vector<template_block_info> full;
+    std::vector<template_block_info> other;
+    std::vector<template_block_info> block_entities;
+    for (auto &info : loaded) {
+        if (info.nbt != nullptr) {
+            block_entities.push_back(std::move(info));
+        } else if (is_full_block(states, info.state)) {
+            full.push_back(std::move(info));
+        } else {
+            other.push_back(std::move(info));
+        }
+    }
     std::stable_sort(full.begin(), full.end(), by_y_x_z);
     std::stable_sort(other.begin(), other.end(), by_y_x_z);
     std::stable_sort(block_entities.begin(), block_entities.end(), by_y_x_z);
@@ -725,53 +766,179 @@ auto zero_position_with_transform(const structure_template &templ,
                      .z = zero.z + mirror_delta_z};
 }
 
-void capped_rule_processor::finalize_processing(
-    block_state_registry &states, jint level_seed, const block_pos &position,
-    std::vector<template_block_info> &blocks) const {
-    if (limit_ <= 0 || blocks.empty()) {
+auto int_provider::sample(worldgen_random &random) const -> jint {
+    switch (type) {
+    case kind::constant:
+        return min_inclusive;
+    case kind::uniform:
+        return random.next_int(max_inclusive - min_inclusive + 1) +
+               min_inclusive;
+    }
+    return min_inclusive;
+}
+
+namespace {
+
+void merge_compound(data::nbt::compound &target,
+                    const data::nbt::compound &source) {
+    for (const auto &[key, value] : source) {
+        const auto *source_compound = value.as_compound();
+        if (source_compound == nullptr) {
+            target.insert_or_assign(key, value);
+            continue;
+        }
+        const auto found = target.find(key);
+        const auto *target_compound =
+            found == target.end() ? nullptr : found->second.as_compound();
+        if (target_compound == nullptr) {
+            target.insert_or_assign(key, value);
+            continue;
+        }
+        auto merged = *target_compound;
+        merge_compound(merged, *source_compound);
+        target.insert_or_assign(key, data::nbt::value{std::move(merged)});
+    }
+}
+
+auto copy_tag(const std::shared_ptr<const data::nbt::compound> &existing)
+    -> data::nbt::compound {
+    return existing == nullptr ? data::nbt::compound{} : *existing;
+}
+
+} // namespace
+
+auto template_block_entity_modifier::apply(
+    worldgen_random &random,
+    const std::shared_ptr<const data::nbt::compound> &existing) const
+    -> block_entity_modification {
+    switch (type) {
+    case kind::passthrough:
+        return block_entity_modification{.nbt = existing};
+    case kind::clear:
+        return block_entity_modification{
+            .nbt = std::make_shared<const data::nbt::compound>(),
+            .loot_seed_fixed = false,
+        };
+    case kind::append_static: {
+        auto merged = copy_tag(existing);
+        merge_compound(merged, data);
+        return block_entity_modification{
+            .nbt =
+                std::make_shared<const data::nbt::compound>(std::move(merged)),
+        };
+    }
+    case kind::append_loot: {
+        auto tagged = copy_tag(existing);
+        tagged.insert_or_assign("LootTable",
+                                data::nbt::value{std::string{loot_table}});
+        tagged.insert_or_assign(
+            "LootTableSeed",
+            data::nbt::value{static_cast<jlong>(random.next_long())});
+        return block_entity_modification{
+            .nbt =
+                std::make_shared<const data::nbt::compound>(std::move(tagged)),
+            .loot_seed_fixed = true,
+        };
+    }
+    }
+    return block_entity_modification{.nbt = existing};
+}
+
+namespace {
+
+auto same_processed(const template_block_info &left,
+                    const block_pos &left_world,
+                    const template_block_info &right,
+                    const block_pos &right_world) -> bool {
+    if (left.x != right.x || left.y != right.y || left.z != right.z ||
+        left.state != right.state || left_world.x != right_world.x ||
+        left_world.y != right_world.y || left_world.z != right_world.z) {
+        return false;
+    }
+    if (left.nbt == nullptr || right.nbt == nullptr) {
+        return left.nbt == right.nbt;
+    }
+    return *left.nbt == *right.nbt;
+}
+
+/// Applies `delegate` to the whole-piece block lists. The shuffle and the
+/// limit share one positional stream at the piece origin; each selected block
+/// then replaces the entry only when the delegate changes it.
+void apply_capped(const template_block_processor &delegate,
+                  const int_provider &limit,
+                  template_finalize_context &context) {
+    if (limit.max_inclusive == 0 || context.blocks.empty() ||
+        context.originals.size() != context.blocks.size()) {
         return;
     }
-    legacy_random_source base{level_seed};
-    const jlong factory = base.next_long();
-    legacy_random_source random{
-        mth_get_seed(position.x, position.y, position.z) ^ factory};
-    std::vector<std::size_t> indices(blocks.size());
-    for (std::size_t i = 0; i < indices.size(); ++i) {
-        indices[i] = i;
+    worldgen_random base{
+        std::make_unique<legacy_random_source>(context.level_seed)};
+    auto factory = base.fork_positional();
+    worldgen_random random{
+        factory->at(context.origin.x, context.origin.y, context.origin.z)};
+    const auto max_to_replace = std::min(
+        limit.sample(random), static_cast<jint>(context.blocks.size()));
+    if (max_to_replace < 1) {
+        return;
     }
-    for (std::size_t i = indices.size(); i > 1; --i) {
-        const auto swap_to =
-            static_cast<std::size_t>(random.next_int(static_cast<jint>(i)));
-        std::swap(indices[i - 1], indices[swap_to]);
+    std::vector<std::size_t> indices(context.blocks.size());
+    for (std::size_t index = 0; index < indices.size(); ++index) {
+        indices[index] = index;
+    }
+    for (std::size_t remaining = indices.size(); remaining > 1; --remaining) {
+        const auto swap_to = static_cast<std::size_t>(
+            random.next_int(static_cast<jint>(remaining)));
+        std::swap(indices[remaining - 1], indices[swap_to]);
     }
     jint replaced = 0;
     for (const auto index : indices) {
-        if (replaced >= limit_) {
+        if (replaced >= max_to_replace) {
             break;
         }
-        auto &block = blocks[index];
-        if (state_block_name(states.name(block.state)) != input_block_) {
+        const auto world = context.positions[index];
+        const auto result =
+            delegate.process(context.states, context.region,
+                             context.blocks[index], world, nullptr);
+        if (!result) {
             continue;
         }
-        auto output = states.find(output_state_);
-        if (!output) {
-            const auto interned =
-                states.intern(output_state_, states.traits(block.state));
-            if (!interned) {
-                continue;
-            }
-            output = *interned;
+        const auto moved = delegate.adjust_position(
+            context.states, context.region, *result, world);
+        if (same_processed(context.blocks[index], world, *result, moved)) {
+            continue;
         }
-        block.state = *output;
-        if (!loot_table_.empty()) {
-            auto entity = std::make_shared<data::nbt::compound>();
-            (*entity)["LootTable"] = data::nbt::value{std::string{loot_table_}};
-            (*entity)["LootTableSeed"] =
-                data::nbt::value{static_cast<jlong>(random.next_long())};
-            block.nbt = std::move(entity);
-        }
+        context.blocks[index] = *result;
+        context.positions[index] = moved;
         ++replaced;
     }
+}
+
+} // namespace
+
+void capped_processor::finalize_processing(
+    template_finalize_context &context) const {
+    apply_capped(*delegate_, limit_, context);
+}
+
+void capped_rule_processor::finalize_processing(
+    template_finalize_context &context) const {
+    const auto output = resolve_block_state(context.states, output_state_);
+    if (output == no_block_state) {
+        return;
+    }
+    template_block_entity_modifier modifier{};
+    modifier.type = template_block_entity_modifier::kind::append_loot;
+    modifier.loot_table = loot_table_;
+    template_rule rule{};
+    rule.input.type = rule_test_type::block_match;
+    rule.input.blocks.push_back(input_block_);
+    rule.location.type = rule_test_type::always_true;
+    rule.output = output;
+    rule.entity_modifier = std::move(modifier);
+    std::vector<template_rule> rules;
+    rules.push_back(std::move(rule));
+    const rule_processor delegate{std::move(rules)};
+    apply_capped(delegate, limit_, context);
 }
 
 namespace {
@@ -919,6 +1086,252 @@ auto decode_rule_test(block_state_registry &states,
         make_error(error_code::unsupported, "unsupported rule test type")};
 }
 
+} // namespace
+
+namespace {
+
+auto decode_nbt_value(const data::json::value &document)
+    -> result<data::nbt::value> {
+    switch (document.kind()) {
+    case data::json::type::boolean: {
+        const auto boolean = document.as_bool();
+        if (!boolean) {
+            return std::unexpected{boolean.error()};
+        }
+        return data::nbt::value{static_cast<std::int8_t>(*boolean ? 1 : 0)};
+    }
+    case data::json::type::integer: {
+        const auto number = document.as_int64();
+        if (!number) {
+            return std::unexpected{number.error()};
+        }
+        const auto value = *number;
+        if (value >= std::numeric_limits<std::int8_t>::min() &&
+            value <= std::numeric_limits<std::int8_t>::max()) {
+            return data::nbt::value{static_cast<std::int8_t>(value)};
+        }
+        if (value >= std::numeric_limits<std::int16_t>::min() &&
+            value <= std::numeric_limits<std::int16_t>::max()) {
+            return data::nbt::value{static_cast<std::int16_t>(value)};
+        }
+        if (value >= std::numeric_limits<std::int32_t>::min() &&
+            value <= std::numeric_limits<std::int32_t>::max()) {
+            return data::nbt::value{static_cast<std::int32_t>(value)};
+        }
+        return data::nbt::value{static_cast<std::int64_t>(value)};
+    }
+    case data::json::type::real: {
+        const auto number = document.as_double();
+        if (!number) {
+            return std::unexpected{number.error()};
+        }
+        const auto narrowed = static_cast<float>(*number);
+        if (static_cast<double>(narrowed) == *number) {
+            return data::nbt::value{narrowed};
+        }
+        return data::nbt::value{*number};
+    }
+    case data::json::type::string: {
+        const auto text = document.as_string();
+        if (!text) {
+            return std::unexpected{text.error()};
+        }
+        return data::nbt::value{std::string{*text}};
+    }
+    case data::json::type::array: {
+        const auto array = document.as_array();
+        if (!array) {
+            return std::unexpected{array.error()};
+        }
+        data::nbt::list_value list{};
+        for (const auto &entry : *array) {
+            auto converted = decode_nbt_value(entry);
+            if (!converted) {
+                return std::unexpected{converted.error()};
+            }
+            if (list.items.empty()) {
+                list.element_type = converted->type();
+            } else if (converted->type() != list.element_type) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "a list value mixes element types")};
+            }
+            list.items.push_back(std::move(*converted));
+        }
+        return data::nbt::value{std::move(list)};
+    }
+    case data::json::type::object: {
+        const auto object = document.as_object();
+        if (!object) {
+            return std::unexpected{object.error()};
+        }
+        data::nbt::compound compound{};
+        for (const auto &[key, entry] : object->get()) {
+            auto converted = decode_nbt_value(entry);
+            if (!converted) {
+                return std::unexpected{converted.error()};
+            }
+            compound.insert_or_assign(key, std::move(*converted));
+        }
+        return data::nbt::value{std::move(compound)};
+    }
+    case data::json::type::null:
+        break;
+    }
+    return std::unexpected{make_error(error_code::parse_error,
+                                      "null has no NBT tag representation")};
+}
+
+auto json_string(const data::json::value *document, std::string_view name)
+    -> result<std::string> {
+    if (document == nullptr) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "missing " + std::string{name})};
+    }
+    const auto text = document->as_string();
+    if (!text) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "invalid " + std::string{name})};
+    }
+    return std::string{*text};
+}
+
+auto json_int(const data::json::value *document, std::string_view name)
+    -> result<jint> {
+    if (document == nullptr) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "missing " + std::string{name})};
+    }
+    const auto number = document->as_int64();
+    if (!number || *number < std::numeric_limits<jint>::min() ||
+        *number > std::numeric_limits<jint>::max()) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "invalid " + std::string{name})};
+    }
+    return static_cast<jint>(*number);
+}
+
+auto json_array(const data::json::value *document, std::string_view name)
+    -> result<std::span<const data::json::value>> {
+    if (document == nullptr) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "missing " + std::string{name})};
+    }
+    const auto array = document->as_array();
+    if (!array) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "invalid " + std::string{name})};
+    }
+    return *array;
+}
+
+auto decode_int_provider(const data::json::value &document)
+    -> result<int_provider> {
+    if (document.is_integer()) {
+        auto value = json_int(&document, "limit");
+        if (!value) {
+            return std::unexpected{value.error()};
+        }
+        if (*value < 1) {
+            return std::unexpected{
+                make_error(error_code::parse_error, "limit must be positive")};
+        }
+        return int_provider::constant(*value);
+    }
+    if (!document.is_object()) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "limit provider has no type")};
+    }
+    auto type = json_string(document.find("type"), "limit provider type");
+    if (!type) {
+        return std::unexpected{type.error()};
+    }
+    if (*type == "minecraft:constant") {
+        auto value = json_int(document.find("value"), "constant value");
+        if (!value) {
+            return std::unexpected{value.error()};
+        }
+        if (*value < 1) {
+            return std::unexpected{
+                make_error(error_code::parse_error, "limit must be positive")};
+        }
+        return int_provider::constant(*value);
+    }
+    if (*type == "minecraft:uniform") {
+        auto minimum =
+            json_int(document.find("min_inclusive"), "uniform minimum");
+        if (!minimum) {
+            return std::unexpected{minimum.error()};
+        }
+        auto maximum =
+            json_int(document.find("max_inclusive"), "uniform maximum");
+        if (!maximum) {
+            return std::unexpected{maximum.error()};
+        }
+        if (*minimum < 1 || *maximum < *minimum) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "uniform limit range is invalid")};
+        }
+        return int_provider::uniform(*minimum, *maximum);
+    }
+    return std::unexpected{
+        make_error(error_code::unsupported, "unsupported limit provider")};
+}
+
+auto decode_block_entity_modifier(const data::json::value &document)
+    -> result<template_block_entity_modifier> {
+    if (!document.is_object()) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "block entity modifier has no type")};
+    }
+    auto type =
+        json_string(document.find("type"), "block entity modifier type");
+    if (!type) {
+        return std::unexpected{type.error()};
+    }
+    template_block_entity_modifier modifier{};
+    if (*type == "minecraft:passthrough") {
+        modifier.type = template_block_entity_modifier::kind::passthrough;
+        return modifier;
+    }
+    if (*type == "minecraft:clear") {
+        modifier.type = template_block_entity_modifier::kind::clear;
+        return modifier;
+    }
+    if (*type == "minecraft:append_loot") {
+        auto loot_table =
+            json_string(document.find("loot_table"), "append_loot loot_table");
+        if (!loot_table) {
+            return std::unexpected{loot_table.error()};
+        }
+        modifier.type = template_block_entity_modifier::kind::append_loot;
+        modifier.loot_table = std::move(*loot_table);
+        return modifier;
+    }
+    if (*type == "minecraft:append_static") {
+        const auto *data = document.find("data");
+        if (data == nullptr || !data->is_object()) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "append_static has no data")};
+        }
+        auto converted = decode_nbt_value(*data);
+        if (!converted) {
+            return std::unexpected{converted.error()};
+        }
+        const auto *compound = converted->as_compound();
+        if (compound == nullptr) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "append_static data is not a compound")};
+        }
+        modifier.type = template_block_entity_modifier::kind::append_static;
+        modifier.data = *compound;
+        return modifier;
+    }
+    return std::unexpected{make_error(error_code::unsupported,
+                                      "unsupported block entity modifier")};
+}
+
 auto decode_rule(const data::json::value &document,
                  block_state_registry &states) -> result<template_rule> {
     const auto *input = document.find("input_predicate");
@@ -941,136 +1354,143 @@ auto decode_rule(const data::json::value &document,
         return std::unexpected{make_error(error_code::parse_error,
                                           "rule output state is invalid")};
     }
+    template_block_entity_modifier modifier{};
+    if (const auto *node = document.find("block_entity_modifier");
+        node != nullptr && !node->is_null()) {
+        auto decoded = decode_block_entity_modifier(*node);
+        if (!decoded) {
+            return std::unexpected{decoded.error()};
+        }
+        modifier = std::move(*decoded);
+    }
     return template_rule{.input = std::move(*input_test),
                          .location = std::move(*location_test),
-                         .output = output_state};
+                         .output = output_state,
+                         .entity_modifier = std::move(modifier)};
 }
 
 } // namespace
 
-auto decode_processor_list(block_state_registry &states,
-                           const data::json::value &document)
-    -> result<std::shared_ptr<structure_processor_list>> {
-    const auto string_of =
-        [](const data::json::value *value) -> std::optional<std::string> {
-        if (value == nullptr) {
-            return std::nullopt;
-        }
-        const auto text = value->as_string();
-        if (!text) {
-            return std::nullopt;
-        }
-        return std::string{*text};
-    };
-    const auto double_of =
-        [](const data::json::value *value) -> std::optional<double> {
-        if (value == nullptr) {
-            return std::nullopt;
-        }
-        const auto number = value->as_double();
-        if (!number) {
-            return std::nullopt;
-        }
-        return *number;
-    };
-    const auto array_of = [](const data::json::value *value)
-        -> std::optional<std::span<const data::json::value>> {
-        if (value == nullptr) {
-            return std::nullopt;
-        }
-        const auto array = value->as_array();
-        if (!array) {
-            return std::nullopt;
-        }
-        return *array;
-    };
-    const auto *processors = document.find("processors");
-    const auto entries = array_of(processors);
-    if (!entries) {
-        return std::unexpected{make_error(error_code::parse_error,
-                                          "processor list has no processors")};
+auto decode_processor(block_state_registry &states,
+                      const data::json::value &document)
+    -> result<std::unique_ptr<template_block_processor>> {
+    auto type = json_string(document.find("processor_type"), "processor type");
+    if (!type) {
+        return std::unexpected{type.error()};
     }
-    auto list = std::make_shared<structure_processor_list>();
-    for (const auto &entry : *entries) {
-        const auto type = string_of(entry.find("processor_type"));
-        if (!type) {
-            return std::unexpected{
-                make_error(error_code::parse_error, "processor has no type")};
+    if (*type == "minecraft:block_rot") {
+        const auto *integrity_value = document.find("integrity");
+        if (integrity_value == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "block_rot has no integrity")};
         }
-        if (*type == "minecraft:block_rot") {
-            const auto integrity = double_of(entry.find("integrity"));
-            if (!integrity) {
-                return std::unexpected{make_error(
-                    error_code::parse_error, "block_rot has no integrity")};
-            }
-            std::vector<std::string> rottable;
-            const auto *rottable_value = entry.find("rottable_blocks");
-            const bool has_rottable = rottable_value != nullptr;
-            if (const auto text = string_of(rottable_value); text.has_value()) {
-                rottable.push_back(*text);
-            } else if (const auto array = array_of(rottable_value);
-                       array.has_value()) {
-                for (const auto &item : *array) {
-                    if (const auto item_text = item.as_string();
-                        item_text.has_value()) {
+        const auto integrity = integrity_value->as_double();
+        if (!integrity) {
+            return std::unexpected{integrity.error()};
+        }
+        std::vector<std::string> rottable;
+        const auto *rottable_value = document.find("rottable_blocks");
+        const bool has_rottable = rottable_value != nullptr;
+        if (rottable_value != nullptr) {
+            if (const auto text = rottable_value->as_string(); text) {
+                rottable.emplace_back(*text);
+            } else if (rottable_value->is_array()) {
+                for (const auto &item : *rottable_value->as_array()) {
+                    const auto item_text = item.as_string();
+                    if (item_text) {
                         rottable.emplace_back(*item_text);
                     }
                 }
             }
-            list->owned.push_back(std::make_unique<block_rot_processor>(
-                static_cast<float>(*integrity), std::move(rottable),
-                has_rottable));
-            list->processors.push_back(list->owned.back().get());
-        } else if (*type == "minecraft:protected_blocks") {
-            const auto value = string_of(entry.find("value"));
-            if (!value) {
-                return std::unexpected{make_error(
-                    error_code::parse_error, "protected_blocks has no value")};
-            }
-            std::string tag{*value};
-            if (tag.starts_with('#')) {
-                tag.erase(0, 1);
-            }
-            list->owned.push_back(
-                std::make_unique<protected_blocks_processor>(std::move(tag)));
-            list->processors.push_back(list->owned.back().get());
-        } else if (*type == "minecraft:rule") {
-            const auto *rules_value = entry.find("rules");
-            const auto rules = array_of(rules_value);
-            if (!rules) {
-                return std::unexpected{
-                    make_error(error_code::parse_error, "rule has no rules")};
-            }
-            std::vector<template_rule> decoded;
-            decoded.reserve(rules->size());
-            for (const auto &rule : *rules) {
-                auto parsed = decode_rule(rule, states);
-                if (!parsed) {
-                    return std::unexpected{parsed.error()};
-                }
-                decoded.push_back(std::move(*parsed));
-            }
-            list->owned.push_back(
-                std::make_unique<rule_processor>(std::move(decoded)));
-            list->processors.push_back(list->owned.back().get());
-        } else if (*type == "minecraft:block_ignore") {
-            std::vector<std::string> blocks;
-            if (const auto array = array_of(entry.find("blocks"));
-                array.has_value()) {
-                for (const auto &item : *array) {
-                    if (const auto item_text = item.as_string();
-                        item_text.has_value()) {
-                        blocks.emplace_back(*item_text);
-                    }
-                }
-            }
-            list->owned.push_back(
-                std::make_unique<block_ignore_processor>(std::move(blocks)));
-            list->processors.push_back(list->owned.back().get());
-        } else if (*type != "minecraft:nop") {
-            return std::unexpected{
-                make_error(error_code::parse_error, "unsupported processor")};
         }
+        return std::make_unique<block_rot_processor>(
+            static_cast<float>(*integrity), std::move(rottable), has_rottable);
+    }
+    if (*type == "minecraft:protected_blocks") {
+        auto value =
+            json_string(document.find("value"), "protected_blocks value");
+        if (!value) {
+            return std::unexpected{value.error()};
+        }
+        std::string tag{*value};
+        if (tag.starts_with('#')) {
+            tag.erase(0, 1);
+        }
+        return std::make_unique<protected_blocks_processor>(std::move(tag));
+    }
+    if (*type == "minecraft:rule") {
+        auto rules = json_array(document.find("rules"), "rules");
+        if (!rules) {
+            return std::unexpected{rules.error()};
+        }
+        std::vector<template_rule> decoded;
+        decoded.reserve(rules->size());
+        for (const auto &rule : *rules) {
+            auto parsed = decode_rule(rule, states);
+            if (!parsed) {
+                return std::unexpected{parsed.error()};
+            }
+            decoded.push_back(std::move(*parsed));
+        }
+        return std::make_unique<rule_processor>(std::move(decoded));
+    }
+    if (*type == "minecraft:block_ignore") {
+        std::vector<std::string> blocks;
+        if (const auto *value = document.find("blocks");
+            value != nullptr && value->is_array()) {
+            for (const auto &item : *value->as_array()) {
+                const auto item_text = item.as_string();
+                if (item_text) {
+                    blocks.emplace_back(*item_text);
+                }
+            }
+        }
+        return std::make_unique<block_ignore_processor>(std::move(blocks));
+    }
+    if (*type == "minecraft:capped") {
+        const auto *delegate = document.find("delegate");
+        if (delegate == nullptr) {
+            return std::unexpected{
+                make_error(error_code::parse_error, "capped has no delegate")};
+        }
+        auto decoded_delegate = decode_processor(states, *delegate);
+        if (!decoded_delegate) {
+            return std::unexpected{decoded_delegate.error()};
+        }
+        const auto *limit = document.find("limit");
+        if (limit == nullptr) {
+            return std::unexpected{
+                make_error(error_code::parse_error, "capped has no limit")};
+        }
+        auto decoded_limit = decode_int_provider(*limit);
+        if (!decoded_limit) {
+            return std::unexpected{decoded_limit.error()};
+        }
+        return std::make_unique<capped_processor>(std::move(*decoded_delegate),
+                                                  *decoded_limit);
+    }
+    if (*type == "minecraft:nop") {
+        return std::make_unique<nop_processor>();
+    }
+    return std::unexpected{
+        make_error(error_code::unsupported, "unsupported processor")};
+}
+
+auto decode_processor_list(block_state_registry &states,
+                           const data::json::value &document)
+    -> result<std::shared_ptr<structure_processor_list>> {
+    auto entries = json_array(document.find("processors"), "processors");
+    if (!entries) {
+        return std::unexpected{entries.error()};
+    }
+    auto list = std::make_shared<structure_processor_list>();
+    for (const auto &entry : *entries) {
+        auto processor = decode_processor(states, entry);
+        if (!processor) {
+            return std::unexpected{processor.error()};
+        }
+        list->processors.push_back(processor->get());
+        list->owned.push_back(std::move(*processor));
     }
     return list;
 }
@@ -1332,7 +1752,7 @@ auto rule_processor::process(block_state_registry &states,
     -> std::optional<template_block_info> {
     (void)random;
     // A rule processor always seeds a positional source at the world position;
-    // the input and location tests share it.
+    // the input and location tests and the block entity modifier share it.
     worldgen_random rng{std::make_unique<legacy_random_source>(
         mth_get_seed(world.x, world.y, world.z))};
     const auto world_state = region.state_at(world.x, world.y, world.z);
@@ -1345,6 +1765,11 @@ auto rule_processor::process(block_state_registry &states,
         }
         auto result = info;
         result.state = rule.output;
+        const auto modified = rule.entity_modifier.apply(rng, info.nbt);
+        result.nbt = modified.nbt;
+        if (modified.loot_seed_fixed.has_value()) {
+            result.loot_seed_fixed = *modified.loot_seed_fixed;
+        }
         return result;
     }
     return info;
@@ -1661,8 +2086,10 @@ auto place_template(chunk_region &region, block_state_registry &states,
             break;
         }
     }
+    std::vector<template_block_info> original_blocks;
     std::vector<template_block_info> processed_blocks;
     std::vector<block_pos> processed_positions;
+    original_blocks.reserve(palette.size());
     processed_blocks.reserve(palette.size());
     processed_positions.reserve(palette.size());
     for (const auto &block : palette) {
@@ -1694,16 +2121,23 @@ auto place_template(chunk_region &region, block_state_registry &states,
         if (is_shape_sensitive(states, processed.state)) {
             any_shape = true;
         }
+        if (whole_piece) {
+            original_blocks.push_back(block);
+        }
         processed_blocks.push_back(std::move(processed));
         processed_positions.push_back(world);
     }
-    if (whole_piece) {
-        for (const auto *processor : settings.processors) {
-            if (processor->evaluates_entire_piece_state()) {
-                processor->finalize_processing(states, settings.level_seed,
-                                               origin, processed_blocks);
-            }
-        }
+    template_finalize_context finalize_context{
+        .states = states,
+        .region = region,
+        .level_seed = settings.level_seed,
+        .origin = origin,
+        .originals = original_blocks,
+        .blocks = processed_blocks,
+        .positions = processed_positions,
+    };
+    for (const auto *processor : settings.processors) {
+        processor->finalize_processing(finalize_context);
     }
     std::size_t placed = 0;
     std::vector<block_pos> placed_positions;
@@ -1755,7 +2189,7 @@ auto place_template(chunk_region &region, block_state_registry &states,
         }
         if (processed.nbt != nullptr) {
             auto entity = *processed.nbt;
-            if (settings.loot_random != nullptr &&
+            if (!processed.loot_seed_fixed && settings.loot_random != nullptr &&
                 entity.find("LootTable") != entity.end()) {
                 entity["LootTableSeed"] = data::nbt::value{
                     static_cast<jlong>(settings.loot_random->next_long())};

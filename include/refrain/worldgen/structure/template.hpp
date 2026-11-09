@@ -36,6 +36,67 @@ struct template_block_info {
     jint z{0};
     block_state_id state{no_block_state};
     std::shared_ptr<const data::nbt::compound> nbt{};
+    /// True when a rule modifier produced this tag together with a loot seed.
+    /// Such a seed belongs to the rule's positional stream, so placement must
+    /// not replace it with a seed from the piece stream.
+    bool loot_seed_fixed{false};
+};
+
+/// A positive integer provider used by a capped processor's limit.
+/// `constant` consumes no draw; `uniform` consumes one bounded draw.
+struct int_provider {
+    enum class kind : std::uint8_t { constant, uniform };
+
+    kind type{kind::constant};
+    jint min_inclusive{0};
+    jint max_inclusive{0};
+
+    [[nodiscard]] static auto constant(jint value) -> int_provider {
+        return int_provider{
+            .type = kind::constant,
+            .min_inclusive = value,
+            .max_inclusive = value,
+        };
+    }
+    [[nodiscard]] static auto uniform(jint min, jint max) -> int_provider {
+        return int_provider{
+            .type = kind::uniform,
+            .min_inclusive = min,
+            .max_inclusive = max,
+        };
+    }
+
+    [[nodiscard]] auto sample(worldgen_random &random) const -> jint;
+};
+
+/// The block entity tag a matching rule leaves behind.
+struct block_entity_modification {
+    std::shared_ptr<const data::nbt::compound> nbt{};
+    /// Set when the modifier itself chose the seed (a loot-table append);
+    /// `std::nullopt` keeps the marker of the tag the rule received.
+    std::optional<bool> loot_seed_fixed{};
+};
+
+/// A rule's block entity modifier. `passthrough` keeps the incoming tag and
+/// consumes nothing, `clear` replaces it with an empty tag, `append_static`
+/// deep-merges fixed data, and `append_loot` stores a loot table and draws one
+/// seed from the rule's positional stream.
+struct template_block_entity_modifier {
+    enum class kind : std::uint8_t {
+        passthrough,
+        clear,
+        append_static,
+        append_loot,
+    };
+
+    kind type{kind::passthrough};
+    std::string loot_table{};
+    data::nbt::compound data{};
+
+    [[nodiscard]] auto
+    apply(worldgen_random &random,
+          const std::shared_ptr<const data::nbt::compound> &existing) const
+        -> block_entity_modification;
 };
 
 struct template_entity_info {
@@ -87,6 +148,20 @@ struct template_bounds {
                                          const block_pos &origin)
     -> template_bounds;
 
+/// State a whole-piece processor sees once every block passed the per-block
+/// chain. `blocks[i]` and `positions[i]` are index-aligned; `originals[i]` is
+/// the palette entry before any processor ran, which a capped delegate needs
+/// for the template-relative position it receives.
+struct template_finalize_context {
+    block_state_registry &states;
+    chunk_region &region;
+    jlong level_seed{0};
+    block_pos origin{};
+    const std::vector<template_block_info> &originals;
+    std::vector<template_block_info> &blocks;
+    std::vector<block_pos> &positions;
+};
+
 /// One block-level processor. `process` returns the replacement entry or
 /// nothing when the block is dropped.
 class template_block_processor {
@@ -120,27 +195,36 @@ class template_block_processor {
         return false;
     }
     /// Runs over every processed block of the piece before placement.
-    virtual void
-    finalize_processing(block_state_registry &states, jint level_seed,
-                        const block_pos &position,
-                        std::vector<template_block_info> &blocks) const {
-        (void)states;
-        (void)level_seed;
-        (void)position;
-        (void)blocks;
+    virtual void finalize_processing(template_finalize_context &context) const {
+        (void)context;
     }
 };
 
-/// A capped processor over a single rule: up to `limit` matching blocks are
-/// replaced, chosen from the whole piece with the positional random at the
-/// piece origin.
-class capped_rule_processor final : public template_block_processor {
+/// Does nothing. Data documents may name it; it keeps the pipeline shape.
+class nop_processor final : public template_block_processor {
   public:
-    capped_rule_processor(std::string input_block, std::string output_state,
-                          std::string loot_table, jint limit)
-        : input_block_{std::move(input_block)},
-          output_state_{std::move(output_state)},
-          loot_table_{std::move(loot_table)}, limit_{limit} {}
+    [[nodiscard]] auto
+    process(block_state_registry &states, const chunk_region &region,
+            const template_block_info &info, const block_pos &world,
+            worldgen_random *random) const
+        -> std::optional<template_block_info> override {
+        (void)states;
+        (void)region;
+        (void)world;
+        (void)random;
+        return info;
+    }
+};
+
+/// Applies a delegate to at most `limit` blocks of the whole piece. The
+/// delegate runs in a shuffled index order drawn from a positional stream
+/// seeded by the level seed at the piece origin; only a delegate that changes
+/// an entry counts against the limit.
+class capped_processor final : public template_block_processor {
+  public:
+    capped_processor(std::unique_ptr<template_block_processor> delegate,
+                     int_provider limit)
+        : delegate_{std::move(delegate)}, limit_{limit} {}
 
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
@@ -156,16 +240,46 @@ class capped_rule_processor final : public template_block_processor {
     [[nodiscard]] auto evaluates_entire_piece_state() const -> bool override {
         return true;
     }
-    void finalize_processing(
-        block_state_registry &states, jint level_seed,
-        const block_pos &position,
-        std::vector<template_block_info> &blocks) const override;
+    void finalize_processing(template_finalize_context &context) const override;
+
+  private:
+    std::unique_ptr<template_block_processor> delegate_{};
+    int_provider limit_{};
+};
+
+/// A capped processor over a single state rule, with a loot-table append as
+/// the block entity modifier. Used by structures whose processor list is built
+/// procedurally rather than read from a data document.
+class capped_rule_processor final : public template_block_processor {
+  public:
+    capped_rule_processor(std::string input_block, std::string output_state,
+                          std::string loot_table, jint limit)
+        : input_block_{std::move(input_block)},
+          output_state_{std::move(output_state)},
+          loot_table_{std::move(loot_table)},
+          limit_{int_provider::constant(limit)} {}
+
+    [[nodiscard]] auto
+    process(block_state_registry &states, const chunk_region &region,
+            const template_block_info &info, const block_pos &world,
+            worldgen_random *random) const
+        -> std::optional<template_block_info> override {
+        (void)states;
+        (void)region;
+        (void)world;
+        (void)random;
+        return info;
+    }
+    [[nodiscard]] auto evaluates_entire_piece_state() const -> bool override {
+        return true;
+    }
+    void finalize_processing(template_finalize_context &context) const override;
 
   private:
     std::string input_block_{};
     std::string output_state_{};
     std::string loot_table_{};
-    jint limit_{0};
+    int_provider limit_{};
 };
 
 /// Drops blocks whose block name is listed.
@@ -210,11 +324,13 @@ struct rule_test {
 };
 
 /// One processor rule: an input state test, a location test against the world
-/// and the replacement state.
+/// and the replacement state. A matching rule may also rewrite the block
+/// entity tag through its modifier.
 struct template_rule {
     rule_test input{};
     rule_test location{};
     block_state_id output{no_block_state};
+    template_block_entity_modifier entity_modifier{};
 };
 
 /// The first matching rule replaces the block.
@@ -425,8 +541,14 @@ struct structure_processor_list {
     std::vector<const template_block_processor *> processors{};
 };
 
+/// Decodes one processor entry (`processor_type` plus its configuration).
+/// `capped` recursively decodes its delegate.
+[[nodiscard]] auto decode_processor(block_state_registry &states,
+                                    const data::json::value &document)
+    -> result<std::unique_ptr<template_block_processor>>;
+
 /// Decodes `worldgen/processor_list` JSON. Supported processor types are
-/// `rule`, `block_rot`, `protected_blocks`, `block_ignore` and `nop`.
+/// `rule`, `block_rot`, `protected_blocks`, `block_ignore`, `capped` and `nop`.
 [[nodiscard]] auto decode_processor_list(block_state_registry &states,
                                          const data::json::value &document)
     -> result<std::shared_ptr<structure_processor_list>>;
