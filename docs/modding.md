@@ -57,7 +57,11 @@ that may be absent.
 
 Static mods bundled with the server omit `[entry]`; their code is linked into
 the binary and paired with the manifest through the static registry. External
-mods declare exactly one of `[entry].native` or `[entry].wasm`.
+native mods declare `[entry].native` and implement the C entry ABI in
+`include/refrain/mod/entry.h`; the loader calls `refrain_mod_main`, validates
+the descriptor ABI, and invokes `on_load` with the sealed host core table.
+External WASM mods (`[entry].wasm`) are rejected until the script runtime
+lands.
 
 ## Gamepack
 
@@ -115,6 +119,37 @@ Provider implementations live in `mods/<id>/src/` for first-party mods. Their
 code is compiled into the server and registered through the static registry.
 A provider that the gamepack selects but the binary does not link fails at
 startup with the missing service key.
+
+## External native entry
+
+A native mod exports `refrain_mod_main` (or the symbol named by
+`[entry].symbol`) with `REFRAIN_MOD_MAIN` and returns a process-lifetime
+`refrain_mod_desc`:
+
+```c
+#include <refrain/mod/entry.h>
+
+static refrain_status on_load(const refrain_mod_context *ctx, void **user) {
+    /* query/register services through ctx->host_core */
+    return REFRAIN_STATUS_OK;
+}
+
+static const refrain_mod_desc desc = {
+    .struct_size = sizeof(refrain_mod_desc),
+    .abi_major = REFRAIN_MOD_ABI_MAJOR,
+    .on_load = &on_load,
+    .on_unload = NULL,
+};
+
+REFRAIN_MOD_MAIN(refrain_mod_main) {
+    (void)init;
+    return &desc;
+}
+```
+
+The host validates `struct_size`, `abi_major` and `on_load` before calling
+`on_load`; failures abort startup with the mod id. The shared library stays
+loaded for the process lifetime and `on_unload` runs at shutdown.
 
 ## Host runtime
 

@@ -12,11 +12,13 @@
 #include <refrain/data/checksum.hpp>
 #include <refrain/mod/package.hpp>
 #include <refrain/mod/static_mod.hpp>
+#include <refrain/platform/dynamic_library.hpp>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <new>
@@ -48,6 +50,12 @@ using mod::static_mod_registry;
 
 [[nodiscard]] auto fail(error_code code, std::string message) -> error {
     return make_error(code, std::move(message));
+}
+
+[[nodiscard]] auto to_refrain_str(std::string_view text) noexcept
+    -> refrain_str {
+    return refrain_str{reinterpret_cast<const std::uint8_t *>(text.data()),
+                       static_cast<std::uint64_t>(text.size())};
 }
 
 /// Capabilities advertised by the sealed `refrain:host.core` contract.
@@ -335,16 +343,59 @@ auto host::load_one(const composition &plan, const package_source &package,
         return std::unexpected{
             annotate(std::move(host_requirements.error()), entry.path)};
     }
+    // A sealed service is owned by the host bootstrap; a mod that declares it
+    // is rejected before any mod code runs, not merely at register_provider().
+    for (const auto &provided : manifest->provides) {
+        if (is_sealed_service(provided)) {
+            return std::unexpected{fail(
+                error_code::permission_denied,
+                fmt::format("mod '{}' declares sealed service '{}'; the host "
+                            "owns that service",
+                            manifest->common.id, provided))};
+        }
+    }
+
+    // Context for `register_provider()`: the mod may only claim services its
+    // manifest declares and the plan selected it for. External mods receive
+    // the same context through the sealed host core table.
+    current_mod_provides_ = manifest->provides;
+    current_mod_planned_slots_.clear();
+    current_mod_planned_instances_.clear();
+    if (const auto found{planned.slots.find(manifest->common.id)};
+        found != planned.slots.end()) {
+        current_mod_planned_slots_ = found->second;
+    }
+    if (const auto found{planned.instances.find(manifest->common.id)};
+        found != planned.instances.end()) {
+        current_mod_planned_instances_ = found->second;
+    }
+
+    const auto declares_provides{!manifest->provides.empty()};
+    const auto selected_provider{planned.mods.contains(manifest->common.id)};
+
     if (manifest->is_external()) {
-        const auto &native{manifest->entry->native};
-        const auto &wasm{manifest->entry->wasm};
-        return std::unexpected{fail(
-            error_code::unsupported,
-            fmt::format("{}: external mod '{}' ({}); dynamic mod loading is "
-                        "not implemented",
-                        entry.path, manifest->common.id,
-                        native.empty() ? fmt::format("wasm {}", wasm)
-                                       : fmt::format("native {}", native)))};
+        const auto activate_external{!declares_provides || selected_provider};
+        if (declares_provides && !selected_provider) {
+            log::info("mod '{}': provider not selected; code not activated "
+                      "(provides {})",
+                      manifest->common.id, provides_summary(*manifest));
+        }
+        loaded_mod loaded{.id = manifest->common.id,
+                          .version = manifest->common.version,
+                          .abi = manifest->common.abi,
+                          .external = true,
+                          .has_code = activate_external,
+                          .provides_summary = provides_summary(*manifest),
+                          .manifest_hash_hex = manifest_hash_hex,
+                          .required = manifest->required,
+                          .optional = manifest->optional};
+        if (auto external{
+                load_external_mod(*manifest, entry, activate_external, loaded)};
+            !external) {
+            return std::unexpected{
+                annotate(std::move(external.error()), entry.path)};
+        }
+        return loaded;
     }
 
     auto matched{registry_.match(*manifest)};
@@ -358,8 +409,6 @@ auto host::load_one(const composition &plan, const package_source &package,
     // declares `[provides]` but is not named by `startup_plan.providers` keeps
     // loading as a data/content mod: its factory stays dormant so it cannot
     // win a service the gamepack did not select it for.
-    const auto declares_provides{!manifest->provides.empty()};
-    const auto selected_provider{planned.mods.contains(manifest->common.id)};
     const auto activate_code{descriptor != nullptr &&
                              descriptor->factory != nullptr &&
                              (!declares_provides || selected_provider)};
@@ -376,32 +425,6 @@ auto host::load_one(const composition &plan, const package_source &package,
         log::info("mod '{}': provider not selected; code not activated "
                   "(provides {})",
                   manifest->common.id, provides_summary(*manifest));
-    }
-
-    // A sealed service is owned by the host bootstrap; a mod that declares it
-    // is rejected before its factory runs, not merely at register_provider().
-    for (const auto &provided : manifest->provides) {
-        if (is_sealed_service(provided)) {
-            return std::unexpected{fail(
-                error_code::permission_denied,
-                fmt::format("mod '{}' declares sealed service '{}'; the host "
-                            "owns that service",
-                            manifest->common.id, provided))};
-        }
-    }
-
-    // Context for `register_provider()`: the factory may only claim services
-    // this manifest declares and the plan selected this mod for.
-    current_mod_provides_ = manifest->provides;
-    current_mod_planned_slots_.clear();
-    current_mod_planned_instances_.clear();
-    if (const auto found{planned.slots.find(manifest->common.id)};
-        found != planned.slots.end()) {
-        current_mod_planned_slots_ = found->second;
-    }
-    if (const auto found{planned.instances.find(manifest->common.id)};
-        found != planned.instances.end()) {
-        current_mod_planned_instances_ = found->second;
     }
 
     loaded_mod loaded{.id = manifest->common.id,
@@ -438,6 +461,141 @@ auto host::load_one(const composition &plan, const package_source &package,
         }
     }
     return loaded;
+}
+
+host::~host() { unload_external_mods(); }
+
+void host::unload_external_mods() noexcept {
+    for (auto entry{external_mods_.rbegin()}; entry != external_mods_.rend();
+         ++entry) {
+        if (entry->on_unload != nullptr) {
+            entry->on_unload(entry->user);
+        }
+    }
+    external_mods_.clear();
+}
+
+auto host::load_external_mod(const mod_manifest &manifest,
+                             const candidate &entry, bool activate_code,
+                             loaded_mod &out) -> status {
+    if (!manifest.entry.has_value()) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "external mod is missing its [entry] table")};
+    }
+    if (!manifest.entry->wasm.empty()) {
+        return std::unexpected{
+            fail(error_code::unsupported,
+                 "WASM external mods are not implemented; only native entry "
+                 "points are supported")};
+    }
+    if (manifest.entry->native.empty()) {
+        return std::unexpected{fail(error_code::invalid_argument,
+                                    "external mod has no native entry point")};
+    }
+    if (!activate_code) {
+        // Provider declared but not selected: keep the package as data only
+        // and do not run external code.
+        return status_ok();
+    }
+
+    const auto root{std::filesystem::path{entry.path}.parent_path()};
+    const auto library_path{root / manifest.entry->native};
+    auto loaded_library{platform::dynamic_library::load(library_path.string())};
+    if (!loaded_library) {
+        return std::unexpected{
+            annotate(fail(error_code::io_error,
+                          fmt::format("cannot load native entry '{}'",
+                                      library_path.string())),
+                     entry.path)};
+    }
+    auto library{std::make_unique<platform::dynamic_library>(
+        std::move(*loaded_library))};
+    const auto symbol_name{manifest.entry->symbol.empty()
+                               ? std::string{"refrain_mod_main"}
+                               : manifest.entry->symbol};
+    auto symbol{library->symbol(symbol_name)};
+    if (!symbol) {
+        return std::unexpected{
+            annotate(fail(error_code::not_found,
+                          fmt::format("native entry '{}' does not export '{}'",
+                                      library_path.string(), symbol_name)),
+                     entry.path)};
+    }
+    auto main_fn{reinterpret_cast<refrain_mod_main_fn>(*symbol)};
+
+    const auto host_core{
+        services_.active_provider(REFRAIN_HOST_CORE_SERVICE_ID)};
+    if (!host_core) {
+        return std::unexpected{
+            fail(error_code::unsupported,
+                 "refrain:host.core is not registered; external mods need the "
+                 "sealed host runtime provider")};
+    }
+    const auto *api{static_cast<const provider_api *>(host_core->instance)};
+    if (api == nullptr || api->vtable == nullptr || api->self == nullptr) {
+        return std::unexpected{fail(error_code::unknown,
+                                    "refrain:host.core provider has no ABI "
+                                    "table")};
+    }
+
+    refrain_mod_init init{};
+    init.struct_size = static_cast<std::uint32_t>(sizeof(init));
+    init.abi_major = REFRAIN_MOD_ABI_MAJOR;
+    init.mod_id = to_refrain_str(manifest.common.id);
+    init.mod_version = to_refrain_str(manifest.common.version);
+    init.host_core = static_cast<const refrain_host_core_vtable *>(api->vtable);
+    init.host_core_self = api->self;
+
+    const auto *desc{main_fn(&init)};
+    if (desc == nullptr) {
+        return std::unexpected{
+            fail(error_code::parse_error,
+                 fmt::format("'{}' returned a null descriptor", symbol_name))};
+    }
+    if (desc->struct_size < sizeof(refrain_mod_desc)) {
+        return std::unexpected{
+            fail(error_code::version_mismatch,
+                 fmt::format("'{}' descriptor struct_size {} is too small",
+                             symbol_name, desc->struct_size))};
+    }
+    if (desc->abi_major != REFRAIN_MOD_ABI_MAJOR) {
+        return std::unexpected{fail(
+            error_code::version_mismatch,
+            fmt::format("'{}' entry ABI major {} does not match {}",
+                        symbol_name, desc->abi_major, REFRAIN_MOD_ABI_MAJOR))};
+    }
+    if (desc->on_load == nullptr) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 fmt::format("'{}' descriptor has no on_load callback",
+                             symbol_name))};
+    }
+
+    refrain_mod_context context{};
+    context.struct_size = static_cast<std::uint32_t>(sizeof(context));
+    context.mod_id = to_refrain_str(manifest.common.id);
+    context.mod_version = to_refrain_str(manifest.common.version);
+    context.host_core = init.host_core;
+    context.host_core_self = init.host_core_self;
+    void *user{nullptr};
+    auto on_load_status{desc->on_load(&context, &user)};
+    if (on_load_status != REFRAIN_STATUS_OK) {
+        return std::unexpected{
+            annotate(fail(static_cast<error_code>(on_load_status),
+                          fmt::format("external mod '{}' on_load failed",
+                                      manifest.common.id)),
+                     entry.path)};
+    }
+
+    external_mods_.push_back(external_mod_state{
+        .library = std::move(library),
+        .on_unload = desc->on_unload,
+        .user = user,
+    });
+    out.external = true;
+    out.has_code = true;
+    return status_ok();
 }
 
 auto host::load(const composition &plan, std::span<const std::byte> image)
@@ -678,6 +836,7 @@ auto host::verify_plan_activation(const composition &plan) const -> status {
 /// allocates. Reached only from the `load()` error paths, which return
 /// `status`.
 void host::enter_failed_state() {
+    unload_external_mods();
     // `freeze()` only runs at the very end of a successful load, so the
     // registry is still mutable here and `clear()` cannot fail.
     static_cast<void>(services_.clear());

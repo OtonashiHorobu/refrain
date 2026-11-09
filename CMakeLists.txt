@@ -519,7 +519,14 @@ if(REFRAIN_BUILD_TESTS)
     enable_testing()
     file(GLOB_RECURSE REFRAIN_TEST_SOURCES CONFIGURE_DEPENDS
          "${PROJECT_SOURCE_DIR}/test/*.cpp")
+    # External native mod fixture: a real shared library the loader test can
+    # open. It is built as part of the test target's dependency graph.
+    add_library(refrain-test-external-mod MODULE
+                test/fixtures/external_mod.cpp)
+    target_link_libraries(refrain-test-external-mod PRIVATE refrain-contracts)
+    refrain_apply_warnings(refrain-test-external-mod)
     add_executable(refrain-tests ${REFRAIN_TEST_SOURCES})
+    add_dependencies(refrain-tests refrain-test-external-mod)
     target_include_directories(refrain-tests PRIVATE
                                "${PROJECT_SOURCE_DIR}/test")
     target_link_libraries(refrain-tests PRIVATE refrain-app refrain-kernel
@@ -534,7 +541,8 @@ if(REFRAIN_BUILD_TESTS)
                                               xxHash::xxhash Boost::ut glaze::glaze
                                               EnTT::EnTT zstd::libzstd_static)
     target_compile_definitions(refrain-tests PRIVATE
-                               REFRAIN_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+                               REFRAIN_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+                               REFRAIN_TEST_EXTERNAL_MOD="$<TARGET_FILE:refrain-test-external-mod>")
     if(REFRAIN_WITH_MIMALLOC)
         # Tests assert the global operator new/delete override is live via
         # mi_is_in_heap_region(), so they need the mimalloc headers/lib too.
