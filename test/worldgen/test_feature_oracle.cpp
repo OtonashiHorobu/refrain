@@ -12,7 +12,9 @@
 // `<PREFIX>_REGION`, `_CHUNK_X`, `_CHUNK_Z`, `_SEED`, `_BIOME` and the optional
 // `_DIMENSION`, `_TARGET`, `_NEIGHBOURS` and `_NEIGHBOURS_FIRST`.
 // `REFRAIN_VANILLA_WORLDGEN` points at the datapack `data` root shared with
-// the other reference suites.
+// the other reference suites. `_NEIGHBOURS_ORDER` decorates the neighbour
+// chunks that precede the target in force-load order first and the rest after
+// it.
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
@@ -180,6 +182,8 @@ void run_feature_case(std::string_view prefix) {
         environment(std::string{prefix} + "_NEIGHBOURS") != nullptr;
     const bool neighbours_before_target =
         environment(std::string{prefix} + "_NEIGHBOURS_FIRST") != nullptr;
+    const bool neighbours_in_generation_order =
+        environment(std::string{prefix} + "_NEIGHBOURS_ORDER") != nullptr;
     auto generator = chunk_generator::create(chunk_generator_config{
         .data_root = data_root,
         .templates_root = "",
@@ -191,6 +195,7 @@ void run_feature_case(std::string_view prefix) {
         .reference_world = false,
         .decorate_neighbours = decorate_neighbours,
         .neighbours_before_target = neighbours_before_target,
+        .neighbours_in_generation_order = neighbours_in_generation_order,
     });
     expect(generator.has_value()) << generator.error().message;
     if (!generator) {

@@ -110,10 +110,15 @@ class heightmap_placement final : public placement_modifier {
     void modify(const placement_context &context, worldgen_random &,
                 const block_pos &origin,
                 std::vector<block_pos> &out) const override {
-        const jint local_x = origin.x - context.chunk->chunk_x() * 16;
-        const jint local_z = origin.z - context.chunk->chunk_z() * 16;
+        // A candidate spread by the offset modifier can land outside the
+        // decorated chunk; the height is then read from the chunk that holds
+        // the column, exactly like every other world-coordinate probe.
         const jint height =
-            context.chunk->first_available(kind_, local_x, local_z);
+            context.height
+                ? context.height(kind_, origin.x, origin.z)
+                : context.chunk->first_available(
+                      kind_, origin.x - context.chunk->chunk_x() * 16,
+                      origin.z - context.chunk->chunk_z() * 16);
         if (height > context.chunk->min_y()) {
             out.push_back(block_pos{.x = origin.x, .y = height, .z = origin.z});
         }
@@ -210,23 +215,24 @@ class count_on_every_layer final : public placement_modifier {
             for (jint i = 0; i < count; ++i) {
                 const jint x = random.next_int(16) + origin.x;
                 const jint z = random.next_int(16) + origin.z;
-                const jint local_x = x - context.chunk->chunk_x() * 16;
-                const jint local_z = z - context.chunk->chunk_z() * 16;
-                if (local_x < 0 || local_x > 15 || local_z < 0 ||
-                    local_z > 15) {
-                    continue;
-                }
-                const jint start_y = context.chunk->first_available(
-                    heightmap_kind::motion_blocking, local_x, local_z);
+                // A column spread this way can leave the decorated chunk; the
+                // height and the scanned blocks come from whichever chunk
+                // holds the column.
+                const jint start_y =
+                    context.height
+                        ? context.height(
+                              worldgen::heightmap_kind::motion_blocking, x, z)
+                        : context.chunk->first_available(
+                              worldgen::heightmap_kind::motion_blocking,
+                              x - context.chunk->chunk_x() * 16,
+                              z - context.chunk->chunk_z() * 16);
                 jint y = start_y;
                 jint current_layer = 0;
                 bool current_air = false;
-                const auto current = context.chunk->state_at(
-                    static_cast<jint>(x), start_y, static_cast<jint>(z));
+                const auto current = context.region->state_at(x, start_y, z);
                 current_air = is_empty(context, current);
                 for (; y >= context.chunk->min_y() + 1; --y) {
-                    const auto below = context.chunk->state_at(
-                        static_cast<jint>(x), y - 1, static_cast<jint>(z));
+                    const auto below = context.region->state_at(x, y - 1, z);
                     if (!is_empty(context, below) && current_air &&
                         state_block_name(context.states->name(below)) !=
                             "minecraft:bedrock") {
@@ -307,15 +313,15 @@ class surface_water_depth_filter final : public placement_modifier {
     void modify(const placement_context &context, worldgen_random &,
                 const block_pos &position,
                 std::vector<block_pos> &out) const override {
-        const jint local_x = position.x - context.chunk->chunk_x() * 16;
-        const jint local_z = position.z - context.chunk->chunk_z() * 16;
-        if (local_x < 0 || local_x > 15 || local_z < 0 || local_z > 15) {
-            return;
-        }
-        const jint surface = context.chunk->first_available(
-            heightmap_kind::world_surface, local_x, local_z);
-        const jint floor = context.chunk->first_available(
-            heightmap_kind::ocean_floor, local_x, local_z);
+        const auto height = [&](worldgen::heightmap_kind kind) {
+            return context.height
+                       ? context.height(kind, position.x, position.z)
+                       : context.chunk->first_available(
+                             kind, position.x - context.chunk->chunk_x() * 16,
+                             position.z - context.chunk->chunk_z() * 16);
+        };
+        const jint surface = height(worldgen::heightmap_kind::world_surface);
+        const jint floor = height(worldgen::heightmap_kind::ocean_floor);
         if (surface - floor <= max_depth_) {
             out.push_back(position);
         }

@@ -102,6 +102,20 @@ constexpr std::array<chunk_pos, 9> neighbour_offsets{{
     {1, 1},
 }};
 
+/// The eight neighbours in ascending x and then ascending z. A force-load
+/// adds one ticket per chunk in that order, so a reference world built that
+/// way decorated the chunks in this sequence.
+constexpr std::array<chunk_pos, 8> generation_order_offsets{{
+    {-1, -1},
+    {-1, 0},
+    {-1, 1},
+    {0, -1},
+    {0, 1},
+    {1, -1},
+    {1, 0},
+    {1, 1},
+}};
+
 } // namespace
 
 struct chunk_generator::shared_generator_data {
@@ -783,7 +797,9 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         // chunks contain the feature writes of their neighbours. Decorating
         // the target chunk first and then its neighbours reproduces those
         // writes for a target chunk that the reference generated before its
-        // neighbours.
+        // neighbours. The generation-order mode follows the ticket order of a
+        // force-load instead: every chunk that precedes the target in
+        // ascending x and z decorates first, then the target, then the rest.
         const auto decorate_neighbours = [&] {
             for (std::size_t index = 1; index < neighbour_offsets.size();
                  ++index) {
@@ -794,8 +810,30 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
                 }
             }
         };
+        const auto decorate_in_generation_order = [&] {
+            const auto precedes_target = [](const chunk_pos &offset) {
+                return offset.x < 0 || (offset.x == 0 && offset.z < 0);
+            };
+            const auto decorate_matching = [&](bool leading) {
+                for (const auto &offset : generation_order_offsets) {
+                    if (precedes_target(offset) != leading) {
+                        continue;
+                    }
+                    auto *target =
+                        region.find(pos.x + offset.x, pos.z + offset.z);
+                    if (target != nullptr) {
+                        decorate_chunk(*target);
+                    }
+                }
+            };
+            decorate_matching(true);
+            decorate_chunk(*center);
+            decorate_matching(false);
+        };
         if (!config_.decorate_neighbours) {
             decorate_chunk(*center);
+        } else if (config_.neighbours_in_generation_order) {
+            decorate_in_generation_order();
         } else if (config_.neighbours_before_target) {
             decorate_neighbours();
             decorate_chunk(*center);

@@ -284,12 +284,11 @@ auto ore_feature::place_ore(feature_context &context, worldgen_random &random,
         const double yy = mth::lerp(static_cast<double>(step), y0, y1);
         const double zz = mth::lerp(static_cast<double>(step), z0, z1);
         const double ss = random.next_double() * size_ / 16.0;
+        // The reference evaluates the sine on the float argument and so
+        // selects its float table lookup; widening first changes the index at
+        // some angles and moves an ellipsoid boundary by a block.
         const double radius =
-            ((mth::sin(static_cast<double>(static_cast<float>(pi) * step)) +
-              1.0F) *
-                 ss +
-             1.0) /
-            2.0;
+            ((mth::sin(static_cast<float>(pi) * step) + 1.0F) * ss + 1.0) / 2.0;
         data[static_cast<std::size_t>(i) * 4U] = xx;
         data[static_cast<std::size_t>(i) * 4U + 1U] = yy;
         data[static_cast<std::size_t>(i) * 4U + 2U] = zz;
@@ -3893,6 +3892,79 @@ auto overlay_feature::place(feature_context &context, worldgen_random &random,
     return placed;
 }
 
+namespace {
+
+/// Order of the positions a vegetation patch collected. The reference keeps
+/// them in a hash set whose iteration order decides which column receives
+/// vegetation first, so the order has to match bucket layout rather than
+/// insertion order: the table grows to the smallest power of two that keeps
+/// the load at three quarters, buckets iterate low to high, and entries inside
+/// a bucket stay in insertion order unless the bucket turned into a tree.
+auto hash_set_iteration_order(const std::vector<block_pos> &positions)
+    -> std::vector<block_pos> {
+    const auto hash_of = [](const block_pos &pos) -> std::uint32_t {
+        const auto y = static_cast<std::uint32_t>(pos.y);
+        const auto z = static_cast<std::uint32_t>(pos.z);
+        const auto x = static_cast<std::uint32_t>(pos.x);
+        return (y + z * 31U) * 31U + x;
+    };
+    const auto spread = [](std::uint32_t hash) -> std::uint32_t {
+        return hash ^ (hash >> 16U);
+    };
+    std::size_t capacity = 16;
+    while (positions.size() > capacity * 3U / 4U) {
+        capacity *= 2U;
+    }
+    std::vector<jint> buckets(positions.size());
+    std::vector<std::size_t> per_bucket(capacity, 0);
+    for (std::size_t i = 0; i < positions.size(); ++i) {
+        buckets[i] =
+            static_cast<jint>(spread(hash_of(positions[i])) &
+                              static_cast<std::uint32_t>(capacity - 1U));
+        ++per_bucket[static_cast<std::size_t>(buckets[i])];
+    }
+    std::vector<std::size_t> order(positions.size());
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        order[i] = i;
+    }
+    std::sort(order.begin(), order.end(),
+              [&](std::size_t left, std::size_t right) {
+                  if (buckets[left] != buckets[right]) {
+                      return buckets[left] < buckets[right];
+                  }
+                  const auto &left_pos = positions[left];
+                  const auto &right_pos = positions[right];
+                  const bool tree =
+                      capacity >= 64U &&
+                      per_bucket[static_cast<std::size_t>(buckets[left])] >= 8U;
+                  if (tree) {
+                      const auto left_hash =
+                          static_cast<jint>(spread(hash_of(left_pos)));
+                      const auto right_hash =
+                          static_cast<jint>(spread(hash_of(right_pos)));
+                      if (left_hash != right_hash) {
+                          return left_hash < right_hash;
+                      }
+                      if (left_pos.y != right_pos.y) {
+                          return left_pos.y < right_pos.y;
+                      }
+                      if (left_pos.z != right_pos.z) {
+                          return left_pos.z < right_pos.z;
+                      }
+                      return left_pos.x < right_pos.x;
+                  }
+                  return left < right;
+              });
+    std::vector<block_pos> sorted;
+    sorted.reserve(positions.size());
+    for (const auto index : order) {
+        sorted.push_back(positions[index]);
+    }
+    return sorted;
+}
+
+} // namespace
+
 auto vegetation_patch_feature::replaceable(feature_context &context,
                                            block_state_id state) const -> bool {
     const auto &states = *context.placement.states;
@@ -3930,16 +4002,44 @@ auto vegetation_patch_feature::place_ground(feature_context &context,
 void vegetation_patch_feature::distribute(
     feature_context &context, worldgen_random &random,
     const std::vector<block_pos> &surface) const {
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
     const jint outwards = ceiling_ ? -1 : 1;
     for (const auto &position : surface) {
-        if (vegetation_chance_ > 0.0F &&
-            random.next_float() < vegetation_chance_) {
-            if (context.place_by_id) {
-                (void)context.place_by_id(nested_feature_, random,
-                                          block_pos{.x = position.x,
-                                                    .y = position.y + outwards,
-                                                    .z = position.z});
-            }
+        if (vegetation_chance_ <= 0.0F ||
+            random.next_float() >= vegetation_chance_) {
+            continue;
+        }
+        if (!context.place_by_id) {
+            continue;
+        }
+        // The waterlogged variant plants one block lower and then waterlogs
+        // the column it grew through.
+        const jint shift = waterlogged_ ? -1 : 0;
+        if (!context.place_by_id(nested_feature_, random,
+                                 block_pos{.x = position.x,
+                                           .y = position.y + outwards + shift,
+                                           .z = position.z})) {
+            continue;
+        }
+        if (!waterlogged_) {
+            continue;
+        }
+        const auto planted =
+            region.state_at(position.x, position.y, position.z);
+        const auto name = states.name(planted);
+        const auto waterlogged = state_property(name, "waterlogged");
+        if (!waterlogged.has_value() || *waterlogged == "true") {
+            continue;
+        }
+        const auto resolved =
+            context.placement.resolve_state
+                ? context.placement.resolve_state(
+                      with_state_property(name, "waterlogged", "true"))
+                : no_block_state;
+        if (resolved != no_block_state) {
+            (void)region.set_block_state(position.x, position.y, position.z,
+                                         resolved);
         }
     }
 }
@@ -3963,9 +4063,16 @@ auto vegetation_patch_feature::place(feature_context &context,
             if (corner) {
                 continue;
             }
-            if (edge && extra_edge_column_chance_ != 0.0F &&
-                random.next_float() > extra_edge_column_chance_) {
-                continue;
+            // An edge column is kept only when the patch declares an edge
+            // chance; a zero chance excludes every edge column without
+            // drawing.
+            if (edge) {
+                if (extra_edge_column_chance_ == 0.0F) {
+                    continue;
+                }
+                if (random.next_float() > extra_edge_column_chance_) {
+                    continue;
+                }
             }
             block_pos pos{
                 .x = origin.x + dx, .y = origin.y, .z = origin.z + dz};
@@ -3999,30 +4106,37 @@ auto vegetation_patch_feature::place(feature_context &context,
             }
         }
     }
+    surface = hash_set_iteration_order(surface);
     if (waterlogged_) {
-        const std::array<std::pair<jint, jint>, 4> horizontal{
-            {{1, 0}, {-1, 0}, {0, 1}, {0, -1}}};
+        // A position is flooded when none of its four sides and its underside
+        // expose it to a face that is not sturdy. The flooded positions form a
+        // new set, so their own hash order decides the water writes and the
+        // vegetation order.
+        const std::array<std::array<jint, 3>, 5> neighbours{{
+            {0, 0, -1},
+            {1, 0, 0},
+            {0, 0, 1},
+            {-1, 0, 0},
+            {0, -1, 0},
+        }};
         std::vector<block_pos> flooded;
         for (const auto &position : surface) {
             bool exposed = false;
-            for (const auto &[dx, dz] : horizontal) {
+            for (const auto &offset : neighbours) {
                 if (!states
-                         .traits(region.state_at(position.x + dx, position.y,
-                                                 position.z + dz))
+                         .traits(region.state_at(position.x + offset[0],
+                                                 position.y + offset[1],
+                                                 position.z + offset[2]))
                          .blocks_motion) {
                     exposed = true;
+                    break;
                 }
-            }
-            if (!states
-                     .traits(region.state_at(position.x, position.y + inwards,
-                                             position.z))
-                     .blocks_motion) {
-                exposed = true;
             }
             if (!exposed) {
                 flooded.push_back(position);
             }
         }
+        flooded = hash_set_iteration_order(flooded);
         const auto water =
             context.placement.resolve_state
                 ? context.placement.resolve_state("minecraft:water")
@@ -4031,6 +4145,8 @@ auto vegetation_patch_feature::place(feature_context &context,
             (void)region.set_block_state(position.x, position.y, position.z,
                                          water);
         }
+        distribute(context, random, flooded);
+        return !flooded.empty();
     }
     distribute(context, random, surface);
     return !surface.empty();
@@ -5124,14 +5240,18 @@ class sculk_spreader {
     attempt_spread_vein(sculk_behaviour behaviour, block_state_id state,
                         const block_pos &pos, const sculk_cursor &cursor) const
         -> bool {
+        // A source that is already a vein spreads from its own faces; every
+        // other state may act as a source on all faces. With no facing data
+        // the vein starts in place, otherwise it regrows the recorded faces.
+        const bool other_source = !is_vein(state);
         if (behaviour != sculk_behaviour::fallback) {
-            return spread_all(state, pos, false, true) > 0;
+            return spread_all(state, pos, false, other_source) > 0;
         }
         if (!cursor.facings.has_value()) {
-            return spread_all(state, pos, true, false) > 0;
+            return spread_all(state, pos, true, true) > 0;
         }
         if (cursor.facings->empty()) {
-            return spread_all(state, pos, false, false) > 0;
+            return spread_all(state, pos, false, other_source) > 0;
         }
         const auto traits = states().traits(state);
         if (!traits.air && !traits.water) {

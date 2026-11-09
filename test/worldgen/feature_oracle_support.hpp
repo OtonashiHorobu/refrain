@@ -100,6 +100,27 @@ inline auto canonical_state_name(std::string_view input) -> std::string {
     if (name.size() > leaf_defaults.size() && name.ends_with(leaf_defaults)) {
         return std::string{name.substr(0, name.size() - leaf_defaults.size())};
     }
+    // The reference chunk palette abbreviates a block's default state as the
+    // bare block name. These states are the defaults that decoration places
+    // explicitly.
+    if (name == "minecraft:tall_seagrass[half=lower]") {
+        return "minecraft:tall_seagrass";
+    }
+    if (name == "minecraft:sea_pickle[pickles=1,waterlogged=true]") {
+        return "minecraft:sea_pickle";
+    }
+    // A feature that names only one property of a multi-property state leaves
+    // the other properties at their default; the reference palette always
+    // writes the full state.
+    constexpr std::string_view berries_default = ",berries=false]";
+    if (name.ends_with(berries_default) &&
+        (name.starts_with("minecraft:cave_vines[") ||
+         name.starts_with("minecraft:cave_vines_plant["))) {
+        std::string canonical{
+            name.substr(0, name.size() - berries_default.size())};
+        canonical.push_back(']');
+        return canonical;
+    }
     return std::string{name};
 }
 

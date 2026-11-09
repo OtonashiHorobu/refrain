@@ -79,6 +79,13 @@ struct chunk_generator_config {
     /// target chunk. The target's own writes then win where two chunks touch;
     /// the default decorates the target first, so neighbour writes win.
     bool neighbours_before_target{false};
+    /// With `decorate_neighbours`, order the nine chunks the way a force-load
+    /// ticket queue does: ascending x, then ascending z. Every chunk that
+    /// precedes the target in that order decorates first, then the target,
+    /// then the chunks that follow. A saved reference world whose area was
+    /// force-loaded contains exactly this interleaving, so a feature that
+    /// writes across a border resolves contacts the same way.
+    bool neighbours_in_generation_order{false};
 };
 
 /// A reusable full-chunk generator. The object is not thread-safe: a single

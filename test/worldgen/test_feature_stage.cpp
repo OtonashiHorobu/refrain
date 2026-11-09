@@ -2979,6 +2979,54 @@ suite<"worldgen/feature/end-spike"> end_spike_tests = [] {
     };
 };
 
+suite<"worldgen/placement/world-heightmap"> world_heightmap_placement_tests = [] {
+    "a heightmap placement reads the chunk that holds the column"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry registry;
+        const auto stone = registry.intern(
+            "minecraft:stone", {.air = false, .blocks_motion = true});
+        expect(stone.has_value());
+        if (!stone) {
+            return;
+        }
+        proto_chunk center{registry, 0, 0, 0, 32};
+        proto_chunk west{registry, -1, 0, 0, 32};
+        center.set_status(chunk_status::biomes);
+        west.set_status(chunk_status::biomes);
+        expect(west.set_state(15, 4, 3, *stone));
+        chunk_region region{center, 1};
+        region.attach(west);
+        feature::placement_context placement{
+            .region = &region,
+            .chunk = &center,
+            .states = &registry,
+            .generation = provider::generation_context{.min_y = 0,
+                                                       .height = 32,
+                                                       .sea_level = 8},
+            .height =
+                [&region](heightmap_kind kind, jint x, jint z) {
+                    return region.height_at(kind, x, z);
+                },
+        };
+        auto document = parse(
+            R"({"type":"minecraft:heightmap","heightmap":"WORLD_SURFACE_WG"})");
+        auto modifier = feature::decode_placement(document, registry);
+        expect(modifier.has_value());
+        if (!modifier) {
+            return;
+        }
+        worldgen_random random{std::make_unique<legacy_random_source>(1)};
+        std::vector<block_pos> out;
+        (*modifier)->modify(placement, random,
+                            block_pos{.x = -1, .y = 0, .z = 3}, out);
+        expect(out.size() == 1U);
+        if (!out.empty()) {
+            expect(out[0].y == 5);
+            expect(out[0].x == -1);
+        }
+    };
+};
+
 suite<"worldgen/feature/vegetation-patch"> vegetation_patch_tests = [] {
     "a floor patch replaces the ground and reports its surface"_test = [] {
         using namespace refrain::worldgen;
@@ -3048,6 +3096,183 @@ suite<"worldgen/feature/vegetation-patch"> vegetation_patch_tests = [] {
         expect(states.name(chunk.state_at(8, 5, 8)) == "minecraft:moss_block");
         expect(states.name(chunk.state_at(8, 4, 8)) == "minecraft:moss_block");
         expect(!nested_called);
+    };
+
+    "the patch distributes vegetation in hash set order"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        const auto stone = states.intern("minecraft:stone",
+                                         {.air = false, .blocks_motion = true});
+        const auto moss = states.intern("minecraft:moss_block",
+                                        {.air = false, .blocks_motion = true});
+        expect(stone && moss);
+        if (!stone || !moss) {
+            return;
+        }
+        const std::array<block_state_id, 1> tag_states{*stone};
+        states.add_tag("test:replaceable", tag_states);
+        proto_chunk chunk{states, 0, 0, 0, 32};
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint y = 0; y <= 5; ++y) {
+                    chunk.set_state(x, y, z, *stone);
+                }
+            }
+        }
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 0};
+        auto depth = provider::int_provider::decode(parse("1"));
+        auto radius = provider::int_provider::decode(parse("2"));
+        expect(depth.has_value() && radius.has_value());
+        if (!depth || !radius) {
+            return;
+        }
+        feature::placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &states,
+            .generation = provider::generation_context{.min_y = 0,
+                                                       .height = 32,
+                                                       .sea_level = 8},
+        };
+        std::vector<std::pair<jint, jint>> order;
+        feature::feature_context context{
+            .placement = placement,
+            .place_by_id =
+                [&](std::string_view, worldgen_random &, const block_pos &pos) {
+                    order.emplace_back(pos.x, pos.z);
+                    return true;
+                },
+        };
+        const feature::vegetation_patch_feature patch{
+            "test:nested",
+            feature::simple_state(*moss),
+            "#test:replaceable",
+            std::move(*depth),
+            std::move(*radius),
+            false,
+            5,
+            1.0F,
+            0.0F,
+            1.0F,
+            false};
+        worldgen_random random{std::make_unique<legacy_random_source>(1)};
+        expect(patch.place(context, random, block_pos{.x = 8, .y = 6, .z = 8}));
+        // The reference keeps the patch columns in a hash set, so the order
+        // comes from the bucket layout of the positions, not from the scan.
+        std::vector<std::pair<jint, jint>> expected;
+        std::string_view encoded =
+            "5,6;6,5;5,7;6,6;7,5;5,8;6,7;7,6;8,5;5,9;6,8;7,7;8,6;9,5;"
+            "5,10;6,9;7,8;8,7;9,6;10,5;6,10;7,9;8,8;9,7;10,6;6,11;7,10;"
+            "8,9;9,8;10,7;11,6;7,11;8,10;9,9;10,8;11,7;8,11;9,10;10,9;"
+            "11,8;9,11;10,10;11,9;10,11;11,10";
+        while (!encoded.empty()) {
+            const auto comma = encoded.find(',');
+            const auto semicolon = encoded.find(';');
+            if (comma == std::string_view::npos) {
+                break;
+            }
+            const auto x =
+                std::atoi(std::string{encoded.substr(0, comma)}.c_str());
+            const auto end = semicolon == std::string_view::npos
+                                 ? encoded.size()
+                                 : semicolon;
+            const auto z = std::atoi(
+                std::string{encoded.substr(comma + 1, end - comma - 1)}
+                    .c_str());
+            expected.emplace_back(x, z);
+            if (semicolon == std::string_view::npos) {
+                break;
+            }
+            encoded = encoded.substr(semicolon + 1);
+        }
+        expect(order.size() == 45U);
+        expect(std::ranges::equal(order, expected));
+    };
+
+    "a waterlogged patch floods enclosed ground and plants in it"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        const auto stone = states.intern("minecraft:stone",
+                                         {.air = false, .blocks_motion = true});
+        const auto moss = states.intern("minecraft:moss_block",
+                                        {.air = false, .blocks_motion = true});
+        const auto water = states.intern(
+            "minecraft:water", {.air = false, .fluid = true, .water = true});
+        const auto plant =
+            states.intern("test:plant[waterlogged=false]", {.air = false});
+        expect(stone && moss && water && plant);
+        if (!stone || !moss || !water || !plant) {
+            return;
+        }
+        const std::array<block_state_id, 1> tag_states{*stone};
+        states.add_tag("test:replaceable", tag_states);
+        proto_chunk chunk{states, 0, 0, 0, 32};
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint y = 0; y <= 5; ++y) {
+                    chunk.set_state(x, y, z, *stone);
+                }
+            }
+        }
+        chunk.set_status(chunk_status::terrain);
+        chunk_region region{chunk, 0};
+        auto depth = provider::int_provider::decode(parse("1"));
+        auto radius = provider::int_provider::decode(parse("1"));
+        expect(depth.has_value() && radius.has_value());
+        if (!depth || !radius) {
+            return;
+        }
+        feature::placement_context placement{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &states,
+            .generation = provider::generation_context{.min_y = 0,
+                                                       .height = 32,
+                                                       .sea_level = 8},
+            .resolve_state =
+                [&states](std::string_view key) {
+                    return states.intern(key, states.infer_traits(key))
+                        .value_or(no_block_state);
+                },
+        };
+        std::vector<block_pos> planted;
+        bool flooded_before_planting = true;
+        feature::feature_context context{
+            .placement = placement,
+            .place_by_id =
+                [&](std::string_view, worldgen_random &, const block_pos &pos) {
+                    planted.push_back(pos);
+                    if (chunk.state_at(pos.x, pos.y, pos.z) != *water) {
+                        flooded_before_planting = false;
+                    }
+                    chunk.set_state(pos.x, pos.y, pos.z, *plant);
+                    return true;
+                },
+        };
+        const feature::vegetation_patch_feature patch{
+            "test:nested",
+            feature::simple_state(*moss),
+            "#test:replaceable",
+            std::move(*depth),
+            std::move(*radius),
+            false,
+            5,
+            1.0F,
+            0.0F,
+            0.0F,
+            true};
+        worldgen_random random{std::make_unique<legacy_random_source>(1)};
+        expect(patch.place(context, random, block_pos{.x = 8, .y = 6, .z = 8}));
+        expect(flooded_before_planting);
+        expect(!planted.empty());
+        for (const auto &pos : planted) {
+            // The waterlogged variant plants in the flooded column and then
+            // waterlogs the block it grew through.
+            expect(pos.y == 5);
+            expect(states.name(chunk.state_at(pos.x, pos.y, pos.z)) ==
+                   "test:plant[waterlogged=true]");
+        }
     };
 };
 
