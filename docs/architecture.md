@@ -92,7 +92,7 @@ facade; only protocol providers and client tooling name a concrete version.
 `refrain::session` owns gameplay-side player and entity state:
 
 - `play_session`: connection-scoped player records, entity id allocation,
-  movement/health/game-mode updates, visibility.
+  movement/health/game-mode updates, per-player inventory slots, visibility.
 - `chunk_tracker`: viewport changes and pending chunk subscription requests.
 
 The network shell reports neutral events (`player_join`, `player_leave`,

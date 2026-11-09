@@ -35,7 +35,9 @@ python3 tools/net/oracle/compare.py \
 
 `run_vanilla.py` supports both self-contained server jars (`-jar`) and the
 Mojang-style split layout (`--libraries` adds every library jar to the
-classpath and launches `net.minecraft.server.Main`).
+classpath and launches `net.minecraft.server.Main`). Pass `--world` to copy an
+existing Anvil world into the oracle directory so both captures cover the same
+chunks.
 
 `compare.py` reports the first state/id or payload mismatch and unique packet
 id sets. `--chunks` decodes every `level_chunk_with_light` body and compares
