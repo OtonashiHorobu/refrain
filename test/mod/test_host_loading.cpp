@@ -445,6 +445,44 @@ const suite mod_host_tests = [] {
                    std::string::npos);
         }
     };
+
+    "mod_host/rejects a declared sealed service before the factory runs"_test =
+        [] {
+            mod::static_mod_registry registry{};
+            g_factory_calls = 0;
+            expect(static_cast<bool>(registry.add(
+                mod::static_mod_descriptor{.id = "refrain.test.sealed",
+                                           .version = "1.0.0",
+                                           .abi = 1,
+                                           .factory = &counting_factory})));
+            auto plan{
+                make_gamepack("\"refrain.test.sealed@1.0.0\"",
+                              "sealed = \"refrain.test.sealed@^1.0.0\"\n")};
+            expect(static_cast<bool>(plan));
+            if (!plan) {
+                return;
+            }
+            image_builder builder{};
+            builder.add("refrain.test.sealed",
+                        make_manifest("refrain.test.sealed", "1.0.0", 1,
+                                      "server", "refrain:host.core"));
+            refrain::mod::host host{registry};
+            const mod::provider_api api{
+                .vtable = g_fake_vtable, .self = &g_fake_self, .abi_major = 0};
+            expect(static_cast<bool>(host.register_sealed_provider(
+                "refrain:host.core", api, "1.0.0")));
+            auto loaded{host.load(*plan, builder.build())};
+            expect(!loaded)
+                << (loaded ? std::string{"load ok"} : loaded.error().message);
+            if (!loaded) {
+                expect(loaded.error().code == error_code::permission_denied)
+                    << loaded.error().message;
+                expect(loaded.error().message.find("sealed service") !=
+                       std::string::npos)
+                    << loaded.error().message;
+            }
+            expect(g_factory_calls == 0);
+        };
 };
 
 } // namespace

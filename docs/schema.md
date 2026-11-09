@@ -38,9 +38,17 @@ import refrain::core;
 Fields use scalar types (`i8`–`i64`, `u8`–`u64`, `bool`, `f32`, `f64`), or
 `string`, `bytes`, `array<T>`, `slice<T>`, `result<T, E>` and handles. A field
 inherits a default `struct_size` prologue in generated ABI structs.
+`opaque_ptr` and `mut_bytes` are RIDL-only contract primitives: `opaque_ptr`
+is a 64-bit `void *` used for opaque provider tables/references, and
+`mut_bytes` is a writable byte span (`refrain_mut_bytes`) used for host-owned
+allocations. Both are rejected in RSC data schemas.
 
 A service block declares its version, side, thread affinity, composition mode,
-provided and required services, and capabilities:
+provided and required services, and capabilities. Composition modes are
+`exclusive` (the default), `instanced`, `chain`, `registry` and `sealed`.
+A `sealed` service is a process-owned host runtime API: the host bootstrap
+registers its only provider, and a gamepack or mod cannot select or replace it
+(for example `refrain:host.core`).
 
 ```ridl
 service world : 1.0.0 {

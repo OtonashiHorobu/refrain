@@ -311,6 +311,18 @@ auto host::load_one(const composition &plan, const package_source &package,
                   manifest->common.id, provides_summary(*manifest));
     }
 
+    // A sealed service is owned by the host bootstrap; a mod that declares it
+    // is rejected before its factory runs, not merely at register_provider().
+    for (const auto &provided : manifest->provides) {
+        if (is_sealed_service(provided)) {
+            return std::unexpected{fail(
+                error_code::permission_denied,
+                fmt::format("mod '{}' declares sealed service '{}'; the host "
+                            "owns that service",
+                            manifest->common.id, provided))};
+        }
+    }
+
     // Context for `register_provider()`: the factory may only claim services
     // this manifest declares and the plan selected this mod for.
     current_mod_provides_ = manifest->provides;
@@ -603,6 +615,7 @@ void host::enter_failed_state() {
     // registry is still mutable here and `clear()` cannot fail.
     static_cast<void>(services_.clear());
     provider_apis_.clear();
+    sealed_services_.clear();
     builtin_image_bytes_.clear();
     builtin_image_digest_hex_.clear();
     mods_.clear();
@@ -621,6 +634,68 @@ auto host::register_provider(std::string_view service, const provider_api &api,
     return register_provider(service, {}, api, version, capabilities);
 }
 
+auto host::register_sealed_provider(std::string_view service,
+                                    const provider_api &api,
+                                    std::string_view version,
+                                    kernel::capability_bits capabilities)
+    -> status {
+    if (failed_ || loaded_flag_) {
+        return std::unexpected{
+            fail(error_code::not_initialized,
+                 "register_sealed_provider() is only legal before load()")};
+    }
+    if (!current_mod_.empty()) {
+        return std::unexpected{fail(
+            error_code::permission_denied,
+            "register_sealed_provider() is only legal from the host bootstrap, "
+            "not from a mod factory")};
+    }
+    if (service.empty()) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "register_sealed_provider() requires a non-empty service id")};
+    }
+    if (api.vtable == nullptr || api.self == nullptr) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "register_sealed_provider() requires both a vtable and a self "
+                 "pointer")};
+    }
+    if (auto checked{check_abi_header(api)}; !checked) {
+        return checked;
+    }
+
+    const std::string effective_version{version.empty() ? std::string{"1.0.0"}
+                                                        : std::string{version}};
+    provider_apis_.push_back(std::make_unique<provider_api>(api));
+    provider_info info{};
+    info.service = std::string{service};
+    info.id = "host";
+    info.version = effective_version;
+    info.capabilities = capabilities;
+    info.instance = provider_apis_.back().get();
+    info.source = "host";
+    auto added{services_.add_provider(std::move(info))};
+    if (!added) {
+        return added;
+    }
+    auto selected{services_.select_active(service, "host", effective_version)};
+    if (!selected) {
+        return selected;
+    }
+    sealed_services_.insert(std::string{service});
+    return status_ok();
+}
+
+auto host::is_sealed_service(std::string_view service) const noexcept -> bool {
+    for (const auto &sealed : sealed_services_) {
+        if (sealed.compare(service) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 auto host::register_provider(std::string_view service,
                              std::string_view instance, const provider_api &api,
                              std::string_view version,
@@ -630,6 +705,13 @@ auto host::register_provider(std::string_view service,
             error_code::not_initialized,
             "register_provider() is only legal from a static mod factory while "
             "the host is loading")};
+    }
+    if (is_sealed_service(service)) {
+        return std::unexpected{fail(
+            error_code::permission_denied,
+            fmt::format("service '{}' is sealed and is owned by the host; a "
+                        "mod cannot provide it",
+                        service))};
     }
     if (api.vtable == nullptr || api.self == nullptr) {
         return std::unexpected{fail(

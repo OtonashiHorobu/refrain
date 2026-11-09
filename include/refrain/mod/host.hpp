@@ -170,6 +170,26 @@ class host {
                            std::string_view version = {},
                            kernel::capability_bits capabilities = 0) -> status;
 
+    /// Register the process-owned provider for a `composition = sealed`
+    /// service. Only the composition root may call this, and only before
+    /// `load()`: the call fails with `permission_denied` while a mod factory is
+    /// running (the sealed provider is part of the host bootstrap, not a mod).
+    ///
+    /// The provider is recorded under the reserved id `host` with
+    /// `source = "host"`, activated on the default instance and marked sealed;
+    /// later `register_provider()` calls from mods are rejected for that
+    /// service. The service registry is frozen when `load()` completes, so the
+    /// sealed provider is immutable for the rest of the process.
+    auto register_sealed_provider(std::string_view service,
+                                  const provider_api &api,
+                                  std::string_view version = {},
+                                  kernel::capability_bits capabilities = 0)
+        -> status;
+
+    /// True when `service` was registered through `register_sealed_provider()`.
+    [[nodiscard]] auto
+    is_sealed_service(std::string_view service) const noexcept -> bool;
+
     /// Frozen service registry after a successful `load()`. Empty when the host
     /// has not loaded yet or when `load()` failed (the failure path clears all
     /// candidates and active instances). Callers use
@@ -251,6 +271,8 @@ class host {
     std::vector<std::byte> builtin_image_bytes_{};
     kernel::service_registry services_{};
     std::vector<std::unique_ptr<provider_api>> provider_apis_{};
+    /// Service ids owned by the host bootstrap; mods cannot provide them.
+    std::set<std::string> sealed_services_{};
     std::string current_mod_{};
     std::string current_mod_version_{};
     /// Manifest `[provides]` of the mod whose factory is running (empty

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 21bfdf943ae85aa9
+// Schema hash: a29acb77eba22b5e
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -86,6 +86,25 @@ template <> struct custom_traits<::refrain::core::chunk_buffer> {
         refrain::reflect::custom_field{"generation", &::refrain::core::chunk_buffer::generation},
         refrain::reflect::custom_field{"word_count", &::refrain::core::chunk_buffer::word_count},
         refrain::reflect::custom_field{"data", &::refrain::core::chunk_buffer::data});
+};
+
+/// Generated RIDL struct 'refrain::host::core::host_version'.
+template <> struct custom_traits<::refrain::host::core::host_version> {
+    static constexpr std::string_view type_name = "refrain::host::core::host_version";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"major", &::refrain::host::core::host_version::major},
+        refrain::reflect::custom_field{"minor", &::refrain::host::core::host_version::minor},
+        refrain::reflect::custom_field{"patch", &::refrain::host::core::host_version::patch});
+};
+
+/// Generated RIDL struct 'refrain::host::core::provider_ref'.
+template <> struct custom_traits<::refrain::host::core::provider_ref> {
+    static constexpr std::string_view type_name = "refrain::host::core::provider_ref";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"vtable", &::refrain::host::core::provider_ref::vtable},
+        refrain::reflect::custom_field{"self", &::refrain::host::core::provider_ref::self},
+        refrain::reflect::custom_field{"abi_major", &::refrain::host::core::provider_ref::abi_major},
+        refrain::reflect::custom_field{"reserved", &::refrain::host::core::provider_ref::reserved});
 };
 
 /// Generated RIDL struct 'refrain::services::data_packs::pack_source'.

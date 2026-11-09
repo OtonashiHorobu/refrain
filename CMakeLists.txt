@@ -382,6 +382,15 @@ if(WIN32)
 endif()
 add_library(Refrain::ModHost ALIAS refrain-mod-host)
 
+# --- host runtime API: sealed `refrain:host/core` adapter -------------------
+# The adapter translates the generated C ABI table to the abstract host
+# context. It deliberately depends on kernel/contracts only; the concrete
+# context (service registry, config, builtin image) is supplied by the
+# composition root, so tests and embedders can use a fake.
+refrain_add_library(refrain-host src/host/core_api.cpp)
+target_link_libraries(refrain-host PUBLIC refrain-contracts refrain-kernel)
+add_library(Refrain::Host ALIAS refrain-host)
+
 # --- first-party static mods -----------------------------------------------
 # First-party mod code lives under mods/<id>/src/ and is statically linked into
 # the host; manifests/data stay in the builtin RFSI content image. REFR_MOD_STATIC
@@ -431,7 +440,7 @@ file(GLOB REFRAIN_APP_SOURCES CONFIGURE_DEPENDS
 refrain_add_library(refrain-app ${REFRAIN_APP_SOURCES})
 target_link_libraries(refrain-app PUBLIC refrain-kernel refrain-data
                                              refrain-world refrain-sim
-                                             refrain-mod-host
+                                             refrain-mod-host refrain-host
                                              refrain-schema refrain-archive
                                              refrain-script-wasm)
 add_library(Refrain::App ALIAS refrain-app)
@@ -518,6 +527,7 @@ if(REFRAIN_BUILD_TESTS)
                                               refrain-archive refrain-data
                                               refrain-world refrain-sim
                                               refrain-builtin refrain-mod-host
+                                              refrain-host
                                               refrain-first-party-mods
                                               refrain-script-wasm libzip::zip
                                               LZ4::lz4_static

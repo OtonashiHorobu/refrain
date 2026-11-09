@@ -54,6 +54,10 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "string";
     case primitive_kind::bytes:
         return "bytes";
+    case primitive_kind::opaque_ptr:
+        return "opaque_ptr";
+    case primitive_kind::mut_bytes:
+        return "mut_bytes";
     case primitive_kind::void_type:
         return "void";
     }
@@ -76,6 +80,8 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"bool", primitive_kind::boolean},
         std::pair{"string", primitive_kind::string},
         std::pair{"bytes", primitive_kind::bytes},
+        std::pair{"opaque_ptr", primitive_kind::opaque_ptr},
+        std::pair{"mut_bytes", primitive_kind::mut_bytes},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -212,6 +218,8 @@ enum class attribute_scope : std::uint8_t {
         return true;
     case primitive_kind::string:
     case primitive_kind::bytes:
+    case primitive_kind::opaque_ptr:
+    case primitive_kind::mut_bytes:
     case primitive_kind::void_type:
         return false;
     }
@@ -222,6 +230,18 @@ enum class attribute_scope : std::uint8_t {
     return !text.empty() && std::ranges::all_of(text, [](char value) {
         return value >= '0' && value <= '9';
     });
+}
+
+/// True for names the emitters generate into ABI structs: the mandatory
+/// `struct_size` prologue and the `reserved_<N>` padding. A user field with
+/// one of these names would produce a duplicate C member.
+[[nodiscard]] auto is_generated_abi_member_name(std::string_view name) noexcept
+    -> bool {
+    if (name == "struct_size") {
+        return true;
+    }
+    constexpr std::string_view prefix{"reserved_"};
+    return name.starts_with(prefix) && all_digits(name.substr(prefix.size()));
 }
 
 /// Version component: decimal digits, no leading zeros (mirrors the gamepack
@@ -634,6 +654,14 @@ class analyzer {
                                   decl.name));
                 continue;
             }
+            if (ridl && is_generated_abi_member_name(field->name)) {
+                error(field->location,
+                      std::format("field '{}' collides with a generated ABI "
+                                  "member name ('struct_size' or "
+                                  "'reserved_<N>')",
+                                  field->name));
+                continue;
+            }
             if (ridl) {
                 if (!is_valid_contract_field_type(field->type)) {
                     error(field->location,
@@ -679,6 +707,13 @@ class analyzer {
                                   field->name, decl.name));
                 continue;
             }
+            if (is_generated_abi_member_name(field->name)) {
+                error(field->location,
+                      std::format("event field '{}' collides with a generated "
+                                  "padding name ('reserved_<N>')",
+                                  field->name));
+                continue;
+            }
             if (field_source.default_value.has_value()) {
                 error(field->location,
                       std::format("event field '{}' cannot have a default "
@@ -718,6 +753,13 @@ class analyzer {
             if (type.primitive == primitive_kind::void_type) {
                 return std::format("event field '{}' cannot be 'void'; {}",
                                    field_name, allowed);
+            }
+            if (type.primitive == primitive_kind::opaque_ptr ||
+                type.primitive == primitive_kind::mut_bytes) {
+                return std::format(
+                    "event field '{}' cannot carry a pointer or writable "
+                    "buffer; events are copied to every subscriber; {}",
+                    field_name, allowed);
             }
             return std::nullopt;
         case resolved_type::category::slice: {
@@ -1049,7 +1091,9 @@ class analyzer {
         -> bool {
         switch (type.kind) {
         case resolved_type::category::primitive:
-            return type.primitive != primitive_kind::void_type;
+            return type.primitive != primitive_kind::void_type &&
+                   type.primitive != primitive_kind::opaque_ptr &&
+                   type.primitive != primitive_kind::mut_bytes;
         case resolved_type::category::named:
             return true;
         case resolved_type::category::handle:
@@ -1156,7 +1200,7 @@ class analyzer {
         static constexpr std::array threads{"main",   "sim", "render", "any",
                                             "worker", "io",  "net"};
         static constexpr std::array compositions{"exclusive", "instanced",
-                                                 "chain", "registry"};
+                                                 "chain", "registry", "sealed"};
         if (std::ranges::find(sides, decl.service.side) == sides.end()) {
             error(decl.location,
                   std::format("invalid service side '{}'", decl.service.side));
@@ -1169,8 +1213,8 @@ class analyzer {
             compositions.end()) {
             error(decl.location,
                   std::format("invalid service composition '{}' (expected "
-                              "'exclusive', 'instanced', 'chain' or "
-                              "'registry')",
+                              "'exclusive', 'instanced', 'chain', 'registry' "
+                              "or 'sealed')",
                               decl.service.composition));
         }
         if (decl.service.provides.empty()) {
@@ -1216,6 +1260,14 @@ class analyzer {
                     error(parameter->location,
                           std::format("duplicate parameter '{}'",
                                       parameter->name));
+                }
+                if (parameter->name == "self" ||
+                    parameter->name == "out_value") {
+                    error(parameter->location,
+                          std::format("parameter name '{}' is reserved by the "
+                                      "generated vtable",
+                                      parameter->name));
+                    continue;
                 }
                 if (!is_valid_contract_field_type(parameter->type)) {
                     error(parameter->location,
@@ -1760,8 +1812,13 @@ class analyzer {
             case primitive_kind::i64:
             case primitive_kind::f64:
                 return size_align{8, 8};
+            case primitive_kind::opaque_ptr:
+                // Contracts are 64-bit only; `string`/`bytes`/`slice` already
+                // make the same assumption in this ABI.
+                return size_align{8, 8};
             case primitive_kind::string:
             case primitive_kind::bytes:
+            case primitive_kind::mut_bytes:
                 return size_align{16, 8};
             case primitive_kind::void_type:
                 return std::nullopt;

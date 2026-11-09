@@ -34,6 +34,13 @@ enum class primitive_kind : std::uint8_t {
     boolean,
     string,
     bytes,
+    /// Opaque 64-bit pointer (C `void *`). Only valid in RIDL contracts and
+    /// only on 64-bit targets; the C ABI layout assumes 8-byte pointers, the
+    /// same assumption already made for `string`/`bytes`/`slice`.
+    opaque_ptr,
+    /// Writable byte span (C `refrain_mut_bytes`). Borrowed for the call
+    /// unless the contract documents host ownership.
+    mut_bytes,
     void_type,
 };
 

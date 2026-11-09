@@ -374,6 +374,9 @@ struct ridl_context {
     if (composition == "registry") {
         return "REFRAIN_COMPOSITION_REGISTRY";
     }
+    if (composition == "sealed") {
+        return "REFRAIN_COMPOSITION_SEALED";
+    }
     return "REFRAIN_COMPOSITION_EXCLUSIVE";
 }
 
@@ -387,6 +390,9 @@ struct ridl_context {
     }
     if (composition == "registry") {
         return "registry";
+    }
+    if (composition == "sealed") {
+        return "sealed";
     }
     return "exclusive";
 }
@@ -694,6 +700,10 @@ void topo_visit(const model &program, std::uint32_t module_index,
         case primitive_kind::bytes:
             return std::format("::refrain::contracts::as_bytes({})",
                                expression);
+        case primitive_kind::mut_bytes:
+            return std::format("std::span<std::uint8_t>{{{}.data, "
+                               "static_cast<std::size_t>({}.len)}}",
+                               expression, expression);
         default:
             return std::format("static_cast<{}>({})", cpp_type(program, type),
                                expression);
@@ -736,6 +746,8 @@ void topo_visit(const model &program, std::uint32_t module_index,
         case primitive_kind::string:
         case primitive_kind::bytes:
             return "::refrain::contracts::to_borrowed(" + parameter.name + ")";
+        case primitive_kind::mut_bytes:
+            return "::refrain::contracts::to_mut(" + parameter.name + ")";
         case primitive_kind::boolean:
             return "static_cast<std::uint8_t>(" + parameter.name + ")";
         case primitive_kind::void_type:

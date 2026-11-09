@@ -10,6 +10,7 @@
 // dual-provider smoke test.
 
 #include <refrain/app/composition.hpp>
+#include <refrain/app/host_context.hpp>
 #include <refrain/app/services.hpp>
 #include <refrain/builtin/image.hpp>
 #include <refrain/contracts/abi.hpp>
@@ -25,6 +26,7 @@
 #include <refrain/data/path.hpp>
 #include <refrain/data/signature.hpp>
 #include <refrain/data/vfs.hpp>
+#include <refrain/host/core_api.hpp>
 #include <refrain/kernel/crash.hpp>
 #include <refrain/mod/discovery.hpp>
 #include <refrain/mod/gamepack.hpp>
@@ -630,6 +632,21 @@ int main(int argc, char **argv) {
     // (manifest gates -> static factories -> service providers). Composition is
     // frozen on success; a failure aborts startup with the offending mod.
     refrain::mod::host mods{};
+    // The host runtime API is a sealed service: register the process-owned
+    // provider before any mod factory runs. Mods may query it through the
+    // frozen registry, but cannot provide or replace it.
+    refrain::app::host_context host_context{mods};
+    const refrain::mod::provider_api host_core_api{
+        .vtable = &refrain::host::core_vtable(),
+        .self = &host_context,
+        .abi_major = REFRAIN_HOST_CORE_ABI_MAJOR,
+    };
+    if (auto registered = mods.register_sealed_provider("refrain:host.core",
+                                                        host_core_api, "1.0.0");
+        !registered) {
+        return report_fatal(registered.error());
+    }
+    refrain::log::info("host-runtime: sealed=refrain:host.core");
     auto mods_loaded{
         refrain::app::activate_server_mods(mods, *plan, image_bytes)};
     if (!mods_loaded) {

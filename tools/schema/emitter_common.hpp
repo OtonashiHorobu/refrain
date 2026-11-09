@@ -332,6 +332,10 @@ attribute_comment(const std::vector<attribute> &attributes,
         return "refrain_str";
     case primitive_kind::bytes:
         return "refrain_bytes";
+    case primitive_kind::opaque_ptr:
+        return "void *";
+    case primitive_kind::mut_bytes:
+        return "refrain_mut_bytes";
     case primitive_kind::void_type:
         return "void";
     }
@@ -367,6 +371,10 @@ attribute_comment(const std::vector<attribute> &attributes,
         return "std::string_view";
     case primitive_kind::bytes:
         return "std::span<const std::uint8_t>";
+    case primitive_kind::opaque_ptr:
+        return "void *";
+    case primitive_kind::mut_bytes:
+        return "std::span<std::uint8_t>";
     case primitive_kind::void_type:
         return "void";
     }

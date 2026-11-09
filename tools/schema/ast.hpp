@@ -89,7 +89,8 @@ struct service_decl {
     std::string version{"1.0.0"};
     std::string side{"both"};
     std::string thread{"any"};
-    /// Contract composition mode: exclusive | instanced | chain | registry.
+    /// Contract composition mode: exclusive | instanced | chain | registry |
+    /// sealed.
     /// Defaults to `exclusive` (one active provider per service).
     std::string composition{"exclusive"};
     std::vector<std::string> provides;

@@ -110,6 +110,17 @@ code is compiled into the server and registered through the static registry.
 A provider that the gamepack selects but the binary does not link fails at
 startup with the missing service key.
 
+## Host runtime
+
+The server exposes a stable runtime API to mods through sealed services.
+`refrain:host.core` is registered by the host bootstrap before any mod factory
+runs; it covers logging, time, host memory and service lookup/registration;
+config reads are reserved for the host config store and currently return
+`unsupported`. A sealed service is not a gamepack provider: a mod cannot
+declare it in `[provides]` or replace it through `register_provider`. The C ABI
+and C++ wrapper are generated from `sdk/idl/refrain/host/core.ridl`, so host
+code and mods share the same versioned contract definitions.
+
 ## Content store
 
 `refrain-server --content-store <dir>` enables the content store. Packages

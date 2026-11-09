@@ -1,0 +1,107 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:host.core` v1: the process-owned runtime API offered to mods.
+//
+// This is a *sealed* service: the host bootstrap registers the only provider
+// before mod loading. A gamepack must not select it and a mod must not claim
+// it in `[provides]`. The contract is not a replacement seam; it is the stable
+// ABI of the host runtime (log/config/service registry/memory/time).
+//
+// The host API is passed to a mod through the host provider table. The table
+// is process-lifetime and immutable; consumers must not retain borrowed
+// strings past their documented lifetime.
+
+module refrain::host::core;
+version 1.0.0;
+
+import refrain::core;
+
+enum host_error : u32 {
+    invalid_argument = 1,
+    not_found = 2,
+    permission_denied = 3,
+    version_mismatch = 4,
+    unsupported = 5,
+    not_initialized = 6,
+    out_of_memory = 7,
+    limit_exceeded = 8,
+    thread_violation = 9,
+    internal = 10,
+    already_exists = 11,
+    io_error = 12,
+}
+
+struct host_version {
+    u32 major;
+    u32 minor;
+    u32 patch;
+}
+
+/// A service provider table plus its instance. `vtable` and `self` are
+/// opaque: the consumer casts them to the generated vtable of the requested
+/// service. The host validates the vtable header before returning a ref.
+struct provider_ref {
+    opaque_ptr vtable;
+    opaque_ptr self;
+    u32 abi_major;
+    u32 reserved;
+}
+
+service core : 1.0.0 {
+    side = both;
+    thread = any;
+    composition = sealed;
+    provides = [ "refrain:host.core" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "log", "services", "clock", "alloc" ];
+
+    #[thread(any)]
+    fn version(out host_version value) -> void;
+
+    #[thread(any)]
+    fn log(u32 level, string message) -> void;
+
+    #[thread(any)]
+    fn now_ns() -> i64;
+
+    #[thread(any)]
+    fn tick_now() -> i64;
+
+    /// Read a value from the calling mod's config namespace. The host returns
+    /// `not_found` for a missing key; the string is borrowed until the next
+    /// config reload.
+    #[thread(any)] #[can_fail]
+    fn config_get_i64(string key) -> result<i64, host_error>;
+
+    #[thread(any)] #[can_fail]
+    fn config_get_bool(string key) -> result<bool, host_error>;
+
+    #[thread(any)] #[can_fail]
+    fn config_get_string(string key) -> result<string, host_error>;
+
+    /// Look up a frozen service provider. `instance` is empty for the default
+    /// instance. The returned vtable/self stay valid for the process lifetime.
+    #[thread(any)] #[can_fail]
+    fn query_service(string service, string instance)
+        -> result<provider_ref, host_error>;
+
+    /// Register the calling mod's provider during load. The host checks the
+    /// manifest `[provides]`, the gamepack plan and the vtable ABI header.
+    /// Sealed services are rejected here; they are registered by the host.
+    #[thread(main)] #[can_fail]
+    fn register_provider(string service, string instance, provider_ref ref)
+        -> result<void, host_error>;
+
+    /// Allocate a host-owned block. The caller releases it with `free`.
+    #[thread(any)] #[can_fail]
+    fn alloc(u64 size, u64 alignment) -> result<mut_bytes, host_error>;
+
+    #[thread(any)]
+    fn free(mut_bytes block) -> void;
+
+    /// Thread-local diagnostic for the last failed host call on this thread.
+    #[thread(any)] #[can_fail]
+    fn last_error_message() -> result<string, host_error>;
+}
