@@ -62,7 +62,12 @@ class feature_registry {
         -> result<std::unique_ptr<state_provider>>;
     [[nodiscard]] auto resolve_provider(std::string_view id)
         -> const state_provider *;
-    [[nodiscard]] auto nested_reference(const data::json::value &input)
+    /// Decodes a nested placed feature reference. `entry_reference` marks the
+    /// positions whose strings name a placed feature (selectors, sequences and
+    /// nested feature slots); the inner feature of an inline placed wrapper is
+    /// a configured reference.
+    [[nodiscard]] auto nested_reference(const data::json::value &input,
+                                        bool entry_reference = false)
         -> result<std::string>;
     [[nodiscard]] auto decode_fallen_decorators(const data::json::value &list)
         -> result<std::vector<std::unique_ptr<tree_decorator>>>;
@@ -78,6 +83,10 @@ class feature_registry {
     /// same dispatch as the data set.
     std::deque<configured_feature_document> *pending_documents_{nullptr};
     std::set<std::string> decoding_providers_{};
+    /// Placed feature ids named by decoded documents; `load_placed` follows
+    /// them so a selector can reach a placed feature whose configured feature
+    /// has a different name.
+    std::set<std::string> referenced_placed_{};
     std::optional<error> provider_error_{};
     jint next_nested_{0};
     std::unordered_map<std::string, std::unique_ptr<feature>> features_{};

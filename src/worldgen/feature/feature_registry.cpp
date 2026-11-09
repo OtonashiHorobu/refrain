@@ -256,9 +256,13 @@ auto feature_registry::resolve_provider(std::string_view id)
     return providers_.emplace(key, std::move(*decoded)).first->second.get();
 }
 
-auto feature_registry::nested_reference(const data::json::value &input)
+auto feature_registry::nested_reference(const data::json::value &input,
+                                        bool entry_reference)
     -> result<std::string> {
     if (const auto text = input.as_string(); text.has_value()) {
+        if (entry_reference) {
+            referenced_placed_.insert(std::string{*text});
+        }
         return std::string{*text};
     }
     if (!input.is_object()) {
@@ -421,38 +425,63 @@ void collect_feature_references(
 
 auto feature_registry::load_placed(const feature_data_set &data,
                                    std::span<const std::string> ids) -> status {
-    feature_data_set subset;
-    subset.state_providers = data.state_providers;
-    std::set<std::string> pending;
-    for (const auto &id : ids) {
-        const auto found = data.placed.find(id);
-        if (found == data.placed.end()) {
-            return std::unexpected{make_error(error_code::not_found,
-                                              "placed feature '" + id +
-                                                  "' is not in the data pack")};
+    std::set<std::string> placed_ids(ids.begin(), ids.end());
+    // Selectors name placed features directly, and a placed feature can point
+    // at a configured feature with a different name. Decode, collect the
+    // placed references that turned up, and repeat until the closure is
+    // stable.
+    for (;;) {
+        feature_data_set subset;
+        subset.state_providers = data.state_providers;
+        std::set<std::string> pending;
+        for (const auto &id : placed_ids) {
+            const auto found = data.placed.find(id);
+            if (found == data.placed.end()) {
+                return std::unexpected{
+                    make_error(error_code::not_found, "placed feature '" + id +
+                                                          "' is not in the "
+                                                          "data pack")};
+            }
+            subset.placed.emplace(found->first, found->second);
+            pending.insert(found->second.feature);
         }
-        subset.placed.emplace(found->first, found->second);
-        pending.insert(found->second.feature);
+        std::set<std::string> decoded;
+        while (!pending.empty()) {
+            const std::string feature = *pending.begin();
+            pending.erase(pending.begin());
+            if (!decoded.insert(feature).second) {
+                continue;
+            }
+            const auto found = data.features.find(feature);
+            if (found == data.features.end()) {
+                return std::unexpected{make_error(
+                    error_code::not_found,
+                    "placed feature names missing configured feature '" +
+                        feature + "'")};
+            }
+            subset.features.emplace(found->first, found->second);
+            collect_feature_references(found->second.document, data.features,
+                                       pending);
+        }
+        if (const auto loaded = load(subset); !loaded) {
+            return loaded;
+        }
+        std::set<std::string> discovered;
+        for (const auto &id : referenced_placed_) {
+            if (!data.placed.contains(id)) {
+                return std::unexpected{make_error(
+                    error_code::not_found, "nested placed feature '" + id +
+                                               "' is not in the data pack")};
+            }
+            if (!placed_ids.contains(id)) {
+                discovered.insert(id);
+            }
+        }
+        if (discovered.empty()) {
+            return status_ok();
+        }
+        placed_ids.insert(discovered.begin(), discovered.end());
     }
-    std::set<std::string> decoded;
-    while (!pending.empty()) {
-        const std::string feature = *pending.begin();
-        pending.erase(pending.begin());
-        if (!decoded.insert(feature).second) {
-            continue;
-        }
-        const auto found = data.features.find(feature);
-        if (found == data.features.end()) {
-            return std::unexpected{
-                make_error(error_code::not_found,
-                           "placed feature names missing configured feature '" +
-                               feature + "'")};
-        }
-        subset.features.emplace(found->first, found->second);
-        collect_feature_references(found->second.document, data.features,
-                                   pending);
-    }
-    return load(subset);
 }
 
 auto feature_registry::configured(std::string_view id) const
@@ -464,6 +493,9 @@ auto feature_registry::configured(std::string_view id) const
 auto feature_registry::load(const feature_data_set &data) -> status {
     nested_placed_.clear();
     pending_documents_ = nullptr;
+    referenced_placed_.clear();
+    features_.clear();
+    placed_.clear();
     next_nested_ = 0;
     providers_.clear();
     decoding_providers_.clear();
@@ -515,7 +547,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             }
             std::vector<std::string> nested;
             for (const auto &entry : *features->as_array()) {
-                auto reference = nested_reference(entry);
+                auto reference = nested_reference(entry, true);
                 if (!reference) {
                     return std::unexpected{reference.error()};
                 }
@@ -1099,7 +1131,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                     make_error(error_code::parse_error,
                                "root system has no nested feature")};
             }
-            auto nested = nested_reference(*feature_field);
+            auto nested = nested_reference(*feature_field, true);
             const auto *root_provider =
                 document.document.find("root_state_provider");
             const auto *hanging_provider =
@@ -1163,7 +1195,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                     make_error(error_code::parse_error,
                                "vegetation patch config is incomplete")};
             }
-            auto nested_id = nested_reference(*nested);
+            auto nested_id = nested_reference(*nested, true);
             auto ground_state = decode_provider(*ground);
             auto depth_provider = provider::int_provider::decode(*depth);
             auto radius_provider = provider::int_provider::decode(*radius);
@@ -1941,7 +1973,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 return std::unexpected{make_error(
                     error_code::parse_error, "random selector is incomplete")};
             }
-            auto default_id = nested_reference(*default_value);
+            auto default_id = nested_reference(*default_value, true);
             if (!default_id) {
                 return std::unexpected{default_id.error()};
             }
@@ -1955,7 +1987,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                    "selector entry is incomplete")};
                 }
                 const auto chance_value = chance->as_double();
-                auto reference = nested_reference(*feature);
+                auto reference = nested_reference(*feature, true);
                 if (!chance_value || !reference) {
                     return std::unexpected{make_error(
                         error_code::parse_error, "selector entry is invalid")};
@@ -1986,7 +2018,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                    "selector entry is incomplete")};
                 }
                 const auto weight_value = weight->as_int64();
-                auto reference = nested_reference(*data_field);
+                auto reference = nested_reference(*data_field, true);
                 if (!weight_value || !reference) {
                     return std::unexpected{make_error(
                         error_code::parse_error, "selector entry is invalid")};
@@ -2007,7 +2039,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             }
             std::vector<std::string> entries;
             for (const auto &entry : *features->as_array()) {
-                auto reference = nested_reference(entry);
+                auto reference = nested_reference(entry, true);
                 if (!reference) {
                     return std::unexpected{reference.error()};
                 }
@@ -2025,7 +2057,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             }
             std::vector<std::string> ids;
             for (const auto &entry : *features->as_array()) {
-                auto reference = nested_reference(entry);
+                auto reference = nested_reference(entry, true);
                 if (!reference) {
                     return std::unexpected{reference.error()};
                 }
@@ -2042,8 +2074,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 return std::unexpected{make_error(
                     error_code::parse_error, "boolean selector is incomplete")};
             }
-            auto true_id = nested_reference(*true_value);
-            auto false_id = nested_reference(*false_value);
+            auto true_id = nested_reference(*true_value, true);
+            auto false_id = nested_reference(*false_value, true);
             if (!true_id || !false_id) {
                 return std::unexpected{make_error(
                     error_code::parse_error, "boolean selector is invalid")};
@@ -2990,7 +3022,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             std::string cap;
             if (const auto *value = document.document.find("cap_feature");
                 value != nullptr) {
-                auto reference = nested_reference(*value);
+                auto reference = nested_reference(*value, true);
                 if (!reference) {
                     return std::unexpected{reference.error()};
                 }
@@ -3077,7 +3109,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                     make_error(error_code::parse_error,
                                "coral feature has no nested feature")};
             }
-            auto reference = nested_reference(*value);
+            auto reference = nested_reference(*value, true);
             if (!reference) {
                 return std::unexpected{reference.error()};
             }

@@ -663,3 +663,64 @@ suite<"worldgen/tree-new"> tree_new_tests = [] {
             << environment.name_at(leaf_pos.x, leaf_pos.y - 1, leaf_pos.z);
     };
 };
+
+suite<"worldgen/feature-closure"> feature_closure_tests = [] {
+    "a selector string follows its placed feature into the closure"_test = [] {
+        block_state_registry states;
+        feature_registry registry{states};
+        feature_data_set data;
+        configured_feature_document selector;
+        selector.id = "oracle:selector";
+        selector.document = parse(
+            R"({"type":"minecraft:random_selector",
+                "default":"oracle:tree","features":[]})");
+        data.features.emplace(selector.id, std::move(selector));
+        configured_feature_document tree;
+        tree.id = "oracle:tree";
+        tree.document = parse(R"({"type":"minecraft:simple_block",
+                       "to_place":{"id":"minecraft:oak_sapling"}})");
+        data.features.emplace(tree.id, std::move(tree));
+        placed_feature_document entry;
+        entry.id = "oracle:entry";
+        entry.feature = "oracle:selector";
+        entry.placement = parse("[]");
+        data.placed.emplace(entry.id, std::move(entry));
+        placed_feature_document placed_tree;
+        placed_tree.id = "oracle:tree";
+        placed_tree.feature = "oracle:tree";
+        placed_tree.placement = parse("[]");
+        data.placed.emplace(placed_tree.id, std::move(placed_tree));
+
+        const std::array<std::string, 1> ids{"oracle:entry"};
+        const auto loaded = registry.load_placed(data, ids);
+        expect(loaded.has_value()) << loaded.error().message;
+        if (!loaded) {
+            return;
+        }
+        expect(registry.placed().contains("oracle:entry"));
+        expect(registry.placed().contains("oracle:tree"));
+    };
+
+    "an unresolvable placed reference is reported"_test = [] {
+        block_state_registry states;
+        feature_registry registry{states};
+        feature_data_set data;
+        configured_feature_document selector;
+        selector.id = "oracle:selector";
+        selector.document = parse(
+            R"({"type":"minecraft:simple_random_selector",
+                "features":["oracle:missing"]})");
+        data.features.emplace(selector.id, std::move(selector));
+        placed_feature_document entry;
+        entry.id = "oracle:entry";
+        entry.feature = "oracle:selector";
+        entry.placement = parse("[]");
+        data.placed.emplace(entry.id, std::move(entry));
+        const std::array<std::string, 1> ids{"oracle:entry"};
+        const auto loaded = registry.load_placed(data, ids);
+        expect(!loaded.has_value());
+        if (!loaded) {
+            expect(loaded.error().code == error_code::not_found);
+        }
+    };
+};
