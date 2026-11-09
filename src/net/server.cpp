@@ -304,8 +304,6 @@ struct server::impl {
     void broadcast_system_chat(std::string_view text);
     void send_initial_chunks(std::uint64_t id);
     void queue_chunk_views();
-    void announce_join(std::uint64_t id);
-    void announce_leave(std::uint64_t id, const uuid &profile);
     void broadcast_animation(std::uint64_t id, std::int8_t action);
     void broadcast_entity_moves();
     void send_keepalive(std::uint64_t id);
@@ -438,7 +436,6 @@ void server::impl::on_close(std::uint64_t id, std::string_view /*reason*/) {
                 .world = {},
             });
         }
-        announce_leave(left_id, left_profile);
     }
 }
 
@@ -1420,7 +1417,14 @@ void server::impl::send_play_login(std::uint64_t id) {
     send_recipe_book();
     send_position();
     send_server_data();
-    announce_join(id);
+    if (player_join_hook) {
+        player_join_hook(player_identity{
+            .connection = id,
+            .id = profile,
+            .name = name,
+            .world = {},
+        });
+    }
     send_border();
     send_time();
     send_spawn();
@@ -1892,136 +1896,7 @@ constexpr std::uint8_t player_info_listed{8U};
 constexpr std::uint8_t player_info_latency{16U};
 constexpr std::uint32_t player_entity_type{159U};
 
-[[nodiscard]] auto angle_byte(float degrees) -> std::int8_t {
-    return static_cast<std::int8_t>(std::lround(degrees * 256.0F / 360.0F));
-}
-
 } // namespace
-
-void server::impl::announce_join(std::uint64_t id) {
-    struct player_snapshot {
-        std::uint64_t connection{0};
-        std::string name{};
-        uuid profile{};
-        double x{0.0};
-        double y{0.0};
-        double z{0.0};
-        float yaw{0.0F};
-        float pitch{0.0F};
-        game_mode mode{game_mode::creative};
-    };
-    std::vector<player_snapshot> players;
-    {
-        const std::lock_guard lock{connections_mutex};
-        for (const auto &[other, live] : connections) {
-            if (live.closed || live.state != connection_state::play) {
-                continue;
-            }
-            players.push_back({.connection = other,
-                               .name = live.name,
-                               .profile = live.profile,
-                               .x = live.x,
-                               .y = live.y,
-                               .z = live.z,
-                               .yaw = live.yaw,
-                               .pitch = live.pitch,
-                               .mode = live.mode});
-        }
-    }
-    const auto make_entry = [&](const player_snapshot &player) {
-        player_info_entry entry{};
-        entry.id = player.profile;
-        entry.name = player.name;
-        entry.game_mode = protocol_game_mode(player.mode);
-        entry.listed = true;
-        entry.latency = 0U;
-        return entry;
-    };
-    const auto make_entity = [&](const player_snapshot &player) {
-        return play_cb::add_entity{
-            .id = static_cast<std::int32_t>(player.connection),
-            .uuid = player.profile,
-            .type_ = player_entity_type,
-            .x = player.x,
-            .y = player.y,
-            .z = player.z,
-            .movement = {},
-            .x_rot = angle_byte(player.pitch),
-            .y_rot = angle_byte(player.yaw),
-            .y_head_rot = angle_byte(player.yaw),
-            .data = 0,
-        };
-    };
-
-    play_cb::player_info_update self_add{};
-    self_add.payload.actions = player_info_add;
-    self_add.payload.entries.reserve(players.size());
-    for (const auto &player : players) {
-        self_add.payload.entries.push_back(make_entry(player));
-    }
-    send_packet(id, play_cb::player_info_update::packet_id, self_add,
-                play_cb::encode_player_info_update);
-
-    play_cb::player_info_update self_update{};
-    self_update.payload.actions = static_cast<std::uint8_t>(
-        player_info_game_mode | player_info_listed | player_info_latency);
-    self_update.payload.entries.reserve(players.size());
-    for (const auto &player : players) {
-        self_update.payload.entries.push_back(make_entry(player));
-    }
-    send_packet(id, play_cb::player_info_update::packet_id, self_update,
-                play_cb::encode_player_info_update);
-
-    for (const auto &player : players) {
-        if (player.connection == id) {
-            continue;
-        }
-        play_cb::add_entity existing{make_entity(player)};
-        send_packet(id, play_cb::add_entity::packet_id, existing,
-                    play_cb::encode_add_entity);
-
-        play_cb::player_info_update update{};
-        update.payload.actions =
-            static_cast<std::uint8_t>(player_info_add | player_info_game_mode |
-                                      player_info_listed | player_info_latency);
-        update.payload.entries.push_back(make_entry(player_snapshot{
-            .connection = id,
-            .name = {},
-            .profile = {},
-        }));
-        // Fill the joining player's own entry from the snapshot list.
-        const auto self{std::ranges::find_if(
-            players, [&](const player_snapshot &candidate) {
-                return candidate.connection == id;
-            })};
-        if (self != players.end()) {
-            update.payload.entries.back() = make_entry(*self);
-        }
-        send_packet(player.connection, play_cb::player_info_update::packet_id,
-                    update, play_cb::encode_player_info_update);
-
-        play_cb::add_entity joining{};
-        if (self != players.end()) {
-            joining = make_entity(*self);
-            send_packet(player.connection, play_cb::add_entity::packet_id,
-                        joining, play_cb::encode_add_entity);
-        }
-    }
-    if (player_join_hook) {
-        const auto self{std::find_if(players.begin(), players.end(),
-                                     [id](const player_snapshot &player) {
-                                         return player.connection == id;
-                                     })};
-        if (self != players.end()) {
-            player_join_hook(player_identity{
-                .connection = self->connection,
-                .id = self->profile,
-                .name = self->name,
-                .world = {},
-            });
-        }
-    }
-}
 
 void server::impl::set_game_mode(std::uint64_t id, game_mode mode) {
     player_info_entry entry{};
@@ -2061,29 +1936,6 @@ void server::impl::set_game_mode(std::uint64_t id, game_mode mode) {
     for (const auto target : targets) {
         send_packet(target, play_cb::player_info_update::packet_id, update,
                     play_cb::encode_player_info_update);
-    }
-}
-
-void server::impl::announce_leave(std::uint64_t id, const uuid &profile) {
-    std::vector<std::uint64_t> targets;
-    {
-        const std::lock_guard lock{connections_mutex};
-        for (const auto &[other, live] : connections) {
-            if (other != id && !live.closed &&
-                live.state == connection_state::play) {
-                targets.push_back(other);
-            }
-        }
-    }
-    play_cb::player_info_remove remove{};
-    remove.profile_ids.push_back(profile);
-    play_cb::remove_entities entities{};
-    entities.entity_ids.push_back(static_cast<std::uint32_t>(id));
-    for (const auto target : targets) {
-        send_packet(target, play_cb::player_info_remove::packet_id, remove,
-                    play_cb::encode_player_info_remove);
-        send_packet(target, play_cb::remove_entities::packet_id, entities,
-                    play_cb::encode_remove_entities);
     }
 }
 

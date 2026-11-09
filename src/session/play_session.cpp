@@ -102,6 +102,16 @@ auto play_session::visible_to(std::uint64_t observer, double radius) const
     return out;
 }
 
+auto play_session::all() const -> std::vector<player> {
+    std::vector<player> out;
+    out.reserve(players_.size());
+    for (const auto &[connection, value] : players_) {
+        static_cast<void>(connection);
+        out.push_back(value);
+    }
+    return out;
+}
+
 auto play_session::size() const -> std::size_t { return players_.size(); }
 
 } // namespace refrain::session

@@ -2,6 +2,8 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/protocol/current.hpp>
+#include <refrain/server/server_properties.hpp>
 #include <refrain/server/server_runtime.hpp>
 
 #include <refrain/session/play_session.hpp>
@@ -998,6 +1000,148 @@ void execute_console_command(const std::string &line,
 
 } // namespace
 
+namespace {
+
+constexpr std::uint8_t player_info_add{1U};
+constexpr std::uint8_t player_info_game_mode{4U};
+constexpr std::uint8_t player_info_listed{8U};
+constexpr std::uint8_t player_info_latency{16U};
+constexpr std::uint32_t player_entity_type{159U};
+
+template <typename Packet, typename Encoder>
+[[nodiscard]] auto encode_play_body(std::uint16_t packet_id,
+                                    const Packet &packet, Encoder encode)
+    -> std::vector<std::byte> {
+    std::vector<std::byte> body;
+    refrain::net::writer writer{body};
+    writer.write_varint(packet_id);
+    if (auto encoded{encode(writer, packet)}; !encoded) {
+        body.clear();
+    }
+    return body;
+}
+
+[[nodiscard]] auto session_entry(const refrain::session::player &value)
+    -> refrain::net::player_info_entry {
+    return refrain::net::player_info_entry{
+        .id = value.id,
+        .name = value.name,
+        .game_mode = value.game_mode,
+        .listed = true,
+        .latency = 0U,
+    };
+}
+
+void send_player_info(refrain::net::server &listener, std::uint64_t connection,
+                      std::uint8_t actions,
+                      const std::vector<refrain::session::player> &players) {
+    refrain::net::player_info_update payload{};
+    payload.actions = actions;
+    payload.entries.reserve(players.size());
+    for (const auto &player : players) {
+        payload.entries.push_back(session_entry(player));
+    }
+    refrain::protocol::current::play::clientbound::player_info_update packet{};
+    packet.payload = std::move(payload);
+    auto body{encode_play_body(refrain::protocol::current::play::clientbound::
+                                   player_info_update::packet_id,
+                               packet,
+                               refrain::protocol::current::play::clientbound::
+                                   encode_player_info_update)};
+    if (!body.empty()) {
+        listener.send_raw(connection, body);
+    }
+}
+
+void send_add_entity(refrain::net::server &listener, std::uint64_t connection,
+                     const refrain::session::player &value) {
+    refrain::protocol::current::play::clientbound::add_entity packet{
+        .id = static_cast<std::int32_t>(value.entity_id),
+        .uuid = value.id,
+        .type_ = player_entity_type,
+        .x = value.x,
+        .y = value.y,
+        .z = value.z,
+        .movement = {},
+        .x_rot = 0,
+        .y_rot = 0,
+        .y_head_rot = 0,
+        .data = 0,
+    };
+    auto body{encode_play_body(
+        refrain::protocol::current::play::clientbound::add_entity::packet_id,
+        packet,
+        refrain::protocol::current::play::clientbound::encode_add_entity)};
+    if (!body.empty()) {
+        listener.send_raw(connection, body);
+    }
+}
+
+void announce_session_join(refrain::net::server &listener,
+                           const refrain::session::play_session &players,
+                           std::uint64_t connection) {
+    const auto snapshot{players.all()};
+    send_player_info(listener, connection, player_info_add, snapshot);
+    send_player_info(listener, connection,
+                     static_cast<std::uint8_t>(player_info_game_mode |
+                                               player_info_listed |
+                                               player_info_latency),
+                     snapshot);
+    for (const auto &other : snapshot) {
+        if (other.connection == connection) {
+            continue;
+        }
+        send_add_entity(listener, connection, other);
+        std::vector<refrain::session::player> joining{};
+        for (const auto &candidate : snapshot) {
+            if (candidate.connection == connection) {
+                joining.push_back(candidate);
+                break;
+            }
+        }
+        send_player_info(
+            listener, other.connection,
+            static_cast<std::uint8_t>(player_info_add | player_info_game_mode |
+                                      player_info_listed | player_info_latency),
+            joining);
+        send_add_entity(listener, other.connection, joining.front());
+    }
+}
+
+void announce_session_leave(refrain::net::server &listener,
+                            const refrain::session::player &left,
+                            const refrain::session::play_session &players) {
+    std::vector<std::uint64_t> targets;
+    for (const auto &player : players.all()) {
+        targets.push_back(player.connection);
+    }
+    refrain::protocol::current::play::clientbound::player_info_remove remove{};
+    remove.profile_ids.push_back(left.id);
+    auto info_body{
+        encode_play_body(refrain::protocol::current::play::clientbound::
+                             player_info_remove::packet_id,
+                         remove,
+                         refrain::protocol::current::play::clientbound::
+                             encode_player_info_remove)};
+    refrain::protocol::current::play::clientbound::remove_entities entities{};
+    entities.entity_ids.push_back(left.entity_id);
+    auto entity_body{encode_play_body(
+        refrain::protocol::current::play::clientbound::remove_entities::
+            packet_id,
+        entities,
+        refrain::protocol::current::play::clientbound::encode_remove_entities)};
+    for (const auto target : targets) {
+        if (!info_body.empty()) {
+            listener.send_raw(target, info_body);
+        }
+        if (!entity_body.empty()) {
+            listener.send_raw(target, entity_body);
+        }
+    }
+}
+
+} // namespace
+
 auto run_server(const server_run_options &options) -> int {
     if (options.world_path.empty()) {
         return report_error(refrain::make_error(
@@ -1170,6 +1314,7 @@ auto run_server(const server_run_options &options) -> int {
             : refrain::net::game_mode::creative};
     command_environment->default_mode = initial_mode;
     refrain::session::play_session players{};
+    refrain::net::server *active_listener{nullptr};
     const auto external_join{options.player_join};
     const auto external_leave{options.player_leave};
     refrain::net::server_inputs network_inputs{};
@@ -1203,19 +1348,31 @@ auto run_server(const server_run_options &options) -> int {
     network_inputs.tab = options.tab;
     network_inputs.encode_tab = options.encode_tab;
     network_inputs.player_join =
-        [&players,
+        [&players, &active_listener,
          external_join](const refrain::net::player_identity &identity) {
-            static_cast<void>(players.add_player(
+            const auto added{players.add_player(
                 identity.connection, identity.id, std::string{identity.name},
-                std::string{identity.world}, 0.0, 64.0, 0.0, 1));
+                std::string{identity.world}, 0.0, 64.0, 0.0, 1)};
+            if (added && active_listener != nullptr) {
+                announce_session_join(*active_listener, players,
+                                      identity.connection);
+            }
             if (external_join) {
                 external_join(identity);
             }
         };
     network_inputs.player_leave =
-        [&players,
+        [&players, &active_listener,
          external_leave](const refrain::net::player_identity &identity) {
+            const auto leaving{players.player_of(identity.connection)};
+            const auto copy{
+                leaving == nullptr
+                    ? std::nullopt
+                    : std::optional<refrain::session::player>{*leaving}};
             static_cast<void>(players.remove_player(identity.connection));
+            if (copy && active_listener != nullptr) {
+                announce_session_leave(*active_listener, *copy, players);
+            }
             if (external_leave) {
                 external_leave(identity);
             }
@@ -1270,6 +1427,7 @@ auto run_server(const server_run_options &options) -> int {
                             network.error().message);
     } else {
         listener = std::move(*network);
+        active_listener = listener.get();
         command_environment->listener = listener.get();
         refrain::log::info("network: listening on {}:{}",
                            options.network.get_string("bind_host", "0.0.0.0"),

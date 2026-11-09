@@ -73,6 +73,8 @@ class play_session {
     [[nodiscard]] auto visible_to(std::uint64_t observer, double radius) const
         -> std::vector<visibility_entry>;
 
+    [[nodiscard]] auto all() const -> std::vector<player>;
+
     [[nodiscard]] auto size() const -> std::size_t;
 
   private:
