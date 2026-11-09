@@ -17,8 +17,15 @@ constexpr auto floor_div16(jint value) -> jint {
 } // namespace
 
 chunk_region::chunk_region(proto_chunk &center, jint write_radius)
-    : center_{&center}, write_radius_{write_radius} {
+    : center_{&center},
+      write_center_{.x = center.chunk_x(), .z = center.chunk_z()},
+      write_radius_{write_radius} {
     chunks_[chunk_pos{.x = center.chunk_x(), .z = center.chunk_z()}] = &center;
+}
+
+void chunk_region::set_write_focus(const chunk_pos &center, jint radius) {
+    write_center_ = center;
+    write_radius_ = radius;
 }
 
 void chunk_region::attach(proto_chunk &chunk) {
@@ -31,8 +38,8 @@ auto chunk_region::find(const chunk_pos &pos) const -> proto_chunk * {
 }
 
 auto chunk_region::within_write_zone(const chunk_pos &pos) const -> bool {
-    return std::abs(pos.x - center_->chunk_x()) <= write_radius_ &&
-           std::abs(pos.z - center_->chunk_z()) <= write_radius_;
+    return std::abs(pos.x - write_center_.x) <= write_radius_ &&
+           std::abs(pos.z - write_center_.z) <= write_radius_;
 }
 
 auto chunk_region::state_at(jint x, jint y, jint z) const -> block_state_id {

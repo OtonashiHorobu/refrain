@@ -773,6 +773,81 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         }
     };
 
+    "neighbour decoration follows the configured radius and box"_test = [] {
+        const auto make = [](chunk_rectangle box, jint radius) {
+            return chunk_generator::create(chunk_generator_config{
+                .data_root = source_data_root(),
+                .templates_root = "",
+                .seed = 1,
+                .kind = dimension_kind::overworld,
+                .fixed_biome = "minecraft:lush_caves",
+                .target = generation_target::features,
+                .structure_sets = {"oracle:no_structure_set"},
+                .decorate_neighbours = true,
+                .neighbours_before_target = false,
+                .neighbours_in_generation_order = true,
+                .neighbour_radius = radius,
+                .neighbour_box = box,
+            });
+        };
+        auto one = make(chunk_rectangle{}, 1);
+        auto two = make(chunk_rectangle{}, 2);
+        auto boxed = make(
+            chunk_rectangle{.min_x = -3, .min_z = -2, .max_x = 1, .max_z = 2},
+            2);
+        expect(one.has_value()) << one.error().message;
+        expect(two.has_value()) << two.error().message;
+        expect(boxed.has_value()) << boxed.error().message;
+        if (!one || !two || !boxed) {
+            return;
+        }
+        const chunk_pos position{.x = -1, .z = 0};
+        auto near = (*one)->generate(position);
+        auto wide = (*two)->generate(position);
+        auto rectangle = (*boxed)->generate(position);
+        expect(near.has_value()) << near.error().message;
+        expect(wide.has_value()) << wide.error().message;
+        expect(rectangle.has_value()) << rectangle.error().message;
+        if (!near || !wide || !rectangle) {
+            return;
+        }
+        expect(block_difference_count(**near, **wide) > 0)
+            << "the wider neighbour radius decorated no extra chunk";
+        expect(same_chunk(**wide, **rectangle))
+            << "the box mode differs from the equal-radius square";
+    };
+
+    "an invalid neighbour configuration is rejected"_test = [] {
+        const auto create = [](chunk_rectangle box, jint radius) {
+            return chunk_generator::create(chunk_generator_config{
+                .data_root = source_data_root(),
+                .templates_root = "",
+                .seed = 1,
+                .kind = dimension_kind::overworld,
+                .fixed_biome = "minecraft:lush_caves",
+                .target = generation_target::features,
+                .structure_sets = {"oracle:no_structure_set"},
+                .decorate_neighbours = true,
+                .neighbour_radius = radius,
+                .neighbour_box = box,
+            });
+        };
+        expect(!create(chunk_rectangle{}, -1).has_value());
+        expect(!create(chunk_rectangle{}, 9).has_value());
+        auto outside = create(
+            chunk_rectangle{.min_x = 4, .min_z = 4, .max_x = 6, .max_z = 6}, 1);
+        expect(outside.has_value()) << outside.error().message;
+        if (!outside) {
+            return;
+        }
+        const auto generated = (*outside)->generate(chunk_pos{.x = 0, .z = 0});
+        expect(!generated.has_value());
+        if (generated) {
+            return;
+        }
+        expect(generated.error().code == error_code::invalid_argument);
+    };
+
     "the target ladder advances terrain, features and full"_test = [] {
         auto terrain_generator = make_terrain_generator(
             generation_target::terrain, {"oracle:no_structure_set"});

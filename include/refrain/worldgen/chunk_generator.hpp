@@ -42,6 +42,19 @@ enum class generation_target : std::uint8_t {
     full = 2,
 };
 
+/// An inclusive rectangle in chunk coordinates. An empty rectangle has a
+/// minimum beyond its maximum.
+struct chunk_rectangle {
+    jint min_x{0};
+    jint min_z{0};
+    jint max_x{-1};
+    jint max_z{-1};
+
+    [[nodiscard]] auto empty() const noexcept -> bool {
+        return min_x > max_x || min_z > max_z;
+    }
+};
+
 struct chunk_generator_config {
     /// The datapack `data` directory (`<version>/data`).
     std::string data_root{};
@@ -79,13 +92,33 @@ struct chunk_generator_config {
     /// target chunk. The target's own writes then win where two chunks touch;
     /// the default decorates the target first, so neighbour writes win.
     bool neighbours_before_target{false};
-    /// With `decorate_neighbours`, order the nine chunks the way a force-load
-    /// ticket queue does: ascending x, then ascending z. Every chunk that
-    /// precedes the target in that order decorates first, then the target,
-    /// then the chunks that follow. A saved reference world whose area was
-    /// force-loaded contains exactly this interleaving, so a feature that
+    /// With `decorate_neighbours`, order the decorated chunks the way a
+    /// force-load ticket queue does: ascending x, then ascending z. Every
+    /// chunk that precedes the target in that order decorates first, then the
+    /// target, then the chunks that follow. A saved reference world whose area
+    /// was force-loaded contains exactly this interleaving, so a feature that
     /// writes across a border resolves contacts the same way.
     bool neighbours_in_generation_order{false};
+    /// With `decorate_neighbours`, how many chunks around the target are
+    /// decorated. Zero decorates only the target, one the eight surrounding
+    /// chunks (the default). Two adds the next ring, which a force-loaded
+    /// reference area also generated: a feature of an outer chunk can read a
+    /// chunk outside the target's three-by-three region, and a patch spread
+    /// from there consumes a different number of random draws when that chunk
+    /// reads as air. The runtime always generates one more terrain ring than
+    /// it decorates, so every decorated chunk can read the chunks its own
+    /// generation region covers, and it attaches no terrain outside the
+    /// symmetric square. The value is limited to eight chunks.
+    jint neighbour_radius{1};
+    /// With `decorate_neighbours`, the reference world's generated chunk
+    /// rectangle in absolute chunk coordinates. The whole rectangle decorates
+    /// in force-load order, which reproduces features whose writes cross more
+    /// than one border, such as a spreading sculk patch. Chunks outside the
+    /// rectangle are attached as terrain only, because the reference world
+    /// generated them as terrain dependencies without features. An empty
+    /// rectangle keeps the symmetric `neighbour_radius` behaviour. The target
+    /// chunk must lie inside the rectangle.
+    chunk_rectangle neighbour_box{};
 };
 
 /// A reusable full-chunk generator. The object is not thread-safe: a single

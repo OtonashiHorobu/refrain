@@ -31,6 +31,13 @@ class chunk_region {
     /// Makes `chunk` readable (and writable when inside the write radius).
     void attach(proto_chunk &chunk);
 
+    /// Moves the write zone to `center`. The zone starts at the region's
+    /// centre chunk; a feature reference run sets it to the chunk it decorates
+    /// so each decoration writes where the reference generation region allowed
+    /// it. Writes outside the zone are dropped, so a smaller radius restricts
+    /// the applied writes without detaching the readable chunks.
+    void set_write_focus(const chunk_pos &center, jint radius);
+
     [[nodiscard]] auto center() -> proto_chunk & { return *center_; }
     [[nodiscard]] auto center() const -> const proto_chunk & {
         return *center_;
@@ -79,6 +86,7 @@ class chunk_region {
     [[nodiscard]] auto within_write_zone(const chunk_pos &pos) const -> bool;
 
     proto_chunk *center_{nullptr};
+    chunk_pos write_center_{};
     jint write_radius_{0};
     std::map<chunk_pos, proto_chunk *> chunks_{};
     std::uint64_t dropped_writes_{0};

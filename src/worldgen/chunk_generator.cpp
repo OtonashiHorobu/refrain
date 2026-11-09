@@ -90,31 +90,32 @@ auto make_start_record(const structure::structure_start &start)
 constexpr std::size_t start_height_capacity = 512;
 constexpr std::size_t start_block_capacity = 2048;
 
-constexpr std::array<chunk_pos, 9> neighbour_offsets{{
-    {0, 0},
-    {-1, -1},
-    {0, -1},
-    {1, -1},
-    {-1, 0},
-    {1, 0},
-    {-1, 1},
-    {0, 1},
-    {1, 1},
-}};
+/// Every chunk offset in a square of the given radius, ordered by ascending x
+/// and then ascending z. A force-load adds one ticket per chunk in that order,
+/// so a reference world built that way decorated the chunks in this sequence.
+auto square_offsets(jint radius) -> std::vector<chunk_pos> {
+    std::vector<chunk_pos> offsets;
+    offsets.reserve(
+        static_cast<std::size_t>((2 * radius + 1) * (2 * radius + 1)));
+    for (jint x = -radius; x <= radius; ++x) {
+        for (jint z = -radius; z <= radius; ++z) {
+            offsets.push_back(chunk_pos{.x = x, .z = z});
+        }
+    }
+    return offsets;
+}
 
-/// The eight neighbours in ascending x and then ascending z. A force-load
-/// adds one ticket per chunk in that order, so a reference world built that
-/// way decorated the chunks in this sequence.
-constexpr std::array<chunk_pos, 8> generation_order_offsets{{
-    {-1, -1},
-    {-1, 0},
-    {-1, 1},
-    {0, -1},
-    {0, 1},
-    {1, -1},
-    {1, 0},
-    {1, 1},
-}};
+/// Moves `center` to the front of `positions`. The chunk generation loop
+/// keeps the target first so the returned chunk is `chunks[0]`.
+auto center_first_positions(std::vector<chunk_pos> positions,
+                            const chunk_pos &center) -> std::vector<chunk_pos> {
+    const auto found = std::find(positions.begin(), positions.end(), center);
+    if (found != positions.end()) {
+        positions.erase(found);
+        positions.insert(positions.begin(), center);
+    }
+    return positions;
+}
 
 } // namespace
 
@@ -154,6 +155,11 @@ auto chunk_generator::create(chunk_generator_config config)
         return std::unexpected{
             fail(error_code::invalid_argument,
                  "neighbour feature decoration requires a fixed biome")};
+    }
+    if (config.neighbour_radius < 0 || config.neighbour_radius > 8) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "neighbour feature radius is outside its supported range")};
     }
     const bool needs_structures = config.target != generation_target::terrain;
     const bool needs_features = needs_structures && !config.reference_world;
@@ -445,13 +451,64 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
     }
 
     const bool needs_neighbours = has_structures_ || has_features_;
-    const std::size_t chunk_count = needs_neighbours ? 9U : 1U;
-    std::array<std::unique_ptr<proto_chunk>, 9> chunks{};
+    // A feature reference run may decorate a wider neighbourhood than the
+    // eight surrounding chunks, or the reference world's whole generated
+    // rectangle. Decorated chunks read their own generation region, so the
+    // attached terrain covers one more ring than the decorated set; that ring
+    // holds terrain only, exactly as the reference generated it as a
+    // dependency of the decorated chunks.
+    const bool boxed =
+        config_.decorate_neighbours && !config_.neighbour_box.empty();
+    if (boxed && (pos.x < config_.neighbour_box.min_x ||
+                  pos.x > config_.neighbour_box.max_x ||
+                  pos.z < config_.neighbour_box.min_z ||
+                  pos.z > config_.neighbour_box.max_z)) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "feature neighbour box does not contain the target chunk")};
+    }
+    const jint decorated_radius =
+        config_.decorate_neighbours
+            ? std::max<jint>(0, config_.neighbour_radius)
+            : 0;
+    std::vector<chunk_pos> decorated_positions;
+    std::vector<chunk_pos> region_positions;
+    if (!needs_neighbours) {
+        region_positions.push_back(pos);
+    } else if (boxed) {
+        for (jint x = config_.neighbour_box.min_x;
+             x <= config_.neighbour_box.max_x; ++x) {
+            for (jint z = config_.neighbour_box.min_z;
+                 z <= config_.neighbour_box.max_z; ++z) {
+                decorated_positions.push_back(chunk_pos{.x = x, .z = z});
+            }
+        }
+        for (jint x = config_.neighbour_box.min_x - 1;
+             x <= config_.neighbour_box.max_x + 1; ++x) {
+            for (jint z = config_.neighbour_box.min_z - 1;
+                 z <= config_.neighbour_box.max_z + 1; ++z) {
+                region_positions.push_back(chunk_pos{.x = x, .z = z});
+            }
+        }
+    } else {
+        for (const auto &offset : square_offsets(decorated_radius)) {
+            decorated_positions.push_back(
+                chunk_pos{.x = pos.x + offset.x, .z = pos.z + offset.z});
+        }
+        const jint region_radius = std::max<jint>(1, decorated_radius + 1);
+        for (const auto &offset : square_offsets(region_radius)) {
+            region_positions.push_back(
+                chunk_pos{.x = pos.x + offset.x, .z = pos.z + offset.z});
+        }
+    }
+    if (decorated_positions.empty()) {
+        decorated_positions.push_back(pos);
+    }
+    region_positions = center_first_positions(std::move(region_positions), pos);
+    const std::size_t chunk_count = region_positions.size();
+    std::vector<std::unique_ptr<proto_chunk>> chunks(chunk_count);
     for (std::size_t index = 0; index < chunk_count; ++index) {
-        const chunk_pos target{
-            .x = pos.x + neighbour_offsets[index].x,
-            .z = pos.z + neighbour_offsets[index].z,
-        };
+        const chunk_pos target = region_positions[index];
         density::sampler_context fill_context;
         std::optional<beardifier> beard;
         if (area.has_value()) {
@@ -485,12 +542,23 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         return std::move(chunks[0]);
     }
 
-    std::vector<std::unique_ptr<proto_chunk>> neighbours;
-    neighbours.reserve(chunk_count - 1);
     chunk_region region{*center, 1};
     for (std::size_t index = 1; index < chunk_count; ++index) {
         region.attach(*chunks[index]);
-        neighbours.push_back(std::move(chunks[index]));
+    }
+    // Pieces are clipped into the eight direct neighbours so the shape repair
+    // of the compared chunk sees the complete building.
+    std::vector<proto_chunk *> neighbours;
+    if (chunk_count > 1) {
+        for (const auto &offset : square_offsets(1)) {
+            if (offset.x == 0 && offset.z == 0) {
+                continue;
+            }
+            if (auto *chunk = region.find(pos.x + offset.x, pos.z + offset.z);
+                chunk != nullptr) {
+                neighbours.push_back(chunk);
+            }
+        }
     }
 
     std::vector<const structure::structure_start *> owned;
@@ -627,7 +695,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
                 continue;
             }
             auto neighbour_context = place_context;
-            neighbour_context.chunk = neighbour.get();
+            neighbour_context.chunk = neighbour;
             worldgen_random random{
                 std::make_unique<xoroshiro_random_source>(0)};
             const jlong neighbour_seed = random.set_decoration_seed(
@@ -800,46 +868,41 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         // neighbours. The generation-order mode follows the ticket order of a
         // force-load instead: every chunk that precedes the target in
         // ascending x and z decorates first, then the target, then the rest.
-        const auto decorate_neighbours = [&] {
-            for (std::size_t index = 1; index < neighbour_offsets.size();
-                 ++index) {
-                auto *target = region.find(pos.x + neighbour_offsets[index].x,
-                                           pos.z + neighbour_offsets[index].z);
-                if (target != nullptr) {
-                    decorate_chunk(*target);
-                }
+        const auto decorate_position = [&](const chunk_pos &position) {
+            if (position == pos) {
+                // The target writes through its own generation region too,
+                // so restore its write zone after a neighbour decoration.
+                region.set_write_focus(pos, 1);
+                decorate_chunk(*center);
+                return;
             }
-        };
-        const auto decorate_in_generation_order = [&] {
-            const auto precedes_target = [](const chunk_pos &offset) {
-                return offset.x < 0 || (offset.x == 0 && offset.z < 0);
-            };
-            const auto decorate_matching = [&](bool leading) {
-                for (const auto &offset : generation_order_offsets) {
-                    if (precedes_target(offset) != leading) {
-                        continue;
-                    }
-                    auto *target =
-                        region.find(pos.x + offset.x, pos.z + offset.z);
-                    if (target != nullptr) {
-                        decorate_chunk(*target);
-                    }
-                }
-            };
-            decorate_matching(true);
-            decorate_chunk(*center);
-            decorate_matching(false);
+            if (auto *target = region.find(position); target != nullptr) {
+                // The reference generation region of this chunk allows writes
+                // in its eight neighbours, not around the compared chunk.
+                region.set_write_focus(position, 1);
+                decorate_chunk(*target);
+            }
         };
         if (!config_.decorate_neighbours) {
             decorate_chunk(*center);
         } else if (config_.neighbours_in_generation_order) {
-            decorate_in_generation_order();
+            for (const auto &position : decorated_positions) {
+                decorate_position(position);
+            }
         } else if (config_.neighbours_before_target) {
-            decorate_neighbours();
-            decorate_chunk(*center);
+            for (const auto &position : decorated_positions) {
+                if (position != pos) {
+                    decorate_position(position);
+                }
+            }
+            decorate_position(pos);
         } else {
-            decorate_chunk(*center);
-            decorate_neighbours();
+            decorate_position(pos);
+            for (const auto &position : decorated_positions) {
+                if (position != pos) {
+                    decorate_position(position);
+                }
+            }
         }
     }
 

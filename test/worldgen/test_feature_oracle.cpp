@@ -14,7 +14,9 @@
 // `REFRAIN_VANILLA_WORLDGEN` points at the datapack `data` root shared with
 // the other reference suites. `_NEIGHBOURS_ORDER` decorates the neighbour
 // chunks that precede the target in force-load order first and the rest after
-// it.
+// it, `_NEIGHBOUR_RADIUS` widens the decorated square, and `_NEIGHBOUR_BOX`
+// names the reference world's generated chunk rectangle as
+// `min_x,min_z,max_x,max_z`.
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
@@ -184,6 +186,22 @@ void run_feature_case(std::string_view prefix) {
         environment(std::string{prefix} + "_NEIGHBOURS_FIRST") != nullptr;
     const bool neighbours_in_generation_order =
         environment(std::string{prefix} + "_NEIGHBOURS_ORDER") != nullptr;
+    const auto neighbour_radius =
+        integer_environment(std::string{prefix} + "_NEIGHBOUR_RADIUS");
+    auto neighbour_box = chunk_rectangle{};
+    if (const char *box_raw =
+            environment(std::string{prefix} + "_NEIGHBOUR_BOX");
+        box_raw != nullptr) {
+        jint min_x = 0;
+        jint min_z = 0;
+        jint max_x = 0;
+        jint max_z = 0;
+        if (std::sscanf(box_raw, "%d,%d,%d,%d", &min_x, &min_z, &max_x,
+                        &max_z) == 4) {
+            neighbour_box = chunk_rectangle{
+                .min_x = min_x, .min_z = min_z, .max_x = max_x, .max_z = max_z};
+        }
+    }
     auto generator = chunk_generator::create(chunk_generator_config{
         .data_root = data_root,
         .templates_root = "",
@@ -196,6 +214,8 @@ void run_feature_case(std::string_view prefix) {
         .decorate_neighbours = decorate_neighbours,
         .neighbours_before_target = neighbours_before_target,
         .neighbours_in_generation_order = neighbours_in_generation_order,
+        .neighbour_radius = neighbour_radius.value_or(1),
+        .neighbour_box = neighbour_box,
     });
     expect(generator.has_value()) << generator.error().message;
     if (!generator) {
