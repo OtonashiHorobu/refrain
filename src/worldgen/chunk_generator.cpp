@@ -136,6 +136,11 @@ auto chunk_generator::create(chunk_generator_config config)
             fail(error_code::invalid_argument,
                  "chunk generator has no content data root")};
     }
+    if (config.decorate_neighbours && config.fixed_biome.empty()) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "neighbour feature decoration requires a fixed biome")};
+    }
     const bool needs_structures = config.target != generation_target::terrain;
     const bool needs_features = needs_structures && !config.reference_world;
 
@@ -766,9 +771,38 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
             }
             candidate_biomes.assign(names.begin(), names.end());
         }
-        feature::decorate(feature_context, shared_->feature_plan,
-                          features_->placed(), candidate_biomes,
-                          shared_->feature_data.biomes, config_.seed);
+        const auto decorate_chunk = [&](proto_chunk &target) {
+            feature_context.placement.chunk = &target;
+            feature_context.placement.generation.min_y = target.min_y();
+            feature_context.placement.generation.height = target.height();
+            feature::decorate(feature_context, shared_->feature_plan,
+                              features_->placed(), candidate_biomes,
+                              shared_->feature_data.biomes, config_.seed);
+        };
+        // A reference world saves every chunk of the generated area, so its
+        // chunks contain the feature writes of their neighbours. Decorating
+        // the target chunk first and then its neighbours reproduces those
+        // writes for a target chunk that the reference generated before its
+        // neighbours.
+        const auto decorate_neighbours = [&] {
+            for (std::size_t index = 1; index < neighbour_offsets.size();
+                 ++index) {
+                auto *target = region.find(pos.x + neighbour_offsets[index].x,
+                                           pos.z + neighbour_offsets[index].z);
+                if (target != nullptr) {
+                    decorate_chunk(*target);
+                }
+            }
+        };
+        if (!config_.decorate_neighbours) {
+            decorate_chunk(*center);
+        } else if (config_.neighbours_before_target) {
+            decorate_neighbours();
+            decorate_chunk(*center);
+        } else {
+            decorate_chunk(*center);
+            decorate_neighbours();
+        }
     }
 
     center->set_status(target_status(config_.target));

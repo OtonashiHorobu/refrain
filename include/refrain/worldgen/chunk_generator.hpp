@@ -68,6 +68,17 @@ struct chunk_generator_config {
     /// structures as well. A production run always executes the dimension's
     /// carvers.
     bool reference_carvers{false};
+    /// Feature reference mode: decorate the target chunk and then the eight
+    /// neighbour chunks through the same region. A reference world saves every
+    /// chunk of a generated area, so its chunks contain the feature writes of
+    /// their neighbours, which reach a few blocks across a border. Production
+    /// generation decorates the target chunk only. Requires a fixed biome,
+    /// because every decorated chunk uses the target's biome plan.
+    bool decorate_neighbours{false};
+    /// With `decorate_neighbours`, decorate the eight neighbours before the
+    /// target chunk. The target's own writes then win where two chunks touch;
+    /// the default decorates the target first, so neighbour writes win.
+    bool neighbours_before_target{false};
 };
 
 /// A reusable full-chunk generator. The object is not thread-safe: a single
