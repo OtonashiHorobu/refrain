@@ -239,6 +239,7 @@ struct server::impl {
     movement_handler movement_hook{};
     attack_handler attack_hook{};
     animation_handler animation_hook{};
+    player_event play_ready_hook{};
     respawn_handler respawn_hook{};
     transport_factory make_transport{};
     std::shared_ptr<protocol_codec> protocol{};
@@ -1361,19 +1362,6 @@ void server::impl::send_play_login(std::uint64_t id) {
         send_packet(id, play_cb::set_chunk_cache_center::packet_id, center,
                     play_cb::encode_set_chunk_cache_center);
     };
-    const auto send_vitals = [&] {
-        play_cb::set_health health{
-            .health = 20.0F, .food = 20, .saturation = 5.0F};
-        send_packet(id, play_cb::set_health::packet_id, health,
-                    play_cb::encode_set_health);
-        play_cb::set_experience experience{
-            .experience_progress = 0.0F,
-            .experience_level = 0,
-            .total_experience = 0,
-        };
-        send_packet(id, play_cb::set_experience::packet_id, experience,
-                    play_cb::encode_set_experience);
-    };
     const auto send_entity_state = [&] {
         play_cb::set_entity_data data{
             .entity_id = static_cast<std::uint32_t>(id),
@@ -1426,9 +1414,16 @@ void server::impl::send_play_login(std::uint64_t id) {
     send_ticking();
     send_view_cache();
     send_initial_chunks(id);
-    send_vitals();
     send_entity_state();
     send_tab_list(id);
+    if (play_ready_hook) {
+        play_ready_hook(player_identity{
+            .connection = id,
+            .id = profile,
+            .name = name,
+            .world = {},
+        });
+    }
 }
 
 void server::impl::send_commands(std::uint64_t id) {
@@ -2843,6 +2838,7 @@ auto server::start(server_inputs inputs, core::config::view view)
     state->movement_hook = std::move(inputs.movement);
     state->attack_hook = std::move(inputs.attack);
     state->animation_hook = std::move(inputs.animation);
+    state->play_ready_hook = std::move(inputs.play_ready);
     state->respawn_hook = std::move(inputs.respawn);
     state->make_transport = std::move(inputs.make_transport);
     state->protocol = std::move(inputs.protocol);

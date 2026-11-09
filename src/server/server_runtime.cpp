@@ -1153,6 +1153,23 @@ void send_session_health(refrain::net::server &listener,
     }
 }
 
+void send_session_experience(refrain::net::server &listener,
+                             std::uint64_t connection) {
+    refrain::protocol::current::play::clientbound::set_experience packet{
+        .experience_progress = 0.0F,
+        .experience_level = 0,
+        .total_experience = 0,
+    };
+    auto body{encode_play_body(
+        refrain::protocol::current::play::clientbound::set_experience::
+            packet_id,
+        packet,
+        refrain::protocol::current::play::clientbound::encode_set_experience)};
+    if (!body.empty()) {
+        listener.send_raw(connection, body);
+    }
+}
+
 void send_session_animation(refrain::net::server &listener,
                             const refrain::session::play_session &players,
                             std::uint64_t source, std::uint64_t target,
@@ -1530,6 +1547,17 @@ auto run_server(const server_run_options &options) -> int {
                                         action);
         }
     };
+    network_inputs.play_ready =
+        [&players,
+         &active_listener](const refrain::net::player_identity &identity) {
+            if (active_listener == nullptr) {
+                return;
+            }
+            const auto value{players.player_of(identity.connection)};
+            send_session_health(*active_listener, identity.connection,
+                                value == nullptr ? 20.0F : value->health);
+            send_session_experience(*active_listener, identity.connection);
+        };
     network_inputs.respawn = [&players,
                               &active_listener](std::uint64_t connection) {
         static_cast<void>(players.set_health(connection, 20.0F));

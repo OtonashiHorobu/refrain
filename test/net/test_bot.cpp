@@ -184,7 +184,6 @@ suite bot_tests = [] {
             };
             expect(has_id(16U));  // commands
             expect(has_id(88U));  // server_data
-            expect(has_id(106U)); // set_health
             expect(has_id(136U)); // update_recipes
             expect(has_id(125U)); // tab_list
         }

@@ -214,6 +214,7 @@ struct server_inputs {
     movement_handler movement{};
     attack_handler attack{};
     animation_handler animation{};
+    player_event play_ready{};
     respawn_handler respawn{};
     /// Optional transport provider. Empty uses the built-in Asio TCP
     /// transport.
