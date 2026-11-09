@@ -150,8 +150,38 @@ void proto_chunk::update_heightmaps(jint x, jint y, jint z,
 }
 
 void proto_chunk::prime_heightmaps(std::array<heightmap_kind, 4> kinds) {
-    for (const auto kind : kinds) {
-        heightmap_at(kind).prime(source_);
+    // One top-down pass over each column fills every map at once. The world
+    // surface map is exact at this point and no final map can match above the
+    // highest non-air block, so the scan starts at that block instead of the
+    // level ceiling.
+    std::array<heightmap *, 4> maps{};
+    std::array<bool, 4> found{};
+    for (std::size_t index = 0; index < kinds.size(); ++index) {
+        maps[index] = &heightmap_at(kinds[index]);
+    }
+    const auto &surface = heightmap_at(heightmap_kind::world_surface_wg);
+    for (jint z = 0; z < 16; ++z) {
+        for (jint x = 0; x < 16; ++x) {
+            found.fill(false);
+            std::size_t remaining = maps.size();
+            const jint top = surface.first_available(x, z) - 1;
+            for (jint y = top; y >= min_y_ && remaining > 0; --y) {
+                const auto state = states_[state_index(x, y, z)];
+                const auto traits = table_->traits(state);
+                for (std::size_t index = 0; index < maps.size(); ++index) {
+                    if (!found[index] && matches(kinds[index], traits)) {
+                        maps[index]->set_first_available(x, z, y + 1);
+                        found[index] = true;
+                        --remaining;
+                    }
+                }
+            }
+            for (std::size_t index = 0; index < maps.size(); ++index) {
+                if (!found[index]) {
+                    maps[index]->set_first_available(x, z, min_y_);
+                }
+            }
+        }
     }
 }
 
