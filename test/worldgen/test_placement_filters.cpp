@@ -20,6 +20,7 @@
 
 #include <boost/ut.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -677,6 +678,71 @@ suite<"worldgen/placement-random"> placement_random_tests = [] {
                                           "placements":[{"type":"minecraft:nope"}]})"),
                                  registry)
                     .has_value());
+    };
+
+    "cuboid emits every cell of the sampled box in xyz order"_test = [] {
+        block_state_registry registry;
+        auto modifier = decode_placement(parse(R"({"type":"minecraft:cuboid",
+                      "xz_size":2,
+                      "y_size":2})"),
+                                         registry);
+        expect(modifier.has_value()) << modifier.error().message;
+        if (!modifier) {
+            return;
+        }
+        auto random = make_random(7);
+        const placement_context context{};
+        std::vector<block_pos> out;
+        (*modifier)->modify(context, random,
+                            block_pos{.x = 10, .y = 4, .z = 20}, out);
+        expect(out.size() == 27U);
+        if (out.size() == 27U) {
+            expect(out.front().x == 10 && out.front().y == 4 &&
+                   out.front().z == 20);
+            expect(out[1].z == 21);
+            expect(out[3].y == 5);
+            expect(out[9].x == 11);
+            expect(out.back().x == 12 && out.back().y == 6 &&
+                   out.back().z == 22);
+        }
+    };
+
+    "cuboid can select edges, interior or both"_test = [] {
+        block_state_registry registry;
+        const auto run = [&](std::string_view document) {
+            auto modifier = decode_placement(parse(document), registry);
+            expect(modifier.has_value()) << modifier.error().message;
+            std::vector<block_pos> out;
+            if (modifier) {
+                auto random = make_random(3);
+                const placement_context context{};
+                (*modifier)->modify(context, random,
+                                    block_pos{.x = 0, .y = 0, .z = 0}, out);
+            }
+            return out;
+        };
+        const auto faces = run(
+            R"({"type":"minecraft:cuboid","xz_size":2,"y_size":2,
+                "include_interior":false})");
+        expect(faces.size() == 26U);
+        expect(std::none_of(faces.begin(), faces.end(), [](const block_pos &p) {
+            return p.x == 1 && p.y == 1 && p.z == 1;
+        }));
+        const auto no_edges = run(
+            R"({"type":"minecraft:cuboid","xz_size":2,"y_size":2,
+                "include_edges":false})");
+        expect(no_edges.size() == 7U);
+        expect(std::none_of(no_edges.begin(), no_edges.end(),
+                            [](const block_pos &p) {
+                                const int boundary = (p.x == 0 || p.x == 2) +
+                                                     (p.y == 0 || p.y == 2) +
+                                                     (p.z == 0 || p.z == 2);
+                                return boundary >= 2;
+                            }));
+        expect(
+            !decode_placement(
+                 parse(R"({"type":"minecraft:cuboid","xz_size":1})"), registry)
+                 .has_value());
     };
 };
 

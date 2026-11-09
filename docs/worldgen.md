@@ -206,21 +206,33 @@ The reference-backed suites currently cover:
 - the full-chunk generator against the reference full-stage worlds of a
   plains village, a woodland mansion and a stronghold, plus batch equality
   and the terrain/features/full status ladder;
+- the configured feature, placement modifier, block predicate, state provider
+  and tree placer families the standard biomes name, through synthetic unit
+  tests and a content-driven test that creates one generator and generates one
+  full chunk for every standard overworld, nether and end biome;
 - benchmarks for fill, parallel fill, structure selection, corridor
   placement, template placement, feature freeze and decoration.
 
-Known gaps: the feature registry implements a subset of the configured
-feature and placement-modifier types. A biome whose feature plan names an
-unsupported type fails `chunk_generator::create` with an `unsupported` error
-instead of silently dropping that feature. Structure feature placement has no
-climate source, so snow and freeze feature modifiers are inert there. Capped processor lists,
-block-entity rule modifiers and template entities are not implemented; end
-city shulker and elytra data markers therefore leave no entities behind.
-End gateways and the obsidian end platform are not implemented. The nether
-climate samplers use the standard noise layout, while the reference builds the
-temperature and vegetation noises of that dimension with the legacy
-nether-biome initializer, so a nether world's biome selection can differ from
-the reference even though the parameter table it selects from does not.
+Known gaps: the feature registry decodes every configured feature, placement
+modifier, block predicate and state-provider type the shipped snapshot uses,
+including the cherry, poplar, bending and upwards-branching tree placers, the
+mangrove root placer and the pale moss and creaking heart decorators. A biome
+whose plan names an unknown type still fails `chunk_generator::create` with an
+`unsupported` error instead of silently dropping that feature, and the
+content-driven test fails when that happens. Predicates whose reference
+definition reads collision geometry (sturdy faces and multiface attachment)
+approximate a full face with the heightmap motion-blocking property, and the
+unobstructed predicate admits every position because generation has no
+entities, and the biome membership predicate accepts explicit biome ids but not
+biome tags. Structure feature placement has no climate source, so snow and
+freeze feature modifiers are inert there. Capped processor lists, block-entity rule
+modifiers and template entities are not implemented; end city shulker and
+elytra data markers therefore leave no entities behind. End gateways and the
+obsidian end platform are not implemented. The nether climate samplers use the
+standard noise layout, while the reference builds the temperature and
+vegetation noises of that dimension with the legacy nether-biome initializer,
+so a nether world's biome selection can differ from the reference even though
+the parameter table it selects from does not.
 
 Ruined portal starts place the template at the reference position and
 orientation. A dry reference candidate at chunk (-65, 0) matches block for

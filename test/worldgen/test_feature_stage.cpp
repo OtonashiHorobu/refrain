@@ -1755,6 +1755,110 @@ suite<"worldgen/block-predicate"> block_predicate_tests = [] {
         }
     };
 
+    "the height range predicate resolves anchors against the generation "
+    "bounds"_test = [] {
+        block_state_registry registry;
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk_region region{chunk, 1};
+        const placement_context context{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &registry,
+            .generation =
+                generation_context{.min_y = 0, .height = 32, .sea_level = 20},
+        };
+        auto predicate =
+            decode_block_predicate(parse(R"({"type":"minecraft:height_range",
+                      "min_inclusive":{"above_bottom":4},
+                      "max_inclusive":{"relative_to_sea_level":-2}})"),
+                                   registry);
+        expect(predicate.has_value());
+        if (!predicate) {
+            return;
+        }
+        expect(!(*predicate)->test(context, block_pos{.x = 0, .y = 3, .z = 0}));
+        expect((*predicate)->test(context, block_pos{.x = 0, .y = 4, .z = 0}));
+        expect((*predicate)->test(context, block_pos{.x = 0, .y = 18, .z = 0}));
+        expect(
+            !(*predicate)->test(context, block_pos{.x = 0, .y = 19, .z = 0}));
+        auto below_top =
+            decode_block_predicate(parse(R"({"type":"minecraft:height_range",
+                      "min_inclusive":{"below_top":30},
+                      "max_inclusive":{"absolute":40}})"),
+                                   registry);
+        expect(below_top.has_value());
+        if (below_top) {
+            expect(!(*below_top)
+                        ->test(context, block_pos{.x = 0, .y = 0, .z = 0}));
+            expect(
+                (*below_top)->test(context, block_pos{.x = 0, .y = 1, .z = 0}));
+        }
+    };
+
+    "the unobstructed predicate admits every generated position"_test = [] {
+        block_state_registry registry;
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(stone.has_value());
+        if (!stone) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::terrain);
+        (void)chunk.set_state(1, 2, 3, *stone);
+        chunk_region region{chunk, 1};
+        const placement_context context{
+            .region = &region, .chunk = &chunk, .states = &registry};
+        auto predicate = decode_block_predicate(
+            parse(R"({"type":"minecraft:unobstructed","offset":[0,1,0]})"),
+            registry);
+        expect(predicate.has_value());
+        if (predicate) {
+            expect(
+                (*predicate)->test(context, block_pos{.x = 1, .y = 2, .z = 3}));
+            expect(
+                (*predicate)->test(context, block_pos{.x = 8, .y = 9, .z = 8}));
+        }
+        expect(
+            !decode_block_predicate(parse(R"({"type":"minecraft:unobstructed",
+                              "offset":[0,17,0]})"),
+                                    registry)
+                 .has_value());
+    };
+
+    "the matching biomes predicate compares the block position's biome"_test =
+        [] {
+            block_state_registry registry;
+            proto_chunk chunk{registry, 0, 0, 0, 32};
+            chunk_region region{chunk, 1};
+            placement_context context{
+                .region = &region, .chunk = &chunk, .states = &registry};
+            auto predicate = decode_block_predicate(
+                parse(R"({"type":"minecraft:matching_biomes",
+                          "biomes":["minecraft:desert","minecraft:badlands"]})"),
+                registry);
+            expect(predicate.has_value());
+            if (!predicate) {
+                return;
+            }
+            expect(!(*predicate)
+                        ->test(context, block_pos{.x = 1, .y = 2, .z = 3}));
+            context.biome = [](const block_pos &pos) -> std::string_view {
+                return pos.y == 2 ? "minecraft:desert" : "minecraft:plains";
+            };
+            expect(
+                (*predicate)->test(context, block_pos{.x = 1, .y = 2, .z = 3}));
+            expect(!(*predicate)
+                        ->test(context, block_pos{.x = 1, .y = 4, .z = 3}));
+            expect(!decode_block_predicate(
+                        parse(R"({"type":"minecraft:matching_biomes",
+                                  "biomes":"#minecraft:is_forest"})"),
+                        registry)
+                        .has_value());
+        };
+
     "random chance keeps positions by probability"_test = [] {
         block_state_registry registry;
         proto_chunk chunk{registry, 0, 0, 0, 32};
