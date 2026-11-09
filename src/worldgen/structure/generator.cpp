@@ -116,6 +116,9 @@ structure_generator::structure_generator(structure_generator_config config,
         }
         (void)states_.intern(key, inferred_traits(key));
     }
+    // Processor rules test block tags, so the registry must carry them for
+    // every structure, whether or not a piece also places features.
+    (void)apply_block_tags(states_, tags_);
     const auto block = states_.intern(settings_.default_block, solid_traits());
     default_block_state_ = block.value_or(no_block_state);
     if (settings_.default_fluid == "minecraft:air") {
@@ -349,9 +352,6 @@ auto structure_generator::generate(const chunk_pos &pos)
             return std::unexpected{loaded_features.error()};
         }
         feature_data = std::move(*loaded_features);
-        if (const auto tagged = apply_block_tags(states_, tags_); !tagged) {
-            return std::unexpected{tagged.error()};
-        }
     }
 
     std::unordered_map<std::string, jint> adjusted_heights;
