@@ -257,8 +257,8 @@ def main() -> int:
     parser.add_argument(
         "--plain",
         action="store_true",
-        help="keep the normal multi-noise overworld (biome oracle) instead of "
-        "generating a terrain-only world",
+        help="keep the normal multi-noise biome source (biome oracle) instead "
+        "of generating a terrain-only world; combines with --dimension",
     )
     parser.add_argument(
         "--surface",
@@ -355,20 +355,16 @@ def main() -> int:
     if dimension_mode:
         overworld_only = [
             flag
-            for flag in (
-                args.plain,
-                args.surface,
-                args.biomes,
-                args.carvers,
-                args.features,
-                args.features_real,
-            )
+            for flag in (args.surface, args.features, args.features_real)
             if flag
         ]
         if overworld_only:
-            parser.error("--dimension only combines with the default mode")
+            parser.error("--dimension only combines with the default mode, "
+                         "--plain, --biomes or --carvers")
         if args.keep_carvers and args.structures:
             parser.error("--keep-carvers does not combine with --structures")
+        if args.biomes and args.carvers:
+            parser.error("--biomes does not combine with --carvers")
         # The dimension references keep the real material rule and only strip
         # the fixed biome's carvers and features, which is the surface oracle.
         # A structure run uses the same fixed biome but an empty rule so the

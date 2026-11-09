@@ -198,6 +198,46 @@ suite<"worldgen/noise"> noise_tests = [] {
         }
     };
 
+    "legacy nether layout matches the reference vectors"_test = [] {
+        normal_noise_parameters parameters;
+        parameters.base_amplitude = 0.8;
+        parameters.base_octave = -5;
+        parameters.octave_count = 3;
+        parameters.amplitude_modifiers = {1.0, 0.5, 0.25};
+        const normal_noise normal{parameters};
+        expect(bits(-normal.range()) == 0xbf99999aU);
+
+        legacy_random_source source{24680};
+        auto stack = normal.create_legacy_nether_biome(source);
+        expect(stack.has_value()) << stack.error().message;
+        if (!stack) {
+            return;
+        }
+        constexpr auto expected3d =
+            std::array<std::uint32_t, 6>{0xbc0d7cd0U, 0x3dfe82d4U, 0x3ddb8334U,
+                                         0xbdb32c6eU, 0xbd4bd545U, 0x3dab9c03U};
+        constexpr auto expected2d = std::array<std::uint32_t, 4>{
+            0xbc0d7cd0U, 0xbd93f048U, 0xbe116c86U, 0xbe8a473bU};
+        const auto actual3d = sample_3d(*stack);
+        const auto actual2d = sample_2d(*stack);
+        for (std::size_t i = 0; i < expected3d.size(); ++i) {
+            expect(actual3d[i] == expected3d[i]) << "3d sample " << i;
+        }
+        for (std::size_t i = 0; i < expected2d.size(); ++i) {
+            expect(actual2d[i] == expected2d[i]) << "2d sample " << i;
+        }
+    };
+
+    "legacy nether layout rejects a positive first octave"_test = [] {
+        normal_noise_parameters parameters;
+        parameters.base_octave = 1;
+        parameters.octave_count = 2;
+        const normal_noise normal{parameters};
+        legacy_random_source source{24680};
+        const auto stack = normal.create_legacy_nether_biome(source);
+        expect(!stack.has_value());
+    };
+
     "stack construction is deterministic for one source"_test = [] {
         auto first = make_factory(12345)->from_hash_of("refrain:noise_test");
         auto second = make_factory(12345)->from_hash_of("refrain:noise_test");

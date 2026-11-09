@@ -4,16 +4,21 @@
 //
 // Opt-in dimension oracle: generates nether and end chunks with the dimension
 // generator and compares them with reference worlds that the reference server
-// wrote for the same seed. The reference worlds use a fixed real biome with its
-// carvers and features stripped and the real material rule, so the saved chunk
-// is exactly the fill and surface output.
+// wrote for the same seed. The fixed-biome reference worlds strip the biome's
+// carvers and features and keep the real material rule, so the saved chunk is
+// exactly the fill and surface output. A multi-noise nether world keeps the
+// normal biome source and carvers but strips features; that suite compares the
+// carved terrain of the selected chunk.
 //
 // `REFRAIN_VANILLA_WORLDGEN` points at the datapack `data` root,
-// `REFRAIN_VANILLA_NETHER_REGION` and `REFRAIN_VANILLA_END_REGION` at the
-// region files under `world/dimensions/minecraft/<dimension>/region`, and
-// `REFRAIN_VANILLA_ORACLE_SEED` at the world seed (default 1).
-// `tools/worldgen/oracle/generate.py --dimension the_nether` writes such a
-// world.
+// `REFRAIN_VANILLA_NETHER_REGION`, `REFRAIN_VANILLA_END_REGION` and
+// `REFRAIN_VANILLA_NETHER_MULTI_REGION` at region files under
+// `world/dimensions/minecraft/<dimension>/region`, and
+// `REFRAIN_VANILLA_ORACLE_SEED` at the world seed (default 1). The multi-noise
+// suite additionally reads `REFRAIN_VANILLA_NETHER_CHUNK_X` and `_Z` and
+// requires the seed variable.
+// `tools/worldgen/oracle/generate.py --dimension the_nether` writes the fixed
+// world; `--carvers --dimension the_nether` writes the multi-noise world.
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
@@ -406,7 +411,8 @@ auto read_inputs(const char *region_variable) -> std::optional<oracle_inputs> {
 
 void compare(const oracle_inputs &inputs, dimension_kind kind,
              std::string_view fixed_biome,
-             const std::vector<std::array<jint, 2>> &chunks) {
+             const std::vector<std::array<jint, 2>> &chunks,
+             bool run_carvers = false) {
     auto created = dimension_generator::create(
         dimension_generator_config{.data_root = inputs.data_root,
                                    .kind = kind,
@@ -448,12 +454,13 @@ void compare(const oracle_inputs &inputs, dimension_kind kind,
         if (!reference) {
             continue;
         }
-        // This reference world strips the biome carvers, so compare the fill
-        // and surface stages only; the carver oracle uses a world that keeps
-        // them.
-        const auto generated =
-            generator.generate_terrain(chunk_pos{.x = chunk_x, .z = chunk_z},
-                                       terrain_stages{.carvers = nullptr});
+        // A fixed-biome reference world strips the biome carvers, so compare
+        // the fill and surface stages only; the carver oracle uses a world
+        // that keeps them.
+        const auto generated = generator.generate_terrain(
+            chunk_pos{.x = chunk_x, .z = chunk_z},
+            terrain_stages{.carvers =
+                               run_carvers ? generator.carvers() : nullptr});
         expect(generated.has_value()) << generated.error().message;
         if (!generated) {
             continue;
@@ -552,5 +559,26 @@ suite<"worldgen/dimension-oracle"> dimension_oracle_tests = [] {
         }
         compare(*inputs, dimension_kind::end, "minecraft:the_end",
                 {{0, 0}, {1, 1}});
+    };
+
+    // A nether world that keeps the normal multi-noise preset and the biome
+    // carvers but strips features. The compared chunk is the full terrain
+    // output of biome selection, fill, surface and carving; its biome source
+    // samples the real climate noises.
+    "nether multi-noise terrain matches the reference"_test = [] {
+        const auto inputs = read_inputs("REFRAIN_VANILLA_NETHER_MULTI_REGION");
+        if (!inputs) {
+            return;
+        }
+        const char *raw_x = std::getenv("REFRAIN_VANILLA_NETHER_CHUNK_X");
+        const char *raw_z = std::getenv("REFRAIN_VANILLA_NETHER_CHUNK_Z");
+        const char *raw_seed = std::getenv("REFRAIN_VANILLA_ORACLE_SEED");
+        if (raw_x == nullptr || raw_z == nullptr || raw_seed == nullptr) {
+            return;
+        }
+        const jint chunk_x = static_cast<jint>(std::strtol(raw_x, nullptr, 10));
+        const jint chunk_z = static_cast<jint>(std::strtol(raw_z, nullptr, 10));
+        compare(*inputs, dimension_kind::nether, "", {{chunk_x, chunk_z}},
+                true);
     };
 };

@@ -267,11 +267,7 @@ biome tags. Structure feature placement has no climate source, so snow and
 freeze feature modifiers are inert there. Capped processor lists, block-entity rule
 modifiers and template entities are not implemented; end city shulker and
 elytra data markers therefore leave no entities behind. End gateways and the
-obsidian end platform are not implemented. The nether climate samplers use the
-standard noise layout, while the reference builds the temperature and
-vegetation noises of that dimension with the legacy nether-biome initializer,
-so a nether world's biome selection can differ from the reference even though
-the parameter table it selects from does not.
+obsidian end platform are not implemented.
 
 Ruined portal starts place the template at the reference position and
 orientation. A dry reference candidate at chunk (-65, 0) matches block for
@@ -301,6 +297,18 @@ material rule while features and structures stay off. The runtime service
 reproduces a chunk with visible cave carving block for block and in all four
 final heightmaps. `tools/worldgen/oracle/README.md` records the command and the
 environment variables of that case.
+
+The two nether climate noises use the historical nether-biome octave layout:
+their generators come from legacy streams seeded with the world seed plus a
+per-noise offset, and each octave stack follows the older descending octave
+order. The other dimensions and every other noise document keep the standard
+layout. A plain nether reference world (no data pack, no fixed biome) compares
+the stored 4x4x4 biome grid of every full chunk in the region against the
+runtime climate sampler, and a nether world that keeps the real multi-noise
+biomes and carvers but strips features compares a carved terrain chunk block
+for block and in all four final heightmaps. Both tests take the seed and, for
+the terrain chunk, the chunk coordinate from the environment;
+`tools/worldgen/oracle/README.md` records the commands.
 
 A second dimension reference world keeps one structure set and uses an empty
 material rule, so a compared chunk contains terrain fill plus structure pieces

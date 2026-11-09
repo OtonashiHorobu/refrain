@@ -3,15 +3,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
 // Opt-in biome oracle: compares the quart biome grid of generated chunks with
-// the biomes stored by the reference server. The world is a plain overworld
-// (no data pack overrides); biomes are written at the `biomes` chunk status by
-// `MultiNoiseBiomeSource.createResolverForChunk` and are independent of surface
-// rules, features and structures.
+// the biomes stored by the reference server. The world keeps its normal
+// multi-noise biome source (no data pack overrides); biomes are written at the
+// `biomes` chunk status and are independent of surface rules, features and
+// structures.
 //
-// `REFRAIN_VANILLA_WORLDGEN` points at the datapack `data` root,
-// `REFRAIN_VANILLA_BIOME_REGION` at the overworld region file of a plain world
-// whose chunks (0,0) to (2,2) were force-loaded, and
-// `REFRAIN_VANILLA_ORACLE_SEED` at the world seed (default 12345).
+// `REFRAIN_VANILLA_WORLDGEN` points at the datapack `data` root and
+// `REFRAIN_VANILLA_ORACLE_SEED` at the world seed. The overworld suite reads
+// `REFRAIN_VANILLA_BIOME_REGION` and the nether suite
+// `REFRAIN_VANILLA_NETHER_BIOME_REGION`; each names a region file of a plain
+// world of that dimension. The nether suite takes the seed from the
+// environment and compares every full chunk the region contains.
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
@@ -176,6 +178,163 @@ auto decode_section_biomes(const data::nbt::value &section)
 } // namespace
 
 using namespace boost::ut;
+
+suite<"worldgen/nether-biome-oracle"> nether_biome_oracle_tests = [] {
+    // The reference world keeps the normal nether preset, so the stored biome
+    // grid is the output of the real multi-noise source. The region may hold
+    // any number of force-loaded chunks; every chunk present is compared.
+    "nether chunks store the reference quart biomes"_test = [] {
+        const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+        const char *region_path =
+            std::getenv("REFRAIN_VANILLA_NETHER_BIOME_REGION");
+        const char *raw_seed = std::getenv("REFRAIN_VANILLA_ORACLE_SEED");
+        if (data_root == nullptr || region_path == nullptr ||
+            raw_seed == nullptr) {
+            return;
+        }
+        const jlong seed = std::strtoll(raw_seed, nullptr, 10);
+        const auto region = core::io::read_file(region_path);
+        expect(region.has_value()) << region.error().message;
+        if (!region) {
+            return;
+        }
+        auto settings =
+            density::load_noise_settings(data_root, "minecraft/nether",
+                                         worldgen::algorithm::xoroshiro, seed);
+        expect(settings.has_value()) << settings.error().message;
+        if (!settings) {
+            return;
+        }
+        const density::sampler_context context;
+        const climate_sampler sampler{*settings->router.temperature,
+                                      *settings->router.vegetation,
+                                      *settings->router.continents,
+                                      *settings->router.erosion,
+                                      *settings->router.depth,
+                                      *settings->router.ridges,
+                                      context};
+        auto parameters =
+            load_biome_parameters(data_root, dimension_kind::nether);
+        expect(parameters.has_value()) << parameters.error().message;
+        if (!parameters) {
+            return;
+        }
+        multi_noise_biome_source source{std::move(*parameters)};
+        const auto &profile = dimension_profile_for(dimension_kind::nether);
+
+        std::size_t compared_chunks = 0;
+        std::size_t compared_cells = 0;
+        std::size_t mismatches = 0;
+        for (jint chunk_z = 0; chunk_z < 32; ++chunk_z) {
+            for (jint chunk_x = 0; chunk_x < 32; ++chunk_x) {
+                const auto payload = chunk_payload(*region, chunk_x, chunk_z);
+                if (!payload) {
+                    continue;
+                }
+                const auto document =
+                    data::nbt::read(*payload, data::nbt::compression::zlib);
+                expect(document.has_value()) << document.error().message;
+                if (!document) {
+                    continue;
+                }
+                const auto *root = document->as_compound();
+                const auto *status_value = child(root, "Status");
+                if (root == nullptr || status_value == nullptr) {
+                    expect(false) << "unexpected chunk document";
+                    continue;
+                }
+                const auto status = status_value->as_string();
+                if (!status || *status != "minecraft:full") {
+                    // Force-loading can save neighbour chunks before they
+                    // reach the full status; those carry no final biome grid.
+                    continue;
+                }
+                const auto *x_pos = child(root, "xPos");
+                const auto *z_pos = child(root, "zPos");
+                if (x_pos == nullptr || z_pos == nullptr) {
+                    expect(false) << "full chunk has no position";
+                    continue;
+                }
+                const auto x = int_value(*x_pos);
+                const auto z = int_value(*z_pos);
+                if (!x || *x != chunk_x || !z || *z != chunk_z) {
+                    expect(false) << "unexpected chunk header";
+                    continue;
+                }
+                const auto *sections_value = child(root, "sections");
+                const auto *sections = sections_value == nullptr
+                                           ? nullptr
+                                           : sections_value->as_list();
+                if (sections == nullptr) {
+                    expect(false) << "chunk has no sections";
+                    continue;
+                }
+                biome_grid grid{source,
+                                sampler,
+                                chunk_x * 4,
+                                profile.min_y >> 2,
+                                chunk_z * 4,
+                                4,
+                                profile.height >> 2,
+                                4};
+                ++compared_chunks;
+                for (const auto &section : sections->items) {
+                    const auto *section_data = section.as_compound();
+                    const auto *y_value = section_data == nullptr
+                                              ? nullptr
+                                              : child(section_data, "Y");
+                    const auto section_y =
+                        y_value == nullptr ? std::nullopt : int_value(*y_value);
+                    if (!section_y) {
+                        continue;
+                    }
+                    const auto expected = decode_section_biomes(section);
+                    if (!expected) {
+                        expect(false) << "section has no biome palette";
+                        continue;
+                    }
+                    expect(expected->size() == 64U);
+                    for (jint x_cell = 0; x_cell < 4; ++x_cell) {
+                        for (jint y_cell = 0; y_cell < 4; ++y_cell) {
+                            for (jint z_cell = 0; z_cell < 4; ++z_cell) {
+                                const jint quart_y = *section_y * 4 + y_cell;
+                                const jint quart_x = chunk_x * 4 + x_cell;
+                                const jint quart_z = chunk_z * 4 + z_cell;
+                                const auto id =
+                                    grid.at(quart_x, quart_y, quart_z);
+                                const auto &want =
+                                    (*expected)[static_cast<std::size_t>(
+                                        x_cell + z_cell * 4 + y_cell * 16)];
+                                ++compared_cells;
+                                if (source.biome(id) == want) {
+                                    continue;
+                                }
+                                if (mismatches < 8) {
+                                    std::fprintf(
+                                        stderr,
+                                        "chunk (%d,%d) quart (%d,%d,%d): got "
+                                        "%.*s want %s\n",
+                                        static_cast<int>(chunk_x),
+                                        static_cast<int>(chunk_z),
+                                        static_cast<int>(quart_x),
+                                        static_cast<int>(quart_y),
+                                        static_cast<int>(quart_z),
+                                        static_cast<int>(
+                                            source.biome(id).size()),
+                                        source.biome(id).data(), want.c_str());
+                                }
+                                ++mismatches;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        expect(compared_chunks > 0U) << "no reference chunk was compared";
+        expect(compared_cells > 0U);
+        expect(mismatches == 0) << "biome mismatches: " << mismatches;
+    };
+};
 
 suite<"worldgen/biome-oracle"> biome_oracle_tests = [] {
     "generated chunks store the reference quart biomes"_test = [] {

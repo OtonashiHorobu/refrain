@@ -697,6 +697,119 @@ auto normal_noise::create_parity(jint first_octave,
     return normal_noise{std::move(parameters)};
 }
 
+auto normal_noise::create_legacy_nether_biome(random_source &random) const
+    -> result<noise_stack> {
+    std::vector<double> amplitudes = parameters_.amplitude_modifiers;
+    if (amplitudes.empty()) {
+        amplitudes.assign(static_cast<std::size_t>(parameters_.octave_count),
+                          1.0);
+    }
+    auto first =
+        build_legacy_nether_layers(random, parameters_.base_octave, amplitudes);
+    if (!first) {
+        return std::unexpected{first.error()};
+    }
+    auto second =
+        build_legacy_nether_layers(random, parameters_.base_octave, amplitudes);
+    if (!second) {
+        return std::unexpected{second.error()};
+    }
+
+    // The outer layer scales the whole unnormalised stack; the standard
+    // layout instead folds the normalised per-octave amplitudes into each
+    // layer. Both produce the same total amplitude, but the multiplication
+    // rounds in a different order.
+    const float value_factor =
+        static_cast<float>(normalization_factor_ * parameters_.base_amplitude);
+    constexpr double second_frequency = 1.0181268882175227;
+
+    std::vector<noise_stack::layer> layers;
+    layers.reserve(first->size() + second->size());
+    const auto append = [&layers, value_factor](auto &stack, double scale) {
+        for (auto &layer : stack) {
+            layers.push_back(noise_stack::layer{
+                .source = std::move(layer.source),
+                .frequency = layer.frequency * scale,
+                .amplitude = layer.amplitude * value_factor,
+            });
+        }
+    };
+    append(*first, 1.0);
+    append(*second, second_frequency);
+    return noise_stack{std::move(layers)};
+}
+
+auto normal_noise::build_legacy_nether_layers(
+    random_source &random, jint first_octave,
+    const std::vector<double> &amplitudes)
+    -> result<std::vector<noise_stack::layer>> {
+    const auto octave_count = static_cast<jint>(amplitudes.size());
+    const jint zero_octave_index = -first_octave;
+    if (zero_octave_index < octave_count - 1) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "legacy nether layout cannot start at a positive "
+                       "octave")};
+    }
+
+    // The generator for the zero octave is drawn even when the layout has no
+    // slot for it; the draw is part of the historical seed sequence.
+    std::vector<std::unique_ptr<perlin_noise>> levels(
+        static_cast<std::size_t>(octave_count));
+    auto zero_octave = std::make_unique<perlin_noise>(random);
+    if (zero_octave_index >= 0 && zero_octave_index < octave_count &&
+        amplitudes[static_cast<std::size_t>(zero_octave_index)] != 0.0) {
+        levels[static_cast<std::size_t>(zero_octave_index)] =
+            std::move(zero_octave);
+    }
+
+    for (jint i = zero_octave_index - 1; i >= 0; --i) {
+        if (i < octave_count &&
+            amplitudes[static_cast<std::size_t>(i)] != 0.0) {
+            levels[static_cast<std::size_t>(i)] =
+                std::make_unique<perlin_noise>(random);
+        } else {
+            random.consume_count(262);
+        }
+    }
+
+    std::size_t non_zero = 0;
+    for (const double amplitude : amplitudes) {
+        if (amplitude != 0.0) {
+            ++non_zero;
+        }
+    }
+    const std::size_t created = static_cast<std::size_t>(
+        std::count_if(levels.begin(), levels.end(),
+                      [](const auto &level) { return level != nullptr; }));
+    if (created != non_zero) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "legacy nether layout has an unfilled octave")};
+    }
+
+    double frequency = std::pow(2.0, -static_cast<double>(zero_octave_index));
+    double amplitude_factor =
+        std::pow(2.0, static_cast<double>(octave_count - 1)) /
+        (std::pow(2.0, static_cast<double>(octave_count)) - 1.0);
+    std::vector<noise_stack::layer> layers;
+    layers.reserve(static_cast<std::size_t>(octave_count));
+    for (jint i = 0; i < octave_count; ++i) {
+        auto &level = levels[static_cast<std::size_t>(i)];
+        if (level != nullptr) {
+            layers.push_back(noise_stack::layer{
+                .source = std::move(level),
+                .frequency = frequency,
+                .amplitude = static_cast<float>(
+                    amplitude_factor * amplitudes[static_cast<std::size_t>(i)]),
+            });
+        }
+        frequency *= 2.0;
+        amplitude_factor /= 2.0;
+    }
+    return layers;
+}
+
 auto normal_noise::create(random_source &random) const -> noise_stack {
     auto first_random = random.fork_positional();
     auto second_random = random.fork_positional();

@@ -8,11 +8,13 @@
 #include <refrain/worldgen/noise/noise.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <memory>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace refrain::worldgen::density {
 
@@ -22,6 +24,24 @@ using json = data::json::value;
 
 auto fail(std::string_view message) -> error {
     return make_error(error_code::parse_error, message);
+}
+
+/// The two climate noises of the nether keep the historical octave layout;
+/// their generators are drawn from legacy streams seeded with the world seed
+/// plus a fixed per-noise offset instead of a positional fork. Every other
+/// noise document uses the standard layout.
+auto legacy_nether_climate_offset(std::string_view noise_id)
+    -> std::optional<jlong> {
+    constexpr std::array<std::pair<std::string_view, jlong>, 2> offsets{{
+        {"minecraft:nether/temperature", 0},
+        {"minecraft:nether/vegetation", 1},
+    }};
+    for (const auto &[id, offset] : offsets) {
+        if (noise_id == id) {
+            return offset;
+        }
+    }
+    return std::nullopt;
 }
 
 auto string_member(const json &node, std::string_view key)
@@ -375,6 +395,10 @@ class decoder {
             }
         }
         const normal_noise normal{parameters};
+        if (const auto offset = legacy_nether_climate_offset(key)) {
+            legacy_random_source random{wrap_add(documents_.seed, *offset)};
+            return normal.create_legacy_nether_biome(random);
+        }
         auto source = factory_->from_hash_of(key);
         return normal.create(*source);
     }

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <refrain/core/error.hpp>
 #include <refrain/worldgen/core/java_compat.hpp>
 #include <refrain/worldgen/core/rng.hpp>
 #include <refrain/worldgen/density/density_buffer.hpp>
@@ -205,10 +206,20 @@ class normal_noise {
                                             std::span<const double> amplitudes)
         -> normal_noise;
 
-    /// Builds the stack. The random source is the one derived from
-    /// Derives the stream from the noise id hash; two positional forks are
-    /// taken from it in order.
+    /// Builds the stack. Derived streams are taken from the noise id hash; two
+    /// positional forks are taken from it in order.
     [[nodiscard]] auto create(random_source &random) const -> noise_stack;
+
+    /// Builds the stack with the historical nether-biome octave layout. The
+    /// octave generators are drawn from `random` in descending octave order,
+    /// with a discarded generator in front and 262 draws for every octave the
+    /// layout leaves empty. Two independent stacks are built from the same
+    /// stream: the first at the base frequencies and the second at the
+    /// slightly higher frequency the standard layout gives its second octave
+    /// generator. Every layer of each stack is scaled by `base_amplitude`;
+    /// the stack amplitudes follow the unnormalised geometric series.
+    [[nodiscard]] auto create_legacy_nether_biome(random_source &random) const
+        -> result<noise_stack>;
 
     [[nodiscard]] auto parameters() const noexcept
         -> const normal_noise_parameters & {
@@ -247,6 +258,10 @@ class normal_noise {
         const std::vector<double> &amplitude_modifiers) -> double;
     [[nodiscard]] static auto parity_expected_deviation(jint octave_span)
         -> double;
+    [[nodiscard]] static auto
+    build_legacy_nether_layers(random_source &random, jint first_octave,
+                               const std::vector<double> &amplitudes)
+        -> result<std::vector<noise_stack::layer>>;
 
     normal_noise_parameters parameters_{};
     std::vector<octave_info> octaves_{};

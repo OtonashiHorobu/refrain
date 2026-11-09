@@ -74,6 +74,22 @@ REFRAIN_VANILLA_BIOME_REGION=/tmp/t2biome/world/dimensions/minecraft/overworld/r
     ./build/Release/bin/refrain-tests
 ```
 
+The same switch combines with `--dimension the_nether`: the normal nether
+preset stays in place, so the stored biome grid comes from the real multi-noise
+source and the climate noises use the historical nether-biome layout. The test
+compares every chunk present in the region and takes the seed from the
+environment, so neither a seed nor a chunk coordinate is fixed in the test:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --plain \
+    --dimension the_nether \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2nether-biome
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_ORACLE_SEED=1 \
+REFRAIN_VANILLA_NETHER_BIOME_REGION=/tmp/t2nether-biome/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+    ./build/Release/bin/refrain-tests
+```
+
 The generator needs a JDK (26.3 requires Java 25 or newer) and a locally owned
 `server.jar`; it never ships game data. The world it writes is a normal
 vanilla world directory under `--output`, with the region files in
@@ -130,6 +146,26 @@ Chunk `(3,0)` is visibly carved: with the same seed, a reference world whose
 default dimension mode strips the carvers differs in 6404 blocks in that
 chunk. The runtime reproduces the carved chunk block for block and in all four
 final heightmaps.
+
+`--carvers` combines with `--dimension the_nether` to keep the normal
+multi-noise nether preset and the biome carvers while every biome's features
+are stripped. The saved chunks are the real terrain of the climate-selected
+biomes: fill, surface and cave carving. The test reads the seed and the chunk
+coordinate from the environment and compares the chunk block for block and in
+all four final heightmaps:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --carvers \
+    --dimension the_nether --settle 40 \
+    --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2nether-multi
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_ORACLE_SEED=1 \
+REFRAIN_VANILLA_NETHER_MULTI_REGION=/tmp/t2nether-multi/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+REFRAIN_VANILLA_NETHER_CHUNK_X=0 REFRAIN_VANILLA_NETHER_CHUNK_Z=0 \
+    ./build/Release/bin/refrain-tests \
+    "nether multi-noise terrain matches the reference"
+```
 
 `--structures` combines with `--dimension`: the targeted dimension gets a real
 fixed biome whose carvers and features are stripped, the material rule is
