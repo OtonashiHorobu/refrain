@@ -251,7 +251,7 @@ class noise_registry {
     /// Walks `<data_root>/<namespace>/worldgen/noise/**`.
     [[nodiscard]] auto load(std::string_view data_root) -> status;
 
-    [[nodiscard]] auto get(std::string_view id) -> const noise_stack *;
+    [[nodiscard]] auto get(std::string_view id) const -> const noise_stack *;
 
   private:
     std::unique_ptr<positional_random_factory> factory_{};
@@ -262,7 +262,7 @@ class noise_registry {
 class surface_system {
   public:
     surface_system(block_states &states, generation_bounds bounds,
-                   noise_registry &noises,
+                   const noise_registry &noises,
                    positional_random_factory &noise_random,
                    state_id default_block, state_id air);
 
@@ -314,7 +314,7 @@ class surface_system {
 
     block_states *states_{nullptr};
     generation_bounds bounds_{};
-    noise_registry *noises_{nullptr};
+    const noise_registry *noises_{nullptr};
     positional_random_factory *noise_random_{nullptr};
     state_id default_block_{no_state};
     state_id air_{no_state};

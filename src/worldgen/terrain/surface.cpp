@@ -832,13 +832,13 @@ auto noise_registry::load(std::string_view data_root) -> status {
     return status_ok();
 }
 
-auto noise_registry::get(std::string_view id) -> const noise_stack * {
+auto noise_registry::get(std::string_view id) const -> const noise_stack * {
     const auto found = noises_.find(std::string{id});
     return found == noises_.end() ? nullptr : &found->second;
 }
 
 surface_system::surface_system(block_states &states, generation_bounds bounds,
-                               noise_registry &noises,
+                               const noise_registry &noises,
                                positional_random_factory &noise_random,
                                state_id default_block, state_id air)
     : states_{&states}, bounds_{bounds}, noises_{&noises},

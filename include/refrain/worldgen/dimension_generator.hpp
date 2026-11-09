@@ -26,7 +26,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -57,9 +56,29 @@ struct dimension_generator_config {
     std::string fixed_biome{};
 };
 
+/// Loaded dimension data that does not change during generation: the noise
+/// settings and their density documents, material documents and rule,
+/// climates, noise functions, block tags and possible biomes. Workers of one
+/// configuration share one instance. The biome source, the block-state
+/// registry, the surface state cache, the positional factories and the biome
+/// search cache stay per generator instance.
+struct dimension_shared_data;
+
 class dimension_generator {
   public:
+    /// Loads the immutable half of a dimension once. `create` calls it when it
+    /// has no shared instance.
+    [[nodiscard]] static auto load_shared(dimension_generator_config config)
+        -> result<std::shared_ptr<const dimension_shared_data>>;
+
     static auto create(dimension_generator_config config)
+        -> result<std::unique_ptr<dimension_generator>>;
+
+    /// Builds a generator over already loaded immutable data. Block tags are
+    /// applied to a fresh registry, so the registry and the biome search are
+    /// still per generator.
+    static auto create(dimension_generator_config config,
+                       std::shared_ptr<const dimension_shared_data> shared)
         -> result<std::unique_ptr<dimension_generator>>;
 
     /// Generates one chunk to `terrain` status: biome cells, fill, surface.
@@ -96,9 +115,7 @@ class dimension_generator {
         return *profile_;
     }
     [[nodiscard]] auto settings() const noexcept
-        -> const density::noise_settings & {
-        return settings_;
-    }
+        -> const density::noise_settings &;
     [[nodiscard]] auto biome_source() noexcept -> dimension_biome_source & {
         return biome_source_;
     }
@@ -109,28 +126,18 @@ class dimension_generator {
         return states_;
     }
     /// Material-rule document id (`minecraft:nether`).
-    [[nodiscard]] auto material_rule() const noexcept -> std::string_view {
-        return settings_.material_rule;
-    }
+    [[nodiscard]] auto material_rule() const noexcept -> std::string_view;
 
     /// Generation geometry: the noise settings clamped to the level height.
     /// The nether and the end fill 128 blocks inside a 256-block level.
-    [[nodiscard]] auto generation_min_y() const noexcept -> jint {
-        return generation_min_y_;
-    }
-    [[nodiscard]] auto generation_height() const noexcept -> jint {
-        return generation_height_;
-    }
+    [[nodiscard]] auto generation_min_y() const noexcept -> jint;
+    [[nodiscard]] auto generation_height() const noexcept -> jint;
 
   private:
     dimension_generator(dimension_generator_config config,
-                        const dimension_profile &profile,
-                        density::noise_settings settings,
+                        std::shared_ptr<const dimension_shared_data> shared,
                         dimension_biome_source biome_source,
-                        block_state_registry states,
-                        surface::material_documents documents,
-                        surface::rule material_rule, biome_climates climates,
-                        jint generation_min_y, jint generation_height);
+                        block_state_registry states);
 
     /// An aquifer borrows its positional random factory, so both live
     /// together for the whole terrain pass.
@@ -146,23 +153,14 @@ class dimension_generator {
         -> std::unique_ptr<proto_chunk>;
 
     dimension_generator_config config_{};
+    std::shared_ptr<const dimension_shared_data> shared_{};
     const dimension_profile *profile_{nullptr};
-    density::noise_settings settings_{};
     dimension_biome_source biome_source_;
     block_state_registry states_{};
     surface::block_states rule_states_{};
-    surface::material_documents documents_{};
-    surface::rule material_rule_{};
-    biome_climates climates_{};
-    biome_temperatures temperatures_{};
-    surface::noise_registry noises_;
-    status noises_status_{};
     std::unique_ptr<positional_random_factory> root_factory_{};
     density::sampler_context sampler_context_{};
     climate_sampler sampler_;
-    std::set<std::string> possible_biomes_{};
-    jint generation_min_y_{0};
-    jint generation_height_{0};
     block_state_id air_state_{0};
     block_state_id default_block_state_{0};
     block_state_id default_fluid_state_{0};

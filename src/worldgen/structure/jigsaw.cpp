@@ -333,7 +333,7 @@ void jigsaw_template_pool::build_index() {
             templates.push_back(index);
         }
     }
-    max_size.reset();
+    max_size = std::make_shared<std::atomic<jint>>(-1);
 }
 
 auto jigsaw_template_pool::get_random_template(worldgen_random &random) const

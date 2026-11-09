@@ -6,22 +6,25 @@
 
 #include <refrain/worldgen/biome/biome_manager.hpp>
 #include <refrain/worldgen/biome/biome_view.hpp>
+#include <refrain/worldgen/carver/carver_data.hpp>
 #include <refrain/worldgen/chunk/chunk_region.hpp>
 #include <refrain/worldgen/chunk/status.hpp>
 #include <refrain/worldgen/core/rng.hpp>
+#include <refrain/worldgen/feature/feature_data.hpp>
+#include <refrain/worldgen/feature/feature_plan.hpp>
 #include <refrain/worldgen/feature/feature_stage.hpp>
 #include <refrain/worldgen/provider.hpp>
 #include <refrain/worldgen/structure/feature_placement.hpp>
 #include <refrain/worldgen/structure/placement_stage.hpp>
 #include <refrain/worldgen/structure/stage.hpp>
 #include <refrain/worldgen/structure/start.hpp>
+#include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/terrain/beardifier.hpp>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
-#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -38,6 +41,16 @@ namespace {
 
 auto fail(error_code code, std::string_view message) -> error {
     return make_error(code, message);
+}
+
+auto dimension_config_for(const chunk_generator_config &config)
+    -> dimension_generator_config {
+    return dimension_generator_config{
+        .data_root = config.data_root,
+        .kind = config.kind,
+        .seed = config.seed,
+        .fixed_biome = config.fixed_biome,
+    };
 }
 
 auto target_status(generation_target target) -> chunk_status {
@@ -72,6 +85,12 @@ auto make_start_record(const structure::structure_start &start)
     return record;
 }
 
+/// Bounds of the per-worker start-probe caches. The height cache holds a
+/// little more than one radius-nine window; the block cache holds the vertical
+/// columns the nether fossil scan revisits across the sliding window.
+constexpr std::size_t start_height_capacity = 512;
+constexpr std::size_t start_block_capacity = 2048;
+
 constexpr std::array<chunk_pos, 9> neighbour_offsets{{
     {0, 0},
     {-1, -1},
@@ -86,18 +105,27 @@ constexpr std::array<chunk_pos, 9> neighbour_offsets{{
 
 } // namespace
 
+struct chunk_generator::shared_generator_data {
+    /// Immutable dimension data: noise settings, material documents and rule,
+    /// climates, noise functions, block tags and possible biomes.
+    std::shared_ptr<const dimension_shared_data> dimension{};
+    carver::loaded_carvers carvers{};
+    feature::feature_data_set feature_data{};
+    /// The per-step feature order and the flat placed-feature list used to
+    /// build every worker's registry.
+    std::vector<feature::step_features> feature_plan{};
+    std::vector<std::string> placed_ids{};
+    structure::structure_data_set structure_data{};
+};
+
 chunk_generator::chunk_generator(
     chunk_generator_config config,
+    std::shared_ptr<const shared_generator_data> shared,
     std::unique_ptr<dimension_generator> dimension,
-    carver::loaded_carvers carvers, feature::feature_data_set feature_data,
     std::unique_ptr<feature::feature_registry> features,
-    std::vector<feature::step_features> feature_plan,
-    structure::structure_data_set structure_data,
     std::unique_ptr<structure::structure_template_manager> templates)
-    : config_{std::move(config)}, dimension_{std::move(dimension)},
-      carvers_{std::move(carvers)}, feature_data_{std::move(feature_data)},
-      features_{std::move(features)}, feature_plan_{std::move(feature_plan)},
-      structure_data_{std::move(structure_data)},
+    : config_{std::move(config)}, shared_{std::move(shared)},
+      dimension_{std::move(dimension)}, features_{std::move(features)},
       templates_{std::move(templates)},
       has_structures_{config_.target != generation_target::terrain},
       has_features_{!config_.reference_world && has_structures_} {}
@@ -110,40 +138,38 @@ auto chunk_generator::create(chunk_generator_config config)
                  "chunk generator has no content data root")};
     }
     const bool needs_structures = config.target != generation_target::terrain;
-    auto dimension = dimension_generator::create(dimension_generator_config{
-        .data_root = config.data_root,
-        .kind = config.kind,
-        .seed = config.seed,
-        .fixed_biome = config.fixed_biome,
-    });
-    if (!dimension) {
-        return std::unexpected{dimension.error()};
-    }
-
     const bool needs_features = needs_structures && !config.reference_world;
     const bool needs_carvers =
         !config.reference_world && config.kind == dimension_kind::overworld;
 
-    carver::loaded_carvers carvers;
+    const auto dimension_config = dimension_config_for(config);
+    auto dimension_shared = dimension_generator::load_shared(dimension_config);
+    if (!dimension_shared) {
+        return std::unexpected{dimension_shared.error()};
+    }
+    auto shared = std::make_shared<shared_generator_data>();
+    shared->dimension = std::move(*dimension_shared);
+
+    auto dimension =
+        dimension_generator::create(dimension_config, shared->dimension);
+    if (!dimension) {
+        return std::unexpected{dimension.error()};
+    }
+
     if (needs_carvers) {
         auto loaded = carver::load_carvers(config.data_root);
         if (!loaded) {
             return std::unexpected{loaded.error()};
         }
-        carvers = std::move(*loaded);
+        shared->carvers = std::move(*loaded);
     }
-
-    feature::feature_data_set feature_data;
     if (needs_structures || needs_features) {
         auto loaded = feature::load_feature_data(config.data_root);
         if (!loaded) {
             return std::unexpected{loaded.error()};
         }
-        feature_data = std::move(*loaded);
+        shared->feature_data = std::move(*loaded);
     }
-
-    std::unique_ptr<feature::feature_registry> features;
-    std::vector<feature::step_features> feature_plan;
     if (needs_features) {
         std::vector<std::string> possible_biomes;
         if (config.fixed_biome.empty()) {
@@ -151,46 +177,178 @@ auto chunk_generator::create(chunk_generator_config config)
         } else {
             possible_biomes.push_back(config.fixed_biome);
         }
-        auto sorted = feature::feature_sorter::build(possible_biomes,
-                                                     feature_data.biomes);
+        auto sorted = feature::feature_sorter::build(
+            possible_biomes, shared->feature_data.biomes);
         if (!sorted) {
             return std::unexpected{sorted.error()};
         }
-        features =
-            std::make_unique<feature::feature_registry>((*dimension)->states());
-        std::vector<std::string> plan_ids;
-        for (const auto &step : *sorted) {
-            plan_ids.insert(plan_ids.end(), step.features.begin(),
-                            step.features.end());
+        shared->feature_plan = std::move(*sorted);
+        for (const auto &step : shared->feature_plan) {
+            shared->placed_ids.insert(shared->placed_ids.end(),
+                                      step.features.begin(),
+                                      step.features.end());
         }
-        if (const auto loaded = features->load_placed(feature_data, plan_ids);
-            !loaded) {
-            return std::unexpected{loaded.error()};
-        }
-        feature_plan = std::move(*sorted);
     }
-
-    structure::structure_data_set structure_data;
-    std::unique_ptr<structure::structure_template_manager> templates;
     if (needs_structures) {
         auto loaded = structure::load_structure_data(config.data_root);
         if (!loaded) {
             return std::unexpected{loaded.error()};
         }
-        structure_data = std::move(*loaded);
+        shared->structure_data = std::move(*loaded);
+    }
+
+    std::unique_ptr<feature::feature_registry> features;
+    if (needs_features) {
+        features =
+            std::make_unique<feature::feature_registry>((*dimension)->states());
+        if (const auto loaded =
+                features->load_placed(shared->feature_data, shared->placed_ids);
+            !loaded) {
+            return std::unexpected{loaded.error()};
+        }
+    }
+    std::unique_ptr<structure::structure_template_manager> templates;
+    if (needs_structures) {
         templates = std::make_unique<structure::structure_template_manager>(
             config.templates_root, (*dimension)->states());
     }
 
+    const std::shared_ptr<const shared_generator_data> immutable = shared;
+    return std::unique_ptr<chunk_generator>{
+        new chunk_generator{std::move(config), immutable, std::move(*dimension),
+                            std::move(features), std::move(templates)}};
+}
+
+auto chunk_generator::create_with_shared(
+    chunk_generator_config config,
+    std::shared_ptr<const shared_generator_data> shared)
+    -> result<std::unique_ptr<chunk_generator>> {
+    auto dimension = dimension_generator::create(dimension_config_for(config),
+                                                 shared->dimension);
+    if (!dimension) {
+        return std::unexpected{dimension.error()};
+    }
+    std::unique_ptr<feature::feature_registry> features;
+    if (config.target != generation_target::terrain &&
+        !config.reference_world) {
+        features =
+            std::make_unique<feature::feature_registry>((*dimension)->states());
+        if (const auto loaded =
+                features->load_placed(shared->feature_data, shared->placed_ids);
+            !loaded) {
+            return std::unexpected{loaded.error()};
+        }
+    }
+    std::unique_ptr<structure::structure_template_manager> templates;
+    if (config.target != generation_target::terrain) {
+        templates = std::make_unique<structure::structure_template_manager>(
+            config.templates_root, (*dimension)->states());
+    }
     return std::unique_ptr<chunk_generator>{new chunk_generator{
-        std::move(config), std::move(*dimension), std::move(carvers),
-        std::move(feature_data), std::move(features), std::move(feature_plan),
-        std::move(structure_data), std::move(templates)}};
+        std::move(config), std::move(shared), std::move(*dimension),
+        std::move(features), std::move(templates)}};
 }
 
 auto chunk_generator::generate(const chunk_pos &pos)
     -> result<std::unique_ptr<proto_chunk>> {
     return generate_impl(pos);
+}
+
+auto chunk_generator::store_height_column(const chunk_pos &column,
+                                          start_height_column value)
+    -> const start_height_column * {
+    if (const auto found = height_columns_.find(column);
+        found != height_columns_.end()) {
+        return &found->second;
+    }
+    while (height_column_order_.size() >= start_height_capacity) {
+        const chunk_pos oldest = height_column_order_.front();
+        height_column_order_.pop_front();
+        height_columns_.erase(oldest);
+    }
+    height_column_order_.push_back(column);
+    return &height_columns_.emplace(column, std::move(value)).first->second;
+}
+
+auto chunk_generator::store_block_column(block_column_key key,
+                                         std::vector<block_state_id> states)
+    -> const std::vector<block_state_id> * {
+    if (const auto found = block_columns_.find(key);
+        found != block_columns_.end()) {
+        return &found->second;
+    }
+    while (block_column_order_.size() >= start_block_capacity) {
+        const block_column_key oldest = block_column_order_.front();
+        block_column_order_.pop_front();
+        block_columns_.erase(oldest);
+    }
+    block_column_order_.push_back(key);
+    return &block_columns_.emplace(std::move(key), std::move(states))
+                .first->second;
+}
+
+auto chunk_generator::start_height_at(const chunk_pos &column)
+    -> result<const start_height_column *> {
+    if (const auto found = height_columns_.find(column);
+        found != height_columns_.end()) {
+        return &found->second;
+    }
+    auto generated = dimension_->generate_height_column(column);
+    if (!generated) {
+        return std::unexpected{generated.error()};
+    }
+    start_height_column snapshot;
+    for (std::size_t kind = 0; kind < heightmap_kind_count; ++kind) {
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                snapshot.heights[kind][static_cast<std::size_t>(z) * 16U +
+                                       static_cast<std::size_t>(x)] =
+                    (*generated)
+                        ->first_available(static_cast<heightmap_kind>(kind), x,
+                                          z);
+            }
+        }
+    }
+    return store_height_column(column, std::move(snapshot));
+}
+
+auto chunk_generator::start_block_at(const chunk_pos &column, jint x, jint y,
+                                     jint z) -> result<block_state_id> {
+    const auto &profile = dimension_->profile();
+    if (y < profile.min_y || y >= profile.min_y + profile.height) {
+        return dimension_->states().air();
+    }
+    const block_column_key key{.chunk = column, .x = x, .z = z};
+    if (const auto found = block_columns_.find(key);
+        found != block_columns_.end()) {
+        return found->second[static_cast<std::size_t>(y - profile.min_y)];
+    }
+    auto generated = dimension_->generate_height_column(column);
+    if (!generated) {
+        return std::unexpected{generated.error()};
+    }
+    std::vector<block_state_id> states;
+    states.reserve(static_cast<std::size_t>(profile.height));
+    for (jint column_y = profile.min_y;
+         column_y < profile.min_y + profile.height; ++column_y) {
+        states.push_back((*generated)->state_at(x, column_y, z));
+    }
+    start_height_column snapshot;
+    for (std::size_t kind = 0; kind < heightmap_kind_count; ++kind) {
+        for (jint column_z = 0; column_z < 16; ++column_z) {
+            for (jint column_x = 0; column_x < 16; ++column_x) {
+                snapshot
+                    .heights[kind][static_cast<std::size_t>(column_z) * 16U +
+                                   static_cast<std::size_t>(column_x)] =
+                    (*generated)
+                        ->first_available(static_cast<heightmap_kind>(kind),
+                                          column_x, column_z);
+            }
+        }
+    }
+    (void)store_height_column(column, std::move(snapshot));
+    const auto *stored = store_block_column(key, std::move(states));
+    return (*stored)[static_cast<std::size_t>(y - profile.min_y)];
 }
 
 auto chunk_generator::generate_impl(const chunk_pos &pos)
@@ -205,7 +363,6 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
     // height probes read unbearded fill columns, not surface or carvers.
     std::optional<structure::structure_area> area;
     if (has_structures_) {
-        std::map<chunk_pos, std::unique_ptr<proto_chunk>> height_cache;
         std::optional<error> height_error;
         const auto height_at = [&](jint x, jint z,
                                    heightmap_kind kind) -> jint {
@@ -213,31 +370,31 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
                 return profile.min_y;
             }
             const chunk_pos column{.x = x >> 4, .z = z >> 4};
-            auto found = height_cache.find(column);
-            if (found == height_cache.end()) {
-                auto generated = dimension_->generate_height_column(column);
-                if (!generated) {
-                    height_error = generated.error();
-                    return profile.min_y;
-                }
-                found =
-                    height_cache.emplace(column, std::move(*generated)).first;
+            const auto found = start_height_at(column);
+            if (!found) {
+                height_error = found.error();
+                return profile.min_y;
             }
-            return found->second->first_available(kind, x & 15, z & 15);
+            return (*found)->heights[static_cast<std::size_t>(kind)]
+                                    [static_cast<std::size_t>(z & 15) * 16U +
+                                     static_cast<std::size_t>(x & 15)];
         };
         const auto block_at = [&](jint x, jint y, jint z) -> block_state_id {
-            (void)height_at(x, z, heightmap_kind::world_surface_wg);
-            const chunk_pos column{.x = x >> 4, .z = z >> 4};
-            const auto found = height_cache.find(column);
-            if (found == height_cache.end()) {
+            if (height_error.has_value()) {
                 return states.air();
             }
-            return found->second->state_at(x & 15, y, z & 15);
+            const chunk_pos column{.x = x >> 4, .z = z >> 4};
+            const auto found = start_block_at(column, x & 15, y, z & 15);
+            if (!found) {
+                height_error = found.error();
+                return states.air();
+            }
+            return *found;
         };
 
         structure::structure_start_context start_context{
             .seed = config_.seed,
-            .data = &structure_data_,
+            .data = &shared_->structure_data,
             .min_y = profile.min_y,
             .world_height = profile.height,
             .sea_level = profile.sea_level,
@@ -289,8 +446,8 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         density::sampler_context fill_context;
         std::optional<beardifier> beard;
         if (area.has_value()) {
-            const auto collected =
-                structure::collect_beard(area->starts, structure_data_, target);
+            const auto collected = structure::collect_beard(
+                area->starts, shared_->structure_data, target);
             if (!collected.pieces.empty() || !collected.junctions.empty() ||
                 collected.affected_box.has_value()) {
                 beard.emplace(collected.pieces, collected.junctions,
@@ -303,7 +460,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
             .fill_context = area.has_value() ? &fill_context : nullptr,
             .carvers = (!config_.reference_world &&
                         config_.kind == dimension_kind::overworld)
-                           ? &carvers_.biomes
+                           ? &shared_->carvers.biomes
                            : nullptr,
             .surface = !config_.reference_world,
         };
@@ -385,7 +542,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         .sea_level = profile.sea_level,
         .level_random = nullptr,
         .adjusted_heights = &adjusted_heights,
-        .data = &structure_data_,
+        .data = &shared_->structure_data,
         .place_feature = {},
     };
 
@@ -398,7 +555,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
     }
     std::optional<structure::structure_feature_placer> structure_features;
     if (!feature_ids.empty()) {
-        structure_features.emplace(place_context, feature_data_);
+        structure_features.emplace(place_context, shared_->feature_data);
         if (const auto loaded = structure_features->load(feature_ids);
             !loaded) {
             return std::unexpected{loaded.error()};
@@ -415,8 +572,8 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
     const jlong decoration_seed =
         decoration.set_decoration_seed(config_.seed, pos.x * 16, pos.z * 16);
     for (const auto *start : active) {
-        const auto index =
-            structure::structure_step_index(structure_data_, start->structure);
+        const auto index = structure::structure_step_index(
+            shared_->structure_data, start->structure);
         if (!index.has_value()) {
             continue;
         }
@@ -438,8 +595,8 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
     // Pieces a start owns are also clipped into the eight neighbours, so the
     // shape repair of the target chunk sees the whole building.
     for (const auto *start : active) {
-        const auto index =
-            structure::structure_step_index(structure_data_, start->structure);
+        const auto index = structure::structure_step_index(
+            shared_->structure_data, start->structure);
         if (!index.has_value()) {
             continue;
         }
@@ -576,9 +733,9 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         if (templates_ != nullptr) {
             feature_context.processor_list = [this](std::string_view id)
                 -> const structure::structure_processor_list * {
-                const auto found =
-                    structure_data_.processor_lists.find(std::string{id});
-                if (found == structure_data_.processor_lists.end()) {
+                const auto found = shared_->structure_data.processor_lists.find(
+                    std::string{id});
+                if (found == shared_->structure_data.processor_lists.end()) {
                     return nullptr;
                 }
                 return &templates_->processor_list(id, found->second);
@@ -609,8 +766,9 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
             }
             candidate_biomes.assign(names.begin(), names.end());
         }
-        feature::decorate(feature_context, feature_plan_, features_->placed(),
-                          candidate_biomes, feature_data_.biomes, config_.seed);
+        feature::decorate(feature_context, shared_->feature_plan,
+                          features_->placed(), candidate_biomes,
+                          shared_->feature_data.biomes, config_.seed);
     }
 
     center->set_status(target_status(config_.target));
@@ -644,7 +802,7 @@ auto chunk_generator::generate_batch(std::span<const chunk_pos> positions,
     }
 
     while (workers_.size() + 1 < worker_count) {
-        auto created = create(config_);
+        auto created = create_with_shared(config_, shared_);
         if (!created) {
             return std::unexpected{created.error()};
         }
@@ -657,6 +815,9 @@ auto chunk_generator::generate_batch(std::span<const chunk_pos> positions,
         worker_instances.push_back(workers_[index - 1].get());
     }
 
+    const std::size_t claim_size = std::clamp<std::size_t>(
+        (positions.size() + worker_count * 2U - 1) / (worker_count * 2U), 1U,
+        16U);
     std::atomic<std::size_t> next{0};
     std::vector<std::optional<error>> errors(positions.size());
     std::vector<std::jthread> threads;
@@ -665,22 +826,28 @@ auto chunk_generator::generate_batch(std::span<const chunk_pos> positions,
         threads.emplace_back([&, worker] {
             auto *generator = worker_instances[worker];
             for (;;) {
-                const std::size_t index = next.fetch_add(1);
-                if (index >= positions.size()) {
+                const std::size_t begin = next.fetch_add(claim_size);
+                if (begin >= positions.size()) {
                     return;
                 }
-                try {
-                    auto generated = generator->generate_impl(positions[index]);
-                    if (!generated) {
-                        errors[index] = generated.error();
-                    } else {
-                        chunks[index] = std::move(*generated);
+                const std::size_t end =
+                    std::min(begin + claim_size, positions.size());
+                for (std::size_t index = begin; index < end; ++index) {
+                    try {
+                        auto generated =
+                            generator->generate_impl(positions[index]);
+                        if (!generated) {
+                            errors[index] = generated.error();
+                        } else {
+                            chunks[index] = std::move(*generated);
+                        }
+                    } catch (const std::exception &exception) {
+                        errors[index] =
+                            fail(error_code::unknown, exception.what());
+                    } catch (...) {
+                        errors[index] = fail(error_code::unknown,
+                                             "chunk generation failed");
                     }
-                } catch (const std::exception &exception) {
-                    errors[index] = fail(error_code::unknown, exception.what());
-                } catch (...) {
-                    errors[index] =
-                        fail(error_code::unknown, "chunk generation failed");
                 }
             }
         });

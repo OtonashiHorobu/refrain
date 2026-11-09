@@ -15,6 +15,7 @@
 #include <refrain/worldgen/core/rng.hpp>
 #include <refrain/worldgen/structure/placement_types.hpp>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -79,7 +80,9 @@ struct jigsaw_template_pool {
     std::string fallback{};
     std::vector<weighted_pool_element> raw_elements{};
     std::vector<std::size_t> templates{};
-    mutable std::optional<jint> max_size{};
+    /// Cached tallest element. Pools are shared by concurrent batch workers,
+    /// so the cache is atomic and is seeded during decoding.
+    mutable std::shared_ptr<std::atomic<jint>> max_size{};
 
     void build_index();
     [[nodiscard]] auto size() const -> jint {

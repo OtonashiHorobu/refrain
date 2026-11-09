@@ -755,8 +755,12 @@ auto heightmap_from_name(std::string_view name)
 
 auto jigsaw_template_pool::get_max_size(
     structure_template_manager &manager) const -> jint {
-    if (max_size.has_value()) {
-        return *max_size;
+    if (max_size == nullptr) {
+        max_size = std::make_shared<std::atomic<jint>>(-1);
+    }
+    const jint cached = max_size->load(std::memory_order_acquire);
+    if (cached >= 0) {
+        return cached;
     }
     jint best = 0;
     for (const auto &weighted : raw_elements) {
@@ -768,7 +772,9 @@ auto jigsaw_template_pool::get_max_size(
             element_bounds(info, manager, block_pos{}, template_rotation::none);
         best = std::max(best, bounds.max_y - bounds.min_y + 1);
     }
-    max_size = best;
+    jint expected = -1;
+    max_size->compare_exchange_strong(expected, best, std::memory_order_acq_rel,
+                                      std::memory_order_acquire);
     return best;
 }
 

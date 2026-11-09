@@ -56,58 +56,76 @@ auto fluid_traits(bool water) -> state_traits {
 
 } // namespace
 
-dimension_generator::dimension_generator(
-    dimension_generator_config config, const dimension_profile &profile,
-    density::noise_settings settings, dimension_biome_source biome_source,
-    block_state_registry states, surface::material_documents documents,
-    surface::rule material_rule, biome_climates climates, jint generation_min_y,
-    jint generation_height)
-    : config_{std::move(config)}, profile_{&profile},
-      settings_{std::move(settings)}, biome_source_{std::move(biome_source)},
-      states_{std::move(states)}, documents_{std::move(documents)},
-      material_rule_{std::move(material_rule)}, climates_{std::move(climates)},
-      noises_{settings_.legacy_random_source ? algorithm::legacy
-                                             : algorithm::xoroshiro,
-              config_.seed},
-      root_factory_{new_positional_factory(settings_.legacy_random_source
-                                               ? algorithm::legacy
+struct dimension_shared_data {
+    dimension_shared_data(const dimension_profile &dimension_profile,
+                          density::noise_settings dimension_settings,
+                          block_tag_set block_tags,
+                          surface::material_documents material_documents,
+                          surface::rule rule, biome_climates dimension_climates,
+                          jlong seed)
+        : profile{dimension_profile}, settings{std::move(dimension_settings)},
+          tags{std::move(block_tags)}, documents{std::move(material_documents)},
+          material_rule{std::move(rule)},
+          climates{std::move(dimension_climates)},
+          noises{settings.legacy_random_source ? algorithm::legacy
                                                : algorithm::xoroshiro,
-                                           config_.seed)},
-      sampler_{*settings_.router.temperature,
-               *settings_.router.vegetation,
-               *settings_.router.continents,
-               *settings_.router.erosion,
-               *settings_.router.depth,
-               *settings_.router.ridges,
-               sampler_context_},
-      generation_min_y_{generation_min_y},
-      generation_height_{generation_height} {
-    noises_status_ = noises_.load(config_.data_root);
+                 seed},
+          generation_min_y{std::max(profile.min_y, settings.min_y)},
+          generation_height{std::min(profile.min_y + profile.height,
+                                     settings.min_y + settings.height) -
+                            generation_min_y} {}
+
+    const dimension_profile &profile;
+    density::noise_settings settings;
+    block_tag_set tags;
+    surface::material_documents documents;
+    surface::rule material_rule;
+    biome_climates climates;
+    biome_temperatures temperatures{};
+    surface::noise_registry noises;
+    std::set<std::string> possible_biomes{};
+    jint generation_min_y{0};
+    jint generation_height{0};
+};
+
+dimension_generator::dimension_generator(
+    dimension_generator_config config,
+    std::shared_ptr<const dimension_shared_data> shared,
+    dimension_biome_source biome_source, block_state_registry states)
+    : config_{std::move(config)}, shared_{std::move(shared)},
+      profile_{&shared_->profile}, biome_source_{std::move(biome_source)},
+      states_{std::move(states)},
+      root_factory_{new_positional_factory(
+          shared_->settings.legacy_random_source ? algorithm::legacy
+                                                 : algorithm::xoroshiro,
+          config_.seed)},
+      sampler_{*shared_->settings.router.temperature,
+               *shared_->settings.router.vegetation,
+               *shared_->settings.router.continents,
+               *shared_->settings.router.erosion,
+               *shared_->settings.router.depth,
+               *shared_->settings.router.ridges,
+               sampler_context_} {
     // The rule table must share the registry the chunk and the fill use.
     rule_states_ = surface::block_states{states_};
-    if (config_.fixed_biome.empty()) {
-        possible_biomes_.insert(biome_source_.biomes().begin(),
-                                biome_source_.biomes().end());
-    } else {
-        possible_biomes_.insert(config_.fixed_biome);
-    }
     air_state_ = states_.air();
-    const auto block = states_.intern(settings_.default_block, solid_traits());
+    const auto block =
+        states_.intern(shared_->settings.default_block, solid_traits());
     default_block_state_ = block.value_or(no_block_state);
-    if (settings_.default_fluid == "minecraft:air") {
+    if (shared_->settings.default_fluid == "minecraft:air") {
         default_fluid_state_ = air_state_;
     } else {
-        const bool water = settings_.default_fluid == "minecraft:water";
-        const auto fluid =
-            states_.intern(settings_.default_fluid, fluid_traits(water));
+        const bool water = shared_->settings.default_fluid == "minecraft:water";
+        const auto fluid = states_.intern(shared_->settings.default_fluid,
+                                          fluid_traits(water));
         default_fluid_state_ = fluid.value_or(no_block_state);
     }
     lava_state_ = states_.intern("minecraft:lava", fluid_traits(false))
                       .value_or(no_block_state);
 }
 
-auto dimension_generator::create(dimension_generator_config config)
-    -> result<std::unique_ptr<dimension_generator>> {
+auto dimension_generator::load_shared(dimension_generator_config config)
+    -> result<std::shared_ptr<const dimension_shared_data>> {
     if (config.data_root.empty()) {
         return std::unexpected{fail("dimension generator has no data root")};
     }
@@ -144,11 +162,6 @@ auto dimension_generator::create(dimension_generator_config config)
     if (!tags) {
         return std::unexpected{tags.error()};
     }
-    block_state_registry states;
-    if (const auto applied = apply_block_tags(states, *tags); !applied) {
-        return std::unexpected{applied.error()};
-    }
-
     auto documents = surface::load_material_documents(config.data_root);
     if (!documents) {
         return std::unexpected{documents.error()};
@@ -163,33 +176,80 @@ auto dimension_generator::create(dimension_generator_config config)
     if (!rule) {
         return std::unexpected{rule.error()};
     }
-
     biome_climates climates;
     if (const auto loaded = climates.load(config.data_root); !loaded) {
         return std::unexpected{loaded.error()};
     }
 
-    // The reference clamps the noise settings to the level height; the nether
-    // and the end generate 128 blocks inside a 256-block level.
-    const jint generation_min_y = std::max(profile.min_y, settings->min_y);
-    const jint generation_max_y = std::min(profile.min_y + profile.height,
-                                           settings->min_y + settings->height);
-    const jint generation_height = generation_max_y - generation_min_y;
-    if (generation_height <= 0) {
+    auto shared = std::make_shared<dimension_shared_data>(
+        profile, std::move(*settings), std::move(*tags), std::move(*documents),
+        std::move(*rule), std::move(climates), config.seed);
+    if (shared->generation_height <= 0) {
         return std::unexpected{
             fail("the noise settings fall outside the level height")};
     }
-
-    auto generator =
-        std::unique_ptr<dimension_generator>{new dimension_generator{
-            std::move(config), profile, std::move(*settings),
-            std::move(*biome_source), std::move(states), std::move(*documents),
-            std::move(*rule), std::move(climates), generation_min_y,
-            generation_height}};
-    if (!generator->noises_status_) {
-        return std::unexpected{generator->noises_status_.error()};
+    if (config.fixed_biome.empty()) {
+        shared->possible_biomes.insert((*biome_source).biomes().begin(),
+                                       (*biome_source).biomes().end());
+    } else {
+        shared->possible_biomes.insert(config.fixed_biome);
     }
-    return generator;
+    if (const auto loaded = shared->noises.load(config.data_root); !loaded) {
+        return std::unexpected{loaded.error()};
+    }
+    return std::shared_ptr<const dimension_shared_data>{std::move(shared)};
+}
+
+auto dimension_generator::create(dimension_generator_config config)
+    -> result<std::unique_ptr<dimension_generator>> {
+    auto shared = load_shared(config);
+    if (!shared) {
+        return std::unexpected{shared.error()};
+    }
+    return create(std::move(config), std::move(*shared));
+}
+
+auto dimension_generator::create(
+    dimension_generator_config config,
+    std::shared_ptr<const dimension_shared_data> shared)
+    -> result<std::unique_ptr<dimension_generator>> {
+    if (config.data_root.empty()) {
+        return std::unexpected{fail("dimension generator has no data root")};
+    }
+    result<dimension_biome_source> biome_source =
+        result<dimension_biome_source>{
+            dimension_biome_source::fixed(config.kind, config.fixed_biome)};
+    if (config.fixed_biome.empty()) {
+        biome_source =
+            dimension_biome_source::load(config.data_root, config.kind);
+    }
+    if (!biome_source) {
+        return std::unexpected{biome_source.error()};
+    }
+    block_state_registry states;
+    if (const auto applied = apply_block_tags(states, shared->tags); !applied) {
+        return std::unexpected{applied.error()};
+    }
+    return std::unique_ptr<dimension_generator>{
+        new dimension_generator{std::move(config), std::move(shared),
+                                std::move(*biome_source), std::move(states)}};
+}
+
+auto dimension_generator::settings() const noexcept
+    -> const density::noise_settings & {
+    return shared_->settings;
+}
+
+auto dimension_generator::material_rule() const noexcept -> std::string_view {
+    return shared_->settings.material_rule;
+}
+
+auto dimension_generator::generation_min_y() const noexcept -> jint {
+    return shared_->generation_min_y;
+}
+
+auto dimension_generator::generation_height() const noexcept -> jint {
+    return shared_->generation_height;
 }
 
 auto dimension_generator::make_aquifer(
@@ -204,17 +264,18 @@ auto dimension_generator::make_aquifer(
                                     .default_fluid = default_fluid_state_,
                                     .lava = lava_state_};
     aquifer_holder holder;
-    if (!settings_.aquifers) {
+    if (!shared_->settings.aquifers) {
         holder.aquifer = std::make_unique<terrain::disabled_aquifer>(picker);
         return holder;
     }
     holder.factory =
         root_factory_->from_hash_of("minecraft:aquifer")->fork_positional();
-    const volume chunk_volume{16,           generation_height_, 16,
-                              chunk_x * 16, generation_min_y_,  chunk_z * 16};
+    const volume chunk_volume{
+        16,           shared_->generation_height, 16,
+        chunk_x * 16, shared_->generation_min_y,  chunk_z * 16};
     holder.aquifer = std::make_unique<terrain::noise_aquifer>(
-        settings_.aquifer, *holder.factory, chunk_volume, picker, blocks,
-        context);
+        shared_->settings.aquifer, *holder.factory, chunk_volume, picker,
+        blocks, context);
     return holder;
 }
 
@@ -238,10 +299,10 @@ auto dimension_generator::generate_height_column(const chunk_pos &pos)
     };
     terrain::fill_proto_chunk(*chunk, fill_options,
                               terrain::proto_fill_volume{
-                                  .min_y = generation_min_y_,
-                                  .height = generation_height_,
+                                  .min_y = shared_->generation_min_y,
+                                  .height = shared_->generation_height,
                               },
-                              *settings_.router.final_density, context,
+                              *shared_->settings.router.final_density, context,
                               *aquifer.aquifer);
     return chunk;
 }
@@ -261,11 +322,12 @@ auto dimension_generator::biome_name(std::uint16_t id) const
 auto dimension_generator::biome_temperature(std::string_view biome, jint x,
                                             jint y, jint z) const
     -> std::optional<float> {
-    const auto *climate = climates_.get(biome);
+    const auto *climate = shared_->climates.get(biome);
     if (climate == nullptr) {
         return std::nullopt;
     }
-    return temperatures_.temperature_at(*climate, x, y, z, profile_->sea_level);
+    return shared_->temperatures.temperature_at(*climate, x, y, z,
+                                                profile_->sea_level);
 }
 
 auto dimension_generator::generate(const chunk_pos &pos)
@@ -292,11 +354,11 @@ auto dimension_generator::generate_terrain(const chunk_pos &pos,
     };
     terrain::fill_proto_chunk(*chunk, fill_options,
                               terrain::proto_fill_volume{
-                                  .min_y = generation_min_y_,
-                                  .height = generation_height_,
+                                  .min_y = shared_->generation_min_y,
+                                  .height = shared_->generation_height,
                               },
-                              *settings_.router.final_density, fill_context,
-                              *aquifer.aquifer);
+                              *shared_->settings.router.final_density,
+                              fill_context, *aquifer.aquifer);
 
     if (!stages.surface && stages.carvers == nullptr) {
         chunk->set_status(chunk_status::terrain);
@@ -325,16 +387,16 @@ auto dimension_generator::generate_terrain(const chunk_pos &pos,
 
     const surface::generation_bounds bounds{
         .min_gen_y = profile_->min_y,
-        .gen_depth = generation_height_,
+        .gen_depth = shared_->generation_height,
         .sea_level = profile_->sea_level,
         .min_y = profile_->min_y,
         .max_block_y = max_block_y,
         .chunk_min_x = pos.x * 16,
         .chunk_min_z = pos.z * 16,
     };
-    surface::surface_system system{
-        rule_states_,         bounds,    noises_, *root_factory_,
-        default_block_state_, air_state_};
+    surface::surface_system system{rule_states_,         bounds,
+                                   shared_->noises,      *root_factory_,
+                                   default_block_state_, air_state_};
 
     dimension_biome_resolver uncached{biome_source_, sampler_};
     chunk_biome_resolver biome_view{
@@ -351,7 +413,7 @@ auto dimension_generator::generate_terrain(const chunk_pos &pos,
         return biome_source_.biome(manager.get_biome(x, y, z));
     };
     providers.preliminary_surface = [this](jint x, jint z) {
-        return settings_.router.chunk_surface_level->sample_value(
+        return shared_->settings.router.chunk_surface_level->sample_value(
             sampler_context_, x, 0, z);
     };
     providers.surface_depth = [&system](jint x, jint z) {
@@ -363,11 +425,13 @@ auto dimension_generator::generate_terrain(const chunk_pos &pos,
     providers.band = [&system](jint x, jint y, jint z) {
         return system.band(x, y, z);
     };
-    providers.noise = [this](std::string_view id) { return noises_.get(id); };
+    providers.noise = [this](std::string_view id) {
+        return shared_->noises.get(id);
+    };
     providers.density =
         [this](std::string_view id) -> result<density::sampler_ptr> {
         return density::decode_density("\"" + std::string{id} + "\"",
-                                       settings_.documents);
+                                       shared_->settings.documents);
     };
     providers.random_factory =
         [this](std::string_view name) -> positional_random_factory & {
@@ -382,26 +446,26 @@ auto dimension_generator::generate_terrain(const chunk_pos &pos,
     };
     providers.cold_enough_to_snow = [this](std::string_view biome, jint x,
                                            jint y, jint z) {
-        const auto *climate = climates_.get(biome);
+        const auto *climate = shared_->climates.get(biome);
         if (climate == nullptr) {
             return false;
         }
-        return temperatures_.temperature_at(*climate, x, y, z,
-                                            profile_->sea_level) < 0.15F;
+        return shared_->temperatures.temperature_at(
+                   *climate, x, y, z, profile_->sea_level) < 0.15F;
     };
-    providers.possible_biomes = &possible_biomes_;
+    providers.possible_biomes = &shared_->possible_biomes;
 
     surface::material_context rule_context{rule_states_, bounds, providers,
                                            sampler_context_};
-    surface::rule_compiler compiler{documents_, rule_context};
-    auto compiled = compiler.compile(material_rule_);
+    surface::rule_compiler compiler{shared_->documents, rule_context};
+    auto compiled = compiler.compile(shared_->material_rule);
     if (!compiled) {
         return std::unexpected{compiled.error()};
     }
     if (stages.surface) {
-        if (const auto built =
-                system.build_surface(*chunk, rule_context, *compiled, climates_,
-                                     temperatures_, providers.biome);
+        if (const auto built = system.build_surface(
+                *chunk, rule_context, *compiled, shared_->climates,
+                shared_->temperatures, providers.biome);
             !built) {
             return std::unexpected{built.error()};
         }
