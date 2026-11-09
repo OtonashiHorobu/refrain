@@ -79,6 +79,8 @@ auto dimension_environment(std::string_view name) -> dimension_kind {
     return dimension_kind::overworld;
 }
 
+auto same_structures(const proto_chunk &left, const proto_chunk &right) -> bool;
+
 auto same_chunk(const proto_chunk &left, const proto_chunk &right,
                 bool compare_status = true) -> bool {
     if (left.min_y() != right.min_y() || left.height() != right.height() ||
@@ -133,6 +135,57 @@ auto same_chunk(const proto_chunk &left, const proto_chunk &right,
                     return false;
                 }
             }
+        }
+    }
+    return same_structures(left, right);
+}
+
+/// The structure records are part of the output even though they do not
+/// change the block grid; compare the fields a batch must reproduce.
+auto same_structures(const proto_chunk &left, const proto_chunk &right)
+    -> bool {
+    const auto &left_starts = left.structure_starts();
+    const auto &right_starts = right.structure_starts();
+    if (left_starts.size() != right_starts.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left_starts.size(); ++index) {
+        const auto &a = left_starts[index];
+        const auto &b = right_starts[index];
+        if (a.structure != b.structure || a.step != b.step ||
+            a.chunk_x != b.chunk_x || a.chunk_z != b.chunk_z ||
+            a.min_x != b.min_x || a.min_y != b.min_y || a.min_z != b.min_z ||
+            a.max_x != b.max_x || a.max_y != b.max_y || a.max_z != b.max_z ||
+            a.pieces.size() != b.pieces.size()) {
+            return false;
+        }
+        for (std::size_t piece = 0; piece < a.pieces.size(); ++piece) {
+            const auto &left_piece = a.pieces[piece];
+            const auto &right_piece = b.pieces[piece];
+            if (left_piece.type != right_piece.type ||
+                left_piece.min_x != right_piece.min_x ||
+                left_piece.min_y != right_piece.min_y ||
+                left_piece.min_z != right_piece.min_z ||
+                left_piece.max_x != right_piece.max_x ||
+                left_piece.max_y != right_piece.max_y ||
+                left_piece.max_z != right_piece.max_z ||
+                left_piece.template_id != right_piece.template_id ||
+                left_piece.orientation != right_piece.orientation) {
+                return false;
+            }
+        }
+    }
+    const auto &left_references = left.structure_references();
+    const auto &right_references = right.structure_references();
+    if (left_references.size() != right_references.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left_references.size(); ++index) {
+        const auto &a = left_references[index];
+        const auto &b = right_references[index];
+        if (a.structure != b.structure || a.chunk_x != b.chunk_x ||
+            a.chunk_z != b.chunk_z || a.count != b.count) {
+            return false;
         }
     }
     return true;
@@ -391,6 +444,105 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
             }
         }
         expect(!(*serial)[0]->structure_starts().empty());
+    };
+
+    "full batches are identical across repeats and workers"_test = [] {
+        auto created = chunk_generator::create(chunk_generator_config{
+            .data_root = source_data_root(),
+            .templates_root = "",
+            .seed = 7,
+            .kind = dimension_kind::end,
+            .fixed_biome = "minecraft:end_barrens",
+            .target = generation_target::full,
+            .structure_sets = {},
+            .reference_world = false,
+        });
+        expect(created.has_value()) << created.error().message;
+        if (!created) {
+            return;
+        }
+        auto generator = std::move(*created);
+        const chunk_pos origin{.x = 0, .z = 0};
+        // The first call fills the start-probe caches, the second reuses them,
+        // and the parallel call uses one cache per worker.
+        const auto cold = generator->generate_area(origin, 4, 2, 1);
+        expect(cold.has_value()) << cold.error().message;
+        if (!cold) {
+            return;
+        }
+        const auto warm = generator->generate_area(origin, 4, 2, 1);
+        expect(warm.has_value()) << warm.error().message;
+        if (!warm) {
+            return;
+        }
+        const auto parallel = generator->generate_area(origin, 4, 2, 4);
+        expect(parallel.has_value()) << parallel.error().message;
+        if (!parallel) {
+            return;
+        }
+        expect(warm->size() == cold->size());
+        expect(parallel->size() == cold->size());
+        for (std::size_t index = 0;
+             index < std::min(cold->size(), warm->size()); ++index) {
+            expect((*cold)[index] != nullptr);
+            expect((*warm)[index] != nullptr);
+            if ((*cold)[index] != nullptr && (*warm)[index] != nullptr) {
+                expect(same_chunk(*(*cold)[index], *(*warm)[index]))
+                    << "a repeated batch changed the chunk";
+            }
+        }
+        for (std::size_t index = 0;
+             index < std::min(cold->size(), parallel->size()); ++index) {
+            expect((*parallel)[index] != nullptr);
+            if ((*cold)[index] != nullptr && (*parallel)[index] != nullptr) {
+                expect(same_chunk(*(*cold)[index], *(*parallel)[index]))
+                    << "serial and parallel batches disagree";
+            }
+        }
+
+        // Jigsaw pools are shared by the workers, so generate a village
+        // neighbourhood in parallel as well.
+        auto village = chunk_generator::create(chunk_generator_config{
+            .data_root = source_data_root(),
+            .templates_root = "",
+            .seed = 11,
+            .kind = dimension_kind::overworld,
+            .fixed_biome = "minecraft:plains",
+            .target = generation_target::full,
+            .structure_sets = {"minecraft:villages"},
+            .reference_world = true,
+        });
+        expect(village.has_value()) << village.error().message;
+        if (!village) {
+            return;
+        }
+        const chunk_pos village_origin{.x = 0, .z = 0};
+        const auto village_serial =
+            (*village)->generate_area(village_origin, 3, 2, 1);
+        expect(village_serial.has_value()) << village_serial.error().message;
+        if (!village_serial) {
+            return;
+        }
+        const auto village_parallel =
+            (*village)->generate_area(village_origin, 3, 2, 3);
+        expect(village_parallel.has_value())
+            << village_parallel.error().message;
+        if (!village_parallel) {
+            return;
+        }
+        expect(village_parallel->size() == village_serial->size());
+        for (std::size_t index = 0;
+             index < std::min(village_serial->size(), village_parallel->size());
+             ++index) {
+            expect((*village_serial)[index] != nullptr);
+            expect((*village_parallel)[index] != nullptr);
+            if ((*village_serial)[index] != nullptr &&
+                (*village_parallel)[index] != nullptr) {
+                expect(same_chunk(*(*village_serial)[index],
+                                  *(*village_parallel)[index]))
+                    << "serial and parallel village chunks disagree";
+            }
+        }
     };
 
     "configuration errors are values"_test = [] {
