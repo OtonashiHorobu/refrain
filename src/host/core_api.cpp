@@ -133,15 +133,15 @@ auto host_tick_now(void *self) -> std::int64_t {
     return self == nullptr ? 0 : context_of(self)->tick_now();
 }
 
-auto host_config_i64(void *self, refrain_str key, std::int64_t *out)
-    -> refrain_status {
+auto host_config_i64(void *self, refrain_str ns, refrain_str key,
+                     std::int64_t *out) -> refrain_status {
     if (self == nullptr || out == nullptr) {
         clear_error();
         set_error("config_get_i64: null argument");
         return static_cast<refrain_status>(core::host_error::invalid_argument);
     }
     clear_error();
-    auto value{context_of(self)->config_i64(to_view(key))};
+    auto value{context_of(self)->config_i64(to_view(ns), to_view(key))};
     if (!value) {
         set_error(value.error());
         return static_cast<refrain_status>(to_host_error(value.error().code));
@@ -150,15 +150,15 @@ auto host_config_i64(void *self, refrain_str key, std::int64_t *out)
     return REFRAIN_STATUS_OK;
 }
 
-auto host_config_bool(void *self, refrain_str key, std::uint8_t *out)
-    -> refrain_status {
+auto host_config_bool(void *self, refrain_str ns, refrain_str key,
+                      std::uint8_t *out) -> refrain_status {
     if (self == nullptr || out == nullptr) {
         clear_error();
         set_error("config_get_bool: null argument");
         return static_cast<refrain_status>(core::host_error::invalid_argument);
     }
     clear_error();
-    auto value{context_of(self)->config_bool(to_view(key))};
+    auto value{context_of(self)->config_bool(to_view(ns), to_view(key))};
     if (!value) {
         set_error(value.error());
         return static_cast<refrain_status>(to_host_error(value.error().code));
@@ -167,15 +167,15 @@ auto host_config_bool(void *self, refrain_str key, std::uint8_t *out)
     return REFRAIN_STATUS_OK;
 }
 
-auto host_config_string(void *self, refrain_str key, refrain_str *out)
-    -> refrain_status {
+auto host_config_string(void *self, refrain_str ns, refrain_str key,
+                        refrain_str *out) -> refrain_status {
     if (self == nullptr || out == nullptr) {
         clear_error();
         set_error("config_get_string: null argument");
         return static_cast<refrain_status>(core::host_error::invalid_argument);
     }
     clear_error();
-    auto value{context_of(self)->config_string(to_view(key))};
+    auto value{context_of(self)->config_string(to_view(ns), to_view(key))};
     if (!value) {
         set_error(value.error());
         return static_cast<refrain_status>(to_host_error(value.error().code));

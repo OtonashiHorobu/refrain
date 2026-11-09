@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: a29acb77eba22b5e
+// Schema hash: 4a5dc6c6c8f9b026
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_HOST_CORE_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_HOST_CORE_ABI_H
@@ -62,7 +62,7 @@ struct refrain_host_core_provider_ref {
 #define REFRAIN_HOST_CORE_SIDE REFRAIN_SIDE_BOTH
 #define REFRAIN_HOST_CORE_THREAD REFRAIN_THREAD_ANY
 #define REFRAIN_HOST_CORE_COMPOSITION REFRAIN_COMPOSITION_SEALED
-#define REFRAIN_HOST_CORE_CAPABILITIES "log,services,clock,alloc"
+#define REFRAIN_HOST_CORE_CAPABILITIES "log,config,services,clock,alloc"
 #define REFRAIN_HOST_CORE_REQUIRES "refrain:core>=1.0.0"
 #define REFRAIN_HOST_CORE_SERVICE_IDS "refrain:host.core"
 
@@ -79,15 +79,17 @@ typedef struct refrain_host_core_vtable {
     int64_t (*now_ns)(void *self);
     // attributes: #[thread(any)]
     int64_t (*tick_now)(void *self);
-    // Read a value from the calling mod's config namespace. The host returns
-    // `not_found` for a missing key; the string is borrowed until the next
-    // config reload.
+    // Read a value from the named config namespace. Namespaces are mounted by
+    // the host composition root (`host`, `network`, `mod/<id>`, ...); a
+    // native mod may read any mounted namespace, while a sandboxed guest is
+    // restricted by the host import layer. The string is borrowed until the
+    // next call on the same thread.
     // attributes: #[thread(any)] #[can_fail]
-    refrain_status (*config_get_i64)(void *self, refrain_str key, int64_t *out_value);
+    refrain_status (*config_get_i64)(void *self, refrain_str ns, refrain_str key, int64_t *out_value);
     // attributes: #[thread(any)] #[can_fail]
-    refrain_status (*config_get_bool)(void *self, refrain_str key, uint8_t *out_value);
+    refrain_status (*config_get_bool)(void *self, refrain_str ns, refrain_str key, uint8_t *out_value);
     // attributes: #[thread(any)] #[can_fail]
-    refrain_status (*config_get_string)(void *self, refrain_str key, refrain_str *out_value);
+    refrain_status (*config_get_string)(void *self, refrain_str ns, refrain_str key, refrain_str *out_value);
     // Look up a frozen service provider. `instance` is empty for the default
     // instance. The returned vtable/self stay valid for the process lifetime.
     // attributes: #[thread(any)] #[can_fail]

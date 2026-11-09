@@ -43,8 +43,13 @@ constexpr std::uint64_t min_alignment{alignof(allocation_header)};
 } // namespace
 
 host_context::host_context(refrain::mod::host &owner,
-                           std::function<std::int64_t()> tick)
-    : owner_{owner}, tick_{std::move(tick)} {}
+                           std::function<std::int64_t()> tick,
+                           const refrain::core::config::store *config)
+    : owner_{owner}, tick_{std::move(tick)}, config_{config} {}
+
+namespace {
+thread_local std::string config_string_buffer;
+} // namespace
 
 void host_context::log(std::uint32_t level, std::string_view message) noexcept {
     auto mapped{refrain::log::level::info};
@@ -69,25 +74,70 @@ void host_context::version(
     out.patch = REFRAIN_HOST_CORE_ABI_PATCH;
 }
 
-auto host_context::config_i64(std::string_view /*key*/)
+auto host_context::config_i64(std::string_view ns, std::string_view key)
     -> refrain::result<std::int64_t> {
-    return std::unexpected{
-        refrain::make_error(refrain::error_code::unsupported,
-                            "host config store is not wired yet")};
+    if (config_ == nullptr) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::unsupported, "host config store is disabled")};
+    }
+    const auto view{config_->module(ns)};
+    if (!view.valid() || !view.contains(key)) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::not_found,
+            "config key is missing in namespace '" + std::string{ns} + "'")};
+    }
+    if (view.kind(key) != refrain::core::config::value_kind::integer) {
+        return std::unexpected{
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "config key is not an integer")};
+    }
+    return view.get_int64(key, 0);
 }
 
-auto host_context::config_bool(std::string_view /*key*/)
+auto host_context::config_bool(std::string_view ns, std::string_view key)
     -> refrain::result<bool> {
-    return std::unexpected{
-        refrain::make_error(refrain::error_code::unsupported,
-                            "host config store is not wired yet")};
+    if (config_ == nullptr) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::unsupported, "host config store is disabled")};
+    }
+    const auto view{config_->module(ns)};
+    if (!view.valid() || !view.contains(key)) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::not_found,
+            "config key is missing in namespace '" + std::string{ns} + "'")};
+    }
+    if (view.kind(key) != refrain::core::config::value_kind::boolean) {
+        return std::unexpected{
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "config key is not a boolean")};
+    }
+    return view.get_bool(key, false);
 }
 
-auto host_context::config_string(std::string_view /*key*/)
+auto host_context::config_string(std::string_view ns, std::string_view key)
     -> refrain::result<std::string_view> {
-    return std::unexpected{
-        refrain::make_error(refrain::error_code::unsupported,
-                            "host config store is not wired yet")};
+    if (config_ == nullptr) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::unsupported, "host config store is disabled")};
+    }
+    const auto view{config_->module(ns)};
+    if (!view.valid() || !view.contains(key)) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::not_found,
+            "config key is missing in namespace '" + std::string{ns} + "'")};
+    }
+    if (view.kind(key) != refrain::core::config::value_kind::string) {
+        return std::unexpected{
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "config key is not a string")};
+    }
+    try {
+        config_string_buffer = view.get_string(key, {});
+    } catch (const std::bad_alloc &) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::out_of_memory, "config string copy failed")};
+    }
+    return std::string_view{config_string_buffer};
 }
 
 auto host_context::query_service(std::string_view service,

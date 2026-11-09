@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: a29acb77eba22b5e
+// Schema hash: 4a5dc6c6c8f9b026
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_HOST_CORE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_HOST_CORE_HPP
@@ -79,7 +79,7 @@ inline constexpr std::uint32_t abi_patch = 0;
 inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::side_kind::both;
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::any;
 inline constexpr ::refrain::contracts::composition_kind composition = ::refrain::contracts::composition_kind::sealed;
-inline constexpr std::string_view capabilities = "log,services,clock,alloc";
+inline constexpr std::string_view capabilities = "log,config,services,clock,alloc";
 inline constexpr std::string_view required_services = "refrain:core>=1.0.0";
 inline constexpr std::string_view service_ids[] = {"refrain:host.core"};
 
@@ -118,28 +118,30 @@ class provider final {
         return static_cast<std::int64_t>(table_->tick_now(self_));
     }
 
-    /// Read a value from the calling mod's config namespace. The host returns
-    /// `not_found` for a missing key; the string is borrowed until the next
-    /// config reload.
-    [[nodiscard]] auto config_get_i64(std::string_view key) const -> std::expected<std::int64_t, ::refrain::host::core::host_error> {
+    /// Read a value from the named config namespace. Namespaces are mounted by
+    /// the host composition root (`host`, `network`, `mod/<id>`, ...); a
+    /// native mod may read any mounted namespace, while a sandboxed guest is
+    /// restricted by the host import layer. The string is borrowed until the
+    /// next call on the same thread.
+    [[nodiscard]] auto config_get_i64(std::string_view ns, std::string_view key) const -> std::expected<std::int64_t, ::refrain::host::core::host_error> {
         ::int64_t value{};
-        if (const auto code = table_->config_get_i64(self_, ::refrain::contracts::to_borrowed(key), &value); code != REFRAIN_STATUS_OK) {
+        if (const auto code = table_->config_get_i64(self_, ::refrain::contracts::to_borrowed(ns), ::refrain::contracts::to_borrowed(key), &value); code != REFRAIN_STATUS_OK) {
             return std::unexpected(static_cast<::refrain::host::core::host_error>(code));
         }
         return static_cast<std::int64_t>(value);
     }
 
-    [[nodiscard]] auto config_get_bool(std::string_view key) const -> std::expected<bool, ::refrain::host::core::host_error> {
+    [[nodiscard]] auto config_get_bool(std::string_view ns, std::string_view key) const -> std::expected<bool, ::refrain::host::core::host_error> {
         ::uint8_t value{};
-        if (const auto code = table_->config_get_bool(self_, ::refrain::contracts::to_borrowed(key), &value); code != REFRAIN_STATUS_OK) {
+        if (const auto code = table_->config_get_bool(self_, ::refrain::contracts::to_borrowed(ns), ::refrain::contracts::to_borrowed(key), &value); code != REFRAIN_STATUS_OK) {
             return std::unexpected(static_cast<::refrain::host::core::host_error>(code));
         }
         return (value != 0);
     }
 
-    [[nodiscard]] auto config_get_string(std::string_view key) const -> std::expected<std::string_view, ::refrain::host::core::host_error> {
+    [[nodiscard]] auto config_get_string(std::string_view ns, std::string_view key) const -> std::expected<std::string_view, ::refrain::host::core::host_error> {
         ::refrain_str value{};
-        if (const auto code = table_->config_get_string(self_, ::refrain::contracts::to_borrowed(key), &value); code != REFRAIN_STATUS_OK) {
+        if (const auto code = table_->config_get_string(self_, ::refrain::contracts::to_borrowed(ns), ::refrain::contracts::to_borrowed(key), &value); code != REFRAIN_STATUS_OK) {
             return std::unexpected(static_cast<::refrain::host::core::host_error>(code));
         }
         return ::refrain::contracts::as_string_view(value);

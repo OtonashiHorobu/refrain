@@ -5,6 +5,7 @@
 #pragma once
 
 #include <refrain/contracts/host/core.hpp>
+#include <refrain/core/config.hpp>
 #include <refrain/host/context.hpp>
 #include <refrain/mod/host.hpp>
 
@@ -21,8 +22,10 @@ namespace refrain::app {
 class host_context final : public refrain::host::context {
   public:
     /// `tick` may be empty; `tick_now()` then reports -1 (no tick loop).
+    /// `config` may be null; config getters then return `unsupported`.
     explicit host_context(refrain::mod::host &owner,
-                          std::function<std::int64_t()> tick = {});
+                          std::function<std::int64_t()> tick = {},
+                          const refrain::core::config::store *config = nullptr);
 
     host_context(const host_context &) = delete;
     auto operator=(const host_context &) -> host_context & = delete;
@@ -36,11 +39,11 @@ class host_context final : public refrain::host::context {
     void
     version(refrain::host::core::host_version &out) const noexcept override;
 
-    [[nodiscard]] auto config_i64(std::string_view key)
+    [[nodiscard]] auto config_i64(std::string_view ns, std::string_view key)
         -> refrain::result<std::int64_t> override;
-    [[nodiscard]] auto config_bool(std::string_view key)
+    [[nodiscard]] auto config_bool(std::string_view ns, std::string_view key)
         -> refrain::result<bool> override;
-    [[nodiscard]] auto config_string(std::string_view key)
+    [[nodiscard]] auto config_string(std::string_view ns, std::string_view key)
         -> refrain::result<std::string_view> override;
 
     [[nodiscard]] auto query_service(std::string_view service,
@@ -58,6 +61,7 @@ class host_context final : public refrain::host::context {
   private:
     refrain::mod::host &owner_;
     std::function<std::int64_t()> tick_;
+    const refrain::core::config::store *config_{nullptr};
 };
 
 } // namespace refrain::app

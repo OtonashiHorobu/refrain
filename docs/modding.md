@@ -114,9 +114,10 @@ startup with the missing service key.
 
 The server exposes a stable runtime API to mods through sealed services.
 `refrain:host.core` is registered by the host bootstrap before any mod factory
-runs; it covers logging, time, host memory and service lookup/registration;
-config reads are reserved for the host config store and currently return
-`unsupported`. A sealed service is not a gamepack provider: a mod cannot
+runs; it covers logging, time, host memory, read-only config namespaces and service
+lookup/registration. `refrain-server --config-dir <dir>` mounts each TOML file
+as a read-only namespace (`refrain.toml` is `host`, `mods/<id>.toml` is
+`mod/<id>`); without the option config reads return `unsupported`. A sealed service is not a gamepack provider: a mod cannot
 declare it in `[provides]` or replace it through `register_provider`. The C ABI
 and C++ wrapper are generated from `sdk/idl/refrain/host/core.ridl`, so host
 code and mods share the same versioned contract definitions.

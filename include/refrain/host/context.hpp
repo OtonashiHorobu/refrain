@@ -36,11 +36,14 @@ class context {
     [[nodiscard]] virtual auto tick_now() const noexcept -> std::int64_t = 0;
     virtual void version(core::host_version &out) const noexcept = 0;
 
-    [[nodiscard]] virtual auto config_i64(std::string_view key)
+    [[nodiscard]] virtual auto config_i64(std::string_view ns,
+                                          std::string_view key)
         -> result<std::int64_t> = 0;
-    [[nodiscard]] virtual auto config_bool(std::string_view key)
+    [[nodiscard]] virtual auto config_bool(std::string_view ns,
+                                           std::string_view key)
         -> result<bool> = 0;
-    [[nodiscard]] virtual auto config_string(std::string_view key)
+    [[nodiscard]] virtual auto config_string(std::string_view ns,
+                                             std::string_view key)
         -> result<std::string_view> = 0;
 
     [[nodiscard]] virtual auto query_service(std::string_view service,

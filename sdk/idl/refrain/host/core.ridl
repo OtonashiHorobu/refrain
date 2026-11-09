@@ -55,7 +55,7 @@ service core : 1.0.0 {
     composition = sealed;
     provides = [ "refrain:host.core" ];
     requires = [ "refrain:core>=1.0.0" ];
-    capabilities = [ "log", "services", "clock", "alloc" ];
+    capabilities = [ "log", "config", "services", "clock", "alloc" ];
 
     #[thread(any)]
     fn version(out host_version value) -> void;
@@ -69,17 +69,19 @@ service core : 1.0.0 {
     #[thread(any)]
     fn tick_now() -> i64;
 
-    /// Read a value from the calling mod's config namespace. The host returns
-    /// `not_found` for a missing key; the string is borrowed until the next
-    /// config reload.
+    /// Read a value from the named config namespace. Namespaces are mounted by
+    /// the host composition root (`host`, `network`, `mod/<id>`, ...); a
+    /// native mod may read any mounted namespace, while a sandboxed guest is
+    /// restricted by the host import layer. The string is borrowed until the
+    /// next call on the same thread.
     #[thread(any)] #[can_fail]
-    fn config_get_i64(string key) -> result<i64, host_error>;
+    fn config_get_i64(string ns, string key) -> result<i64, host_error>;
 
     #[thread(any)] #[can_fail]
-    fn config_get_bool(string key) -> result<bool, host_error>;
+    fn config_get_bool(string ns, string key) -> result<bool, host_error>;
 
     #[thread(any)] #[can_fail]
-    fn config_get_string(string key) -> result<string, host_error>;
+    fn config_get_string(string ns, string key) -> result<string, host_error>;
 
     /// Look up a frozen service provider. `instance` is empty for the default
     /// instance. The returned vtable/self stay valid for the process lifetime.

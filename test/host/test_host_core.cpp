@@ -50,8 +50,9 @@ class fake_context final : public host::context {
         out.patch = 3;
     }
 
-    [[nodiscard]] auto config_i64(std::string_view key)
+    [[nodiscard]] auto config_i64(std::string_view ns, std::string_view key)
         -> refrain::result<std::int64_t> override {
+        last_config_namespace = ns;
         if (key == "missing") {
             return std::unexpected{refrain::make_error(
                 refrain::error_code::not_found, "no such key")};
@@ -59,8 +60,9 @@ class fake_context final : public host::context {
         return 42;
     }
 
-    [[nodiscard]] auto config_bool(std::string_view key)
+    [[nodiscard]] auto config_bool(std::string_view ns, std::string_view key)
         -> refrain::result<bool> override {
+        last_config_namespace = ns;
         if (key == "missing") {
             return std::unexpected{refrain::make_error(
                 refrain::error_code::not_found, "no such key")};
@@ -68,8 +70,9 @@ class fake_context final : public host::context {
         return true;
     }
 
-    [[nodiscard]] auto config_string(std::string_view key)
+    [[nodiscard]] auto config_string(std::string_view ns, std::string_view key)
         -> refrain::result<std::string_view> override {
+        last_config_namespace = ns;
         if (key == "missing") {
             return std::unexpected{refrain::make_error(
                 refrain::error_code::not_found, "no such key")};
@@ -128,6 +131,7 @@ class fake_context final : public host::context {
 
     std::uint32_t last_level{0};
     std::string last_message{};
+    std::string last_config_namespace{};
     std::string queried_service{};
     std::string queried_instance{};
     std::string registered_service{};
@@ -163,14 +167,16 @@ const suite host_core_tests = [] {
         fake_context fake;
         const auto api{host::make_core_provider(fake)};
 
-        expect(api.config_get_i64("answer").value() == std::int64_t{42});
-        expect(api.config_get_bool("flag").value());
+        expect(api.config_get_i64("demo", "answer").value() ==
+               std::int64_t{42});
+        expect(api.config_get_bool("demo", "flag").value());
+        expect(fake.last_config_namespace == "demo");
 
-        const auto text{api.config_get_string("name")};
+        const auto text{api.config_get_string("demo", "name")};
         expect(text.has_value());
         expect(*text == "hello");
 
-        const auto missing{api.config_get_i64("missing")};
+        const auto missing{api.config_get_i64("demo", "missing")};
         expect(!missing.has_value());
         expect(missing.error() == core::host_error::not_found);
 
@@ -291,6 +297,33 @@ const suite host_core_tests = [] {
             expect(!missing.has_value());
         };
 
+    "host/core app context reads mounted config namespaces"_test = [] {
+        refrain::core::config::store config;
+        expect(static_cast<bool>(config.mount_text(
+            "demo", "answer = 42\nflag = true\nname = \"hello\"\n", "<demo>")));
+
+        refrain::mod::host owner{};
+        refrain::app::host_context context{owner, {}, &config};
+        expect(context.config_i64("demo", "answer").value() ==
+               std::int64_t{42});
+        expect(context.config_bool("demo", "flag").value());
+        const auto name{context.config_string("demo", "name")};
+        expect(name.has_value());
+        expect(*name == "hello");
+
+        const auto missing_key{context.config_i64("demo", "missing")};
+        expect(!missing_key.has_value());
+        expect(missing_key.error().code == refrain::error_code::not_found);
+        const auto missing_ns{context.config_i64("missing", "answer")};
+        expect(!missing_ns.has_value());
+        expect(missing_ns.error().code == refrain::error_code::not_found);
+
+        refrain::app::host_context no_config{owner};
+        const auto disabled{no_config.config_i64("demo", "answer")};
+        expect(!disabled.has_value());
+        expect(disabled.error().code == refrain::error_code::unsupported);
+    };
+
     "host/core C ABI guards null and struct_size"_test = [] {
         fake_context fake;
         const auto &table{host::core_vtable()};
@@ -299,9 +332,9 @@ const suite host_core_tests = [] {
 
         std::int64_t value{0};
         refrain_str key{};
-        expect(table.config_get_i64(nullptr, key, &value) ==
+        expect(table.config_get_i64(nullptr, key, key, &value) ==
                static_cast<refrain_status>(core::host_error::invalid_argument));
-        expect(table.config_get_i64(&fake, key, nullptr) ==
+        expect(table.config_get_i64(&fake, key, key, nullptr) ==
                static_cast<refrain_status>(core::host_error::invalid_argument));
 
         const auto null_query{table.query_service(&fake, {}, {}, nullptr)};
