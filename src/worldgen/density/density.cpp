@@ -10,7 +10,9 @@
 #include <memory>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <unordered_map>
@@ -44,7 +46,91 @@ auto linear_extend(float input, const std::vector<float> &locations,
                               : value + derivative * (input - locations[index]);
 }
 
+/// The values one `cache` node keeps, together with the grid they cover.
+struct cached_values {
+    volume vol;
+    buffer values;
+    /// Set while the input is sampled, so eviction never drops a buffer a
+    /// nested cache node is still writing into.
+    bool filling{false};
+};
+
+auto cache_bytes(const buffer &values) -> std::size_t {
+    return values.capacity() * sizeof(float);
+}
+
 } // namespace
+
+struct sampler_context::volume_cache {
+    /// Cache nodes are few, so a flat list beats a hash map. The entries are
+    /// stable while the input of a cache node is sampled, because that input
+    /// can reach other cache nodes and add entries to the same list.
+    std::deque<std::pair<std::size_t, cached_values>> entries;
+    /// Live bytes of `entries`. A context can outlive the graph that first
+    /// filled it (a rule compile decodes a fresh graph per chunk), so the
+    /// oldest finished entries are dropped once the budget is reached.
+    std::size_t bytes{0};
+};
+
+namespace {
+
+/// The cache keeps at most this much per sampling context. A chunk fill needs
+/// a few kilobytes of cell buffers; the budget only bounds contexts that
+/// outlive many freshly decoded graphs.
+constexpr std::size_t cache_budget_bytes = 2U * 1024U * 1024U;
+
+} // namespace
+
+sampler_context::sampler_context() = default;
+
+sampler_context::~sampler_context() = default;
+
+auto sampler_context::cached_volume(std::size_t id, const volume &vol) const
+    -> std::pair<buffer *, bool> {
+    if (cache_ == nullptr) {
+        cache_ = std::make_shared<volume_cache>();
+    }
+    for (auto &entry : cache_->entries) {
+        if (entry.first != id) {
+            continue;
+        }
+        cached_values &cached = entry.second;
+        if (cached.vol == vol) {
+            return {&cached.values, true};
+        }
+        cache_->bytes -= cache_bytes(cached.values);
+        cached.vol = vol;
+        cached.values.resize(vol.size());
+        cache_->bytes += cache_bytes(cached.values);
+        return {&cached.values, false};
+    }
+    buffer fresh{vol.size()};
+    const std::size_t wanted = cache_bytes(fresh);
+    // Evicting from the front keeps references to the other entries valid;
+    // entries still being filled are skipped.
+    for (auto entry = cache_->entries.begin();
+         cache_->bytes + wanted > cache_budget_bytes &&
+         entry != cache_->entries.end();) {
+        if (entry->second.filling) {
+            ++entry;
+            continue;
+        }
+        cache_->bytes -= cache_bytes(entry->second.values);
+        entry = cache_->entries.erase(entry);
+    }
+    cache_->bytes += wanted;
+    cache_->entries.emplace_back(id, cached_values{vol, std::move(fresh)});
+    return {&cache_->entries.back().second.values, false};
+}
+
+void sampler_context::mark_filling(std::size_t id, bool value) const {
+    for (auto &entry : cache_->entries) {
+        if (entry.first == id) {
+            entry.second.filling = value;
+            return;
+        }
+    }
+}
 
 namespace {
 
@@ -1678,6 +1764,43 @@ class interval_select_sampler final : public sampler {
     std::vector<sampler_ptr> functions_;
 };
 
+/// `minecraft:cache`: keeps the values of one input for one volume per sampling
+/// context. The scalar path is not served from the cached volume, because the
+/// scalar and bulk paths of some nodes round differently and terrain generation
+/// reads only the bulk path.
+class cache_sampler final : public sampler {
+  public:
+    explicit cache_sampler(sampler_ptr input)
+        : input_{std::move(input)}, id_{next_cache_id()} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint y, jint z) const -> float override {
+        return input_->sample_value(context, x, y, z);
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        auto [values, cached] = context.cached_volume(id_, vol);
+        if (!cached) {
+            context.mark_filling(id_, true);
+            input_->sample_volume(context, *values, vol);
+            context.mark_filling(id_, false);
+        }
+        output.copy_from(*values);
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return input_->range();
+    }
+
+  private:
+    static auto next_cache_id() -> std::size_t {
+        static std::atomic<std::size_t> next{0};
+        return next.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    sampler_ptr input_;
+    std::size_t id_;
+};
+
 } // namespace
 
 auto constant(float value) -> sampler_ptr {
@@ -1925,7 +2048,9 @@ auto lerp(sampler_ptr alpha, sampler_ptr first, sampler_ptr second)
                                           std::move(second));
 }
 
-auto cache(sampler_ptr input) -> sampler_ptr { return input; }
+auto cache(sampler_ptr input) -> sampler_ptr {
+    return std::make_shared<cache_sampler>(std::move(input));
+}
 
 auto blend_alpha() -> sampler_ptr {
     return std::make_unique<context_bound_sampler>(

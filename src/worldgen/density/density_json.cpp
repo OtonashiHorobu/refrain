@@ -11,6 +11,7 @@
 #include <cmath>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace refrain::worldgen::density {
@@ -137,7 +138,11 @@ class decoder {
             return decode_interpolated(node);
         }
         if (kind == "minecraft:cache") {
-            return child(node, "input");
+            auto input = child(node, "input");
+            if (!input) {
+                return input;
+            }
+            return cache(std::move(*input));
         }
         if (kind == "minecraft:blend_density") {
             auto input = child(node, "input");
@@ -189,6 +194,10 @@ class decoder {
 
     auto decode_reference(std::string_view id) -> result<sampler_ptr> {
         const std::string key{id};
+        if (const auto decoded = decoded_.find(key);
+            decoded != decoded_.end()) {
+            return decoded->second;
+        }
         if (active_.contains(key)) {
             return std::unexpected{fail("density function reference cycle")};
         }
@@ -205,6 +214,13 @@ class decoder {
         active_.insert(key);
         auto result = decode_value(*parsed);
         active_.erase(key);
+        if (!result) {
+            return result;
+        }
+        // A document is a pure function of position, so every reference to it
+        // shares one compiled graph. The reference compiler does the same; not
+        // sharing multiplies the sampling work by the number of references.
+        decoded_.emplace(key, *result);
         return result;
     }
 
@@ -702,6 +718,7 @@ class decoder {
     const density_documents &documents_;
     std::unique_ptr<positional_random_factory> factory_;
     std::unordered_set<std::string> active_;
+    std::unordered_map<std::string, sampler_ptr> decoded_;
 };
 
 } // namespace

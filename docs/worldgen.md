@@ -133,6 +133,33 @@ region. The final heightmaps are primed in one top-down pass per column when
 the terrain status is reached and updated by every piece and feature write, so
 they cover the finished chunk.
 
+## Density sampling
+
+The final density contains the two sampling layers the documents declare. An
+interpolated node builds a coarse lattice over the requested block volume and
+samplers fill the lattice corners: the overworld and the nether use a cell
+width of four blocks on x and z and a cell height of eight, and the end uses
+eight on x and z with a height of four. The lattice gains one extra row,
+column or layer when the requested volume does not end on a cell boundary, and
+the block values between corners are trilinearly interpolated in the
+reference's float order, including its incremental y accumulation. A volume
+whose steps equal the cell size and whose minimum lies on a cell boundary is
+sampled directly, and a volume with a non-block step samples a block volume
+and picks the samples.
+
+Interpolation covers only the sub-expression the document wraps. The remaining
+terms of the final density, such as the cave noises and the structure
+beardifier, are evaluated for every block. A lattice over the whole final
+density would therefore change generated blocks and is not used.
+
+A referenced density document compiles once and every reference to it shares
+the same graph. A `cache` node keeps the values its input sampled for one grid
+in the sampling pass, and a grid that does not match replaces the entry, so a
+context can be reused across chunks. The cache changes the amount of sampling,
+not its results: cached and direct bulk sampling agree bit for bit. Scalar
+sampling never reads the cached grid, because some nodes round the scalar and
+bulk paths differently and terrain generation reads the bulk path.
+
 The multi-noise search is reset before each chunk, which makes a chunk
 independent of the chunks generated before it. `generate_batch` creates one
 independent generator per worker and returns chunks in input order. Workers

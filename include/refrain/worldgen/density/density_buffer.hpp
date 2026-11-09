@@ -79,6 +79,18 @@ class volume {
                static_cast<std::size_t>(size_z_);
     }
 
+    /// Every field compared, so two grids are equal exactly when they address
+    /// the same block coordinates with the same steps.
+    [[nodiscard]] auto operator==(const volume &other) const noexcept -> bool {
+        return size_x_ == other.size_x_ && size_y_ == other.size_y_ &&
+               size_z_ == other.size_z_ && min_block_x_ == other.min_block_x_ &&
+               min_block_y_ == other.min_block_y_ &&
+               min_block_z_ == other.min_block_z_ &&
+               step_block_x_ == other.step_block_x_ &&
+               step_block_y_ == other.step_block_y_ &&
+               step_block_z_ == other.step_block_z_;
+    }
+
     /// The buffer index of a block coordinate, or `npos` when the block is
     /// outside the grid or not on a sample.
     [[nodiscard]] auto index_of_block(jint block_x, jint block_y,
@@ -123,9 +135,15 @@ class buffer {
         }
     }
     void copy_from(const buffer &other) { values_ = other.values_; }
+    /// Resizes the storage. An enlarged buffer reads zero in the new range; a
+    /// cache node overwrites every value before it is read.
+    void resize(std::size_t size) { values_.resize(size); }
 
     [[nodiscard]] auto size() const noexcept -> std::size_t {
         return values_.size();
+    }
+    [[nodiscard]] auto capacity() const noexcept -> std::size_t {
+        return values_.capacity();
     }
     [[nodiscard]] auto data() noexcept -> float * { return values_.data(); }
     [[nodiscard]] auto data() const noexcept -> const float * {
