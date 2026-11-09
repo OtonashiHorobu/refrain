@@ -1129,6 +1129,69 @@ suite<"worldgen/template"> template_tests = [] {
             std::filesystem::remove_all(directory);
         };
 
+    "wall sides ignore hanging lanterns"_test = [] {
+        using namespace refrain;
+        using namespace refrain::worldgen;
+        block_state_registry registry;
+        const auto wall = registry.intern(
+            "minecraft:blackstone_wall[east=none,north=none,south=none,"
+            "up=true,waterlogged=false,west=none]",
+            {.air = false, .blocks_motion = true});
+        const auto bricks =
+            registry.intern("minecraft:polished_blackstone_bricks",
+                            {.air = false, .blocks_motion = true});
+        const auto lantern =
+            registry.intern("minecraft:lantern[hanging=true,waterlogged=false]",
+                            {.air = false, .blocks_motion = true});
+        expect(wall && bricks && lantern);
+        if (!wall || !bricks || !lantern) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 16};
+        chunk_region region{chunk, 0};
+        const auto property = [&](std::string_view key) {
+            const auto name =
+                std::string{registry.name(chunk.state_at(5, 5, 5))};
+            const auto at = name.find(key);
+            if (at == std::string::npos) {
+                return std::string{};
+            }
+            const auto start = at + key.size();
+            return name.substr(start, name.find_first_of(",]", start) - start);
+        };
+        const auto reset_wall = [&] {
+            chunk.set_state(5, 5, 5, *wall);
+            chunk.set_state(4, 5, 5, registry.air());
+            chunk.set_state(5, 6, 5, registry.air());
+        };
+
+        // A hanging lantern west of a wall does not offer a sturdy face, so
+        // the wall must not connect to it even though the block has motion
+        // blocking height.
+        reset_wall();
+        chunk.set_state(4, 5, 5, *lantern);
+        chunk.set_state(5, 6, 5, *bricks);
+        (void)structure::refresh_block_shape(registry, region,
+                                             block_pos{.x = 5, .y = 5, .z = 5});
+        expect(property("west=") == "none");
+        expect(property("up=") == "true");
+
+        // A lantern above the wall does not cover the side, so a connected
+        // wall stays low instead of turning tall.
+        reset_wall();
+        chunk.set_state(4, 5, 5, *bricks);
+        chunk.set_state(5, 6, 5, *lantern);
+        expect(structure::refresh_block_shape(
+            registry, region, block_pos{.x = 5, .y = 5, .z = 5}));
+        expect(property("west=") == "low");
+
+        // A full block above covers the side and makes it tall.
+        chunk.set_state(5, 6, 5, *bricks);
+        expect(structure::refresh_block_shape(
+            registry, region, block_pos{.x = 5, .y = 5, .z = 5}));
+        expect(property("west=") == "tall");
+    };
+
     "template shape updates cross the write radius"_test = [] {
         using namespace refrain;
         using namespace refrain::worldgen;

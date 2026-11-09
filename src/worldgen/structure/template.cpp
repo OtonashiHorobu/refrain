@@ -1647,6 +1647,18 @@ auto is_shape_sensitive(block_state_registry &states, block_state_id state)
            block.ends_with("_wall");
 }
 
+auto is_lantern_block(const block_state_registry &states, block_state_id state,
+                      std::string_view name) -> bool {
+    // Sea lanterns are full blocks and stay connectable; hanging lanterns have
+    // a small collision shape that does not offer a sturdy face.
+    if (states.in_tag(state, "minecraft:lanterns")) {
+        return true;
+    }
+    // Synthetic registries may not carry the block tag.
+    return name == "minecraft:lantern" || name == "minecraft:soul_lantern" ||
+           name.ends_with("_copper_lantern");
+}
+
 auto fence_connects(const block_state_registry &states, block_state_id state)
     -> bool {
     const auto name = state_block_name(states.name(state));
@@ -1658,8 +1670,8 @@ auto fence_connects(const block_state_registry &states, block_state_id state)
         name.ends_with("_door") || name.ends_with("_trapdoor") ||
         name.ends_with("_wall") || name.ends_with("_fence_gate") ||
         name.ends_with("_pane") || name.ends_with("_bars") ||
-        name == "minecraft:air" || name == "minecraft:water" ||
-        name == "minecraft:lava") {
+        is_lantern_block(states, state, name) || name == "minecraft:air" ||
+        name == "minecraft:water" || name == "minecraft:lava") {
         return false;
     }
     return states.traits(state).blocks_motion;
@@ -1801,6 +1813,7 @@ auto update_template_block(block_state_registry &states, chunk_region &region,
                         }
                     }
                 } else if (states.traits(above).blocks_motion &&
+                           !is_lantern_block(states, above, above_name) &&
                            !above_name.ends_with("_fence") &&
                            !above_name.ends_with("_stairs") &&
                            !above_name.ends_with("_slab") &&
