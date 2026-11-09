@@ -12,8 +12,10 @@
 
 #include <boost/ut.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -3477,5 +3479,238 @@ suite<"worldgen/feature/root-system"> root_system_tests = [] {
         worldgen_random random{std::make_unique<legacy_random_source>(1)};
         expect(patch.place(context, random, block_pos{.x = 8, .y = 6, .z = 8}));
         expect(states.name(chunk.state_at(8, 5, 8)) == "minecraft:water");
+    };
+};
+
+suite<"worldgen/feature-survival"> feature_survival_tests = [] {
+    "a mushroom needs a solid-render substrate"_test = [] {
+        block_state_registry registry;
+        auto air = registry.intern("minecraft:air", {.air = true});
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        auto mushroom =
+            registry.intern("minecraft:brown_mushroom", {.air = false});
+        expect(air.has_value() && stone.has_value() && mushroom.has_value());
+        if (!air || !stone || !mushroom) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::terrain);
+        (void)chunk.set_state(8, 9, 8, *air);
+        (void)chunk.set_state(8, 10, 8, *air);
+        chunk_region region{chunk, 1};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 32,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        const simple_block_feature feature{*mushroom, false};
+        worldgen_random random{std::make_unique<legacy_random_source>(12345)};
+        expect(
+            !feature.place(context, random, block_pos{.x = 8, .y = 10, .z = 8}))
+            << "a mushroom floated over air";
+        (void)chunk.set_state(8, 9, 8, *stone);
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 10, .z = 8}));
+        expect(chunk.state_at(8, 10, 8) == *mushroom);
+    };
+
+    "a default-property state key folds onto the bare block name"_test = [] {
+        block_state_registry registry;
+        auto air = registry.intern("minecraft:air", {.air = true});
+        expect(air.has_value());
+        if (!air) {
+            return;
+        }
+        registry.set_block_defaults(block_default_map{
+            {"minecraft:basalt", {{.name = "axis", .value = "y"}}},
+        });
+        feature_data_set data;
+        data.features.emplace(
+            "oracle:basalt_default",
+            configured_feature_document{
+                .id = "oracle:basalt_default",
+                .document = parse(
+                    R"({"type":"minecraft:simple_block","to_place":{"id":"minecraft:basalt","properties":{"axis":"y"}}})")});
+        data.features.emplace(
+            "oracle:basalt_side",
+            configured_feature_document{
+                .id = "oracle:basalt_side",
+                .document = parse(
+                    R"({"type":"minecraft:simple_block","to_place":{"id":"minecraft:basalt","properties":{"axis":"x"}}})")});
+        const auto placed = [](std::string_view id, std::string_view feature,
+                               std::string_view positions) {
+            return placed_feature_document{.id = std::string{id},
+                                           .feature = std::string{feature},
+                                           .placement = parse(positions)};
+        };
+        data.placed.emplace(
+            "oracle:basalt_default_placed",
+            placed(
+                "oracle:basalt_default_placed", "oracle:basalt_default",
+                R"([{"type":"minecraft:fixed_placement","positions":[[8,5,8]]}])"));
+        data.placed.emplace(
+            "oracle:basalt_side_placed",
+            placed(
+                "oracle:basalt_side_placed", "oracle:basalt_side",
+                R"([{"type":"minecraft:fixed_placement","positions":[[9,5,8]]}])"));
+        data.biomes.push_back(
+            biome_feature_list{.biome = "oracle:test",
+                               .steps = {{},
+                                         {},
+                                         {},
+                                         {},
+                                         {},
+                                         {},
+                                         {},
+                                         {},
+                                         {},
+                                         {"oracle:basalt_default_placed",
+                                          "oracle:basalt_side_placed"}}});
+        feature_registry features{registry};
+        const auto loaded = features.load(data);
+        expect(loaded.has_value()) << loaded.error().message;
+        if (!loaded) {
+            return;
+        }
+        const auto plan = feature_sorter::build({"oracle:test"}, data.biomes);
+        expect(plan.has_value());
+        if (!plan) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::terrain);
+        (void)chunk.set_state(8, 5, 8, *air);
+        (void)chunk.set_state(9, 5, 8, *air);
+        chunk_region region{chunk, 1};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 32,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        decorate(context, *plan, features.placed(), {"oracle:test"},
+                 data.biomes, 12345);
+        // The default state is compared by the bare name a chunk palette
+        // writes; the non-default variant keeps its properties.
+        expect(registry.name(chunk.state_at(8, 5, 8)) == "minecraft:basalt");
+        expect(registry.name(chunk.state_at(9, 5, 8)) ==
+               "minecraft:basalt[axis=x]");
+    };
+
+    "a spring writes the fluid's legacy block, not the falling flag"_test = [] {
+        block_state_registry registry;
+        auto air = registry.intern("minecraft:air", {.air = true});
+        auto stone = registry.intern("minecraft:stone",
+                                     {.air = false,
+                                      .blocks_motion = true,
+                                      .blocks_motion_no_leaves = true});
+        expect(air.has_value() && stone.has_value());
+        if (!air || !stone) {
+            return;
+        }
+        feature_data_set data;
+        data.features.emplace(
+            "oracle:spring",
+            configured_feature_document{
+                .id = "oracle:spring",
+                .document = parse(
+                    R"({"type":"minecraft:spring_feature","state":{"id":"minecraft:lava","properties":{"falling":"true"}},"valid_blocks":["minecraft:stone"]})")});
+        data.placed.emplace(
+            "oracle:spring_placed",
+            placed_feature_document{
+                .id = "oracle:spring_placed",
+                .feature = "oracle:spring",
+                .placement = parse(
+                    R"([{"type":"minecraft:fixed_placement","positions":[[8,5,8]]}])")});
+        data.biomes.push_back(biome_feature_list{
+            .biome = "oracle:test",
+            .steps = {
+                {}, {}, {}, {}, {}, {}, {}, {}, {}, {"oracle:spring_placed"}}});
+        feature_registry features{registry};
+        const auto loaded = features.load(data);
+        expect(loaded.has_value()) << loaded.error().message;
+        if (!loaded) {
+            return;
+        }
+        const auto plan = feature_sorter::build({"oracle:test"}, data.biomes);
+        expect(plan.has_value());
+        if (!plan) {
+            return;
+        }
+        proto_chunk chunk{registry, 0, 0, 0, 32};
+        chunk.set_status(chunk_status::terrain);
+        (void)chunk.set_state(8, 4, 8, *stone);
+        (void)chunk.set_state(8, 6, 8, *stone);
+        (void)chunk.set_state(7, 5, 8, *stone);
+        (void)chunk.set_state(9, 5, 8, *stone);
+        (void)chunk.set_state(8, 5, 7, *stone);
+        (void)chunk.set_state(8, 5, 9, *air);
+        chunk_region region{chunk, 1};
+        feature_context context{.placement = placement_context{
+                                    .region = &region,
+                                    .chunk = &chunk,
+                                    .states = &registry,
+                                    .generation =
+                                        generation_context{
+                                            .min_y = 0,
+                                            .height = 32,
+                                            .sea_level = 8,
+                                        },
+                                }};
+        decorate(context, *plan, features.placed(), {"oracle:test"},
+                 data.biomes, 12345);
+        // A spring names a fluid state; the reference writes the fluid's
+        // legacy block, which keeps the level and drops the falling flag.
+        expect(registry.name(chunk.state_at(8, 5, 8)) == "minecraft:lava");
+    };
+
+    "a height range resolves below_top against the generation depth"_test = [] {
+        block_state_registry registry;
+        auto modifier = decode_placement(
+            parse(
+                R"({"type":"minecraft:height_range","height":{"type":"minecraft:uniform","max_inclusive":{"below_top":0},"min_inclusive":{"above_bottom":0}}})"),
+            registry);
+        expect(modifier.has_value()) << modifier.error().message;
+        if (!modifier) {
+            return;
+        }
+        // A 128-block noise-settings depth inside a 256-block level: the
+        // top anchor is the generation top, not the level top.
+        placement_context context{.generation = generation_context{
+                                      .min_y = 0,
+                                      .height = 128,
+                                      .sea_level = 32,
+                                  }};
+        worldgen_random random{std::make_unique<legacy_random_source>(12345)};
+        jint lowest = 1000;
+        jint highest = -1;
+        std::vector<block_pos> out;
+        for (jint i = 0; i < 512; ++i) {
+            out.clear();
+            (*modifier)->modify(context, random,
+                                block_pos{.x = 0, .y = 0, .z = 0}, out);
+            expect(out.size() == 1U);
+            if (out.empty()) {
+                continue;
+            }
+            lowest = std::min(lowest, out.front().y);
+            highest = std::max(highest, out.front().y);
+        }
+        expect(lowest >= 0);
+        expect(highest <= 127);
     };
 };

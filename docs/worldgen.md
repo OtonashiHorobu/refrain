@@ -156,6 +156,17 @@ only. A feature that spreads across more than one border needs the rectangle
 form; a sculk patch is the example, because its charge cursors move up to
 twelve blocks from the patch origin.
 
+`neighbours_ticket_sweep` replaces the flat ascending order with the order a
+force-load ticket queue runs. A forced chunk keeps its own two rings at the
+full status, so the generation task of every force-loaded chunk runs the
+feature layer of the three-by-three around it; the tickets propagated two
+rings out are full chunks themselves and run one more layer each. The sweep
+therefore decorates the rectangle expanded by three chunks, and the runtime
+attaches one more terrain ring for the chunks every decoration reads.
+`force_load_decoration_order` returns that sequence. A basalt delta, blob or
+column reads and writes the chunks those dependency rings generated, so the
+chunk that a saved reference world contains depends on this order.
+
 One object owns the block state registry and its tags, the dimension profile,
 the biome source, the surface rule state, the loaded carvers' runtime objects,
 the feature registry, the structure data and template manager, and the terrain
@@ -318,8 +329,18 @@ The reference-backed suites currently cover:
   cursors at most twelve blocks from the origin, so the patches of a
   neighbour chunk must see the chunks their own generation regions cover; the
   wider radius provides them, and each decoration writes through its own
-  generation region again. The basalt delta and column features place
-  different shapes. The scanned chunks and commands are recorded in
+  generation region again. The scanned chunks and commands are recorded in
+  `tools/worldgen/oracle/README.md`;
+- a fixed-biome basalt deltas world reaches zero with the ticket sweep of its
+  force-load and the rectangle the reference world generated. The delta,
+  small and large basalt column and basalt blob families sample the
+  noise-settings generation depth (128 blocks in the nether) instead of the
+  level height, which keeps their height-range draws inside the generation
+  area. Datapack state keys that spell only default property values fold onto
+  the bare block name the reference palette writes, a spring writes the
+  legacy block of its configured fluid state rather than the falling flag,
+  and a mushroom needs a solid-render substrate. The chunk exercises all four
+  behaviours, and the command and environment are recorded in
   `tools/worldgen/oracle/README.md`;
 - benchmarks for fill, parallel fill, structure selection, corridor
   placement, template placement, feature freeze and decoration.
@@ -340,10 +361,16 @@ trapdoors, doors, walls, fences, fence gates, panes, bars, carpets, snow
 layers, paths, farmland, speleothems, cave vines, multiface layers and sculk
 sensors answer per direction; a bare state key takes the properties its
 default state carries from the default-state report. States outside those
-families still fall back to the heightmap motion-blocking tags. The unobstructed predicate admits every
-position because generation has no entities, and the biome membership
-predicate accepts explicit biome ids but not biome tags. Structure feature placement has no climate source, so snow and
-freeze feature modifiers are inert there. Template entities are not placed;
+families still fall back to the heightmap motion-blocking tags. The substrate
+checks of a simple-block placement cover the families the shipped snapshot
+places: a mushroom needs a solid-render block below it or a block that
+overrides its light requirement. Generation carries no light data, so the
+reference's light gate is not modelled; it admits every position in a
+dimension without skylight, which is the case the feature worlds exercise.
+The unobstructed predicate admits every position because generation has no
+entities, and the biome membership predicate accepts explicit biome ids but
+not biome tags. Structure feature placement has no climate source, so snow
+and freeze feature modifiers are inert there. Template entities are not placed;
 end city shulker and elytra data markers, pillager cages and village animal
 markers therefore leave no entities behind. Capped processor lists decode and
 run their delegate over the whole piece, with constant and uniform limits; a

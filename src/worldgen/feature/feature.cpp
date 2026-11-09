@@ -91,6 +91,18 @@ auto simple_block_feature::place(feature_context &context,
         !states.traits(above).blocks_motion) {
         return false;
     }
+    // A mushroom needs a solid-render block below it. The reference also
+    // admits a position over a block that overrides its light requirement;
+    // generation carries no light data, so that tag is the only other
+    // substrate the support test can name.
+    const auto state_block = state_block_name(states.name(state));
+    if ((state_block == "minecraft:brown_mushroom" ||
+         state_block == "minecraft:red_mushroom") &&
+        !states.traits(below).blocks_motion &&
+        !states.in_tag(below,
+                       "minecraft:overrides_mushroom_light_requirement")) {
+        return false;
+    }
     (void)schedule_tick_;
     // Double plants place both halves. A state that spells `half=lower` maps
     // directly to its upper counterpart; a bare block name is a default state,

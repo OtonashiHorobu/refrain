@@ -91,6 +91,15 @@ terrain plus the real feature writes. The runtime compares it with
   sculk patch, needs this form rather than the symmetric radius. The reported
   rectangle is the force-loaded area the reference world generated; the spawn
   area and dependency rings are visible in the saved chunk statuses.
+* `<PREFIX>_NEIGHBOURS_SWEEP` follows the ticket queue of the force-load
+  instead of the flat ascending order. A forced chunk keeps its own two rings
+  at the full status, so the generation task of every force-loaded chunk first
+  runs the feature layer of the three-by-three around it; the tickets
+  propagated two rings out are full chunks themselves and run one more layer
+  each. The sweep therefore decorates the rectangle expanded by three chunks,
+  and the runtime attaches one more terrain ring for the chunks every
+  decoration reads. Use it when a feature's contact with a neighbour depends
+  on that dependency order; it requires `_NEIGHBOUR_BOX`.
 
 The four chunks below match block for block and in all four final heightmaps.
 The terrain is ocean at the spawn area of seed 1, so the surface vegetation of
@@ -216,18 +225,46 @@ REFRAIN_FEATURE_DEEP_DARK_NEIGHBOUR_RADIUS=2 \
   the origin, so a neighbour chunk's patches must read the chunks their own
   generation regions cover; the wider radius attaches those chunks and gives
   every decoration its own write region.
-* `minecraft:basalt_deltas`: chunk `(0,0)` has 2556 block and 2 heightmap
-  mismatches. Delta, small/large basalt column and basalt blob placement
-  differ across the chunk, so the feature family itself needs more work
-  before a chunk can match.
+* `minecraft:basalt_deltas`: chunk `(0,0)` matches block for block and in all
+  four final heightmaps with the ticket sweep of the reference force-load.
+  The delta, small/large basalt column and basalt blob families run against
+  the noise-settings generation depth rather than the level height, which
+  keeps their height-range draws inside the nether's 128-block generation
+  area. The reference palette abbreviates a default state as the bare block
+  name, so a state key that spells only default property values folds onto
+  that name. A spring names a fluid state, and the feature writes the fluid's
+  legacy block, which keeps the level but not the falling flag. A mushroom
+  needs a solid-render substrate. The compared chunk exercises all of them.
+
+```bash
+python3 tools/worldgen/oracle/generate.py --dimension the_nether \
+    --fixed-biome minecraft:basalt_deltas --keep-features \
+    --force-load-box -48 -48 47 47 \
+    --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2feature-basalt
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_FEATURE_BASALT_DELTAS_REGION=/tmp/t2feature-basalt/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+REFRAIN_FEATURE_BASALT_DELTAS_CHUNK_X=0 \
+REFRAIN_FEATURE_BASALT_DELTAS_CHUNK_Z=0 \
+REFRAIN_FEATURE_BASALT_DELTAS_SEED=1 \
+REFRAIN_FEATURE_BASALT_DELTAS_BIOME=minecraft:basalt_deltas \
+REFRAIN_FEATURE_BASALT_DELTAS_DIMENSION=the_nether \
+REFRAIN_FEATURE_BASALT_DELTAS_NEIGHBOURS=1 \
+REFRAIN_FEATURE_BASALT_DELTAS_NEIGHBOURS_ORDER=1 \
+REFRAIN_FEATURE_BASALT_DELTAS_NEIGHBOURS_SWEEP=1 \
+REFRAIN_FEATURE_BASALT_DELTAS_NEIGHBOUR_BOX="-3,-3,2,2" \
+    ./build/Release/bin/refrain-tests \
+    "the runtime feature oracle reproduces a basalt deltas chunk"
+```
 
 Lush caves, deep dark and basalt deltas use their own
 `REFRAIN_FEATURE_LUSH_CAVES_*`, `REFRAIN_FEATURE_DEEP_DARK_*` and
 `REFRAIN_FEATURE_BASALT_DELTAS_*` prefixes. The basalt deltas world is
 generated with `--dimension the_nether` and its test sets
-`REFRAIN_FEATURE_BASALT_DELTAS_DIMENSION=the_nether`. The deep dark and basalt
-deltas chunks above use the default target order; the lush caves chunk uses
-force-load order as well.
+`REFRAIN_FEATURE_BASALT_DELTAS_DIMENSION=the_nether`. The deep dark and lush
+caves chunks use the flat force-load order; the basalt deltas chunk uses the
+ticket sweep because its blobs, columns and delta read and write across the
+chunk borders the dependency rings create.
 
 The default-state report is part of the datapack snapshot the tests load
 (`content/vanilla/<version>/reports/block_defaults/`). Regenerate it after a

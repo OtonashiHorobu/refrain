@@ -817,6 +817,54 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
             << "the box mode differs from the equal-radius square";
     };
 
+    "the ticket sweep follows the force-load dependency order"_test = [] {
+        const auto order = force_load_decoration_order(
+            chunk_rectangle{.min_x = 0, .min_z = 0, .max_x = 1, .max_z = 1});
+        // A force-loaded rectangle keeps its own two rings at the full
+        // status, so the sweep covers the rectangle expanded by three chunks.
+        expect(order.size() == 64U);
+        if (order.size() != 64U) {
+            return;
+        }
+        // The first ticket runs the three-by-three around its chunk in
+        // ascending x and then z.
+        expect(order[0] == (chunk_pos{.x = -1, .z = -1}));
+        expect(order[1] == (chunk_pos{.x = -1, .z = 0}));
+        expect(order[2] == (chunk_pos{.x = -1, .z = 1}));
+        expect(order[3] == (chunk_pos{.x = 0, .z = -1}));
+        // The four tickets cover the rectangle's own ring first.
+        expect(order[15] == (chunk_pos{.x = 2, .z = 2}));
+        // The propagated full ring two chunks out runs one more layer each.
+        expect(order[16] == (chunk_pos{.x = -3, .z = -3}));
+        expect(order.back() == (chunk_pos{.x = 4, .z = 4}));
+        std::set<chunk_pos> unique{order.begin(), order.end()};
+        expect(unique.size() == order.size());
+        for (const auto &position : order) {
+            expect(position.x >= -3 && position.x <= 4);
+            expect(position.z >= -3 && position.z <= 4);
+        }
+        expect(force_load_decoration_order(chunk_rectangle{}).empty());
+    };
+
+    "a ticket sweep without a reference box is rejected"_test = [] {
+        const auto created = chunk_generator::create(chunk_generator_config{
+            .data_root = source_data_root(),
+            .templates_root = "",
+            .seed = 1,
+            .kind = dimension_kind::overworld,
+            .fixed_biome = "minecraft:plains",
+            .target = generation_target::features,
+            .structure_sets = {"oracle:no_structure_set"},
+            .decorate_neighbours = true,
+            .neighbours_ticket_sweep = true,
+        });
+        expect(!created.has_value());
+        if (created) {
+            return;
+        }
+        expect(created.error().code == error_code::invalid_argument);
+    };
+
     "an invalid neighbour configuration is rejected"_test = [] {
         const auto create = [](chunk_rectangle box, jint radius) {
             return chunk_generator::create(chunk_generator_config{

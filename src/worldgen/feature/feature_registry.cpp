@@ -8,6 +8,10 @@
 #include <refrain/worldgen/feature/rule_test.hpp>
 #include <refrain/worldgen/feature/tree.hpp>
 
+#include "state_resolution.hpp"
+
+#include <algorithm>
+#include <charconv>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -141,44 +145,45 @@ auto decode_template_feature_document(block_state_registry &states,
         std::move(processor_id))};
 }
 
-auto resolve_state(block_state_registry &states, std::string_view key)
-    -> result<block_state_id> {
-    // Fluid JSON spells out the default level. The registry keys states by
-    // their data spelling, so fold it to the plain block name that terrain
-    // fluids use; the two are the same state in the reference.
-    std::string canonical{key};
-    for (const std::string_view fluid : {"minecraft:water", "minecraft:lava"}) {
-        if (key == std::string{fluid} + "[level=0]") {
-            canonical = std::string{fluid};
-            break;
+/// The block a spring writes for its configured fluid state. A spring names a
+/// fluid state, and the reference writes the fluid's legacy block: the block
+/// keeps the fluid level but takes the falling flag from the fluid, not from
+/// the spelling of the state, so a source state always writes the plain fluid.
+auto legacy_fluid_state_key(const block_state_registry &states,
+                            block_state_id state, std::string_view key)
+    -> std::string {
+    const auto traits = states.traits(state);
+    const std::string_view block = state_block_name(key);
+    const bool water = traits.water;
+    if (!water && block != "minecraft:lava") {
+        return std::string{key};
+    }
+    jint level = 0;
+    const auto open = key.find('[');
+    const auto close = key.rfind(']');
+    if (open != std::string_view::npos && close != std::string_view::npos &&
+        close > open) {
+        auto body = key.substr(open + 1, close - open - 1);
+        while (!body.empty()) {
+            const auto comma = body.find(',');
+            const auto entry = body.substr(0, comma);
+            if (entry.starts_with("level=")) {
+                const auto digits = entry.substr(6);
+                (void)std::from_chars(digits.data(),
+                                      digits.data() + digits.size(), level);
+            }
+            if (comma == std::string_view::npos) {
+                break;
+            }
+            body = body.substr(comma + 1);
         }
     }
-    if (const auto found = states.find(canonical); found.has_value()) {
-        return *found;
+    const std::string_view fluid = water ? "minecraft:water" : "minecraft:lava";
+    level = std::clamp(level, 0, 8);
+    if (level == 0) {
+        return std::string{fluid};
     }
-    key = canonical;
-    // Take the motion traits from the block tags, which describe the shapes a
-    // heightmap counts. The listed states have a collision shape the tag
-    // counts but a heightmap must ignore; a partial snow layer has no
-    // collision shape at all.
-    auto traits = states.infer_traits(key);
-    const auto block = state_block_name(key);
-    if (block == "minecraft:snow" &&
-        key.find("layers=8") == std::string_view::npos) {
-        traits.blocks_motion = false;
-        traits.blocks_motion_no_leaves = false;
-    }
-    const bool non_solid =
-        block == "minecraft:end_portal" || block == "minecraft:end_gateway" ||
-        block == "minecraft:fire" || block == "minecraft:torch" ||
-        block == "minecraft:wall_torch" || block == "minecraft:soul_torch" ||
-        block == "minecraft:soul_wall_torch" ||
-        block == "minecraft:glow_lichen" || block == "minecraft:sculk_vein";
-    if (non_solid) {
-        traits.blocks_motion = false;
-        traits.blocks_motion_no_leaves = false;
-    }
-    return states.intern(key, traits);
+    return std::string{fluid} + "[level=" + std::to_string(level) + "]";
 }
 
 auto decode_simple_state(const data::json::value &provider,
@@ -1821,7 +1826,13 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             if (!state_key) {
                 return std::unexpected{state_key.error()};
             }
-            const auto state = resolve_state(*states_, *state_key);
+            const auto raw_state = resolve_state(*states_, *state_key);
+            if (!raw_state) {
+                return std::unexpected{raw_state.error()};
+            }
+            const auto state = resolve_state(
+                *states_,
+                legacy_fluid_state_key(*states_, *raw_state, *state_key));
             if (!state) {
                 return std::unexpected{state.error()};
             }

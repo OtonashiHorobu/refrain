@@ -119,6 +119,48 @@ auto center_first_positions(std::vector<chunk_pos> positions,
 
 } // namespace
 
+auto force_load_decoration_order(const chunk_rectangle &box)
+    -> std::vector<chunk_pos> {
+    std::vector<chunk_pos> order;
+    if (box.empty()) {
+        return order;
+    }
+    std::set<chunk_pos> decorated;
+    const auto push_square = [&](jint center_x, jint center_z) {
+        for (jint x = center_x - 1; x <= center_x + 1; ++x) {
+            for (jint z = center_z - 1; z <= center_z + 1; ++z) {
+                const chunk_pos position{.x = x, .z = z};
+                if (decorated.insert(position).second) {
+                    order.push_back(position);
+                }
+            }
+        }
+    };
+    // A force-loaded chunk's ticket keeps its own two rings at the full
+    // status, so the ticket's generation task runs the feature layer over the
+    // three-by-three around it. Tickets run in the order the command adds
+    // them: ascending x, then ascending z.
+    for (jint x = box.min_x; x <= box.max_x; ++x) {
+        for (jint z = box.min_z; z <= box.max_z; ++z) {
+            push_square(x, z);
+        }
+    }
+    // The propagated tickets two rings out are full chunks themselves, so
+    // their own tasks run one more feature layer each, in the order the
+    // tickets reached them.
+    for (jint x = box.min_x - 2; x <= box.max_x + 2; ++x) {
+        for (jint z = box.min_z - 2; z <= box.max_z + 2; ++z) {
+            const bool propagated_ring = x < box.min_x - 1 ||
+                                         x > box.max_x + 1 ||
+                                         z < box.min_z - 1 || z > box.max_z + 1;
+            if (propagated_ring) {
+                push_square(x, z);
+            }
+        }
+    }
+    return order;
+}
+
 struct chunk_generator::shared_generator_data {
     /// Immutable dimension data: noise settings, material documents and rule,
     /// climates, noise functions, block tags, possible biomes and the
@@ -160,6 +202,11 @@ auto chunk_generator::create(chunk_generator_config config)
         return std::unexpected{
             fail(error_code::invalid_argument,
                  "neighbour feature radius is outside its supported range")};
+    }
+    if (config.neighbours_ticket_sweep && config.neighbour_box.empty()) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "the ticket sweep needs a reference neighbour box")};
     }
     const bool needs_structures = config.target != generation_target::terrain;
     const bool needs_features = needs_structures && !config.reference_world;
@@ -476,18 +523,27 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
     if (!needs_neighbours) {
         region_positions.push_back(pos);
     } else if (boxed) {
-        for (jint x = config_.neighbour_box.min_x;
-             x <= config_.neighbour_box.max_x; ++x) {
-            for (jint z = config_.neighbour_box.min_z;
-                 z <= config_.neighbour_box.max_z; ++z) {
-                decorated_positions.push_back(chunk_pos{.x = x, .z = z});
+        const auto &box = config_.neighbour_box;
+        if (config_.neighbours_ticket_sweep) {
+            decorated_positions = force_load_decoration_order(box);
+            // The sweep covers three rings around the box; every decorated
+            // chunk reads the chunks its own generation region covers, which
+            // adds one more terrain ring.
+            for (jint x = box.min_x - 4; x <= box.max_x + 4; ++x) {
+                for (jint z = box.min_z - 4; z <= box.max_z + 4; ++z) {
+                    region_positions.push_back(chunk_pos{.x = x, .z = z});
+                }
             }
-        }
-        for (jint x = config_.neighbour_box.min_x - 1;
-             x <= config_.neighbour_box.max_x + 1; ++x) {
-            for (jint z = config_.neighbour_box.min_z - 1;
-                 z <= config_.neighbour_box.max_z + 1; ++z) {
-                region_positions.push_back(chunk_pos{.x = x, .z = z});
+        } else {
+            for (jint x = box.min_x; x <= box.max_x; ++x) {
+                for (jint z = box.min_z; z <= box.max_z; ++z) {
+                    decorated_positions.push_back(chunk_pos{.x = x, .z = z});
+                }
+            }
+            for (jint x = box.min_x - 1; x <= box.max_x + 1; ++x) {
+                for (jint z = box.min_z - 1; z <= box.max_z + 1; ++z) {
+                    region_positions.push_back(chunk_pos{.x = x, .z = z});
+                }
             }
         }
     } else {
@@ -752,8 +808,8 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
                     .states = &states,
                     .generation =
                         provider::generation_context{
-                            .min_y = center->min_y(),
-                            .height = center->height(),
+                            .min_y = dimension_->generation_min_y(),
+                            .height = dimension_->generation_height(),
                             .sea_level = profile.sea_level,
                             .world_seed = config_.seed,
                         },
@@ -855,8 +911,10 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         }
         const auto decorate_chunk = [&](proto_chunk &target) {
             feature_context.placement.chunk = &target;
-            feature_context.placement.generation.min_y = target.min_y();
-            feature_context.placement.generation.height = target.height();
+            feature_context.placement.generation.min_y =
+                dimension_->generation_min_y();
+            feature_context.placement.generation.height =
+                dimension_->generation_height();
             feature::decorate(feature_context, shared_->feature_plan,
                               features_->placed(), candidate_biomes,
                               shared_->feature_data.biomes, config_.seed);
@@ -885,7 +943,8 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         };
         if (!config_.decorate_neighbours) {
             decorate_chunk(*center);
-        } else if (config_.neighbours_in_generation_order) {
+        } else if (config_.neighbours_in_generation_order ||
+                   config_.neighbours_ticket_sweep) {
             for (const auto &position : decorated_positions) {
                 decorate_position(position);
             }

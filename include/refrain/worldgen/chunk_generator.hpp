@@ -99,6 +99,17 @@ struct chunk_generator_config {
     /// was force-loaded contains exactly this interleaving, so a feature that
     /// writes across a border resolves contacts the same way.
     bool neighbours_in_generation_order{false};
+    /// With `decorate_neighbours` and a `neighbour_box`, decorate the chunks
+    /// in the order a force-load ticket queue runs them instead of ascending
+    /// x and z. A ticket keeps its own two rings at the full status, so the
+    /// task of every force-loaded chunk first runs the feature layer of the
+    /// three-by-three around it; the propagated tickets two rings out then
+    /// run one more layer each. `force_load_decoration_order` returns that
+    /// sequence. A reference world built by force-loading a rectangle saves
+    /// the whole area the tickets reached, and a feature that writes across a
+    /// border resolves contacts in this order, so a single-chunk comparison
+    /// of such a world needs it. Requires a non-empty `neighbour_box`.
+    bool neighbours_ticket_sweep{false};
     /// With `decorate_neighbours`, how many chunks around the target are
     /// decorated. Zero decorates only the target, one the eight surrounding
     /// chunks (the default). Two adds the next ring, which a force-loaded
@@ -120,6 +131,15 @@ struct chunk_generator_config {
     /// chunk must lie inside the rectangle.
     chunk_rectangle neighbour_box{};
 };
+
+/// The chunks a force-load of `box` runs features for, in the order the
+/// ticket queue runs them. Every chunk of the rectangle is force-loaded in
+/// ascending x and then z; each ticket keeps its own two rings at the full
+/// status, so its generation task runs the feature layer of the three-by-three
+/// around it, and the tickets propagated two rings out run one more layer
+/// each. The result covers the rectangle expanded by three chunks.
+[[nodiscard]] auto force_load_decoration_order(const chunk_rectangle &box)
+    -> std::vector<chunk_pos>;
 
 /// A reusable full-chunk generator. The object is not thread-safe: a single
 /// instance must not generate concurrently. The batch entry points create one

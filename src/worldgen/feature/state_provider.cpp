@@ -12,6 +12,8 @@
 #include <refrain/worldgen/noise/noise.hpp>
 #include <refrain/worldgen/provider.hpp>
 
+#include "state_resolution.hpp"
+
 #include <algorithm>
 #include <array>
 #include <string>
@@ -22,35 +24,6 @@
 namespace refrain::worldgen::feature {
 
 namespace {
-
-auto resolve_state(block_state_registry &states, std::string_view key)
-    -> result<block_state_id> {
-    // Fluid JSON spells out the default level. The registry keys states by
-    // their data spelling, so fold it to the plain block name that terrain
-    // fluids use; the two are the same state in the reference.
-    std::string canonical{key};
-    for (const std::string_view fluid : {"minecraft:water", "minecraft:lava"}) {
-        if (key == std::string{fluid} + "[level=0]") {
-            canonical = std::string{fluid};
-            break;
-        }
-    }
-    if (const auto found = states.find(canonical); found.has_value()) {
-        return *found;
-    }
-    key = canonical;
-    // Take the motion traits from the block tags, which describe the shapes a
-    // heightmap counts. A snow layer is the exception: the tag covers the
-    // full block, and a partial layer has no collision shape.
-    auto traits = states.infer_traits(key);
-    const auto block = state_block_name(key);
-    if (block == "minecraft:snow" &&
-        key.find("layers=8") == std::string_view::npos) {
-        traits.blocks_motion = false;
-        traits.blocks_motion_no_leaves = false;
-    }
-    return states.intern(key, traits);
-}
 
 class reference_provider final : public state_provider {
   public:

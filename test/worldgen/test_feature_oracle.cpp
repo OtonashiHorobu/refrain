@@ -16,7 +16,10 @@
 // chunks that precede the target in force-load order first and the rest after
 // it, `_NEIGHBOUR_RADIUS` widens the decorated square, and `_NEIGHBOUR_BOX`
 // names the reference world's generated chunk rectangle as
-// `min_x,min_z,max_x,max_z`.
+// `min_x,min_z,max_x,max_z`. `_NEIGHBOURS_SWEEP` follows the ticket queue of a
+// force-load instead of ascending x and z: every force-loaded chunk first
+// decorates the three-by-three around it, then the propagated full chunks two
+// rings out decorate one more layer each.
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
@@ -186,6 +189,8 @@ void run_feature_case(std::string_view prefix) {
         environment(std::string{prefix} + "_NEIGHBOURS_FIRST") != nullptr;
     const bool neighbours_in_generation_order =
         environment(std::string{prefix} + "_NEIGHBOURS_ORDER") != nullptr;
+    const bool neighbours_ticket_sweep =
+        environment(std::string{prefix} + "_NEIGHBOURS_SWEEP") != nullptr;
     const auto neighbour_radius =
         integer_environment(std::string{prefix} + "_NEIGHBOUR_RADIUS");
     auto neighbour_box = chunk_rectangle{};
@@ -214,6 +219,7 @@ void run_feature_case(std::string_view prefix) {
         .decorate_neighbours = decorate_neighbours,
         .neighbours_before_target = neighbours_before_target,
         .neighbours_in_generation_order = neighbours_in_generation_order,
+        .neighbours_ticket_sweep = neighbours_ticket_sweep,
         .neighbour_radius = neighbour_radius.value_or(1),
         .neighbour_box = neighbour_box,
     });
