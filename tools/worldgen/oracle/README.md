@@ -365,9 +365,9 @@ REFRAIN_RUNTIME_STRONGHOLD_STRUCTURE_SET=minecraft:strongholds \
     ./build/Release/bin/refrain-tests "the runtime service reproduces"
 ```
 
-### Jigsaw coverage: outpost, taiga village, ancient city and trial chambers
+### Jigsaw coverage: outpost, taiga village, ancient city, trial chambers and trail ruins
 
-Four further jigsaw structures have reference starts and full-stage chunks.
+Five further jigsaw structures have reference starts and full-stage chunks.
 The candidates come from `locate structure` in a probe world with the same
 fixed biome; the force-load boxes below cover the start and the pieces the
 compared chunk needs.
@@ -509,6 +509,56 @@ REFRAIN_JIGSAW_TRIAL_FULL_STAGE_BIOME=minecraft:plains \
     ./build/Release/bin/refrain-tests \
     "a trial chambers chunk matches the reference full-stage world"
 ```
+
+A trail ruins start is underground and only selects the taiga-family biomes.
+Seed 1 places its start at chunk `(0, -12)`; the box covers the start and every
+piece the compared chunk needs. The chunk holds six brushable block entities,
+three from the common capped list and three from the rare one, so the case
+exercises capped delegates and the `append_loot` rule modifier:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:taiga --only-structure-set trail_ruins \
+    --settle 25 --force-load-box -128 -288 143 -81 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2trail
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_REGION=/tmp/t2trail/world/dimensions/minecraft/overworld/region/r.0.-1.mca \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_CHUNK_X=0 \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_CHUNK_Z=-12 \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_START_CHUNK_X=0 \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_START_CHUNK_Z=-12 \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_SEED=1 \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_BIOME=minecraft:taiga \
+    ./build/Release/bin/refrain-tests \
+    "a trail ruins chunk matches the reference full-stage world"
+```
+
+The trail ruins case compares loot-table block entities by default: every
+reference block entity that stores `LootTable` must exist at the same position
+with the same `LootTable` and `LootTableSeed`. The same comparison runs for a
+trial chambers chest chunk; chunk `(21, 15)` with start chunk `(18, 14)` holds
+two chests:
+
+```bash
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_REGION=/tmp/t2trial/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_CHUNK_X=21 \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_CHUNK_Z=15 \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_START_CHUNK_X=18 \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_START_CHUNK_Z=14 \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_SEED=1 \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_BIOME=minecraft:plains \
+    ./build/Release/bin/refrain-tests \
+    "a trial chambers chest chunk matches the reference loot block entities"
+```
+
+Any other full-stage case enables the same comparison with a non-empty
+`<PREFIX>_BLOCK_ENTITIES` variable.
 
 The start cases read `_STRUCTURE`, `_BIOME` and `_TEMPLATE_DIRS` overrides when
 the structure document differs from the defaults. Every candidate value comes

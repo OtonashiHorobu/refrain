@@ -237,8 +237,8 @@ The reference-backed suites currently cover:
   generation for jungle temple, warm ocean ruin, beached shipwreck,
   buried treasure, mineshaft, ocean monument, stronghold, nether fortress,
   bastion remnant, nether fossil, end city, a plains village start, a
-  pillager outpost, a taiga village, an ancient city and trial chambers,
-  including their feature pool elements;
+  pillager outpost, a taiga village, an ancient city, trial chambers and
+  trail ruins, including their feature pool elements;
 - `locate_structure` against real seeds and reference heightmaps;
 - the storage bridge, RWF round trip and Anvil export/import;
 - parallel fill determinism and fixed-biome structure generator
@@ -269,11 +269,17 @@ approximate a full face with the heightmap motion-blocking property, and the
 unobstructed predicate admits every position because generation has no
 entities, and the biome membership predicate accepts explicit biome ids but not
 biome tags. Structure feature placement has no climate source, so snow and
-freeze feature modifiers are inert there. Capped processor lists, block-entity rule
-modifiers and template entities are not implemented; end city shulker and
-elytra data markers, pillager cages and village animal markers therefore leave
-no entities behind. End gateways and the
-obsidian end platform are not implemented.
+freeze feature modifiers are inert there. Template entities are not placed;
+end city shulker and elytra data markers, pillager cages and village animal
+markers therefore leave no entities behind. Capped processor lists decode and
+run their delegate over the whole piece, with constant and uniform limits; a
+limit document that names another provider type is rejected instead of being
+approximated. Rule block entity modifiers are decoded for `clear`,
+`passthrough`, `append_static` and `append_loot`. A rule that names a loot
+table keeps the seed drawn from its own positional stream, while a container
+tag carried by the template still receives the piece stream's seed at
+placement. Processor rule position predicates are not decoded. End gateways
+and the obsidian end platform are not implemented.
 
 Ruined portal starts place the template at the reference position and
 orientation. A dry reference candidate at chunk (-65, 0) matches block for
@@ -295,7 +301,10 @@ plates, the ancient city's start anchor and the trial chambers pool aliases.
 A full-stage reference chunk of each structure matches block for block and in
 all four final heightmaps: the outpost and trial chambers start chunks, a taiga
 village chunk one chunk south of the start and an ancient city chunk away from
-its fluid pools.
+its fluid pools. A trail ruins chunk exercises both capped archaeology lists:
+the reference and runtime chunks agree on every block, heightmap and brushable
+block entity, including the loot seed each capped selection stored. A trial
+chambers chest chunk agrees on its container loot tables and seeds as well.
 The clean chunks are chosen deliberately: reference worlds settle flowing
 water and lava after saving, so a chunk whose pieces place fluids cannot be
 compared block for block, and a feature element that writes into the compared
