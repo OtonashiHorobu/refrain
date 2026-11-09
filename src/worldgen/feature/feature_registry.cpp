@@ -157,30 +157,28 @@ auto resolve_state(block_state_registry &states, std::string_view key)
         return *found;
     }
     key = canonical;
+    // Take the motion traits from the block tags, which describe the shapes a
+    // heightmap counts. The listed states have a collision shape the tag
+    // counts but a heightmap must ignore; a partial snow layer has no
+    // collision shape at all.
+    auto traits = states.infer_traits(key);
     const auto block = state_block_name(key);
-    const bool air = is_air_block_name(block);
-    const bool water = block == "minecraft:water" ||
-                       key.find("waterlogged=true") != std::string_view::npos;
-    const bool fluid = water || block == "minecraft:lava" ||
-                       block == "minecraft:bubble_column";
-    const bool leaves = block.ends_with("_leaves");
-    // A snow layer has no collision shape until it reaches a full block.
-    const bool snow_layer = block == "minecraft:snow" &&
-                            key.find("layers=8") == std::string_view::npos;
+    if (block == "minecraft:snow" &&
+        key.find("layers=8") == std::string_view::npos) {
+        traits.blocks_motion = false;
+        traits.blocks_motion_no_leaves = false;
+    }
     const bool non_solid =
         block == "minecraft:end_portal" || block == "minecraft:end_gateway" ||
         block == "minecraft:fire" || block == "minecraft:torch" ||
         block == "minecraft:wall_torch" || block == "minecraft:soul_torch" ||
         block == "minecraft:soul_wall_torch" ||
         block == "minecraft:glow_lichen" || block == "minecraft:sculk_vein";
-    return states.intern(
-        key, state_traits{
-                 .air = air,
-                 .fluid = fluid,
-                 .water = water,
-                 .blocks_motion = !air && !fluid && !snow_layer && !non_solid,
-                 .blocks_motion_no_leaves =
-                     !air && !fluid && !leaves && !snow_layer && !non_solid});
+    if (non_solid) {
+        traits.blocks_motion = false;
+        traits.blocks_motion_no_leaves = false;
+    }
+    return states.intern(key, traits);
 }
 
 auto decode_simple_state(const data::json::value &provider,

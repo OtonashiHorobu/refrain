@@ -39,23 +39,17 @@ auto resolve_state(block_state_registry &states, std::string_view key)
         return *found;
     }
     key = canonical;
+    // Take the motion traits from the block tags, which describe the shapes a
+    // heightmap counts. A snow layer is the exception: the tag covers the
+    // full block, and a partial layer has no collision shape.
+    auto traits = states.infer_traits(key);
     const auto block = state_block_name(key);
-    const bool air = is_air_block_name(block);
-    const bool water = block == "minecraft:water" ||
-                       key.find("waterlogged=true") != std::string_view::npos;
-    const bool fluid = water || block == "minecraft:lava" ||
-                       block == "minecraft:bubble_column";
-    const bool leaves = block.ends_with("_leaves");
-    // A snow layer has no collision shape until it reaches a full block.
-    const bool snow_layer = block == "minecraft:snow" &&
-                            key.find("layers=8") == std::string_view::npos;
-    return states.intern(
-        key, state_traits{.air = air,
-                          .fluid = fluid,
-                          .water = water,
-                          .blocks_motion = !air && !fluid && !snow_layer,
-                          .blocks_motion_no_leaves =
-                              !air && !fluid && !leaves && !snow_layer});
+    if (block == "minecraft:snow" &&
+        key.find("layers=8") == std::string_view::npos) {
+        traits.blocks_motion = false;
+        traits.blocks_motion_no_leaves = false;
+    }
+    return states.intern(key, traits);
 }
 
 class reference_provider final : public state_provider {
