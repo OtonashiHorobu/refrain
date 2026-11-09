@@ -564,6 +564,15 @@ if(REFRAIN_BUILD_BENCH)
                           benchmark::benchmark_main)
     refrain_apply_warnings(refrain-bench)
 
+    # Runtime generator benchmark: a standalone executable because it reports
+    # per-scenario tail latency and resident memory, which the Google Benchmark
+    # reporters do not. It skips itself when the datapack root is unset.
+    add_executable(refrain-bench-runtime
+                   "${PROJECT_SOURCE_DIR}/bench/runtime/bench_chunk_generator.cpp")
+    target_link_libraries(refrain-bench-runtime PRIVATE refrain-worldgen
+                          refrain-data refrain-kernel fmt::fmt)
+    refrain_apply_warnings(refrain-bench-runtime)
+
     # Library-comparison benchmarks: the sources are optional and live outside
     # this tree, so the target exists only when the option is enabled and
     # REFRAIN_BENCH_VARIANTS_DIR actually contains sources.
