@@ -165,6 +165,45 @@ service core : 1.0.0 {
                    std::string::npos);
         };
 
+    "schema/host modules also emit Rust bindings"_test = [] {
+        const auto generated{compile_ridl(R"(module refrain::host::demo;
+version 1.0.0;
+
+callback job_callback = fn(opaque_ptr userdata) -> void;
+
+struct config {
+    u32 port;
+}
+
+service demo : 1.0.0 {
+    side = both;
+    thread = any;
+    composition = sealed;
+    provides = [ "refrain:host.demo" ];
+    fn submit(job_callback callback, opaque_ptr userdata) -> u32;
+}
+)")};
+        expect(generated.has_value());
+        if (!generated) {
+            return;
+        }
+        const auto *rust{file_named(*generated, "rust/refrain_host.rs")};
+        expect(rust != nullptr);
+        if (rust == nullptr) {
+            return;
+        }
+        expect(rust->find("pub mod demo") != std::string::npos);
+        expect(rust->find("pub struct config") != std::string::npos);
+        expect(rust->find("pub type job_callback = Option<unsafe extern "
+                          "\"C\" fn(userdata: *mut ::core::ffi::c_void)>;") !=
+               std::string::npos);
+        expect(rust->find("pub struct refrain_host_demo_vtable") !=
+               std::string::npos);
+        expect(rust->find("offset_of!(config, port) == 4") !=
+               std::string::npos);
+        expect(rust->find("REFRAIN_HOST_DEMO_SERVICE_ID") != std::string::npos);
+    };
+
     "schema/callback restrictions are enforced"_test = [] {
         const auto non_void{compile_ridl(R"(module refrain::demo;
 version 1.0.0;

@@ -191,6 +191,19 @@ struct generated_file {
     return "cpp/refrain/reflection.hpp";
 }
 
+/// Generated runtime schema metadata (types, fields, enums, contracts) used
+/// by the sealed `refrain:host.metadata` service. This is data, not C++
+/// `reflect<T>`; the reflection header stays a separate, optional output.
+[[nodiscard]] inline auto cpp_metadata_header_path() -> std::string {
+    return "cpp/refrain/metadata.hpp";
+}
+
+/// Generated Rust bindings for the sealed host contracts. One file keeps the
+/// host API surface together (`pub mod core`, `pub mod platform`, ...).
+[[nodiscard]] inline auto rust_bindings_path() -> std::string {
+    return "rust/refrain_host.rs";
+}
+
 [[nodiscard]] inline auto upper(std::string_view text) -> std::string {
     std::string result;
     result.reserve(text.size());

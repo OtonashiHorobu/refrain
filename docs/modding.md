@@ -160,7 +160,10 @@ lookup/registration. `refrain:host.platform` adds random-access files,
 read-only mmap and crash annotations; file handles are host-owned and
 single-threaded. `refrain:host.kernel` adds background jobs and a process-local
 event bus; job callbacks run on host workers and event callbacks run on the
-publishing thread. `refrain-server --config-dir <dir>` mounts each TOML file as a
+publishing thread. `refrain:host.metadata` exposes the generated schema
+metadata (types, fields, enum values and contract versions) as read-only data;
+it is not C++ `reflect<T>`. Rust bindings for the sealed host contracts are
+generated under `sdk/generated/rust/refrain_host.rs`. `refrain-server --config-dir <dir>` mounts each TOML file as a
 read-only namespace (`refrain.toml` is `host`, `mods/<id>.toml` is
 `mod/<id>`); without the option config reads return `unsupported`. A sealed service is not a gamepack provider: a mod cannot
 declare it in `[provides]` or replace it through `register_provider`. The C ABI

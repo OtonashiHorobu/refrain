@@ -389,7 +389,8 @@ add_library(Refrain::ModHost ALIAS refrain-mod-host)
 # composition root, so tests and embedders can use a fake.
 refrain_add_library(refrain-host src/host/core_api.cpp
                             src/host/platform_api.cpp
-                            src/host/kernel_api.cpp)
+                            src/host/kernel_api.cpp
+                            src/host/metadata_api.cpp)
 target_link_libraries(refrain-host PUBLIC refrain-contracts refrain-kernel)
 add_library(Refrain::Host ALIAS refrain-host)
 

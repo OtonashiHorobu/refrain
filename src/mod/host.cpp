@@ -5,6 +5,8 @@
 #include <refrain/mod/host.hpp>
 
 #include <refrain/contracts/host/core.hpp>
+#include <refrain/contracts/host/kernel.hpp>
+#include <refrain/contracts/host/metadata.hpp>
 #include <refrain/contracts/host/platform.hpp>
 #include <refrain/core/config.hpp>
 #include <refrain/core/log.hpp>
@@ -78,6 +80,8 @@ using mod::static_mod_registry;
         };
         add(REFRAIN_HOST_CORE_CAPABILITIES);
         add(REFRAIN_HOST_PLATFORM_CAPABILITIES);
+        add(REFRAIN_HOST_KERNEL_CAPABILITIES);
+        add(REFRAIN_HOST_METADATA_CAPABILITIES);
         return out;
     }();
     return capabilities;

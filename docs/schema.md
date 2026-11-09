@@ -89,8 +89,10 @@ build/Release/bin/refrain-tools schema gen --check
 ```
 
 Generation writes C ABI headers under `sdk/generated/c/`, C++ wrappers under
-`sdk/generated/cpp/` and reflection metadata in
-`sdk/generated/cpp/refrain/reflection.hpp`. Every file records the schema hash
+`sdk/generated/cpp/`, reflection metadata in
+`sdk/generated/cpp/refrain/reflection.hpp`, runtime schema metadata in
+`sdk/generated/cpp/refrain/metadata.hpp`, and Rust bindings for the sealed host
+contracts in `sdk/generated/rust/refrain_host.rs`. Every file records the schema hash
 of the inputs. `--check` regenerates into a temporary directory and fails when
 the committed output differs.
 

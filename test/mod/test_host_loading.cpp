@@ -268,7 +268,7 @@ const suite mod_host_tests = [] {
         }
     };
 
-    "mod_host/rejects external mods"_test = [] {
+    "mod_host/rejects a missing external library"_test = [] {
         mod::static_mod_registry registry{};
         auto plan{make_gamepack("\"refrain.test.external@1.0.0\"")};
         expect(static_cast<bool>(plan));
@@ -283,9 +283,29 @@ const suite mod_host_tests = [] {
         auto loaded{host.load(*plan, builder.build())};
         expect(!loaded);
         if (!loaded) {
-            expect(loaded.error().code == error_code::unsupported);
-            expect(loaded.error().message.find("external") !=
+            expect(loaded.error().code == error_code::io_error);
+            expect(loaded.error().message.find("cannot load native entry") !=
                    std::string::npos);
+        }
+    };
+
+    "mod_host/rejects wasm external mods"_test = [] {
+        mod::static_mod_registry registry{};
+        auto plan{make_gamepack("\"refrain.test.external@1.0.0\"")};
+        expect(static_cast<bool>(plan));
+        if (!plan) {
+            return;
+        }
+        auto manifest{make_manifest("refrain.test.external")};
+        manifest += "\n[entry]\nwasm = \"script.wasm\"\n";
+        image_builder builder{};
+        builder.add("refrain.test.external", std::move(manifest));
+        refrain::mod::host host{registry};
+        auto loaded{host.load(*plan, builder.build())};
+        expect(!loaded);
+        if (!loaded) {
+            expect(loaded.error().code == error_code::unsupported);
+            expect(loaded.error().message.find("WASM") != std::string::npos);
         }
     };
 
