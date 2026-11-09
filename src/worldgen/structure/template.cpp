@@ -896,9 +896,9 @@ void apply_capped(const template_block_processor &delegate,
             break;
         }
         const auto world = context.positions[index];
-        const auto result =
-            delegate.process(context.states, context.region,
-                             context.blocks[index], world, nullptr);
+        const auto result = delegate.process(context.states, context.region,
+                                             context.blocks[index], world,
+                                             context.reference, nullptr);
         if (!result) {
             continue;
         }
@@ -1211,6 +1211,27 @@ auto json_int(const data::json::value *document, std::string_view name)
     return static_cast<jint>(*number);
 }
 
+auto json_int_or(const data::json::value *document, std::string_view name,
+                 jint fallback) -> result<jint> {
+    if (document == nullptr) {
+        return fallback;
+    }
+    return json_int(document, name);
+}
+
+auto json_float_or(const data::json::value *document, std::string_view name,
+                   float fallback) -> result<float> {
+    if (document == nullptr) {
+        return fallback;
+    }
+    const auto number = document->as_double();
+    if (!number) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "invalid " + std::string{name})};
+    }
+    return static_cast<float>(*number);
+}
+
 auto json_array(const data::json::value *document, std::string_view name)
     -> result<std::span<const data::json::value>> {
     if (document == nullptr) {
@@ -1332,6 +1353,82 @@ auto decode_block_entity_modifier(const data::json::value &document)
                                       "unsupported block entity modifier")};
 }
 
+auto decode_position_rule(const data::json::value &document)
+    -> result<position_rule_test> {
+    if (!document.is_object()) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "position predicate has no type")};
+    }
+    auto type =
+        json_string(document.find("predicate_type"), "position predicate type");
+    if (!type) {
+        return std::unexpected{type.error()};
+    }
+    position_rule_test test{};
+    if (*type == "minecraft:always_true") {
+        return test;
+    }
+    if (*type != "minecraft:linear_pos" &&
+        *type != "minecraft:axis_aligned_linear_pos") {
+        return std::unexpected{make_error(error_code::unsupported,
+                                          "unsupported position predicate")};
+    }
+    test.type = *type == "minecraft:linear_pos"
+                    ? position_rule_type::linear_pos
+                    : position_rule_type::axis_aligned_linear_pos;
+    auto min_chance =
+        json_float_or(document.find("min_chance"), "min_chance", 0.0F);
+    if (!min_chance) {
+        return std::unexpected{min_chance.error()};
+    }
+    auto max_chance =
+        json_float_or(document.find("max_chance"), "max_chance", 0.0F);
+    if (!max_chance) {
+        return std::unexpected{max_chance.error()};
+    }
+    auto min_dist = json_int_or(document.find("min_dist"), "min_dist", 0);
+    if (!min_dist) {
+        return std::unexpected{min_dist.error()};
+    }
+    auto max_dist = json_int_or(document.find("max_dist"), "max_dist", 0);
+    if (!max_dist) {
+        return std::unexpected{max_dist.error()};
+    }
+    // A range that does not advance cannot be interpolated; the document is
+    // rejected instead of silently changing the predicate into a constant.
+    if (*min_dist >= *max_dist) {
+        return std::unexpected{make_error(
+            error_code::parse_error, "position predicate range is invalid")};
+    }
+    test.min_chance = *min_chance;
+    test.max_chance = *max_chance;
+    test.min_dist = *min_dist;
+    test.max_dist = *max_dist;
+    if (test.type == position_rule_type::axis_aligned_linear_pos) {
+        const auto *axis = document.find("axis");
+        if (axis != nullptr) {
+            const auto value = axis->as_string();
+            if (!value) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "invalid position predicate axis")};
+            }
+            if (*value == "x") {
+                test.axis = position_axis::x;
+            } else if (*value == "y") {
+                test.axis = position_axis::y;
+            } else if (*value == "z") {
+                test.axis = position_axis::z;
+            } else {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "invalid position predicate axis")};
+            }
+        }
+    }
+    return test;
+}
+
 auto decode_rule(const data::json::value &document,
                  block_state_registry &states) -> result<template_rule> {
     const auto *input = document.find("input_predicate");
@@ -1349,6 +1446,15 @@ auto decode_rule(const data::json::value &document,
     if (!location_test) {
         return std::unexpected{location_test.error()};
     }
+    position_rule_test position_test{};
+    if (const auto *node = document.find("position_predicate");
+        node != nullptr && !node->is_null()) {
+        auto decoded = decode_position_rule(*node);
+        if (!decoded) {
+            return std::unexpected{decoded.error()};
+        }
+        position_test = std::move(*decoded);
+    }
     const auto output_state = decode_block_state(states, *output);
     if (output_state == no_block_state) {
         return std::unexpected{make_error(error_code::parse_error,
@@ -1365,6 +1471,7 @@ auto decode_rule(const data::json::value &document,
     }
     return template_rule{.input = std::move(*input_test),
                          .location = std::move(*location_test),
+                         .position = std::move(position_test),
                          .output = output_state,
                          .entity_modifier = std::move(modifier)};
 }
@@ -1744,15 +1851,51 @@ auto replace_block_name(std::string key, std::string_view replacement)
 
 } // namespace
 
+auto position_rule_test::test(const block_pos &world,
+                              const block_pos &reference,
+                              worldgen_random &random) const -> bool {
+    if (type == position_rule_type::always_true) {
+        return true;
+    }
+    // A decoded predicate always has an advancing range; a directly built
+    // invalid one matches nothing instead of dividing by zero.
+    if (min_dist >= max_dist) {
+        return false;
+    }
+    const auto absolute = [](jint value) { return value < 0 ? -value : value; };
+    jint distance = 0;
+    if (type == position_rule_type::linear_pos) {
+        distance = absolute(world.x - reference.x) +
+                   absolute(world.y - reference.y) +
+                   absolute(world.z - reference.z);
+    } else {
+        const jint delta = axis == position_axis::x   ? world.x - reference.x
+                           : axis == position_axis::y ? world.y - reference.y
+                                                      : world.z - reference.z;
+        distance = absolute(delta);
+    }
+    const float value = static_cast<float>(distance);
+    const float low = static_cast<float>(min_dist);
+    const float high = static_cast<float>(max_dist);
+    const float factor = (value - low) / (high - low);
+    const float chance =
+        factor < 0.0F
+            ? min_chance
+            : (factor > 1.0F ? max_chance
+                             : min_chance + factor * (max_chance - min_chance));
+    return random.next_float() <= chance;
+}
+
 auto rule_processor::process(block_state_registry &states,
                              const chunk_region &region,
                              const template_block_info &info,
-                             const block_pos &world,
+                             const block_pos &world, const block_pos &reference,
                              worldgen_random *random) const
     -> std::optional<template_block_info> {
     (void)random;
     // A rule processor always seeds a positional source at the world position;
-    // the input and location tests and the block entity modifier share it.
+    // the input, location and position tests and the block entity modifier
+    // share it.
     worldgen_random rng{std::make_unique<legacy_random_source>(
         mth_get_seed(world.x, world.y, world.z))};
     const auto world_state = region.state_at(world.x, world.y, world.z);
@@ -1761,6 +1904,9 @@ auto rule_processor::process(block_state_registry &states,
             continue;
         }
         if (!rule_matches(rule.location, states, world_state, rng)) {
+            continue;
+        }
+        if (!rule.position.test(world, reference, rng)) {
             continue;
         }
         auto result = info;
@@ -1779,10 +1925,12 @@ auto jigsaw_replacement_processor::process(block_state_registry &states,
                                            const chunk_region &region,
                                            const template_block_info &info,
                                            const block_pos &world,
+                                           const block_pos &reference,
                                            worldgen_random *random) const
     -> std::optional<template_block_info> {
     (void)region;
     (void)world;
+    (void)reference;
     (void)random;
     if (state_block_name(states.name(info.state)) != "minecraft:jigsaw" ||
         info.nbt == nullptr) {
@@ -1820,8 +1968,10 @@ auto protected_block_processor::process(block_state_registry &states,
                                         const chunk_region &region,
                                         const template_block_info &info,
                                         const block_pos &world,
+                                        const block_pos &reference,
                                         worldgen_random *random) const
     -> std::optional<template_block_info> {
+    (void)reference;
     (void)random;
     const auto state = region.state_at(world.x, world.y, world.z);
     if (states.in_tag(state, tag_)) {
@@ -1834,8 +1984,10 @@ auto lava_submerged_processor::process(block_state_registry &states,
                                        const chunk_region &region,
                                        const template_block_info &info,
                                        const block_pos &world,
+                                       const block_pos &reference,
                                        worldgen_random *random) const
     -> std::optional<template_block_info> {
+    (void)reference;
     (void)random;
     const auto current = region.state_at(world.x, world.y, world.z);
     if (states.name(current) == "minecraft:lava" &&
@@ -1851,8 +2003,10 @@ auto block_age_processor::process(block_state_registry &states,
                                   const chunk_region &region,
                                   const template_block_info &info,
                                   const block_pos &world,
+                                  const block_pos &reference,
                                   worldgen_random *random) const
     -> std::optional<template_block_info> {
+    (void)reference;
     (void)region;
     // Positional processors randomise from the transformed world position, not
     // from the template-local position carried by the block info.
@@ -1989,11 +2143,13 @@ auto blackstone_replace_processor::process(block_state_registry &states,
                                            const chunk_region &region,
                                            const template_block_info &info,
                                            const block_pos &world,
+                                           const block_pos &reference,
                                            worldgen_random *random) const
     -> std::optional<template_block_info> {
     (void)region;
     (void)random;
     (void)world;
+    (void)reference;
     static const std::array<std::pair<std::string_view, std::string_view>, 23>
         replacements{{
             {"minecraft:cobblestone", "minecraft:blackstone"},
@@ -2105,8 +2261,9 @@ auto place_template(chunk_region &region, block_state_registry &states,
         auto processed = block;
         bool dropped = false;
         for (const auto *processor : settings.processors) {
-            const auto result = processor->process(states, region, processed,
-                                                   world, settings.random);
+            const auto result =
+                processor->process(states, region, processed, world,
+                                   settings.reference, settings.random);
             if (!result) {
                 dropped = true;
                 break;
@@ -2132,6 +2289,7 @@ auto place_template(chunk_region &region, block_state_registry &states,
         .region = region,
         .level_seed = settings.level_seed,
         .origin = origin,
+        .reference = settings.reference,
         .originals = original_blocks,
         .blocks = processed_blocks,
         .positions = processed_positions,
@@ -2262,10 +2420,12 @@ auto block_ignore_processor::process(block_state_registry &states,
                                      const chunk_region &region,
                                      const template_block_info &info,
                                      const block_pos &world,
+                                     const block_pos &reference,
                                      worldgen_random *random) const
     -> std::optional<template_block_info> {
     (void)region;
     (void)world;
+    (void)reference;
     (void)random;
     const auto name = state_block_name(states.name(info.state));
     if (std::find(blocks_.begin(), blocks_.end(), name) != blocks_.end()) {
@@ -2278,8 +2438,10 @@ auto block_rot_processor::process(block_state_registry &states,
                                   const chunk_region &region,
                                   const template_block_info &info,
                                   const block_pos &world,
+                                  const block_pos &reference,
                                   worldgen_random *random) const
     -> std::optional<template_block_info> {
+    (void)reference;
     (void)region;
     if (has_rottable_) {
         const auto name = state_block_name(states.name(info.state));
@@ -2310,8 +2472,10 @@ auto protected_blocks_processor::process(block_state_registry &states,
                                          const chunk_region &region,
                                          const template_block_info &info,
                                          const block_pos &world,
+                                         const block_pos &reference,
                                          worldgen_random *random) const
     -> std::optional<template_block_info> {
+    (void)reference;
     (void)random;
     if (states.in_tag(region.state_at(world.x, world.y, world.z), tag_)) {
         return std::nullopt;

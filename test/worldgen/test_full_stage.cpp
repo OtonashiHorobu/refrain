@@ -522,8 +522,13 @@ void run_full_stage_case(std::string_view prefix,
             auto placement_random =
                 worldgen_random{std::make_unique<xoroshiro_random_source>(0)};
             placement_random.set_feature_seed(decoration_seed, *index, step);
+            auto start_placement = place_context;
+            if (!start.pieces.empty()) {
+                start_placement.reference = structure::start_reference_position(
+                    start.pieces.front().bounds);
+            }
             if (own_start) {
-                structure::place_structures(chunk, place_context, start.step,
+                structure::place_structures(chunk, start_placement, start.step,
                                             placement_random);
                 continue;
             }
@@ -535,7 +540,7 @@ void run_full_stage_case(std::string_view prefix,
                     continue;
                 }
                 structure::place_structure_piece(
-                    place_context, structure::to_piece_record(piece),
+                    start_placement, structure::to_piece_record(piece),
                     placement_random);
             }
         }
@@ -558,19 +563,12 @@ void run_full_stage_case(std::string_view prefix,
                 if (!intersects) {
                     continue;
                 }
-                const structure::structure_place_context neighbour_context{
-                    .region = &region_view,
-                    .chunk = neighbour.get(),
-                    .states = &states,
-                    .state = resolve,
-                    .templates = &manager,
-                    .registry = &states,
-                    .seed = seed,
-                    .sea_level = settings->sea_level,
-                    .adjusted_heights = &adjusted_heights,
-                    .data = &*data,
-                    .place_feature = place_feature,
-                };
+                auto neighbour_context = place_context;
+                neighbour_context.region = &region_view;
+                neighbour_context.chunk = neighbour.get();
+                neighbour_context.templates = &manager;
+                neighbour_context.adjusted_heights = &adjusted_heights;
+                neighbour_context.place_feature = place_feature;
                 worldgen_random neighbour_random{
                     std::make_unique<xoroshiro_random_source>(0)};
                 const jlong neighbour_decoration_seed =
@@ -583,6 +581,11 @@ void run_full_stage_case(std::string_view prefix,
                     continue;
                 }
                 const auto &start = starts[start_index];
+                if (!start.pieces.empty()) {
+                    neighbour_context.reference =
+                        structure::start_reference_position(
+                            start.pieces.front().bounds);
+                }
                 const jint step =
                     structure::generation_step_ordinal(start.step);
                 neighbour_random.set_feature_seed(neighbour_decoration_seed,
@@ -816,5 +819,13 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
             run_full_stage_case("JIGSAW_TRIAL_LOOT_FULL_STAGE", std::nullopt,
                                 std::nullopt, std::nullopt, "minecraft:plains",
                                 "minecraft/structure/trial_chambers", true);
+        };
+
+    "a bastion high rampart chunk matches the reference full-stage world"_test =
+        [] {
+            run_full_stage_case("BASTION_RAMPART_FULL_STAGE", std::nullopt,
+                                std::nullopt, std::nullopt,
+                                "minecraft:nether_wastes",
+                                "minecraft/structure/bastion", true);
         };
 };

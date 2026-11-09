@@ -85,6 +85,15 @@ struct structure_piece {
 [[nodiscard]] auto to_piece_record(const structure_piece &piece)
     -> ::refrain::worldgen::structure_piece_record;
 
+/// Reference position of a structure start: the centre of its first piece's
+/// box on the horizontal axes, at the box floor. A rule position predicate
+/// measures distance from this point, which is the same for every chunk the
+/// start reaches.
+[[nodiscard]] auto start_reference_position(const structure_bbox &first)
+    -> block_pos;
+[[nodiscard]] auto start_reference_position(
+    const ::refrain::worldgen::structure_piece_record &first) -> block_pos;
+
 struct structure_start {
     std::string structure{};
     std::string step{};

@@ -239,6 +239,35 @@ REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:nether_wastes \
     ./build/Release/bin/refrain-tests
 ```
 
+The treasure branch also builds two high-rampart wall pieces that reach north
+of that box. A second reference world force-loads those chunks and the
+dedicated test compares one chunk the walls cross, including its container
+block entities:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --dimension the_nether --only-structure-set nether_complexes \
+    --fixed-biome minecraft:nether_wastes --settle 40 \
+    --force-load-box 160 -64 271 63 \
+    --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2nether-rampart
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_DIMENSION=the_nether \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_REGION=/tmp/t2nether-rampart/world/dimensions/minecraft/the_nether/region/r.0.-1.mca \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_CHUNK_X=13 \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_CHUNK_Z=-2 \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_START_CHUNK_X=12 \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_START_CHUNK_Z=0 \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_SEED=1 \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_BIOME=minecraft:nether_wastes \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_TEMPLATE_DIRS=minecraft/structure/bastion \
+    ./build/Release/bin/refrain-tests \
+    "a bastion high rampart chunk matches the reference full-stage world"
+```
+
 The bastion start suite compares the complete piece list, including the pool
 element, rotation, ground-level delta and junctions. The nether fossils set has
 a two-chunk spacing, so seed 1 with a force-load box near the origin yields

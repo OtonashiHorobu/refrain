@@ -278,8 +278,12 @@ approximated. Rule block entity modifiers are decoded for `clear`,
 `passthrough`, `append_static` and `append_loot`. A rule that names a loot
 table keeps the seed drawn from its own positional stream, while a container
 tag carried by the template still receives the piece stream's seed at
-placement. Processor rule position predicates are not decoded. End gateways
-and the obsidian end platform are not implemented.
+placement. Processor rule position predicates decode `always_true`,
+`linear_pos` and `axis_aligned_linear_pos`; the two linear forms measure the
+world position against the reference position of the structure start (the
+centre of its first piece's box at the box floor), so the template-local
+position does not participate. A missing predicate is `always_true` and draws
+nothing. End gateways and the obsidian end platform are not implemented.
 
 Ruined portal starts place the template at the reference position and
 orientation. A dry reference candidate at chunk (-65, 0) matches block for
@@ -316,7 +320,13 @@ The nether structure oracle also compares a full-stage bastion remnant chunk
 and a full-stage nether fossil chunk block for block and in all four final
 heightmaps. The bastion start list and junctions match the reference for the
 treasure, bridge, stable and housing/units branches; the fossil start and its
-dried ghast placement match a soul-sand-valley reference chunk. The dimension
+dried ghast placement match a soul-sand-valley reference chunk. A treasure
+chunk crossed by the two high-rampart wall pieces matches block for block,
+in all four final heightmaps and in its container block entities, which
+exercises the axis-aligned linear position predicate. A hoglin stable chunk
+matches the same way after wall sides stop connecting to hanging lanterns; the
+four-block blackstone wall difference seen there was a final shape rescan
+approximation, not a rule or position predicate difference. The dimension
 oracle of seed 1 matches nether chunks `(0,0)`, `(1,0)` and `(0,1)` and end
 chunks `(0,0)` and `(1,1)` block for block and in all four final heightmaps.
 Both reference worlds fix a real biome and strip its carvers and features, so

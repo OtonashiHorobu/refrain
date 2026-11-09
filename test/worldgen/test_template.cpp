@@ -27,6 +27,32 @@ using namespace refrain;
 using namespace refrain::worldgen;
 using namespace refrain::worldgen::structure;
 
+/// Returns the same 24-bit value for every draw, so a test can place a
+/// predicate result exactly on a chance boundary. `next_float` multiplies the
+/// value by 2^-24.
+class scripted_float_source final : public random_source {
+  public:
+    explicit scripted_float_source(jint bits) : bits_{bits} {}
+
+    auto next(int) -> jint override { return bits_; }
+    auto next_gaussian() -> double override { return 0.0; }
+    void set_seed(jlong) override {}
+    auto fork() -> std::unique_ptr<random_source> override {
+        return std::make_unique<scripted_float_source>(bits_);
+    }
+    auto fork_positional()
+        -> std::unique_ptr<positional_random_factory> override {
+        return nullptr;
+    }
+
+  private:
+    jint bits_{0};
+};
+
+auto scripted_random(jint bits) -> worldgen_random {
+    return worldgen_random{std::make_unique<scripted_float_source>(bits)};
+}
+
 auto ints(std::initializer_list<jint> values) -> data::nbt::value {
     auto list = data::nbt::make_list(data::nbt::tag_type::int_);
     for (const auto value : values) {
@@ -739,6 +765,259 @@ suite<"worldgen/template"> template_tests = [] {
         expect((*list)->processors.size() == 3U);
     };
 
+    "a linear position predicate interpolates between distance bounds"_test =
+        [] {
+            const block_pos reference{};
+            position_rule_test test{};
+            test.type = position_rule_type::linear_pos;
+            test.min_chance = 0.25F;
+            test.max_chance = 0.75F;
+            test.min_dist = 0;
+            test.max_dist = 10;
+            const auto passes = [&](jint bits, const block_pos &world) {
+                auto random = scripted_random(bits);
+                return test.test(world, reference, random);
+            };
+            // 0.25, 0.5 and 0.75 are exact 24-bit float draws.
+            expect(passes(1 << 22, block_pos{.x = 0, .y = 0, .z = 0}));
+            expect(!passes((1 << 22) + 1, block_pos{.x = 0, .y = 0, .z = 0}));
+            expect(passes(1 << 23, block_pos{.x = 5, .y = 0, .z = 0}));
+            expect(!passes((1 << 23) + 1, block_pos{.x = 5, .y = 0, .z = 0}));
+            expect(passes(3 << 22, block_pos{.x = 0, .y = 0, .z = 10}));
+            expect(!passes((3 << 22) + 1, block_pos{.x = 0, .y = 0, .z = 10}));
+            // Distances past either bound clamp to the end chance.
+            expect(passes(3 << 22, block_pos{.x = 100, .y = 0, .z = 0}));
+            expect(!passes((3 << 22) + 1, block_pos{.x = 100, .y = 0, .z = 0}));
+            // The distance is the sum over all three axes.
+            expect(passes(1 << 23, block_pos{.x = 2, .y = 2, .z = 1}));
+            expect(!passes((1 << 23) + 1, block_pos{.x = 2, .y = 2, .z = 1}));
+        };
+
+    "an axis aligned position predicate measures only its axis"_test = [] {
+        const block_pos reference{};
+        position_rule_test test{};
+        test.type = position_rule_type::axis_aligned_linear_pos;
+        test.min_chance = 0.0F;
+        test.max_chance = 1.0F;
+        test.min_dist = 0;
+        test.max_dist = 10;
+        const auto passes = [&](jint bits, const block_pos &world) {
+            auto random = scripted_random(bits);
+            return test.test(world, reference, random);
+        };
+        test.axis = position_axis::x;
+        expect(passes((1 << 24) - 1, block_pos{.x = 100, .y = 0, .z = 0}));
+        expect(passes((1 << 24) - 1, block_pos{.x = -100, .y = 0, .z = 0}));
+        // The maximum draw still passes a chance of one.
+        expect(passes((1 << 24) - 1, block_pos{.x = 10, .y = 0, .z = 0}));
+        // A distance of zero uses the minimum chance; only a zero draw passes.
+        expect(passes(0, block_pos{.x = 0, .y = 0, .z = 0}));
+        expect(!passes(1, block_pos{.x = 0, .y = 0, .z = 0}));
+        test.axis = position_axis::y;
+        expect(!passes(1, block_pos{.x = 100, .y = 0, .z = 100}));
+        test.axis = position_axis::z;
+        expect(passes((1 << 24) - 1, block_pos{.x = 0, .y = 0, .z = 10}));
+        // A falling chance clamps the same way.
+        test.min_chance = 1.0F;
+        test.max_chance = 0.0F;
+        test.axis = position_axis::y;
+        expect(passes(0, block_pos{.x = 0, .y = 0, .z = 0}));
+        expect(!passes(1, block_pos{.x = 0, .y = 10, .z = 0}));
+    };
+
+    "a rule position predicate sees the world position and reference"_test =
+        [] {
+            block_state_registry states;
+            const auto stone = states.intern(
+                "minecraft:stone", {.air = false, .blocks_motion = true});
+            const auto dirt = states.intern(
+                "minecraft:dirt", {.air = false, .blocks_motion = true});
+            expect(stone && dirt);
+            if (!stone || !dirt) {
+                return;
+            }
+            const block_pos world{.x = 8, .y = 5, .z = 8};
+            proto_chunk chunk{states, 0, 0, 0, 32};
+            chunk.set_state(world.x, world.y, world.z, *stone);
+            chunk_region region{chunk, 0};
+            template_rule rule{};
+            rule.input.type = rule_test_type::random_block_match;
+            rule.input.blocks = {"minecraft:stone"};
+            rule.input.probability = 1.0F;
+            rule.location.type = rule_test_type::always_true;
+            rule.position.type = position_rule_type::linear_pos;
+            rule.position.min_chance = 0.25F;
+            rule.position.max_chance = 0.75F;
+            rule.position.min_dist = 0;
+            rule.position.max_dist = 10;
+            rule.output = *dirt;
+            const rule_processor processor{{rule}};
+            // The input test draws first; the location test draws nothing and
+            // the position test draws next. A reference at the block itself
+            // is distance zero, so the chance is the minimum.
+            legacy_random_source expected{
+                mth_get_seed(world.x, world.y, world.z)};
+            (void)expected.next_float();
+            const bool matches = expected.next_float() <= 0.25F;
+            const template_block_info info{
+                .x = 999, .y = 999, .z = 999, .state = *stone};
+            const auto result =
+                processor.process(states, region, info, world, world, nullptr);
+            expect(result.has_value());
+            if (result) {
+                expect(result->state == (matches ? *dirt : *stone));
+            }
+            // Moving the reference ten blocks away selects the maximum chance
+            // even though the template-local position did not change.
+            legacy_random_source far_expected{
+                mth_get_seed(world.x, world.y, world.z)};
+            (void)far_expected.next_float();
+            const bool far_matches = far_expected.next_float() <= 0.75F;
+            const block_pos far_reference{
+                .x = world.x + 10, .y = world.y, .z = world.z};
+            const auto far_result = processor.process(
+                states, region, info, world, far_reference, nullptr);
+            expect(far_result.has_value());
+            if (far_result) {
+                expect(far_result->state == (far_matches ? *dirt : *stone));
+            }
+        };
+
+    "a decoded position predicate controls the rule output"_test = [] {
+        block_state_registry states;
+        const auto stone = states.intern("minecraft:stone",
+                                         {.air = false, .blocks_motion = true});
+        const auto dirt = states.intern("minecraft:dirt",
+                                        {.air = false, .blocks_motion = true});
+        expect(stone && dirt);
+        if (!stone || !dirt) {
+            return;
+        }
+        const auto document = data::json::value::parse(R"({
+            "processors": [{
+                "processor_type": "minecraft:rule",
+                "rules": [{
+                    "input_predicate": {"predicate_type": "minecraft:always_true"},
+                    "location_predicate": {"predicate_type": "minecraft:always_true"},
+                    "position_predicate": {
+                        "predicate_type": "minecraft:axis_aligned_linear_pos",
+                        "axis": "x",
+                        "min_chance": 0.25,
+                        "max_chance": 0.75,
+                        "min_dist": 0,
+                        "max_dist": 10
+                    },
+                    "output_state": "minecraft:dirt"
+                }]
+            }]
+        })");
+        expect(document.has_value());
+        if (!document) {
+            return;
+        }
+        const auto list = decode_processor_list(states, *document);
+        expect(list.has_value());
+        if (!list) {
+            return;
+        }
+        structure_template templ{};
+        templ.size_x = 1;
+        templ.size_y = 1;
+        templ.size_z = 1;
+        templ.palettes.push_back(
+            {template_block_info{.x = 0, .y = 0, .z = 0, .state = *stone}});
+        template_place_settings settings{};
+        settings.processors = (*list)->processors;
+        const auto place_at = [&](const block_pos &origin,
+                                  const block_pos &reference) {
+            proto_chunk chunk{states, 0, 0, 0, 32};
+            chunk_region region{chunk, 0};
+            settings.reference = reference;
+            (void)place_template(region, states, templ, origin, settings);
+            return chunk.state_at(origin.x & 15, origin.y, origin.z & 15);
+        };
+        const block_pos near_origin{.x = 2, .y = 10, .z = 2};
+        legacy_random_source near_expected{
+            mth_get_seed(near_origin.x, near_origin.y, near_origin.z)};
+        const bool near_matches = near_expected.next_float() <= 0.25F;
+        expect(place_at(near_origin, near_origin) ==
+               (near_matches ? *dirt : *stone));
+        const block_pos far_origin{.x = 6, .y = 10, .z = 6};
+        const block_pos far_reference{
+            .x = far_origin.x + 10, .y = far_origin.y, .z = far_origin.z};
+        legacy_random_source far_expected{
+            mth_get_seed(far_origin.x, far_origin.y, far_origin.z)};
+        const bool far_matches = far_expected.next_float() <= 0.75F;
+        expect(place_at(far_origin, far_reference) ==
+               (far_matches ? *dirt : *stone));
+    };
+
+    "invalid position predicates are rejected"_test = [] {
+        block_state_registry states;
+        const auto equal_range = data::json::value::parse(R"({
+            "processors": [{
+                "processor_type": "minecraft:rule",
+                "rules": [{
+                    "input_predicate": {"predicate_type": "minecraft:always_true"},
+                    "location_predicate": {"predicate_type": "minecraft:always_true"},
+                    "position_predicate": {
+                        "predicate_type": "minecraft:linear_pos",
+                        "min_dist": 5, "max_dist": 5
+                    },
+                    "output_state": "minecraft:dirt"
+                }]
+            }]
+        })");
+        const auto unknown_type = data::json::value::parse(R"({
+            "processors": [{
+                "processor_type": "minecraft:rule",
+                "rules": [{
+                    "input_predicate": {"predicate_type": "minecraft:always_true"},
+                    "location_predicate": {"predicate_type": "minecraft:always_true"},
+                    "position_predicate": {
+                        "predicate_type": "minecraft:does_not_exist"
+                    },
+                    "output_state": "minecraft:dirt"
+                }]
+            }]
+        })");
+        const auto unknown_axis = data::json::value::parse(R"({
+            "processors": [{
+                "processor_type": "minecraft:rule",
+                "rules": [{
+                    "input_predicate": {"predicate_type": "minecraft:always_true"},
+                    "location_predicate": {"predicate_type": "minecraft:always_true"},
+                    "position_predicate": {
+                        "predicate_type": "minecraft:axis_aligned_linear_pos",
+                        "axis": "w",
+                        "min_dist": 0, "max_dist": 1
+                    },
+                    "output_state": "minecraft:dirt"
+                }]
+            }]
+        })");
+        const auto missing_type = data::json::value::parse(R"({
+            "processors": [{
+                "processor_type": "minecraft:rule",
+                "rules": [{
+                    "input_predicate": {"predicate_type": "minecraft:always_true"},
+                    "location_predicate": {"predicate_type": "minecraft:always_true"},
+                    "position_predicate": {"min_dist": 0, "max_dist": 1},
+                    "output_state": "minecraft:dirt"
+                }]
+            }]
+        })");
+        expect(equal_range.has_value() && unknown_type.has_value() &&
+               unknown_axis.has_value() && missing_type.has_value());
+        if (!equal_range || !unknown_type || !unknown_axis || !missing_type) {
+            return;
+        }
+        expect(!decode_processor_list(states, *equal_range).has_value());
+        expect(!decode_processor_list(states, *unknown_type).has_value());
+        expect(!decode_processor_list(states, *unknown_axis).has_value());
+        expect(!decode_processor_list(states, *missing_type).has_value());
+    };
+
     "unknown palette names and indices resolve to air"_test = [] {
         block_state_registry registry;
         data::nbt::compound root;
@@ -1135,10 +1414,12 @@ suite<"worldgen/template"> template_tests = [] {
         const template_block_info stone_info{.state = *stone};
         const template_block_info dirt_info{.state = *dirt};
         expect(!rot.process(registry, region, stone_info,
-                            block_pos{.x = 0, .y = 1, .z = 0}, nullptr)
+                            block_pos{.x = 0, .y = 1, .z = 0}, block_pos{},
+                            nullptr)
                     .has_value());
         expect(rot.process(registry, region, dirt_info,
-                           block_pos{.x = 0, .y = 1, .z = 0}, nullptr)
+                           block_pos{.x = 0, .y = 1, .z = 0}, block_pos{},
+                           nullptr)
                    .has_value());
     };
 
@@ -1175,7 +1456,7 @@ suite<"worldgen/template"> template_tests = [] {
             .output = *netherrack,
         }}};
         const auto replaced =
-            rule.process(states, region, info, world, nullptr);
+            rule.process(states, region, info, world, block_pos{}, nullptr);
         expect(replaced.has_value());
         if (replaced) {
             expect(replaced->state == *netherrack);
@@ -1185,14 +1466,15 @@ suite<"worldgen/template"> template_tests = [] {
         states.add_tag("test:protected", tag_states);
         const structure::protected_block_processor protected_blocks{
             "test:protected"};
-        expect(!protected_blocks.process(states, region, info, world, nullptr)
+        expect(!protected_blocks
+                    .process(states, region, info, world, block_pos{}, nullptr)
                     .has_value());
 
         chunk.set_state(8, 5, 8, *lava);
         const structure::lava_submerged_processor submerged{*lava};
         template_block_info non_full{.x = 0, .y = 5, .z = 0, .state = 0};
-        const auto restored =
-            submerged.process(states, region, non_full, world, nullptr);
+        const auto restored = submerged.process(states, region, non_full, world,
+                                                block_pos{}, nullptr);
         expect(restored.has_value());
         if (restored) {
             expect(restored->state == *lava);
@@ -1201,8 +1483,8 @@ suite<"worldgen/template"> template_tests = [] {
         chunk.set_state(8, 5, 8, *stone);
         const structure::blackstone_replace_processor blackstone;
         template_block_info stone_info{.x = 0, .y = 5, .z = 0, .state = *stone};
-        const auto black =
-            blackstone.process(states, region, stone_info, world, nullptr);
+        const auto black = blackstone.process(states, region, stone_info, world,
+                                              block_pos{}, nullptr);
         expect(black.has_value());
         if (black) {
             expect(black->state == *polished);
@@ -1238,9 +1520,9 @@ suite<"worldgen/template"> template_tests = [] {
         for (jint x = 0; x < 256; ++x) {
             const block_pos world{.x = x, .y = 5, .z = 0};
             const auto dry_result =
-                dry.process(states, region, info, world, nullptr);
+                dry.process(states, region, info, world, block_pos{}, nullptr);
             const auto wet_result =
-                wet.process(states, region, info, world, nullptr);
+                wet.process(states, region, info, world, block_pos{}, nullptr);
             expect(dry_result.has_value() && wet_result.has_value());
             if (!dry_result || !wet_result) {
                 return;
@@ -1283,9 +1565,9 @@ suite<"worldgen/template"> template_tests = [] {
         const structure::block_age_processor age{0.2F};
         const template_block_info info{
             .x = 1, .y = 1, .z = 3, .state = *stone_bricks};
-        const auto result =
-            age.process(states, region, info,
-                        block_pos{.x = -253, .y = 63, .z = -569}, nullptr);
+        const auto result = age.process(
+            states, region, info, block_pos{.x = -253, .y = 63, .z = -569},
+            block_pos{}, nullptr);
         expect(result.has_value());
         if (result) {
             expect(result->state == *expected_stairs);

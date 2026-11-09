@@ -64,6 +64,26 @@ auto to_piece_record(const structure_piece &piece)
     return record;
 }
 
+auto start_reference_position(const structure_bbox &first) -> block_pos {
+    return block_pos{
+        .x = first.min_x + (first.max_x - first.min_x + 1) / 2,
+        .y = first.min_y,
+        .z = first.min_z + (first.max_z - first.min_z + 1) / 2,
+    };
+}
+
+auto start_reference_position(
+    const ::refrain::worldgen::structure_piece_record &first) -> block_pos {
+    return start_reference_position(structure_bbox{
+        .min_x = first.min_x,
+        .min_y = first.min_y,
+        .min_z = first.min_z,
+        .max_x = first.max_x,
+        .max_y = first.max_y,
+        .max_z = first.max_z,
+    });
+}
+
 auto structure_bbox::intersects(const structure_bbox &other) const -> bool {
     return min_x <= other.max_x && max_x >= other.min_x &&
            min_y <= other.max_y && max_y >= other.min_y &&

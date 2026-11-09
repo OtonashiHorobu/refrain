@@ -157,6 +157,9 @@ struct template_finalize_context {
     chunk_region &region;
     jlong level_seed{0};
     block_pos origin{};
+    /// Reference position of the structure start this piece belongs to; rule
+    /// position predicates measure their distance from it.
+    block_pos reference{};
     const std::vector<template_block_info> &originals;
     std::vector<template_block_info> &blocks;
     std::vector<block_pos> &positions;
@@ -178,7 +181,7 @@ class template_block_processor {
     [[nodiscard]] virtual auto
     process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
-            worldgen_random *random) const
+            const block_pos &reference, worldgen_random *random) const
         -> std::optional<template_block_info> = 0;
     /// Processors that move a block override this. It runs after `process` and
     /// later processors see the moved position.
@@ -206,11 +209,12 @@ class nop_processor final : public template_block_processor {
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
-            worldgen_random *random) const
+            const block_pos &reference, worldgen_random *random) const
         -> std::optional<template_block_info> override {
         (void)states;
         (void)region;
         (void)world;
+        (void)reference;
         (void)random;
         return info;
     }
@@ -229,11 +233,12 @@ class capped_processor final : public template_block_processor {
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
-            worldgen_random *random) const
+            const block_pos &reference, worldgen_random *random) const
         -> std::optional<template_block_info> override {
         (void)states;
         (void)region;
         (void)world;
+        (void)reference;
         (void)random;
         return info;
     }
@@ -262,11 +267,12 @@ class capped_rule_processor final : public template_block_processor {
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
-            worldgen_random *random) const
+            const block_pos &reference, worldgen_random *random) const
         -> std::optional<template_block_info> override {
         (void)states;
         (void)region;
         (void)world;
+        (void)reference;
         (void)random;
         return info;
     }
@@ -291,7 +297,7 @@ class block_ignore_processor final : public template_block_processor {
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
-            worldgen_random *random) const
+            const block_pos &reference, worldgen_random *random) const
         -> std::optional<template_block_info> override;
 
   private:
@@ -323,12 +329,43 @@ struct rule_test {
     std::vector<rule_test> children{};
 };
 
+/// The axis a position predicate measures along.
+enum class position_axis : std::uint8_t { x, y, z };
+
+/// A rule's position test. `linear_pos` uses the Manhattan distance between the
+/// world position and the reference position of the structure start;
+/// `axis_aligned_linear_pos` uses the absolute distance along one axis. Both
+/// draw one float and pass when it is at most the linearly interpolated
+/// chance, so a chance of one always passes and a chance of zero passes only on
+/// a zero draw. `always_true` draws nothing.
+enum class position_rule_type : std::uint8_t {
+    always_true,
+    linear_pos,
+    axis_aligned_linear_pos,
+};
+
+struct position_rule_test {
+    position_rule_type type{position_rule_type::always_true};
+    float min_chance{0.0F};
+    float max_chance{0.0F};
+    jint min_dist{0};
+    jint max_dist{0};
+    position_axis axis{position_axis::y};
+
+    /// Tests a world position against the start reference position. The
+    /// template-local position does not participate: the chance follows the
+    /// distance the block has from the start in the world.
+    [[nodiscard]] auto test(const block_pos &world, const block_pos &reference,
+                            worldgen_random &random) const -> bool;
+};
+
 /// One processor rule: an input state test, a location test against the world
 /// and the replacement state. A matching rule may also rewrite the block
 /// entity tag through its modifier.
 struct template_rule {
     rule_test input{};
     rule_test location{};
+    position_rule_test position{};
     block_state_id output{no_block_state};
     template_block_entity_modifier entity_modifier{};
 };
@@ -342,7 +379,7 @@ class rule_processor final : public template_block_processor {
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
-            worldgen_random *random) const
+            const block_pos &reference, worldgen_random *random) const
         -> std::optional<template_block_info> override;
 
   private:
@@ -358,7 +395,7 @@ class protected_block_processor final : public template_block_processor {
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
-            worldgen_random *random) const
+            const block_pos &reference, worldgen_random *random) const
         -> std::optional<template_block_info> override;
 
   private:
@@ -374,7 +411,7 @@ class lava_submerged_processor final : public template_block_processor {
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
-            worldgen_random *random) const
+            const block_pos &reference, worldgen_random *random) const
         -> std::optional<template_block_info> override;
 
   private:
@@ -390,7 +427,7 @@ class block_age_processor final : public template_block_processor {
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
-            worldgen_random *random) const
+            const block_pos &reference, worldgen_random *random) const
         -> std::optional<template_block_info> override;
 
   private:
@@ -404,7 +441,7 @@ class blackstone_replace_processor final : public template_block_processor {
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
-            worldgen_random *random) const
+            const block_pos &reference, worldgen_random *random) const
         -> std::optional<template_block_info> override;
 };
 
@@ -415,7 +452,7 @@ class jigsaw_replacement_processor final : public template_block_processor {
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
-            worldgen_random *random) const
+            const block_pos &reference, worldgen_random *random) const
         -> std::optional<template_block_info> override;
 };
 
@@ -429,11 +466,12 @@ class gravity_processor final : public template_block_processor {
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
-            worldgen_random *random) const
+            const block_pos &reference, worldgen_random *random) const
         -> std::optional<template_block_info> override {
         (void)states;
         (void)region;
         (void)world;
+        (void)reference;
         (void)random;
         return info;
     }
@@ -460,7 +498,7 @@ class block_rot_processor final : public template_block_processor {
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
-            worldgen_random *random) const
+            const block_pos &reference, worldgen_random *random) const
         -> std::optional<template_block_info> override;
 
   private:
@@ -479,7 +517,7 @@ class protected_blocks_processor final : public template_block_processor {
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
             const template_block_info &info, const block_pos &world,
-            worldgen_random *random) const
+            const block_pos &reference, worldgen_random *random) const
         -> std::optional<template_block_info> override;
 
   private:
@@ -498,6 +536,10 @@ struct template_place_settings {
     jlong level_seed{0};
     /// Shared piece random: loot-table containers consume one seed from it.
     worldgen_random *loot_random{nullptr};
+    /// Reference position of the structure start that owns this placement.
+    /// Rule position predicates measure from here; an unset reference means a
+    /// placement outside a structure start.
+    block_pos reference{};
 };
 
 /// Transforms a local position: mirroring is applied first, then the rotation;

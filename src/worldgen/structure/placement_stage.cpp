@@ -2479,6 +2479,7 @@ void place_jigsaw_template(const structure_place_context &context,
                                  : liquid_settings::apply_waterlogging);
     settings.level_seed = context.seed;
     settings.loot_random = &random;
+    settings.reference = context.reference;
     (void)place_template(*context.region, *context.registry, templ,
                          block_pos{.x = piece.template_x,
                                    .y = piece.template_y,
@@ -2700,6 +2701,11 @@ void place_structures(proto_chunk &chunk,
     const jint chunk_min_z = context.chunk->chunk_z() * 16;
     const auto place_pieces =
         [&](const ::refrain::worldgen::structure_start &start) {
+            auto piece_context = context;
+            if (!start.pieces.empty()) {
+                piece_context.reference =
+                    start_reference_position(start.pieces.front());
+            }
             for (const auto &piece : start.pieces) {
                 if (piece.max_x < chunk_min_x ||
                     piece.min_x > chunk_min_x + 15 ||
@@ -2707,7 +2713,7 @@ void place_structures(proto_chunk &chunk,
                     piece.min_z > chunk_min_z + 15) {
                     continue;
                 }
-                place_structure_piece(context, piece, random);
+                place_structure_piece(piece_context, piece, random);
             }
         };
     // The chunk owns its starts; references only point at starts owned by

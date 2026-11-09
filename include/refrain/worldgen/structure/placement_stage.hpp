@@ -37,6 +37,11 @@ struct structure_place_context {
     worldgen_random *level_random{nullptr};
     /// Per-piece adjusted heights shared by the owner and neighbour sections.
     std::unordered_map<std::string, jint> *adjusted_heights{nullptr};
+    /// Reference position of the start whose piece is being placed: the
+    /// centre of its first piece's box at that box's floor. Rule position
+    /// predicates measure distance from this point, which is the same for
+    /// every chunk the start reaches.
+    block_pos reference{};
     /// Processor-list documents for jigsaw pieces; null leaves the element
     /// processor lists empty.
     const structure_data_set *data{nullptr};
