@@ -74,7 +74,11 @@ terrain plus the real feature writes. The runtime compares it with
   neighbours through the same region, which reproduces the feature writes a
   saved reference chunk receives from the chunks next to it;
 * `<PREFIX>_NEIGHBOURS_FIRST` reverses that order, which matches a target the
-  reference generated before its neighbours.
+  reference generated before its neighbours;
+* `<PREFIX>_NEIGHBOURS_ORDER` follows the order a force-load uses: the
+  neighbours that precede the target in ascending x and then z decorate first,
+  then the target, then the rest. Features that write across a chunk border
+  resolve contacts the way the saved reference chunk did.
 
 The four chunks below match block for block and in all four final heightmaps.
 The terrain is ocean at the spawn area of seed 1, so the surface vegetation of
@@ -127,30 +131,10 @@ surface patches write across chunk borders and depend on the reference
 world's generation order, so a single-chunk comparison only matches when the
 order reproduced by the neighbour mode is the one the server used.
 
-The other target biomes do not yield a stable single chunk oracle yet. The
-best scanned chunks and the remaining differences are:
-
-* `minecraft:lush_caves`: chunk `(-1,0)` has 103 block and 0 heightmap
-  mismatches. The vegetation patches differ in ground and distribution: the
-  surface positions form a Java hash set in the reference, the face-sturdy
-  check that selects a patch column is approximated by the motion-blocking
-  trait, and neighbour patches write up to seven blocks across a border.
-  Cave vines, clay/sand disks and a few ore overlaps remain as well.
-* `minecraft:deep_dark`: the best of sixteen scanned chunks has 414 block and
-  11 heightmap mismatches. The sculk patch spread and sculk vein faces differ
-  from the reference, and the patches reach across chunk borders.
-* `minecraft:warm_ocean`: chunk `(0,-1)` has 54 block and 0 heightmap
-  mismatches. The weighted tall/short seagrass selection differs at a handful
-  of columns (the reference places tall seagrass where the runtime places
-  none and the other way round), and neighbour seagrass writes depend on the
-  chunk generation order around the water column.
-* `minecraft:basalt_deltas`: chunk `(0,0)` has 2531 block and 2 heightmap
-  mismatches. Delta, small/large basalt column and basalt blob placement
-  differ across the chunk, so the feature family itself needs more work
-  before a chunk can match.
-
-The failing cases use the same command shape as the passing ones. For
-example, the warm ocean chunk above:
+A warm ocean reference world with neighbour decoration in force-load order
+matches its chunk block for block and in all four final heightmaps. The chunk
+exercises the weighted tall and short seagrass selection, sea pickles, and the
+cross-border writes of both.
 
 ```bash
 python3 tools/worldgen/oracle/generate.py --fixed-biome minecraft:warm_ocean \
@@ -163,10 +147,29 @@ REFRAIN_FEATURE_WARM_OCEAN_CHUNK_Z=-1 \
 REFRAIN_FEATURE_WARM_OCEAN_SEED=1 \
 REFRAIN_FEATURE_WARM_OCEAN_BIOME=minecraft:warm_ocean \
 REFRAIN_FEATURE_WARM_OCEAN_NEIGHBOURS=1 \
-REFRAIN_FEATURE_WARM_OCEAN_NEIGHBOURS_FIRST=1 \
+REFRAIN_FEATURE_WARM_OCEAN_NEIGHBOURS_ORDER=1 \
     ./build/Release/bin/refrain-tests \
     "the runtime feature oracle reproduces a warm ocean chunk"
 ```
+
+The other target biomes do not yield a stable single chunk oracle yet. The
+best scanned chunks and the remaining differences are:
+
+* `minecraft:lush_caves`: chunk `(-1,0)` has 16 block and 0 heightmap
+  mismatches with neighbour decoration in force-load order. The vegetation
+  patch now distributes its columns in the reference hash-set order, floods
+  and plants a waterlogged patch the way the reference does, and skips edge
+  columns when the patch declares no edge chance. The remaining blocks are
+  cave vines whose ceiling scan accepts a block the face-sturdy check rejects,
+  and a few patch boundaries.
+* `minecraft:deep_dark`: the best of sixteen scanned chunks has 447 block and
+  18 heightmap mismatches. The sculk patch starts veins from non-vein sources
+  but its spread order and face tests still differ from the reference, and the
+  patches reach across chunk borders.
+* `minecraft:basalt_deltas`: chunk `(0,0)` has 2556 block and 2 heightmap
+  mismatches. Delta, small/large basalt column and basalt blob placement
+  differ across the chunk, so the feature family itself needs more work
+  before a chunk can match.
 
 Lush caves, deep dark and basalt deltas use their own
 `REFRAIN_FEATURE_LUSH_CAVES_*`, `REFRAIN_FEATURE_DEEP_DARK_*` and

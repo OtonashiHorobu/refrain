@@ -117,12 +117,15 @@ pieces and feature decoration), or at `full` (the features target plus the
 final status). `structure_sets` restricts starts to the listed sets for oracle
 runs, and an empty list enables every set. An empty template root still
 generates procedural pieces and features; template-backed pieces stay empty.
-Two reference-only switches reproduce a saved reference chunk that contains
+Three reference-only switches reproduce a saved reference chunk that contains
 its neighbours' feature writes: `decorate_neighbours` decorates the eight
-neighbour chunks through the same region, and `neighbours_before_target`
-selects whether their writes come before or after the target's own features.
-A fixed biome is required because every decorated chunk uses the target's
-biome plan.
+neighbour chunks through the same region, `neighbours_before_target` selects
+whether their writes come before or after the target's own features, and
+`neighbours_in_generation_order` follows the order a force-load uses: every
+chunk that precedes the target in ascending x and z decorates first, then the
+target, then the rest. A mixed order matters for any feature that writes across
+a border, such as an ore vein or a vegetation patch. A fixed biome is required
+because every decorated chunk uses the target's biome plan.
 
 One object owns the block state registry and its tags, the dimension profile,
 the biome source, the surface rule state, the loaded carvers' runtime objects,
@@ -265,13 +268,24 @@ The reference-backed suites currently cover:
   the underground families (ores, disks, geodes, lava lakes, springs) and
   their fluids. The reference command and environment variables are recorded
   in `tools/worldgen/oracle/README.md`;
-- fixed-biome feature worlds for lush caves, deep dark, warm ocean and basalt
-  deltas do not yield a stable chunk yet. Vegetation and sculk patches write
-  across chunk borders and their column set and spread differ from the
-  reference, warm-ocean seagrass chooses the tall and short variants in a
-  different order, and the basalt delta and column features place different
-  shapes. The best scanned chunks, their remaining mismatch counts and the
-  commands are recorded in `tools/worldgen/oracle/README.md`;
+- a fixed-biome warm ocean feature world reproduces its chunk block for block
+  and in all four final heightmaps: chunk `(0,-1)` of the seed-1 reference
+  world reaches zero with neighbour decoration in force-load order. The chunk
+  exercises the weighted tall/short seagrass selection, sea pickles and the
+  cross-border writes of both. Heightmap placements read the heightmap of the
+  chunk that holds the candidate column, so a candidate the offset modifier
+  spreads into a neighbour uses that neighbour's height;
+- fixed-biome feature worlds for lush caves, deep dark and basalt deltas do
+  not reach zero yet. Lush caves improves from 103 to 16 remaining blocks once
+  a vegetation patch distributes its vegetation in the reference hash-set
+  order, floods and plants a waterlogged patch the way the reference does, and
+  skips edge columns when the patch declares no edge chance. The residual
+  blocks come from the face-sturdy approximation and a few patch boundaries.
+  The deep-dark sculk patch spreads veins from a non-vein source and grows
+  more of the reference field, but its spread order still differs. The basalt
+  delta and column features place different shapes. The best scanned chunks,
+  their remaining mismatch counts and the commands are recorded in
+  `tools/worldgen/oracle/README.md`;
 - benchmarks for fill, parallel fill, structure selection, corridor
   placement, template placement, feature freeze and decoration.
 
