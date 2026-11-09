@@ -77,6 +77,13 @@ structure_feature_placer::structure_feature_placer(
                                           const block_pos &position) {
         return place(id, random, position);
     };
+    feature_context_.place_configured = [this](std::string_view id,
+                                               worldgen_random &random,
+                                               const block_pos &position) {
+        const auto *configured = registry_.configured(id);
+        return configured != nullptr &&
+               configured->place(feature_context_, random, position);
+    };
 }
 
 auto structure_feature_placer::load(std::span<const std::string> ids)

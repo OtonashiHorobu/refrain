@@ -112,8 +112,7 @@ void decorate(
         if (found == placed.end()) {
             return false;
         }
-        (void)place_placed(context, found->second, random, position);
-        return true;
+        return place_placed(context, found->second, random, position);
     };
     const block_pos origin{.x = context.placement.chunk->chunk_x() * 16,
                            .y = context.placement.chunk->min_y(),

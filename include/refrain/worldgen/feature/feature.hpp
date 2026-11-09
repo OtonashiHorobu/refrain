@@ -17,6 +17,7 @@
 #include <refrain/worldgen/structure/template.hpp>
 
 #include <array>
+#include <optional>
 
 namespace refrain::worldgen::feature {
 
@@ -26,6 +27,10 @@ struct feature_context {
     /// supplies this; selectors use it for their nested entries.
     std::function<bool(std::string_view, worldgen_random &, const block_pos &)>
         place_by_id{};
+    /// Places one configured feature by id without its placement modifiers.
+    /// Decorators that run a nested configured feature use it.
+    std::function<bool(std::string_view, worldgen_random &, const block_pos &)>
+        place_configured{};
     /// Template and processor-list sources for features that place `.nbt`
     /// content (fossils).
     const structure::structure_template_manager *templates{nullptr};
@@ -1191,6 +1196,208 @@ class overlay_feature final : public feature {
 
   private:
     std::vector<std::string> features_{};
+};
+
+/// Performs no writes and always succeeds.
+class no_op_feature final : public feature {
+  public:
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+};
+
+/// Fills one 16x16 layer `height` blocks above the dimension's bottom with
+/// `state`, keeping every non-air block.
+class fill_layer_feature final : public feature {
+  public:
+    fill_layer_feature(jint height, block_state_id state)
+        : height_{height}, state_{state} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    jint height_{0};
+    block_state_id state_{no_block_state};
+};
+
+/// Climbs from the origin while `can_replace` accepts the block and the
+/// continue chance holds, then runs the cap placed feature one step back.
+class single_block_pillar_feature final : public feature {
+  public:
+    single_block_pillar_feature(std::unique_ptr<state_provider> block,
+                                std::unique_ptr<block_predicate> can_replace,
+                                jint direction, float chance_to_continue,
+                                std::string cap_feature)
+        : block_{std::move(block)}, can_replace_{std::move(can_replace)},
+          direction_{direction}, chance_to_continue_{chance_to_continue},
+          cap_feature_{std::move(cap_feature)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::unique_ptr<state_provider> block_{};
+    std::unique_ptr<block_predicate> can_replace_{};
+    jint direction_{1};
+    float chance_to_continue_{1.0F};
+    std::string cap_feature_{};
+};
+
+/// Grows one pointed-block column from a base patch of replaceable blocks.
+class speleothem_feature final : public feature {
+  public:
+    speleothem_feature(block_state_id base_block, block_state_id pointed_block,
+                       std::string replaceable_tag,
+                       float chance_of_taller_generation,
+                       float chance_of_directional_spread,
+                       float chance_of_spread_radius2,
+                       float chance_of_spread_radius3)
+        : base_block_{base_block}, pointed_block_{pointed_block},
+          replaceable_tag_{std::move(replaceable_tag)},
+          chance_taller_{chance_of_taller_generation},
+          chance_directional_{chance_of_directional_spread},
+          chance_radius2_{chance_of_spread_radius2},
+          chance_radius3_{chance_of_spread_radius3} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    [[nodiscard]] auto is_base(feature_context &context,
+                               block_state_id state) const -> bool;
+    void place_base(feature_context &context, const block_pos &pos) const;
+    void create_patch(feature_context &context, worldgen_random &random,
+                      const block_pos &root) const;
+    void grow(feature_context &context, const block_pos &origin, jint direction,
+              jint height) const;
+
+    block_state_id base_block_{no_block_state};
+    block_state_id pointed_block_{no_block_state};
+    std::string replaceable_tag_{};
+    float chance_taller_{0.2F};
+    float chance_directional_{0.7F};
+    float chance_radius2_{0.5F};
+    float chance_radius3_{0.5F};
+};
+
+/// Repeats a nested placed feature along a trunk and side branches.
+class coral_tree_feature final : public feature {
+  public:
+    explicit coral_tree_feature(std::string feature_id)
+        : feature_{std::move(feature_id)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::string feature_{};
+};
+
+/// Repeats a nested placed feature along a claw of side branches.
+class coral_claw_feature final : public feature {
+  public:
+    explicit coral_claw_feature(std::string feature_id)
+        : feature_{std::move(feature_id)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::string feature_{};
+};
+
+/// Drops a randomised square of one state downwards through a predicate.
+class projected_random_patchy_square_feature final : public feature {
+  public:
+    projected_random_patchy_square_feature(
+        std::unique_ptr<state_provider> block,
+        std::unique_ptr<block_predicate> project_through,
+        std::unique_ptr<provider::int_provider> size,
+        jint max_projection_height)
+        : block_{std::move(block)},
+          project_through_{std::move(project_through)}, size_{std::move(size)},
+          max_projection_height_{max_projection_height} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    std::unique_ptr<state_provider> block_{};
+    std::unique_ptr<block_predicate> project_through_{};
+    std::unique_ptr<provider::int_provider> size_{};
+    jint max_projection_height_{0};
+};
+
+/// Grows stepped columns from a cluster of surface positions.
+class stepped_column_cluster_feature final : public feature {
+  public:
+    stepped_column_cluster_feature(
+        std::unique_ptr<state_provider> block,
+        std::unique_ptr<block_predicate> continue_through,
+        std::unique_ptr<block_predicate> can_replace,
+        std::string cannot_place_on_tag,
+        std::vector<std::string> cannot_place_on_blocks,
+        std::unique_ptr<provider::int_provider> cluster_reach,
+        std::unique_ptr<provider::int_provider> column_count,
+        std::unique_ptr<provider::int_provider> column_reach,
+        std::unique_ptr<provider::int_provider> height)
+        : block_{std::move(block)},
+          continue_through_{std::move(continue_through)},
+          can_replace_{std::move(can_replace)},
+          cannot_place_on_tag_{std::move(cannot_place_on_tag)},
+          cannot_place_on_blocks_{std::move(cannot_place_on_blocks)},
+          cluster_reach_{std::move(cluster_reach)},
+          column_count_{std::move(column_count)},
+          column_reach_{std::move(column_reach)}, height_{std::move(height)} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    [[nodiscard]] auto cannot_place_on(feature_context &context,
+                                       block_state_id state) const -> bool;
+    [[nodiscard]] auto can_place_at(feature_context &context,
+                                    const block_pos &pos) const -> bool;
+    [[nodiscard]] auto find_surface(feature_context &context,
+                                    const block_pos &start, jint limit) const
+        -> std::optional<block_pos>;
+    [[nodiscard]] auto find_air(feature_context &context,
+                                const block_pos &start, jint limit) const
+        -> std::optional<block_pos>;
+    auto place_column(feature_context &context, worldgen_random &random,
+                      jint sea_level, const block_pos &origin,
+                      jint column_height, jint reach) const -> bool;
+
+    std::unique_ptr<state_provider> block_{};
+    std::unique_ptr<block_predicate> continue_through_{};
+    std::unique_ptr<block_predicate> can_replace_{};
+    std::string cannot_place_on_tag_{};
+    std::vector<std::string> cannot_place_on_blocks_{};
+    std::unique_ptr<provider::int_provider> cluster_reach_{};
+    std::unique_ptr<provider::int_provider> column_count_{};
+    std::unique_ptr<provider::int_provider> column_reach_{};
+    std::unique_ptr<provider::int_provider> height_{};
+};
+
+/// Spreads sculk charges from the origin over a growing patch.
+class sculk_patch_feature final : public feature {
+  public:
+    sculk_patch_feature(jint charge_count, jint amount_per_charge,
+                        jint spread_attempts, jint growth_rounds,
+                        jint spread_rounds)
+        : charge_count_{charge_count}, amount_per_charge_{amount_per_charge},
+          spread_attempts_{spread_attempts}, growth_rounds_{growth_rounds},
+          spread_rounds_{spread_rounds} {}
+
+    [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
+                             const block_pos &origin) const -> bool override;
+
+  private:
+    jint charge_count_{0};
+    jint amount_per_charge_{0};
+    jint spread_attempts_{0};
+    jint growth_rounds_{0};
+    jint spread_rounds_{0};
 };
 
 } // namespace refrain::worldgen::feature

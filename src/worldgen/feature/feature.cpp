@@ -101,8 +101,7 @@ auto disk_feature::place(feature_context &context, worldgen_random &random,
             }
             bool placed_above = false;
             for (jint y = top; y > bottom; --y) {
-                if (!target_->test(*context.placement.region,
-                                   *context.placement.states,
+                if (!target_->test(context.placement,
                                    block_pos{.x = x, .y = y, .z = z})) {
                     placed_above = false;
                     continue;
@@ -445,8 +444,7 @@ auto random_neighbor_spread_feature::place(feature_context &context,
             .y = origin.y + y_offset_->sample(random),
             .z = origin.z + xz_offset_->sample(random),
         };
-        if (!can_replace_->test(*context.placement.region,
-                                *context.placement.states, pos)) {
+        if (!can_replace_->test(context.placement, pos)) {
             continue;
         }
         jint neighbours = 0;
@@ -570,8 +568,7 @@ auto huge_fungus_feature::replaceable(feature_context &context,
     if (context.placement.states->traits(state).air) {
         return true;
     }
-    return check_plants && replaceable_->test(*context.placement.region,
-                                              *context.placement.states, pos);
+    return check_plants && replaceable_->test(context.placement, pos);
 }
 
 void huge_fungus_feature::place_stem(feature_context &context,
@@ -788,7 +785,7 @@ auto huge_mushroom_feature::place(feature_context &context,
         return false;
     }
     if (!can_place_on_->test(
-            *context.placement.region, *context.placement.states,
+            context.placement,
             block_pos{.x = origin.x, .y = origin.y - 1, .z = origin.z})) {
         return false;
     }
@@ -2858,7 +2855,7 @@ auto spike_feature::place(feature_context &context, worldgen_random &random,
            origin.y > context.placement.chunk->min_y() + 2) {
         --origin.y;
     }
-    if (!can_place_on_->test(region, states, origin)) {
+    if (!can_place_on_->test(context.placement, origin)) {
         return false;
     }
     origin.y += random.next_int(4);
@@ -2893,7 +2890,7 @@ auto spike_feature::place(feature_context &context, worldgen_random &random,
                                     .z = origin.z + zo};
                 const auto current = region.state_at(pos.x, pos.y, pos.z);
                 if (states.traits(current).air ||
-                    can_replace_->test(region, states, pos)) {
+                    can_replace_->test(context.placement, pos)) {
                     (void)region.set_block_state(pos.x, pos.y, pos.z, state_);
                 }
                 if (y_off != 0 && new_width > 1) {
@@ -2903,7 +2900,7 @@ auto spike_feature::place(feature_context &context, worldgen_random &random,
                     const auto negative_state =
                         region.state_at(negative.x, negative.y, negative.z);
                     if (states.traits(negative_state).air ||
-                        can_replace_->test(region, states, negative)) {
+                        can_replace_->test(context.placement, negative)) {
                         (void)region.set_block_state(negative.x, negative.y,
                                                      negative.z, state_);
                     }
@@ -2925,7 +2922,7 @@ auto spike_feature::place(feature_context &context, worldgen_random &random,
                 const auto state =
                     region.state_at(cursor.x, cursor.y, cursor.z);
                 if (!states.traits(state).air &&
-                    !can_replace_->test(region, states, cursor) &&
+                    !can_replace_->test(context.placement, cursor) &&
                     state != state_) {
                     break;
                 }
@@ -3074,7 +3071,7 @@ auto lake_feature::place(feature_context &context, worldgen_random &random,
                 if (yy < 4 && !traits.blocks_motion && state != fluid) {
                     return false;
                 }
-                if (!can_place_feature_->test(region, states, pos)) {
+                if (!can_place_feature_->test(context.placement, pos)) {
                     return false;
                 }
             }
@@ -3089,7 +3086,7 @@ auto lake_feature::place(feature_context &context, worldgen_random &random,
                 }
                 const block_pos pos{
                     .x = origin.x + xx, .y = origin.y + yy, .z = origin.z + zz};
-                if (!can_replace_with_air_or_fluid_->test(region, states,
+                if (!can_replace_with_air_or_fluid_->test(context.placement,
                                                           pos)) {
                     continue;
                 }
@@ -3121,7 +3118,8 @@ auto lake_feature::place(feature_context &context, worldgen_random &random,
                              .blocks_motion) {
                         continue;
                     }
-                    if (!can_replace_with_barrier_->test(region, states, pos)) {
+                    if (!can_replace_with_barrier_->test(context.placement,
+                                                         pos)) {
                         continue;
                     }
                     (void)region.set_block_state(pos.x, pos.y, pos.z, barrier);
@@ -3138,7 +3136,8 @@ auto lake_feature::place(feature_context &context, worldgen_random &random,
                     .x = origin.x + xx, .y = origin.y + 4, .z = origin.z + zz};
                 if (context.placement.should_freeze &&
                     context.placement.should_freeze(pos) &&
-                    can_replace_with_air_or_fluid_->test(region, states, pos)) {
+                    can_replace_with_air_or_fluid_->test(context.placement,
+                                                         pos)) {
                     (void)region.set_block_state(pos.x, pos.y, pos.z, ice_);
                 }
             }
@@ -3642,7 +3641,7 @@ auto block_blob_feature::place(feature_context &context,
     block_pos origin = initial;
     while (origin.y > context.placement.chunk->min_y() + 3 &&
            !can_place_on_->test(
-               *context.placement.region, *context.placement.states,
+               context.placement,
                block_pos{.x = origin.x, .y = origin.y - 1, .z = origin.z})) {
         --origin.y;
     }
@@ -3729,8 +3728,7 @@ auto block_column_feature::place(feature_context &context,
     block_pos place_pos = origin;
     block_pos next_pos = offset(direction_, place_pos);
     for (jint y = 0; y < total_height; ++y) {
-        if (!allowed_placement_->test(*context.placement.region,
-                                      *context.placement.states, next_pos)) {
+        if (!allowed_placement_->test(context.placement, next_pos)) {
             truncate(heights, total_height, y, prioritize_tip_);
             break;
         }
@@ -4049,7 +4047,7 @@ auto root_system_feature::place_dirt_and_tree(feature_context &context,
             return false;
         }
         if (!allowed_tree_position_ ||
-            !allowed_tree_position_->test(region, states, working) ||
+            !allowed_tree_position_->test(context.placement, working) ||
             !space_for_tree(context, working)) {
             continue;
         }
@@ -4197,6 +4195,1193 @@ auto template_feature::place(feature_context &context, worldgen_random &random,
     return structure::place_template(*context.placement.region,
                                      *context.registry, templ, position,
                                      settings) > 0;
+}
+
+auto no_op_feature::place(feature_context &, worldgen_random &,
+                          const block_pos &) const -> bool {
+    return true;
+}
+
+auto fill_layer_feature::place(feature_context &context, worldgen_random &,
+                               const block_pos &origin) const -> bool {
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
+    const jint y = context.placement.chunk->min_y() + height_;
+    for (jint dx = 0; dx < 16; ++dx) {
+        for (jint dz = 0; dz < 16; ++dz) {
+            const jint x = origin.x + dx;
+            const jint z = origin.z + dz;
+            if (!states.traits(region.state_at(x, y, z)).air) {
+                continue;
+            }
+            (void)region.set_block_state(x, y, z, state_);
+        }
+    }
+    return true;
+}
+
+auto single_block_pillar_feature::place(feature_context &context,
+                                        worldgen_random &random,
+                                        const block_pos &origin) const -> bool {
+    auto &region = *context.placement.region;
+    const jint min_y = context.placement.chunk->min_y();
+    const jint height = context.placement.chunk->height();
+    block_pos pos = origin;
+    while (can_replace_->test(context.placement, pos) &&
+           random.next_float() < chance_to_continue_ && pos.y >= min_y &&
+           pos.y < min_y + height) {
+        const auto state = block_->get(context.placement, random, pos);
+        (void)region.set_block_state(pos.x, pos.y, pos.z, state);
+        pos.y += direction_;
+    }
+    pos.y -= direction_;
+    if (!cap_feature_.empty() && context.place_by_id) {
+        (void)context.place_by_id(cap_feature_, random, pos);
+    }
+    return true;
+}
+
+auto speleothem_feature::is_base(feature_context &context,
+                                 block_state_id state) const -> bool {
+    return state == base_block_ ||
+           context.placement.states->in_tag(state, replaceable_tag_);
+}
+
+void speleothem_feature::place_base(feature_context &context,
+                                    const block_pos &pos) const {
+    const auto state = context.placement.region->state_at(pos.x, pos.y, pos.z);
+    if (context.placement.states->in_tag(state, replaceable_tag_)) {
+        (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                        base_block_);
+    }
+}
+
+void speleothem_feature::create_patch(feature_context &context,
+                                      worldgen_random &random,
+                                      const block_pos &root) const {
+    place_base(context, root);
+    constexpr std::array<std::pair<jint, jint>, 4> horizontal{{
+        {0, -1},
+        {1, 0},
+        {0, 1},
+        {-1, 0},
+    }};
+    for (const auto &[dx, dz] : horizontal) {
+        if (random.next_float() > chance_directional_) {
+            continue;
+        }
+        const block_pos first{.x = root.x + dx, .y = root.y, .z = root.z + dz};
+        place_base(context, first);
+        if (random.next_float() > chance_radius2_) {
+            continue;
+        }
+        const auto &sample =
+            all_directions[static_cast<std::size_t>(random.next_int(6))];
+        const block_pos second{.x = first.x + sample.dx,
+                               .y = first.y + sample.dy,
+                               .z = first.z + sample.dz};
+        place_base(context, second);
+        if (random.next_float() > chance_radius3_) {
+            continue;
+        }
+        const auto &next =
+            all_directions[static_cast<std::size_t>(random.next_int(6))];
+        place_base(context, block_pos{.x = second.x + next.dx,
+                                      .y = second.y + next.dy,
+                                      .z = second.z + next.dz});
+    }
+}
+
+void speleothem_feature::grow(feature_context &context, const block_pos &origin,
+                              jint direction, jint height) const {
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
+    const auto resolve = [&](std::string_view key) -> block_state_id {
+        if (!context.placement.resolve_state) {
+            return no_block_state;
+        }
+        return context.placement.resolve_state(key);
+    };
+    const auto at = [&](jint y) {
+        return region.state_at(origin.x, y, origin.z);
+    };
+    if (!is_base(context, at(origin.y - direction))) {
+        return;
+    }
+    const std::string_view thickness_direction = direction > 0 ? "up" : "down";
+    std::vector<std::string_view> layers;
+    if (height >= 3) {
+        layers.emplace_back("base");
+        for (jint i = 0; i < height - 3; ++i) {
+            layers.emplace_back("middle");
+        }
+    }
+    if (height >= 2) {
+        layers.emplace_back("frustum");
+    }
+    if (height >= 1) {
+        layers.emplace_back("tip");
+    }
+    jint y = origin.y;
+    for (const auto thickness : layers) {
+        std::string key = std::string{states.name(pointed_block_)};
+        key = with_state_property(key, "thickness", thickness);
+        key = with_state_property(key, "tip_direction", thickness_direction);
+        key = with_state_property(
+            key, "waterlogged", states.traits(at(y)).water ? "true" : "false");
+        const auto state = resolve(key);
+        if (state != no_block_state) {
+            (void)region.set_block_state(origin.x, y, origin.z, state);
+        }
+        y += direction;
+    }
+}
+
+auto speleothem_feature::place(feature_context &context,
+                               worldgen_random &random,
+                               const block_pos &origin) const -> bool {
+    const auto &states = *context.placement.states;
+    auto &region = *context.placement.region;
+    const auto at = [&](jint y) {
+        return region.state_at(origin.x, y, origin.z);
+    };
+    const auto is_empty_or_water = [&](block_state_id state) {
+        const auto traits = states.traits(state);
+        return traits.air || traits.water;
+    };
+    const bool can_above = is_base(context, at(origin.y + 1));
+    const bool can_below = is_base(context, at(origin.y - 1));
+    jint direction = 0;
+    if (can_above && can_below) {
+        direction = random.next_boolean() ? -1 : 1;
+    } else if (can_above) {
+        direction = -1;
+    } else if (can_below) {
+        direction = 1;
+    } else {
+        return false;
+    }
+    const block_pos root{
+        .x = origin.x, .y = origin.y - direction, .z = origin.z};
+    create_patch(context, random, root);
+    const jint height = random.next_float() < chance_taller_ &&
+                                is_empty_or_water(at(origin.y + direction))
+                            ? 2
+                            : 1;
+    grow(context, origin, direction, height);
+    return true;
+}
+
+auto coral_tree_feature::place(feature_context &context,
+                               worldgen_random &random,
+                               const block_pos &origin) const -> bool {
+    if (!context.place_by_id) {
+        return false;
+    }
+    constexpr std::array<std::pair<jint, jint>, 4> horizontal{{
+        {0, -1},
+        {1, 0},
+        {0, 1},
+        {-1, 0},
+    }};
+    block_pos cursor = origin;
+    const jint trunk_height = random.next_int(3) + 1;
+    for (jint i = 0; i < trunk_height; ++i) {
+        if (!context.place_by_id(feature_, random, cursor)) {
+            return true;
+        }
+        ++cursor.y;
+    }
+    const block_pos top = cursor;
+    const jint branches = random.next_int(3) + 2;
+    const auto order = shuffled(horizontal.size(), random);
+    for (jint branch = 0; branch < branches; ++branch) {
+        const auto &[dx, dz] =
+            horizontal[order[static_cast<std::size_t>(branch)]];
+        cursor = block_pos{.x = top.x + dx, .y = top.y, .z = top.z + dz};
+        const jint branch_height = random.next_int(5) + 2;
+        jint segment_length = 0;
+        for (jint step = 0; step < branch_height; ++step) {
+            if (!context.place_by_id(feature_, random, cursor)) {
+                break;
+            }
+            ++segment_length;
+            ++cursor.y;
+            if (step == 0 ||
+                (segment_length >= 2 && random.next_float() < 0.25F)) {
+                cursor.x += dx;
+                cursor.z += dz;
+                segment_length = 0;
+            }
+        }
+    }
+    return true;
+}
+
+auto coral_claw_feature::place(feature_context &context,
+                               worldgen_random &random,
+                               const block_pos &origin) const -> bool {
+    if (!context.place_by_id) {
+        return false;
+    }
+    if (!context.place_by_id(feature_, random, origin)) {
+        return false;
+    }
+    constexpr std::array<std::pair<jint, jint>, 4> horizontal{{
+        {0, -1},
+        {1, 0},
+        {0, 1},
+        {-1, 0},
+    }};
+    const auto claw = static_cast<std::size_t>(random.next_int(4));
+    const jint branches = random.next_int(2) + 2;
+    const std::array<std::size_t, 3> candidates{claw, (claw + 1) % 4,
+                                                (claw + 3) % 4};
+    const auto order = shuffled(candidates.size(), random);
+    for (jint branch = 0; branch < branches; ++branch) {
+        const auto branch_direction =
+            candidates[order[static_cast<std::size_t>(branch)]];
+        const auto &[branch_dx, branch_dz] = horizontal[branch_direction];
+        block_pos cursor = origin;
+        const jint sideway_length = random.next_int(2) + 1;
+        cursor.x += branch_dx;
+        cursor.z += branch_dz;
+        jint segment_x = 0;
+        jint segment_y = 0;
+        jint segment_z = 0;
+        jint inward_length = 0;
+        if (branch_direction == claw) {
+            segment_x = branch_dx;
+            segment_z = branch_dz;
+            inward_length = random.next_int(3) + 2;
+        } else {
+            ++cursor.y;
+            const std::array<std::pair<jint, jint>, 2> possible{{
+                {branch_dx, branch_dz},
+                {0, 1},
+            }};
+            const auto &[dx, dz] =
+                possible[static_cast<std::size_t>(random.next_int(2))];
+            segment_x = dx;
+            segment_z = dz;
+            inward_length = random.next_int(3) + 3;
+        }
+        for (jint i = 0; i < sideway_length; ++i) {
+            if (!context.place_by_id(feature_, random, cursor)) {
+                break;
+            }
+            cursor.x += segment_x;
+            cursor.y += segment_y;
+            cursor.z += segment_z;
+        }
+        cursor.x -= segment_x;
+        cursor.y -= segment_y;
+        cursor.z -= segment_z;
+        ++cursor.y;
+        const auto &[claw_dx, claw_dz] = horizontal[claw];
+        for (jint i = 0; i < inward_length; ++i) {
+            cursor.x += claw_dx;
+            cursor.z += claw_dz;
+            if (!context.place_by_id(feature_, random, cursor)) {
+                break;
+            }
+            if (random.next_float() < 0.25F) {
+                ++cursor.y;
+            }
+        }
+    }
+    return true;
+}
+
+auto projected_random_patchy_square_feature::place(
+    feature_context &context, worldgen_random &random,
+    const block_pos &origin) const -> bool {
+    auto &region = *context.placement.region;
+    const jint size = size_->sample(random);
+    const jint bound = size * size + 1;
+    for (jint dx = -size; dx <= size; ++dx) {
+        for (jint dz = -size; dz <= size; ++dz) {
+            const jint probability = std::abs(dx) * std::abs(dz);
+            if (random.next_int(bound) >= bound - probability) {
+                continue;
+            }
+            block_pos base{
+                .x = origin.x + dx, .y = origin.y, .z = origin.z + dz};
+            jint drop = max_projection_height_;
+            while (project_through_->test(
+                context.placement,
+                block_pos{.x = base.x, .y = base.y - 1, .z = base.z})) {
+                --base.y;
+                if (--drop <= 0) {
+                    break;
+                }
+            }
+            const auto state =
+                block_->get_optional(context.placement, random, base);
+            if (state.has_value() && *state != no_block_state) {
+                (void)region.set_block_state(base.x, base.y, base.z, *state);
+            }
+        }
+    }
+    return true;
+}
+
+auto stepped_column_cluster_feature::cannot_place_on(feature_context &context,
+                                                     block_state_id state) const
+    -> bool {
+    const auto &states = *context.placement.states;
+    if (!cannot_place_on_tag_.empty() &&
+        states.in_tag(state, cannot_place_on_tag_)) {
+        return true;
+    }
+    const auto name = states.name(state);
+    for (const auto &block : cannot_place_on_blocks_) {
+        if (name == block) {
+            return true;
+        }
+    }
+    return false;
+}
+
+auto stepped_column_cluster_feature::can_place_at(feature_context &context,
+                                                  const block_pos &pos) const
+    -> bool {
+    if (!can_replace_->test(context.placement, pos)) {
+        return false;
+    }
+    const auto below =
+        context.placement.region->state_at(pos.x, pos.y - 1, pos.z);
+    const auto &states = *context.placement.states;
+    return !states.traits(below).air && !cannot_place_on(context, below);
+}
+
+auto stepped_column_cluster_feature::find_surface(feature_context &context,
+                                                  const block_pos &start,
+                                                  jint limit) const
+    -> std::optional<block_pos> {
+    const jint floor = context.placement.chunk->min_y() + 1;
+    block_pos cursor = start;
+    while (cursor.y > floor && limit > 0) {
+        --limit;
+        if (can_place_at(context, cursor)) {
+            return cursor;
+        }
+        --cursor.y;
+    }
+    return std::nullopt;
+}
+
+auto stepped_column_cluster_feature::find_air(feature_context &context,
+                                              const block_pos &start,
+                                              jint limit) const
+    -> std::optional<block_pos> {
+    const jint ceiling = context.placement.chunk->min_y() +
+                         context.placement.chunk->height() - 1;
+    block_pos cursor = start;
+    while (cursor.y <= ceiling && limit > 0) {
+        --limit;
+        const auto state =
+            context.placement.region->state_at(cursor.x, cursor.y, cursor.z);
+        if (cannot_place_on(context, state)) {
+            return std::nullopt;
+        }
+        if (context.placement.states->traits(state).air) {
+            return cursor;
+        }
+        ++cursor.y;
+    }
+    return std::nullopt;
+}
+
+auto stepped_column_cluster_feature::place_column(
+    feature_context &context, worldgen_random &random, jint sea_level,
+    const block_pos &origin, jint column_height, jint reach) const -> bool {
+    (void)sea_level;
+    auto &region = *context.placement.region;
+    bool placed_any = false;
+    for (jint z = origin.z - reach; z <= origin.z + reach; ++z) {
+        for (jint x = origin.x - reach; x <= origin.x + reach; ++x) {
+            const block_pos start{.x = x, .y = origin.y, .z = z};
+            const jint step_limit =
+                std::abs(x - origin.x) + std::abs(z - origin.z);
+            const bool replaceable =
+                can_replace_->test(context.placement, start);
+            const auto column = replaceable
+                                    ? find_surface(context, start, step_limit)
+                                    : find_air(context, start, step_limit);
+            if (!column.has_value()) {
+                continue;
+            }
+            jint blocks = column_height - step_limit / 2;
+            block_pos cursor = *column;
+            while (blocks >= 0) {
+                if (can_replace_->test(context.placement, cursor)) {
+                    const auto state =
+                        block_->get(context.placement, random, cursor);
+                    (void)region.set_block_state(cursor.x, cursor.y, cursor.z,
+                                                 state);
+                    ++cursor.y;
+                    placed_any = true;
+                } else {
+                    if (!continue_through_->test(context.placement, cursor)) {
+                        break;
+                    }
+                    ++cursor.y;
+                }
+                --blocks;
+            }
+        }
+    }
+    return placed_any;
+}
+
+auto stepped_column_cluster_feature::place(feature_context &context,
+                                           worldgen_random &random,
+                                           const block_pos &origin) const
+    -> bool {
+    const jint sea_level = context.placement.generation.sea_level;
+    if (!can_place_at(context, origin)) {
+        return false;
+    }
+    const jint column_height = height_->sample(random);
+    const jint cluster_reach =
+        std::min(column_height, cluster_reach_->sample(random));
+    const jint count = column_count_->sample(random);
+    bool placed = false;
+    for (jint i = 0; i < count; ++i) {
+        const jint width = 2 * cluster_reach + 1;
+        const jint x = origin.x - cluster_reach + random.next_int(width);
+        (void)random.next_int(1);
+        const jint z = origin.z - cluster_reach + random.next_int(width);
+        const block_pos pos{.x = x, .y = origin.y, .z = z};
+        const jint blocks =
+            column_height - (std::abs(x - origin.x) + std::abs(z - origin.z));
+        if (blocks < 0) {
+            continue;
+        }
+        placed = place_column(context, random, sea_level, pos, blocks,
+                              column_reach_->sample(random)) ||
+                 placed;
+    }
+    return placed;
+}
+
+namespace {
+
+/// The six block faces in the order the reference enumerates them.
+constexpr std::array<block_pos, 6> sculk_faces{{
+    {.x = 0, .y = -1, .z = 0},
+    {.x = 0, .y = 1, .z = 0},
+    {.x = 0, .y = 0, .z = -1},
+    {.x = 0, .y = 0, .z = 1},
+    {.x = -1, .y = 0, .z = 0},
+    {.x = 1, .y = 0, .z = 0},
+}};
+constexpr std::array<std::string_view, 6> sculk_face_names{
+    "down", "up", "north", "south", "west", "east"};
+
+auto sculk_opposite(std::size_t face) -> std::size_t { return face ^ 1U; }
+
+auto sculk_axis(std::size_t face) -> int {
+    return face <= 1 ? 0 : (face <= 3 ? 2 : 1);
+}
+
+/// The eighteen neighbour offsets the reference tries when it moves a charge:
+/// every position next to the cursor that shares at least one axis coordinate.
+auto non_corner_neighbours() -> const std::array<block_pos, 18> & {
+    static const auto offsets = [] {
+        std::array<block_pos, 18> out{};
+        std::size_t index = 0;
+        for (jint z = -1; z <= 1; ++z) {
+            for (jint y = -1; y <= 1; ++y) {
+                for (jint x = -1; x <= 1; ++x) {
+                    const bool shares = x == 0 || y == 0 || z == 0;
+                    if (shares && !(x == 0 && y == 0 && z == 0)) {
+                        out[index++] = block_pos{.x = x, .y = y, .z = z};
+                    }
+                }
+            }
+        }
+        return out;
+    }();
+    return offsets;
+}
+
+enum class sculk_behaviour : std::uint8_t { fallback, sculk, vein };
+
+struct sculk_cursor {
+    block_pos pos{};
+    jint charge{0};
+    jint update_delay{0};
+    jint decay_delay{1};
+    std::optional<std::array<bool, 6>> facings{};
+};
+
+/// The sculk patch spreader: charges walk over the region, spreading veins and
+/// growing sensors, shriekers and vein faces exactly in the reference's random
+/// order. Level events and sounds have no worldgen counterpart and are not
+/// reproduced.
+class sculk_spreader {
+  public:
+    sculk_spreader(feature_context &context, worldgen_random &random)
+        : context_{context}, random_{random} {}
+
+    [[nodiscard]] auto can_spread_from(const block_pos &origin) const -> bool {
+        const auto start = state_at(origin);
+        if (behaviour_of(start) != sculk_behaviour::fallback) {
+            return true;
+        }
+        if (!states().traits(start).air && !is_water(start)) {
+            return false;
+        }
+        for (const auto &face : sculk_faces) {
+            const auto neighbour = add(origin, face);
+            if (states().traits(state_at(neighbour)).blocks_motion) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void add_cursors(const block_pos &origin, jint charge) {
+        while (charge > 0) {
+            const jint current = std::min(charge, 1000);
+            if (cursors_.size() < 32) {
+                cursors_.push_back(
+                    sculk_cursor{.pos = origin, .charge = current});
+            }
+            charge -= current;
+        }
+    }
+
+    void update_cursors(const block_pos &origin, bool spread_veins) {
+        if (cursors_.empty()) {
+            return;
+        }
+        std::vector<sculk_cursor> processed;
+        std::map<block_pos, std::size_t> mergeable;
+        for (auto &cursor : cursors_) {
+            if (std::max({std::abs(cursor.pos.x - origin.x),
+                          std::abs(cursor.pos.y - origin.y),
+                          std::abs(cursor.pos.z - origin.z)}) > 1024) {
+                continue;
+            }
+            update(cursor, origin, spread_veins);
+            if (cursor.charge <= 0) {
+                continue;
+            }
+            const auto found = mergeable.find(cursor.pos);
+            if (found == mergeable.end()) {
+                mergeable.emplace(cursor.pos, processed.size());
+                processed.push_back(cursor);
+            } else {
+                processed.push_back(cursor);
+                if (cursor.charge < processed[found->second].charge) {
+                    found->second = processed.size() - 1;
+                }
+            }
+        }
+        cursors_ = std::move(processed);
+    }
+
+    void clear() { cursors_.clear(); }
+
+  private:
+    [[nodiscard]] auto states() const -> const block_state_table & {
+        return *context_.placement.states;
+    }
+    [[nodiscard]] auto region() const -> chunk_region & {
+        return *context_.placement.region;
+    }
+    [[nodiscard]] auto state_at(const block_pos &pos) const -> block_state_id {
+        return context_.placement.region->state_at(pos.x, pos.y, pos.z);
+    }
+    [[nodiscard]] static auto add(const block_pos &pos, const block_pos &offset)
+        -> block_pos {
+        return block_pos{.x = pos.x + offset.x,
+                         .y = pos.y + offset.y,
+                         .z = pos.z + offset.z};
+    }
+    [[nodiscard]] auto resolve(std::string_view key) const -> block_state_id {
+        if (!context_.placement.resolve_state) {
+            return no_block_state;
+        }
+        return context_.placement.resolve_state(key);
+    }
+    [[nodiscard]] auto is_vein(block_state_id state) const -> bool {
+        return state_block_name(states().name(state)) == "minecraft:sculk_vein";
+    }
+    [[nodiscard]] auto is_sculk(block_state_id state) const -> bool {
+        return state_block_name(states().name(state)) == "minecraft:sculk";
+    }
+    [[nodiscard]] auto is_water(block_state_id state) const -> bool {
+        return state_block_name(states().name(state)) == "minecraft:water";
+    }
+    [[nodiscard]] auto behaviour_of(block_state_id state) const
+        -> sculk_behaviour {
+        const auto name = state_block_name(states().name(state));
+        if (name == "minecraft:sculk") {
+            return sculk_behaviour::sculk;
+        }
+        if (name == "minecraft:sculk_vein") {
+            return sculk_behaviour::vein;
+        }
+        return sculk_behaviour::fallback;
+    }
+    [[nodiscard]] auto available_faces(block_state_id state) const
+        -> std::array<bool, 6> {
+        if (!is_vein(state)) {
+            return {};
+        }
+        return multiface_faces(states(), state, "minecraft:sculk_vein");
+    }
+    [[nodiscard]] auto has_any_face(const std::array<bool, 6> &faces) const
+        -> bool {
+        return std::any_of(faces.begin(), faces.end(),
+                           [](bool value) { return value; });
+    }
+    [[nodiscard]] auto vein_state(const std::array<bool, 6> &faces,
+                                  bool waterlogged) const -> block_state_id {
+        auto base = resolve("minecraft:sculk_vein");
+        if (base == no_block_state) {
+            return no_block_state;
+        }
+        std::string key{states().name(base)};
+        for (std::size_t face = 0; face < sculk_face_names.size(); ++face) {
+            key = with_state_property(key, sculk_face_names[face],
+                                      faces[face] ? "true" : "false");
+        }
+        key = with_state_property(key, "waterlogged",
+                                  waterlogged ? "true" : "false");
+        const auto resolved = resolve(key);
+        return resolved == no_block_state ? base : resolved;
+    }
+    [[nodiscard]] auto sculk_state() const -> block_state_id {
+        return resolve("minecraft:sculk");
+    }
+    [[nodiscard]] auto catalyst_state() const -> block_state_id {
+        return resolve("minecraft:sculk_catalyst");
+    }
+    [[nodiscard]] auto has_fluid(block_state_id state) const -> bool {
+        return states().traits(state).fluid;
+    }
+    [[nodiscard]] auto is_waterlogged(block_state_id state) const -> bool {
+        const auto key = states().name(state);
+        const auto open = key.find('[');
+        if (open == std::string_view::npos) {
+            return false;
+        }
+        return key.find("waterlogged=true") != std::string_view::npos;
+    }
+    [[nodiscard]] auto face_sturdy(block_state_id state) const -> bool {
+        // The registry has no collision-shape geometry; a motion-blocking
+        // block is the closest available approximation of a sturdy face.
+        return states().traits(state).blocks_motion;
+    }
+    [[nodiscard]] auto can_attach_to(const block_pos &placement,
+                                     std::size_t face) const -> bool {
+        const auto neighbour = add(placement, sculk_faces[face]);
+        return face_sturdy(state_at(neighbour));
+    }
+    [[nodiscard]] auto is_replaceable(block_state_id state) const -> bool {
+        return states().in_tag(state, "minecraft:replaceable");
+    }
+
+    void set_block(const block_pos &pos, block_state_id state) const {
+        (void)region().set_block_state(pos.x, pos.y, pos.z, state);
+    }
+
+    /// The sculk vein spreader's replacement rule. `source` and `placement`
+    /// are the current cursor and the target cell; `existing` is what the
+    /// target currently holds.
+    [[nodiscard]] auto vein_can_replace(const block_pos &source,
+                                        const block_pos &placement,
+                                        std::size_t face,
+                                        block_state_id existing) const -> bool {
+        const auto against = state_at(add(placement, sculk_faces[face]));
+        const auto against_name = state_block_name(states().name(against));
+        if (against_name == "minecraft:sculk" ||
+            against_name == "minecraft:sculk_catalyst" ||
+            against_name == "minecraft:moving_piston") {
+            return false;
+        }
+        if (std::abs(source.x - placement.x) +
+                std::abs(source.y - placement.y) +
+                std::abs(source.z - placement.z) ==
+            2) {
+            const auto neighbour =
+                add(source, sculk_faces[sculk_opposite(face)]);
+            if (face_sturdy(state_at(neighbour))) {
+                return false;
+            }
+        }
+        const auto traits = states().traits(existing);
+        if (traits.fluid && !traits.water) {
+            return false;
+        }
+        if (states().in_tag(existing, "minecraft:fire")) {
+            return false;
+        }
+        return is_replaceable(existing) || traits.air || is_vein(existing) ||
+               is_water(existing);
+    }
+
+    [[nodiscard]] auto valid_vein_placement(block_state_id existing,
+                                            const block_pos &placement,
+                                            std::size_t face) const -> bool {
+        if (is_vein(existing) && available_faces(existing)[face]) {
+            return false;
+        }
+        return can_attach_to(placement, face);
+    }
+
+    [[nodiscard]] auto can_spread_into(const block_pos &source,
+                                       const block_pos &placement,
+                                       std::size_t face,
+                                       block_state_id existing) const -> bool {
+        return vein_can_replace(source, placement, face, existing) &&
+               valid_vein_placement(existing, placement, face);
+    }
+
+    /// One spread type: same position, same plane or wrap around.
+    [[nodiscard]] auto spread_position(const block_pos &pos,
+                                       std::size_t spread_direction,
+                                       std::size_t from_face, int type) const
+        -> std::pair<block_pos, std::size_t> {
+        if (type == 0) {
+            return {pos, spread_direction};
+        }
+        if (type == 1) {
+            return {add(pos, sculk_faces[spread_direction]), from_face};
+        }
+        const auto middle = add(pos, sculk_faces[spread_direction]);
+        return {add(middle, sculk_faces[from_face]),
+                sculk_opposite(spread_direction)};
+    }
+
+    [[nodiscard]] auto
+    spread_from_face(const block_state_id state, const block_pos &pos,
+                     std::size_t from_face, std::size_t spread_direction,
+                     bool same_position_only, bool other_source) const
+        -> std::optional<std::pair<block_pos, std::size_t>> {
+        if (sculk_axis(spread_direction) == sculk_axis(from_face)) {
+            return std::nullopt;
+        }
+        const auto faces = available_faces(state);
+        if (!other_source && !(faces[from_face] && !faces[spread_direction])) {
+            return std::nullopt;
+        }
+        const int types = same_position_only ? 1 : 3;
+        for (int type = 0; type < types; ++type) {
+            const auto [placement, face] =
+                spread_position(pos, spread_direction, from_face, type);
+            if (can_spread_into(pos, placement, face, state_at(placement))) {
+                return std::pair{placement, face};
+            }
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] auto place_spread(const block_pos &placement,
+                                    std::size_t face) const -> bool {
+        const auto existing = state_at(placement);
+        if (!valid_vein_placement(existing, placement, face)) {
+            return false;
+        }
+        const bool waterlogged =
+            is_vein(existing) ? is_waterlogged(existing) : has_fluid(existing);
+        auto faces = is_vein(existing) ? available_faces(existing)
+                                       : std::array<bool, 6>{};
+        faces[face] = true;
+        const auto state = vein_state(faces, waterlogged);
+        if (state == no_block_state) {
+            return false;
+        }
+        (void)region().mark_post_processing(placement.x, placement.y,
+                                            placement.z);
+        set_block(placement, state);
+        return true;
+    }
+
+    /// `spreadAll`: every face of the source state, then every direction from
+    /// that face.
+    [[nodiscard]] auto spread_all(block_state_id state, const block_pos &pos,
+                                  bool same_position_only,
+                                  bool other_source) const -> jlong {
+        jlong placed = 0;
+        const auto faces = available_faces(state);
+        for (std::size_t face = 0; face < sculk_faces.size(); ++face) {
+            if (!other_source && !faces[face]) {
+                continue;
+            }
+            for (std::size_t spread = 0; spread < sculk_faces.size();
+                 ++spread) {
+                const auto target = spread_from_face(
+                    state, pos, face, spread, same_position_only, other_source);
+                if (target.has_value() &&
+                    place_spread(target->first, target->second)) {
+                    ++placed;
+                }
+            }
+        }
+        return placed;
+    }
+
+    [[nodiscard]] auto regrow(const block_pos &pos, block_state_id existing,
+                              const std::array<bool, 6> &requested) const
+        -> bool {
+        auto faces = std::array<bool, 6>{};
+        bool any = false;
+        for (std::size_t face = 0; face < sculk_faces.size(); ++face) {
+            if (!requested[face]) {
+                continue;
+            }
+            if (can_attach_to(pos, face)) {
+                faces[face] = true;
+                any = true;
+            }
+        }
+        if (!any) {
+            return false;
+        }
+        set_block(pos, vein_state(faces, has_fluid(existing) ||
+                                             is_waterlogged(existing)));
+        return true;
+    }
+
+    [[nodiscard]] auto has_substrate_access(block_state_id state,
+                                            const block_pos &pos) const
+        -> bool {
+        if (!is_vein(state)) {
+            return false;
+        }
+        const auto faces = available_faces(state);
+        for (std::size_t face = 0; face < sculk_faces.size(); ++face) {
+            if (!faces[face]) {
+                continue;
+            }
+            const auto neighbour = add(pos, sculk_faces[face]);
+            if (states().in_tag(state_at(neighbour),
+                                "minecraft:sculk_replaceable")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] auto
+    attempt_spread_vein(sculk_behaviour behaviour, block_state_id state,
+                        const block_pos &pos, const sculk_cursor &cursor) const
+        -> bool {
+        if (behaviour != sculk_behaviour::fallback) {
+            return spread_all(state, pos, false, true) > 0;
+        }
+        if (!cursor.facings.has_value()) {
+            return spread_all(state, pos, true, false) > 0;
+        }
+        if (cursor.facings->empty()) {
+            return spread_all(state, pos, false, false) > 0;
+        }
+        const auto traits = states().traits(state);
+        if (!traits.air && !traits.water) {
+            return false;
+        }
+        return regrow(pos, state, *cursor.facings);
+    }
+
+    [[nodiscard]] auto can_place_growth(const block_pos &pos) const -> bool {
+        const auto above =
+            state_at(block_pos{.x = pos.x, .y = pos.y + 1, .z = pos.z});
+        const auto &traits = states().traits(above);
+        if (!traits.air && !is_water(above)) {
+            return false;
+        }
+        jint inhibitors = 0;
+        for (jint dz = -4; dz <= 4; ++dz) {
+            for (jint dy = 0; dy <= 2; ++dy) {
+                for (jint dx = -4; dx <= 4; ++dx) {
+                    const auto state = state_at(block_pos{
+                        .x = pos.x + dx, .y = pos.y + dy, .z = pos.z + dz});
+                    if (states().in_tag(state,
+                                        "minecraft:sculk_growth_inhibitors")) {
+                        if (++inhibitors > 2) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] auto random_growth_state(const block_pos &pos) const
+        -> block_state_id {
+        const bool shrieker = random_.next_int(11) == 0;
+        block_state_id base = resolve(shrieker ? "minecraft:sculk_shrieker"
+                                               : "minecraft:sculk_sensor");
+        if (base == no_block_state) {
+            return base;
+        }
+        std::string key{states().name(base)};
+        if (shrieker) {
+            key = with_state_property(key, "can_summon", "true");
+        }
+        if (has_fluid(state_at(pos))) {
+            key = with_state_property(key, "waterlogged", "true");
+        }
+        const auto resolved = resolve(key);
+        return resolved == no_block_state ? base : resolved;
+    }
+
+    [[nodiscard]] auto decay_penalty(const block_pos &pos,
+                                     const block_pos &origin, jint charge) const
+        -> jint {
+        const auto distance = static_cast<float>(std::sqrt(
+            static_cast<double>((pos.x - origin.x) * (pos.x - origin.x) +
+                                (pos.y - origin.y) * (pos.y - origin.y) +
+                                (pos.z - origin.z) * (pos.z - origin.z))));
+        const float outer = (distance - 1.0F) * (distance - 1.0F);
+        const float factor = std::min(1.0F, outer / (23.0F * 23.0F));
+        return std::max(
+            1, static_cast<jint>(static_cast<float>(charge) * factor * 0.5F));
+    }
+
+    [[nodiscard]] auto attempt_use_charge(sculk_behaviour behaviour,
+                                          sculk_cursor &cursor,
+                                          const block_pos &origin,
+                                          bool spread_veins) -> jint {
+        if (behaviour == sculk_behaviour::fallback) {
+            return cursor.decay_delay > 0 ? cursor.charge : 0;
+        }
+        if (behaviour == sculk_behaviour::vein) {
+            if (spread_veins && attempt_place_sculk(cursor.pos)) {
+                return cursor.charge - 1;
+            }
+            return random_.next_int(5) == 0
+                       ? static_cast<jint>(static_cast<float>(cursor.charge) *
+                                           0.5F)
+                       : cursor.charge;
+        }
+        const jint charge = cursor.charge;
+        if (charge == 0 || random_.next_int(5) != 0) {
+            return charge;
+        }
+        const bool close =
+            (cursor.pos.x - origin.x) * (cursor.pos.x - origin.x) +
+                (cursor.pos.y - origin.y) * (cursor.pos.y - origin.y) +
+                (cursor.pos.z - origin.z) * (cursor.pos.z - origin.z) <
+            1;
+        if (!close && can_place_growth(cursor.pos)) {
+            if (random_.next_int(50) < charge) {
+                set_block(block_pos{.x = cursor.pos.x,
+                                    .y = cursor.pos.y + 1,
+                                    .z = cursor.pos.z},
+                          random_growth_state(block_pos{.x = cursor.pos.x,
+                                                        .y = cursor.pos.y + 1,
+                                                        .z = cursor.pos.z}));
+            }
+            return std::max(0, charge - 50);
+        }
+        if (random_.next_int(10) != 0) {
+            return charge;
+        }
+        return charge - (close ? 1 : decay_penalty(cursor.pos, origin, charge));
+    }
+
+    [[nodiscard]] auto attempt_place_sculk(const block_pos &pos) -> bool {
+        const auto state = state_at(pos);
+        const auto faces = available_faces(state);
+        const auto order = shuffled(sculk_faces.size(), random_);
+        for (const auto index : order) {
+            if (!faces[index]) {
+                continue;
+            }
+            const auto support_pos = add(pos, sculk_faces[index]);
+            const auto support_state = state_at(support_pos);
+            if (!states().in_tag(support_state,
+                                 "minecraft:sculk_replaceable_world_gen")) {
+                continue;
+            }
+            const auto sculk = sculk_state();
+            if (sculk == no_block_state) {
+                return false;
+            }
+            set_block(support_pos, sculk);
+            (void)spread_all(sculk, support_pos, false, true);
+            const auto skip = sculk_opposite(index);
+            for (std::size_t face = 0; face < sculk_faces.size(); ++face) {
+                if (face == skip) {
+                    continue;
+                }
+                const auto vein_pos = add(support_pos, sculk_faces[face]);
+                const auto possible = state_at(vein_pos);
+                if (is_vein(possible)) {
+                    discharge_vein(possible, vein_pos);
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    void discharge_vein(block_state_id state, const block_pos &pos) const {
+        auto faces = available_faces(state);
+        for (std::size_t face = 0; face < sculk_faces.size(); ++face) {
+            if (!faces[face]) {
+                continue;
+            }
+            if (is_sculk(state_at(add(pos, sculk_faces[face])))) {
+                faces[face] = false;
+            }
+        }
+        block_state_id next = no_block_state;
+        if (has_any_face(faces)) {
+            next = vein_state(faces, is_waterlogged(state));
+        } else {
+            next = is_waterlogged(state) ? resolve("minecraft:water")
+                                         : resolve("minecraft:air");
+        }
+        if (next != no_block_state) {
+            set_block(pos, next);
+        }
+    }
+
+    void discharge(sculk_behaviour behaviour, block_state_id state,
+                   const block_pos &pos) const {
+        if (behaviour == sculk_behaviour::vein) {
+            discharge_vein(state, pos);
+        }
+    }
+
+    [[nodiscard]] auto movement_unobstructed(const block_pos &from,
+                                             const block_pos &to) const
+        -> bool {
+        const jint distance = std::abs(to.x - from.x) +
+                              std::abs(to.y - from.y) + std::abs(to.z - from.z);
+        if (distance == 1) {
+            return true;
+        }
+        const auto clear = [&](jint dx, jint dy, jint dz) {
+            const block_pos test{
+                .x = from.x + dx, .y = from.y + dy, .z = from.z + dz};
+            return !face_sturdy(state_at(test));
+        };
+        const jint dx = to.x - from.x;
+        const jint dy = to.y - from.y;
+        const jint dz = to.z - from.z;
+        if (dx == 0) {
+            return clear(0, dy > 0 ? 1 : -1, 0) || clear(0, 0, dz > 0 ? 1 : -1);
+        }
+        if (dy == 0) {
+            return clear(dx > 0 ? 1 : -1, 0, 0) || clear(0, 0, dz > 0 ? 1 : -1);
+        }
+        return clear(dx > 0 ? 1 : -1, 0, 0) || clear(0, dy > 0 ? 1 : -1, 0);
+    }
+
+    [[nodiscard]] auto valid_movement(const block_pos &origin,
+                                      const block_pos &position) const
+        -> std::optional<block_pos> {
+        const auto order = shuffled(non_corner_neighbours().size(), random_);
+        block_pos result = position;
+        for (const auto index : order) {
+            const auto neighbour =
+                add(position, non_corner_neighbours()[index]);
+            if ((origin.x - neighbour.x) * (origin.x - neighbour.x) +
+                    (origin.z - neighbour.z) * (origin.z - neighbour.z) >
+                144) {
+                continue;
+            }
+            const auto transferee = state_at(neighbour);
+            if (behaviour_of(transferee) == sculk_behaviour::fallback) {
+                continue;
+            }
+            if (!movement_unobstructed(position, neighbour)) {
+                continue;
+            }
+            result = neighbour;
+            if (has_substrate_access(transferee, neighbour)) {
+                break;
+            }
+        }
+        if (result.x == position.x && result.y == position.y &&
+            result.z == position.z) {
+            return std::nullopt;
+        }
+        return result;
+    }
+
+    void update(sculk_cursor &cursor, const block_pos &origin,
+                bool spread_veins) {
+        if (cursor.charge <= 0) {
+            return;
+        }
+        if (cursor.update_delay > 0) {
+            --cursor.update_delay;
+            return;
+        }
+        auto current_state = state_at(cursor.pos);
+        auto behaviour = behaviour_of(current_state);
+        if (spread_veins &&
+            attempt_spread_vein(behaviour, current_state, cursor.pos, cursor)) {
+            if (behaviour != sculk_behaviour::sculk) {
+                current_state = state_at(cursor.pos);
+                behaviour = behaviour_of(current_state);
+            }
+        }
+        cursor.charge =
+            attempt_use_charge(behaviour, cursor, origin, spread_veins);
+        if (cursor.charge <= 0) {
+            discharge(behaviour, current_state, cursor.pos);
+            return;
+        }
+        const auto transfer = valid_movement(origin, cursor.pos);
+        if (transfer.has_value()) {
+            discharge(behaviour, current_state, cursor.pos);
+            cursor.pos = *transfer;
+            current_state = state_at(cursor.pos);
+        } else {
+            discharge(behaviour, current_state, cursor.pos);
+            cursor.charge = 0;
+            return;
+        }
+        behaviour = behaviour_of(current_state);
+        if (behaviour != sculk_behaviour::fallback) {
+            cursor.facings = available_faces(current_state);
+        }
+        if (behaviour == sculk_behaviour::fallback) {
+            cursor.decay_delay = std::max(cursor.decay_delay - 1, 0);
+        } else {
+            cursor.decay_delay = 1;
+        }
+        cursor.update_delay = 1;
+    }
+
+    feature_context &context_;
+    worldgen_random &random_;
+    std::vector<sculk_cursor> cursors_{};
+};
+
+} // namespace
+
+auto sculk_patch_feature::place(feature_context &context,
+                                worldgen_random &random,
+                                const block_pos &origin) const -> bool {
+    sculk_spreader spreader{context, random};
+    if (!spreader.can_spread_from(origin)) {
+        return false;
+    }
+    const jint total_rounds = spread_rounds_ + growth_rounds_;
+    for (jint round = 0; round < total_rounds; ++round) {
+        for (jint i = 0; i < charge_count_; ++i) {
+            spreader.add_cursors(origin, amount_per_charge_);
+        }
+        const bool spread_veins = round < spread_rounds_;
+        for (jint i = 0; i < spread_attempts_; ++i) {
+            spreader.update_cursors(origin, spread_veins);
+        }
+        spreader.clear();
+    }
+    return true;
 }
 
 } // namespace refrain::worldgen::feature

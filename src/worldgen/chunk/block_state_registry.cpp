@@ -296,6 +296,14 @@ void block_state_registry::add_tag(std::string_view tag,
     stored.assign(states.begin(), states.end());
     std::sort(stored.begin(), stored.end());
     stored.erase(std::unique(stored.begin(), stored.end()), stored.end());
+    auto &ordered = ordered_tags_[std::string{tag}];
+    ordered.clear();
+    ordered.reserve(stored.size());
+    for (const auto id : states) {
+        if (std::find(ordered.begin(), ordered.end(), id) == ordered.end()) {
+            ordered.push_back(id);
+        }
+    }
     // Block tags name blocks, not one property variant. Keep the block names so
     // a state variant interned after the tag was registered still matches.
     auto &names = tag_names_[std::string{tag}];
@@ -317,6 +325,15 @@ auto block_state_registry::traits(block_state_id id) const -> state_traits {
 
 auto block_state_registry::name(block_state_id id) const -> std::string_view {
     return id < keys_.size() ? std::string_view{keys_[id]} : std::string_view{};
+}
+
+auto block_state_registry::tag_states(std::string_view tag) const
+    -> std::span<const block_state_id> {
+    const auto found = ordered_tags_.find(tag);
+    if (found == ordered_tags_.end()) {
+        return {};
+    }
+    return found->second;
 }
 
 auto block_state_registry::in_tag(block_state_id id, std::string_view tag) const

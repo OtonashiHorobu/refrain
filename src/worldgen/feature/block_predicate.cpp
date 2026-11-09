@@ -6,6 +6,8 @@
 
 #include <refrain/data/json.hpp>
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
+#include <refrain/worldgen/feature/placement.hpp>
+#include <refrain/worldgen/terrain/material.hpp>
 
 #include <algorithm>
 #include <array>
@@ -85,10 +87,43 @@ auto names(const data::json::value &input) -> result<std::vector<std::string>> {
     return out;
 }
 
+/// Decodes one vertical anchor object, the same four forms the height
+/// providers use.
+auto decode_anchor(const data::json::value &input)
+    -> result<surface::vertical_anchor> {
+    if (!input.is_object()) {
+        return std::unexpected{make_error(error_code::parse_error,
+                                          "height anchor is not an object")};
+    }
+    struct entry {
+        std::string_view name;
+        surface::vertical_anchor::kind kind;
+    };
+    constexpr std::array<entry, 4> entries{{
+        {"absolute", surface::vertical_anchor::kind::absolute},
+        {"above_bottom", surface::vertical_anchor::kind::above_bottom},
+        {"below_top", surface::vertical_anchor::kind::below_top},
+        {"relative_to_sea_level",
+         surface::vertical_anchor::kind::relative_to_sea_level},
+    }};
+    for (const auto &candidate : entries) {
+        if (const auto *field = input.find(candidate.name); field != nullptr) {
+            const auto value = field->as_int64();
+            if (!value) {
+                return std::unexpected{value.error()};
+            }
+            return surface::vertical_anchor{.type = candidate.kind,
+                                            .value = static_cast<jint>(*value)};
+        }
+    }
+    return std::unexpected{
+        make_error(error_code::parse_error, "unknown height anchor")};
+}
+
 class true_predicate final : public block_predicate {
-  public:
-    [[nodiscard]] auto test(const chunk_region &, const block_state_table &,
-                            const block_pos &) const -> bool override {
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &) const
+        -> bool override {
         return true;
     }
 };
@@ -97,10 +132,12 @@ class matching_blocks final : public block_predicate {
   public:
     explicit matching_blocks(std::vector<std::string> blocks)
         : blocks_{std::move(blocks)} {}
-    [[nodiscard]] auto test(const chunk_region &region,
-                            const block_state_table &states,
-                            const block_pos &pos) const -> bool override {
-        const auto name = states.name(region.state_at(pos.x, pos.y, pos.z));
+
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &context) const
+        -> bool override {
+        const auto name = context.states->name(context.region->state_at(
+            context.pos->x, context.pos->y, context.pos->z));
         return std::find(blocks_.begin(), blocks_.end(), name) != blocks_.end();
     }
 
@@ -111,10 +148,14 @@ class matching_blocks final : public block_predicate {
 class matching_tag final : public block_predicate {
   public:
     explicit matching_tag(std::string tag) : tag_{std::move(tag)} {}
-    [[nodiscard]] auto test(const chunk_region &region,
-                            const block_state_table &states,
-                            const block_pos &pos) const -> bool override {
-        return states.in_tag(region.state_at(pos.x, pos.y, pos.z), tag_);
+
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &context) const
+        -> bool override {
+        return context.states->in_tag(context.region->state_at(context.pos->x,
+                                                               context.pos->y,
+                                                               context.pos->z),
+                                      tag_);
     }
 
   private:
@@ -125,10 +166,11 @@ class not_predicate final : public block_predicate {
   public:
     explicit not_predicate(std::unique_ptr<block_predicate> inner)
         : inner_{std::move(inner)} {}
-    [[nodiscard]] auto test(const chunk_region &region,
-                            const block_state_table &states,
-                            const block_pos &pos) const -> bool override {
-        return !inner_->test(region, states, pos);
+
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &context) const
+        -> bool override {
+        return !inner_->evaluate(context);
     }
 
   private:
@@ -139,11 +181,12 @@ class any_of final : public block_predicate {
   public:
     explicit any_of(std::vector<std::unique_ptr<block_predicate>> rules)
         : rules_{std::move(rules)} {}
-    [[nodiscard]] auto test(const chunk_region &region,
-                            const block_state_table &states,
-                            const block_pos &pos) const -> bool override {
+
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &context) const
+        -> bool override {
         return std::any_of(rules_.begin(), rules_.end(), [&](const auto &rule) {
-            return rule->test(region, states, pos);
+            return rule->evaluate(context);
         });
     }
 
@@ -152,11 +195,12 @@ class any_of final : public block_predicate {
 };
 
 class solid_predicate final : public block_predicate {
-  public:
-    [[nodiscard]] auto test(const chunk_region &region,
-                            const block_state_table &states,
-                            const block_pos &pos) const -> bool override {
-        return states.traits(region.state_at(pos.x, pos.y, pos.z))
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &context) const
+        -> bool override {
+        return context.states
+            ->traits(context.region->state_at(context.pos->x, context.pos->y,
+                                              context.pos->z))
             .blocks_motion;
     }
 };
@@ -165,13 +209,15 @@ class has_sturdy_face final : public block_predicate {
   public:
     has_sturdy_face(std::string_view direction, const block_pos &offset)
         : direction_{direction}, offset_{offset} {}
-    [[nodiscard]] auto test(const chunk_region &region,
-                            const block_state_table &states,
-                            const block_pos &pos) const -> bool override {
-        const block_pos target{.x = pos.x + offset_.x,
-                               .y = pos.y + offset_.y,
-                               .z = pos.z + offset_.z};
-        return states.traits(region.state_at(target.x, target.y, target.z))
+
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &context) const
+        -> bool override {
+        const block_pos target{.x = context.pos->x + offset_.x,
+                               .y = context.pos->y + offset_.y,
+                               .z = context.pos->z + offset_.z};
+        return context.states
+            ->traits(context.region->state_at(target.x, target.y, target.z))
             .blocks_motion;
     }
 
@@ -183,10 +229,12 @@ class has_sturdy_face final : public block_predicate {
 class matching_fluids final : public block_predicate {
   public:
     matching_fluids(bool water, bool lava) : water_{water}, lava_{lava} {}
-    [[nodiscard]] auto test(const chunk_region &region,
-                            const block_state_table &states,
-                            const block_pos &pos) const -> bool override {
-        const auto traits = states.traits(region.state_at(pos.x, pos.y, pos.z));
+
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &context) const
+        -> bool override {
+        const auto traits = context.states->traits(context.region->state_at(
+            context.pos->x, context.pos->y, context.pos->z));
         return (water_ && traits.water) ||
                (lava_ && traits.fluid && !traits.water);
     }
@@ -211,12 +259,15 @@ class would_survive final : public block_predicate {
   public:
     would_survive(survival_rule rule, block_pos offset)
         : rule_{rule}, offset_{offset} {}
-    [[nodiscard]] auto test(const chunk_region &region,
-                            const block_state_table &states,
-                            const block_pos &pos) const -> bool override {
-        const block_pos at{.x = pos.x + offset_.x,
-                           .y = pos.y + offset_.y,
-                           .z = pos.z + offset_.z};
+
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &context) const
+        -> bool override {
+        const auto &region = *context.region;
+        const auto &states = *context.states;
+        const block_pos at{.x = context.pos->x + offset_.x,
+                           .y = context.pos->y + offset_.y,
+                           .z = context.pos->z + offset_.z};
         if (rule_ == survival_rule::hanging_mangrove) {
             const block_pos above{.x = at.x, .y = at.y + 1, .z = at.z};
             return states.in_tag(
@@ -284,14 +335,16 @@ class would_survive final : public block_predicate {
 class replaceable_predicate final : public block_predicate {
   public:
     explicit replaceable_predicate(block_pos offset) : offset_{offset} {}
-    [[nodiscard]] auto test(const chunk_region &region,
-                            const block_state_table &states,
-                            const block_pos &pos) const -> bool override {
-        const block_pos target{.x = pos.x + offset_.x,
-                               .y = pos.y + offset_.y,
-                               .z = pos.z + offset_.z};
-        return states.in_tag(region.state_at(target.x, target.y, target.z),
-                             "minecraft:replaceable");
+
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &context) const
+        -> bool override {
+        const block_pos target{.x = context.pos->x + offset_.x,
+                               .y = context.pos->y + offset_.y,
+                               .z = context.pos->z + offset_.z};
+        return context.states->in_tag(
+            context.region->state_at(target.x, target.y, target.z),
+            "minecraft:replaceable");
     }
 
   private:
@@ -302,16 +355,76 @@ class inside_world_bounds_predicate final : public block_predicate {
   public:
     explicit inside_world_bounds_predicate(block_pos offset)
         : offset_{offset} {}
-    [[nodiscard]] auto test(const chunk_region &region,
-                            const block_state_table &,
-                            const block_pos &pos) const -> bool override {
-        const jint y = pos.y + offset_.y;
-        const jint min_y = region.center().min_y();
-        return y >= min_y && y < min_y + region.center().height();
+
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &context) const
+        -> bool override {
+        const jint y = context.pos->y + offset_.y;
+        const jint min_y = context.region->center().min_y();
+        return y >= min_y && y < min_y + context.region->center().height();
     }
 
   private:
     block_pos offset_{};
+};
+
+class height_range_predicate final : public block_predicate {
+  public:
+    height_range_predicate(surface::vertical_anchor min,
+                           surface::vertical_anchor max)
+        : min_{min}, max_{max} {}
+
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &context) const
+        -> bool override {
+        const auto &generation = context.generation;
+        const jint min = min_.resolve(generation.min_y, generation.height,
+                                      generation.sea_level);
+        const jint max = max_.resolve(generation.min_y, generation.height,
+                                      generation.sea_level);
+        return context.pos->y >= min && context.pos->y <= max;
+    }
+
+  private:
+    surface::vertical_anchor min_{};
+    surface::vertical_anchor max_{};
+};
+
+/// World generation has no entities, and the reference asks the level whether
+/// any entity would obstruct a block-shaped volume at the position. That query
+/// is always empty during generation, so the predicate admits every position.
+class unobstructed_predicate final : public block_predicate {
+  public:
+    explicit unobstructed_predicate(block_pos offset) : offset_{offset} {}
+
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &) const
+        -> bool override {
+        return true;
+    }
+
+  private:
+    block_pos offset_{};
+};
+
+class matching_biomes_predicate final : public block_predicate {
+  public:
+    explicit matching_biomes_predicate(std::vector<std::string> biomes)
+        : biomes_{std::move(biomes)} {}
+
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &context) const
+        -> bool override {
+        if (!context.biome) {
+            return false;
+        }
+        const auto biome = context.biome(*context.pos);
+        return std::find(biomes_.begin(), biomes_.end(), biome) !=
+               biomes_.end();
+    }
+
+  private:
+    std::vector<std::string> biomes_;
 };
 
 class volume_match_predicate final : public block_predicate {
@@ -319,16 +432,19 @@ class volume_match_predicate final : public block_predicate {
     volume_match_predicate(block_pos min, block_pos max,
                            std::unique_ptr<block_predicate> match)
         : min_{min}, max_{max}, match_{std::move(match)} {}
-    [[nodiscard]] auto test(const chunk_region &region,
-                            const block_state_table &states,
-                            const block_pos &pos) const -> bool override {
+
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &context) const
+        -> bool override {
         for (jint x = min_.x; x <= max_.x; ++x) {
             for (jint z = min_.z; z <= max_.z; ++z) {
                 for (jint y = min_.y; y <= max_.y; ++y) {
-                    if (!match_->test(region, states,
-                                      block_pos{.x = pos.x + x,
-                                                .y = pos.y + y,
-                                                .z = pos.z + z})) {
+                    auto shifted = context;
+                    const block_pos pos{.x = context.pos->x + x,
+                                        .y = context.pos->y + y,
+                                        .z = context.pos->z + z};
+                    shifted.pos = &pos;
+                    if (!match_->evaluate(shifted)) {
                         return false;
                     }
                 }
@@ -347,11 +463,12 @@ class all_of final : public block_predicate {
   public:
     explicit all_of(std::vector<std::unique_ptr<block_predicate>> rules)
         : rules_{std::move(rules)} {}
-    [[nodiscard]] auto test(const chunk_region &region,
-                            const block_state_table &states,
-                            const block_pos &pos) const -> bool override {
+
+  protected:
+    [[nodiscard]] auto test_impl(const block_predicate_context &context) const
+        -> bool override {
         return std::all_of(rules_.begin(), rules_.end(), [&](const auto &rule) {
-            return rule->test(region, states, pos);
+            return rule->evaluate(context);
         });
     }
 
@@ -360,6 +477,27 @@ class all_of final : public block_predicate {
 };
 
 } // namespace
+
+auto block_predicate::test(const chunk_region &region,
+                           const block_state_table &states,
+                           const block_pos &pos) const -> bool {
+    return evaluate(block_predicate_context{
+        .region = &region,
+        .states = &states,
+        .pos = &pos,
+    });
+}
+
+auto block_predicate::test(const placement_context &context,
+                           const block_pos &pos) const -> bool {
+    return evaluate(block_predicate_context{
+        .region = context.region,
+        .states = context.states,
+        .pos = &pos,
+        .generation = context.generation,
+        .biome = context.biome,
+    });
+}
 
 auto decode_block_predicate(const data::json::value &document,
                             const block_state_table &states)
@@ -398,8 +536,7 @@ auto decode_block_predicate(const data::json::value &document,
     }
     if (*type == "minecraft:has_sturdy_face") {
         const auto *direction = document.find("direction");
-        const auto *offset = document.find("offset");
-        if (direction == nullptr || offset == nullptr || !offset->is_array()) {
+        if (direction == nullptr) {
             return std::unexpected{make_error(error_code::parse_error,
                                               "has_sturdy_face is incomplete")};
         }
@@ -407,23 +544,29 @@ auto decode_block_predicate(const data::json::value &document,
         if (!direction_text) {
             return std::unexpected{direction_text.error()};
         }
-        const auto values = offset->as_array();
-        if (!values || values->size() != 3) {
-            return std::unexpected{make_error(
-                error_code::parse_error, "has_sturdy_face offset is invalid")};
-        }
-        const auto x = (*values)[0].as_int64();
-        const auto y = (*values)[1].as_int64();
-        const auto z = (*values)[2].as_int64();
-        if (!x || !y || !z) {
-            return std::unexpected{make_error(
-                error_code::parse_error, "has_sturdy_face offset is invalid")};
+        block_pos offset{};
+        if (const auto *offset_value = document.find("offset");
+            offset_value != nullptr) {
+            const auto values = offset_value->as_array();
+            if (!values || values->size() != 3) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "has_sturdy_face offset is invalid")};
+            }
+            const auto x = (*values)[0].as_int64();
+            const auto y = (*values)[1].as_int64();
+            const auto z = (*values)[2].as_int64();
+            if (!x || !y || !z) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "has_sturdy_face offset is invalid")};
+            }
+            offset = block_pos{.x = static_cast<jint>(*x),
+                               .y = static_cast<jint>(*y),
+                               .z = static_cast<jint>(*z)};
         }
         return std::unique_ptr<block_predicate>{
-            std::make_unique<has_sturdy_face>(
-                *direction_text, block_pos{.x = static_cast<jint>(*x),
-                                           .y = static_cast<jint>(*y),
-                                           .z = static_cast<jint>(*z)})};
+            std::make_unique<has_sturdy_face>(*direction_text, offset)};
     }
     if (*type == "minecraft:would_survive") {
         const auto *state_value = document.find("state");
@@ -524,6 +667,67 @@ auto decode_block_predicate(const data::json::value &document,
         }
         return std::unique_ptr<block_predicate>{
             std::make_unique<inside_world_bounds_predicate>(offset)};
+    }
+    if (*type == "minecraft:height_range") {
+        const auto *min_field = document.find("min_inclusive");
+        const auto *max_field = document.find("max_inclusive");
+        if (min_field == nullptr || max_field == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "height_range is incomplete")};
+        }
+        const auto min = decode_anchor(*min_field);
+        const auto max = decode_anchor(*max_field);
+        if (!min || !max) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "height_range anchor is invalid")};
+        }
+        return std::unique_ptr<block_predicate>{
+            std::make_unique<height_range_predicate>(*min, *max)};
+    }
+    if (*type == "minecraft:unobstructed") {
+        block_pos offset{};
+        if (const auto decoded = decode_offset(document, offset); !decoded) {
+            return std::unexpected{decoded.error()};
+        }
+        return std::unique_ptr<block_predicate>{
+            std::make_unique<unobstructed_predicate>(offset)};
+    }
+    if (*type == "minecraft:matching_biomes") {
+        const auto *field = document.find("biomes");
+        if (field == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "matching_biomes has no biomes")};
+        }
+        std::vector<std::string> decoded;
+        if (const auto single = field->as_string(); single.has_value()) {
+            decoded.emplace_back(*single);
+        } else if (field->is_array()) {
+            for (const auto &entry : *field->as_array()) {
+                const auto name = entry.as_string();
+                if (!name) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error, "biome name is not a string")};
+                }
+                decoded.emplace_back(*name);
+            }
+        } else {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "matching_biomes list is not an array")};
+        }
+        for (const auto &name : decoded) {
+            if (name.starts_with("#")) {
+                return std::unexpected{make_error(
+                    error_code::unsupported,
+                    "matching_biomes cannot resolve biome tag '" + name + "'")};
+            }
+        }
+        if (decoded.empty()) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "matching_biomes list is empty")};
+        }
+        return std::unique_ptr<block_predicate>{
+            std::make_unique<matching_biomes_predicate>(std::move(decoded))};
     }
     if (*type == "minecraft:volume_match") {
         const auto *min_field = document.find("min");

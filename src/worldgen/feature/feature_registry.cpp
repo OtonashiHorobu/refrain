@@ -279,51 +279,21 @@ auto feature_registry::nested_reference(const data::json::value &input)
     if (const auto text = feature->as_string(); text.has_value()) {
         feature_id = std::string{*text};
     } else if (feature->is_object()) {
-        const auto *type = feature->find("type");
-        if (type == nullptr) {
+        if (feature->find("type") == nullptr) {
             return std::unexpected{make_error(error_code::parse_error,
                                               "inline feature has no type")};
         }
-        const auto type_name = type->as_string();
-        if (!type_name) {
-            return std::unexpected{type_name.error()};
+        if (pending_documents_ == nullptr) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "inline feature is not allowed in this position")};
         }
-        if (*type_name == "minecraft:simple_block") {
-            const auto *to_place = feature->find("to_place");
-            if (to_place == nullptr) {
-                return std::unexpected{
-                    make_error(error_code::parse_error,
-                               "inline simple block has no state")};
-            }
-            auto provider = decode_provider(*to_place);
-            if (!provider) {
-                return std::unexpected{provider.error()};
-            }
-            bool schedule_tick = false;
-            if (const auto *field = feature->find("schedule_tick");
-                field != nullptr) {
-                const auto value = field->as_bool();
-                if (!value) {
-                    return std::unexpected{value.error()};
-                }
-                schedule_tick = *value;
-            }
-            feature_id = "#inline:" + std::to_string(next_nested_++);
-            features_.emplace(feature_id,
-                              std::make_unique<simple_block_feature>(
-                                  std::move(*provider), schedule_tick));
-        } else if (*type_name == "minecraft:template") {
-            auto decoded = decode_template_feature_document(*states_, *feature);
-            if (!decoded) {
-                return std::unexpected{decoded.error()};
-            }
-            feature_id = "#inline:" + std::to_string(next_nested_++);
-            features_.emplace(feature_id, std::move(*decoded));
-        } else {
-            return std::unexpected{make_error(
-                error_code::unsupported, "unsupported inline feature type '" +
-                                             std::string{*type_name} + "'")};
-        }
+        // An inline configured feature is decoded by the same dispatch as a
+        // document from the data set; the synthetic id keeps the reference
+        // stable for the nesting entry built below.
+        feature_id = "#inline:" + std::to_string(next_nested_++);
+        pending_documents_->push_back(configured_feature_document{
+            .id = feature_id, .document = *feature});
     } else {
         return std::unexpected{
             make_error(error_code::parse_error, "nested feature is invalid")};
@@ -485,14 +455,31 @@ auto feature_registry::load_placed(const feature_data_set &data,
     return load(subset);
 }
 
+auto feature_registry::configured(std::string_view id) const
+    -> const feature * {
+    const auto found = features_.find(std::string{id});
+    return found == features_.end() ? nullptr : found->second.get();
+}
+
 auto feature_registry::load(const feature_data_set &data) -> status {
     nested_placed_.clear();
+    pending_documents_ = nullptr;
     next_nested_ = 0;
     providers_.clear();
     decoding_providers_.clear();
     provider_error_.reset();
     provider_documents_ = data.state_providers;
+    // Inline configured features append themselves to this list while the
+    // selected documents decode, so one pass decodes the whole closure.
+    std::deque<configured_feature_document> documents;
     for (const auto &[id, document] : data.features) {
+        (void)id;
+        documents.push_back(document);
+    }
+    pending_documents_ = &documents;
+    for (std::size_t index = 0; index < documents.size(); ++index) {
+        const auto &id = documents[index].id;
+        const auto &document = documents[index];
         const auto type = type_of(document.document);
         if (!type) {
             return std::unexpected{type.error()};
@@ -2124,10 +2111,178 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 return std::unexpected{make_error(
                     error_code::parse_error, "tree feature is incomplete")};
             }
-            if (document.document.find("root_placer") != nullptr) {
-                return std::unexpected{
-                    make_error(error_code::unsupported,
-                               "tree root placers are not implemented")};
+            tree_placer_options options;
+            const auto read_holder_set =
+                [](const data::json::value &value, std::string &tag,
+                   std::vector<std::string> &names) -> status {
+                if (const auto single = value.as_string(); single.has_value()) {
+                    if (single->starts_with("#")) {
+                        tag = std::string{single->substr(1)};
+                    } else {
+                        names.emplace_back(*single);
+                    }
+                    return status_ok();
+                }
+                if (!value.is_array()) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error, "holder set is not a list")};
+                }
+                for (const auto &entry : *value.as_array()) {
+                    const auto name = entry.as_string();
+                    if (!name) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "holder set entry is not a string")};
+                    }
+                    if (name->starts_with("#")) {
+                        if (!tag.empty()) {
+                            return std::unexpected{
+                                make_error(error_code::parse_error,
+                                           "holder set has more than one tag")};
+                        }
+                        tag = std::string{name->substr(1)};
+                    } else {
+                        names.emplace_back(*name);
+                    }
+                }
+                return status_ok();
+            };
+            const auto read_uniform_bounds = [](const data::json::value &value,
+                                                jint &minimum,
+                                                jint &maximum) -> status {
+                if (const auto values = value.as_array();
+                    values && values->size() == 2) {
+                    const auto min = (*values)[0].as_int64();
+                    const auto max = (*values)[1].as_int64();
+                    if (!min || !max) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "uniform bounds are not integers")};
+                    }
+                    minimum = static_cast<jint>(*min);
+                    maximum = static_cast<jint>(*max);
+                    return status_ok();
+                }
+                const auto *min_field = value.find("min_inclusive");
+                const auto *max_field = value.find("max_inclusive");
+                if (min_field == nullptr || max_field == nullptr) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error, "uniform bounds are missing")};
+                }
+                const auto min = min_field->as_int64();
+                const auto max = max_field->as_int64();
+                if (!min || !max) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "uniform bounds are not integers")};
+                }
+                minimum = static_cast<jint>(*min);
+                maximum = static_cast<jint>(*max);
+                return status_ok();
+            };
+            if (const auto *root = document.document.find("root_placer");
+                root != nullptr) {
+                const auto *root_type = root->find("type");
+                std::optional<std::string_view> root_type_name;
+                if (root_type != nullptr) {
+                    const auto decoded_type = root_type->as_string();
+                    if (decoded_type) {
+                        root_type_name = *decoded_type;
+                    }
+                }
+                if (!root_type_name ||
+                    *root_type_name != "minecraft:mangrove_root_placer") {
+                    return std::unexpected{
+                        make_error(error_code::unsupported,
+                                   "unsupported tree root placer")};
+                }
+                const auto *trunk_offset = root->find("trunk_offset_y");
+                const auto *root_provider = root->find("root_provider");
+                const auto *mangrove = root->find("mangrove_root_placement");
+                if (trunk_offset == nullptr || root_provider == nullptr ||
+                    mangrove == nullptr) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "mangrove root placer is incomplete")};
+                }
+                auto offset_provider =
+                    provider::int_provider::decode(*trunk_offset);
+                auto provider_value = decode_provider(*root_provider);
+                if (!offset_provider || !provider_value) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "mangrove root placer is invalid")};
+                }
+                options.root_trunk_offset_y = std::move(*offset_provider);
+                options.root_provider = std::move(*provider_value);
+                if (const auto *above = root->find("above_root_placement");
+                    above != nullptr) {
+                    const auto *above_provider =
+                        above->find("above_root_provider");
+                    const auto *above_chance =
+                        above->find("above_root_placement_chance");
+                    if (above_provider == nullptr || above_chance == nullptr) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "above root placement is incomplete")};
+                    }
+                    auto decoded = decode_provider(*above_provider);
+                    const auto chance = above_chance->as_double();
+                    if (!decoded || !chance) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "above root placement is invalid")};
+                    }
+                    options.above_root_provider = std::move(*decoded);
+                    options.above_root_chance = static_cast<float>(*chance);
+                }
+                const auto *can_grow = mangrove->find("can_grow_through");
+                const auto *muddy_in = mangrove->find("muddy_roots_in");
+                const auto *muddy_provider =
+                    mangrove->find("muddy_roots_provider");
+                const auto *max_width = mangrove->find("max_root_width");
+                const auto *max_length = mangrove->find("max_root_length");
+                const auto *skew = mangrove->find("random_skew_chance");
+                if (can_grow == nullptr || muddy_in == nullptr ||
+                    muddy_provider == nullptr || max_width == nullptr ||
+                    max_length == nullptr || skew == nullptr) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "mangrove root placement is incomplete")};
+                }
+                std::string can_grow_tag;
+                std::vector<std::string> can_grow_names;
+                if (const auto read = read_holder_set(*can_grow, can_grow_tag,
+                                                      can_grow_names);
+                    !read) {
+                    return std::unexpected{read.error()};
+                }
+                if (!can_grow_names.empty() || can_grow_tag.empty()) {
+                    return std::unexpected{make_error(
+                        error_code::unsupported,
+                        "mangrove roots need a can_grow_through tag")};
+                }
+                std::string muddy_tag;
+                if (const auto read = read_holder_set(
+                        *muddy_in, muddy_tag, options.mangrove_muddy_roots_in);
+                    !read) {
+                    return std::unexpected{read.error()};
+                }
+                auto decoded_muddy = decode_provider(*muddy_provider);
+                const auto width = max_width->as_int64();
+                const auto length = max_length->as_int64();
+                const auto skew_value = skew->as_double();
+                if (!decoded_muddy || !width || !length || !skew_value) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "mangrove root placement is invalid")};
+                }
+                options.mangrove_can_grow_through = std::move(can_grow_tag);
+                options.muddy_roots_provider = std::move(*decoded_muddy);
+                options.mangrove_max_root_width = static_cast<jint>(*width);
+                options.mangrove_max_root_length = static_cast<jint>(*length);
+                options.mangrove_random_skew_chance =
+                    static_cast<float>(*skew_value);
             }
             if (!decorators->is_array()) {
                 return std::unexpected{make_error(
@@ -2144,6 +2299,20 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 if (decorator_name == "minecraft:trunk_vine") {
                     decoded_decorators.push_back(
                         std::make_unique<trunk_vine_decorator>());
+                } else if (decorator_name == "minecraft:shelf_mushroom") {
+                    const auto *probability = entry.find("probability");
+                    if (probability == nullptr) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "shelf mushroom has no probability")};
+                    }
+                    const auto value = probability->as_double();
+                    if (!value) {
+                        return std::unexpected{value.error()};
+                    }
+                    decoded_decorators.push_back(
+                        std::make_unique<shelf_mushroom_decorator>(
+                            static_cast<float>(*value)));
                 } else if (decorator_name == "minecraft:attached_to_leaves") {
                     const auto *probability = entry.find("probability");
                     const auto *provider_value = entry.find("block_provider");
@@ -2301,9 +2470,50 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                     decoded_decorators.push_back(
                         std::make_unique<leave_vine_decorator>(
                             static_cast<float>(*value)));
+                } else if (decorator_name == "minecraft:pale_moss") {
+                    const auto read =
+                        [&](std::string_view name) -> std::optional<float> {
+                        const auto *value = entry.find(name);
+                        if (value == nullptr) {
+                            return std::nullopt;
+                        }
+                        const auto number = value->as_double();
+                        if (!number) {
+                            return std::nullopt;
+                        }
+                        return static_cast<float>(*number);
+                    };
+                    const auto leaves = read("leaves_probability");
+                    const auto trunk = read("trunk_probability");
+                    const auto ground = read("ground_probability");
+                    if (!leaves || !trunk || !ground) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "pale moss decorator is incomplete")};
+                    }
+                    decoded_decorators.push_back(
+                        std::make_unique<pale_moss_decorator>(
+                            *leaves, *trunk, *ground,
+                            "minecraft:pale_moss_patch"));
+                } else if (decorator_name == "minecraft:creaking_heart") {
+                    const auto *probability = entry.find("probability");
+                    if (probability == nullptr) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "creaking heart has no probability")};
+                    }
+                    const auto value = probability->as_double();
+                    if (!value) {
+                        return std::unexpected{value.error()};
+                    }
+                    decoded_decorators.push_back(
+                        std::make_unique<creaking_heart_decorator>(
+                            static_cast<float>(*value)));
                 } else {
-                    return std::unexpected{make_error(
-                        error_code::unsupported, "unsupported tree decorator")};
+                    return std::unexpected{
+                        make_error(error_code::unsupported,
+                                   "unsupported tree decorator '" +
+                                       std::string{decorator_name} + "'")};
                 }
             }
             const auto *trunk_type = trunk_placer->find("type");
@@ -2326,6 +2536,121 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 kind = trunk_kind::giant;
             } else if (*trunk_name == "minecraft:mega_jungle_trunk_placer") {
                 kind = trunk_kind::mega_jungle;
+            } else if (*trunk_name == "minecraft:cherry_trunk_placer") {
+                kind = trunk_kind::cherry;
+                const auto *count = trunk_placer->find("branch_count");
+                const auto *horizontal =
+                    trunk_placer->find("branch_horizontal_length");
+                const auto *start =
+                    trunk_placer->find("branch_start_offset_from_top");
+                const auto *end =
+                    trunk_placer->find("branch_end_offset_from_top");
+                if (count == nullptr || horizontal == nullptr ||
+                    start == nullptr || end == nullptr) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "cherry trunk placer is incomplete")};
+                }
+                auto count_provider = provider::int_provider::decode(*count);
+                auto horizontal_provider =
+                    provider::int_provider::decode(*horizontal);
+                auto end_provider = provider::int_provider::decode(*end);
+                jint start_min = 0;
+                jint start_max = 0;
+                const auto bounds =
+                    read_uniform_bounds(*start, start_min, start_max);
+                if (!count_provider || !horizontal_provider || !end_provider ||
+                    !bounds) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "cherry trunk placer is invalid")};
+                }
+                options.cherry_branch_count = std::move(*count_provider);
+                options.cherry_branch_horizontal_length =
+                    std::move(*horizontal_provider);
+                options.cherry_branch_start_min = start_min;
+                options.cherry_branch_start_max = start_max;
+                options.cherry_branch_end_offset = std::move(*end_provider);
+            } else if (*trunk_name == "minecraft:poplar_trunk_placer") {
+                kind = trunk_kind::poplar;
+                const auto *above =
+                    trunk_placer->find("trunk_height_above_branches");
+                const auto *amount = trunk_placer->find("branch_amount");
+                if (above == nullptr || amount == nullptr) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "poplar trunk placer is incomplete")};
+                }
+                auto above_provider = provider::int_provider::decode(*above);
+                auto amount_provider = provider::int_provider::decode(*amount);
+                if (!above_provider || !amount_provider) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "poplar trunk placer is invalid")};
+                }
+                options.poplar_trunk_above_branches =
+                    std::move(*above_provider);
+                options.poplar_branch_amount = std::move(*amount_provider);
+            } else if (*trunk_name == "minecraft:bending_trunk_placer") {
+                kind = trunk_kind::bending;
+                const auto *bend = trunk_placer->find("bend_length");
+                if (bend == nullptr) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "bending trunk placer has no bend_length")};
+                }
+                auto bend_provider = provider::int_provider::decode(*bend);
+                if (!bend_provider) {
+                    return std::unexpected{bend_provider.error()};
+                }
+                options.bending_bend_length = std::move(*bend_provider);
+                if (const auto *minimum =
+                        trunk_placer->find("min_height_for_leaves");
+                    minimum != nullptr) {
+                    const auto value = minimum->as_int64();
+                    if (!value) {
+                        return std::unexpected{value.error()};
+                    }
+                    options.bending_min_height_for_leaves =
+                        static_cast<jint>(*value);
+                }
+            } else if (*trunk_name ==
+                       "minecraft:upwards_branching_trunk_placer") {
+                kind = trunk_kind::upwards_branching;
+                const auto *steps = trunk_placer->find("extra_branch_steps");
+                const auto *length = trunk_placer->find("extra_branch_length");
+                const auto *probability =
+                    trunk_placer->find("place_branch_per_log_probability");
+                const auto *grow = trunk_placer->find("can_grow_through");
+                if (steps == nullptr || length == nullptr ||
+                    probability == nullptr || grow == nullptr) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error,
+                        "upwards branching trunk placer is incomplete")};
+                }
+                auto steps_provider = provider::int_provider::decode(*steps);
+                auto length_provider = provider::int_provider::decode(*length);
+                const auto probability_value = probability->as_double();
+                std::string grow_tag;
+                std::vector<std::string> grow_names;
+                const auto read = read_holder_set(*grow, grow_tag, grow_names);
+                if (!steps_provider || !length_provider || !probability_value ||
+                    !read) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error,
+                        "upwards branching trunk placer is invalid")};
+                }
+                if (!grow_names.empty() || grow_tag.empty()) {
+                    return std::unexpected{make_error(
+                        error_code::unsupported,
+                        "upwards branching needs a can_grow_through tag")};
+                }
+                options.upwards_extra_branch_steps = std::move(*steps_provider);
+                options.upwards_extra_branch_length =
+                    std::move(*length_provider);
+                options.upwards_branch_probability =
+                    static_cast<float>(*probability_value);
+                options.upwards_can_grow_through = std::move(grow_tag);
             } else if (*trunk_name != "minecraft:straight_trunk_placer") {
                 return std::unexpected{make_error(error_code::unsupported,
                                                   "unsupported trunk placer '" +
@@ -2355,11 +2680,86 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 foliage_type_kind = foliage_kind::jungle;
             } else if (foliage_name == "minecraft:bush_foliage_placer") {
                 foliage_type_kind = foliage_kind::bush;
+            } else if (foliage_name == "minecraft:cherry_foliage_placer") {
+                foliage_type_kind = foliage_kind::cherry;
+            } else if (foliage_name == "minecraft:poplar_foliage_placer") {
+                foliage_type_kind = foliage_kind::poplar;
+            } else if (foliage_name ==
+                       "minecraft:random_spread_foliage_placer") {
+                foliage_type_kind = foliage_kind::random_spread;
             } else if (foliage_name != "minecraft:blob_foliage_placer") {
                 return std::unexpected{
                     make_error(error_code::unsupported,
                                "unsupported foliage placer '" +
                                    std::string{foliage_name} + "'")};
+            }
+            if (foliage_type_kind == foliage_kind::cherry ||
+                foliage_type_kind == foliage_kind::poplar ||
+                foliage_type_kind == foliage_kind::random_spread) {
+                const auto *height_field = foliage_placer->find(
+                    foliage_type_kind == foliage_kind::random_spread
+                        ? "foliage_height"
+                        : "height");
+                if (height_field == nullptr) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "foliage placer has no foliage height")};
+                }
+                auto decoded = provider::int_provider::decode(*height_field);
+                if (!decoded) {
+                    return std::unexpected{decoded.error()};
+                }
+                options.foliage_height = std::move(*decoded);
+                const auto read_chance = [&](std::string_view name,
+                                             float &out) -> status {
+                    const auto *value = foliage_placer->find(name);
+                    if (value == nullptr) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "foliage placer chance is missing")};
+                    }
+                    const auto number = value->as_double();
+                    if (!number) {
+                        return std::unexpected{number.error()};
+                    }
+                    out = static_cast<float>(*number);
+                    return status_ok();
+                };
+                if (foliage_type_kind == foliage_kind::cherry &&
+                    (!read_chance("wide_bottom_layer_hole_chance",
+                                  options.cherry_wide_bottom_hole_chance) ||
+                     !read_chance("corner_hole_chance",
+                                  options.cherry_corner_hole_chance) ||
+                     !read_chance("hanging_leaves_chance",
+                                  options.cherry_hanging_leaves_chance) ||
+                     !read_chance("hanging_leaves_extension_chance",
+                                  options.cherry_hanging_extension_chance))) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "cherry foliage placer is invalid")};
+                }
+                if (foliage_type_kind == foliage_kind::poplar &&
+                    !read_chance("side_hole_chance",
+                                 options.poplar_side_hole_chance)) {
+                    return std::unexpected{
+                        make_error(error_code::parse_error,
+                                   "poplar foliage placer is invalid")};
+                }
+                if (foliage_type_kind == foliage_kind::random_spread) {
+                    const auto *attempts =
+                        foliage_placer->find("leaf_placement_attempts");
+                    if (attempts == nullptr) {
+                        return std::unexpected{make_error(
+                            error_code::parse_error,
+                            "random spread foliage has no attempts")};
+                    }
+                    const auto value = attempts->as_int64();
+                    if (!value) {
+                        return std::unexpected{value.error()};
+                    }
+                    options.random_spread_leaf_attempts =
+                        static_cast<jint>(*value);
+                }
             }
             const auto *minimum_type = minimum_size->find("type");
             if (minimum_type == nullptr || !minimum_type->as_string()) {
@@ -2395,7 +2795,10 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             const auto rand_a_value = rand_a->as_int64();
             const auto rand_b_value = rand_b->as_int64();
             jint height_value = 0;
-            if (height != nullptr && foliage_type_kind != foliage_kind::pine) {
+            if (height != nullptr && foliage_type_kind != foliage_kind::pine &&
+                foliage_type_kind != foliage_kind::cherry &&
+                foliage_type_kind != foliage_kind::poplar &&
+                foliage_type_kind != foliage_kind::random_spread) {
                 const auto parsed_height = height->as_int64();
                 if (!parsed_height) {
                     return std::unexpected{parsed_height.error()};
@@ -2517,7 +2920,295 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                     std::move(spruce_trunk_height), std::move(mega_pine_crown),
                     height_value, limit, lower, upper, three_layers,
                     upper_limit, middle, has_min_clipped, min_clipped,
-                    ignore_vines, std::move(decoded_decorators)));
+                    ignore_vines, std::move(decoded_decorators),
+                    std::move(options)));
+            continue;
+        }
+        if (*type == "minecraft:no_op") {
+            features_.emplace(id, std::make_unique<no_op_feature>());
+            continue;
+        }
+        if (*type == "minecraft:fill_layer") {
+            const auto *height_value = document.document.find("height");
+            const auto *state_value = document.document.find("state");
+            if (height_value == nullptr || state_value == nullptr) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "fill layer is incomplete")};
+            }
+            const auto height = height_value->as_int64();
+            const auto key = decode_state_key(*state_value);
+            if (!height || !key) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "fill layer is invalid")};
+            }
+            auto state = resolve_state(*states_, *key);
+            if (!state) {
+                return std::unexpected{state.error()};
+            }
+            features_.emplace(id, std::make_unique<fill_layer_feature>(
+                                      static_cast<jint>(*height), *state));
+            continue;
+        }
+        if (*type == "minecraft:single_block_pillar") {
+            const auto *block_value = document.document.find("block");
+            const auto *direction_value = document.document.find("direction");
+            if (block_value == nullptr || direction_value == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "single block pillar is incomplete")};
+            }
+            auto block = decode_provider(*block_value);
+            if (!block) {
+                return std::unexpected{block.error()};
+            }
+            const auto direction_name = direction_value->as_string();
+            if (!direction_name ||
+                (*direction_name != "up" && *direction_name != "down")) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "single block pillar direction is invalid")};
+            }
+            std::unique_ptr<block_predicate> can_replace;
+            if (const auto *value = document.document.find("can_replace");
+                value != nullptr) {
+                auto decoded = decode_block_predicate(*value, *states_);
+                if (!decoded) {
+                    return std::unexpected{decoded.error()};
+                }
+                can_replace = std::move(*decoded);
+            }
+            float chance = 1.0F;
+            if (const auto *value =
+                    document.document.find("chance_to_continue");
+                value != nullptr) {
+                const auto number = value->as_double();
+                if (!number) {
+                    return std::unexpected{number.error()};
+                }
+                chance = static_cast<float>(*number);
+            }
+            std::string cap;
+            if (const auto *value = document.document.find("cap_feature");
+                value != nullptr) {
+                auto reference = nested_reference(*value);
+                if (!reference) {
+                    return std::unexpected{reference.error()};
+                }
+                cap = std::move(*reference);
+            }
+            features_.emplace(id, std::make_unique<single_block_pillar_feature>(
+                                      std::move(*block), std::move(can_replace),
+                                      *direction_name == "up" ? 1 : -1, chance,
+                                      std::move(cap)));
+            continue;
+        }
+        if (*type == "minecraft:speleothem") {
+            const auto *base_value = document.document.find("base_block");
+            const auto *pointed_value = document.document.find("pointed_block");
+            const auto *replaceable_value =
+                document.document.find("replaceable_blocks");
+            if (base_value == nullptr || pointed_value == nullptr ||
+                replaceable_value == nullptr) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "speleothem is incomplete")};
+            }
+            const auto base_key = decode_state_key(*base_value);
+            const auto pointed_key = decode_state_key(*pointed_value);
+            const auto replaceable = replaceable_value->as_string();
+            if (!base_key || !pointed_key || !replaceable ||
+                !replaceable->starts_with("#")) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "speleothem is invalid")};
+            }
+            auto base = resolve_state(*states_, *base_key);
+            auto pointed = resolve_state(*states_, *pointed_key);
+            if (!base || !pointed) {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "speleothem state is invalid")};
+            }
+            float taller = 0.2F;
+            float directional = 0.7F;
+            float radius2 = 0.5F;
+            float radius3 = 0.5F;
+            const auto read_chance = [&](std::string_view name,
+                                         float &out) -> status {
+                const auto *value = document.document.find(name);
+                if (value == nullptr) {
+                    return status_ok();
+                }
+                const auto number = value->as_double();
+                if (!number) {
+                    return std::unexpected{number.error()};
+                }
+                out = static_cast<float>(*number);
+                return status_ok();
+            };
+            if (const auto read =
+                    read_chance("chance_of_taller_generation", taller);
+                !read) {
+                return std::unexpected{read.error()};
+            }
+            if (const auto read =
+                    read_chance("chance_of_directional_spread", directional);
+                !read) {
+                return std::unexpected{read.error()};
+            }
+            if (const auto read =
+                    read_chance("chance_of_spread_radius2", radius2);
+                !read) {
+                return std::unexpected{read.error()};
+            }
+            if (const auto read =
+                    read_chance("chance_of_spread_radius3", radius3);
+                !read) {
+                return std::unexpected{read.error()};
+            }
+            features_.emplace(id, std::make_unique<speleothem_feature>(
+                                      *base, *pointed,
+                                      std::string{replaceable->substr(1)},
+                                      taller, directional, radius2, radius3));
+            continue;
+        }
+        if (*type == "minecraft:coral_tree" ||
+            *type == "minecraft:coral_claw") {
+            const auto *value = document.document.find("feature");
+            if (value == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "coral feature has no nested feature")};
+            }
+            auto reference = nested_reference(*value);
+            if (!reference) {
+                return std::unexpected{reference.error()};
+            }
+            if (*type == "minecraft:coral_tree") {
+                features_.emplace(id, std::make_unique<coral_tree_feature>(
+                                          std::move(*reference)));
+            } else {
+                features_.emplace(id, std::make_unique<coral_claw_feature>(
+                                          std::move(*reference)));
+            }
+            continue;
+        }
+        if (*type == "minecraft:projected_random_patchy_square") {
+            const auto *block_value = document.document.find("block");
+            const auto *predicate_value =
+                document.document.find("project_through");
+            const auto *size_value = document.document.find("size");
+            const auto *height_value =
+                document.document.find("max_projection_height");
+            if (block_value == nullptr || predicate_value == nullptr ||
+                size_value == nullptr || height_value == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "projected random patchy square is incomplete")};
+            }
+            auto block = decode_provider(*block_value);
+            auto predicate = decode_block_predicate(*predicate_value, *states_);
+            auto size = provider::int_provider::decode(*size_value);
+            const auto height = height_value->as_int64();
+            if (!block || !predicate || !size || !height) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "projected random patchy square is invalid")};
+            }
+            features_.emplace(
+                id, std::make_unique<projected_random_patchy_square_feature>(
+                        std::move(*block), std::move(*predicate),
+                        std::move(*size), static_cast<jint>(*height)));
+            continue;
+        }
+        if (*type == "minecraft:stepped_column_cluster") {
+            const auto *block_value = document.document.find("block");
+            const auto *continue_value =
+                document.document.find("continue_through");
+            const auto *replace_value = document.document.find("can_replace");
+            const auto *cannot_value =
+                document.document.find("cannot_place_on");
+            const auto *reach_value = document.document.find("cluster_reach");
+            const auto *count_value = document.document.find("column_count");
+            const auto *column_reach_value =
+                document.document.find("column_reach");
+            const auto *height_value = document.document.find("height");
+            if (block_value == nullptr || continue_value == nullptr ||
+                replace_value == nullptr || cannot_value == nullptr ||
+                reach_value == nullptr || count_value == nullptr ||
+                column_reach_value == nullptr || height_value == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "stepped column cluster is incomplete")};
+            }
+            auto block = decode_provider(*block_value);
+            auto continue_through =
+                decode_block_predicate(*continue_value, *states_);
+            auto can_replace = decode_block_predicate(*replace_value, *states_);
+            auto reach = provider::int_provider::decode(*reach_value);
+            auto count = provider::int_provider::decode(*count_value);
+            auto column_reach =
+                provider::int_provider::decode(*column_reach_value);
+            auto height = provider::int_provider::decode(*height_value);
+            if (!block || !continue_through || !can_replace || !reach ||
+                !count || !column_reach || !height) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "stepped column cluster is invalid")};
+            }
+            std::string tag;
+            std::vector<std::string> blocks;
+            if (const auto single = cannot_value->as_string();
+                single.has_value()) {
+                if (single->starts_with("#")) {
+                    tag = single->substr(1);
+                } else {
+                    blocks.emplace_back(*single);
+                }
+            } else if (cannot_value->is_array()) {
+                for (const auto &entry : *cannot_value->as_array()) {
+                    const auto name = entry.as_string();
+                    if (!name || name->starts_with("#")) {
+                        return std::unexpected{
+                            make_error(error_code::parse_error,
+                                       "cannot_place_on entry is invalid")};
+                    }
+                    blocks.emplace_back(*name);
+                }
+            } else {
+                return std::unexpected{make_error(
+                    error_code::parse_error, "cannot_place_on is invalid")};
+            }
+            features_.emplace(
+                id, std::make_unique<stepped_column_cluster_feature>(
+                        std::move(*block), std::move(*continue_through),
+                        std::move(*can_replace), std::move(tag),
+                        std::move(blocks), std::move(*reach), std::move(*count),
+                        std::move(*column_reach), std::move(*height)));
+            continue;
+        }
+        if (*type == "minecraft:sculk_patch") {
+            const auto read_int =
+                [&](std::string_view name) -> std::optional<jint> {
+                const auto *value = document.document.find(name);
+                if (value == nullptr) {
+                    return std::nullopt;
+                }
+                const auto number = value->as_int64();
+                if (!number) {
+                    return std::nullopt;
+                }
+                return static_cast<jint>(*number);
+            };
+            const auto charge_count = read_int("charge_count");
+            const auto amount = read_int("amount_per_charge");
+            const auto attempts = read_int("spread_attempts");
+            const auto growth = read_int("growth_rounds");
+            const auto spread = read_int("spread_rounds");
+            if (!charge_count || !amount || !attempts || !growth || !spread) {
+                return std::unexpected{make_error(error_code::parse_error,
+                                                  "sculk patch is incomplete")};
+            }
+            features_.emplace(
+                id, std::make_unique<sculk_patch_feature>(
+                        *charge_count, *amount, *attempts, *growth, *spread));
             continue;
         }
         if (*type == "minecraft:template") {
@@ -2534,6 +3225,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                                     std::string{*type} + "'")};
     }
 
+    pending_documents_ = nullptr;
     for (const auto &[id, document] : data.placed) {
         const auto configured = features_.find(document.feature);
         if (configured == features_.end()) {

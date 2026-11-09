@@ -85,6 +85,11 @@ class block_state_registry final : public block_state_table {
 
     void add_tag(std::string_view tag, std::span<const block_state_id> states);
 
+    /// Tag members in the order the tag document listed them, without
+    /// duplicates. Empty when the tag is unknown.
+    [[nodiscard]] auto tag_states(std::string_view tag) const
+        -> std::span<const block_state_id>;
+
     /// Traits for a state key that is not interned yet. When the registry
     /// carries the heightmap motion tags, membership is decided by the block
     /// name the tags list, matching how reference worlds classify states.
@@ -107,6 +112,8 @@ class block_state_registry final : public block_state_table {
     std::vector<std::uint16_t> vanilla_ids_{};
     std::unordered_map<std::string_view, block_state_id> index_{};
     std::map<std::string, std::vector<block_state_id>, std::less<>> tags_{};
+    std::map<std::string, std::vector<block_state_id>, std::less<>>
+        ordered_tags_{};
     std::map<std::string, std::set<std::string, std::less<>>, std::less<>>
         tag_names_{};
 };

@@ -689,6 +689,15 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
                                                      jint x, jint z) {
             return region.height_at(kind, x, z);
         };
+        feature_context.place_configured = [&feature_context,
+                                            this](std::string_view id,
+                                                  worldgen_random &random,
+                                                  const block_pos &position) {
+            const auto *configured =
+                features_ == nullptr ? nullptr : features_->configured(id);
+            return configured != nullptr &&
+                   configured->place(feature_context, random, position);
+        };
         feature_context.placement.biome = biome_of;
         feature_context.placement.resolve_state = resolve_state;
         feature_context.placement.should_freeze =

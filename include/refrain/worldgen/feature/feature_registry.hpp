@@ -13,6 +13,7 @@
 #include <refrain/worldgen/feature/feature_data.hpp>
 #include <refrain/worldgen/feature/feature_stage.hpp>
 
+#include <deque>
 #include <memory>
 #include <optional>
 #include <set>
@@ -41,6 +42,10 @@ class feature_registry {
     [[nodiscard]] auto load_placed(const feature_data_set &data,
                                    std::span<const std::string> ids) -> status;
 
+    /// The runtime object for one configured feature id, or null when the id
+    /// was not decoded.
+    [[nodiscard]] auto configured(std::string_view id) const -> const feature *;
+
     [[nodiscard]] auto placed() const
         -> const std::unordered_map<std::string, placed_feature_runtime> & {
         return placed_;
@@ -68,6 +73,10 @@ class feature_registry {
     std::unordered_map<std::string, std::unique_ptr<state_provider>>
         providers_{};
     std::vector<nested_placed_entry> nested_placed_{};
+    /// Configured feature documents produced while decoding: inline feature
+    /// bodies appended by `nested_reference` and drained by `load` through the
+    /// same dispatch as the data set.
+    std::deque<configured_feature_document> *pending_documents_{nullptr};
     std::set<std::string> decoding_providers_{};
     std::optional<error> provider_error_{};
     jint next_nested_{0};

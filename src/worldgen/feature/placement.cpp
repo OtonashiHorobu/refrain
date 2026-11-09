@@ -266,11 +266,10 @@ class environment_scan final : public placement_modifier {
                 std::vector<block_pos> &out) const override {
         block_pos pos = origin;
         const auto allowed = [&](const block_pos &value) {
-            return allowed_ == nullptr ||
-                   allowed_->test(*context.region, *context.states, value);
+            return allowed_ == nullptr || allowed_->test(context, value);
         };
         const auto target = [&](const block_pos &value) {
-            return target_->test(*context.region, *context.states, value);
+            return target_->test(context, value);
         };
         if (!allowed(pos)) {
             return;
@@ -333,7 +332,7 @@ class block_predicate_filter final : public placement_modifier {
     void modify(const placement_context &context, worldgen_random &,
                 const block_pos &position,
                 std::vector<block_pos> &out) const override {
-        if (predicate_->test(*context.region, *context.states, position)) {
+        if (predicate_->test(context, position)) {
             out.push_back(position);
         }
     }
@@ -470,6 +469,52 @@ class surface_relative_threshold_filter final : public placement_modifier {
     worldgen::heightmap_kind kind_{worldgen::heightmap_kind::world_surface};
     jint min_inclusive_{0};
     jint max_inclusive_{0};
+};
+
+/// Emits every cell of a randomly sized box. The reference samples the y size,
+/// then the two horizontal sizes, and emits x-major, then y, then z.
+class cuboid_placement final : public placement_modifier {
+  public:
+    cuboid_placement(std::unique_ptr<provider::int_provider> xz_size,
+                     std::unique_ptr<provider::int_provider> y_size,
+                     bool include_edges, bool include_interior)
+        : xz_size_{std::move(xz_size)}, y_size_{std::move(y_size)},
+          include_edges_{include_edges}, include_interior_{include_interior} {}
+
+    void modify(const placement_context &, worldgen_random &random,
+                const block_pos &origin,
+                std::vector<block_pos> &out) const override {
+        const jint height = y_size_->sample(random);
+        const jint width = xz_size_->sample(random);
+        const jint length = xz_size_->sample(random);
+        for (jint x = 0; x <= width; ++x) {
+            for (jint y = 0; y <= height; ++y) {
+                for (jint z = 0; z <= length; ++z) {
+                    const bool edge_x = x == 0 || x == width;
+                    const bool edge_y = y == 0 || y == height;
+                    const bool edge_z = z == 0 || z == length;
+                    const bool on_edge = (edge_x && edge_y) ||
+                                         (edge_y && edge_z) ||
+                                         (edge_x && edge_z);
+                    if (!include_edges_ && on_edge) {
+                        continue;
+                    }
+                    if (!include_interior_ && !edge_x && !edge_y && !edge_z) {
+                        continue;
+                    }
+                    out.push_back(block_pos{.x = origin.x + x,
+                                            .y = origin.y + y,
+                                            .z = origin.z + z});
+                }
+            }
+        }
+    }
+
+  private:
+    std::unique_ptr<provider::int_provider> xz_size_;
+    std::unique_ptr<provider::int_provider> y_size_;
+    bool include_edges_{true};
+    bool include_interior_{true};
 };
 
 class randomly_selected_placement final : public placement_modifier {
@@ -806,6 +851,42 @@ auto decode_placement(const data::json::value &document,
         return std::unique_ptr<placement_modifier>{
             std::make_unique<surface_relative_threshold_filter>(
                 *kind, min_inclusive, max_inclusive)};
+    }
+    if (*type == "minecraft:cuboid") {
+        const auto *xz_field = document.find("xz_size");
+        const auto *y_field = document.find("y_size");
+        if (xz_field == nullptr || y_field == nullptr) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "cuboid is missing a size field")};
+        }
+        auto xz_size = provider::int_provider::decode(*xz_field);
+        auto y_size = provider::int_provider::decode(*y_field);
+        if (!xz_size || !y_size) {
+            return std::unexpected{
+                make_error(error_code::parse_error, "cuboid size is invalid")};
+        }
+        bool include_edges = true;
+        bool include_interior = true;
+        if (const auto *edges = document.find("include_edges");
+            edges != nullptr) {
+            const auto value = edges->as_bool();
+            if (!value) {
+                return std::unexpected{value.error()};
+            }
+            include_edges = *value;
+        }
+        if (const auto *interior = document.find("include_interior");
+            interior != nullptr) {
+            const auto value = interior->as_bool();
+            if (!value) {
+                return std::unexpected{value.error()};
+            }
+            include_interior = *value;
+        }
+        return std::unique_ptr<placement_modifier>{
+            std::make_unique<cuboid_placement>(
+                std::move(*xz_size), std::move(*y_size), include_edges,
+                include_interior)};
     }
     if (*type == "minecraft:randomly_selected") {
         const auto *placements = document.find("placements");
