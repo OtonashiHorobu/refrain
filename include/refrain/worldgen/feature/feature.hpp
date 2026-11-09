@@ -548,8 +548,9 @@ class vegetation_patch_feature final : public feature {
   private:
     [[nodiscard]] auto replaceable(feature_context &context,
                                    block_state_id state) const -> bool;
-    void place_ground(feature_context &context, worldgen_random &random,
-                      block_pos &below, jint depth) const;
+    [[nodiscard]] auto place_ground(feature_context &context,
+                                    worldgen_random &random, block_pos &below,
+                                    jint depth) const -> bool;
     void distribute(feature_context &context, worldgen_random &random,
                     const std::vector<block_pos> &surface) const;
 

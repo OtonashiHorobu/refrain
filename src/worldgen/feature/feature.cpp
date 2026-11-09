@@ -69,20 +69,61 @@ auto simple_block_feature::place(feature_context &context,
     if (state == no_block_state) {
         return false;
     }
-    // `SimpleBlockFeature.place` writes only when the state survives at the
-    // position. Small flowers are vegetation blocks: their sole support rule
-    // is the block below being in the vegetation substrate tag. States outside
-    // that family keep the default can-survive result.
+    // A simple block write happens only when the state survives at the
+    // position. Substrate plants reject an unsupported column: a small flower
+    // needs the vegetation substrate below it, and the wider flower, grass and
+    // replaceable-plant families need a motion-blocking neighbour either below
+    // (ground plants) or above (ceiling plants such as spore blossoms). States
+    // outside those families keep the default can-survive result.
     const auto &states = *context.placement.states;
+    const auto below =
+        context.placement.region->state_at(origin.x, origin.y - 1, origin.z);
+    const auto above =
+        context.placement.region->state_at(origin.x, origin.y + 1, origin.z);
     if (states.in_tag(state, "minecraft:small_flowers") &&
-        !states.in_tag(context.placement.region->state_at(
-                           origin.x, origin.y - 1, origin.z),
-                       "minecraft:supports_vegetation")) {
+        !states.in_tag(below, "minecraft:supports_vegetation")) {
+        return false;
+    }
+    if ((states.in_tag(state, "minecraft:flowers") ||
+         states.in_tag(state, "minecraft:replaceable_by_trees")) &&
+        !states.traits(below).blocks_motion &&
+        !states.traits(above).blocks_motion) {
         return false;
     }
     (void)schedule_tick_;
-    return context.placement.region->set_block_state(origin.x, origin.y,
-                                                     origin.z, state);
+    // Double plants place both halves. The lower state carries `half=lower`;
+    // the upper half replaces the air or fluid above it and keeps every other
+    // property of the placed state.
+    std::optional<block_state_id> upper_state;
+    const std::string_view state_name = states.name(state);
+    if (const auto half = state_name.find("half=lower");
+        half != std::string_view::npos) {
+        std::string upper_key{state_name};
+        upper_key.replace(half, std::string_view{"half=lower"}.size(),
+                          "half=upper");
+        const auto resolved = context.placement.resolve_state
+                                  ? context.placement.resolve_state(upper_key)
+                                  : no_block_state;
+        if (resolved == no_block_state) {
+            return false;
+        }
+        const auto above_state = context.placement.region->state_at(
+            origin.x, origin.y + 1, origin.z);
+        const auto above_traits = states.traits(above_state);
+        if (!above_traits.air && !above_traits.fluid) {
+            return false;
+        }
+        upper_state = resolved;
+    }
+    if (!context.placement.region->set_block_state(origin.x, origin.y, origin.z,
+                                                   state)) {
+        return false;
+    }
+    if (upper_state.has_value()) {
+        (void)context.placement.region->set_block_state(origin.x, origin.y + 1,
+                                                        origin.z, *upper_state);
+    }
+    return true;
 }
 
 auto disk_feature::place(feature_context &context, worldgen_random &random,
@@ -1771,6 +1812,10 @@ auto multiface_growth_feature::place(feature_context &context,
         }
     };
     std::vector<std::size_t> valid;
+    // The reference builds its direction list as ceiling, floor and then the
+    // horizontal plane in its iteration order (north, east, south, west). The
+    // shuffle below draws one index per position, so this order decides which
+    // face a growth accepts first.
     if (ceiling_) {
         valid.push_back(1);
     }
@@ -1779,9 +1824,9 @@ auto multiface_growth_feature::place(feature_context &context,
     }
     if (wall_) {
         valid.push_back(2);
+        valid.push_back(5);
         valid.push_back(3);
         valid.push_back(4);
-        valid.push_back(5);
     }
     const auto try_place =
         [&](const block_pos &pos, block_state_id state,
@@ -3857,24 +3902,29 @@ auto vegetation_patch_feature::replaceable(feature_context &context,
     return !replaceable_.empty() && states.name(state) == replaceable_;
 }
 
-void vegetation_patch_feature::place_ground(feature_context &context,
+auto vegetation_patch_feature::place_ground(feature_context &context,
                                             worldgen_random &random,
-                                            block_pos &below,
-                                            jint depth) const {
+                                            block_pos &below, jint depth) const
+    -> bool {
     auto &region = *context.placement.region;
     const auto &states = *context.placement.states;
     const jint direction = ceiling_ ? 1 : -1;
     for (jint i = 0; i < depth; ++i) {
         const auto state = ground_state_->get(context.placement, random, below);
         const auto current = region.state_at(below.x, below.y, below.z);
-        if (states.name(state) != states.name(current)) {
+        if (state_block_name(states.name(state)) !=
+            state_block_name(states.name(current))) {
             if (!replaceable(context, current)) {
-                return;
+                // A deeper layer that stopped being replaceable still counts
+                // as a partial patch; a first layer that cannot be replaced
+                // means this column never became part of the patch.
+                return i != 0;
             }
             (void)region.set_block_state(below.x, below.y, below.z, state);
             below.y += direction;
         }
     }
+    return true;
 }
 
 void vegetation_patch_feature::distribute(
@@ -3944,8 +3994,9 @@ auto vegetation_patch_feature::place(feature_context &context,
                          random.next_float() < extra_bottom_block_chance_
                      ? 1
                      : 0);
-            place_ground(context, random, below, depth);
-            surface.push_back(ground);
+            if (place_ground(context, random, below, depth)) {
+                surface.push_back(ground);
+            }
         }
     }
     if (waterlogged_) {
