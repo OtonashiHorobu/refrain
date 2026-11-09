@@ -46,6 +46,81 @@ def read_capture(path: Path) -> list[Packet]:
     return packets
 
 
+def read_varint(data: bytes, offset: int) -> tuple[int, int]:
+    value = 0
+    shift = 0
+    while True:
+        if offset >= len(data):
+            raise ValueError("truncated VarInt")
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        shift += 7
+        if not byte & 0x80:
+            return value, offset
+
+
+def read_string(data: bytes, offset: int) -> tuple[str, int]:
+    length, offset = read_varint(data, offset)
+    end = offset + length
+    if end > len(data):
+        raise ValueError("truncated string")
+    return data[offset:end].decode("utf-8"), end
+
+
+def read_i64(data: bytes, offset: int) -> tuple[int, int]:
+    if offset + 8 > len(data):
+        raise ValueError("truncated i64")
+    return struct.unpack_from("<q", data, offset)[0], offset + 8
+
+
+def login_fields(body: bytes) -> dict[str, object]:
+    _, offset = read_varint(body, 0)  # packet id
+    fields: dict[str, object] = {}
+    fields["player_id"] = struct.unpack_from("<i", body, offset)[0]
+    offset += 4
+    fields["hardcore"] = bool(body[offset])
+    offset += 1
+    count, offset = read_varint(body, offset)
+    levels = []
+    for _ in range(count):
+        level, offset = read_string(body, offset)
+        levels.append(level)
+    fields["levels"] = levels
+    fields["max_players"], offset = read_varint(body, offset)
+    fields["chunk_radius"], offset = read_varint(body, offset)
+    fields["simulation_distance"], offset = read_varint(body, offset)
+    fields["reduced_debug_info"] = bool(body[offset])
+    offset += 1
+    fields["show_death_screen"] = bool(body[offset])
+    offset += 1
+    fields["limited_crafting"] = bool(body[offset])
+    offset += 1
+    fields["dimension_type"], offset = read_varint(body, offset)
+    fields["dimension"], offset = read_string(body, offset)
+    fields["seed"], offset = read_i64(body, offset)
+    fields["game_type"], offset = read_varint(body, offset)
+    previous, offset = read_varint(body, offset)
+    fields["previous_game_type"] = None if previous == 0 else previous - 1
+    fields["debug"] = bool(body[offset])
+    offset += 1
+    fields["flat"] = bool(body[offset])
+    offset += 1
+    has_death = bool(body[offset])
+    offset += 1
+    if has_death:
+        death, offset = read_i64(body, offset)
+        fields["last_death"] = death
+    else:
+        fields["last_death"] = None
+    fields["portal_cooldown"], offset = read_varint(body, offset)
+    fields["sea_level"], offset = read_varint(body, offset)
+    fields["online_mode"] = bool(body[offset])
+    offset += 1
+    fields["enforces_secure_chat"] = bool(body[offset])
+    return fields
+
+
 def first_payload_mismatch(left: bytes, right: bytes) -> int | None:
     for index, (a, b) in enumerate(zip(left, right, strict=False)):
         if a != b:
@@ -59,6 +134,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("left", type=Path)
     parser.add_argument("right", type=Path)
+    parser.add_argument(
+        "--login",
+        action="store_true",
+        help="compare decoded play login fields instead of raw bytes",
+    )
     parser.add_argument(
         "--payload",
         action="store_true",
@@ -109,6 +189,34 @@ def main() -> int:
         f"oracle: left {len(left_all)} packet(s), right {len(right_all)} packet(s); "
         f"comparing {len(left)} vs {len(right)}"
     )
+    if args.login:
+        left_login = next(
+            (packet for packet in left_all if packet.state == 2 and packet.packet_id == 50),
+            None,
+        )
+        right_login = next(
+            (packet for packet in right_all if packet.state == 2 and packet.packet_id == 50),
+            None,
+        )
+        if left_login is None or right_login is None:
+            print("oracle: login packet is missing")
+            return 1
+        left_fields = login_fields(left_login.body)
+        right_fields = login_fields(right_login.body)
+        failures = 0
+        for key, value in left_fields.items():
+            if key == "player_id":
+                continue
+            if value != right_fields.get(key):
+                print(
+                    f"oracle: login field '{key}' differs: "
+                    f"left={value!r} right={right_fields.get(key)!r}"
+                )
+                failures += 1
+        if failures == 0:
+            print("oracle: decoded login fields match (except player entity id)")
+            return 0
+        return 1
 
     mismatches = 0
     for index, (a, b) in enumerate(zip(left, right, strict=False)):
