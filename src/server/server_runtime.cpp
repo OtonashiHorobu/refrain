@@ -1140,6 +1140,87 @@ void announce_session_leave(refrain::net::server &listener,
     }
 }
 
+void send_session_health(refrain::net::server &listener,
+                         std::uint64_t connection, float health) {
+    refrain::protocol::current::play::clientbound::set_health packet{
+        .health = health, .food = 20, .saturation = 5.0F};
+    auto body{encode_play_body(
+        refrain::protocol::current::play::clientbound::set_health::packet_id,
+        packet,
+        refrain::protocol::current::play::clientbound::encode_set_health)};
+    if (!body.empty()) {
+        listener.send_raw(connection, body);
+    }
+}
+
+void send_session_animation(refrain::net::server &listener,
+                            const refrain::session::play_session &players,
+                            std::uint64_t source, std::uint64_t target,
+                            std::int8_t action) {
+    const auto mover{players.player_of(source)};
+    if (mover == nullptr) {
+        return;
+    }
+    refrain::protocol::current::play::clientbound::animate packet{
+        .id = static_cast<std::int32_t>(mover->entity_id),
+        .action = action,
+    };
+    auto body{encode_play_body(
+        refrain::protocol::current::play::clientbound::animate::packet_id,
+        packet, refrain::protocol::current::play::clientbound::encode_animate)};
+    if (!body.empty()) {
+        listener.send_raw(target, body);
+    }
+}
+
+void send_session_hurt(refrain::net::server &listener,
+                       const refrain::session::player &target) {
+    refrain::protocol::current::play::clientbound::hurt_animation packet{
+        .id = static_cast<std::int32_t>(target.entity_id),
+        .yaw = 0.0F,
+    };
+    auto body{encode_play_body(
+        refrain::protocol::current::play::clientbound::hurt_animation::
+            packet_id,
+        packet,
+        refrain::protocol::current::play::clientbound::encode_hurt_animation)};
+    if (!body.empty()) {
+        listener.send_raw(target.connection, body);
+    }
+}
+
+void handle_session_attack(refrain::net::server &listener,
+                           refrain::session::play_session &players,
+                           const refrain::net::attack_event &event) {
+    const auto target{players.player_by_entity(
+        static_cast<std::uint32_t>(event.target_entity))};
+    if (target == nullptr || target->connection == event.connection) {
+        return;
+    }
+    const auto player_id{target->connection};
+    const auto health{std::max(0.0F, target->health - 1.0F)};
+    static_cast<void>(players.set_health(player_id, health));
+    send_session_health(listener, player_id, health);
+    send_session_hurt(listener, *target);
+    for (const auto &other : players.all()) {
+        if (other.connection != event.connection) {
+            send_session_animation(listener, players, event.connection,
+                                   other.connection, 0);
+        }
+    }
+}
+
+void broadcast_session_animation(refrain::net::server &listener,
+                                 const refrain::session::play_session &players,
+                                 std::uint64_t source, std::int8_t action) {
+    for (const auto &other : players.all()) {
+        if (other.connection != source) {
+            send_session_animation(listener, players, source, other.connection,
+                                   action);
+        }
+    }
+}
+
 void broadcast_session_moves(
     refrain::net::server &listener,
     const refrain::session::play_session &players,
@@ -1435,6 +1516,27 @@ auto run_server(const server_run_options &options) -> int {
                                                       event.y, event.z,
                                                       event.yaw, event.pitch));
         };
+    network_inputs.attack =
+        [&players, &active_listener](const refrain::net::attack_event &event) {
+            if (active_listener != nullptr) {
+                handle_session_attack(*active_listener, players, event);
+            }
+        };
+    network_inputs.animation = [&players,
+                                &active_listener](std::uint64_t connection,
+                                                  std::int8_t action) {
+        if (active_listener != nullptr) {
+            broadcast_session_animation(*active_listener, players, connection,
+                                        action);
+        }
+    };
+    network_inputs.respawn = [&players,
+                              &active_listener](std::uint64_t connection) {
+        static_cast<void>(players.set_health(connection, 20.0F));
+        if (active_listener != nullptr) {
+            send_session_health(*active_listener, connection, 20.0F);
+        }
+    };
     network_inputs.verify_session = options.verify_session;
     network_inputs.seed = level->seed;
     network_inputs.spawn_x = static_cast<double>(level->spawn_x) + 0.5;

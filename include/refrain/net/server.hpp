@@ -110,6 +110,16 @@ using tab_provider = std::function<tab_view(const player_identity &)>;
 /// interprets it.
 using player_event = std::function<void(const player_identity &)>;
 using movement_handler = std::function<void(const movement_event &)>;
+
+struct attack_event {
+    std::uint64_t connection{0};
+    std::int32_t target_entity{0};
+};
+
+using attack_handler = std::function<void(const attack_event &)>;
+using animation_handler =
+    std::function<void(std::uint64_t connection, std::int8_t action)>;
+using respawn_handler = std::function<void(std::uint64_t connection)>;
 /// Optional protocol-owned encoder for the tab_list packet body. The network
 /// layer falls back to its generated encoder when empty.
 using tab_encoder = std::function<result<std::vector<std::byte>>(
@@ -202,6 +212,9 @@ struct server_inputs {
     player_event player_join{};
     player_event player_leave{};
     movement_handler movement{};
+    attack_handler attack{};
+    animation_handler animation{};
+    respawn_handler respawn{};
     /// Optional transport provider. Empty uses the built-in Asio TCP
     /// transport.
     transport_factory make_transport{};

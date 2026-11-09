@@ -216,7 +216,6 @@ struct server::impl {
         bool client_loaded{false};
         std::int32_t client_view_distance{0};
         std::uint32_t held_slot{0};
-        float health{20.0F};
         std::int32_t last_chunk_x{0};
         std::int32_t last_chunk_z{0};
         std::int32_t last_chunk_radius{0};
@@ -238,6 +237,9 @@ struct server::impl {
     player_event player_join_hook{};
     player_event player_leave_hook{};
     movement_handler movement_hook{};
+    attack_handler attack_hook{};
+    animation_handler animation_hook{};
+    respawn_handler respawn_hook{};
     transport_factory make_transport{};
     std::shared_ptr<protocol_codec> protocol{};
     std::mutex command_cache_mutex{};
@@ -298,7 +300,6 @@ struct server::impl {
     void broadcast_system_chat(std::string_view text);
     void send_initial_chunks(std::uint64_t id);
     void queue_chunk_views();
-    void broadcast_animation(std::uint64_t id, std::int8_t action);
     void send_keepalive(std::uint64_t id);
     void keepalive_loop();
     [[nodiscard]] auto build_configuration() -> status;
@@ -1932,27 +1933,6 @@ void server::impl::set_game_mode(std::uint64_t id, game_mode mode) {
     }
 }
 
-void server::impl::broadcast_animation(std::uint64_t id, std::int8_t action) {
-    std::vector<std::uint64_t> targets;
-    {
-        const std::lock_guard lock{connections_mutex};
-        for (const auto &[other, live] : connections) {
-            if (other != id && !live.closed &&
-                live.state == connection_state::play) {
-                targets.push_back(other);
-            }
-        }
-    }
-    play_cb::animate animation{
-        .id = static_cast<std::int32_t>(id),
-        .action = action,
-    };
-    for (const auto target : targets) {
-        send_packet(target, play_cb::animate::packet_id, animation,
-                    play_cb::encode_animate);
-    }
-}
-
 void server::impl::send_initial_chunks(std::uint64_t id) {
     play_cb::chunk_batch_start start{};
     send_packet(id, play_cb::chunk_batch_start::packet_id, start,
@@ -2389,7 +2369,6 @@ void server::impl::handle_play(std::uint64_t id,
             live.last_chunk_x = 0;
             live.last_chunk_z = 0;
             live.last_chunk_radius = 0;
-            live.health = 20.0F;
             mode = live.mode;
         }
         play_cb::respawn respawn{};
@@ -2421,13 +2400,9 @@ void server::impl::handle_play(std::uint64_t id,
         };
         send_packet(id, play_cb::player_position::packet_id, position,
                     play_cb::encode_player_position);
-        play_cb::set_health health_packet{
-            .health = 20.0F,
-            .food = 20,
-            .saturation = 5.0F,
-        };
-        send_packet(id, play_cb::set_health::packet_id, health_packet,
-                    play_cb::encode_set_health);
+        if (respawn_hook) {
+            respawn_hook(id);
+        }
         return;
     }
     case play_sb::container_close::packet_id: {
@@ -2500,7 +2475,9 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        broadcast_animation(id, 0);
+        if (animation_hook) {
+            animation_hook(id, 0);
+        }
         return;
     }
     case play_sb::interact::packet_id: {
@@ -2509,7 +2486,9 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        broadcast_animation(id, 0);
+        if (animation_hook) {
+            animation_hook(id, 0);
+        }
         return;
     }
     case play_sb::attack::packet_id: {
@@ -2518,40 +2497,10 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        broadcast_animation(id, 0);
-        const auto target_id{static_cast<std::uint64_t>(packet.entity_id)};
-        if (target_id == 0 || target_id == id) {
-            return;
+        if (attack_hook) {
+            attack_hook(attack_event{.connection = id,
+                                     .target_entity = packet.entity_id});
         }
-        float health{0.0F};
-        bool damaged{false};
-        {
-            const std::lock_guard lock{connections_mutex};
-            const auto target{connections.find(target_id)};
-            if (target != connections.end() && !target->second.closed &&
-                target->second.state == connection_state::play) {
-                auto &live{target->second};
-                live.health = std::max(0.0F, live.health - 1.0F);
-                health = live.health;
-                damaged = true;
-            }
-        }
-        if (!damaged) {
-            return;
-        }
-        play_cb::set_health health_packet{
-            .health = health,
-            .food = 20,
-            .saturation = 5.0F,
-        };
-        send_packet(target_id, play_cb::set_health::packet_id, health_packet,
-                    play_cb::encode_set_health);
-        play_cb::hurt_animation hurt{
-            .id = static_cast<std::int32_t>(target_id),
-            .yaw = 0.0F,
-        };
-        send_packet(target_id, play_cb::hurt_animation::packet_id, hurt,
-                    play_cb::encode_hurt_animation);
         return;
     }
     case play_sb::ping_request::packet_id: {
@@ -2892,6 +2841,9 @@ auto server::start(server_inputs inputs, core::config::view view)
     state->player_join_hook = std::move(inputs.player_join);
     state->player_leave_hook = std::move(inputs.player_leave);
     state->movement_hook = std::move(inputs.movement);
+    state->attack_hook = std::move(inputs.attack);
+    state->animation_hook = std::move(inputs.animation);
+    state->respawn_hook = std::move(inputs.respawn);
     state->make_transport = std::move(inputs.make_transport);
     state->protocol = std::move(inputs.protocol);
     state->verify_session = std::move(inputs.verify_session);

@@ -41,6 +41,17 @@ auto play_session::player_of(std::uint64_t connection) const
     return found == players_.end() ? nullptr : &found->second;
 }
 
+auto play_session::player_by_entity(std::uint32_t entity_id) const
+    -> const session::player * {
+    for (const auto &[connection, value] : players_) {
+        static_cast<void>(connection);
+        if (value.entity_id == entity_id) {
+            return &value;
+        }
+    }
+    return nullptr;
+}
+
 auto play_session::update_position(std::uint64_t connection, double x, double y,
                                    double z, float yaw, float pitch) -> bool {
     const auto found{players_.find(connection)};

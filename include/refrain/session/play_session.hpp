@@ -59,6 +59,8 @@ class play_session {
 
     [[nodiscard]] auto player_of(std::uint64_t connection) const
         -> const session::player *;
+    [[nodiscard]] auto player_by_entity(std::uint32_t entity_id) const
+        -> const session::player *;
 
     [[nodiscard]] auto update_position(std::uint64_t connection, double x,
                                        double y, double z, float yaw,
