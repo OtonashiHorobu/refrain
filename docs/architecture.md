@@ -15,6 +15,7 @@ definitions and gameplay modules can evolve independently.
 | World | `include/refrain/world`, `src/world` | RWF world storage, chunk codec, Anvil import and export |
 | Simulation | `include/refrain/sim`, `src/sim` | runtime world, block registry, entities, inventory, tick loop, replay |
 | Mods | `include/refrain/mod`, `src/mod` | manifests, gamepack composition, discovery, resolution, loading, provider registry, static mod registry, startup content |
+| Session | `include/refrain/session`, `src/session` | player table, entity visibility/movement, chunk subscriptions |
 | Server runtime | `include/refrain/server`, `src/server` | headless tick loop, console, watchdog, per-namespace TOML configuration |
 | Application | `include/refrain/app`, `src/app`, `src/main` | composition root, service layer shared by the CLIs, CLI entry points |
 | Tools | `tools`, `src/main/tools.cpp` | schema compiler, world conversion, packaging, diagnostics |
@@ -85,6 +86,19 @@ dispatches no lifecycle events.
 The stable C++ facade for the current wire version is
 `include/refrain/protocol/current.hpp`. Session and server code include this
 facade; only protocol providers and client tooling name a concrete version.
+
+### Session layer
+
+`refrain::session` owns gameplay-side player and entity state:
+
+- `play_session`: connection-scoped player records, entity id allocation,
+  movement/health/game-mode updates, visibility.
+- `chunk_tracker`: viewport changes and pending chunk subscription requests.
+
+The network shell reports neutral events (`player_join`, `player_leave`,
+`movement`, `attack`, `animation`, `play_ready`, `view_distance`) and provides a
+raw packet sink. It does not decide which entities exist, who can see them, how
+much health a player has, or when a chunk view changes.
 
 ## World storage
 
