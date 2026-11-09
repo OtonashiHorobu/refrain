@@ -52,7 +52,7 @@ struct wire_argument_signatures {
 
 struct wire_update {
     #[varint] offset: i32;
-    #[fixed_bytes(20)] acknowledged: bytes;
+    #[fixed_bytes(3)] acknowledged: bytes;
     #[fixed] checksum: i8;
 }
 

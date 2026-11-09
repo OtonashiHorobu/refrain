@@ -29,7 +29,7 @@ packet chat = 9 {
     salt: i64;
     #[fixed_bytes(256)] signature: optional<bytes>;
     #[varint] offset: u32;
-    #[fixed_bytes(20)] acknowledged: bytes;
+    #[fixed_bytes(3)] acknowledged: bytes;
     #[fixed] checksum: i8;
 }
 

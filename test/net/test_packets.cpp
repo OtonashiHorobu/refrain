@@ -145,7 +145,7 @@ const suite tests = [] {
         packet.salt = 42;
         packet.signature = std::vector<std::byte>(256, std::byte{0xAB});
         packet.offset = 0;
-        packet.acknowledged = std::vector<std::byte>(20, std::byte{0xFF});
+        packet.acknowledged = std::vector<std::byte>(3, std::byte{0xFF});
         packet.checksum = -1;
 
         std::vector<std::byte> body;
@@ -161,7 +161,7 @@ const suite tests = [] {
         expect(decoded.message == "hello");
         expect(decoded.signature.has_value());
         expect(decoded.signature->size() == 256U);
-        expect(decoded.acknowledged.size() == 20U);
+        expect(decoded.acknowledged.size() == 3U);
         expect(decoded.checksum == -1);
 
         packet.signature = std::nullopt;

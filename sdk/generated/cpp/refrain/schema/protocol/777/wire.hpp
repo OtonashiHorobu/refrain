@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 927eab4ffcbbd2c4
+// Schema hash: 617516b9e3302208
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_WIRE_HPP
@@ -74,7 +74,7 @@ struct wire_argument_signatures {
 struct wire_update {
     // attributes: #[varint]
     std::int32_t offset;
-    // attributes: #[fixed_bytes(20)]
+    // attributes: #[fixed_bytes(3)]
     std::vector<std::byte> acknowledged;
     // attributes: #[fixed]
     std::int8_t checksum;
@@ -587,8 +587,8 @@ struct wire_position_move_rotation {
     out.write_varint(static_cast<std::uint32_t>(value.offset));
   }
   {
-    if (value.acknowledged.size() != 20) {
-      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'acknowledged' must be exactly 20 byte(s)")};
+    if (value.acknowledged.size() != 3) {
+      return std::unexpected{::refrain::make_error(::refrain::error_code::invalid_argument, "field 'acknowledged' must be exactly 3 byte(s)")};
     }
     out.write_bytes(std::span<const std::byte>{value.acknowledged });
   }
@@ -607,7 +607,7 @@ struct wire_position_move_rotation {
     value.offset = static_cast<decltype(value.offset)>(*value_0);
   }
   {
-    auto value_0 = in.read_bytes(20);
+    auto value_0 = in.read_bytes(3);
     if (!value_0) return std::unexpected{std::move(value_0.error())};
     value.acknowledged = std::vector<std::byte>{value_0->begin(), value_0->end()};
   }
