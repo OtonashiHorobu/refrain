@@ -302,11 +302,21 @@ struct server::impl {
     void keepalive_loop();
     [[nodiscard]] auto build_configuration() -> status;
 
+    template <typename Packet, typename Decoder>
+    void parse_only(std::uint64_t id, reader &in, Decoder decode) {
+        Packet packet{};
+        if (auto decoded{decode(in, packet)}; !decoded) {
+            reject(id, "malformed or unexpected packet");
+        }
+    }
+
     template <typename Packet, typename Encoder>
     void send_packet(std::uint64_t id, std::uint16_t packet_id,
                      const Packet &packet, Encoder encode) {
         auto body{encode_packet(packet_id, packet, encode)};
         if (!body) {
+            log::error("net: packet encode failed connection={} packet={}", id,
+                       packet_id);
             close(id);
             return;
         }
@@ -2581,10 +2591,131 @@ void server::impl::handle_play(std::uint64_t id,
         }
         return;
     }
+    case play_sb::block_entity_tag_query::packet_id:
+        parse_only<play_sb::block_entity_tag_query>(
+            id, in, play_sb::decode_block_entity_tag_query);
+        return;
+    case play_sb::change_difficulty::packet_id:
+        parse_only<play_sb::change_difficulty>(
+            id, in, play_sb::decode_change_difficulty);
+        return;
+    case play_sb::change_game_mode::packet_id:
+        parse_only<play_sb::change_game_mode>(id, in,
+                                              play_sb::decode_change_game_mode);
+        return;
+    case play_sb::chat_session_update::packet_id:
+        parse_only<play_sb::chat_session_update>(
+            id, in, play_sb::decode_chat_session_update);
+        return;
+    case play_sb::configuration_acknowledged::packet_id:
+        parse_only<play_sb::configuration_acknowledged>(
+            id, in, play_sb::decode_configuration_acknowledged);
+        return;
+    case play_sb::cookie_response::packet_id:
+        parse_only<play_sb::cookie_response>(id, in,
+                                             play_sb::decode_cookie_response);
+        return;
+    case play_sb::custom_payload::packet_id:
+        parse_only<play_sb::custom_payload>(id, in,
+                                            play_sb::decode_custom_payload);
+        return;
+    case play_sb::debug_subscription_request::packet_id:
+        parse_only<play_sb::debug_subscription_request>(
+            id, in, play_sb::decode_debug_subscription_request);
+        return;
+    case play_sb::edit_book::packet_id:
+        parse_only<play_sb::edit_book>(id, in, play_sb::decode_edit_book);
+        return;
+    case play_sb::entity_tag_query::packet_id:
+        parse_only<play_sb::entity_tag_query>(id, in,
+                                              play_sb::decode_entity_tag_query);
+        return;
+    case play_sb::jigsaw_generate::packet_id:
+        parse_only<play_sb::jigsaw_generate>(id, in,
+                                             play_sb::decode_jigsaw_generate);
+        return;
+    case play_sb::lock_difficulty::packet_id:
+        parse_only<play_sb::lock_difficulty>(id, in,
+                                             play_sb::decode_lock_difficulty);
+        return;
+    case play_sb::move_vehicle::packet_id:
+        parse_only<play_sb::move_vehicle>(id, in, play_sb::decode_move_vehicle);
+        return;
+    case play_sb::paddle_boat::packet_id:
+        parse_only<play_sb::paddle_boat>(id, in, play_sb::decode_paddle_boat);
+        return;
+    case play_sb::pick_item_from_block::packet_id:
+        parse_only<play_sb::pick_item_from_block>(
+            id, in, play_sb::decode_pick_item_from_block);
+        return;
+    case play_sb::pick_item_from_entity::packet_id:
+        parse_only<play_sb::pick_item_from_entity>(
+            id, in, play_sb::decode_pick_item_from_entity);
+        return;
+    case play_sb::place_recipe::packet_id:
+        parse_only<play_sb::place_recipe>(id, in, play_sb::decode_place_recipe);
+        return;
+    case play_sb::rename_item::packet_id:
+        parse_only<play_sb::rename_item>(id, in, play_sb::decode_rename_item);
+        return;
+    case play_sb::resource_pack::packet_id:
+        parse_only<play_sb::resource_pack>(id, in,
+                                           play_sb::decode_resource_pack);
+        return;
+    case play_sb::select_trade::packet_id:
+        parse_only<play_sb::select_trade>(id, in, play_sb::decode_select_trade);
+        return;
+    case play_sb::set_beacon::packet_id:
+        parse_only<play_sb::set_beacon>(id, in, play_sb::decode_set_beacon);
+        return;
+    case play_sb::set_command_block::packet_id:
+        parse_only<play_sb::set_command_block>(
+            id, in, play_sb::decode_set_command_block);
+        return;
+    case play_sb::set_command_minecart::packet_id:
+        parse_only<play_sb::set_command_minecart>(
+            id, in, play_sb::decode_set_command_minecart);
+        return;
+    case play_sb::set_game_rule::packet_id:
+        parse_only<play_sb::set_game_rule>(id, in,
+                                           play_sb::decode_set_game_rule);
+        return;
+    case play_sb::set_jigsaw_block::packet_id:
+        parse_only<play_sb::set_jigsaw_block>(id, in,
+                                              play_sb::decode_set_jigsaw_block);
+        return;
+    case play_sb::set_structure_block::packet_id:
+        parse_only<play_sb::set_structure_block>(
+            id, in, play_sb::decode_set_structure_block);
+        return;
+    case play_sb::set_test_block::packet_id:
+        parse_only<play_sb::set_test_block>(id, in,
+                                            play_sb::decode_set_test_block);
+        return;
+    case play_sb::sign_update::packet_id:
+        parse_only<play_sb::sign_update>(id, in, play_sb::decode_sign_update);
+        return;
+    case play_sb::spectator_action::packet_id:
+        parse_only<play_sb::spectator_action>(id, in,
+                                              play_sb::decode_spectator_action);
+        return;
+    case play_sb::teleport_to_entity::packet_id:
+        parse_only<play_sb::teleport_to_entity>(
+            id, in, play_sb::decode_teleport_to_entity);
+        return;
+    case play_sb::test_instance_block_action::packet_id:
+        parse_only<play_sb::test_instance_block_action>(
+            id, in, play_sb::decode_test_instance_block_action);
+        return;
+    case play_sb::use_item::packet_id:
+        parse_only<play_sb::use_item>(id, in, play_sb::decode_use_item);
+        return;
+    case play_sb::custom_click_action::packet_id:
+        parse_only<play_sb::custom_click_action>(
+            id, in, play_sb::decode_custom_click_action);
+        return;
     default:
-        // Packets without server-side state (animation, input, containers)
-        // are ignored until their handlers land.
-        log::debug("net: ignored play packet id={} packet={}", id, *packet_id);
+        reject(id, "unknown play packet");
         return;
     }
 }
