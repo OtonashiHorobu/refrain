@@ -464,6 +464,7 @@ void collect_slice_types(const model &program, const resolved_type &type,
     case declaration_kind::flags:
     case declaration_kind::handle:
     case declaration_kind::service:
+    case declaration_kind::callback:
     // Events are in-process values with their own `event_traits` metadata;
     // they are not reflectable contract records.
     case declaration_kind::event:
@@ -840,6 +841,56 @@ void topo_visit(const model &program, std::uint32_t module_index,
     return writer.take();
 }
 
+[[nodiscard]] auto callback_parameters_c(const model &program,
+                                         const decl_model &decl)
+    -> std::string {
+    std::string parameters;
+    for (const auto &parameter : decl.callback_parameters) {
+        if (!parameters.empty()) {
+            parameters += ", ";
+        }
+        parameters += c_type(program, parameter.type) + " " + parameter.name;
+    }
+    return parameters;
+}
+
+[[nodiscard]] auto callback_parameters_cpp(const model &program,
+                                           const decl_model &decl)
+    -> std::string {
+    std::string parameters;
+    for (const auto &parameter : decl.callback_parameters) {
+        if (!parameters.empty()) {
+            parameters += ", ";
+        }
+        parameters += cpp_type(program, parameter.type) + " " + parameter.name;
+    }
+    return parameters;
+}
+
+[[nodiscard]] auto emit_callback_abi(const model &program,
+                                     std::uint32_t module_index,
+                                     const decl_model &decl) -> std::string {
+    code_writer writer;
+    writer.raw(emit::doc_block(decl.documentation, "// "));
+    writer.line("typedef {} (*{})({});",
+                c_type(program, decl.callback_return_type),
+                c_decl_name(program, module_index, decl),
+                callback_parameters_c(program, decl));
+    writer.blank();
+    return writer.take();
+}
+
+[[nodiscard]] auto emit_callback_cpp(const model &program,
+                                     const decl_model &decl) -> std::string {
+    code_writer writer;
+    writer.raw(emit::doc_block(decl.documentation, "/// "));
+    writer.line("using {} = {} (*)({});", decl.name,
+                cpp_type(program, decl.callback_return_type),
+                callback_parameters_cpp(program, decl));
+    writer.blank();
+    return writer.take();
+}
+
 [[nodiscard]] auto emit_abi_header(const ridl_context &context,
                                    std::uint32_t module_index) -> std::string {
     const auto &program{context.program};
@@ -888,6 +939,11 @@ void topo_visit(const model &program, std::uint32_t module_index,
         writer.line("#define {}_INVALID (({})(REFRAIN_HANDLE_INVALID))",
                     emit::upper(c_name), c_name);
         writer.blank();
+    }
+    for (const auto &decl : module.declarations) {
+        if (decl.kind == declaration_kind::callback) {
+            writer.raw(emit_callback_abi(program, module_index, decl));
+        }
     }
     for (const auto &decl : module.declarations) {
         if (decl.kind != declaration_kind::event) {
@@ -1147,6 +1203,12 @@ void topo_visit(const model &program, std::uint32_t module_index,
                 decl.name, decl.name);
         }
         writer.blank();
+    }
+
+    for (const auto &decl : module.declarations) {
+        if (decl.kind == declaration_kind::callback) {
+            writer.raw(emit_callback_cpp(program, decl));
+        }
     }
 
     // Events: after the handle aliases, before the contract structs.

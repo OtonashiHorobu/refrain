@@ -108,6 +108,10 @@ enum class declaration_kind : std::uint8_t {
     record,
     handle,
     service,
+    /// C function pointer type usable as a service method parameter (RIDL
+    /// only). Callbacks are not value types: they cannot appear in structs or
+    /// as return types.
+    callback,
     /// In-process, transient notification (RIDL only). Events are not
     /// C ABI structs: they carry no `struct_size` and never cross the wire.
     event,
@@ -134,6 +138,11 @@ struct declaration {
     // service
     service_decl service;
     std::vector<method_decl> methods;
+
+    // callback
+    std::vector<field_decl> callback_parameters;
+    type_ref callback_return;
+    bool callback_has_return{false};
 };
 
 /// One parsed `.rsc`/`.ridl` file.

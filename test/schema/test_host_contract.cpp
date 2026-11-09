@@ -128,6 +128,70 @@ service core : 1.0.0 {
                std::string::npos);
     };
 
+    "schema/callback declarations generate C and C++ function pointers"_test =
+        [] {
+            const auto generated{compile_ridl(R"(module refrain::demo;
+version 1.0.0;
+
+callback job_callback = fn(opaque_ptr userdata, u64 value) -> void;
+
+service core : 1.0.0 {
+    side = both;
+    thread = any;
+    composition = sealed;
+    provides = [ "refrain:demo/core" ];
+    fn submit(job_callback callback, opaque_ptr userdata) -> u32;
+}
+)")};
+            expect(generated.has_value());
+            if (!generated) {
+                return;
+            }
+            const auto *abi{
+                file_named(*generated, "c/refrain/contracts/demo_abi.h")};
+            const auto *cpp{
+                file_named(*generated, "cpp/refrain/contracts/demo.hpp")};
+            expect(abi != nullptr);
+            expect(cpp != nullptr);
+            if (abi == nullptr || cpp == nullptr) {
+                return;
+            }
+            expect(abi->find("typedef void (*refrain_demo_job_callback)("
+                             "void * userdata, uint64_t value);") !=
+                   std::string::npos);
+            expect(cpp->find("using job_callback = void (*)(void * userdata, "
+                             "std::uint64_t value);") != std::string::npos);
+            expect(abi->find("refrain_demo_job_callback callback") !=
+                   std::string::npos);
+        };
+
+    "schema/callback restrictions are enforced"_test = [] {
+        const auto non_void{compile_ridl(R"(module refrain::demo;
+version 1.0.0;
+callback bad = fn(opaque_ptr userdata) -> u32;
+)")};
+        expect(!non_void.has_value());
+        expect(non_void.error().message.find("return values") !=
+               std::string::npos);
+
+        const auto bad_parameter{compile_ridl(R"(module refrain::demo;
+version 1.0.0;
+callback bad = fn(string text) -> void;
+)")};
+        expect(!bad_parameter.has_value());
+        expect(bad_parameter.error().message.find("numeric primitive") !=
+               std::string::npos);
+
+        const auto struct_field{compile_ridl(R"(module refrain::demo;
+version 1.0.0;
+callback cb = fn(opaque_ptr userdata) -> void;
+struct bad { cb callback; }
+)")};
+        expect(!struct_field.has_value());
+        expect(struct_field.error().message.find("not allowed") !=
+               std::string::npos);
+    };
+
     "schema/reserved ABI member and parameter names are rejected"_test = [] {
         const auto field{compile_ridl(R"(module refrain::demo;
 version 1.0.0;

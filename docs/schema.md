@@ -33,6 +33,7 @@ import refrain::core;
 | `packet` | protocol message with an explicit identifier |
 | `handle` | opaque typed handle |
 | `event` | transient in-process notification |
+| `callback` | C function pointer type for method parameters |
 | `service` | contract with methods and composition metadata |
 
 Fields use scalar types (`i8`–`i64`, `u8`–`u64`, `bool`, `f32`, `f64`), or
@@ -62,6 +63,12 @@ service world : 1.0.0 {
     fn block_at(in block_pos pos) -> u32;
 }
 ```
+
+A `callback` declaration defines a C function pointer type
+(`callback job_callback = fn(opaque_ptr userdata) -> void;`). Callbacks are
+method parameters only; their parameters are limited to numeric primitives and
+`opaque_ptr`, and they return `void`, so the C and C++ function pointer
+spellings stay ABI-identical.
 
 Methods may carry attributes such as `#[thread(sim)]`, `#[can_fail]`,
 `#[borrow]`, `#[owned]`, `#[caller_provided]` and `#[hot_path]`. A method

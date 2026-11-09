@@ -30,6 +30,7 @@ namespace refrain::app {
 namespace {
 
 namespace host_platform = refrain::host::platform;
+namespace host_kernel = refrain::host::kernel;
 namespace file_api = refrain::platform::file;
 
 constexpr std::uint64_t max_alignment{4096};
@@ -389,6 +390,126 @@ auto host_context::temp_directory() noexcept -> std::string_view {
     static thread_local std::string path;
     path = refrain::core::io::temp_directory();
     return path;
+}
+
+auto host_context::job_submit(std::uint32_t priority,
+                              host_kernel::job_callback callback,
+                              void *userdata)
+    -> refrain::result<host_kernel::job> {
+    if (callback == nullptr || priority > 3) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::invalid_argument,
+            "job_submit requires a callback and priority in 0..3")};
+    }
+    std::scoped_lock lock{kernel_mutex_};
+    if (!jobs_) {
+        try {
+            jobs_ = std::make_unique<refrain::core::jobs::executor>(1);
+        } catch (...) {
+            return std::unexpected{
+                refrain::make_error(refrain::error_code::out_of_memory,
+                                    "cannot start the host job worker")};
+        }
+    }
+    auto state{std::make_shared<job_state>()};
+    const auto handle{next_job_++};
+    job_states_.emplace(handle, state);
+    try {
+        static_cast<void>(jobs_->submit(
+            static_cast<refrain::core::jobs::priority>(priority),
+            [state, callback, userdata] {
+                try {
+                    if (!state->cancelled.load(std::memory_order_acquire)) {
+                        callback(userdata);
+                    }
+                } catch (...) {
+                    // A native callback must not take down the worker.
+                }
+                state->promise.set_value();
+            }));
+    } catch (...) {
+        job_states_.erase(handle);
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::out_of_memory, "cannot submit host job")};
+    }
+    return host_kernel::job{handle};
+}
+
+auto host_context::job_cancel(host_kernel::job handle) -> refrain::status {
+    std::scoped_lock lock{kernel_mutex_};
+    const auto found{job_states_.find(handle.raw())};
+    if (found == job_states_.end()) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::not_found, "job handle is not active")};
+    }
+    found->second->cancelled.store(true, std::memory_order_release);
+    return refrain::status_ok();
+}
+
+auto host_context::job_wait(host_kernel::job handle) -> refrain::status {
+    std::shared_ptr<job_state> state{};
+    {
+        std::scoped_lock lock{kernel_mutex_};
+        const auto found{job_states_.find(handle.raw())};
+        if (found == job_states_.end()) {
+            return std::unexpected{refrain::make_error(
+                refrain::error_code::not_found, "job handle is not active")};
+        }
+        state = found->second;
+    }
+    state->future.wait();
+    std::scoped_lock lock{kernel_mutex_};
+    job_states_.erase(handle.raw());
+    return refrain::status_ok();
+}
+
+auto host_context::event_subscribe(std::uint64_t event_type,
+                                   host_kernel::event_callback callback,
+                                   void *userdata)
+    -> refrain::result<host_kernel::subscription> {
+    if (callback == nullptr) {
+        return std::unexpected{
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "event_subscribe requires a callback")};
+    }
+    std::scoped_lock lock{kernel_mutex_};
+    const auto handle{next_subscription_++};
+    events_.emplace(handle, event_state{.type = event_type,
+                                        .callback = callback,
+                                        .userdata = userdata});
+    return host_kernel::subscription{handle};
+}
+
+auto host_context::event_unsubscribe(host_kernel::subscription handle)
+    -> refrain::status {
+    std::scoped_lock lock{kernel_mutex_};
+    if (events_.erase(handle.raw()) == 0) {
+        return std::unexpected{
+            refrain::make_error(refrain::error_code::not_found,
+                                "subscription handle is not active")};
+    }
+    return refrain::status_ok();
+}
+
+void host_context::event_publish(std::uint64_t event_type, void *payload,
+                                 std::uint64_t size) {
+    std::vector<event_state> callbacks{};
+    {
+        std::scoped_lock lock{kernel_mutex_};
+        for (const auto &[handle, state] : events_) {
+            static_cast<void>(handle);
+            if (state.type == event_type) {
+                callbacks.push_back(state);
+            }
+        }
+    }
+    for (const auto &state : callbacks) {
+        try {
+            state.callback(state.userdata, payload, size);
+        } catch (...) {
+            // A native callback must not take down the publisher.
+        }
+    }
 }
 
 } // namespace refrain::app

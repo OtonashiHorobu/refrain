@@ -146,6 +146,11 @@ struct decl_model {
     std::uint32_t abi_size{0};
     std::uint32_t abi_alignment{0};
 
+    // Callback metadata (`declaration_kind::callback` only).
+    std::vector<field_model> callback_parameters;
+    resolved_type callback_return_type;
+    bool callback_has_return{false};
+
     // Event metadata (`declaration_kind::event` only).
     bool event_batch{false};
     bool event_cancellable{false};

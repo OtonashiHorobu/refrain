@@ -5,17 +5,23 @@
 #pragma once
 
 #include <refrain/contracts/host/core.hpp>
+#include <refrain/contracts/host/kernel.hpp>
 #include <refrain/contracts/host/platform.hpp>
 #include <refrain/core/config.hpp>
+#include <refrain/core/jobs.hpp>
 #include <refrain/host/context.hpp>
+#include <refrain/host/kernel_context.hpp>
 #include <refrain/host/platform_context.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/platform/mmap.hpp>
 #include <refrain/platform/random_access_file.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <span>
 #include <string_view>
@@ -28,7 +34,8 @@ namespace refrain::app {
 // the host config store lands (ADR-066 Phase 2); the methods are present so
 // the ABI shape does not change when that happens.
 class host_context final : public refrain::host::context,
-                           public refrain::host::platform_context {
+                           public refrain::host::platform_context,
+                           public refrain::host::kernel_context {
   public:
     /// `tick` may be empty; `tick_now()` then reports -1 (no tick loop).
     /// `config` may be null; config getters then return `unsupported`.
@@ -98,6 +105,27 @@ class host_context final : public refrain::host::context,
                           std::string_view value) noexcept override;
     [[nodiscard]] auto temp_directory() noexcept -> std::string_view override;
 
+    // `refrain::host.kernel` implementation.
+    [[nodiscard]] auto job_submit(std::uint32_t priority,
+                                  refrain::host::kernel::job_callback callback,
+                                  void *userdata)
+        -> refrain::result<refrain::host::kernel::job> override;
+    [[nodiscard]] auto job_cancel(refrain::host::kernel::job handle)
+        -> refrain::status override;
+    [[nodiscard]] auto job_wait(refrain::host::kernel::job handle)
+        -> refrain::status override;
+
+    [[nodiscard]] auto
+    event_subscribe(std::uint64_t event_type,
+                    refrain::host::kernel::event_callback callback,
+                    void *userdata)
+        -> refrain::result<refrain::host::kernel::subscription> override;
+    [[nodiscard]] auto
+    event_unsubscribe(refrain::host::kernel::subscription handle)
+        -> refrain::status override;
+    void event_publish(std::uint64_t event_type, void *payload,
+                       std::uint64_t size) override;
+
   private:
     struct file_entry {
         refrain::platform::file::random_access_file file;
@@ -111,6 +139,24 @@ class host_context final : public refrain::host::context,
     std::map<std::uint64_t, file_entry> files_{};
     std::map<std::uint64_t, refrain::platform::mapped_file> maps_{};
     std::uint64_t next_handle_{1};
+
+    struct job_state {
+        std::promise<void> promise;
+        std::shared_future<void> future;
+        std::atomic<bool> cancelled{false};
+        job_state() : future{promise.get_future().share()} {}
+    };
+    struct event_state {
+        std::uint64_t type{0};
+        refrain::host::kernel::event_callback callback{nullptr};
+        void *userdata{nullptr};
+    };
+    std::unique_ptr<refrain::core::jobs::executor> jobs_{};
+    std::mutex kernel_mutex_{};
+    std::map<std::uint64_t, std::shared_ptr<job_state>> job_states_{};
+    std::uint64_t next_job_{1};
+    std::map<std::uint64_t, event_state> events_{};
+    std::uint64_t next_subscription_{1};
 };
 
 } // namespace refrain::app

@@ -158,7 +158,9 @@ The server exposes a stable runtime API to mods through sealed services.
 runs; it covers logging, time, host memory, read-only config namespaces and service
 lookup/registration. `refrain:host.platform` adds random-access files,
 read-only mmap and crash annotations; file handles are host-owned and
-single-threaded. `refrain-server --config-dir <dir>` mounts each TOML file as a
+single-threaded. `refrain:host.kernel` adds background jobs and a process-local
+event bus; job callbacks run on host workers and event callbacks run on the
+publishing thread. `refrain-server --config-dir <dir>` mounts each TOML file as a
 read-only namespace (`refrain.toml` is `host`, `mods/<id>.toml` is
 `mod/<id>`); without the option config reads return `unsupported`. A sealed service is not a gamepack provider: a mod cannot
 declare it in `[provides]` or replace it through `register_provider`. The C ABI

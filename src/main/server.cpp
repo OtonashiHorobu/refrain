@@ -27,6 +27,7 @@
 #include <refrain/data/signature.hpp>
 #include <refrain/data/vfs.hpp>
 #include <refrain/host/core_api.hpp>
+#include <refrain/host/kernel_api.hpp>
 #include <refrain/host/platform_api.hpp>
 #include <refrain/kernel/crash.hpp>
 #include <refrain/mod/discovery.hpp>
@@ -708,8 +709,18 @@ int main(int argc, char **argv) {
         !registered) {
         return report_fatal(registered.error());
     }
-    refrain::log::info(
-        "host-runtime: sealed=refrain:host.core,refrain:host.platform");
+    const refrain::mod::provider_api host_kernel_api{
+        .vtable = &refrain::host::kernel_vtable(),
+        .self = static_cast<refrain::host::kernel_context *>(&host_context),
+        .abi_major = REFRAIN_HOST_KERNEL_ABI_MAJOR,
+    };
+    if (auto registered = mods.register_sealed_provider(
+            "refrain:host.kernel", host_kernel_api, "1.0.0");
+        !registered) {
+        return report_fatal(registered.error());
+    }
+    refrain::log::info("host-runtime: sealed=refrain:host.core,"
+                       "refrain:host.platform,refrain:host.kernel");
     auto mods_loaded{
         refrain::app::activate_server_mods(mods, *plan, image_bytes)};
     if (!mods_loaded) {
