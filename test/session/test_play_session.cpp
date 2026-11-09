@@ -42,6 +42,28 @@ suite play_session_tests = [] {
         expect(players.player_of(2)->health == 7.0F);
     };
 
+    "session/inventories are owned per player"_test = [] {
+        session::play_session players{};
+        expect(players.add_player(1, {}, "Alice", "overworld", 0.0, 0.0, 0.0, 1)
+                   .has_value());
+        expect(players.add_player(2, {}, "Bob", "overworld", 0.0, 0.0, 0.0, 1)
+                   .has_value());
+        auto *alice{players.inventory_of(1)};
+        auto *bob{players.inventory_of(2)};
+        expect(alice != nullptr);
+        expect(bob != nullptr);
+        if (alice == nullptr || bob == nullptr) {
+            return;
+        }
+        alice->push_back({.item = "minecraft:stone", .count = 4});
+        alice->push_back({.item = "minecraft:dirt", .count = 2});
+        expect(std::all_of(bob->begin(), bob->end(),
+                           [](const auto &stack) { return stack.count == 0; }));
+        expect(players.player_of(1)->inventory.size() == 38U);
+        expect(players.player_of(2)->inventory.size() == 36U);
+        expect(players.inventory_of(99) == nullptr);
+    };
+
     "session/player removal releases the record"_test = [] {
         session::play_session players{};
         expect(players.add_player(3, {}, "Carol", "overworld", 0.0, 0.0, 0.0, 1)

@@ -422,7 +422,8 @@ add_library(Refrain::Net ALIAS refrain-net)
 file(GLOB_RECURSE REFRAIN_SESSION_SOURCES CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/session/*.cpp")
 refrain_add_library(refrain-session ${REFRAIN_SESSION_SOURCES})
-target_link_libraries(refrain-session PUBLIC refrain-kernel refrain-net)
+target_link_libraries(refrain-session PUBLIC refrain-kernel refrain-net
+                                       refrain-sim)
 add_library(Refrain::Session ALIAS refrain-session)
 
 # --- mod host: loads built-in mods against the embedded archive ------------

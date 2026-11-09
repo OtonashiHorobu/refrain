@@ -19,15 +19,17 @@ auto play_session::add_player(std::uint64_t connection, net::uuid id,
                                           "session player is invalid")};
     }
     const auto entity_id{next_entity_id_++};
-    players_.emplace(connection, player{.connection = connection,
-                                        .id = id,
-                                        .name = std::move(name),
-                                        .world = std::move(world),
-                                        .entity_id = entity_id,
-                                        .x = x,
-                                        .y = y,
-                                        .z = z,
-                                        .game_mode = game_mode});
+    players_.emplace(connection,
+                     player{.connection = connection,
+                            .id = id,
+                            .name = std::move(name),
+                            .world = std::move(world),
+                            .entity_id = entity_id,
+                            .x = x,
+                            .y = y,
+                            .z = z,
+                            .game_mode = game_mode,
+                            .inventory = std::vector<sim::item_stack>(36)});
     return entity_id;
 }
 
@@ -50,6 +52,12 @@ auto play_session::player_by_entity(std::uint32_t entity_id) const
         }
     }
     return nullptr;
+}
+
+auto play_session::inventory_of(std::uint64_t connection)
+    -> std::vector<sim::item_stack> * {
+    const auto found{players_.find(connection)};
+    return found == players_.end() ? nullptr : &found->second.inventory;
 }
 
 auto play_session::update_position(std::uint64_t connection, double x, double y,

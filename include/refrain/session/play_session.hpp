@@ -6,6 +6,7 @@
 
 #include <refrain/core/error.hpp>
 #include <refrain/net/base.hpp>
+#include <refrain/sim/world.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -32,6 +33,7 @@ struct player {
     std::uint32_t game_mode{0};
     float health{20.0F};
     std::int32_t view_distance{10};
+    std::vector<sim::item_stack> inventory{};
 };
 
 struct visibility_entry {
@@ -62,6 +64,11 @@ class play_session {
         -> const session::player *;
     [[nodiscard]] auto player_by_entity(std::uint32_t entity_id) const
         -> const session::player *;
+
+    /// Mutable inventory owned by one player. The simulation thread is the
+    /// only writer; the pointer is invalidated by remove_player().
+    [[nodiscard]] auto inventory_of(std::uint64_t connection)
+        -> std::vector<sim::item_stack> *;
 
     [[nodiscard]] auto update_position(std::uint64_t connection, double x,
                                        double y, double z, float yaw,

@@ -1789,19 +1789,20 @@ auto run_server(const server_run_options &options) -> int {
     std::set<std::uint64_t> inventory_initialized{};
     std::set<std::uint64_t> inventory_forced{};
     std::unordered_map<std::uint64_t, refrain::sim::item_stack> carried_items{};
-    std::uint64_t last_inventory_hash{0};
-    bool have_inventory_hash{false};
+    std::unordered_map<std::uint64_t, std::uint64_t> inventory_hashes{};
     std::int32_t inventory_state{0};
     const auto process_container_clicks = [&]() {
         if (!listener) {
             return;
         }
         for (const auto &slot : listener->take_creative_slots()) {
+            auto *inventory = players.inventory_of(slot.connection);
             const auto index{static_cast<std::size_t>(slot.slot)};
-            if (slot.slot < 0 || index >= store->player().inventory.size()) {
+            if (inventory == nullptr || slot.slot < 0 ||
+                index >= inventory->size()) {
                 continue;
             }
-            auto &target{store->player().inventory[index]};
+            auto &target{(*inventory)[index]};
             if (slot.item_id == 0 || slot.count == 0) {
                 target = sim::item_stack{};
             } else {
@@ -1827,9 +1828,13 @@ auto run_server(const server_run_options &options) -> int {
             if (click.container_id != 0 || click.mode != 0) {
                 continue;
             }
+            auto *inventory = players.inventory_of(click.connection);
+            if (inventory == nullptr) {
+                continue;
+            }
             auto &carried{carried_items[click.connection]};
             const auto changed{refrain::server::apply_player_click(
-                store->player().inventory, carried, click.slot, click.button)};
+                *inventory, carried, click.slot, click.button)};
             refrain::log::debug(
                 "inventory: click conn={} slot={} button={} mode={} -> "
                 "carried='{}' x{} changed={}",
@@ -1854,50 +1859,54 @@ auto run_server(const server_run_options &options) -> int {
                 ++iterator;
             }
         }
-        std::vector<refrain::net::item_stack> slots(46);
-        std::uint64_t hash{0};
-        const auto &inventory{store->player().inventory};
-        for (std::size_t index{0}; index < inventory.size(); ++index) {
-            const auto &stack{inventory[index]};
-            const auto item{item_ids.find(stack.item)};
-            hash ^= std::hash<std::string>{}(stack.item) +
-                    (static_cast<std::uint64_t>(stack.count) << 1U);
-            if (item == item_ids.end()) {
-                continue;
-            }
-            std::size_t slot{0};
-            if (index < 9) {
-                slot = 36U + index;
-            } else if (index < 36U) {
-                slot = index;
+        for (auto iterator = inventory_hashes.begin();
+             iterator != inventory_hashes.end();) {
+            if (!active.contains(iterator->first)) {
+                iterator = inventory_hashes.erase(iterator);
             } else {
+                ++iterator;
+            }
+        }
+        for (const auto id : active_ids) {
+            const auto *record{players.player_of(id)};
+            if (record == nullptr) {
                 continue;
             }
-            slots[slot] = refrain::net::item_stack{
-                .count = stack.count,
-                .item_id = item->second,
-            };
-        }
-        const auto changed{!have_inventory_hash || hash != last_inventory_hash};
-        bool any_new{false};
-        for (const auto id : active_ids) {
-            if (!inventory_initialized.contains(id)) {
-                any_new = true;
-                break;
+            std::vector<refrain::net::item_stack> slots(46);
+            std::uint64_t hash{0};
+            for (std::size_t index{0}; index < record->inventory.size();
+                 ++index) {
+                const auto &stack{record->inventory[index]};
+                const auto item{item_ids.find(stack.item)};
+                hash ^= std::hash<std::string>{}(stack.item) +
+                        (static_cast<std::uint64_t>(stack.count) << 1U);
+                if (item == item_ids.end()) {
+                    continue;
+                }
+                std::size_t slot{0};
+                if (index < 9) {
+                    slot = 36U + index;
+                } else if (index < 36U) {
+                    slot = index;
+                } else {
+                    continue;
+                }
+                slots[slot] = refrain::net::item_stack{
+                    .count = stack.count,
+                    .item_id = item->second,
+                };
             }
-        }
-        if (!changed && !any_new && inventory_forced.empty()) {
-            return;
-        }
-        if (changed) {
-            last_inventory_hash = hash;
-            have_inventory_hash = true;
-            ++inventory_state;
-        }
-        for (const auto id : active_ids) {
+            const auto previous{inventory_hashes.find(id)};
+            const auto changed{previous == inventory_hashes.end() ||
+                               previous->second != hash};
+            const auto any_new{!inventory_initialized.contains(id)};
             const auto forced{inventory_forced.contains(id)};
-            if (!changed && !forced && inventory_initialized.contains(id)) {
+            if (!changed && !any_new && !forced) {
                 continue;
+            }
+            if (changed) {
+                inventory_hashes[id] = hash;
+                ++inventory_state;
             }
             auto carried{refrain::net::item_stack{}};
             if (const auto stack{carried_items.find(id)};
