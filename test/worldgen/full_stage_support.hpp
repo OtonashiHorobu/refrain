@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <set>
 #include <span>
@@ -111,6 +112,7 @@ inline auto canonical(std::string name) -> std::string {
                              base == "minecraft:mycelium" ||
                              base == "minecraft:podzol";
     const bool fence_gate = base.ends_with("_fence_gate");
+    const bool pointed_dripstone = base == "minecraft:pointed_dripstone";
     std::vector<std::string> parts;
     std::string_view body{name.data() + open + 1, close - open - 1};
     while (true) {
@@ -130,7 +132,9 @@ inline auto canonical(std::string name) -> std::string {
             (rail && part == "shape=north_south") ||
             (snowy_block && part == "snowy=false") ||
             (fence_gate && (part == "facing=north" || part == "in_wall=false" ||
-                            part == "open=false" || part == "powered=false"));
+                            part == "open=false" || part == "powered=false")) ||
+            (pointed_dripstone &&
+             (part == "thickness=tip" || part == "vertical_direction=up"));
         if (!default_property) {
             parts.emplace_back(part);
         }
@@ -172,6 +176,17 @@ inline auto canonical(std::string name) -> std::string {
         return base;
     }
     return rebuilt;
+}
+
+/// How many block mismatches a comparison prints. The default keeps failures
+/// readable; a larger value lists every differing position of a small diff.
+inline auto mismatch_print_limit() -> std::size_t {
+    const char *value = std::getenv("REFRAIN_FULL_STAGE_MISMATCHES");
+    if (value == nullptr) {
+        return 10;
+    }
+    const auto parsed = std::strtoul(value, nullptr, 10);
+    return parsed == 0 ? 10 : parsed;
 }
 
 inline auto decode(const data::nbt::value &document,
@@ -371,7 +386,7 @@ compare_chunks(const proto_chunk &actual, const decoded &reference,
                 if (got == expected) {
                     continue;
                 }
-                if (result.block_mismatches < 10) {
+                if (result.block_mismatches < mismatch_print_limit()) {
                     std::fprintf(
                         stderr,
                         "full-stage mismatch (%d,%d,%d): got %s want %s\n",
@@ -404,7 +419,8 @@ compare_chunks(const proto_chunk &actual, const decoded &reference,
             if (got == *expected) {
                 continue;
             }
-            if (result.heightmap_mismatches < 8) {
+            if (result.heightmap_mismatches <
+                static_cast<jint>(mismatch_print_limit())) {
                 std::fprintf(stderr, "heightmap %s (%d,%d): got %d want %d\n",
                              kind_name, static_cast<int>(x),
                              static_cast<int>(z), static_cast<int>(got),

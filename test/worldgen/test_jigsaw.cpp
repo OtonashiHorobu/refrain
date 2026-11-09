@@ -430,6 +430,260 @@ auto connector(structure::jigsaw_front front, structure::jigsaw_front top,
 
 } // namespace
 
+namespace {
+
+/// Runs an env-gated jigsaw start comparison. The environment supplies the
+/// reference region, candidate chunk and seed; the structure id, biome and
+/// template directories have case defaults and may be overridden.
+void check_jigsaw_start_reference(std::string_view prefix,
+                                  std::string_view default_structure,
+                                  std::string_view default_biome,
+                                  std::string_view default_template_dirs) {
+    const std::string base{"REFRAIN_" + std::string{prefix}};
+    const auto env = [&base](std::string_view suffix) -> std::string {
+        const std::string key = base + "_" + std::string{suffix};
+        const char *value = std::getenv(key.c_str());
+        return value == nullptr ? std::string{} : std::string{value};
+    };
+    const std::string region = env("REGION");
+    const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+    const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
+    const std::string chunk_x_raw = env("CHUNK_X");
+    const std::string chunk_z_raw = env("CHUNK_Z");
+    const std::string seed_raw = env("SEED");
+    if (region.empty() || data_root == nullptr || templates_root == nullptr ||
+        chunk_x_raw.empty() || chunk_z_raw.empty() || seed_raw.empty()) {
+        std::fprintf(stderr,
+                     "skipping %.*s: set %s_REGION, %s_CHUNK_X, "
+                     "%s_CHUNK_Z and %s_SEED to the reference candidate\n",
+                     static_cast<int>(prefix.size()), prefix.data(),
+                     base.c_str(), base.c_str(), base.c_str(), base.c_str());
+        return;
+    }
+    const jint chunk_x = std::atoi(chunk_x_raw.c_str());
+    const jint chunk_z = std::atoi(chunk_z_raw.c_str());
+    const jlong seed = std::strtoll(seed_raw.c_str(), nullptr, 10);
+    std::string structure_id{default_structure};
+    if (const auto value = env("STRUCTURE"); !value.empty()) {
+        structure_id = value;
+    }
+    std::string biome{default_biome};
+    if (const auto value = env("BIOME"); !value.empty()) {
+        biome = value;
+    }
+    std::string template_dirs{default_template_dirs};
+    if (const auto value = env("TEMPLATE_DIRS"); !value.empty()) {
+        template_dirs = value;
+    }
+    const auto document = read_chunk(region.c_str(), chunk_x, chunk_z);
+    expect(document.has_value());
+    if (!document) {
+        return;
+    }
+    const auto *structures = child(document->as_compound(), "structures");
+    const auto *starts = structures == nullptr
+                             ? nullptr
+                             : child(structures->as_compound(), "starts");
+    const auto *start =
+        starts == nullptr ? nullptr
+                          : child(starts->as_compound(), structure_id.c_str());
+    const auto *children =
+        start == nullptr ? nullptr : child(start->as_compound(), "Children");
+    const auto pieces = children == nullptr ? nullptr : children->as_list();
+    expect(pieces != nullptr);
+    if (pieces == nullptr) {
+        return;
+    }
+    auto data = structure::load_structure_data(data_root);
+    expect(data.has_value());
+    if (!data) {
+        return;
+    }
+    const auto found = data->structures.find(structure_id);
+    expect(found != data->structures.end());
+    if (found == data->structures.end()) {
+        return;
+    }
+    const auto settings = density::load_noise_settings(
+        data_root, "minecraft/overworld", algorithm::xoroshiro, seed);
+    expect(settings.has_value());
+    if (!settings) {
+        return;
+    }
+    block_state_registry states;
+    (void)states.intern("minecraft:air", {.air = true});
+    (void)states.intern("minecraft:stone",
+                        {.air = false, .blocks_motion = true});
+    (void)states.intern("minecraft:water",
+                        {.air = false, .fluid = true, .water = true});
+    (void)states.intern("minecraft:lava", {.air = false, .fluid = true});
+    std::size_t directory_start = 0;
+    while (directory_start <= template_dirs.size()) {
+        const auto comma = template_dirs.find(',', directory_start);
+        const auto directory = template_dirs.substr(
+            directory_start, comma == std::string::npos
+                                 ? std::string::npos
+                                 : comma - directory_start);
+        if (!directory.empty()) {
+            test_support::prime_template_states(states, templates_root,
+                                                directory);
+        }
+        if (comma == std::string::npos) {
+            break;
+        }
+        directory_start = comma + 1;
+    }
+    structure::structure_template_manager manager{templates_root, states};
+    height_source heights{
+        .settings = &*settings,
+        .states = &states,
+        .seed = seed,
+        .ids =
+            terrain::block_ids{
+                .air = 0, .default_block = 1, .default_fluid = 2, .lava = 3},
+        .picker =
+            terrain::fluid_picker{
+                .sea_level = settings->sea_level,
+                .default_fluid = 2,
+                .lava = 3,
+                .air = 0,
+            },
+    };
+    const structure::structure_start_context start_context{
+        .seed = seed,
+        .data = &*data,
+        .min_y = oracle_min_y,
+        .world_height = oracle_height,
+        .sea_level = settings->sea_level,
+        .fixed_biome = true,
+        .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
+        .biome_name = [&biome](std::uint16_t) -> std::string_view {
+            return biome;
+        },
+        .height_at =
+            [&](jint x, jint z, heightmap_kind kind) {
+                return heights.at(x, z, kind);
+            },
+        .templates = &manager,
+    };
+    const auto generated = structure::jigsaw_start(
+        chunk_pos{.x = chunk_x, .z = chunk_z},
+        structure::jigsaw_generation_context{
+            .structure = &found->second,
+            .data = &*data,
+            .templates = &manager,
+            .seed = seed,
+            .min_y = oracle_min_y,
+            .world_height = oracle_height,
+            .sea_level = settings->sea_level,
+            .height_at = start_context.height_at,
+            .valid_biome = [](const block_pos &) { return true; },
+            .column_allowed = [](jint, jint) { return true; },
+        });
+    expect(generated.has_value());
+    if (!generated) {
+        return;
+    }
+    expect(generated->pieces.size() == pieces->items.size());
+    const auto count = std::min(generated->pieces.size(), pieces->items.size());
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto *expected = pieces->items[index].as_compound();
+        expect(expected != nullptr);
+        if (expected == nullptr) {
+            continue;
+        }
+        const auto &actual = generated->pieces[index];
+        const auto *box = child(expected, "BB");
+        if (box == nullptr || !box->as_int_array().has_value()) {
+            std::fprintf(stderr, "piece %zu has no bounding box\n", index);
+            expect(false);
+            continue;
+        }
+        const auto values = *box->as_int_array();
+        if (values.size() != 6U) {
+            std::fprintf(stderr, "piece %zu has a short bounding box\n", index);
+            expect(false);
+            continue;
+        }
+        const bool bounds_match = actual.bounds.min_x == values[0] &&
+                                  actual.bounds.min_y == values[1] &&
+                                  actual.bounds.min_z == values[2] &&
+                                  actual.bounds.max_x == values[3] &&
+                                  actual.bounds.max_y == values[4] &&
+                                  actual.bounds.max_z == values[5];
+        const jint position_y = integer_field(expected, "PosY", 0);
+        const bool position_match =
+            actual.template_origin.x == integer_field(expected, "PosX", 0) &&
+            actual.template_origin.y == position_y &&
+            actual.template_origin.z == integer_field(expected, "PosZ", 0);
+        const bool rotation_match =
+            rotation_name(static_cast<structure::template_rotation>(
+                actual.template_rotation)) ==
+            string_field(expected, "rotation", "NONE");
+        const bool ground_match =
+            actual.jigsaw.has_value() &&
+            actual.jigsaw->ground_level_delta ==
+                integer_field(expected, "ground_level_delta", 0);
+        const auto *element = child(expected, "pool_element");
+        bool element_match = actual.jigsaw.has_value();
+        if (element_match && element != nullptr &&
+            element->as_compound() != nullptr) {
+            const auto *entries = element->as_compound();
+            const auto type = string_field(entries, "element_type", "");
+            const auto location = string_field(entries, "location", "");
+            const auto feature = string_field(entries, "feature", "");
+            element_match = actual.jigsaw->element.template_id == location &&
+                            actual.jigsaw->element.feature == feature;
+            const bool legacy = type == "minecraft:legacy_single_pool_element";
+            element_match =
+                element_match &&
+                (actual.jigsaw->element.kind ==
+                 structure::pool_element_kind::legacy_single) == legacy;
+        }
+        if (!bounds_match || !position_match || !rotation_match ||
+            !ground_match || !element_match) {
+            const std::string rotation_text{
+                rotation_name(static_cast<structure::template_rotation>(
+                    actual.template_rotation))};
+            std::fprintf(stderr,
+                         "piece %zu mismatch: bounds=%d pos=%d rotation=%d "
+                         "ground=%d element=%d ref=[%d,%d,%d,%d,%d,%d] "
+                         "pos=(%d,%d,%d) rot=%s\n",
+                         index, bounds_match ? 1 : 0, position_match ? 1 : 0,
+                         rotation_match ? 1 : 0, ground_match ? 1 : 0,
+                         element_match ? 1 : 0, values[0], values[1], values[2],
+                         values[3], values[4], values[5],
+                         actual.template_origin.x, actual.template_origin.y,
+                         actual.template_origin.z, rotation_text.c_str());
+            if (actual.jigsaw.has_value()) {
+                std::fprintf(stderr, "  template=%s feature=%s\n",
+                             actual.jigsaw->element.template_id.c_str(),
+                             actual.jigsaw->element.feature.c_str());
+            }
+        }
+        expect(bounds_match);
+        expect(position_match);
+        expect(rotation_match);
+        expect(ground_match);
+        expect(element_match);
+        if (!bounds_match || !position_match || !rotation_match ||
+            !ground_match || !element_match) {
+            return;
+        }
+    }
+    digest expected_digest;
+    digest actual_digest;
+    for (const auto &piece : pieces->items) {
+        expected_digest.mix(std::to_string(reference_piece_digest(piece)) +
+                            ";");
+    }
+    for (const auto &piece : generated->pieces) {
+        actual_digest.mix(std::to_string(generated_piece_digest(piece)) + ";");
+    }
+}
+
+} // namespace
+
 suite<"worldgen/jigsaw"> jigsaw_tests = [] {
     "pool weights expand in declaration order"_test = [] {
         const auto document = data::json::value::parse(
@@ -785,232 +1039,32 @@ suite<"worldgen/jigsaw"> jigsaw_tests = [] {
     };
 
     "the village start matches the reference piece list"_test = [] {
-        const char *region = std::getenv("REFRAIN_VANILLA_JIGSAW_REGION");
-        const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
-        const char *templates_root = std::getenv("REFRAIN_VANILLA_STRUCTURES");
-        if (region == nullptr || data_root == nullptr ||
-            templates_root == nullptr) {
-            return;
-        }
-        const char *chunk_x_raw = std::getenv("REFRAIN_JIGSAW_CHUNK_X");
-        const char *chunk_z_raw = std::getenv("REFRAIN_JIGSAW_CHUNK_Z");
-        const char *seed_raw = std::getenv("REFRAIN_JIGSAW_SEED");
-        if (chunk_x_raw == nullptr || chunk_z_raw == nullptr ||
-            seed_raw == nullptr) {
-            std::fprintf(stderr,
-                         "skipping the jigsaw piece oracle: set "
-                         "REFRAIN_JIGSAW_CHUNK_X, REFRAIN_JIGSAW_CHUNK_Z and "
-                         "REFRAIN_JIGSAW_SEED to the reference candidate\n");
-            return;
-        }
-        const jint chunk_x = std::atoi(chunk_x_raw);
-        const jint chunk_z = std::atoi(chunk_z_raw);
-        const jlong seed = std::strtoll(seed_raw, nullptr, 10);
-        std::string structure_id = "minecraft:village_plains";
-        const char *structure_env = std::getenv("REFRAIN_JIGSAW_STRUCTURE");
-        if (structure_env != nullptr) {
-            structure_id = structure_env;
-        }
-        const auto document = read_chunk(region, chunk_x, chunk_z);
-        expect(document.has_value());
-        if (!document) {
-            return;
-        }
-        const auto *structures = child(document->as_compound(), "structures");
-        const auto *starts = structures == nullptr
-                                 ? nullptr
-                                 : child(structures->as_compound(), "starts");
-        const auto *start = starts == nullptr ? nullptr
-                                              : child(starts->as_compound(),
-                                                      structure_id.c_str());
-        const auto *children = start == nullptr
-                                   ? nullptr
-                                   : child(start->as_compound(), "Children");
-        const auto pieces = children == nullptr ? nullptr : children->as_list();
-        expect(pieces != nullptr);
-        if (pieces == nullptr) {
-            return;
-        }
-        auto data = structure::load_structure_data(data_root);
-        expect(data.has_value());
-        if (!data) {
-            return;
-        }
-        const auto found = data->structures.find(structure_id);
-        expect(found != data->structures.end());
-        if (found == data->structures.end()) {
-            return;
-        }
-        const auto settings = density::load_noise_settings(
-            data_root, "minecraft/overworld", algorithm::xoroshiro, seed);
-        expect(settings.has_value());
-        if (!settings) {
-            return;
-        }
-        block_state_registry states;
-        (void)states.intern("minecraft:air", {.air = true});
-        (void)states.intern("minecraft:stone",
-                            {.air = false, .blocks_motion = true});
-        (void)states.intern("minecraft:water",
-                            {.air = false, .fluid = true, .water = true});
-        (void)states.intern("minecraft:lava", {.air = false, .fluid = true});
-        test_support::prime_template_states(states, templates_root,
-                                            "minecraft/structure/village");
-        structure::structure_template_manager manager{templates_root, states};
-        height_source heights{
-            .settings = &*settings,
-            .states = &states,
-            .seed = seed,
-            .ids = terrain::block_ids{.air = 0,
-                                      .default_block = 1,
-                                      .default_fluid = 2,
-                                      .lava = 3},
-            .picker =
-                terrain::fluid_picker{
-                    .sea_level = settings->sea_level,
-                    .default_fluid = 2,
-                    .lava = 3,
-                    .air = 0,
-                },
-        };
-        const structure::structure_start_context start_context{
-            .seed = seed,
-            .data = &*data,
-            .min_y = oracle_min_y,
-            .world_height = oracle_height,
-            .sea_level = settings->sea_level,
-            .fixed_biome = true,
-            .biome_at = [](jint, jint, jint) { return std::uint16_t{0}; },
-            .biome_name = [](std::uint16_t) -> std::string_view {
-                return "minecraft:plains";
-            },
-            .height_at =
-                [&](jint x, jint z, heightmap_kind kind) {
-                    return heights.at(x, z, kind);
-                },
-            .templates = &manager,
-        };
-        const auto generated = structure::jigsaw_start(
-            chunk_pos{.x = chunk_x, .z = chunk_z},
-            structure::jigsaw_generation_context{
-                .structure = &found->second,
-                .data = &*data,
-                .templates = &manager,
-                .seed = seed,
-                .min_y = oracle_min_y,
-                .world_height = oracle_height,
-                .sea_level = settings->sea_level,
-                .height_at = start_context.height_at,
-                .valid_biome = [](const block_pos &) { return true; },
-                .column_allowed = [](jint, jint) { return true; },
-            });
-        expect(generated.has_value());
-        if (!generated) {
-            return;
-        }
-        expect(generated->pieces.size() == pieces->items.size());
-        const auto count =
-            std::min(generated->pieces.size(), pieces->items.size());
-        for (std::size_t index = 0; index < count; ++index) {
-            const auto *expected = pieces->items[index].as_compound();
-            expect(expected != nullptr);
-            if (expected == nullptr) {
-                continue;
-            }
-            const auto &actual = generated->pieces[index];
-            const auto *box = child(expected, "BB");
-            if (box == nullptr || !box->as_int_array().has_value()) {
-                std::fprintf(stderr, "piece %zu has no bounding box\n", index);
-                expect(false);
-                continue;
-            }
-            const auto values = *box->as_int_array();
-            if (values.size() != 6U) {
-                std::fprintf(stderr, "piece %zu has a short bounding box\n",
-                             index);
-                expect(false);
-                continue;
-            }
-            const bool bounds_match = actual.bounds.min_x == values[0] &&
-                                      actual.bounds.min_y == values[1] &&
-                                      actual.bounds.min_z == values[2] &&
-                                      actual.bounds.max_x == values[3] &&
-                                      actual.bounds.max_y == values[4] &&
-                                      actual.bounds.max_z == values[5];
-            const jint position_y = integer_field(expected, "PosY", 0);
-            const bool position_match =
-                actual.template_origin.x ==
-                    integer_field(expected, "PosX", 0) &&
-                actual.template_origin.y == position_y &&
-                actual.template_origin.z == integer_field(expected, "PosZ", 0);
-            const bool rotation_match =
-                rotation_name(static_cast<structure::template_rotation>(
-                    actual.template_rotation)) ==
-                string_field(expected, "rotation", "NONE");
-            const bool ground_match =
-                actual.jigsaw.has_value() &&
-                actual.jigsaw->ground_level_delta ==
-                    integer_field(expected, "ground_level_delta", 0);
-            const auto *element = child(expected, "pool_element");
-            bool element_match = actual.jigsaw.has_value();
-            if (element_match && element != nullptr &&
-                element->as_compound() != nullptr) {
-                const auto *entries = element->as_compound();
-                const auto type = string_field(entries, "element_type", "");
-                const auto location = string_field(entries, "location", "");
-                const auto feature = string_field(entries, "feature", "");
-                element_match =
-                    actual.jigsaw->element.template_id == location &&
-                    actual.jigsaw->element.feature == feature;
-                const bool legacy =
-                    type == "minecraft:legacy_single_pool_element";
-                element_match =
-                    element_match &&
-                    (actual.jigsaw->element.kind ==
-                     structure::pool_element_kind::legacy_single) == legacy;
-            }
-            if (!bounds_match || !position_match || !rotation_match ||
-                !ground_match || !element_match) {
-                const std::string rotation_text{
-                    rotation_name(static_cast<structure::template_rotation>(
-                        actual.template_rotation))};
-                std::fprintf(stderr,
-                             "piece %zu mismatch: bounds=%d pos=%d rotation=%d "
-                             "ground=%d element=%d ref=[%d,%d,%d,%d,%d,%d] "
-                             "pos=(%d,%d,%d) rot=%s\n",
-                             index, bounds_match ? 1 : 0,
-                             position_match ? 1 : 0, rotation_match ? 1 : 0,
-                             ground_match ? 1 : 0, element_match ? 1 : 0,
-                             values[0], values[1], values[2], values[3],
-                             values[4], values[5], actual.template_origin.x,
-                             actual.template_origin.y, actual.template_origin.z,
-                             rotation_text.c_str());
-                if (actual.jigsaw.has_value()) {
-                    std::fprintf(stderr, "  template=%s feature=%s\n",
-                                 actual.jigsaw->element.template_id.c_str(),
-                                 actual.jigsaw->element.feature.c_str());
-                }
-            }
-            expect(bounds_match);
-            expect(position_match);
-            expect(rotation_match);
-            expect(ground_match);
-            expect(element_match);
-            if (!bounds_match || !position_match || !rotation_match ||
-                !ground_match || !element_match) {
-                return;
-            }
-        }
-        digest expected_digest;
-        digest actual_digest;
-        for (const auto &piece : pieces->items) {
-            expected_digest.mix(std::to_string(reference_piece_digest(piece)) +
-                                ";");
-        }
-        for (const auto &piece : generated->pieces) {
-            actual_digest.mix(std::to_string(generated_piece_digest(piece)) +
-                              ";");
-        }
-        expect(expected_digest.value == actual_digest.value);
+        check_jigsaw_start_reference("JIGSAW", "minecraft:village_plains",
+                                     "minecraft:plains",
+                                     "minecraft/structure/village");
+    };
+
+    "the pillager outpost start matches the reference piece list"_test = [] {
+        check_jigsaw_start_reference(
+            "JIGSAW_PILLAGER_OUTPOST", "minecraft:pillager_outpost",
+            "minecraft:plains", "minecraft/structure/pillager_outpost");
+    };
+
+    "the taiga village start matches the reference piece list"_test = [] {
+        check_jigsaw_start_reference(
+            "JIGSAW_VILLAGE_TAIGA", "minecraft:village_taiga",
+            "minecraft:taiga", "minecraft/structure/village");
+    };
+
+    "the trial chambers start matches the reference piece list"_test = [] {
+        check_jigsaw_start_reference(
+            "JIGSAW_TRIAL_CHAMBERS", "minecraft:trial_chambers",
+            "minecraft:plains", "minecraft/structure/trial_chambers");
+    };
+
+    "the ancient city start matches the reference piece list"_test = [] {
+        check_jigsaw_start_reference(
+            "JIGSAW_ANCIENT_CITY", "minecraft:ancient_city",
+            "minecraft:deep_dark", "minecraft/structure/ancient_city");
     };
 };
