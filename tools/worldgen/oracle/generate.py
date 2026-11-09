@@ -21,12 +21,24 @@ the force-load command runs inside the dimension. The region is written under
 fixed nether biome's real carvers, so the saved chunk is fill, surface and
 carving output; features stay stripped and structures stay disabled.
 
+`--keep-features` keeps the fixed real biome's features. With `--structures`
+it also keeps the real surface materials. In the default mode it additionally
+keeps the real surface pass and carvers, so the saved chunk is the production
+terrain plus the real feature writes. `--force-load-box` moves the generated
+area for these runs as well, which allows a feature reference world away from
+the ocean terrain around the spawn.
+
 Usage:
     generate.py --server-jar server.jar --seed 12345 --output /tmp/t2oracle
     generate.py --server-jar server.jar --seed 1 --output /tmp/t2nether \
         --dimension the_nether
     generate.py --server-jar server.jar --seed 1 --output /tmp/t2nether-caves \
         --dimension the_nether --keep-carvers
+    generate.py --server-jar server.jar --seed 1 --output /tmp/t2cherry \
+        --fixed-biome minecraft:cherry_grove --keep-features
+    generate.py --server-jar server.jar --seed 1 --output /tmp/t2plains \
+        --fixed-biome minecraft:plains --keep-features \
+        --force-load-box -114752 -8256 -114625 -8145
 
 The reference server must be started by a JDK (Java 25 or newer for 26.3).
 """
@@ -323,8 +335,10 @@ def main() -> int:
     parser.add_argument(
         "--keep-features",
         action="store_true",
-        help="with --structures, keep the fixed biome's real features and "
-        "surface materials",
+        help="keep the fixed real biome's features: with --structures the "
+        "surface materials are kept as well; with a fixed real biome in the "
+        "default mode the real surface pass and carvers are kept too, which "
+        "is the feature reference world",
     )
     parser.add_argument(
         "--only-structure-set",
@@ -350,8 +364,6 @@ def main() -> int:
 
     dimension = DIMENSIONS[args.dimension]
     dimension_mode = args.dimension != "overworld"
-    if args.keep_carvers and not dimension_mode:
-        parser.error("--keep-carvers requires --dimension")
     if dimension_mode:
         overworld_only = [
             flag
@@ -377,6 +389,22 @@ def main() -> int:
                 if args.structures
                 else FIXED_BIOMES[args.dimension]
             )
+
+    if args.keep_features:
+        if args.plain or args.biomes or args.carvers or args.features or \
+                args.features_real:
+            parser.error("--keep-features combines with --structures or a "
+                         "fixed real biome")
+        if not args.structures and args.fixed_biome == "oracle:terrain":
+            parser.error("--keep-features requires --fixed-biome for a "
+                         "surface reference world")
+        # A feature reference world keeps the real surface materials and the
+        # fixed biome's carvers, so the saved chunk is the production terrain
+        # plus the real feature writes.
+        args.surface = True
+    if args.keep_carvers:
+        # Carving is part of the terrain stages, so the material rule stays.
+        args.surface = True
 
     root = args.output.resolve()
     shutil.rmtree(root, ignore_errors=True)
@@ -1838,9 +1866,10 @@ def main() -> int:
                 args.server_jar,
                 f"data/{namespace}/worldgen/biome/{path}.json",
             )
-            if not args.keep_carvers:
+            if not args.keep_carvers and not args.keep_features:
                 override["carvers"] = []
-            override["features"] = []
+            if not args.keep_features:
+                override["features"] = []
         write_pack(preset, biome, root / "world/datapacks/t2oracle",
                    empty_material_rule=not args.surface,
                    fixed_biome=args.fixed_biome, biome_override=override,
@@ -1880,7 +1909,20 @@ def main() -> int:
             dimension=dimension,
         )
     else:
-        run_server(root, args.server_jar, args.settle, dimension=dimension)
+        # A fixed-biome feature reference world can move the force-loaded area
+        # so the compared chunk is the only one that reaches the feature stage;
+        # its neighbours are generated as terrain for the density and carver
+        # stages and do not write features across the border.
+        run_server(
+            root,
+            args.server_jar,
+            args.settle,
+            force_load=True,
+            force_load_box=tuple(args.force_load_box)
+            if args.force_load_box is not None
+            else None,
+            dimension=dimension,
+        )
 
     namespace, name = dimension.split(":", 1)
     region_dir = root / "world" / "dimensions" / namespace / name / "region"
