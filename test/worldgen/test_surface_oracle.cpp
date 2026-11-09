@@ -33,6 +33,8 @@
 #include <refrain/worldgen/terrain/surface.hpp>
 #include <refrain/worldgen/terrain/terrain.hpp>
 
+#include "worldgen/feature_oracle_support.hpp"
+
 #include <boost/ut.hpp>
 
 #include <algorithm>
@@ -57,6 +59,7 @@ namespace {
 using namespace refrain;
 using namespace refrain::worldgen;
 using namespace refrain::worldgen::surface;
+using refrain::worldgen::test_support::canonical_state_name;
 
 constexpr jint oracle_min_y = -64;
 constexpr jint oracle_height = 384;
@@ -131,88 +134,6 @@ auto child(const data::nbt::compound *entries, std::string_view key)
     }
     const auto found = entries->find(key);
     return found == entries->end() ? nullptr : &found->second;
-}
-
-auto canonical_state_name(std::string_view input) -> std::string {
-    // Palette strings sort properties by name; normalise both sides before
-    // the state-specific default elisions below.
-    const auto canon_sort = [](std::string text) -> std::string {
-        const auto open = text.find('[');
-        if (open == std::string::npos) {
-            return text;
-        }
-        const auto close = text.rfind(']');
-        if (close == std::string::npos || close < open) {
-            return text;
-        }
-        std::vector<std::pair<std::string, std::string>> properties;
-        std::string_view body{text.data() + open + 1, close - open - 1};
-        while (!body.empty()) {
-            const auto comma = body.find(',');
-            const auto entry = body.substr(0, comma);
-            const auto equals = entry.find('=');
-            if (equals != std::string_view::npos) {
-                properties.emplace_back(std::string{entry.substr(0, equals)},
-                                        std::string{entry.substr(equals + 1)});
-            }
-            if (comma == std::string_view::npos) {
-                break;
-            }
-            body = body.substr(comma + 1);
-        }
-        std::sort(properties.begin(), properties.end());
-        std::string rebuilt = text.substr(0, open);
-        rebuilt.push_back('[');
-        for (std::size_t i = 0; i < properties.size(); ++i) {
-            if (i != 0) {
-                rebuilt.push_back(',');
-            }
-            rebuilt.append(properties[i].first);
-            rebuilt.push_back('=');
-            rebuilt.append(properties[i].second);
-        }
-        rebuilt.push_back(']');
-        return rebuilt;
-    };
-    const std::string owned = canon_sort(std::string{input});
-    std::string_view name{owned};
-
-    if (name.size() > 8 && name.ends_with("[axis=y]")) {
-        const auto base = name.substr(0, name.size() - 8);
-        if (base.ends_with("_log") || base.ends_with("_stem") ||
-            base.ends_with("_wood")) {
-            return std::string{base};
-        }
-    }
-    if (name == "minecraft:bone_block[axis=y]") {
-        return "minecraft:bone_block";
-    }
-    if (name == "minecraft:wall_torch[facing=north]" ||
-        name == "minecraft:torch[waterlogged=false]") {
-        return std::string{name.substr(0, name.find('['))};
-    }
-    if (name == "minecraft:snow[layers=1]") {
-        return "minecraft:snow";
-    }
-    constexpr std::string_view fluid_default = "[level=0]";
-    if (name.ends_with(fluid_default) &&
-        (name.starts_with("minecraft:lava") ||
-         name.starts_with("minecraft:water"))) {
-        return std::string{name.substr(0, name.size() - fluid_default.size())};
-    }
-    constexpr std::string_view honey_default = ",honey_level=0]";
-    if (name.ends_with(honey_default)) {
-        std::string canonical{
-            name.substr(0, name.size() - honey_default.size())};
-        canonical.push_back(']');
-        return canonical;
-    }
-    constexpr std::string_view leaf_defaults =
-        "[distance=7,persistent=false,waterlogged=false]";
-    if (name.size() > leaf_defaults.size() && name.ends_with(leaf_defaults)) {
-        return std::string{name.substr(0, name.size() - leaf_defaults.size())};
-    }
-    return std::string{name};
 }
 
 auto decode_expected_heightmap(const data::nbt::value &root,

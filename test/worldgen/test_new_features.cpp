@@ -795,4 +795,61 @@ suite<"worldgen/feature-sculk"> sculk_feature_tests = [] {
         }
         expect(sculk_blocks > 2) << sculk_blocks;
     };
+
+    "a simple block feature rejects vegetation without a supporting block"_test =
+        [] {
+            fixture environment;
+            const auto grass = environment.resolve("minecraft:grass_block");
+            const auto water = environment.resolve("minecraft:water");
+            const auto short_grass =
+                environment.resolve("minecraft:short_grass");
+            expect(grass != no_block_state);
+            expect(water != no_block_state);
+            expect(short_grass != no_block_state);
+            const std::array<block_state_id, 1> motion{grass};
+            const std::array<block_state_id, 1> plants{short_grass};
+            environment.registry.add_tag("minecraft:blocks_motion_in_heightmap",
+                                         motion);
+            environment.registry.add_tag("minecraft:replaceable_by_trees",
+                                         plants);
+            environment.chunk.set_state(8, 10, 8, water);
+            decoded_feature feature{environment.registry};
+            if (!feature.load(
+                    R"({"type":"minecraft:simple_block",
+                        "to_place":{"id":"minecraft:short_grass"}})")) {
+                return;
+            }
+            auto random = make_random(7);
+            expect(!feature.place(environment.context, random,
+                                  block_pos{.x = 8, .y = 11, .z = 8}));
+            expect(environment.name_at(8, 11, 8) == "minecraft:air");
+        };
+
+    "a simple block feature places both halves of a double plant"_test = [] {
+        fixture environment;
+        const auto grass = environment.resolve("minecraft:grass_block");
+        expect(grass != no_block_state);
+        const std::array<block_state_id, 1> motion{grass};
+        environment.registry.add_tag("minecraft:blocks_motion_in_heightmap",
+                                     motion);
+        environment.chunk.set_state(8, 10, 8, grass);
+        decoded_feature feature{environment.registry};
+        if (!feature.load(
+                R"({"type":"minecraft:simple_block",
+                    "to_place":{"id":"minecraft:tall_grass",
+                                "properties":{"half":"lower"}}})")) {
+            return;
+        }
+        auto random = make_random(9);
+        expect(feature.place(environment.context, random,
+                             block_pos{.x = 8, .y = 11, .z = 8}));
+        expect(
+            environment.name_at(8, 11, 8).starts_with("minecraft:tall_grass"));
+        expect(environment.name_at(8, 11, 8).find("half=lower") !=
+               std::string_view::npos);
+        expect(
+            environment.name_at(8, 12, 8).starts_with("minecraft:tall_grass"));
+        expect(environment.name_at(8, 12, 8).find("half=upper") !=
+               std::string_view::npos);
+    };
 };
