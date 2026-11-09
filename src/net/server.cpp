@@ -260,6 +260,7 @@ struct server::impl {
         std::vector<std::byte> body{};
     };
     std::mutex connections_mutex{};
+    std::mutex send_mutex{};
     std::mutex inbound_mutex{};
     std::deque<queued_packet> inbound{};
     std::mutex click_mutex{};
@@ -2734,6 +2735,7 @@ void server::impl::handle_play(std::uint64_t id,
 }
 
 void server::impl::send(std::uint64_t id, std::span<const std::byte> packet) {
+    const std::lock_guard send_lock{send_mutex};
     packets_out.fetch_add(1, std::memory_order_relaxed);
     bytes_out.fetch_add(packet.size(), std::memory_order_relaxed);
     if (!protocol) {

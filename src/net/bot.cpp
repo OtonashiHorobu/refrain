@@ -178,6 +178,7 @@ class bot_session {
     template <typename Packet, typename Encoder>
     void send_packet(std::uint16_t packet_id, const Packet &packet,
                      Encoder encode) {
+        const std::lock_guard send_lock{send_mutex_};
         std::vector<std::byte> body;
         writer out{body};
         out.write_varint(packet_id);
@@ -512,6 +513,7 @@ class bot_session {
     std::unique_ptr<aes128_cfb8> cipher_{};
     bot_state state_{bot_state::login};
     std::mutex mutex_{};
+    std::mutex send_mutex_{};
     std::condition_variable condition_{};
     bool done_{false};
     bool joined_{false};
