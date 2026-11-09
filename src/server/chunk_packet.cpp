@@ -64,13 +64,26 @@ constexpr std::size_t light_bytes{2048};
 
 void write_bitset(std::vector<std::byte> &out,
                   std::span<const std::uint64_t> words) {
-    // BitSet is transmitted as a byte array (little-endian words), not as a
-    // long array: VarInt byte length followed by the bytes.
+    // BitSet is transmitted as a byte array: VarInt byte length followed by the
+    // little-endian bytes, with trailing zero bytes omitted.
+    std::size_t bytes{words.size() * sizeof(std::uint64_t)};
+    while (bytes > 0) {
+        const auto byte{static_cast<std::uint8_t>(
+            words[(bytes - 1) / sizeof(std::uint64_t)] >>
+            (((bytes - 1) % sizeof(std::uint64_t)) * 8U))};
+        if (byte != 0) {
+            break;
+        }
+        --bytes;
+    }
     writer target{out};
-    target.write_varint(
-        static_cast<std::uint32_t>(words.size() * sizeof(std::uint64_t)));
-    for (const auto word : words) {
-        target.write_i64(static_cast<std::int64_t>(word));
+    target.write_varint(static_cast<std::uint32_t>(bytes));
+    for (std::size_t index{0}; index < bytes; ++index) {
+        const auto byte{
+            static_cast<std::uint8_t>((words[index / sizeof(std::uint64_t)] >>
+                                       ((index % sizeof(std::uint64_t)) * 8U)) &
+                                      0xFFU)};
+        target.write_u8(byte);
     }
 }
 
@@ -95,6 +108,39 @@ void set_bit(std::vector<std::uint64_t> &words, std::size_t index) {
         }
     }
     return std::nullopt;
+}
+
+[[nodiscard]] auto is_fluid(std::string_view key) noexcept -> bool {
+    const auto bracket{key.find('[')};
+    const auto name{key.substr(0, bracket)};
+    if (name.ends_with("_cauldron")) {
+        return false;
+    }
+    if (name == "minecraft:water" || name == "minecraft:lava" ||
+        key.find("waterlogged=true") != std::string_view::npos) {
+        return true;
+    }
+    return name == "minecraft:bubble_column" || name == "minecraft:kelp" ||
+           name == "minecraft:kelp_plant" || name == "minecraft:seagrass" ||
+           name == "minecraft:tall_seagrass";
+}
+
+[[nodiscard]] auto registry_size(const net::registry_catalog *catalog,
+                                 std::string_view registry) -> std::size_t {
+    if (catalog == nullptr) {
+        return 0;
+    }
+    for (const auto &definition : catalog->registries()) {
+        if (definition.key == registry) {
+            return definition.entries.size();
+        }
+    }
+    return 0;
+}
+
+[[nodiscard]] auto global_palette_bits(std::size_t entries) -> std::uint8_t {
+    return std::max<std::uint8_t>(1,
+                                  ceil_log2(std::max<std::size_t>(entries, 1)));
 }
 
 struct encoded_section {
@@ -142,6 +188,17 @@ struct light_data {
         if (!key.empty() && tables != nullptr) {
             if (const auto dense{tables->find_state(key)}; dense) {
                 vanilla_id = tables->state_at(*dense).vanilla_id;
+            } else {
+                // Imported worlds may store only the block name when every
+                // property value is the default; resolve that form to the
+                // block's default state instead of dropping it as air.
+                const auto bracket{key.find('[')};
+                const auto name{key.substr(0, bracket)};
+                if (const auto block{tables->find_block(name)}; block) {
+                    const auto default_state{
+                        tables->block_at(*block).default_state};
+                    vanilla_id = tables->state_at(default_state).vanilla_id;
+                }
             }
         }
         vanilla.push_back(vanilla_id);
@@ -149,10 +206,7 @@ struct light_data {
         if (!air) {
             ++encoded.non_empty;
         }
-        if (!key.empty() &&
-            (key.find("water") != std::string_view::npos ||
-             key.find("lava") != std::string_view::npos ||
-             key.find("waterlogged=true") != std::string_view::npos)) {
+        if (is_fluid(key)) {
             ++encoded.fluids;
         }
     }
@@ -172,7 +226,8 @@ struct light_data {
             std::max<std::uint8_t>(4, ceil_log2(encoded.block_palette.size()));
     } else {
         encoded.block_global = true;
-        encoded.block_bits = 16;
+        encoded.block_bits =
+            global_palette_bits(tables == nullptr ? 0 : tables->state_count());
     }
     encoded.block_words.assign(
         packed_words(section_entries, encoded.block_bits), 0);
@@ -213,25 +268,35 @@ struct light_data {
             for (std::size_t index{0}; index < biome_entries; ++index) {
                 const auto palette_value{packed_value(
                     base.biome_data, index, base.biome_bits_per_entry)};
-                const auto bounded{std::min<std::size_t>(
-                    palette_value, encoded.biome_palette.size() - 1)};
+                if (palette_value >= encoded.biome_palette.size()) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error,
+                        "biome palette index is outside the section palette")};
+                }
                 encoded.biome_words[index / per_word] |=
-                    static_cast<std::uint64_t>(bounded)
+                    static_cast<std::uint64_t>(palette_value)
                     << ((index % per_word) * encoded.biome_bits);
             }
         } else {
             encoded.biome_global = true;
-            encoded.biome_bits = 7;
+            const auto registry_entries{
+                registry_size(catalog, "minecraft:worldgen/biome")};
+            encoded.biome_bits = global_palette_bits(
+                registry_entries == 0 ? 64 : registry_entries);
             encoded.biome_words.assign(
                 packed_words(biome_entries, encoded.biome_bits), 0);
             const auto per_word{64U / encoded.biome_bits};
             for (std::size_t index{0}; index < biome_entries; ++index) {
                 const auto palette_value{packed_value(
                     base.biome_data, index, base.biome_bits_per_entry)};
-                const auto bounded{std::min<std::size_t>(
-                    palette_value, encoded.biome_palette.size() - 1)};
+                if (palette_value >= encoded.biome_palette.size()) {
+                    return std::unexpected{make_error(
+                        error_code::parse_error,
+                        "biome palette index is outside the section palette")};
+                }
                 encoded.biome_words[index / per_word] |=
-                    static_cast<std::uint64_t>(encoded.biome_palette[bounded])
+                    static_cast<std::uint64_t>(
+                        encoded.biome_palette[palette_value])
                     << ((index % per_word) * encoded.biome_bits);
             }
         }
@@ -244,24 +309,27 @@ struct light_data {
     -> std::vector<std::uint64_t> {
     constexpr std::uint8_t bits{9};
     constexpr std::size_t per_word{7};
-    std::vector<std::uint64_t> words(packed_words(256, bits), 0);
+    constexpr std::size_t columns{256};
+    constexpr std::int32_t chunk_height{24 * 16};
+    std::vector<std::uint64_t> words(packed_words(columns, bits), 0);
     const auto base_x{chunk.pos.x * 16};
     const auto base_z{chunk.pos.z * 16};
+    const auto min_y{chunk.y_pos * 16};
     for (std::int32_t z{0}; z < 16; ++z) {
         for (std::int32_t x{0}; x < 16; ++x) {
-            std::int32_t top{chunk.y_pos * 16};
-            for (std::int32_t y{(chunk.y_pos + 24) * 16 - 1};
-                 y >= chunk.y_pos * 16; --y) {
+            std::uint64_t top{0};
+            for (std::int32_t y{min_y + chunk_height - 1}; y >= min_y; --y) {
                 if (world.block_at(
                         sim::block_pos{base_x + x, static_cast<std::int16_t>(y),
                                        base_z + z}) != sim::air_block) {
-                    top = y + 1;
+                    // Heightmap raw values are relative to the chunk's
+                    // minimum Y; the client adds it back when reading.
+                    top = static_cast<std::uint64_t>(y + 1 - min_y);
                     break;
                 }
             }
             const auto index{static_cast<std::size_t>(z * 16 + x)};
-            words[index / per_word] |= static_cast<std::uint64_t>(top)
-                                       << ((index % per_word) * bits);
+            words[index / per_word] |= top << ((index % per_word) * bits);
         }
     }
     return words;
@@ -326,12 +394,14 @@ auto encode_full_chunk(const chunk_packet_source &source, sim::chunk_pos pos)
     out.write_i32(pos.x);
     out.write_i32(pos.z);
 
-    // Heightmaps. Prefer the stored payload when it uses the overworld's
-    // nine-bit encoding; otherwise compute the four client maps.
+    // Heightmaps. The three maps marked `sendToClient()` by the protocol are
+    // WORLD_SURFACE, MOTION_BLOCKING and MOTION_BLOCKING_NO_LEAVES. Stored
+    // nine-bit payloads are authoritative; the computed surface is only a
+    // fallback for chunks that never carried heightmaps.
     const auto computed{computed_heightmap(*source.world, chunk)};
-    std::array<std::pair<std::string_view, std::uint32_t>, 4> requested{{
+    constexpr std::size_t heightmap_words{37};
+    std::array<std::pair<std::string_view, std::uint32_t>, 3> requested{{
         {"WORLD_SURFACE", 1},
-        {"OCEAN_FLOOR", 3},
         {"MOTION_BLOCKING", 4},
         {"MOTION_BLOCKING_NO_LEAVES", 5},
     }};
@@ -339,7 +409,8 @@ auto encode_full_chunk(const chunk_packet_source &source, sim::chunk_pos pos)
     for (const auto [name, type] : requested) {
         std::span<const std::uint64_t> words{computed};
         for (const auto &stored : chunk.storage.heightmaps) {
-            if (stored.name == name && stored.bits_per_entry == 9) {
+            if (stored.name == name && stored.bits_per_entry == 9 &&
+                stored.data.size() == heightmap_words) {
                 words = stored.data;
                 break;
             }
@@ -427,8 +498,9 @@ auto encode_full_chunk(const chunk_packet_source &source, sim::chunk_pos pos)
                           entity_entries.end());
     out.write_bytes(block_entities);
 
-    // Light: one mask entry per light section, with empty masks for layers the
-    // storage does not carry.
+    // Light: one mask entry per light section. A layer that the chunk does not
+    // carry leaves both masks clear, matching the protocol's "no data" state;
+    // a carried layer with an empty array is marked empty.
     const auto light_min{source.min_section_y - 1};
     const auto light_count{static_cast<std::size_t>(source.max_section_y -
                                                     source.min_section_y + 3)};
@@ -443,24 +515,43 @@ auto encode_full_chunk(const chunk_packet_source &source, sim::chunk_pos pos)
     for (const auto &layer : chunk.storage.light_sections) {
         light_by_y.emplace(layer.y, &layer);
     }
+    std::optional<std::size_t> highest_light{};
+    if (!light_by_y.empty()) {
+        highest_light =
+            static_cast<std::size_t>(light_by_y.rbegin()->first - light_min);
+    }
     for (std::size_t index{0}; index < light_count; ++index) {
         const auto y{static_cast<std::int32_t>(light_min + index)};
         const auto found{light_by_y.find(y)};
         if (found == light_by_y.end()) {
-            set_bit(light.empty_sky, index);
-            set_bit(light.empty_block, index);
+            if (highest_light && index <= *highest_light) {
+                set_bit(light.empty_sky, index);
+                set_bit(light.empty_block, index);
+            }
             continue;
         }
         const auto &layer{*found->second};
         if (layer.sky_light.size() == light_bytes) {
-            set_bit(light.sky_mask, index);
-            light.sky_updates.push_back(layer.sky_light);
+            if (std::all_of(
+                    layer.sky_light.begin(), layer.sky_light.end(),
+                    [](std::byte value) { return value == std::byte{0}; })) {
+                set_bit(light.empty_sky, index);
+            } else {
+                set_bit(light.sky_mask, index);
+                light.sky_updates.push_back(layer.sky_light);
+            }
         } else {
             set_bit(light.empty_sky, index);
         }
         if (layer.block_light.size() == light_bytes) {
-            set_bit(light.block_mask, index);
-            light.block_updates.push_back(layer.block_light);
+            if (std::all_of(
+                    layer.block_light.begin(), layer.block_light.end(),
+                    [](std::byte value) { return value == std::byte{0}; })) {
+                set_bit(light.empty_block, index);
+            } else {
+                set_bit(light.block_mask, index);
+                light.block_updates.push_back(layer.block_light);
+            }
         } else {
             set_bit(light.empty_block, index);
         }
