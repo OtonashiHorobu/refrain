@@ -40,6 +40,10 @@ class dimension_biome_source {
     [[nodiscard]] auto noise_biome(const climate_sampler &sampler, jint quart_x,
                                    jint quart_y, jint quart_z) -> std::uint16_t;
 
+    /// Drops the nearest-point search warm start. Selection is then
+    /// independent of the chunks generated before this one.
+    void reset_search();
+
     [[nodiscard]] auto biome(std::uint16_t id) const -> std::string_view;
     [[nodiscard]] auto biomes() const -> const std::vector<std::string> &;
     [[nodiscard]] auto kind() const noexcept -> dimension_kind { return kind_; }

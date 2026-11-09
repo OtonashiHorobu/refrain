@@ -6,12 +6,14 @@
 
 #include <refrain/worldgen/biome/biome_manager.hpp>
 #include <refrain/worldgen/biome/biome_view.hpp>
+#include <refrain/worldgen/carver/carver_stage.hpp>
 #include <refrain/worldgen/chunk/chunk_region.hpp>
 #include <refrain/worldgen/terrain/aquifer.hpp>
 
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -192,7 +194,7 @@ auto dimension_generator::create(dimension_generator_config config)
 
 auto dimension_generator::make_aquifer(
     jint chunk_x, jint chunk_z, const density::sampler_context &context) const
-    -> std::unique_ptr<terrain::aquifer> {
+    -> aquifer_holder {
     const terrain::fluid_picker picker{.sea_level = profile_->sea_level,
                                        .default_fluid = default_fluid_state_,
                                        .lava = lava_state_,
@@ -201,25 +203,33 @@ auto dimension_generator::make_aquifer(
                                     .default_block = default_block_state_,
                                     .default_fluid = default_fluid_state_,
                                     .lava = lava_state_};
+    aquifer_holder holder;
     if (!settings_.aquifers) {
-        return std::make_unique<terrain::disabled_aquifer>(picker);
+        holder.aquifer = std::make_unique<terrain::disabled_aquifer>(picker);
+        return holder;
     }
-    auto factory =
+    holder.factory =
         root_factory_->from_hash_of("minecraft:aquifer")->fork_positional();
     const volume chunk_volume{16,           generation_height_, 16,
                               chunk_x * 16, generation_min_y_,  chunk_z * 16};
-    return std::make_unique<terrain::noise_aquifer>(
-        settings_.aquifer, *factory, chunk_volume, picker, blocks, context);
+    holder.aquifer = std::make_unique<terrain::noise_aquifer>(
+        settings_.aquifer, *holder.factory, chunk_volume, picker, blocks,
+        context);
+    return holder;
 }
 
-auto dimension_generator::generate(const chunk_pos &pos)
-    -> result<std::unique_ptr<proto_chunk>> {
-    auto chunk = std::make_unique<proto_chunk>(
-        states_, pos.x, pos.z, profile_->min_y, profile_->height);
-    chunk->set_status(chunk_status::biomes);
-    fill_chunk_biomes(*chunk, biome_source_, sampler_);
+auto dimension_generator::make_chunk(const chunk_pos &pos) const
+    -> std::unique_ptr<proto_chunk> {
+    return std::make_unique<proto_chunk>(states_, pos.x, pos.z, profile_->min_y,
+                                         profile_->height);
+}
 
-    auto aquifer = make_aquifer(pos.x, pos.z, sampler_context_);
+auto dimension_generator::generate_height_column(const chunk_pos &pos)
+    -> result<std::unique_ptr<proto_chunk>> {
+    auto chunk = make_chunk(pos);
+    chunk->set_status(chunk_status::biomes);
+    const density::sampler_context context;
+    auto aquifer = make_aquifer(pos.x, pos.z, context);
     const terrain::proto_fill_options fill_options{
         .air = air_state_,
         .default_block = default_block_state_,
@@ -231,8 +241,67 @@ auto dimension_generator::generate(const chunk_pos &pos)
                                   .min_y = generation_min_y_,
                                   .height = generation_height_,
                               },
-                              *settings_.router.final_density, sampler_context_,
-                              *aquifer);
+                              *settings_.router.final_density, context,
+                              *aquifer.aquifer);
+    return chunk;
+}
+
+void dimension_generator::reset_biome_search() { biome_source_.reset_search(); }
+
+auto dimension_generator::biome_at_quart(jint quart_x, jint quart_y,
+                                         jint quart_z) -> std::uint16_t {
+    return biome_source_.noise_biome(sampler_, quart_x, quart_y, quart_z);
+}
+
+auto dimension_generator::biome_name(std::uint16_t id) const
+    -> std::string_view {
+    return biome_source_.biome(id);
+}
+
+auto dimension_generator::biome_temperature(std::string_view biome, jint x,
+                                            jint y, jint z) const
+    -> std::optional<float> {
+    const auto *climate = climates_.get(biome);
+    if (climate == nullptr) {
+        return std::nullopt;
+    }
+    return temperatures_.temperature_at(*climate, x, y, z, profile_->sea_level);
+}
+
+auto dimension_generator::generate(const chunk_pos &pos)
+    -> result<std::unique_ptr<proto_chunk>> {
+    return generate_terrain(pos, terrain_stages{});
+}
+
+auto dimension_generator::generate_terrain(const chunk_pos &pos,
+                                           const terrain_stages &stages)
+    -> result<std::unique_ptr<proto_chunk>> {
+    auto chunk = make_chunk(pos);
+    chunk->set_status(chunk_status::biomes);
+    fill_chunk_biomes(*chunk, biome_source_, sampler_);
+
+    const auto &fill_context = stages.fill_context != nullptr
+                                   ? *stages.fill_context
+                                   : sampler_context_;
+    auto aquifer = make_aquifer(pos.x, pos.z, fill_context);
+    const terrain::proto_fill_options fill_options{
+        .air = air_state_,
+        .default_block = default_block_state_,
+        .default_fluid = default_fluid_state_,
+        .lava = lava_state_,
+    };
+    terrain::fill_proto_chunk(*chunk, fill_options,
+                              terrain::proto_fill_volume{
+                                  .min_y = generation_min_y_,
+                                  .height = generation_height_,
+                              },
+                              *settings_.router.final_density, fill_context,
+                              *aquifer.aquifer);
+
+    if (!stages.surface && stages.carvers == nullptr) {
+        chunk->set_status(chunk_status::terrain);
+        return chunk;
+    }
 
     // The surface rule resolves its anchors against the generation depth, so
     // the nether roof lines up with `below_top` of 128, not 256.
@@ -253,6 +322,7 @@ auto dimension_generator::generate(const chunk_pos &pos)
             break;
         }
     }
+
     const surface::generation_bounds bounds{
         .min_gen_y = profile_->min_y,
         .gen_depth = generation_height_,
@@ -328,11 +398,45 @@ auto dimension_generator::generate(const chunk_pos &pos)
     if (!compiled) {
         return std::unexpected{compiled.error()};
     }
-    if (const auto built =
-            system.build_surface(*chunk, rule_context, *compiled, climates_,
-                                 temperatures_, providers.biome);
-        !built) {
-        return std::unexpected{built.error()};
+    if (stages.surface) {
+        if (const auto built =
+                system.build_surface(*chunk, rule_context, *compiled, climates_,
+                                     temperatures_, providers.biome);
+            !built) {
+            return std::unexpected{built.error()};
+        }
+    }
+    if (stages.carvers != nullptr) {
+        carver::carver_generator generator{
+            [this](jint quart_x, jint quart_z) -> std::string_view {
+                return biome_name(biome_at_quart(quart_x, 0, quart_z));
+            },
+            *stages.carvers, config_.seed,
+            provider::generation_context{.min_y = profile_->min_y,
+                                         .height = profile_->height,
+                                         .sea_level = profile_->sea_level}};
+        const auto mask = generator.generate(pos);
+        carver::carve_apply_context apply{
+            .aquifer = aquifer.aquifer.get(),
+            .states = &states_,
+            .top_material = {},
+            .filter = {},
+        };
+        if (stages.surface) {
+            apply.top_material =
+                [&system, &rule_context, &compiled,
+                 &chunk](jint block_x, jint block_y, jint block_z,
+                         bool under_fluid) -> std::optional<surface::state_id> {
+                return system.top_material(
+                    rule_context, *compiled, block_x, block_y, block_z,
+                    under_fluid, [&chunk](jint x, jint z) {
+                        return chunk->first_available(
+                                   heightmap_kind::world_surface_wg, x, z) -
+                               1;
+                    });
+            };
+        }
+        carver::apply_carving_mask(*chunk, mask, apply);
     }
     chunk->set_status(chunk_status::terrain);
     return chunk;

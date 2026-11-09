@@ -94,6 +94,9 @@ class parameter_list {
     /// shared with `find`; values may repeat, indices do not.
     [[nodiscard]] auto find_index(const target_point &target) -> std::size_t;
 
+    /// Forgets the previous result so the next search starts from the root.
+    void reset_search() noexcept { last_result_ = npos; }
+
     [[nodiscard]] auto size() const noexcept -> std::size_t {
         return values_.size();
     }

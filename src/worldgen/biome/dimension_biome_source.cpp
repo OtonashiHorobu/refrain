@@ -66,6 +66,12 @@ auto dimension_biome_source::noise_biome(const climate_sampler &sampler,
     return std::uint16_t{0};
 }
 
+void dimension_biome_source::reset_search() {
+    if (auto *source = std::get_if<multi_noise_biome_source>(&source_)) {
+        source->reset_search();
+    }
+}
+
 auto dimension_biome_source::biome(std::uint16_t id) const -> std::string_view {
     if (const auto *source = std::get_if<multi_noise_biome_source>(&source_)) {
         return source->biome(id);

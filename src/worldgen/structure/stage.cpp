@@ -550,7 +550,9 @@ auto generate_structure_starts(const chunk_pos &chunk,
         return starts;
     }
     for (const auto &[set_id, set] : context.data->sets) {
-        (void)set_id;
+        if (context.set_filter && !context.set_filter(set_id)) {
+            continue;
+        }
         bool set_candidate = false;
         if (set.random_spread.has_value()) {
             set_candidate = set.random_spread->is_structure_chunk(

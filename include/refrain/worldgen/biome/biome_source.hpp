@@ -75,6 +75,9 @@ class multi_noise_biome_source {
         return parameters_.find(target);
     }
 
+    /// Clears the nearest-point warm start.
+    void reset_search() { parameters_.reset_search(); }
+
     [[nodiscard]] auto biome(std::uint16_t id) const -> std::string_view {
         return biomes_[id];
     }

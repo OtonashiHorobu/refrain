@@ -59,6 +59,9 @@ struct structure_start_context {
     /// Template source for structure types that place `.nbt` pieces. Null
     /// leaves those types ungenerated.
     structure_template_manager *templates{nullptr};
+    /// Restricts start generation to the selected structure sets. Empty
+    /// accepts every set; a filter that selects none is an empty set.
+    std::function<bool(std::string_view)> set_filter{};
 };
 
 /// The beardifier inputs one chunk sees: the rigid pieces and junction sources
