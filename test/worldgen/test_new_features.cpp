@@ -566,6 +566,38 @@ suite<"worldgen/tree-new"> tree_new_tests = [] {
         expect(leaves > 0) << leaves;
     };
 
+    "a pine foliage placer grows a canopy from its height provider"_test = [] {
+        fixture environment;
+        decoded_feature feature{environment.registry};
+        const auto document = tree_document(
+            R"({"type":"minecraft:straight_trunk_placer","base_height":6,
+                "height_rand_a":0,"height_rand_b":0})",
+            R"({"type":"minecraft:pine_foliage_placer","radius":1,"offset":1,
+                "height":3})",
+            "minecraft:spruce_log");
+        if (!feature.load(document)) {
+            return;
+        }
+        const auto stone = environment.resolve("minecraft:stone");
+        environment.fill_layer(4, stone);
+        auto random = make_random(35);
+        expect(feature.place(environment.context, random,
+                             block_pos{.x = 8, .y = 5, .z = 8}));
+        expect(environment.count_blocks("minecraft:spruce_log") > 0);
+        jint leaves = 0;
+        for (jint y = 0; y < 32; ++y) {
+            for (jint x = 0; x < 16; ++x) {
+                for (jint z = 0; z < 16; ++z) {
+                    if (environment.name_at(x, y, z).starts_with(
+                            "minecraft:oak_leaves")) {
+                        ++leaves;
+                    }
+                }
+            }
+        }
+        expect(leaves > 0);
+    };
+
     "a mangrove root placer writes roots below the trunk origin"_test = [] {
         fixture environment;
         decoded_feature feature{environment.registry};

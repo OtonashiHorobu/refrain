@@ -290,7 +290,7 @@ class tree_feature final : public feature {
                  std::unique_ptr<provider::int_provider> foliage_radius,
                  std::unique_ptr<provider::int_provider> foliage_offset,
                  std::unique_ptr<provider::int_provider> spruce_trunk_height,
-                 std::unique_ptr<provider::int_provider> mega_pine_crown,
+                 std::unique_ptr<provider::int_provider> pine_foliage_height,
                  jint foliage_height, jint size_limit, jint lower_size,
                  jint upper_size, bool three_layers, jint upper_limit,
                  jint middle_size, bool has_min_clipped, jint min_clipped,
@@ -306,7 +306,7 @@ class tree_feature final : public feature {
           foliage_radius_{std::move(foliage_radius)},
           foliage_offset_{std::move(foliage_offset)},
           spruce_trunk_height_{std::move(spruce_trunk_height)},
-          mega_pine_crown_{std::move(mega_pine_crown)},
+          pine_foliage_height_{std::move(pine_foliage_height)},
           foliage_height_{foliage_height}, size_limit_{size_limit},
           lower_size_{lower_size}, upper_size_{upper_size},
           three_layers_{three_layers}, upper_limit_{upper_limit},
@@ -362,7 +362,7 @@ class tree_feature final : public feature {
     std::unique_ptr<provider::int_provider> foliage_radius_{};
     std::unique_ptr<provider::int_provider> foliage_offset_{};
     std::unique_ptr<provider::int_provider> spruce_trunk_height_{};
-    std::unique_ptr<provider::int_provider> mega_pine_crown_{};
+    std::unique_ptr<provider::int_provider> pine_foliage_height_{};
     jint foliage_height_{0};
     jint size_limit_{1};
     jint lower_size_{0};
