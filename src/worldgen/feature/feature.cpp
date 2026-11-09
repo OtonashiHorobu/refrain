@@ -11,6 +11,7 @@
 
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/core/mth.hpp>
+#include <refrain/worldgen/feature/block_shape.hpp>
 #include <refrain/worldgen/noise/noise.hpp>
 
 namespace refrain::worldgen::feature {
@@ -1672,16 +1673,28 @@ auto multiface_faces(const block_state_table &states, block_state_id state,
 auto multiface_key(std::string_view block_name,
                    const std::array<bool, 6> &faces, bool waterlogged)
     -> std::string {
+    // The canonical key sorts properties by name; the registry stores the
+    // data pack spelling, so a key in any other order would intern a second
+    // state for the same block state.
+    std::array<std::pair<std::string_view, bool>, 7> properties{};
+    for (std::size_t i = 0; i < multiface_names.size(); ++i) {
+        properties[i] = {multiface_names[i], faces[i]};
+    }
+    properties[6] = {"waterlogged", waterlogged};
+    std::sort(properties.begin(), properties.end(),
+              [](const auto &left, const auto &right) {
+                  return left.first < right.first;
+              });
     std::string key{block_name};
     key.push_back('[');
-    for (std::size_t i = 0; i < multiface_names.size(); ++i) {
+    for (std::size_t i = 0; i < properties.size(); ++i) {
         if (i != 0) {
             key.push_back(',');
         }
-        key.append(multiface_names[i]);
-        key.append(faces[i] ? "=true" : "=false");
+        key.append(properties[i].first);
+        key.append(properties[i].second ? "=true" : "=false");
     }
-    key.append(waterlogged ? ",waterlogged=true]" : ",waterlogged=false]");
+    key.push_back(']');
     return key;
 }
 
@@ -1720,9 +1733,9 @@ auto multiface_growth_feature::place(feature_context &context,
         const auto neighbour = block_pos{.x = pos.x + offset.x,
                                          .y = pos.y + offset.y,
                                          .z = pos.z + offset.z};
-        return states
-            .traits(region.state_at(neighbour.x, neighbour.y, neighbour.z))
-            .blocks_motion;
+        return is_sturdy_face(
+            states, region.state_at(neighbour.x, neighbour.y, neighbour.z),
+            opposite_block_face(static_cast<block_face>(face)));
     };
     const auto make_state =
         [&](block_state_id old_state, const block_pos &pos,
@@ -4090,8 +4103,9 @@ auto vegetation_patch_feature::place(feature_context &context,
             }
             block_pos below{.x = pos.x, .y = pos.y + inwards, .z = pos.z};
             if (!states.traits(region.state_at(pos.x, pos.y, pos.z)).air ||
-                !states.traits(region.state_at(below.x, below.y, below.z))
-                     .blocks_motion) {
+                !is_sturdy_face(states,
+                                region.state_at(below.x, below.y, below.z),
+                                ceiling_ ? block_face::down : block_face::up)) {
                 continue;
             }
             const block_pos ground = below;
@@ -4112,22 +4126,23 @@ auto vegetation_patch_feature::place(feature_context &context,
         // expose it to a face that is not sturdy. The flooded positions form a
         // new set, so their own hash order decides the water writes and the
         // vegetation order.
-        const std::array<std::array<jint, 3>, 5> neighbours{{
-            {0, 0, -1},
-            {1, 0, 0},
-            {0, 0, 1},
-            {-1, 0, 0},
-            {0, -1, 0},
-        }};
+        const std::array<std::pair<block_face, std::array<jint, 3>>, 5>
+            neighbours{{
+                {block_face::north, {0, 0, -1}},
+                {block_face::east, {1, 0, 0}},
+                {block_face::south, {0, 0, 1}},
+                {block_face::west, {-1, 0, 0}},
+                {block_face::down, {0, -1, 0}},
+            }};
         std::vector<block_pos> flooded;
         for (const auto &position : surface) {
             bool exposed = false;
-            for (const auto &offset : neighbours) {
-                if (!states
-                         .traits(region.state_at(position.x + offset[0],
-                                                 position.y + offset[1],
-                                                 position.z + offset[2]))
-                         .blocks_motion) {
+            for (const auto &[direction, offset] : neighbours) {
+                const auto neighbour = region.state_at(position.x + offset[0],
+                                                       position.y + offset[1],
+                                                       position.z + offset[2]);
+                if (!is_sturdy_face(states, neighbour,
+                                    opposite_block_face(direction))) {
                     exposed = true;
                     break;
                 }
@@ -4903,7 +4918,7 @@ class sculk_spreader {
         }
         for (const auto &face : sculk_faces) {
             const auto neighbour = add(origin, face);
-            if (states().traits(state_at(neighbour)).blocks_motion) {
+            if (full_collision_block(state_at(neighbour))) {
                 return true;
             }
         }
@@ -5009,19 +5024,12 @@ class sculk_spreader {
     }
     [[nodiscard]] auto vein_state(const std::array<bool, 6> &faces,
                                   bool waterlogged) const -> block_state_id {
-        auto base = resolve("minecraft:sculk_vein");
-        if (base == no_block_state) {
-            return no_block_state;
-        }
-        std::string key{states().name(base)};
-        for (std::size_t face = 0; face < sculk_face_names.size(); ++face) {
-            key = with_state_property(key, sculk_face_names[face],
-                                      faces[face] ? "true" : "false");
-        }
-        key = with_state_property(key, "waterlogged",
-                                  waterlogged ? "true" : "false");
-        const auto resolved = resolve(key);
-        return resolved == no_block_state ? base : resolved;
+        // Build the whole state instead of patching a bare block name: the
+        // state helper only replaces properties an existing key already
+        // carries, and resolve_state would otherwise intern a state with a
+        // single face property.
+        return resolve(
+            multiface_key("minecraft:sculk_vein", faces, waterlogged));
     }
     [[nodiscard]] auto sculk_state() const -> block_state_id {
         return resolve("minecraft:sculk");
@@ -5040,15 +5048,27 @@ class sculk_spreader {
         }
         return key.find("waterlogged=true") != std::string_view::npos;
     }
-    [[nodiscard]] auto face_sturdy(block_state_id state) const -> bool {
-        // The registry has no collision-shape geometry; a motion-blocking
-        // block is the closest available approximation of a sturdy face.
-        return states().traits(state).blocks_motion;
+    [[nodiscard]] auto face_sturdy(block_state_id state, std::size_t face) const
+        -> bool {
+        return is_sturdy_face(states(), state, static_cast<block_face>(face));
+    }
+    [[nodiscard]] auto full_collision_block(block_state_id state) const
+        -> bool {
+        // The patch origin needs a full collision cube next to it; a block
+        // that only offers some full faces is not enough.
+        for (std::size_t face = 0; face < sculk_faces.size(); ++face) {
+            if (!face_sturdy(state, face)) {
+                return false;
+            }
+        }
+        return true;
     }
     [[nodiscard]] auto can_attach_to(const block_pos &placement,
                                      std::size_t face) const -> bool {
         const auto neighbour = add(placement, sculk_faces[face]);
-        return face_sturdy(state_at(neighbour));
+        return face_sturdy(state_at(neighbour),
+                           static_cast<std::size_t>(opposite_block_face(
+                               static_cast<block_face>(face))));
     }
     [[nodiscard]] auto is_replaceable(block_state_id state) const -> bool {
         return states().in_tag(state, "minecraft:replaceable");
@@ -5078,7 +5098,7 @@ class sculk_spreader {
             2) {
             const auto neighbour =
                 add(source, sculk_faces[sculk_opposite(face)]);
-            if (face_sturdy(state_at(neighbour))) {
+            if (face_sturdy(state_at(neighbour), face)) {
                 return false;
             }
         }
@@ -5288,20 +5308,21 @@ class sculk_spreader {
     [[nodiscard]] auto random_growth_state(const block_pos &pos) const
         -> block_state_id {
         const bool shrieker = random_.next_int(11) == 0;
-        block_state_id base = resolve(shrieker ? "minecraft:sculk_shrieker"
-                                               : "minecraft:sculk_sensor");
-        if (base == no_block_state) {
-            return base;
-        }
-        std::string key{states().name(base)};
+        const bool waterlogged = has_fluid(state_at(pos));
         if (shrieker) {
-            key = with_state_property(key, "can_summon", "true");
+            return resolve(waterlogged
+                               ? "minecraft:sculk_shrieker[can_summon=true,"
+                                 "shrieking=false,waterlogged=true]"
+                               : "minecraft:sculk_shrieker[can_summon=true,"
+                                 "shrieking=false,waterlogged=false]");
         }
-        if (has_fluid(state_at(pos))) {
-            key = with_state_property(key, "waterlogged", "true");
-        }
-        const auto resolved = resolve(key);
-        return resolved == no_block_state ? base : resolved;
+        const std::string key =
+            waterlogged
+                ? "minecraft:sculk_sensor[power=0,sculk_sensor_phase=inactive,"
+                  "waterlogged=true]"
+                : "minecraft:sculk_sensor[power=0,sculk_sensor_phase=inactive,"
+                  "waterlogged=false]";
+        return resolve(key);
     }
 
     [[nodiscard]] auto decay_penalty(const block_pos &pos,
@@ -5432,21 +5453,26 @@ class sculk_spreader {
         if (distance == 1) {
             return true;
         }
-        const auto clear = [&](jint dx, jint dy, jint dz) {
-            const block_pos test{
-                .x = from.x + dx, .y = from.y + dy, .z = from.z + dz};
-            return !face_sturdy(state_at(test));
+        const auto clear = [&](block_face direction) {
+            const auto index = static_cast<std::size_t>(direction);
+            const block_pos test = add(from, sculk_faces[index]);
+            return !face_sturdy(
+                state_at(test),
+                static_cast<std::size_t>(opposite_block_face(direction)));
         };
         const jint dx = to.x - from.x;
         const jint dy = to.y - from.y;
         const jint dz = to.z - from.z;
+        const auto direction_x = dx > 0 ? block_face::east : block_face::west;
+        const auto direction_y = dy > 0 ? block_face::up : block_face::down;
+        const auto direction_z = dz > 0 ? block_face::south : block_face::north;
         if (dx == 0) {
-            return clear(0, dy > 0 ? 1 : -1, 0) || clear(0, 0, dz > 0 ? 1 : -1);
+            return clear(direction_y) || clear(direction_z);
         }
         if (dy == 0) {
-            return clear(dx > 0 ? 1 : -1, 0, 0) || clear(0, 0, dz > 0 ? 1 : -1);
+            return clear(direction_x) || clear(direction_z);
         }
-        return clear(dx > 0 ? 1 : -1, 0, 0) || clear(0, dy > 0 ? 1 : -1, 0);
+        return clear(direction_x) || clear(direction_y);
     }
 
     [[nodiscard]] auto valid_movement(const block_pos &origin,
@@ -5505,6 +5531,9 @@ class sculk_spreader {
             discharge(behaviour, current_state, cursor.pos);
             return;
         }
+        // The decay delay and spread delay come from the behaviour that ran
+        // the charge, not from the state the cursor moves into.
+        const auto acting_behaviour = behaviour;
         const auto transfer = valid_movement(origin, cursor.pos);
         if (transfer.has_value()) {
             discharge(behaviour, current_state, cursor.pos);
@@ -5515,11 +5544,11 @@ class sculk_spreader {
             cursor.charge = 0;
             return;
         }
-        behaviour = behaviour_of(current_state);
-        if (behaviour != sculk_behaviour::fallback) {
+        const auto target_behaviour = behaviour_of(current_state);
+        if (target_behaviour != sculk_behaviour::fallback) {
             cursor.facings = available_faces(current_state);
         }
-        if (behaviour == sculk_behaviour::fallback) {
+        if (acting_behaviour == sculk_behaviour::fallback) {
             cursor.decay_delay = std::max(cursor.decay_delay - 1, 0);
         } else {
             cursor.decay_delay = 1;

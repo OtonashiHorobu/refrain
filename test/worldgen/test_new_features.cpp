@@ -758,6 +758,115 @@ suite<"worldgen/feature-closure"> feature_closure_tests = [] {
 };
 
 suite<"worldgen/feature-sculk"> sculk_feature_tests = [] {
+    "a sculk patch matches the reference spread over a stone floor"_test = [] {
+        block_state_registry registry;
+        const auto air =
+            registry.intern("minecraft:air", state_traits{.air = true});
+        const auto stone = registry.intern(
+            "minecraft:stone", state_traits{.air = false,
+                                            .blocks_motion = true,
+                                            .blocks_motion_no_leaves = true});
+        const auto sculk = registry.intern(
+            "minecraft:sculk", state_traits{.air = false,
+                                            .blocks_motion = true,
+                                            .blocks_motion_no_leaves = true});
+        expect(air.has_value() && stone.has_value() && sculk.has_value());
+        if (!air || !stone || !sculk) {
+            return;
+        }
+        const std::array<block_state_id, 1> replaceable{*stone};
+        registry.add_tag("minecraft:sculk_replaceable_world_gen", replaceable);
+        registry.add_tag("minecraft:sculk_replaceable", replaceable);
+        const auto sensor =
+            registry.intern("minecraft:sculk_sensor[power=0,"
+                            "sculk_sensor_phase=inactive,waterlogged=false]",
+                            state_traits{.air = false,
+                                         .blocks_motion = true,
+                                         .blocks_motion_no_leaves = true});
+        const std::array<block_state_id, 1> inhibitors{
+            sensor.value_or(no_block_state)};
+        registry.add_tag("minecraft:sculk_growth_inhibitors", inhibitors);
+
+        std::array<std::unique_ptr<proto_chunk>, 9> chunks;
+        for (jint dz = -1; dz <= 1; ++dz) {
+            for (jint dx = -1; dx <= 1; ++dx) {
+                auto &chunk =
+                    chunks[static_cast<std::size_t>((dz + 1) * 3 + dx + 1)];
+                chunk = std::make_unique<proto_chunk>(registry, dx, dz, 0, 32);
+                chunk->set_status(chunk_status::features);
+            }
+        }
+        proto_chunk &center = *chunks[4];
+        chunk_region region{center, 1};
+        for (auto &chunk : chunks) {
+            if (chunk.get() != &center) {
+                region.attach(*chunk);
+            }
+        }
+        for (jint x = 0; x <= 15; ++x) {
+            for (jint z = 0; z <= 15; ++z) {
+                for (jint y = 8; y <= 10; ++y) {
+                    (void)center.set_state(x, y, z, *stone);
+                }
+                for (jint y = 16; y <= 17; ++y) {
+                    (void)center.set_state(x, y, z, *stone);
+                }
+            }
+        }
+        feature_context context;
+        context.placement = placement_context{
+            .region = &region,
+            .chunk = &center,
+            .states = &registry,
+            .generation = provider::generation_context{.min_y = 0,
+                                                       .height = 32,
+                                                       .sea_level = 8},
+        };
+        context.placement.resolve_state =
+            [&registry](std::string_view key) -> block_state_id {
+            if (const auto found = registry.find(key); found.has_value()) {
+                return *found;
+            }
+            const auto interned =
+                registry.intern(key, registry.infer_traits(key));
+            return interned ? *interned : no_block_state;
+        };
+        context.placement.height = [&region](heightmap_kind kind, jint x,
+                                             jint z) -> jint {
+            return region.height_at(kind, x, z);
+        };
+        const sculk_patch_feature feature{10, 32, 16, 0, 1};
+        worldgen_random random{std::make_unique<legacy_random_source>(1234)};
+        expect(
+            feature.place(context, random, block_pos{.x = 8, .y = 11, .z = 8}));
+
+        jint sculk_blocks = 0;
+        jint vein_blocks = 0;
+        for (const auto &chunk : chunks) {
+            for (jint y = 0; y < 32; ++y) {
+                for (jint z = 0; z < 16; ++z) {
+                    for (jint x = 0; x < 16; ++x) {
+                        const auto name = state_block_name(
+                            registry.name(chunk->state_at(x, y, z)));
+                        if (name == "minecraft:sculk") {
+                            ++sculk_blocks;
+                        } else if (name == "minecraft:sculk_vein") {
+                            ++vein_blocks;
+                        }
+                    }
+                }
+            }
+        }
+        expect(sculk_blocks == 38) << sculk_blocks;
+        expect(vein_blocks == 27) << vein_blocks;
+        expect(region.state_at(8, 10, 8) == *sculk);
+        expect(region.state_at(7, 10, 8) == *sculk);
+        expect(region.state_at(8, 10, 7) == *sculk);
+        expect(region.state_at(9, 10, 8) == *sculk);
+        expect(region.state_at(8, 11, 8) == *air);
+        expect(random.count() == 1748) << random.count();
+    };
+
     "a sculk patch spreads charges over its substrate"_test = [] {
         fixture environment;
         const auto stone = environment.resolve("minecraft:stone");

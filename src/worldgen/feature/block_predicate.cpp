@@ -4,6 +4,8 @@
 
 #include <refrain/worldgen/feature/block_predicate.hpp>
 
+#include <refrain/worldgen/feature/block_shape.hpp>
+
 #include <refrain/data/json.hpp>
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/feature/placement.hpp>
@@ -207,7 +209,7 @@ class solid_predicate final : public block_predicate {
 
 class has_sturdy_face final : public block_predicate {
   public:
-    has_sturdy_face(std::string_view direction, const block_pos &offset)
+    has_sturdy_face(block_face direction, const block_pos &offset)
         : direction_{direction}, offset_{offset} {}
 
   protected:
@@ -216,13 +218,13 @@ class has_sturdy_face final : public block_predicate {
         const block_pos target{.x = context.pos->x + offset_.x,
                                .y = context.pos->y + offset_.y,
                                .z = context.pos->z + offset_.z};
-        return context.states
-            ->traits(context.region->state_at(target.x, target.y, target.z))
-            .blocks_motion;
+        return is_sturdy_face(
+            *context.states,
+            context.region->state_at(target.x, target.y, target.z), direction_);
     }
 
   private:
-    std::string direction_;
+    block_face direction_{block_face::up};
     block_pos offset_{};
 };
 
@@ -544,6 +546,12 @@ auto decode_block_predicate(const data::json::value &document,
         if (!direction_text) {
             return std::unexpected{direction_text.error()};
         }
+        const auto face = parse_block_face(*direction_text);
+        if (!face) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "has_sturdy_face direction is not a block face")};
+        }
         block_pos offset{};
         if (const auto *offset_value = document.find("offset");
             offset_value != nullptr) {
@@ -566,7 +574,7 @@ auto decode_block_predicate(const data::json::value &document,
                                .z = static_cast<jint>(*z)};
         }
         return std::unique_ptr<block_predicate>{
-            std::make_unique<has_sturdy_face>(*direction_text, offset)};
+            std::make_unique<has_sturdy_face>(*face, offset)};
     }
     if (*type == "minecraft:would_survive") {
         const auto *state_value = document.find("state");
