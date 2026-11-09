@@ -1718,6 +1718,9 @@ auto run_server(const server_run_options &options) -> int {
             stream.center_dirty = stream.center_dirty || center_changed;
             stream.reported = false;
         }
+        std::map<std::pair<std::int32_t, std::int32_t>, std::vector<std::byte>>
+            encoded_cache{};
+        std::size_t encode_budget{1};
         for (const auto id : active_ids) {
             auto match{chunk_streams.find(id)};
             if (match == chunk_streams.end()) {
@@ -1733,18 +1736,30 @@ auto run_server(const server_run_options &options) -> int {
                 if (stream.known.contains({x, z})) {
                     continue;
                 }
-                auto encoded{refrain::server::encode_full_chunk(
-                    stream_source, refrain::sim::chunk_pos{x, z})};
-                if (!encoded) {
-                    // The world may not have this chunk generated; remember
-                    // it so the same coordinate is not retried every tick.
-                    refrain::log::debug(
-                        "network: chunk ({}, {}) encode failed: {}", x, z,
-                        encoded.error().message);
-                    stream.known.emplace(x, z);
-                    continue;
+                const auto cache_key{std::pair{x, z}};
+                auto cached{encoded_cache.find(cache_key)};
+                if (cached == encoded_cache.end()) {
+                    if (encode_budget == 0) {
+                        break;
+                    }
+                    --encode_budget;
+                    auto encoded{refrain::server::encode_full_chunk(
+                        stream_source, refrain::sim::chunk_pos{x, z})};
+                    if (!encoded) {
+                        // The world may not have this chunk generated;
+                        // remember it so the same coordinate is not retried
+                        // every tick.
+                        refrain::log::debug(
+                            "network: chunk ({}, {}) encode failed: {}", x, z,
+                            encoded.error().message);
+                        stream.known.emplace(x, z);
+                        continue;
+                    }
+                    cached =
+                        encoded_cache.emplace(cache_key, std::move(*encoded))
+                            .first;
                 }
-                packets.push_back(std::move(*encoded));
+                packets.push_back(cached->second);
                 stream.known.emplace(x, z);
                 ++stream.sent;
             }

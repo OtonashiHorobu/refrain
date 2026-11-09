@@ -170,76 +170,86 @@ struct light_data {
     return section.uniform ? section.value : section.blocks[index];
 }
 
+[[nodiscard]] auto vanilla_state_id(const data::vanilla_tables *tables,
+                                    std::string_view key) -> std::uint32_t {
+    if (key.empty() || tables == nullptr) {
+        return 0;
+    }
+    if (const auto dense{tables->find_state(key)}; dense) {
+        return tables->state_at(*dense).vanilla_id;
+    }
+    // Imported worlds may store only the block name when every property value
+    // is the default; resolve that form to the block's default state instead
+    // of dropping it as air.
+    const auto bracket{key.find('[')};
+    const auto name{key.substr(0, bracket)};
+    if (const auto block{tables->find_block(name)}; block) {
+        const auto default_state{tables->block_at(*block).default_state};
+        return tables->state_at(default_state).vanilla_id;
+    }
+    return 0;
+}
+
 [[nodiscard]] auto encode_section(const sim::world &world,
                                   const data::vanilla_tables *tables,
                                   const net::registry_catalog *catalog,
                                   const sim::section &section)
     -> result<encoded_section> {
     encoded_section encoded{};
-    std::map<std::uint32_t, std::uint32_t> palette_index{};
-    std::vector<sim::block_state_id> runtime_palette{};
-    std::vector<std::uint32_t> vanilla{};
-    vanilla.reserve(section_entries);
-
-    for (std::size_t index{0}; index < section_entries; ++index) {
-        const auto state{block_state(section, index)};
-        const auto key{world.registry().key(state)};
-        std::uint32_t vanilla_id{0};
-        if (!key.empty() && tables != nullptr) {
-            if (const auto dense{tables->find_state(key)}; dense) {
-                vanilla_id = tables->state_at(*dense).vanilla_id;
-            } else {
-                // Imported worlds may store only the block name when every
-                // property value is the default; resolve that form to the
-                // block's default state instead of dropping it as air.
-                const auto bracket{key.find('[')};
-                const auto name{key.substr(0, bracket)};
-                if (const auto block{tables->find_block(name)}; block) {
-                    const auto default_state{
-                        tables->block_at(*block).default_state};
-                    vanilla_id = tables->state_at(default_state).vanilla_id;
-                }
+    if (section.uniform) {
+        const auto key{world.registry().key(section.value)};
+        const auto vanilla_id{vanilla_state_id(tables, key)};
+        encoded.non_empty = vanilla_id == 0 ? 0 : 4096;
+        encoded.fluids = is_fluid(key) ? 4096 : 0;
+        encoded.block_palette.push_back(vanilla_id);
+    } else {
+        std::map<std::uint32_t, std::uint32_t> palette_index{};
+        std::vector<std::uint32_t> vanilla{};
+        vanilla.reserve(section_entries);
+        for (std::size_t index{0}; index < section_entries; ++index) {
+            const auto state{block_state(section, index)};
+            const auto key{world.registry().key(state)};
+            const auto vanilla_id{vanilla_state_id(tables, key)};
+            vanilla.push_back(vanilla_id);
+            if (vanilla_id != 0) {
+                ++encoded.non_empty;
+            }
+            if (is_fluid(key)) {
+                ++encoded.fluids;
             }
         }
-        vanilla.push_back(vanilla_id);
-        const bool air{vanilla_id == 0};
-        if (!air) {
-            ++encoded.non_empty;
-        }
-        if (is_fluid(key)) {
-            ++encoded.fluids;
-        }
-    }
 
-    for (const auto id : vanilla) {
-        if (!palette_index.contains(id)) {
-            const auto next{static_cast<std::uint32_t>(palette_index.size())};
-            palette_index.emplace(id, next);
-            encoded.block_palette.push_back(id);
+        for (const auto id : vanilla) {
+            if (!palette_index.contains(id)) {
+                const auto next{
+                    static_cast<std::uint32_t>(palette_index.size())};
+                palette_index.emplace(id, next);
+                encoded.block_palette.push_back(id);
+            }
         }
-    }
 
-    if (encoded.block_palette.size() == 1) {
-        encoded.block_bits = 0;
-    } else if (encoded.block_palette.size() <= 256) {
-        encoded.block_bits =
-            std::max<std::uint8_t>(4, ceil_log2(encoded.block_palette.size()));
-    } else {
-        encoded.block_global = true;
-        encoded.block_bits =
-            global_palette_bits(tables == nullptr ? 0 : tables->state_count());
-    }
-    encoded.block_words.assign(
-        packed_words(section_entries, encoded.block_bits), 0);
-    if (encoded.block_bits > 0) {
-        const auto per_word{64U / encoded.block_bits};
-        for (std::size_t index{0}; index < section_entries; ++index) {
-            const auto value = encoded.block_global
-                                   ? vanilla[index]
-                                   : palette_index[vanilla[index]];
-            encoded.block_words[index / per_word] |=
-                static_cast<std::uint64_t>(value)
-                << ((index % per_word) * encoded.block_bits);
+        if (encoded.block_palette.size() == 1) {
+            encoded.block_bits = 0;
+        } else if (encoded.block_palette.size() <= 256) {
+            encoded.block_bits = std::max<std::uint8_t>(
+                4, ceil_log2(encoded.block_palette.size()));
+        } else {
+            encoded.block_global = true;
+            encoded.block_bits = global_palette_bits(
+                tables == nullptr ? 0 : tables->state_count());
+        }
+        encoded.block_words.assign(
+            packed_words(section_entries, encoded.block_bits), 0);
+        if (encoded.block_bits > 0) {
+            const auto per_word{64U / encoded.block_bits};
+            for (std::size_t index{0}; index < section_entries; ++index) {
+                const auto value = encoded.block_global
+                                       ? vanilla[index]
+                                       : palette_index[vanilla[index]];
+                encoded.block_words[index / per_word] |=
+                    static_cast<std::uint64_t>(value)
+                    << ((index % per_word) * encoded.block_bits);
+            }
         }
     }
 
@@ -398,7 +408,7 @@ auto encode_full_chunk(const chunk_packet_source &source, sim::chunk_pos pos)
     // WORLD_SURFACE, MOTION_BLOCKING and MOTION_BLOCKING_NO_LEAVES. Stored
     // nine-bit payloads are authoritative; the computed surface is only a
     // fallback for chunks that never carried heightmaps.
-    const auto computed{computed_heightmap(*source.world, chunk)};
+    std::optional<std::vector<std::uint64_t>> computed{};
     constexpr std::size_t heightmap_words{37};
     std::array<std::pair<std::string_view, std::uint32_t>, 3> requested{{
         {"WORLD_SURFACE", 1},
@@ -407,13 +417,19 @@ auto encode_full_chunk(const chunk_packet_source &source, sim::chunk_pos pos)
     }};
     out.write_varint(static_cast<std::uint32_t>(requested.size()));
     for (const auto [name, type] : requested) {
-        std::span<const std::uint64_t> words{computed};
+        std::span<const std::uint64_t> words{};
         for (const auto &stored : chunk.storage.heightmaps) {
             if (stored.name == name && stored.bits_per_entry == 9 &&
                 stored.data.size() == heightmap_words) {
                 words = stored.data;
                 break;
             }
+        }
+        if (words.empty()) {
+            if (!computed) {
+                computed = computed_heightmap(*source.world, chunk);
+            }
+            words = *computed;
         }
         out.write_varint(type);
         out.write_varint(static_cast<std::uint32_t>(words.size()));
