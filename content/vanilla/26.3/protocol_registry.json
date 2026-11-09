@@ -620,23 +620,6 @@
    ]
   },
   {
-   "registry": "minecraft:cow_variant",
-   "entries": [
-    {
-     "name": "minecraft:cold",
-     "id": 0
-    },
-    {
-     "name": "minecraft:temperate",
-     "id": 1
-    },
-    {
-     "name": "minecraft:warm",
-     "id": 2
-    }
-   ]
-  },
-  {
    "registry": "minecraft:cow_sound_variant",
    "entries": [
     {
@@ -650,7 +633,7 @@
    ]
   },
   {
-   "registry": "minecraft:chicken_variant",
+   "registry": "minecraft:cow_variant",
    "entries": [
     {
      "name": "minecraft:cold",
@@ -676,6 +659,23 @@
     {
      "name": "minecraft:picky",
      "id": 1
+    }
+   ]
+  },
+  {
+   "registry": "minecraft:chicken_variant",
+   "entries": [
+    {
+     "name": "minecraft:cold",
+     "id": 0
+    },
+    {
+     "name": "minecraft:temperate",
+     "id": 1
+    },
+    {
+     "name": "minecraft:warm",
+     "id": 2
     }
    ]
   },
