@@ -43,8 +43,9 @@ The composition mode of a service decides how many providers may be active:
 forward selectively) and `registry` (contributions merged into a registry).
 `sealed` is the host-owned mode: the process bootstrap registers the only
 provider before mod loading, and a gamepack or mod cannot select or replace it.
-The first sealed service is `refrain:host.core`, the stable runtime API offered
-to mods.
+The sealed host services (`refrain:host.core`, `refrain:host.platform`,
+`refrain:host.kernel` and `refrain:host.metadata`) are the stable runtime API
+offered to mods.
 
 ## Composition
 
