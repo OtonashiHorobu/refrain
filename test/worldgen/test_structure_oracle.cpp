@@ -1577,12 +1577,12 @@ suite<"worldgen/structure-oracle"> structure_oracle_tests = [] {
             std::fprintf(stderr, "mineshaft pieces ours=%zu ref=%zu\n",
                          start.pieces.size(), pieces->items.size());
             const auto print =
-                [](const char *tag, std::size_t index, std::string_view id,
+                [](const char *label, std::size_t index, std::string_view id,
                    jint o,
                    const refrain::worldgen::structure::structure_bbox &b) {
                     std::fprintf(
                         stderr, "%s %zu %.*s O=%d BB=[%d,%d,%d,%d,%d,%d]\n",
-                        tag, index, static_cast<int>(id.size()), id.data(),
+                        label, index, static_cast<int>(id.size()), id.data(),
                         static_cast<int>(o), static_cast<int>(b.min_x),
                         static_cast<int>(b.min_y), static_cast<int>(b.min_z),
                         static_cast<int>(b.max_x), static_cast<int>(b.max_y),

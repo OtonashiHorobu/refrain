@@ -768,15 +768,15 @@ suite<"worldgen/template"> template_tests = [] {
     "a linear position predicate interpolates between distance bounds"_test =
         [] {
             const block_pos reference{};
-            position_rule_test test{};
-            test.type = position_rule_type::linear_pos;
-            test.min_chance = 0.25F;
-            test.max_chance = 0.75F;
-            test.min_dist = 0;
-            test.max_dist = 10;
+            position_rule_test rule{};
+            rule.type = position_rule_type::linear_pos;
+            rule.min_chance = 0.25F;
+            rule.max_chance = 0.75F;
+            rule.min_dist = 0;
+            rule.max_dist = 10;
             const auto passes = [&](jint bits, const block_pos &world) {
                 auto random = scripted_random(bits);
-                return test.test(world, reference, random);
+                return rule.test(world, reference, random);
             };
             // 0.25, 0.5 and 0.75 are exact 24-bit float draws.
             expect(passes(1 << 22, block_pos{.x = 0, .y = 0, .z = 0}));
@@ -795,17 +795,17 @@ suite<"worldgen/template"> template_tests = [] {
 
     "an axis aligned position predicate measures only its axis"_test = [] {
         const block_pos reference{};
-        position_rule_test test{};
-        test.type = position_rule_type::axis_aligned_linear_pos;
-        test.min_chance = 0.0F;
-        test.max_chance = 1.0F;
-        test.min_dist = 0;
-        test.max_dist = 10;
+        position_rule_test rule{};
+        rule.type = position_rule_type::axis_aligned_linear_pos;
+        rule.min_chance = 0.0F;
+        rule.max_chance = 1.0F;
+        rule.min_dist = 0;
+        rule.max_dist = 10;
         const auto passes = [&](jint bits, const block_pos &world) {
             auto random = scripted_random(bits);
-            return test.test(world, reference, random);
+            return rule.test(world, reference, random);
         };
-        test.axis = position_axis::x;
+        rule.axis = position_axis::x;
         expect(passes((1 << 24) - 1, block_pos{.x = 100, .y = 0, .z = 0}));
         expect(passes((1 << 24) - 1, block_pos{.x = -100, .y = 0, .z = 0}));
         // The maximum draw still passes a chance of one.
@@ -813,14 +813,14 @@ suite<"worldgen/template"> template_tests = [] {
         // A distance of zero uses the minimum chance; only a zero draw passes.
         expect(passes(0, block_pos{.x = 0, .y = 0, .z = 0}));
         expect(!passes(1, block_pos{.x = 0, .y = 0, .z = 0}));
-        test.axis = position_axis::y;
+        rule.axis = position_axis::y;
         expect(!passes(1, block_pos{.x = 100, .y = 0, .z = 100}));
-        test.axis = position_axis::z;
+        rule.axis = position_axis::z;
         expect(passes((1 << 24) - 1, block_pos{.x = 0, .y = 0, .z = 10}));
         // A falling chance clamps the same way.
-        test.min_chance = 1.0F;
-        test.max_chance = 0.0F;
-        test.axis = position_axis::y;
+        rule.min_chance = 1.0F;
+        rule.max_chance = 0.0F;
+        rule.axis = position_axis::y;
         expect(passes(0, block_pos{.x = 0, .y = 0, .z = 0}));
         expect(!passes(1, block_pos{.x = 0, .y = 10, .z = 0}));
     };
