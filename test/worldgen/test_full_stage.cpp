@@ -633,15 +633,15 @@ void run_full_stage_case(std::string_view prefix,
             child(document->as_compound(), "block_entities");
         if (block_entities != nullptr && block_entities->as_list() != nullptr) {
             for (const auto &entry : block_entities->as_list()->items) {
-                const auto *tag = entry.as_compound();
-                if (tag == nullptr) {
+                const auto *block_tag = entry.as_compound();
+                if (block_tag == nullptr) {
                     continue;
                 }
-                const auto *table = child(tag, "LootTable");
-                const auto *seed_tag = child(tag, "LootTableSeed");
-                const auto *x = child(tag, "x");
-                const auto *y = child(tag, "y");
-                const auto *z = child(tag, "z");
+                const auto *table = child(block_tag, "LootTable");
+                const auto *seed_tag = child(block_tag, "LootTableSeed");
+                const auto *x = child(block_tag, "x");
+                const auto *y = child(block_tag, "y");
+                const auto *z = child(block_tag, "z");
                 if (table == nullptr || seed_tag == nullptr || x == nullptr ||
                     y == nullptr || z == nullptr) {
                     continue;
