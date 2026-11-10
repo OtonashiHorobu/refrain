@@ -2127,7 +2127,11 @@ auto emit_metadata(const model &program, std::string_view schema_hash)
             return "optional<" + self(self, type.arguments.front()) + ">";
         case resolved_type::category::repeated:
             return "repeated<" + self(self, type.arguments.front()) + ">";
-        }
+                case resolved_type::category::map:
+        case resolved_type::category::either:
+        case resolved_type::category::holder:
+            std::unreachable();
+}
         return "?";
     };
     const auto type_id_of = [&](const resolved_type &type) {
@@ -2347,7 +2351,45 @@ auto emit_rust(const model &program, std::string_view schema_hash)
                 return "*mut ::core::ffi::c_void";
             case primitive_kind::void_type:
                 return "()";
-            }
+                        case primitive_kind::identifier:
+            case primitive_kind::uuid:
+            case primitive_kind::text_component:
+            case primitive_kind::item_stack:
+            case primitive_kind::lp_vec3:
+            case primitive_kind::nbt:
+            case primitive_kind::varint_id:
+            case primitive_kind::message_signature_packed:
+            case primitive_kind::filter_mask:
+            case primitive_kind::stat_entry:
+            case primitive_kind::position_path:
+            case primitive_kind::map_patch:
+            case primitive_kind::advancement_seen:
+            case primitive_kind::vec_delta:
+            case primitive_kind::sound_selector:
+            case primitive_kind::objective_update:
+            case primitive_kind::team_update:
+            case primitive_kind::player_info_update:
+            case primitive_kind::tracked_waypoint:
+            case primitive_kind::component_predicate:
+            case primitive_kind::merchant_offer:
+            case primitive_kind::entity_metadata:
+            case primitive_kind::item_stack_template:
+            case primitive_kind::advancement_display:
+            case primitive_kind::advancement_requirements:
+            case primitive_kind::advancement:
+            case primitive_kind::advancement_progress:
+            case primitive_kind::holder_set:
+            case primitive_kind::slot_display:
+            case primitive_kind::recipe_display:
+            case primitive_kind::recipe_display_entry:
+            case primitive_kind::single_input_set:
+            case primitive_kind::particle_options:
+            case primitive_kind::debug_subscription_update:
+            case primitive_kind::debug_subscription_event:
+            case primitive_kind::command_tree:
+            case primitive_kind::container_click_data:
+                std::unreachable();
+}
             return "()";
         case resolved_type::category::named:
             return decl_of(program, type.module_index, type.decl_index).name;
@@ -2359,7 +2401,11 @@ auto emit_rust(const model &program, std::string_view schema_hash)
         case resolved_type::category::optional:
         case resolved_type::category::repeated:
             return "()";
-        }
+                case resolved_type::category::map:
+        case resolved_type::category::either:
+        case resolved_type::category::holder:
+            std::unreachable();
+}
         return "()";
     };
     const auto rust_type_of = [&](const resolved_type &type) {

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 3a0899b8b7e5f861
+// Schema hash: 04d13b3ba7228746
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_METADATA_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_METADATA_HPP
@@ -236,6 +236,12 @@ inline constexpr std::array<field_entry, 5> refrain_services_data_packs_pack_inf
     field_entry{"pack_format" , "u32", 48, 4, 0},
     field_entry{"file_count" , "u64", 56, 8, 0},
 };
+inline constexpr std::array<enum_value_entry, 4> refrain_services_net_protocol_protocol_edition_values{
+    enum_value_entry{"java" , 0},
+    enum_value_entry{"bedrock" , 1},
+    enum_value_entry{"refrain" , 2},
+    enum_value_entry{"custom" , 3},
+};
 inline constexpr std::array<enum_value_entry, 5> refrain_services_net_protocol_protocol_error_values{
     enum_value_entry{"frame_too_large" , 1},
     enum_value_entry{"malformed_packet" , 2},
@@ -243,12 +249,34 @@ inline constexpr std::array<enum_value_entry, 5> refrain_services_net_protocol_p
     enum_value_entry{"unsupported_version" , 4},
     enum_value_entry{"compression_failed" , 5},
 };
+inline constexpr std::array<enum_value_entry, 4> refrain_services_net_protocol_protocol_event_values{
+    enum_value_entry{"status_request" , 0},
+    enum_value_entry{"login_request" , 1},
+    enum_value_entry{"login_acknowledged" , 2},
+    enum_value_entry{"configuration_acknowledged" , 3},
+};
 inline constexpr std::array<enum_value_entry, 5> refrain_services_net_protocol_connection_state_values{
     enum_value_entry{"handshake" , 0},
     enum_value_entry{"status" , 1},
     enum_value_entry{"login" , 2},
     enum_value_entry{"configuration" , 3},
     enum_value_entry{"play" , 4},
+};
+inline constexpr std::array<field_entry, 7> refrain_services_net_protocol_protocol_descriptor_fields{
+    field_entry{"edition" , "refrain::services::net_protocol::protocol_edition", 4, 4, 0},
+    field_entry{"family" , "string", 8, 16, 0},
+    field_entry{"canonical_version" , "u32", 24, 4, 0},
+    field_entry{"accepted_versions" , "string", 32, 16, 0},
+    field_entry{"transport_protocol" , "u32", 48, 4, 0},
+    field_entry{"requires_stream" , "bool", 52, 1, 0},
+    field_entry{"capabilities" , "string", 56, 16, 0},
+};
+inline constexpr std::array<field_entry, 1> refrain_services_net_protocol_frame_chunk_fields{
+    field_entry{"data" , "bytes", 8, 16, 0},
+};
+inline constexpr std::array<field_entry, 2> refrain_services_net_protocol_decoded_packet_fields{
+    field_entry{"header" , "refrain::services::net_protocol::frame_header", 4, 12, 0},
+    field_entry{"packet" , "refrain::services::net_protocol::packet_view", 16, 24, 0},
 };
 inline constexpr std::array<field_entry, 2> refrain_services_net_protocol_protocol_version_fields{
     field_entry{"protocol" , "u32", 4, 4, 0},
@@ -262,35 +290,94 @@ inline constexpr std::array<field_entry, 2> refrain_services_net_protocol_packet
     field_entry{"packet_id" , "u32", 4, 4, 0},
     field_entry{"payload" , "bytes", 8, 16, 0},
 };
+inline constexpr std::array<field_entry, 1> refrain_services_net_protocol_encoded_packet_fields{
+    field_entry{"data" , "bytes", 8, 16, 0},
+};
+inline constexpr std::array<enum_value_entry, 4> refrain_services_net_session_session_error_values{
+    enum_value_entry{"invalid_argument" , 1},
+    enum_value_entry{"not_joined" , 2},
+    enum_value_entry{"unavailable" , 3},
+    enum_value_entry{"malformed_profile" , 4},
+};
+inline constexpr std::array<field_entry, 3> refrain_services_net_session_session_profile_fields{
+    field_entry{"id" , "string", 8, 16, 0},
+    field_entry{"name" , "string", 24, 16, 0},
+    field_entry{"properties" , "bytes", 40, 16, 0},
+};
+inline constexpr std::array<enum_value_entry, 3> refrain_services_net_translator_translation_error_values{
+    enum_value_entry{"unsupported" , 1},
+    enum_value_entry{"malformed_packet" , 2},
+    enum_value_entry{"internal" , 3},
+};
+inline constexpr std::array<field_entry, 4> refrain_services_net_translator_translator_descriptor_fields{
+    field_entry{"name" , "string", 8, 16, 0},
+    field_entry{"source_family" , "string", 24, 16, 0},
+    field_entry{"target_family" , "string", 40, 16, 0},
+    field_entry{"capabilities" , "string", 56, 16, 0},
+};
+inline constexpr std::array<field_entry, 5> refrain_services_net_translator_translation_request_fields{
+    field_entry{"connection" , "u64", 8, 8, 0},
+    field_entry{"source_protocol" , "u32", 16, 4, 0},
+    field_entry{"target_protocol" , "u32", 20, 4, 0},
+    field_entry{"packet_id" , "u32", 24, 4, 0},
+    field_entry{"payload" , "bytes", 32, 16, 0},
+};
+inline constexpr std::array<field_entry, 2> refrain_services_net_translator_translation_result_fields{
+    field_entry{"packet_id" , "u32", 4, 4, 0},
+    field_entry{"payload" , "bytes", 8, 16, 0},
+};
 inline constexpr std::array<enum_value_entry, 3> refrain_services_runtime_runtime_error_values{
     enum_value_entry{"invalid_config" , 1},
     enum_value_entry{"io_error" , 2},
     enum_value_entry{"internal" , 3},
 };
-inline constexpr std::array<field_entry, 23> refrain_services_runtime_runtime_config_fields{
+inline constexpr std::array<field_entry, 22> refrain_services_runtime_runtime_config_fields{
     field_entry{"world_path" , "string", 8, 16, 0},
-    field_entry{"server_properties" , "string", 24, 16, 0},
-    field_entry{"ticks" , "i64", 40, 8, 0},
-    field_entry{"command_file" , "string", 48, 16, 0},
-    field_entry{"script_file" , "string", 64, 16, 0},
-    field_entry{"hash_every" , "u64", 80, 8, 0},
-    field_entry{"world_zstd_level" , "i32", 88, 4, 0},
-    field_entry{"zstd_near_level" , "i32", 92, 4, 0},
-    field_entry{"zstd_mid_level" , "i32", 96, 4, 0},
-    field_entry{"zstd_far_level" , "i32", 100, 4, 0},
-    field_entry{"zstd_near_radius" , "i32", 104, 4, 0},
-    field_entry{"zstd_mid_radius" , "i32", 108, 4, 0},
-    field_entry{"watchdog_timeout_ms" , "u32", 112, 4, 0},
-    field_entry{"autosave_interval_ticks" , "u64", 120, 8, 0},
-    field_entry{"compact_interval_ticks" , "u64", 128, 8, 0},
-    field_entry{"compact_min_bytes" , "u64", 136, 8, 0},
-    field_entry{"compact_garbage_percent" , "u32", 144, 4, 0},
-    field_entry{"store_compact_interval_ticks" , "u64", 152, 8, 0},
-    field_entry{"content_store" , "string", 160, 16, 0},
-    field_entry{"content_gc_apply" , "bool", 176, 1, 0},
-    field_entry{"content_gc_keep_days" , "i32", 180, 4, 0},
-    field_entry{"content_gc_budget_ms" , "u64", 184, 8, 0},
-    field_entry{"content_gc_interval_ticks" , "u64", 192, 8, 0},
+    field_entry{"ticks" , "i64", 24, 8, 0},
+    field_entry{"command_file" , "string", 32, 16, 0},
+    field_entry{"script_file" , "string", 48, 16, 0},
+    field_entry{"hash_every" , "u64", 64, 8, 0},
+    field_entry{"world_zstd_level" , "i32", 72, 4, 0},
+    field_entry{"zstd_near_level" , "i32", 76, 4, 0},
+    field_entry{"zstd_mid_level" , "i32", 80, 4, 0},
+    field_entry{"zstd_far_level" , "i32", 84, 4, 0},
+    field_entry{"zstd_near_radius" , "i32", 88, 4, 0},
+    field_entry{"zstd_mid_radius" , "i32", 92, 4, 0},
+    field_entry{"watchdog_timeout_ms" , "u32", 96, 4, 0},
+    field_entry{"autosave_interval_ticks" , "u64", 104, 8, 0},
+    field_entry{"compact_interval_ticks" , "u64", 112, 8, 0},
+    field_entry{"compact_min_bytes" , "u64", 120, 8, 0},
+    field_entry{"compact_garbage_percent" , "u32", 128, 4, 0},
+    field_entry{"store_compact_interval_ticks" , "u64", 136, 8, 0},
+    field_entry{"content_store" , "string", 144, 16, 0},
+    field_entry{"content_gc_apply" , "bool", 160, 1, 0},
+    field_entry{"content_gc_keep_days" , "i32", 164, 4, 0},
+    field_entry{"content_gc_budget_ms" , "u64", 168, 8, 0},
+    field_entry{"content_gc_interval_ticks" , "u64", 176, 8, 0},
+};
+inline constexpr std::array<field_entry, 3> refrain_services_session_lifecycle_player_info_fields{
+    field_entry{"connection" , "u64", 8, 8, 0},
+    field_entry{"name" , "string", 16, 16, 0},
+    field_entry{"world" , "string", 32, 16, 0},
+};
+inline constexpr std::array<field_entry, 4> refrain_services_session_status_status_request_fields{
+    field_entry{"protocol" , "u32", 4, 4, 0},
+    field_entry{"host" , "string", 8, 16, 0},
+    field_entry{"port" , "u16", 24, 2, 0},
+    field_entry{"online_players" , "u32", 28, 4, 0},
+};
+inline constexpr std::array<field_entry, 3> refrain_services_session_status_status_view_fields{
+    field_entry{"description" , "string", 8, 16, 0},
+    field_entry{"online_players" , "u32", 24, 4, 0},
+    field_entry{"max_players" , "u32", 28, 4, 0},
+};
+inline constexpr std::array<field_entry, 2> refrain_services_session_tab_tab_request_fields{
+    field_entry{"connection" , "u64", 8, 8, 0},
+    field_entry{"player_name" , "string", 16, 16, 0},
+};
+inline constexpr std::array<field_entry, 2> refrain_services_session_tab_tab_view_fields{
+    field_entry{"header" , "string", 8, 16, 0},
+    field_entry{"footer" , "string", 24, 16, 0},
 };
 inline constexpr std::array<enum_value_entry, 5> refrain_services_sim_sim_error_values{
     enum_value_entry{"invalid_handle" , 1},
@@ -324,6 +411,50 @@ inline constexpr std::array<field_entry, 3> refrain_services_storage_chunk_read_
     field_entry{"bytes_read" , "u32", 4, 4, 0},
     field_entry{"format_version" , "u32", 8, 4, 0},
     field_entry{"record_version" , "u64", 16, 8, 0},
+};
+inline constexpr std::array<enum_value_entry, 8> refrain_services_transport_transport_error_values{
+    enum_value_entry{"invalid_argument" , 1},
+    enum_value_entry{"not_found" , 2},
+    enum_value_entry{"already_exists" , 3},
+    enum_value_entry{"permission_denied" , 4},
+    enum_value_entry{"io_error" , 5},
+    enum_value_entry{"out_of_memory" , 6},
+    enum_value_entry{"unsupported" , 7},
+    enum_value_entry{"closed" , 8},
+};
+inline constexpr std::array<enum_value_entry, 7> refrain_services_transport_transport_protocol_values{
+    enum_value_entry{"tcp" , 0},
+    enum_value_entry{"tls_tcp" , 1},
+    enum_value_entry{"raknet" , 2},
+    enum_value_entry{"unix_stream" , 3},
+    enum_value_entry{"memory_stream" , 4},
+    enum_value_entry{"memory_message" , 5},
+    enum_value_entry{"custom" , 6},
+};
+inline constexpr std::array<enum_value_entry, 4> refrain_services_transport_transport_event_kind_values{
+    enum_value_entry{"opened" , 1},
+    enum_value_entry{"data" , 2},
+    enum_value_entry{"closed" , 3},
+    enum_value_entry{"error" , 4},
+};
+inline constexpr std::array<field_entry, 2> refrain_services_transport_transport_endpoint_fields{
+    field_entry{"host" , "string", 8, 16, 0},
+    field_entry{"port" , "u16", 24, 2, 0},
+};
+inline constexpr std::array<field_entry, 7> refrain_services_transport_transport_descriptor_fields{
+    field_entry{"provider" , "string", 8, 16, 0},
+    field_entry{"protocol" , "refrain::services::transport::transport_protocol", 24, 4, 0},
+    field_entry{"reliable" , "bool", 28, 1, 0},
+    field_entry{"ordered" , "bool", 29, 1, 0},
+    field_entry{"message_oriented" , "bool", 30, 1, 0},
+    field_entry{"mtu" , "u32", 32, 4, 0},
+    field_entry{"backpressure" , "bool", 36, 1, 0},
+};
+inline constexpr std::array<field_entry, 4> refrain_services_transport_transport_event_fields{
+    field_entry{"kind" , "refrain::services::transport::transport_event_kind", 4, 4, 0},
+    field_entry{"connection" , "u64", 8, 8, 0},
+    field_entry{"data" , "bytes", 16, 16, 0},
+    field_entry{"error" , "string", 32, 16, 0},
 };
 inline constexpr std::array<enum_value_entry, 6> refrain_services_world_world_error_values{
     enum_value_entry{"chunk_not_loaded" , 1},
@@ -364,7 +495,7 @@ inline constexpr std::array<field_entry, 3> refrain_services_worldgen_generate_o
 };
 } // namespace detail
 
-inline constexpr std::array<type_entry, 44> types{
+inline constexpr std::array<type_entry, 67> types{
     type_entry{"refrain::core::core_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_core_core_error_values}},
     type_entry{"refrain::core::chunk_status", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_core_chunk_status_values}},
     type_entry{"refrain::core::block_face", 1, 1, 1, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_core_block_face_values}},
@@ -390,19 +521,42 @@ inline constexpr std::array<type_entry, 44> types{
     type_entry{"refrain::services::data_packs::pack_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_data_packs_pack_error_values}},
     type_entry{"refrain::services::data_packs::pack_source", 0, 32, 8, std::span<const field_entry>{detail::refrain_services_data_packs_pack_source_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::data_packs::pack_info", 0, 64, 8, std::span<const field_entry>{detail::refrain_services_data_packs_pack_info_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::net_protocol::protocol_edition", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_net_protocol_protocol_edition_values}},
     type_entry{"refrain::services::net_protocol::protocol_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_net_protocol_protocol_error_values}},
+    type_entry{"refrain::services::net_protocol::protocol_event", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_net_protocol_protocol_event_values}},
     type_entry{"refrain::services::net_protocol::connection_state", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_net_protocol_connection_state_values}},
+    type_entry{"refrain::services::net_protocol::protocol_descriptor", 0, 72, 8, std::span<const field_entry>{detail::refrain_services_net_protocol_protocol_descriptor_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::net_protocol::frame_chunk", 0, 24, 8, std::span<const field_entry>{detail::refrain_services_net_protocol_frame_chunk_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::net_protocol::decoded_packet", 0, 40, 8, std::span<const field_entry>{detail::refrain_services_net_protocol_decoded_packet_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::net_protocol::protocol_version", 0, 24, 8, std::span<const field_entry>{detail::refrain_services_net_protocol_protocol_version_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::net_protocol::frame_header", 0, 12, 4, std::span<const field_entry>{detail::refrain_services_net_protocol_frame_header_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::net_protocol::packet_view", 0, 24, 8, std::span<const field_entry>{detail::refrain_services_net_protocol_packet_view_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::net_protocol::encoded_packet", 0, 24, 8, std::span<const field_entry>{detail::refrain_services_net_protocol_encoded_packet_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::net_session::session_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_net_session_session_error_values}},
+    type_entry{"refrain::services::net_session::session_profile", 0, 56, 8, std::span<const field_entry>{detail::refrain_services_net_session_session_profile_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::net_translator::translation_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_net_translator_translation_error_values}},
+    type_entry{"refrain::services::net_translator::translator_descriptor", 0, 72, 8, std::span<const field_entry>{detail::refrain_services_net_translator_translator_descriptor_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::net_translator::translation_request", 0, 48, 8, std::span<const field_entry>{detail::refrain_services_net_translator_translation_request_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::net_translator::translation_result", 0, 24, 8, std::span<const field_entry>{detail::refrain_services_net_translator_translation_result_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::runtime::runtime_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_runtime_runtime_error_values}},
-    type_entry{"refrain::services::runtime::runtime_config", 0, 200, 8, std::span<const field_entry>{detail::refrain_services_runtime_runtime_config_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::runtime::runtime_config", 0, 184, 8, std::span<const field_entry>{detail::refrain_services_runtime_runtime_config_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::session_lifecycle::player_info", 0, 48, 8, std::span<const field_entry>{detail::refrain_services_session_lifecycle_player_info_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::session_status::status_request", 0, 32, 8, std::span<const field_entry>{detail::refrain_services_session_status_status_request_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::session_status::status_view", 0, 32, 8, std::span<const field_entry>{detail::refrain_services_session_status_status_view_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::session_tab::tab_request", 0, 32, 8, std::span<const field_entry>{detail::refrain_services_session_tab_tab_request_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::session_tab::tab_view", 0, 40, 8, std::span<const field_entry>{detail::refrain_services_session_tab_tab_view_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::sim::sim_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_sim_sim_error_values}},
     type_entry{"refrain::services::sim::sim_config", 0, 32, 8, std::span<const field_entry>{detail::refrain_services_sim_sim_config_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::storage::storage_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_storage_storage_error_values}},
     type_entry{"refrain::services::storage::world_open_config", 0, 48, 8, std::span<const field_entry>{detail::refrain_services_storage_world_open_config_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::storage::chunk_key", 0, 20, 4, std::span<const field_entry>{detail::refrain_services_storage_chunk_key_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::storage::chunk_read_result", 0, 24, 8, std::span<const field_entry>{detail::refrain_services_storage_chunk_read_result_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::transport::transport_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_transport_transport_error_values}},
+    type_entry{"refrain::services::transport::transport_protocol", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_transport_transport_protocol_values}},
+    type_entry{"refrain::services::transport::transport_event_kind", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_transport_transport_event_kind_values}},
+    type_entry{"refrain::services::transport::transport_endpoint", 0, 32, 8, std::span<const field_entry>{detail::refrain_services_transport_transport_endpoint_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::transport::transport_descriptor", 0, 40, 8, std::span<const field_entry>{detail::refrain_services_transport_transport_descriptor_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::transport::transport_event", 0, 48, 8, std::span<const field_entry>{detail::refrain_services_transport_transport_event_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::world::world_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_world_world_error_values}},
     type_entry{"refrain::services::world::world_config", 0, 32, 8, std::span<const field_entry>{detail::refrain_services_world_world_config_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::worldgen::worldgen_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_worldgen_worldgen_error_values}},
@@ -411,21 +565,27 @@ inline constexpr std::array<type_entry, 44> types{
     type_entry{"refrain::services::worldgen::generate_outcome", 0, 24, 8, std::span<const field_entry>{detail::refrain_services_worldgen_generate_outcome_fields}, std::span<const enum_value_entry>{}},
 };
 
-inline constexpr std::array<contract_entry, 11> contracts{
-    contract_entry{"refrain:host.core", 1, 0, 0, "3a0899b8b7e5f861", 12},
-    contract_entry{"refrain:host.kernel", 1, 0, 0, "3a0899b8b7e5f861", 6},
-    contract_entry{"refrain:host.metadata", 1, 0, 0, "3a0899b8b7e5f861", 8},
-    contract_entry{"refrain:host.platform", 1, 0, 0, "3a0899b8b7e5f861", 12},
-    contract_entry{"refrain:data.packs", 1, 0, 0, "3a0899b8b7e5f861", 4},
-    contract_entry{"refrain:net.protocol", 1, 0, 0, "3a0899b8b7e5f861", 5},
-    contract_entry{"refrain:runtime", 1, 0, 0, "3a0899b8b7e5f861", 1},
-    contract_entry{"refrain:sim", 1, 0, 0, "3a0899b8b7e5f861", 5},
-    contract_entry{"refrain:storage", 1, 0, 0, "3a0899b8b7e5f861", 6},
-    contract_entry{"refrain:world", 1, 0, 0, "3a0899b8b7e5f861", 8},
-    contract_entry{"refrain:worldgen", 1, 0, 0, "3a0899b8b7e5f861", 4},
+inline constexpr std::array<contract_entry, 17> contracts{
+    contract_entry{"refrain:host.core", 1, 0, 0, "04d13b3ba7228746", 12},
+    contract_entry{"refrain:host.kernel", 1, 0, 0, "04d13b3ba7228746", 6},
+    contract_entry{"refrain:host.metadata", 1, 0, 0, "04d13b3ba7228746", 8},
+    contract_entry{"refrain:host.platform", 1, 0, 0, "04d13b3ba7228746", 12},
+    contract_entry{"refrain:data.packs", 1, 0, 0, "04d13b3ba7228746", 4},
+    contract_entry{"refrain:net.protocol", 2, 0, 0, "04d13b3ba7228746", 14},
+    contract_entry{"refrain:net.session", 1, 0, 0, "04d13b3ba7228746", 2},
+    contract_entry{"refrain:net.translator", 1, 0, 0, "04d13b3ba7228746", 2},
+    contract_entry{"refrain:runtime", 2, 0, 0, "04d13b3ba7228746", 1},
+    contract_entry{"refrain:session.lifecycle", 1, 0, 0, "04d13b3ba7228746", 3},
+    contract_entry{"refrain:session.status", 1, 0, 0, "04d13b3ba7228746", 1},
+    contract_entry{"refrain:session.tab", 1, 0, 0, "04d13b3ba7228746", 1},
+    contract_entry{"refrain:sim", 1, 0, 0, "04d13b3ba7228746", 5},
+    contract_entry{"refrain:storage", 1, 0, 0, "04d13b3ba7228746", 6},
+    contract_entry{"refrain:transport", 1, 0, 0, "04d13b3ba7228746", 9},
+    contract_entry{"refrain:world", 1, 0, 0, "04d13b3ba7228746", 8},
+    contract_entry{"refrain:worldgen", 1, 0, 0, "04d13b3ba7228746", 4},
 };
 
-inline constexpr std::string_view schema_hash = "3a0899b8b7e5f861";
+inline constexpr std::string_view schema_hash = "04d13b3ba7228746";
 
 } // namespace refrain::metadata
 

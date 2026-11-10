@@ -92,7 +92,7 @@ auto host_context::config_i64(std::string_view ns, std::string_view key)
     const auto view{config_->module(ns)};
     if (!view || !view->valid()) {
         return std::unexpected{refrain::make_error(
-            refrain::error_code::unsupported,
+            refrain::error_code::not_found,
             "config namespace '" + std::string{ns} + "' is not mounted")};
     }
     if (!view->contains(key)) {
@@ -117,7 +117,7 @@ auto host_context::config_bool(std::string_view ns, std::string_view key)
     const auto view{config_->module(ns)};
     if (!view || !view->valid()) {
         return std::unexpected{refrain::make_error(
-            refrain::error_code::unsupported,
+            refrain::error_code::not_found,
             "config namespace '" + std::string{ns} + "' is not mounted")};
     }
     if (!view->contains(key)) {
@@ -142,7 +142,7 @@ auto host_context::config_string(std::string_view ns, std::string_view key)
     const auto view{config_->module(ns)};
     if (!view || !view->valid()) {
         return std::unexpected{refrain::make_error(
-            refrain::error_code::unsupported,
+            refrain::error_code::not_found,
             "config namespace '" + std::string{ns} + "' is not mounted")};
     }
     if (!view->contains(key)) {

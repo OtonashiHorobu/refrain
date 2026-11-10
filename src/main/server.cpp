@@ -164,10 +164,10 @@ int main(int argc, char **argv) {
 
     std::string gamepack{"gamepack/gamepack.toml"};
     app.add_option("-g,--gamepack", gamepack, "Path to gamepack.toml");
-    std::string config_dir;
+    std::string config_dir{"config"};
     app.add_option("--config-dir", config_dir,
-                   "Host config directory (TOML namespaces; disabled when "
-                   "empty)");
+                   "Directory with per-namespace TOML configuration files "
+                   "(disabled when empty)");
     std::string log_level{"info"};
     app.add_option("--log-level", log_level, "Console log level");
     // Crash reporting is opt-in: without --crash-dir the server never creates a
@@ -185,9 +185,6 @@ int main(int argc, char **argv) {
     app.add_option("--world", world_path,
                    "RWF world directory (overrides world.path; enables the "
                    "tick loop)");
-    std::string config_dir{"config"};
-    app.add_option("--config-dir", config_dir,
-                   "Directory with per-namespace TOML configuration files");
     std::string import_properties_path;
     app.add_option("--import-properties", import_properties_path,
                    "Import a Java server.properties file as a fallback layer");
@@ -834,8 +831,7 @@ int main(int argc, char **argv) {
     // The host runtime API is a sealed service: register the process-owned
     // provider before any mod factory runs. Mods may query it through the
     // frozen registry, but cannot provide or replace it.
-    refrain::app::host_context host_context{
-        mods, {}, &config_store};
+    refrain::app::host_context host_context{mods, {}, &config_store};
     const refrain::mod::provider_api host_core_api{
         .vtable = &refrain::host::core_vtable(),
         .self = &host_context,

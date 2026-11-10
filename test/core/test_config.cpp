@@ -421,61 +421,72 @@ name = "x"
     };
 
     "config/store mounts namespaces and isolates keys"_test = [] {
+        const auto root{make_temp_dir()};
+        write_text_file(root / "network.toml", "port = 25565\nmotd = \"hi\"\n");
+        write_text_file(root / "world.toml", "level_name = \"world\"\n");
         config::store store;
-        expect(static_cast<bool>(store.mount_text(
-            "network", "port = 25565\nmotd = \"hi\"\n", "<network>")));
-        expect(static_cast<bool>(
-            store.mount_text("world", "level_name = \"world\"\n", "<world>")));
-        expect(store.size() == 2U);
+        expect(static_cast<bool>(store.mount(
+            {.name = "network", .path = (root / "network.toml").string()})));
+        expect(static_cast<bool>(store.mount(
+            {.name = "world", .path = (root / "world.toml").string()})));
+        expect(static_cast<bool>(store.load_all()));
         expect(store.names() == (std::vector<std::string>{"network", "world"}));
-        expect(store.contains("network"));
-        expect(!store.contains("missing"));
 
         const auto network{store.module("network")};
-        expect(network.valid());
-        expect(network.name() == "network");
-        expect(network.contains("port"));
-        expect(network.get_int64("port", 0) == 25565);
-        expect(network.get_string("motd", "") == "hi");
-        expect(network.get_strings("motd") == (std::vector<std::string>{}));
-        expect(network.kind("port") == config::value_kind::integer);
-        expect(network.kind("missing") == config::value_kind::missing);
-        expect(!network.contains("level_name"));
+        expect(static_cast<bool>(network));
+        if (!network) {
+            return;
+        }
+        expect(network->name() == "network");
+        expect(network->contains("port"));
+        expect(network->get_int64("port", 0) == 25565);
+        expect(network->get_string("motd", "") == "hi");
+        expect(network->get_strings("motd") == (std::vector<std::string>{}));
+        expect(network->kind("port") == config::value_kind::integer);
+        expect(network->kind("missing") == config::value_kind::missing);
+        expect(!network->contains("level_name"));
 
         const auto missing{store.module("missing")};
-        expect(!missing.valid());
-        expect(!missing.contains("port"));
-        expect(missing.get_int64("port", 7) == 7);
-        expect(missing.get_string("motd", "fallback") == "fallback");
+        expect(!missing);
+        if (!missing) {
+            expect(missing.error().code == refrain::error_code::not_found);
+        }
 
-        const auto duplicate{store.mount_text("network", "x = 1")};
+        const auto duplicate{store.mount(
+            {.name = "network", .path = (root / "network.toml").string()})};
         expect(!duplicate);
         if (!duplicate) {
             expect(duplicate.error().code ==
                    refrain::error_code::already_exists);
         }
-        expect(static_cast<bool>(store.mount_text("empty", "", "<empty>")));
-        expect(store.module("empty").valid());
-        expect(!store.module("empty").contains("port"));
     };
 
     "config/store reads a TOML file and a missing mount is empty"_test = [] {
         config::store store;
         const auto path{std::string{REFRAIN_SOURCE_DIR} +
                         "/test/fixtures/gamepack/data-only.toml"};
-        expect(static_cast<bool>(store.mount("game", path)));
+        expect(static_cast<bool>(store.mount({.name = "game", .path = path})));
+        expect(static_cast<bool>(store.load_all()));
         const auto game{store.module("game")};
-        expect(game.get_string("gamepack.id", "") == "refrain.test.data_only");
-        expect(game.get_string("gamepack.abi", "") == "1");
-        expect(game.get_strings("mods.list") ==
+        expect(static_cast<bool>(game));
+        if (!game) {
+            return;
+        }
+        expect(game->get_string("gamepack.id", "") == "refrain.test.data_only");
+        expect(game->get_string("gamepack.abi", "") == "1");
+        expect(game->get_strings("mods.list") ==
                (std::vector<std::string>{"refrain.test.content@1.0.0",
                                          "refrain.test.data@1.0.0"}));
 
-        const auto missing{
-            store.mount("missing", "/nonexistent/refrain-config-missing.toml")};
+        expect(static_cast<bool>(
+            store.mount({.name = "missing",
+                         .path = "/nonexistent/refrain-config-missing.toml"})));
+        expect(static_cast<bool>(store.load_all()));
+        const auto missing{store.module("missing")};
         expect(static_cast<bool>(missing));
-        expect(store.module("missing").valid());
-        expect(!store.module("missing").contains("x"));
+        if (missing) {
+            expect(!missing->contains("x"));
+        }
     };
 
     "config/default origin is memory"_test = [] {

@@ -444,6 +444,8 @@ enum class attribute_scope : std::uint8_t {
     case primitive_kind::debug_subscription_event:
     case primitive_kind::command_tree:
     case primitive_kind::container_click_data:
+    case primitive_kind::opaque_ptr:
+    case primitive_kind::mut_bytes:
     case primitive_kind::void_type:
         return false;
     }
@@ -876,6 +878,7 @@ class analyzer {
                 break;
             }
             resolve_extension(module_index, decl, source);
+            break;
         case declaration_kind::callback:
             if (!ridl) {
                 error(decl.location,

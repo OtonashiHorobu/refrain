@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 3a0899b8b7e5f861
+// Schema hash: 04d13b3ba7228746
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_RUNTIME_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_RUNTIME_ABI_H
@@ -32,8 +32,6 @@ struct refrain_services_runtime_runtime_config {
     uint8_t reserved_0[4];
     // RWF world directory (`--world`); required by `run`.
     refrain_str world_path;
-    // Optional Java `server.properties`; a missing file keeps defaults.
-    refrain_str server_properties;
     // Run exactly this many ticks, then stop. 0 = until `stop`/EOF.
     int64_t ticks;
     // Optional batch command file (one console command per line, tick 0).
@@ -70,11 +68,11 @@ struct refrain_services_runtime_runtime_config {
     int32_t content_gc_keep_days;
     uint64_t content_gc_budget_ms;
     uint64_t content_gc_interval_ticks;
-}; // refrain_services_runtime_runtime_config size = 200
+}; // refrain_services_runtime_runtime_config size = 184
 #define REFRAIN_SERVICES_RUNTIME_RUNTIME_CONFIG_SIZE ((uint32_t)sizeof(refrain_services_runtime_runtime_config))
 
 #define REFRAIN_SERVICES_RUNTIME_SERVICE_ID "refrain:runtime"
-#define REFRAIN_SERVICES_RUNTIME_ABI_MAJOR 1u
+#define REFRAIN_SERVICES_RUNTIME_ABI_MAJOR 2u
 #define REFRAIN_SERVICES_RUNTIME_ABI_MINOR 0u
 #define REFRAIN_SERVICES_RUNTIME_ABI_PATCH 0u
 #define REFRAIN_SERVICES_RUNTIME_SIDE REFRAIN_SIDE_SERVER

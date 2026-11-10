@@ -510,6 +510,10 @@ void emit_encode_value(code_writer &writer, const model &program,
     switch (type.kind) {
     case resolved_type::category::primitive:
         switch (type.primitive) {
+        case primitive_kind::opaque_ptr:
+        case primitive_kind::mut_bytes:
+            // RIDL-only primitives never reach RSC data emission.
+            std::unreachable();
         case primitive_kind::u8:
         case primitive_kind::u16:
         case primitive_kind::u32:
@@ -1081,6 +1085,10 @@ void emit_decode_value(code_writer &writer, const model &program,
     switch (type.kind) {
     case resolved_type::category::primitive:
         switch (type.primitive) {
+        case primitive_kind::opaque_ptr:
+        case primitive_kind::mut_bytes:
+            // RIDL-only primitives never reach RSC data emission.
+            std::unreachable();
         case primitive_kind::u8:
         case primitive_kind::u16:
         case primitive_kind::u32:
@@ -1846,6 +1854,10 @@ void emit_decode_value(code_writer &writer, const model &program,
                                const resolved_type &type) -> bool {
         if (type.kind == resolved_type::category::primitive) {
             switch (type.primitive) {
+        case primitive_kind::opaque_ptr:
+        case primitive_kind::mut_bytes:
+            // RIDL-only primitives never reach RSC data emission.
+            std::unreachable();
             case primitive_kind::u8:
             case primitive_kind::u16:
             case primitive_kind::u32:

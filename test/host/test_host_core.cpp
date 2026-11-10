@@ -12,6 +12,9 @@
 
 #include <boost/ut.hpp>
 
+#include <filesystem>
+#include <fstream>
+
 #include <cstdint>
 #include <span>
 #include <string>
@@ -298,9 +301,18 @@ const suite host_core_tests = [] {
         };
 
     "host/core app context reads mounted config namespaces"_test = [] {
+        const auto root{std::filesystem::temp_directory_path() /
+                        "refrain_host_core_config"};
+        std::filesystem::create_directories(root);
+        const auto path{root / "demo.toml"};
+        {
+            std::ofstream stream{path, std::ios::binary | std::ios::trunc};
+            stream << "answer = 42\nflag = true\nname = \"hello\"\n";
+        }
         refrain::core::config::store config;
-        expect(static_cast<bool>(config.mount_text(
-            "demo", "answer = 42\nflag = true\nname = \"hello\"\n", "<demo>")));
+        expect(static_cast<bool>(
+            config.mount({.name = "demo", .path = path.string()})));
+        expect(static_cast<bool>(config.load_all()));
 
         refrain::mod::host owner{};
         refrain::app::host_context context{owner, {}, &config};
