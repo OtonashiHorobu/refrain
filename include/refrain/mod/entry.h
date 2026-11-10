@@ -81,7 +81,7 @@ typedef const refrain_mod_desc *(*refrain_mod_main_fn)(
 ///       return &desc;
 ///   }
 #define REFRAIN_MOD_MAIN(name)                                                 \
-    REFRAIN_MOD_EXTERN_C REFRAIN_EXPORT const refrain_mod_desc *name(      \
+    REFRAIN_MOD_EXTERN_C REFRAIN_EXPORT const refrain_mod_desc *name(          \
         const refrain_mod_init *init)
 
 #ifdef __cplusplus
