@@ -30,9 +30,8 @@ namespace refrain::app {
 
 // Concrete host runtime context used by `refrain-server`. It exposes the
 // process-owned service registry and allocation/log/time primitives through
-// the sealed `refrain:host.core` ABI. Config getters stay unsupported until
-// the host config store lands (ADR-066 Phase 2); the methods are present so
-// the ABI shape does not change when that happens.
+// the sealed `refrain:host.core` ABI. Config getters read the store passed to
+// the constructor and report `unsupported` when none is attached.
 class host_context final : public refrain::host::context,
                            public refrain::host::platform_context,
                            public refrain::host::kernel_context {
