@@ -30,4 +30,17 @@ namespace refrain::schema {
                                    std::string_view schema_hash)
     -> emit::generated_file;
 
+/// Generated runtime schema metadata for the sealed `refrain:host.metadata`
+/// service (types, fields, enum values and contracts). This is data, not the
+/// optional C++ `reflect<T>` header.
+[[nodiscard]] auto emit_metadata(const model &program,
+                                 std::string_view schema_hash)
+    -> emit::generated_file;
+
+/// Generated Rust bindings for the sealed host contracts. C ABI layout is the
+/// source of truth; the file mirrors structs, callback typedefs and service
+/// vtables with compile-time layout assertions.
+[[nodiscard]] auto emit_rust(const model &program, std::string_view schema_hash)
+    -> emit::generated_file;
+
 } // namespace refrain::schema

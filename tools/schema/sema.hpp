@@ -34,6 +34,13 @@ enum class primitive_kind : std::uint8_t {
     boolean,
     string,
     bytes,
+    /// Opaque 64-bit pointer (C `void *`). Only valid in RIDL contracts and
+    /// only on 64-bit targets; the C ABI layout assumes 8-byte pointers, the
+    /// same assumption already made for `string`/`bytes`/`slice`.
+    opaque_ptr,
+    /// Writable byte span (C `refrain_mut_bytes`). Borrowed for the call
+    /// unless the contract documents host ownership.
+    mut_bytes,
     void_type,
 };
 
@@ -138,6 +145,11 @@ struct decl_model {
     // ABI layout (RIDL structs; empty for RSC data types).
     std::uint32_t abi_size{0};
     std::uint32_t abi_alignment{0};
+
+    // Callback metadata (`declaration_kind::callback` only).
+    std::vector<field_model> callback_parameters;
+    resolved_type callback_return_type;
+    bool callback_has_return{false};
 
     // Event metadata (`declaration_kind::event` only).
     bool event_batch{false};

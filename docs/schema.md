@@ -33,14 +33,23 @@ import refrain::core;
 | `packet` | protocol message with an explicit identifier |
 | `handle` | opaque typed handle |
 | `event` | transient in-process notification |
+| `callback` | C function pointer type for method parameters |
 | `service` | contract with methods and composition metadata |
 
 Fields use scalar types (`i8`–`i64`, `u8`–`u64`, `bool`, `f32`, `f64`), or
 `string`, `bytes`, `array<T>`, `slice<T>`, `result<T, E>` and handles. A field
 inherits a default `struct_size` prologue in generated ABI structs.
+`opaque_ptr` and `mut_bytes` are RIDL-only contract primitives: `opaque_ptr`
+is a 64-bit `void *` used for opaque provider tables/references, and
+`mut_bytes` is a writable byte span (`refrain_mut_bytes`) used for host-owned
+allocations. Both are rejected in RSC data schemas.
 
 A service block declares its version, side, thread affinity, composition mode,
-provided and required services, and capabilities:
+provided and required services, and capabilities. Composition modes are
+`exclusive` (the default), `instanced`, `chain`, `registry` and `sealed`.
+A `sealed` service is a process-owned host runtime API: the host bootstrap
+registers its only provider, and a gamepack or mod cannot select or replace it
+(for example `refrain:host.core`).
 
 ```ridl
 service world : 1.0.0 {
@@ -54,6 +63,12 @@ service world : 1.0.0 {
     fn block_at(in block_pos pos) -> u32;
 }
 ```
+
+A `callback` declaration defines a C function pointer type
+(`callback job_callback = fn(opaque_ptr userdata) -> void;`). Callbacks are
+method parameters only; their parameters are limited to numeric primitives and
+`opaque_ptr`, and they return `void`, so the C and C++ function pointer
+spellings stay ABI-identical.
 
 Methods may carry attributes such as `#[thread(sim)]`, `#[can_fail]`,
 `#[borrow]`, `#[owned]`, `#[caller_provided]` and `#[hot_path]`. A method
@@ -74,8 +89,10 @@ build/Release/bin/refrain-tools schema gen --check
 ```
 
 Generation writes C ABI headers under `sdk/generated/c/`, C++ wrappers under
-`sdk/generated/cpp/` and reflection metadata in
-`sdk/generated/cpp/refrain/reflection.hpp`. Every file records the schema hash
+`sdk/generated/cpp/`, reflection metadata in
+`sdk/generated/cpp/refrain/reflection.hpp`, runtime schema metadata in
+`sdk/generated/cpp/refrain/metadata.hpp`, and Rust bindings for the sealed host
+contracts in `sdk/generated/rust/refrain_host.rs`. Every file records the schema hash
 of the inputs. `--check` regenerates into a temporary directory and fails when
 the committed output differs.
 

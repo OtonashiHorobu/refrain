@@ -561,4 +561,119 @@ auto document::dump() const -> std::string {
     return out;
 }
 
+view::view(std::string name, std::shared_ptr<const document> parsed)
+    : name_{std::move(name)}, document_{std::move(parsed)} {}
+
+auto view::contains(std::string_view key) const noexcept -> bool {
+    return document_ != nullptr && document_->contains(key);
+}
+
+auto view::get_bool(std::string_view key, bool fallback) const -> bool {
+    return document_ == nullptr ? fallback : document_->get_bool(key, fallback);
+}
+
+auto view::get_int64(std::string_view key, std::int64_t fallback) const
+    -> std::int64_t {
+    return document_ == nullptr ? fallback
+                                : document_->get_int64(key, fallback);
+}
+
+auto view::get_double(std::string_view key, double fallback) const -> double {
+    return document_ == nullptr ? fallback
+                                : document_->get_double(key, fallback);
+}
+
+auto view::get_string(std::string_view key, std::string_view fallback) const
+    -> std::string {
+    return document_ == nullptr ? std::string{fallback}
+                                : document_->get_string(key, fallback);
+}
+
+auto view::get_strings(std::string_view key,
+                       std::span<const std::string_view> fallback) const
+    -> std::vector<std::string> {
+    return document_ == nullptr ? copy_fallback(fallback)
+                                : document_->get_strings(key, fallback);
+}
+
+auto view::kind(std::string_view key) const noexcept -> value_kind {
+    if (document_ == nullptr) {
+        return value_kind::missing;
+    }
+    const std::string_view path[]{key};
+    return document_->kind_at(path);
+}
+
+auto store::mount(std::string_view name, std::string_view path) -> status {
+    if (name.empty()) {
+        return std::unexpected{make_error(error_code::invalid_argument,
+                                          "config: namespace is empty")};
+    }
+    if (modules_.contains(std::string{name})) {
+        return std::unexpected{make_error(
+            error_code::already_exists,
+            "config: namespace is already mounted: " + std::string{name})};
+    }
+    std::shared_ptr<const document> parsed{};
+    if (io::exists(path)) {
+        auto loaded{document::parse_file(path)};
+        if (!loaded) {
+            return std::unexpected{std::move(loaded.error())};
+        }
+        parsed = std::make_shared<const document>(std::move(*loaded));
+    } else {
+        auto empty{document::parse_text("", path)};
+        if (!empty) {
+            return std::unexpected{std::move(empty.error())};
+        }
+        parsed = std::make_shared<const document>(std::move(*empty));
+    }
+    modules_.emplace(std::string{name},
+                     view{std::string{name}, std::move(parsed)});
+    return status_ok();
+}
+
+auto store::mount_text(std::string_view name, std::string_view text,
+                       std::string_view origin) -> status {
+    if (name.empty()) {
+        return std::unexpected{make_error(error_code::invalid_argument,
+                                          "config: namespace is empty")};
+    }
+    if (modules_.contains(std::string{name})) {
+        return std::unexpected{make_error(
+            error_code::already_exists,
+            "config: namespace is already mounted: " + std::string{name})};
+    }
+    auto parsed{document::parse_text(text, origin)};
+    if (!parsed) {
+        return std::unexpected{std::move(parsed.error())};
+    }
+    modules_.emplace(std::string{name},
+                     view{std::string{name}, std::make_shared<const document>(
+                                                 std::move(*parsed))});
+    return status_ok();
+}
+
+auto store::module(std::string_view name) const -> view {
+    const auto found{modules_.find(std::string{name})};
+    return found == modules_.end() ? view{std::string{name}, nullptr}
+                                   : found->second;
+}
+
+auto store::contains(std::string_view name) const noexcept -> bool {
+    return modules_.contains(std::string{name});
+}
+
+auto store::names() const -> std::vector<std::string> {
+    auto names{std::vector<std::string>{}};
+    names.reserve(modules_.size());
+    for (const auto &[name, value] : modules_) {
+        static_cast<void>(value);
+        names.push_back(name);
+    }
+    return names;
+}
+
+auto store::size() const noexcept -> std::size_t { return modules_.size(); }
+
 } // namespace refrain::core::config

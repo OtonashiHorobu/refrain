@@ -56,6 +56,10 @@ namespace {
             return "std::string";
         case primitive_kind::bytes:
             return "std::vector<std::byte>";
+        case primitive_kind::opaque_ptr:
+        case primitive_kind::mut_bytes:
+            // RIDL-only primitives; sema rejects them in RSC data schemas.
+            std::unreachable();
         case primitive_kind::void_type:
             return "void";
         }

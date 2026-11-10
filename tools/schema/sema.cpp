@@ -54,6 +54,10 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "string";
     case primitive_kind::bytes:
         return "bytes";
+    case primitive_kind::opaque_ptr:
+        return "opaque_ptr";
+    case primitive_kind::mut_bytes:
+        return "mut_bytes";
     case primitive_kind::void_type:
         return "void";
     }
@@ -76,6 +80,8 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"bool", primitive_kind::boolean},
         std::pair{"string", primitive_kind::string},
         std::pair{"bytes", primitive_kind::bytes},
+        std::pair{"opaque_ptr", primitive_kind::opaque_ptr},
+        std::pair{"mut_bytes", primitive_kind::mut_bytes},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -212,6 +218,8 @@ enum class attribute_scope : std::uint8_t {
         return true;
     case primitive_kind::string:
     case primitive_kind::bytes:
+    case primitive_kind::opaque_ptr:
+    case primitive_kind::mut_bytes:
     case primitive_kind::void_type:
         return false;
     }
@@ -222,6 +230,18 @@ enum class attribute_scope : std::uint8_t {
     return !text.empty() && std::ranges::all_of(text, [](char value) {
         return value >= '0' && value <= '9';
     });
+}
+
+/// True for names the emitters generate into ABI structs: the mandatory
+/// `struct_size` prologue and the `reserved_<N>` padding. A user field with
+/// one of these names would produce a duplicate C member.
+[[nodiscard]] auto is_generated_abi_member_name(std::string_view name) noexcept
+    -> bool {
+    if (name == "struct_size") {
+        return true;
+    }
+    constexpr std::string_view prefix{"reserved_"};
+    return name.starts_with(prefix) && all_digits(name.substr(prefix.size()));
 }
 
 /// Version component: decimal digits, no leading zeros (mirrors the gamepack
@@ -587,6 +607,13 @@ class analyzer {
             }
             resolve_service(module_index, decl, source);
             break;
+        case declaration_kind::callback:
+            if (!ridl) {
+                error(decl.location,
+                      "'callback' is only valid in RIDL service contracts");
+            }
+            resolve_callback(module_index, decl, source);
+            break;
         case declaration_kind::event:
             // Events are in-process notifications: they have no C ABI, no
             // persistence and no wire format, so they only exist in RIDL.
@@ -634,6 +661,14 @@ class analyzer {
                                   decl.name));
                 continue;
             }
+            if (ridl && is_generated_abi_member_name(field->name)) {
+                error(field->location,
+                      std::format("field '{}' collides with a generated ABI "
+                                  "member name ('struct_size' or "
+                                  "'reserved_<N>')",
+                                  field->name));
+                continue;
+            }
             if (ridl) {
                 if (!is_valid_contract_field_type(field->type)) {
                     error(field->location,
@@ -679,6 +714,13 @@ class analyzer {
                                   field->name, decl.name));
                 continue;
             }
+            if (is_generated_abi_member_name(field->name)) {
+                error(field->location,
+                      std::format("event field '{}' collides with a generated "
+                                  "padding name ('reserved_<N>')",
+                                  field->name));
+                continue;
+            }
             if (field_source.default_value.has_value()) {
                 error(field->location,
                       std::format("event field '{}' cannot have a default "
@@ -718,6 +760,13 @@ class analyzer {
             if (type.primitive == primitive_kind::void_type) {
                 return std::format("event field '{}' cannot be 'void'; {}",
                                    field_name, allowed);
+            }
+            if (type.primitive == primitive_kind::opaque_ptr ||
+                type.primitive == primitive_kind::mut_bytes) {
+                return std::format(
+                    "event field '{}' cannot carry a pointer or writable "
+                    "buffer; events are copied to every subscriber; {}",
+                    field_name, allowed);
             }
             return std::nullopt;
         case resolved_type::category::slice: {
@@ -893,6 +942,10 @@ class analyzer {
             case declaration_kind::service:
                 return std::optional<std::string>{
                     "this declaration cannot be used as a value type"};
+            case declaration_kind::callback:
+                // Callbacks are method parameters only; struct fields reject
+                // them via is_valid_contract_field_type().
+                return std::nullopt;
             case declaration_kind::event:
                 return std::optional<std::string>{
                     "events cannot be referenced by name as field types"};
@@ -1023,7 +1076,8 @@ class analyzer {
         case resolved_type::category::primitive:
             return type.primitive != primitive_kind::void_type;
         case resolved_type::category::named:
-            return true;
+            return decl_at({type.module_index, type.decl_index}).kind !=
+                   declaration_kind::callback;
         case resolved_type::category::handle:
             return true;
         case resolved_type::category::slice: {
@@ -1049,9 +1103,12 @@ class analyzer {
         -> bool {
         switch (type.kind) {
         case resolved_type::category::primitive:
-            return type.primitive != primitive_kind::void_type;
+            return type.primitive != primitive_kind::void_type &&
+                   type.primitive != primitive_kind::opaque_ptr &&
+                   type.primitive != primitive_kind::mut_bytes;
         case resolved_type::category::named:
-            return true;
+            return decl_at({type.module_index, type.decl_index}).kind !=
+                   declaration_kind::callback;
         case resolved_type::category::handle:
             return false;
         case resolved_type::category::array:
@@ -1131,6 +1188,69 @@ class analyzer {
         }
     }
 
+    /// Callbacks are C function pointer types. ABI v0 restricts parameters to
+    /// numeric primitives and `opaque_ptr` so the C and C++ function pointer
+    /// spellings stay ABI-identical (no bool/string/handle/enum widening).
+    void resolve_callback(std::uint32_t module_index, decl_model &decl,
+                          const declaration &source) {
+        std::set<std::string> names;
+        for (const auto &parameter_source : source.callback_parameters) {
+            auto parameter{resolve_field(parameter_source, module_index)};
+            if (!parameter.has_value()) {
+                continue;
+            }
+            if (!names.insert(parameter->name).second) {
+                error(parameter->location,
+                      std::format("duplicate callback parameter '{}'",
+                                  parameter->name));
+                continue;
+            }
+            if (parameter->out) {
+                error(parameter->location,
+                      "callback parameters are inputs; 'out' is not allowed");
+                continue;
+            }
+            const auto callback_parameter{
+                parameter->type.kind == resolved_type::category::named &&
+                decl_at(
+                    {parameter->type.module_index, parameter->type.decl_index})
+                        .kind == declaration_kind::callback};
+            if (callback_parameter) {
+                error(parameter->location,
+                      "nested callback parameters are not supported");
+                continue;
+            }
+            const auto allowed{
+                parameter->type.kind == resolved_type::category::primitive &&
+                (parameter->type.primitive == primitive_kind::opaque_ptr ||
+                 is_scalar_primitive(parameter->type.primitive))};
+            if (!allowed) {
+                error(parameter->location,
+                      std::format("callback parameter '{}' must be a numeric "
+                                  "primitive or opaque_ptr",
+                                  parameter->name));
+                continue;
+            }
+            decl.callback_parameters.push_back(std::move(*parameter));
+        }
+
+        decl.callback_return_type.kind = resolved_type::category::primitive;
+        decl.callback_return_type.primitive = primitive_kind::void_type;
+        decl.callback_has_return = source.callback_has_return;
+        if (source.callback_has_return) {
+            auto result{
+                resolve_type(source.callback_return, module_index, true)};
+            if (!result.has_value()) {
+                return;
+            }
+            if (!result->is_void()) {
+                error(source.callback_return.location,
+                      "callback return values are not supported; use 'void'");
+                return;
+            }
+        }
+    }
+
     void resolve_service(std::uint32_t module_index, decl_model &decl,
                          const declaration &source) {
         static_cast<void>(module_index);
@@ -1156,7 +1276,7 @@ class analyzer {
         static constexpr std::array threads{"main",   "sim", "render", "any",
                                             "worker", "io",  "net"};
         static constexpr std::array compositions{"exclusive", "instanced",
-                                                 "chain", "registry"};
+                                                 "chain", "registry", "sealed"};
         if (std::ranges::find(sides, decl.service.side) == sides.end()) {
             error(decl.location,
                   std::format("invalid service side '{}'", decl.service.side));
@@ -1169,8 +1289,8 @@ class analyzer {
             compositions.end()) {
             error(decl.location,
                   std::format("invalid service composition '{}' (expected "
-                              "'exclusive', 'instanced', 'chain' or "
-                              "'registry')",
+                              "'exclusive', 'instanced', 'chain', 'registry' "
+                              "or 'sealed')",
                               decl.service.composition));
         }
         if (decl.service.provides.empty()) {
@@ -1217,7 +1337,21 @@ class analyzer {
                           std::format("duplicate parameter '{}'",
                                       parameter->name));
                 }
-                if (!is_valid_contract_field_type(parameter->type)) {
+                if (parameter->name == "self" ||
+                    parameter->name == "out_value") {
+                    error(parameter->location,
+                          std::format("parameter name '{}' is reserved by the "
+                                      "generated vtable",
+                                      parameter->name));
+                    continue;
+                }
+                const auto is_callback{
+                    parameter->type.kind == resolved_type::category::named &&
+                    decl_at({parameter->type.module_index,
+                             parameter->type.decl_index})
+                            .kind == declaration_kind::callback};
+                if (!is_callback &&
+                    !is_valid_contract_field_type(parameter->type)) {
                     error(parameter->location,
                           std::format("parameter '{}' has a type that is not "
                                       "allowed in a service method",
@@ -1760,8 +1894,13 @@ class analyzer {
             case primitive_kind::i64:
             case primitive_kind::f64:
                 return size_align{8, 8};
+            case primitive_kind::opaque_ptr:
+                // Contracts are 64-bit only; `string`/`bytes`/`slice` already
+                // make the same assumption in this ABI.
+                return size_align{8, 8};
             case primitive_kind::string:
             case primitive_kind::bytes:
+            case primitive_kind::mut_bytes:
                 return size_align{16, 8};
             case primitive_kind::void_type:
                 return std::nullopt;
@@ -1785,6 +1924,8 @@ class analyzer {
             if (decl.kind == declaration_kind::structure) {
                 return layout_of(type.module_index, type.decl_index);
             }
+            // Callbacks are function pointers, not struct fields; they are
+            // rejected before layout by is_valid_contract_field_type().
             return std::nullopt;
         }
         case resolved_type::category::array:

@@ -26,6 +26,8 @@ id = "example.content"
 version = "1.0.0"
 abi = "1"
 side = "both"
+host_api = "1.0.0"          # optional: required host runtime API
+host_capabilities = ["log"] # optional: required host capabilities
 
 [meta]
 display_name = "Example content"
@@ -43,7 +45,11 @@ native = "libexample.so"
 ```
 
 `[mod]` carries the identity, a SemVer 2.0.0 version, the integer ABI major and
-the side (`server`, `client` or `both`). `[meta]` is display metadata and never
+the side (`server`, `client` or `both`). It may also declare `host_api` (a full
+SemVer version of the host runtime API the mod requires) and
+`host_capabilities` (host runtime capability names such as `log` or `config`);
+the loader rejects a major mismatch, a newer minor or an unknown capability
+before any mod code runs. `[meta]` is display metadata and never
 affects composition. `[provides]` lists service keys. `[requires]` maps mod ids
 to version ranges; ranges support `=`, `>`, `>=`, `<`, `<=`, `^`, `~`, space for
 conjunction and `||` for alternation. `[optional_requires]` marks dependencies
@@ -51,7 +57,11 @@ that may be absent.
 
 Static mods bundled with the server omit `[entry]`; their code is linked into
 the binary and paired with the manifest through the static registry. External
-mods declare exactly one of `[entry].native` or `[entry].wasm`.
+native mods declare `[entry].native` and implement the C entry ABI in
+`include/refrain/mod/entry.h`; the loader calls `refrain_mod_main`, validates
+the descriptor ABI, and invokes `on_load` with the sealed host core table.
+External WASM mods (`[entry].wasm`) are rejected until the script runtime
+lands.
 
 ## Gamepack
 
@@ -109,6 +119,56 @@ Provider implementations live in `mods/<id>/src/` for first-party mods. Their
 code is compiled into the server and registered through the static registry.
 A provider that the gamepack selects but the binary does not link fails at
 startup with the missing service key.
+
+## External native entry
+
+A native mod exports `refrain_mod_main` (or the symbol named by
+`[entry].symbol`) with `REFRAIN_MOD_MAIN` and returns a process-lifetime
+`refrain_mod_desc`:
+
+```c
+#include <refrain/mod/entry.h>
+
+static refrain_status on_load(const refrain_mod_context *ctx, void **user) {
+    /* query/register services through ctx->host_core */
+    return REFRAIN_STATUS_OK;
+}
+
+static const refrain_mod_desc desc = {
+    .struct_size = sizeof(refrain_mod_desc),
+    .abi_major = REFRAIN_MOD_ABI_MAJOR,
+    .on_load = &on_load,
+    .on_unload = NULL,
+};
+
+REFRAIN_MOD_MAIN(refrain_mod_main) {
+    (void)init;
+    return &desc;
+}
+```
+
+The host validates `struct_size`, `abi_major` and `on_load` before calling
+`on_load`; failures abort startup with the mod id. The shared library stays
+loaded for the process lifetime and `on_unload` runs at shutdown.
+
+## Host runtime
+
+The server exposes a stable runtime API to mods through sealed services.
+`refrain:host.core` is registered by the host bootstrap before any mod factory
+runs; it covers logging, time, host memory, read-only config namespaces and service
+lookup/registration. `refrain:host.platform` adds random-access files,
+read-only mmap and crash annotations; file handles are host-owned and
+single-threaded. `refrain:host.kernel` adds background jobs and a process-local
+event bus; job callbacks run on host workers and event callbacks run on the
+publishing thread. `refrain:host.metadata` exposes the generated schema
+metadata (types, fields, enum values and contract versions) as read-only data;
+it is not C++ `reflect<T>`. Rust bindings for the sealed host contracts are
+generated under `sdk/generated/rust/refrain_host.rs`. `refrain-server --config-dir <dir>` mounts each TOML file as a
+read-only namespace (`refrain.toml` is `host`, `mods/<id>.toml` is
+`mod/<id>`); without the option config reads return `unsupported`. A sealed service is not a gamepack provider: a mod cannot
+declare it in `[provides]` or replace it through `register_provider`. The C ABI
+and C++ wrapper are generated from `sdk/idl/refrain/host/core.ridl`, so host
+code and mods share the same versioned contract definitions.
 
 ## Content store
 

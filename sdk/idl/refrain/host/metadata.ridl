@@ -1,0 +1,94 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:host.metadata` v1: read-only schema metadata generated from RSC and
+// RIDL. Mods use it for editors, serialization and tooling; C++ `reflect<T>`
+// is compile-time and deliberately not exposed across the ABI.
+//
+// All strings are borrowed process-lifetime views into the generated tables.
+
+module refrain::host::metadata;
+version 1.0.0;
+
+import refrain::core;
+
+enum metadata_error : u32 {
+    invalid_argument = 1,
+    not_found = 2,
+    internal = 3,
+}
+
+enum type_kind : u32 {
+    structure = 0,
+    enumeration = 1,
+    flags = 2,
+    record = 3,
+    packet = 4,
+}
+
+struct type_info {
+    string id;
+    type_kind kind;
+    u32 size;
+    u32 alignment;
+    u32 field_count;
+    u32 enum_count;
+}
+
+struct field_info {
+    string name;
+    string type_id;
+    u32 offset;
+    u32 size;
+    u32 flags;
+}
+
+struct enum_value_info {
+    string name;
+    i64 value;
+}
+
+struct contract_info {
+    string id;
+    u32 abi_major;
+    u32 abi_minor;
+    u32 abi_patch;
+    string schema_hash;
+    u32 method_count;
+}
+
+service metadata : 1.0.0 {
+    side = both;
+    thread = any;
+    composition = sealed;
+    provides = [ "refrain:host.metadata" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "types", "contracts" ];
+
+    #[thread(any)]
+    fn type_count() -> u32;
+
+    #[thread(any)] #[can_fail]
+    fn type_at(u32 index) -> result<type_info, metadata_error>;
+
+    #[thread(any)] #[can_fail]
+    fn type_find(string id) -> result<type_info, metadata_error>;
+
+    #[thread(any)] #[can_fail]
+    fn field_at(string type_id, u32 index)
+        -> result<field_info, metadata_error>;
+
+    #[thread(any)] #[can_fail]
+    fn enum_value_at(string type_id, u32 index)
+        -> result<enum_value_info, metadata_error>;
+
+    #[thread(any)]
+    fn contract_count() -> u32;
+
+    #[thread(any)] #[can_fail]
+    fn contract_at(u32 index) -> result<contract_info, metadata_error>;
+
+    #[thread(any)]
+    fn schema_hash() -> string;
+}

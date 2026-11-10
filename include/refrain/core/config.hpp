@@ -8,6 +8,7 @@
 #include <refrain/core/io.hpp>
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <span>
 #include <string>
@@ -156,6 +157,76 @@ class document {
     explicit document(std::shared_ptr<const impl> parsed) noexcept;
 
     std::shared_ptr<const impl> impl_;
+};
+
+/// Immutable view of one configuration namespace. `document` is shared, so a
+/// view is cheap to copy and stays valid while the store is alive. A default
+/// or unknown view is empty: every getter returns its fallback and `contains`
+/// is false.
+class view {
+  public:
+    view() = default;
+    view(std::string name, std::shared_ptr<const document> parsed);
+
+    [[nodiscard]] auto name() const noexcept -> std::string_view {
+        return name_;
+    }
+
+    [[nodiscard]] auto valid() const noexcept -> bool {
+        return document_ != nullptr;
+    }
+
+    [[nodiscard]] auto contains(std::string_view key) const noexcept -> bool;
+    [[nodiscard]] auto get_bool(std::string_view key, bool fallback) const
+        -> bool;
+    [[nodiscard]] auto get_int64(std::string_view key,
+                                 std::int64_t fallback) const -> std::int64_t;
+    [[nodiscard]] auto get_double(std::string_view key, double fallback) const
+        -> double;
+    [[nodiscard]] auto get_string(std::string_view key,
+                                  std::string_view fallback) const
+        -> std::string;
+    [[nodiscard]] auto
+    get_strings(std::string_view key,
+                std::span<const std::string_view> fallback = {}) const
+        -> std::vector<std::string>;
+    [[nodiscard]] auto kind(std::string_view key) const noexcept -> value_kind;
+
+  private:
+    std::string name_{};
+    std::shared_ptr<const document> document_{};
+};
+
+/// Multi-namespace configuration store. Each namespace is parsed from its own
+/// TOML file; a missing file yields an empty view (all defaults). Namespaces
+/// are addressed by name (for example "host", "network", or "mod/<id>").
+///
+/// This is the read-only Phase 2 subset of the host configuration design:
+/// mount/parse/module/names. Setters, reload and save are added with the
+/// writable store.
+class store {
+  public:
+    store() = default;
+
+    /// Mount `path` as `name`. A missing file is an empty namespace, not an
+    /// error. Duplicate names fail with `already_exists`.
+    [[nodiscard]] auto mount(std::string_view name, std::string_view path)
+        -> status;
+
+    /// Mount an in-memory TOML document (tests/tools).
+    [[nodiscard]] auto mount_text(std::string_view name, std::string_view text,
+                                  std::string_view origin = "<memory>")
+        -> status;
+
+    /// View for `name`; an unknown namespace is an empty view with that name.
+    [[nodiscard]] auto module(std::string_view name) const -> view;
+
+    [[nodiscard]] auto contains(std::string_view name) const noexcept -> bool;
+    [[nodiscard]] auto names() const -> std::vector<std::string>;
+    [[nodiscard]] auto size() const noexcept -> std::size_t;
+
+  private:
+    std::map<std::string, view, std::less<>> modules_{};
 };
 
 } // namespace refrain::core::config

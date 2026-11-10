@@ -109,10 +109,17 @@ typedef struct refrain_allocator {
 ///   selectively override slots.
 /// * registry: providers extend a registry-style service (many registered
 ///   entries under one service).
+/// * sealed: the process owns the only provider; it is registered by the host
+///   bootstrap and cannot be selected or replaced by a gamepack/mod.
 #define REFRAIN_COMPOSITION_EXCLUSIVE 0u
 #define REFRAIN_COMPOSITION_INSTANCED 1u
 #define REFRAIN_COMPOSITION_CHAIN 2u
 #define REFRAIN_COMPOSITION_REGISTRY 3u
+/// The provider is owned by the process itself, not by a mod. A sealed
+/// service is registered by the host bootstrap before mod loading; a gamepack
+/// must not select it and a mod must not claim it in `[provides]`. Used for
+/// host-owned runtime APIs (see the host runtime contract).
+#define REFRAIN_COMPOSITION_SEALED 4u
 
 /// ABI version as a single 32-bit value: (major << 16) | minor.
 #define REFRAIN_ABI_VERSION                                                    \
