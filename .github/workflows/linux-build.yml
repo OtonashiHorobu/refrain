@@ -200,6 +200,7 @@ jobs:
           path: |
             build/Release/Testing/Temporary/LastTest.log
             build/Release/Testing/Temporary/LastTestsFailed.log
+            build/Release/bin/
           if-no-files-found: ignore
 
       - name: Schema drift
