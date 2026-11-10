@@ -60,8 +60,9 @@ suite<"worldgen/mth"> mth_tests = [] {
     };
 
     "float variants keep float arithmetic"_test = [] {
-        expect(fbits(mth::map(0.75F, 0.0F, 1.0F, -1.0F, 3.0F)) == 0x40000000U);
-        expect(fbits(mth::clamped_map(1.5F, 0.0F, 1.0F, -1.0F, 3.0F)) ==
-               0x40400000U);
+        expect(fbits(static_cast<float>(
+                   mth::map(0.75F, 0.0F, 1.0F, -1.0F, 3.0F))) == 0x40000000U);
+        expect(fbits(static_cast<float>(mth::clamped_map(
+                   1.5F, 0.0F, 1.0F, -1.0F, 3.0F))) == 0x40400000U);
     };
 };
