@@ -71,7 +71,8 @@ suite<"worldgen/carver"> carver_tests = [] {
     "the ellipsoid carver matches the normalized test"_test = [] {
         carving_mask mask{-10, 10};
         const chunk_pos target{.x = 0, .z = 0};
-        const skip_checker skip = [](double xd, double yd, double zd, jint) {
+        const skip_checker skip_check = [](double xd, double yd, double zd,
+                                           jint) {
             return xd * xd + yd * yd + zd * zd >= 1.0;
         };
         constexpr double x = 8.0;
@@ -79,7 +80,7 @@ suite<"worldgen/carver"> carver_tests = [] {
         constexpr double z = 8.0;
         constexpr double hr = 3.5;
         constexpr double vr = 2.5;
-        carve_ellipsoid(target, x, y, z, hr, vr, mask, skip);
+        carve_ellipsoid(target, x, y, z, hr, vr, mask, skip_check);
 
         std::size_t expected = 0;
         for (jint bx = 0; bx < 16; ++bx) {
@@ -88,7 +89,7 @@ suite<"worldgen/carver"> carver_tests = [] {
                     const double xd = (bx + 0.5 - x) / hr;
                     const double yd = (by - 0.5 - y) / vr;
                     const double zd = (bz + 0.5 - z) / hr;
-                    if (!skip(xd, yd, zd, by)) {
+                    if (!skip_check(xd, yd, zd, by)) {
                         ++expected;
                     }
                 }
