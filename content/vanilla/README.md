@@ -9,14 +9,15 @@ laid out per game version:
 
 ```text
 content/vanilla/<version>/
-  MANIFEST.json        game version, data version, source jar hash, file hashes
+  MANIFEST.json        game version, data version, entry count, content digest
   data/                worldgen documents and block/biome tags
   reports/             compact tables converted from the game's datagen reports
 ```
 
-`MANIFEST.json` names the generator and every file hash, so a build can verify
-that the snapshot matches the code it runs against and that a regenerated
-snapshot is identical.
+`MANIFEST.json` records the game and data version, the entry count and a
+`content_sha256` digest over every entry name and its bytes. A regenerated
+snapshot is compared against the committed digest; per-file hashes and the
+source jar digest are not recorded.
 
 The contents are not covered by the repository license; see `NOTICE.md` and the
 root `NOTICE.md`. Data is regenerated from a locally owned copy of the game:

@@ -616,6 +616,17 @@ class decoder {
                 .value = std::move(*value),
             });
         }
+        // The factory rejects these shapes by throwing, which must stay an
+        // internal invariant; a document that breaks them is a parse error.
+        if (decoded_points.empty()) {
+            return std::unexpected{fail("spline needs at least one point")};
+        }
+        for (std::size_t i = 1; i < decoded_points.size(); ++i) {
+            if (decoded_points[i].location <= decoded_points[i - 1].location) {
+                return std::unexpected{
+                    fail("spline points must be in ascending order")};
+            }
+        }
         return spline::multipoint(
             std::shared_ptr<sampler>(std::move(*coordinate_sampler)),
             std::move(decoded_points));

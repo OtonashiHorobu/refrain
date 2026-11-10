@@ -19,6 +19,8 @@
 
 #include <boost/ut.hpp>
 
+#include <iostream>
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -280,6 +282,11 @@ void run_reference_case(std::string_view prefix) {
     const char *templates_root = environment("REFRAIN_VANILLA_STRUCTURES");
     if (region_path == nullptr || data_root == nullptr ||
         templates_root == nullptr) {
+        // The reference world is an opt-in oracle; make the skip visible so a
+        // green run does not read as conformance evidence.
+        std::clog << "worldgen: reference oracle skipped; set " << region_key
+                  << ", REFRAIN_VANILLA_WORLDGEN and "
+                     "REFRAIN_VANILLA_STRUCTURES to run it\n";
         return;
     }
     const jint chunk_x =
