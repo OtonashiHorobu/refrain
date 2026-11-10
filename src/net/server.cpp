@@ -1392,8 +1392,10 @@ void server::impl::send_play_login(std::uint64_t id) {
     const auto send_spawn = [&] {
         play_cb::set_default_spawn_position spawn{
             .dimension = overworld(),
-            .position = packed_block_position(config.spawn_x, config.spawn_y,
-                                              config.spawn_z),
+            .position = packed_block_position(
+                static_cast<std::int32_t>(config.spawn_x),
+                static_cast<std::int32_t>(config.spawn_y),
+                static_cast<std::int32_t>(config.spawn_z)),
             .yaw = 0.0F,
             .pitch = 0.0F,
         };
