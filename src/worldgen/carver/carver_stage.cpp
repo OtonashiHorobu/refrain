@@ -34,7 +34,10 @@ auto carver_generator::generate(const chunk_pos &target) const -> carving_mask {
                 random.set_large_feature_seed(seed_ + index, source.x,
                                               source.z);
                 if (carver->is_start_chunk(random)) {
-                    carver->carve(context_, random, target, source, mask);
+                    // The mask is the output; the return value only reports
+                    // whether this carver touched the chunk.
+                    static_cast<void>(
+                        carver->carve(context_, random, target, source, mask));
                 }
                 ++index;
             }
