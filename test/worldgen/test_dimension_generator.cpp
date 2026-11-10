@@ -11,6 +11,8 @@
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/dimension_generator.hpp>
 
+#include "support/vanilla_data.hpp"
+
 #include <boost/ut.hpp>
 
 #include <array>
@@ -22,10 +24,6 @@ namespace {
 using namespace boost::ut;
 using namespace refrain;
 using namespace refrain::worldgen;
-
-auto data_root() -> std::string {
-    return std::string{REFRAIN_SOURCE_DIR} + "/content/vanilla/26.3/data";
-}
 
 auto same_chunk(const proto_chunk &left, const proto_chunk &right) -> bool {
     if (left.min_y() != right.min_y() || left.height() != right.height()) {
@@ -88,8 +86,12 @@ auto occupied_above(const proto_chunk &chunk, jint top) -> bool {
 
 auto make_generator(dimension_kind kind, std::string biome)
     -> std::unique_ptr<dimension_generator> {
+    const auto snapshot = refrain::test_support::vanilla_data();
+    if (!snapshot.available) {
+        return nullptr;
+    }
     auto created = dimension_generator::create(
-        dimension_generator_config{.data_root = data_root(),
+        dimension_generator_config{.data_root = snapshot.path,
                                    .kind = kind,
                                    .seed = 1,
                                    .fixed_biome = std::move(biome)});
@@ -233,10 +235,12 @@ suite<"worldgen/dimension-generator"> dimension_generator_tests = [] {
     "a dimension profile mismatch is rejected"_test = [] {
         // The end report does not exist, so the end never reads a parameter
         // table; a bad data root fails while loading the noise settings.
-        const auto missing = dimension_generator::create(
-            dimension_generator_config{.data_root = data_root() + "/missing",
-                                       .kind = dimension_kind::nether,
-                                       .seed = 1});
+        const auto missing =
+            dimension_generator::create(dimension_generator_config{
+                .data_root =
+                    refrain::test_support::vanilla_data_root() + "/missing",
+                .kind = dimension_kind::nether,
+                .seed = 1});
         expect(!missing.has_value());
     };
 };

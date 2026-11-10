@@ -5,7 +5,8 @@ The datapack names a block without properties when a feature places its
 default state. The world generator needs to know the properties of that state
 to reproduce state-dependent behaviour such as the second half of a double
 plant. This tool reduces the data generator's `blocks.json` report to one
-default property map per block and writes it next to the datapack snapshot.
+default property map per block and writes it into the locally generated
+datapack snapshot.
 
 Usage:
     java -DbundlerMainClass=net.minecraft.data.Main -jar server.jar --reports
@@ -13,7 +14,8 @@ Usage:
         --blocks generated/reports/blocks.json \
         --out content/vanilla/26.3/reports/block_defaults
 
-The output is game-derived data and carries its own notice.
+The output is game-derived data, is generated locally and is not committed;
+it carries its own notice.
 """
 
 from __future__ import annotations

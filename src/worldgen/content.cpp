@@ -25,6 +25,13 @@ auto is_zip(std::string_view path) -> bool {
 
 auto materialize_worldgen_data(std::string_view path) -> result<std::string> {
     if (!is_zip(path)) {
+        if (!core::io::is_directory(path)) {
+            return std::unexpected{
+                make_error(error_code::not_found,
+                           "worldgen: datapack snapshot '" + std::string{path} +
+                               "' is missing; run scripts/fetch-content.sh "
+                               "<server.jar>")};
+        }
         return std::string{path};
     }
     static std::mutex mutex;
