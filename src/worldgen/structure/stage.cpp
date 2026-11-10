@@ -15,7 +15,6 @@ namespace refrain::worldgen::structure {
 
 namespace {
 
-constexpr jint horizontal_west = 0;
 constexpr jint horizontal_east = 1;
 constexpr jint horizontal_south = 2;
 constexpr jint horizontal_north = 3;
