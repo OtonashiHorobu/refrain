@@ -371,15 +371,15 @@ const suite tests = [] {
     };
 
     "recipe slots and displays round trip"_test = [] {
-        const auto tag{
+        const auto block_tag{
             refrain::data::resource_location::parse("minecraft:planks")};
-        expect(tag.has_value());
-        if (!tag) {
+        expect(block_tag.has_value());
+        if (!block_tag) {
             return;
         }
         net::item_holder_set named{};
         named.named = true;
-        named.tag = *tag;
+        named.tag = *block_tag;
         net::item_holder_set direct{};
         direct.ids = {4U, 5U};
         for (const auto &set : {named, direct}) {
@@ -1014,25 +1014,25 @@ const suite tests = [] {
 
     "nbt compound round trips byte for byte"_test = [] {
         // TAG_Compound with an empty name holding one TAG_Int named "value".
-        std::vector<std::byte> tag;
-        const auto push = [&tag](std::initializer_list<int> values) {
+        std::vector<std::byte> tag_bytes;
+        const auto push = [&tag_bytes](std::initializer_list<int> values) {
             for (const int value : values) {
-                tag.push_back(static_cast<std::byte>(value));
+                tag_bytes.push_back(static_cast<std::byte>(value));
             }
         };
         push({10, 0, 0, 3, 0, 5});
         for (const char character : std::string_view{"value"}) {
-            tag.push_back(static_cast<std::byte>(character));
+            tag_bytes.push_back(static_cast<std::byte>(character));
         }
         push({0, 0, 0, 42, 0});
-        const net::nbt_blob value{.bytes = tag};
+        const net::nbt_blob value{.bytes = tag_bytes};
         std::vector<std::byte> bytes;
         net::writer out{bytes};
         expect(static_cast<bool>(net::encode_nbt(out, value)));
         net::reader in{bytes};
         net::nbt_blob decoded{};
         expect(static_cast<bool>(net::decode_nbt(in, decoded)));
-        const bool same{decoded.bytes == tag};
+        const bool same{decoded.bytes == tag_bytes};
         expect(same);
         expect(in.empty());
     };
