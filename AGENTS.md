@@ -110,6 +110,10 @@ Accepted types are `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `build`,
 behavior change needs context; never describe process, schedules or review
 history.
 
+Commits are signed off with `git commit -s`; the `Signed-off-by` trailer is
+required, must match the commit author, and certifies the Developer Certificate
+of Origin 1.1. A pull request with an unsigned commit is not merged.
+
 ## Generated files
 
 `sdk/generated/` is produced by the schema compiler:
