@@ -22,6 +22,7 @@ scripted stop command.
 | Option | Meaning |
 |---|---|
 | `--gamepack <file>` | composition file; defaults to the bundled gamepack |
+| `--config-dir <dir>` | host config directory; each `*.toml` becomes a read-only host runtime namespace (`refrain.toml` is `host`, `mods/*.toml` is `mod/<id>`); empty disables |
 | `--world <dir>` | RWF world directory |
 | `--server-properties <file>` | Java `server.properties`; missing keys keep defaults |
 | `--ticks <n>` | stop after n ticks, 0 disables the limit |

@@ -1,0 +1,79 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:host.kernel` v1: background jobs and a process-local event bus for
+// mods. Sealed like the other host APIs: the host bootstrap owns the only
+// provider.
+//
+// Job callbacks run on host worker threads. They must not touch simulation
+// state directly; post results back to the simulation thread. Event callbacks
+// run on the thread that publishes the event; the payload pointer is valid
+// only for the duration of the callback.
+
+module refrain::host::kernel;
+version 1.0.0;
+
+import refrain::core;
+
+enum kernel_error : u32 {
+    invalid_argument = 1,
+    not_found = 2,
+    permission_denied = 3,
+    unsupported = 4,
+    out_of_memory = 5,
+    cancelled = 6,
+    timeout = 7,
+    thread_violation = 8,
+    internal = 9,
+}
+
+/// `void (*)(void *userdata)`.
+callback job_callback = fn(opaque_ptr userdata) -> void;
+
+/// `void (*)(void *userdata, void *payload, u64 size)`; the payload is
+/// borrowed for the duration of the callback.
+callback event_callback = fn(opaque_ptr userdata, opaque_ptr payload, u64 size)
+    -> void;
+
+handle<job>;
+handle<subscription>;
+
+service kernel : 1.0.0 {
+    side = both;
+    thread = any;
+    composition = sealed;
+    provides = [ "refrain:host.kernel" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "jobs", "events" ];
+
+    /// Submit a background job. Priority: 0 interactive, 1 player-visible,
+    /// 2 normal, 3 background. The callback runs on a host worker thread.
+    #[thread(any)] #[can_fail]
+    fn job_submit(u32 priority, job_callback callback, opaque_ptr userdata)
+        -> result<job, kernel_error>;
+
+    /// Mark a queued job as cancelled. A job already running is not
+    /// interrupted.
+    #[thread(any)] #[can_fail]
+    fn job_cancel(job handle) -> result<void, kernel_error>;
+
+    /// Block until the job's callback returns. Must not be called from a job
+    /// callback (deadlock).
+    #[thread(any)] #[can_fail]
+    fn job_wait(job handle) -> result<void, kernel_error>;
+
+    /// Subscribe to `event_type` (an application-defined 64-bit id). Returns a
+    /// handle released by `event_unsubscribe`.
+    #[thread(any)] #[can_fail]
+    fn event_subscribe(u64 event_type, event_callback callback,
+                       opaque_ptr userdata) -> result<subscription, kernel_error>;
+
+    #[thread(any)] #[can_fail]
+    fn event_unsubscribe(subscription handle) -> result<void, kernel_error>;
+
+    /// Publish to every current subscriber on the calling thread. The payload
+    /// pointer is borrowed for the duration of the call.
+    #[thread(any)]
+    fn event_publish(u64 event_type, opaque_ptr payload, u64 size) -> void;
+}

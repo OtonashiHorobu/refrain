@@ -2,9 +2,12 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/app/host_context.hpp>
 #include <refrain/core/config.hpp>
+#include <refrain/core/io.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/checksum.hpp>
+#include <refrain/host/core_api.hpp>
 #include <refrain/mod/discovery.hpp>
 #include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
@@ -16,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <span>
 #include <string>
 #include <string_view>
@@ -264,7 +268,7 @@ const suite mod_host_tests = [] {
         }
     };
 
-    "mod_host/rejects external mods"_test = [] {
+    "mod_host/rejects a missing external library"_test = [] {
         mod::static_mod_registry registry{};
         auto plan{make_gamepack("\"refrain.test.external@1.0.0\"")};
         expect(static_cast<bool>(plan));
@@ -279,9 +283,29 @@ const suite mod_host_tests = [] {
         auto loaded{host.load(*plan, builder.build())};
         expect(!loaded);
         if (!loaded) {
-            expect(loaded.error().code == error_code::unsupported);
-            expect(loaded.error().message.find("external") !=
+            expect(loaded.error().code == error_code::io_error);
+            expect(loaded.error().message.find("cannot load native entry") !=
                    std::string::npos);
+        }
+    };
+
+    "mod_host/rejects wasm external mods"_test = [] {
+        mod::static_mod_registry registry{};
+        auto plan{make_gamepack("\"refrain.test.external@1.0.0\"")};
+        expect(static_cast<bool>(plan));
+        if (!plan) {
+            return;
+        }
+        auto manifest{make_manifest("refrain.test.external")};
+        manifest += "\n[entry]\nwasm = \"script.wasm\"\n";
+        image_builder builder{};
+        builder.add("refrain.test.external", std::move(manifest));
+        refrain::mod::host host{registry};
+        auto loaded{host.load(*plan, builder.build())};
+        expect(!loaded);
+        if (!loaded) {
+            expect(loaded.error().code == error_code::unsupported);
+            expect(loaded.error().message.find("WASM") != std::string::npos);
         }
     };
 
@@ -445,6 +469,195 @@ const suite mod_host_tests = [] {
                    std::string::npos);
         }
     };
+
+    "mod_host/loads an external native mod"_test = [] {
+        namespace fs = std::filesystem;
+        const auto root{fs::temp_directory_path() /
+                        "refrain-host-external-test"};
+        std::error_code error;
+        fs::remove_all(root, error);
+        expect(fs::create_directories(root, error));
+
+        const auto module_path{root / "libexternal.so"};
+        fs::copy_file(fs::path{REFRAIN_TEST_EXTERNAL_MOD}, module_path,
+                      fs::copy_options::overwrite_existing, error);
+        expect(!error) << error.message();
+
+        constexpr std::string_view manifest_text = R"(
+[mod]
+id = "refrain.test.external"
+version = "1.0.0"
+abi = 1
+side = "server"
+
+[provides]
+services = ["refrain:data.packs"]
+
+[entry]
+native = "libexternal.so"
+)";
+        auto written{refrain::core::io::write_text(
+            (root / "manifest.toml").string(), manifest_text)};
+        expect(static_cast<bool>(written)) << written.error().message;
+
+        mod::composition plan{};
+        plan.spec.id = "refrain.test.external.plan";
+        plan.spec.version = "1.0.0";
+        plan.spec.side = "server";
+        plan.spec.abi = 1;
+        plan.spec.auto_scan = false;
+        mod::candidate entry{};
+        entry.id = "refrain.test.external";
+        entry.version = "1.0.0";
+        entry.abi = 1;
+        entry.origin = mod::mod_origin::user;
+        entry.side = mod::manifest_side::server;
+        entry.provides = {"refrain:data.packs"};
+        entry.path = (root / "manifest.toml").string();
+        entry.kind = mod::package_kind::directory;
+        entry.entry = mod::manifest_entry_point{.native = "libexternal.so"};
+        plan.load_order.push_back(entry);
+        plan.providers.push_back(mod::resolved_provider{
+            .service = "data",
+            .mode = mod::provider_mode::exclusive,
+            .provider = "refrain.test.external@1.0.0",
+        });
+
+        const auto resolver{
+            [](const mod::candidate &candidate)
+                -> refrain::result<std::unique_ptr<mod::package_source>> {
+                const auto mod_root{
+                    std::filesystem::path{candidate.path}.parent_path()};
+                return mod::make_directory_package_source(mod_root.string());
+            }};
+
+        mod::static_mod_registry registry{};
+        mod::host host{registry};
+        refrain::app::host_context context{host};
+        const mod::provider_api host_api{
+            .vtable = &refrain::host::core_vtable(),
+            .self = &context,
+            .abi_major = REFRAIN_HOST_CORE_ABI_MAJOR,
+        };
+        expect(static_cast<bool>(host.register_sealed_provider(
+            "refrain:host.core", host_api, "1.0.0")));
+
+        auto loaded{host.load(plan, resolver)};
+        expect(static_cast<bool>(loaded))
+            << (loaded ? std::string{"load ok"} : loaded.error().message);
+        expect(host.mods().size() == 1U);
+        if (host.mods().size() == 1U) {
+            expect(host.mods()[0].external);
+            expect(host.mods()[0].has_code);
+            expect(host.mods()[0].id == "refrain.test.external");
+        }
+        const auto active{
+            host.services().active_provider("refrain:data.packs")};
+        expect(active.has_value());
+        if (active) {
+            expect(active->id == "refrain.test.external");
+        }
+        fs::remove_all(root, error);
+    };
+
+    "mod_host/rejects an incompatible host_api"_test = [] {
+        mod::static_mod_registry registry{};
+        auto plan{make_gamepack("\"refrain.test.hostapi@1.0.0\"")};
+        expect(static_cast<bool>(plan));
+        if (!plan) {
+            return;
+        }
+        image_builder builder{};
+        auto manifest{make_manifest("refrain.test.hostapi")};
+        manifest += "host_api = \"2.0.0\"\n";
+        builder.add("refrain.test.hostapi", std::move(manifest));
+        refrain::mod::host host{registry};
+        auto loaded{host.load(*plan, builder.build())};
+        expect(!loaded);
+        if (!loaded) {
+            expect(loaded.error().code == error_code::version_mismatch);
+            expect(loaded.error().message.find("host_api") !=
+                   std::string::npos);
+        }
+    };
+
+    "mod_host/rejects an unknown host capability"_test = [] {
+        mod::static_mod_registry registry{};
+        auto plan{make_gamepack("\"refrain.test.hostapi@1.0.0\"")};
+        expect(static_cast<bool>(plan));
+        if (!plan) {
+            return;
+        }
+        image_builder builder{};
+        auto manifest{make_manifest("refrain.test.hostapi")};
+        manifest += "host_capabilities = [\"nope\"]\n";
+        builder.add("refrain.test.hostapi", std::move(manifest));
+        refrain::mod::host host{registry};
+        auto loaded{host.load(*plan, builder.build())};
+        expect(!loaded);
+        if (!loaded) {
+            expect(loaded.error().code == error_code::unsupported);
+            expect(loaded.error().message.find("capability") !=
+                   std::string::npos);
+        }
+    };
+
+    "mod_host/accepts a compatible host_api and capability"_test = [] {
+        mod::static_mod_registry registry{};
+        auto plan{make_gamepack("\"refrain.test.hostapi@1.0.0\"")};
+        expect(static_cast<bool>(plan));
+        if (!plan) {
+            return;
+        }
+        image_builder builder{};
+        auto manifest{make_manifest("refrain.test.hostapi")};
+        manifest += "host_api = \"1.0.0\"\n";
+        manifest += "host_capabilities = [\"log\", \"config\"]\n";
+        builder.add("refrain.test.hostapi", std::move(manifest));
+        refrain::mod::host host{registry};
+        auto loaded{host.load(*plan, builder.build())};
+        expect(static_cast<bool>(loaded))
+            << (loaded ? std::string{"load ok"} : loaded.error().message);
+        expect(host.loaded());
+    };
+
+    "mod_host/rejects a declared sealed service before the factory runs"_test =
+        [] {
+            mod::static_mod_registry registry{};
+            g_factory_calls = 0;
+            expect(static_cast<bool>(registry.add(
+                mod::static_mod_descriptor{.id = "refrain.test.sealed",
+                                           .version = "1.0.0",
+                                           .abi = 1,
+                                           .factory = &counting_factory})));
+            auto plan{
+                make_gamepack("\"refrain.test.sealed@1.0.0\"",
+                              "sealed = \"refrain.test.sealed@^1.0.0\"\n")};
+            expect(static_cast<bool>(plan));
+            if (!plan) {
+                return;
+            }
+            image_builder builder{};
+            builder.add("refrain.test.sealed",
+                        make_manifest("refrain.test.sealed", "1.0.0", 1,
+                                      "server", "refrain:host.core"));
+            refrain::mod::host host{registry};
+            const mod::provider_api api{
+                .vtable = g_fake_vtable, .self = &g_fake_self, .abi_major = 0};
+            expect(static_cast<bool>(host.register_sealed_provider(
+                "refrain:host.core", api, "1.0.0")));
+            auto loaded{host.load(*plan, builder.build())};
+            expect(!loaded)
+                << (loaded ? std::string{"load ok"} : loaded.error().message);
+            if (!loaded) {
+                expect(loaded.error().code == error_code::permission_denied)
+                    << loaded.error().message;
+                expect(loaded.error().message.find("sealed service") !=
+                       std::string::npos)
+                    << loaded.error().message;
+            }
+            expect(g_factory_calls == 0);
+        };
 };
 
 } // namespace

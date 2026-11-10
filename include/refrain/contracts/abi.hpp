@@ -136,6 +136,7 @@ enum class composition_kind : std::uint32_t {
     instanced = REFRAIN_COMPOSITION_INSTANCED,
     chain = REFRAIN_COMPOSITION_CHAIN,
     registry = REFRAIN_COMPOSITION_REGISTRY,
+    sealed = REFRAIN_COMPOSITION_SEALED,
 };
 
 } // namespace refrain::contracts

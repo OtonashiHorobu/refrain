@@ -44,6 +44,8 @@ auto declaration_kind_name(declaration_kind kind) noexcept -> const char * {
         return "handle";
     case declaration_kind::service:
         return "service";
+    case declaration_kind::callback:
+        return "callback";
     case declaration_kind::event:
         return "event";
     }
@@ -56,7 +58,7 @@ namespace {
     -> bool {
     return text == "struct" || text == "enum" || text == "flags" ||
            text == "packet" || text == "record" || text == "handle" ||
-           text == "service" || text == "event";
+           text == "service" || text == "callback" || text == "event";
 }
 
 [[nodiscard]] auto is_integer_type_name(std::string_view text) noexcept
@@ -327,6 +329,9 @@ class parser_impl {
                 return parse_structure(declaration_kind::event,
                                        std::move(documentation));
             }
+            if (keyword == "callback") {
+                return parse_callback(std::move(documentation));
+            }
             return parse_service(std::move(documentation));
         }
         error_here(std::format("expected a declaration, found {}",
@@ -459,6 +464,38 @@ class parser_impl {
         decl.name = expect_identifier("handle tag type name").text;
         expect(token_kind::r_angle, "'>' closing the handle type");
         expect(token_kind::semicolon, "';' after the handle declaration");
+        return decl;
+    }
+
+    /// `callback <name> = fn(<params>) [-> <return>];`; a C function pointer
+    /// type. Callbacks are method parameters only, never value types.
+    [[nodiscard]] auto parse_callback(std::string documentation)
+        -> declaration {
+        declaration decl;
+        decl.kind = declaration_kind::callback;
+        decl.location = location();
+        decl.documentation = std::move(documentation);
+        advance(); // 'callback'
+        decl.name = expect_identifier("callback name").text;
+        expect(token_kind::equals, "'=' after the callback name");
+        if (!at_identifier("fn")) {
+            error_here("expected 'fn' after '=' in a callback declaration");
+        } else {
+            advance(); // 'fn'
+        }
+        expect(token_kind::l_paren, "'(' after 'fn'");
+        while (!at(token_kind::r_paren) && !at(token_kind::end_of_file)) {
+            decl.callback_parameters.push_back(parse_parameter());
+            if (!consume(token_kind::comma)) {
+                break;
+            }
+        }
+        expect(token_kind::r_paren, "')' after callback parameters");
+        if (consume(token_kind::arrow)) {
+            decl.callback_has_return = true;
+            decl.callback_return = parse_type();
+        }
+        expect(token_kind::semicolon, "';' after the callback declaration");
         return decl;
     }
 

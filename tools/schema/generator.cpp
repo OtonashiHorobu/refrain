@@ -204,6 +204,8 @@ auto generate_from_sources(std::vector<source_file> sources)
     // one generation owns the complete output set (and the duplicate-path
     // check below sees it like any other emitted file).
     files.push_back(emit_reflection(*program, *hash));
+    files.push_back(emit_metadata(*program, *hash));
+    files.push_back(emit_rust(*program, *hash));
 
     std::set<std::string> paths;
     for (const auto &file : files) {
