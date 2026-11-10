@@ -1044,8 +1044,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 }
                 place_on_ids.emplace_back(*item_text);
             }
-            const jint search_value =
-                search == nullptr ? 10 : search->as_int64().value_or(10);
+            const jint search_value = static_cast<jint>(
+                search == nullptr ? 10 : search->as_int64().value_or(10));
             const bool floor_value =
                 floor != nullptr && floor->as_bool().value_or(false);
             const bool ceiling_value =
