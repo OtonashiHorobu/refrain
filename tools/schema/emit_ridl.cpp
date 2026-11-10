@@ -2127,11 +2127,11 @@ auto emit_metadata(const model &program, std::string_view schema_hash)
             return "optional<" + self(self, type.arguments.front()) + ">";
         case resolved_type::category::repeated:
             return "repeated<" + self(self, type.arguments.front()) + ">";
-                case resolved_type::category::map:
+        case resolved_type::category::map:
         case resolved_type::category::either:
         case resolved_type::category::holder:
             std::unreachable();
-}
+        }
         return "?";
     };
     const auto type_id_of = [&](const resolved_type &type) {
@@ -2351,7 +2351,7 @@ auto emit_rust(const model &program, std::string_view schema_hash)
                 return "*mut ::core::ffi::c_void";
             case primitive_kind::void_type:
                 return "()";
-                        case primitive_kind::identifier:
+            case primitive_kind::identifier:
             case primitive_kind::uuid:
             case primitive_kind::text_component:
             case primitive_kind::item_stack:
@@ -2389,7 +2389,7 @@ auto emit_rust(const model &program, std::string_view schema_hash)
             case primitive_kind::command_tree:
             case primitive_kind::container_click_data:
                 std::unreachable();
-}
+            }
             return "()";
         case resolved_type::category::named:
             return decl_of(program, type.module_index, type.decl_index).name;
@@ -2401,11 +2401,11 @@ auto emit_rust(const model &program, std::string_view schema_hash)
         case resolved_type::category::optional:
         case resolved_type::category::repeated:
             return "()";
-                case resolved_type::category::map:
+        case resolved_type::category::map:
         case resolved_type::category::either:
         case resolved_type::category::holder:
             std::unreachable();
-}
+        }
         return "()";
     };
     const auto rust_type_of = [&](const resolved_type &type) {
