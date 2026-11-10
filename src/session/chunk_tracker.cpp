@@ -14,6 +14,7 @@ auto chunk_tracker::update(std::uint64_t connection, std::int32_t chunk_x,
     if (connection == 0 || radius < 0) {
         return false;
     }
+    const std::lock_guard lock{mutex_};
     auto &entry{views_[connection]};
     const auto seed_radius{entry.initialized ? 0 : 3};
     if (entry.initialized && entry.chunk_x == chunk_x &&
@@ -33,10 +34,12 @@ auto chunk_tracker::update(std::uint64_t connection, std::int32_t chunk_x,
 }
 
 auto chunk_tracker::take_requests() -> std::vector<chunk_view_request> {
+    const std::lock_guard lock{mutex_};
     return std::exchange(pending_, {});
 }
 
 auto chunk_tracker::remove(std::uint64_t connection) -> bool {
+    const std::lock_guard lock{mutex_};
     return views_.erase(connection) != 0;
 }
 

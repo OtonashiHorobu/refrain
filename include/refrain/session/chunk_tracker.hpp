@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -22,6 +23,9 @@ struct chunk_view_request {
 /// Session-owned chunk subscription tracking. The network layer no longer
 /// decides when a player needs a new viewport; it only reports movement and
 /// client view distance.
+///
+/// Transport callbacks update the tracker while the simulation drains it, so
+/// every method takes the internal lock.
 class chunk_tracker {
   public:
     /// Update one player's viewport. Returns true when the center or radius
@@ -42,6 +46,7 @@ class chunk_tracker {
         std::int32_t radius{0};
         bool initialized{false};
     };
+    mutable std::mutex mutex_{};
     std::unordered_map<std::uint64_t, view> views_{};
     std::vector<chunk_view_request> pending_{};
 };
