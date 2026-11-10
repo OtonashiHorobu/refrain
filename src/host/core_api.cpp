@@ -114,23 +114,45 @@ void host_version(void *self, refrain_host_core_host_version *out) {
         return;
     }
     out->struct_size = REFRAIN_HOST_CORE_HOST_VERSION_SIZE;
-    context_of(self)->version(*out);
+    try {
+        context_of(self)->version(*out);
+    } catch (...) {
+        // The version table is informational; keep the struct_size field.
+    }
 }
 
 void host_log(void *self, std::uint32_t level, refrain_str message) {
     if (self == nullptr) {
         return;
     }
-    context_of(self)->log(static_cast<std::uint32_t>(log_level(level)),
-                          to_view(message));
+    try {
+        context_of(self)->log(static_cast<std::uint32_t>(log_level(level)),
+                              to_view(message));
+    } catch (...) {
+        // A log sink must never terminate the caller.
+    }
 }
 
 auto host_now_ns(void *self) -> std::int64_t {
-    return self == nullptr ? 0 : context_of(self)->now_ns();
+    if (self == nullptr) {
+        return 0;
+    }
+    try {
+        return context_of(self)->now_ns();
+    } catch (...) {
+        return 0;
+    }
 }
 
 auto host_tick_now(void *self) -> std::int64_t {
-    return self == nullptr ? 0 : context_of(self)->tick_now();
+    if (self == nullptr) {
+        return 0;
+    }
+    try {
+        return context_of(self)->tick_now();
+    } catch (...) {
+        return -1;
+    }
 }
 
 auto host_config_i64(void *self, refrain_str ns, refrain_str key,
@@ -141,12 +163,18 @@ auto host_config_i64(void *self, refrain_str ns, refrain_str key,
         return static_cast<refrain_status>(core::host_error::invalid_argument);
     }
     clear_error();
-    auto value{context_of(self)->config_i64(to_view(ns), to_view(key))};
-    if (!value) {
-        set_error(value.error());
-        return static_cast<refrain_status>(to_host_error(value.error().code));
+    try {
+        auto value{context_of(self)->config_i64(to_view(ns), to_view(key))};
+        if (!value) {
+            set_error(value.error());
+            return static_cast<refrain_status>(
+                to_host_error(value.error().code));
+        }
+        *out = *value;
+    } catch (...) {
+        set_error("config_get_i64: host threw");
+        return static_cast<refrain_status>(core::host_error::internal);
     }
-    *out = *value;
     return REFRAIN_STATUS_OK;
 }
 
@@ -158,12 +186,18 @@ auto host_config_bool(void *self, refrain_str ns, refrain_str key,
         return static_cast<refrain_status>(core::host_error::invalid_argument);
     }
     clear_error();
-    auto value{context_of(self)->config_bool(to_view(ns), to_view(key))};
-    if (!value) {
-        set_error(value.error());
-        return static_cast<refrain_status>(to_host_error(value.error().code));
+    try {
+        auto value{context_of(self)->config_bool(to_view(ns), to_view(key))};
+        if (!value) {
+            set_error(value.error());
+            return static_cast<refrain_status>(
+                to_host_error(value.error().code));
+        }
+        *out = *value ? 1U : 0U;
+    } catch (...) {
+        set_error("config_get_bool: host threw");
+        return static_cast<refrain_status>(core::host_error::internal);
     }
-    *out = *value ? 1U : 0U;
     return REFRAIN_STATUS_OK;
 }
 
@@ -175,12 +209,18 @@ auto host_config_string(void *self, refrain_str ns, refrain_str key,
         return static_cast<refrain_status>(core::host_error::invalid_argument);
     }
     clear_error();
-    auto value{context_of(self)->config_string(to_view(ns), to_view(key))};
-    if (!value) {
-        set_error(value.error());
-        return static_cast<refrain_status>(to_host_error(value.error().code));
+    try {
+        auto value{context_of(self)->config_string(to_view(ns), to_view(key))};
+        if (!value) {
+            set_error(value.error());
+            return static_cast<refrain_status>(
+                to_host_error(value.error().code));
+        }
+        *out = to_borrowed(*value);
+    } catch (...) {
+        set_error("config_get_string: host threw");
+        return static_cast<refrain_status>(core::host_error::internal);
     }
-    *out = to_borrowed(*value);
     return REFRAIN_STATUS_OK;
 }
 
@@ -192,14 +232,20 @@ auto host_query_service(void *self, refrain_str service, refrain_str instance,
         return static_cast<refrain_status>(core::host_error::invalid_argument);
     }
     clear_error();
-    auto value{
-        context_of(self)->query_service(to_view(service), to_view(instance))};
-    if (!value) {
-        set_error(value.error());
-        return static_cast<refrain_status>(to_host_error(value.error().code));
+    try {
+        auto value{context_of(self)->query_service(to_view(service),
+                                                   to_view(instance))};
+        if (!value) {
+            set_error(value.error());
+            return static_cast<refrain_status>(
+                to_host_error(value.error().code));
+        }
+        *out = *value;
+        out->struct_size = REFRAIN_HOST_CORE_PROVIDER_REF_SIZE;
+    } catch (...) {
+        set_error("query_service: host threw");
+        return static_cast<refrain_status>(core::host_error::internal);
     }
-    *out = *value;
-    out->struct_size = REFRAIN_HOST_CORE_PROVIDER_REF_SIZE;
     return REFRAIN_STATUS_OK;
 }
 
@@ -218,12 +264,17 @@ auto host_register_provider(void *self, refrain_str service,
         return static_cast<refrain_status>(core::host_error::version_mismatch);
     }
     clear_error();
-    auto registered{context_of(self)->register_provider(
-        to_view(service), to_view(instance), *ref)};
-    if (!registered) {
-        set_error(registered.error());
-        return static_cast<refrain_status>(
-            to_host_error(registered.error().code));
+    try {
+        auto registered{context_of(self)->register_provider(
+            to_view(service), to_view(instance), *ref)};
+        if (!registered) {
+            set_error(registered.error());
+            return static_cast<refrain_status>(
+                to_host_error(registered.error().code));
+        }
+    } catch (...) {
+        set_error("register_provider: host threw");
+        return static_cast<refrain_status>(core::host_error::internal);
     }
     return REFRAIN_STATUS_OK;
 }
@@ -236,13 +287,19 @@ auto host_alloc(void *self, std::uint64_t size, std::uint64_t alignment,
         return static_cast<refrain_status>(core::host_error::invalid_argument);
     }
     clear_error();
-    auto block{context_of(self)->alloc(size, alignment)};
-    if (!block) {
-        set_error(block.error());
-        return static_cast<refrain_status>(to_host_error(block.error().code));
+    try {
+        auto block{context_of(self)->alloc(size, alignment)};
+        if (!block) {
+            set_error(block.error());
+            return static_cast<refrain_status>(
+                to_host_error(block.error().code));
+        }
+        out->data = block->data();
+        out->len = static_cast<std::uint64_t>(block->size());
+    } catch (...) {
+        set_error("alloc: host threw");
+        return static_cast<refrain_status>(core::host_error::internal);
     }
-    out->data = block->data();
-    out->len = static_cast<std::uint64_t>(block->size());
     return REFRAIN_STATUS_OK;
 }
 
@@ -250,8 +307,12 @@ void host_free(void *self, refrain_mut_bytes block) {
     if (self == nullptr || block.data == nullptr || block.len == 0) {
         return;
     }
-    context_of(self)->free(std::span<std::uint8_t>{
-        block.data, static_cast<std::size_t>(block.len)});
+    try {
+        context_of(self)->free(std::span<std::uint8_t>{
+            block.data, static_cast<std::size_t>(block.len)});
+    } catch (...) {
+        // Freeing must not throw across the ABI.
+    }
 }
 
 auto host_last_error_message(void *self, refrain_str *out) -> refrain_status {

@@ -37,6 +37,36 @@ namespace refrain::mod {
 
 namespace {
 
+// A mod reports a contract status; the loader records the engine error code.
+// Unknown values stay unknown instead of being reinterpreted as a different
+// error taxonomy.
+[[nodiscard]] auto from_mod_status(refrain_status status) noexcept
+    -> error_code {
+    switch (static_cast<refrain::host::core::host_error>(status)) {
+    case refrain::host::core::host_error::invalid_argument:
+        return error_code::invalid_argument;
+    case refrain::host::core::host_error::not_found:
+        return error_code::not_found;
+    case refrain::host::core::host_error::permission_denied:
+        return error_code::permission_denied;
+    case refrain::host::core::host_error::version_mismatch:
+        return error_code::version_mismatch;
+    case refrain::host::core::host_error::unsupported:
+        return error_code::unsupported;
+    case refrain::host::core::host_error::already_exists:
+        return error_code::already_exists;
+    case refrain::host::core::host_error::io_error:
+        return error_code::io_error;
+    case refrain::host::core::host_error::not_initialized:
+    case refrain::host::core::host_error::out_of_memory:
+    case refrain::host::core::host_error::limit_exceeded:
+    case refrain::host::core::host_error::thread_violation:
+    case refrain::host::core::host_error::internal:
+        return error_code::unknown;
+    }
+    return error_code::unknown;
+}
+
 namespace config = core::config;
 namespace kernel = refrain::kernel;
 namespace data = refrain::data;
@@ -530,6 +560,18 @@ auto host::load_external_mod(const mod_manifest &manifest,
         // and do not run external code.
         return status_ok();
     }
+    // The manifest declares the entry ABI the package was built against. A
+    // mismatch is rejected before the library is opened, so no mod code runs
+    // against a host it cannot understand.
+    if (manifest.common.abi != REFRAIN_MOD_ABI_MAJOR) {
+        return std::unexpected{annotate(
+            fail(error_code::version_mismatch,
+                 fmt::format("external mod '{}' was built for entry ABI {}, "
+                             "this host provides {}",
+                             manifest.common.id, manifest.common.abi,
+                             REFRAIN_MOD_ABI_MAJOR)),
+            entry.path)};
+    }
 
     const auto root{std::filesystem::path{entry.path}.parent_path()};
     const auto library_path{root / manifest.entry->native};
@@ -631,9 +673,10 @@ auto host::load_external_mod(const mod_manifest &manifest,
     }
     if (on_load_status != REFRAIN_STATUS_OK) {
         return std::unexpected{
-            annotate(fail(static_cast<error_code>(on_load_status),
-                          fmt::format("external mod '{}' on_load failed",
-                                      manifest.common.id)),
+            annotate(fail(from_mod_status(on_load_status),
+                          fmt::format("external mod '{}' on_load failed "
+                                      "with status {}",
+                                      manifest.common.id, on_load_status)),
                      entry.path)};
     }
 
