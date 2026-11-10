@@ -228,7 +228,7 @@ jobs:
           trap 'rm -rf "$stream_work"' EXIT
           ./build/Release/bin/refrain-server --gamepack gamepack/gamepack.toml \
             --dump-gamepack >"$stream_work/out.txt" 2>"$stream_work/err.txt"
-          grep -q 'worldgen -> ' "$stream_work/out.txt" \
+          grep -Eq 'worldgen[[:space:]]*-> ' "$stream_work/out.txt" \
             || { echo "stream split: dump plan missing from stdout" >&2; exit 1; }
           if grep -Eq '\[[^]]*/(info|warn|error|debug|critical)\]' "$stream_work/out.txt"; then
             echo "stream split: console log leaked into stdout" >&2; exit 1
