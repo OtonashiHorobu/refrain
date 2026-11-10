@@ -51,6 +51,9 @@ jobs:
               pacman -Syu --noconfirm --needed base-devel git python python-pip \
                 cmake ninja mingw-w64-gcc mingw-w64-binutils wine \
                 xorg-server-xvfb nasm perl
+              # OpenSSL's MinGW makefile invokes `windres` without the target
+              # prefix; expose the cross resource compiler under that name.
+              ln -sf /usr/bin/x86_64-w64-mingw32-windres /usr/local/bin/windres
               python3 -m pip install --break-system-packages "conan==2.31.2"
 
               conan profile detect --force
