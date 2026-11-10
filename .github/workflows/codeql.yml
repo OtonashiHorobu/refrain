@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+#
+# CodeQL analysis. C/C++ needs a manual build: every dependency is resolved by
+# Conan, so CodeQL's autobuild cannot configure the tree. The job mirrors the
+# linux-build setup, then runs the same build under the extractor.
+
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  packages: read
+  actions: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CONAN_VERSION: "2.31.2"
+  CMAKE_VERSION: "4.4.4"
+  REFRAIN_CONAN_PROFILE: gcc-release
+  CMAKE_GENERATOR: Ninja
+  CONAN_LOGIN_USERNAME: ""
+  CONAN_NON_INTERACTIVE: "1"
+
+jobs:
+  analyze:
+    name: analyze (c-cpp)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install toolchain
+        run: |
+          set -euo pipefail
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build gcc-16 g++-16
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-16 160
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-16 160
+          gcc --version | head -1
+          python3 -m pip install --upgrade pip
+          python3 -m pip install "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
+          conan --version
+          cmake --version | head -1
+          ninja --version
+
+      - name: Restore Conan cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.conan2
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
+          restore-keys: |
+            conan-${{ runner.os }}-
+
+      - name: Create Conan profile
+        run: bash scripts/bootstrap.sh --profile-only
+
+      - name: Build vendor recipes
+        run: python3 tools/vendor_export.py --build --profile "${REFRAIN_CONAN_PROFILE}"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          test -f conan/locks/vendor.lock || {
+            echo "conan/locks/vendor.lock is missing; dependencies must be pinned" >&2
+            exit 1
+          }
+          conan install . -pr "${REFRAIN_CONAN_PROFILE}" --build=missing \
+            --lockfile=conan/locks/vendor.lock
+
+      - uses: github/codeql-action/init@9418214df1f2c4b8128c770156c409013b07d6b9 # v3
+        with:
+          languages: c-cpp
+          build-mode: manual
+
+      - name: Configure
+        run: cmake --preset conan-release
+
+      - name: Build
+        run: cmake --build --preset conan-release -j "$(nproc)"
+
+      - uses: github/codeql-action/analyze@9418214df1f2c4b8128c770156c409013b07d6b9 # v3
+        with:
+          category: "/language:c-cpp"
