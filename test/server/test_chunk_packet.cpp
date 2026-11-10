@@ -120,7 +120,7 @@ void add_section(storage::chunk &chunk, std::int8_t y) {
         }
         for (const auto y : {-4, 19}) {
             storage::light_section light{};
-            light.y = y;
+            light.y = static_cast<std::int8_t>(y);
             light.sky_light.assign(light_bytes, std::byte{0x11});
             light.block_light.assign(light_bytes, std::byte{0x22});
             chunk.light_sections.push_back(std::move(light));
