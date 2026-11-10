@@ -266,8 +266,8 @@ caves chunks use the flat force-load order; the basalt deltas chunk uses the
 ticket sweep because its blobs, columns and delta read and write across the
 chunk borders the dependency rings create.
 
-The default-state report is part of the datapack snapshot the tests load
-(`content/vanilla/<version>/reports/block_defaults/`). Regenerate it after a
+The default-state report ships with the derived tables under
+`content/vanilla/<version>/reports/block_defaults/`. Regenerate it after a
 game update with the data generator's `blocks.json` report:
 `python3 tools/worldgen/block_defaults.py --blocks generated/reports/blocks.json
 --out content/vanilla/<version>/reports/block_defaults`.
