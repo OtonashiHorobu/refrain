@@ -709,7 +709,7 @@ suite<"worldgen/placement-random"> placement_random_tests = [] {
 
     "cuboid can select edges, interior or both"_test = [] {
         block_state_registry registry;
-        const auto run = [&](std::string_view document) {
+        const auto run_case = [&](std::string_view document) {
             auto modifier = decode_placement(parse(document), registry);
             expect(modifier.has_value()) << modifier.error().message;
             std::vector<block_pos> out;
@@ -721,14 +721,14 @@ suite<"worldgen/placement-random"> placement_random_tests = [] {
             }
             return out;
         };
-        const auto faces = run(
+        const auto faces = run_case(
             R"({"type":"minecraft:cuboid","xz_size":2,"y_size":2,
                 "include_interior":false})");
         expect(faces.size() == 26U);
         expect(std::none_of(faces.begin(), faces.end(), [](const block_pos &p) {
             return p.x == 1 && p.y == 1 && p.z == 1;
         }));
-        const auto no_edges = run(
+        const auto no_edges = run_case(
             R"({"type":"minecraft:cuboid","xz_size":2,"y_size":2,
                 "include_edges":false})");
         expect(no_edges.size() == 7U);

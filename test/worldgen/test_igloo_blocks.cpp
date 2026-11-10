@@ -86,14 +86,14 @@ auto read_chunk(std::string_view path, jint chunk_x, jint chunk_z)
     return std::move(*parsed);
 }
 
-auto int_value(const data::nbt::value &tag) -> std::optional<jint> {
-    if (const auto value = tag.as_int(); value.has_value()) {
+auto int_value(const data::nbt::value &nbt_tag) -> std::optional<jint> {
+    if (const auto value = nbt_tag.as_int(); value.has_value()) {
         return *value;
     }
-    if (const auto value = tag.as_short(); value.has_value()) {
+    if (const auto value = nbt_tag.as_short(); value.has_value()) {
         return *value;
     }
-    if (const auto value = tag.as_byte(); value.has_value()) {
+    if (const auto value = nbt_tag.as_byte(); value.has_value()) {
         return *value;
     }
     return std::nullopt;
@@ -1963,11 +1963,11 @@ suite<"worldgen/igloo-blocks"> igloo_blocks_tests = [] {
 };
 namespace {
 
-auto byte_flag(const data::nbt::value &tag) -> bool {
-    if (const auto value = tag.as_byte(); value.has_value()) {
+auto byte_flag(const data::nbt::value &nbt_tag) -> bool {
+    if (const auto value = nbt_tag.as_byte(); value.has_value()) {
         return *value != 0;
     }
-    if (const auto value = tag.as_int(); value.has_value()) {
+    if (const auto value = nbt_tag.as_int(); value.has_value()) {
         return *value != 0;
     }
     return false;

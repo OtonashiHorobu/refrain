@@ -115,12 +115,12 @@ auto read_reference(std::string_view region_path, jint chunk_x, jint chunk_z,
     if (!block_tags) {
         return std::nullopt;
     }
-    const auto resolve_tag_names = [&](std::string_view tag) {
+    const auto resolve_tag_names = [&](std::string_view tag_name) {
         std::set<std::string> names;
-        if (!block_tags->has(tag)) {
+        if (!block_tags->has(tag_name)) {
             return names;
         }
-        auto resolved = block_tags->resolve(tag);
+        auto resolved = block_tags->resolve(tag_name);
         expect(resolved.has_value());
         if (resolved) {
             names.insert(resolved->begin(), resolved->end());

@@ -212,27 +212,29 @@ suite<"worldgen/feature-pool"> feature_pool_tests = [] {
         };
 
         constexpr jlong seed = 987654321;
-        const auto run = [&](std::vector<structure::jigsaw_element_info> items,
-                             const block_pos &origin) {
-            structure::jigsaw_element_info element{};
-            if (items.size() == 1) {
-                element = std::move(items.front());
-            } else {
-                element.kind = structure::pool_element_kind::list;
-                element.elements = std::move(items);
-            }
-            auto random = worldgen_random{
-                std::make_unique<xoroshiro_random_source>(seed)};
-            structure::place_structure_piece(
-                state.context, make_piece(std::move(element), origin), random);
-            return random;
-        };
+        const auto run_case =
+            [&](std::vector<structure::jigsaw_element_info> items,
+                const block_pos &origin) {
+                structure::jigsaw_element_info element{};
+                if (items.size() == 1) {
+                    element = std::move(items.front());
+                } else {
+                    element.kind = structure::pool_element_kind::list;
+                    element.elements = std::move(items);
+                }
+                auto random = worldgen_random{
+                    std::make_unique<xoroshiro_random_source>(seed)};
+                structure::place_structure_piece(
+                    state.context, make_piece(std::move(element), origin),
+                    random);
+                return random;
+            };
 
         auto expected =
             worldgen_random{std::make_unique<xoroshiro_random_source>(seed)};
         const auto first = expected.next_int(2);
-        auto one = run({feature_element("oracle:weighted")},
-                       block_pos{.x = 6, .y = 12, .z = 6});
+        auto one = run_case({feature_element("oracle:weighted")},
+                            block_pos{.x = 6, .y = 12, .z = 6});
         expect(state.chunk->state_at(6, 12, 6) ==
                (first == 0 ? state.stone : state.dirt));
         expect(one.next_int(1000) == expected.next_int(1000));
@@ -241,9 +243,9 @@ suite<"worldgen/feature-pool"> feature_pool_tests = [] {
             worldgen_random{std::make_unique<xoroshiro_random_source>(seed)};
         const auto first_again = expected.next_int(2);
         const auto second = expected.next_int(2);
-        auto two = run({feature_element("oracle:weighted"),
-                        feature_element("oracle:weighted")},
-                       block_pos{.x = 7, .y = 12, .z = 7});
+        auto two = run_case({feature_element("oracle:weighted"),
+                             feature_element("oracle:weighted")},
+                            block_pos{.x = 7, .y = 12, .z = 7});
         expect(first_again == first);
         expect(state.chunk->state_at(7, 12, 7) ==
                (second == 0 ? state.stone : state.dirt));

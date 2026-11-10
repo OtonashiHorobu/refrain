@@ -214,7 +214,7 @@ inline auto decode(const data::nbt::value &document,
         if (y_value == nullptr || states_value == nullptr) {
             continue;
         }
-        auto section_y = y_value->as_byte();
+        std::optional<jint> section_y = y_value->as_byte();
         if (!section_y) {
             section_y = y_value->as_short();
         }

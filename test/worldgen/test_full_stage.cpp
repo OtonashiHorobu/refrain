@@ -155,12 +155,12 @@ void run_full_stage_case(std::string_view prefix,
     if (!block_tags) {
         return;
     }
-    const auto resolve_tag_names = [&](std::string_view tag) {
+    const auto resolve_tag_names = [&](std::string_view tag_name) {
         std::set<std::string> names;
-        if (!block_tags->has(tag)) {
+        if (!block_tags->has(tag_name)) {
             return names;
         }
-        auto resolved = block_tags->resolve(tag);
+        auto resolved = block_tags->resolve(tag_name);
         expect(resolved.has_value());
         if (resolved) {
             names.insert(resolved->begin(), resolved->end());
