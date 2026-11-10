@@ -23,6 +23,7 @@ scripted stop command.
 | Option | Meaning |
 |---|---|
 | `--gamepack <file>` | composition file; defaults to the bundled gamepack |
+| `--config-dir <dir>` | host config directory; each `*.toml` becomes a read-only host runtime namespace (`refrain.toml` is `host`, `mods/*.toml` is `mod/<id>`); empty disables |
 | `--world <dir>` | RWF world directory |
 | `--config-dir <dir>` | per-namespace TOML configuration; missing files keep defaults |
 | `--import-properties <file>` | import Java `server.properties` as a fallback layer (not written) |

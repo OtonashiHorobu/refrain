@@ -23,6 +23,11 @@ auto generator::generate_terrain(const chunk_pos &pos)
     auto chunk =
         std::make_unique<proto_chunk>(*states_, pos.x, pos.z, min_y_, height_);
     chunk->set_status(chunk_status::biomes);
+    if (stages_.biomes) {
+        if (const auto staged = stages_.biomes(*chunk); !staged) {
+            return std::unexpected{staged.error()};
+        }
+    }
     stages_.fill(*chunk);
 
     if (stages_.surface) {
@@ -47,8 +52,26 @@ auto generator::generate(const chunk_pos &pos, chunk_status target)
     if (target == chunk_status::terrain) {
         return generate_terrain(pos);
     }
-    return std::unexpected{make_error(error_code::unsupported,
-                                      "generation status is not implemented")};
+    if (target != chunk_status::features && target != chunk_status::full) {
+        return std::unexpected{make_error(
+            error_code::unsupported, "generation status is not implemented")};
+    }
+    auto chunk = generate_terrain(pos);
+    if (!chunk) {
+        return chunk;
+    }
+    if (stages_.structures) {
+        if (const auto staged = stages_.structures(**chunk); !staged) {
+            return std::unexpected{staged.error()};
+        }
+    }
+    if (stages_.features) {
+        if (const auto staged = stages_.features(**chunk); !staged) {
+            return std::unexpected{staged.error()};
+        }
+    }
+    (*chunk)->set_status(target);
+    return chunk;
 }
 
 } // namespace refrain::worldgen

@@ -4,17 +4,22 @@
 //
 // 26.3 density-function samplers.
 //
-// 26.3 compiles every density-function node into a `DensitySampler` with a
-// scalar (`sampleValue`) and a bulk (`sampleVolume`) path. The two paths do not
-// always agree: for example `mul` short-circuits a zero left operand on the
-// scalar path but not in bulk, and `sub` accumulates the right operand negated
-// in bulk. Both are implemented separately, because terrain generation reads
-// the bulk path.
+// Every density-function node compiles into a sampler with a scalar and a bulk
+// sampling path. The two paths do not always agree: for example `mul`
+// short-circuits a zero left operand on the scalar path but not in bulk, and
+// `sub` accumulates the right operand negated in bulk. Both are implemented
+// separately, because terrain generation reads the bulk path.
 //
 // The compiler also rewrites the graph (constant specialisations, `div` by a
 // constant becoming a multiply by the reciprocal, min/max range shortcuts).
 // Those rewrites are part of the observable float results, so the factories
 // below reproduce them.
+//
+// A referenced density document is compiled once and shared by every node that
+// refers to it, and a `cache` node keeps the values it sampled for one volume
+// in the sampling context. Both reproduce the reference's compiled graph: the
+// number of evaluations of a shared node no longer depends on how often the
+// document is referenced.
 
 #pragma once
 
@@ -27,13 +32,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace refrain::worldgen::density {
 
 class sampler;
 
-/// Context fields the reference binds through `SamplerContext` keys. Terrain
+/// Context fields the reference binds through named sampler keys. Terrain
 /// generation without blending/beardifier leaves them unset, which makes the
 /// corresponding samplers use their fallbacks.
 enum class context_key : std::uint8_t {
@@ -42,15 +48,32 @@ enum class context_key : std::uint8_t {
     beardifier,
 };
 
+/// One sampling pass's state: the bound context fields and the buffers
+/// `cache` nodes keep. A context is single-threaded; copies share the cache.
 class sampler_context {
   public:
-    sampler_context() = default;
+    sampler_context();
+    sampler_context(const sampler_context &) = default;
+    auto operator=(const sampler_context &) -> sampler_context & = default;
+    sampler_context(sampler_context &&) noexcept = default;
+    auto operator=(sampler_context &&) noexcept -> sampler_context & = default;
+    ~sampler_context();
 
     /// Scratch storage for one sampling pass. The reference uses a pooled arena
     /// with scoped lifetimes; a fresh allocation has the same values.
     [[nodiscard]] auto acquire(std::size_t size) const -> buffer {
         return buffer{size};
     }
+
+    /// The buffer a `cache` node keeps for `volume`, and whether it already
+    /// holds that volume's values. On a miss the buffer is resized for the new
+    /// volume and the caller must sample it before reading; the reference keeps
+    /// one buffer per cache node and samples it again when the volume changes.
+    [[nodiscard]] auto cached_volume(std::size_t id, const volume &vol) const
+        -> std::pair<buffer *, bool>;
+
+    /// Marks a cache entry as being filled, so eviction keeps its buffer.
+    void mark_filling(std::size_t id, bool value) const;
 
     [[nodiscard]] auto get_field(context_key key) const -> const sampler * {
         return fields_[static_cast<std::size_t>(key)];
@@ -60,7 +83,10 @@ class sampler_context {
     }
 
   private:
+    struct volume_cache;
+
     std::array<const sampler *, 3> fields_{};
+    mutable std::shared_ptr<volume_cache> cache_;
 };
 
 class sampler {
@@ -87,7 +113,9 @@ class sampler {
     }
 };
 
-using sampler_ptr = std::unique_ptr<sampler>;
+/// Samplers are shared: a referenced document compiles once, and a `cache`
+/// node's identity therefore stays the same at every reference to it.
+using sampler_ptr = std::shared_ptr<sampler>;
 
 [[nodiscard]] auto constant(float value) -> sampler_ptr;
 
@@ -118,7 +146,7 @@ using sampler_ptr = std::unique_ptr<sampler>;
 [[nodiscard]] auto gradient_y(jint from_coordinate, jint to_coordinate,
                               float from_value, float to_value) -> sampler_ptr;
 
-/// `minecraft:noise`: `noise.get(x * xz, y * y, z * xz)`.
+/// `minecraft:noise`: samples the noise at `(x * xz, y * y, z * xz)`.
 [[nodiscard]] auto noise(std::shared_ptr<const noise_stack> stack,
                          double xz_scale, double y_scale) -> sampler_ptr;
 
@@ -134,16 +162,15 @@ using sampler_ptr = std::unique_ptr<sampler>;
                                      std::shared_ptr<const noise_stack> stack)
     -> sampler_ptr;
 
-class spline;
+struct spline;
 struct spline_point {
     float location{0.0F};
     float derivative{0.0F};
     std::shared_ptr<const spline> value{};
 };
 
-/// `net.minecraft.util.CubicSpline`: a constant or a multipoint Hermite
-/// spline. Coordinates are density samplers; identical samplers are sampled
-/// once per point/volume.
+/// A constant or a multipoint Hermite spline. Coordinates are density samplers;
+/// identical samplers are sampled once per point/volume.
 struct spline {
     [[nodiscard]] static auto constant(float value)
         -> std::shared_ptr<const spline>;
@@ -181,8 +208,8 @@ struct spline {
                                    std::vector<sampler_ptr> functions)
     -> sampler_ptr;
 
-/// `minecraft:lerp`: `Mth.lerp(alpha, first, second)` with the reference's
-/// 0/1 alpha short circuits and constant specialisations.
+/// `minecraft:lerp`: linear interpolation of the two branches with the
+/// reference's 0/1 alpha short circuits and constant specialisations.
 [[nodiscard]] auto lerp(sampler_ptr alpha, sampler_ptr first,
                         sampler_ptr second) -> sampler_ptr;
 
@@ -206,13 +233,38 @@ struct blended_noise_parameters {
 };
 
 /// `minecraft:old_blended_noise`: three smeared-Perlin FBM stacks combined by
-/// a clamped lerp. `random` is the stream derived from
-/// `factory.fromHashOf("minecraft:terrain")`.
+/// a clamped lerp. `random` is the stream derived from the
+/// `"minecraft:terrain"` name hash.
 [[nodiscard]] auto blended_noise(const blended_noise_parameters &parameters,
                                  random_source &random) -> sampler_ptr;
 
-/// `minecraft:slice`: evaluate `input` at a fixed Y and broadcast the result.
+/// `minecraft:slice`: evaluate `input` at a fixed coordinate of one axis and
+/// broadcast the result along that axis.
+enum class slice_axis : std::uint8_t { x, y, z };
+
+[[nodiscard]] auto slice(slice_axis axis, jint coordinate, sampler_ptr input)
+    -> sampler_ptr;
+
+/// `minecraft:slice` on Y. Kept as the constructor the surface probe uses.
 [[nodiscard]] auto slice_y(sampler_ptr input, jint y) -> sampler_ptr;
+
+/// The distance a `minecraft:distance_to_point` function reports.
+enum class distance_metric : std::uint8_t {
+    euclidean,
+    euclidean_squared,
+    manhattan,
+    chebyshev,
+};
+
+/// `minecraft:distance_to_point`: the metric between a fixed point and the
+/// sampled block position.
+[[nodiscard]] auto distance_to_point(jint x, jint y, jint z,
+                                     distance_metric metric) -> sampler_ptr;
+
+/// `minecraft:end_outer_islands`: the outer-island height field. The stream is
+/// a legacy source seeded with the world seed that has consumed the 17292
+/// draws the reference discards before building the simplex noise.
+[[nodiscard]] auto end_outer_islands(random_source &random) -> sampler_ptr;
 
 /// `minecraft:find_top_surface`: probe the density along Y in `cell_height`
 /// steps and return the first cell above zero (or `lower_bound`).
@@ -220,10 +272,11 @@ struct blended_noise_parameters {
                                     sampler_ptr upper_bound, jint lower_bound,
                                     jint cell_height) -> sampler_ptr;
 
-/// `minecraft:cache`: the 26.3 compiler deduplicates caches by input and
-/// stores results per `SamplerContext`. Values on the bulk path are identical
-/// to the input; this implementation returns the input unchanged. The scalar
-/// cross-path behaviour is documented as a deviation.
+/// `minecraft:cache`: keeps the values its input sampled for one grid in the
+/// sampling context, so several references to the same node sample it once per
+/// grid. A different grid replaces the entry. Only the bulk path reads the
+/// entry; scalar sampling evaluates the input, because the scalar and bulk
+/// paths of some nodes round differently and terrain generation reads bulk.
 [[nodiscard]] auto cache(sampler_ptr input) -> sampler_ptr;
 
 /// `minecraft:shift`: the 3D noise at a quarter scale, times four.

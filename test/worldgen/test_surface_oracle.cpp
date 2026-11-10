@@ -13,21 +13,27 @@
 // the world seed (default 12345).
 
 #include <refrain/core/io.hpp>
+#include <refrain/data/json.hpp>
 #include <refrain/data/nbt.hpp>
 #include <refrain/worldgen/biome/biome_climate.hpp>
 #include <refrain/worldgen/biome/biome_manager.hpp>
+#include <refrain/worldgen/biome/biome_parameters.hpp>
 #include <refrain/worldgen/biome/biome_source.hpp>
-#include <refrain/worldgen/biome/overworld_biome_builder.hpp>
+#include <refrain/worldgen/biome/biome_view.hpp>
 #include <refrain/worldgen/carver/carver_data.hpp>
 #include <refrain/worldgen/carver/carver_stage.hpp>
+#include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
 #include <refrain/worldgen/feature/feature_data.hpp>
 #include <refrain/worldgen/feature/feature_registry.hpp>
 #include <refrain/worldgen/feature/feature_stage.hpp>
+#include <refrain/worldgen/structure/template.hpp>
 #include <refrain/worldgen/terrain/surface.hpp>
 #include <refrain/worldgen/terrain/terrain.hpp>
+
+#include "worldgen/feature_oracle_support.hpp"
 
 #include <boost/ut.hpp>
 
@@ -45,6 +51,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -52,6 +59,7 @@ namespace {
 using namespace refrain;
 using namespace refrain::worldgen;
 using namespace refrain::worldgen::surface;
+using refrain::worldgen::test_support::canonical_state_name;
 
 constexpr jint oracle_min_y = -64;
 constexpr jint oracle_height = 384;
@@ -126,29 +134,6 @@ auto child(const data::nbt::compound *entries, std::string_view key)
     }
     const auto found = entries->find(key);
     return found == entries->end() ? nullptr : &found->second;
-}
-
-auto canonical_state_name(std::string_view name) -> std::string {
-    if (name.size() > 8 && name.ends_with("[axis=y]")) {
-        const auto base = name.substr(0, name.size() - 8);
-        if (base.ends_with("_log") || base.ends_with("_stem") ||
-            base.ends_with("_wood")) {
-            return std::string{base};
-        }
-    }
-    constexpr std::string_view honey_default = ",honey_level=0]";
-    if (name.ends_with(honey_default)) {
-        std::string canonical{
-            name.substr(0, name.size() - honey_default.size())};
-        canonical.push_back(']');
-        return canonical;
-    }
-    constexpr std::string_view leaf_defaults =
-        "[distance=7,persistent=false,waterlogged=false]";
-    if (name.size() > leaf_defaults.size() && name.ends_with(leaf_defaults)) {
-        return std::string{name.substr(0, name.size() - leaf_defaults.size())};
-    }
-    return std::string{name};
 }
 
 auto decode_expected_heightmap(const data::nbt::value &root,
@@ -363,6 +348,13 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
         const material_documents &documents = *documents_result;
         biome_climates climates;
         expect(climates.load(data_root).has_value());
+        if (feature_mode) {
+            if (const char *feature_root =
+                    std::getenv("REFRAIN_VANILLA_FEATURE_DATA");
+                feature_root != nullptr) {
+                expect(climates.load(feature_root).has_value());
+            }
+        }
         const biome_temperatures temperatures;
         const std::string *overworld_text = nullptr;
         for (const auto &[id, text] : documents.rules) {
@@ -378,7 +370,13 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
         noise_registry registry{algorithm::xoroshiro, seed};
         expect(registry.load(data_root).has_value());
         auto root_factory = new_positional_factory(algorithm::xoroshiro, seed);
-        multi_noise_biome_source source{overworld_parameters()};
+        auto parameters =
+            load_biome_parameters(data_root, dimension_kind::overworld);
+        expect(parameters.has_value()) << parameters.error().message;
+        if (!parameters) {
+            return;
+        }
+        multi_noise_biome_source source{std::move(*parameters)};
         const bool real_biomes =
             std::getenv("REFRAIN_VANILLA_SURFACE_BIOMES") != nullptr ||
             carver_mode || feature_real_mode;
@@ -411,23 +409,34 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
         }
         std::set<std::string> possible_biomes;
         if (real_biomes) {
-            for (const auto &parameter : overworld_parameters()) {
-                possible_biomes.insert(parameter.biome);
-            }
+            possible_biomes.insert(source.biomes().begin(),
+                                   source.biomes().end());
         } else {
             possible_biomes.insert(fixed_biome);
         }
 
-        constexpr std::array<std::array<jint, 2>, 5> chunks{{
+        std::vector<std::array<jint, 2>> chunks{{
             {0, 0},
             {1, 0},
             {0, 1},
             {1, 1},
             {2, 2},
         }};
+        if (const char *chunk_x_raw =
+                std::getenv("REFRAIN_VANILLA_FEATURE_CHUNK_X");
+            chunk_x_raw != nullptr) {
+            const char *chunk_z_raw =
+                std::getenv("REFRAIN_VANILLA_FEATURE_CHUNK_Z");
+            chunks = {{std::atoi(chunk_x_raw),
+                       chunk_z_raw == nullptr ? 0 : std::atoi(chunk_z_raw)}};
+        }
         std::size_t mismatches = 0;
         std::size_t map_mismatches = 0;
         std::size_t compared = 0;
+        std::size_t compared_chunks = 0;
+        const char *border_block =
+            std::getenv("REFRAIN_VANILLA_FEATURE_BORDER_BLOCK");
+        bool skip_border_chunks = border_block != nullptr;
         for (const auto &coordinates : chunks) {
             const jint chunk_x = coordinates[0];
             const jint chunk_z = coordinates[1];
@@ -451,6 +460,17 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             }
 
             block_state_registry block_registry;
+            for (const auto key :
+                 {"minecraft:end_portal", "minecraft:end_gateway",
+                  "minecraft:fire", "minecraft:torch",
+                  "minecraft:wall_torch[facing=north]", "minecraft:soul_torch",
+                  "minecraft:soul_wall_torch[facing=north]",
+                  "minecraft:glow_lichen", "minecraft:sculk_vein"}) {
+                (void)block_registry.intern(key,
+                                            {.air = false,
+                                             .blocks_motion = false,
+                                             .blocks_motion_no_leaves = false});
+            }
             auto air_state =
                 block_registry.intern("minecraft:air", {.air = true});
             auto stone_state = block_registry.intern(
@@ -466,6 +486,24 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 "minecraft:bedrock", {.air = false,
                                       .blocks_motion = true,
                                       .blocks_motion_no_leaves = true});
+            for (const auto key : {"minecraft:vine[east=false,north=false,"
+                                   "south=false,up=false,west=false]",
+                                   "minecraft:vine[east=false,north=false,"
+                                   "south=false,up=true,west=false]",
+                                   "minecraft:vine[east=false,north=true,south="
+                                   "false,up=false,west=false]",
+                                   "minecraft:vine[east=false,north=false,"
+                                   "south=true,up=false,west=false]",
+                                   "minecraft:vine[east=false,north=false,"
+                                   "south=false,up=false,west=true]",
+                                   "minecraft:vine[east=true,north=false,south="
+                                   "false,up=false,west=false]"}) {
+                expect(block_registry
+                           .intern(key, {.air = false,
+                                         .blocks_motion = false,
+                                         .blocks_motion_no_leaves = false})
+                           .has_value());
+            }
             auto coal_ore_state = block_registry.intern(
                 "minecraft:coal_ore", {.air = false,
                                        .blocks_motion = true,
@@ -488,6 +526,42 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             expect(water_state.has_value());
             expect(lava_state.has_value());
             expect(bedrock_state.has_value());
+            const auto loaded_tags = load_block_tags(data_root);
+            expect(loaded_tags.has_value());
+            if (loaded_tags) {
+                for (const auto &[tag, raw] : loaded_tags->entries()) {
+                    (void)raw;
+                    const auto names = loaded_tags->resolve(tag);
+                    if (!names) {
+                        continue;
+                    }
+                    std::vector<block_state_id> ids;
+                    for (const auto &name : *names) {
+                        if (const auto found = block_registry.find(name);
+                            found.has_value()) {
+                            ids.push_back(*found);
+                            continue;
+                        }
+                        const auto block = name;
+                        const bool air = is_air_block_name(block);
+                        const bool water = block == "minecraft:water";
+                        const bool fluid = water || block == "minecraft:lava" ||
+                                           block == "minecraft:bubble_column";
+                        const bool leaves = block.ends_with("_leaves");
+                        if (const auto interned = block_registry.intern(
+                                name, {.air = air,
+                                       .fluid = fluid,
+                                       .water = water,
+                                       .blocks_motion = !air && !fluid,
+                                       .blocks_motion_no_leaves =
+                                           !air && !fluid && !leaves});
+                            interned.has_value()) {
+                            ids.push_back(*interned);
+                        }
+                    }
+                    block_registry.add_tag(tag, ids);
+                }
+            }
             expect(coal_ore_state.has_value());
             expect(sand_state.has_value());
             expect(dirt_state.has_value());
@@ -536,6 +610,14 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             proto_chunk chunk{block_registry, chunk_x, chunk_z, oracle_min_y,
                               oracle_height};
             chunk.set_status(chunk_status::biomes);
+            const climate_sampler sampler{*settings->router.temperature,
+                                          *settings->router.vegetation,
+                                          *settings->router.continents,
+                                          *settings->router.erosion,
+                                          *settings->router.depth,
+                                          *settings->router.ridges,
+                                          context};
+            fill_chunk_biomes(chunk, source, sampler);
             const terrain::proto_fill_options fill_options{
                 .air = *air_state,
                 .default_block = *stone_state,
@@ -580,15 +662,14 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                                   static_cast<state_id>(*stone_state),
                                   static_cast<state_id>(*air_state)};
             factory_provider factories{*root_factory};
-            const climate_sampler sampler{*settings->router.temperature,
-                                          *settings->router.vegetation,
-                                          *settings->router.continents,
-                                          *settings->router.erosion,
-                                          *settings->router.depth,
-                                          *settings->router.ridges,
-                                          context};
-            climate_biome_resolver resolver{source, sampler};
-            biome_manager manager{resolver,
+            climate_biome_resolver uncached_resolver{source, sampler};
+            chunk_biome_resolver biome_view{
+                [&chunk, chunk_x, chunk_z](jint cx,
+                                           jint cz) -> const proto_chunk * {
+                    return cx == chunk_x && cz == chunk_z ? &chunk : nullptr;
+                },
+                uncached_resolver};
+            biome_manager manager{biome_view,
                                   biome_manager::obfuscate_seed(seed)};
 
             material_providers providers;
@@ -715,12 +796,7 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 std::vector<std::string> plan_biomes;
                 std::vector<std::string> candidate_biomes;
                 if (feature_real_mode) {
-                    std::set<std::string> seen;
-                    for (const auto &parameter : overworld_parameters()) {
-                        if (seen.insert(parameter.biome).second) {
-                            plan_biomes.push_back(parameter.biome);
-                        }
-                    }
+                    plan_biomes = source.biomes();
                     biome_grid grid{source,
                                     sampler,
                                     (chunk_x - 1) * 4,
@@ -761,11 +837,173 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                             .min_y = oracle_min_y,
                             .height = oracle_height,
                             .sea_level = settings->sea_level,
+                            .world_seed = seed,
                         },
                 };
                 feature_placement.region = nullptr;
+                feature_placement.height = [&chunk](heightmap_kind kind, jint x,
+                                                    jint z) -> jint {
+                    const jint local_x = x - chunk.chunk_x() * 16;
+                    const jint local_z = z - chunk.chunk_z() * 16;
+                    if (local_x < 0 || local_x > 15 || local_z < 0 ||
+                        local_z > 15) {
+                        return chunk.min_y();
+                    }
+                    return chunk.first_available(kind, local_x, local_z);
+                };
+                const auto biome_temperature =
+                    [&climates, &temperatures, &manager, &source, &fixed_biome,
+                     real_biomes, sea_level = settings->sea_level](
+                        const block_pos &pos) -> std::optional<float> {
+                    const std::string_view biome =
+                        real_biomes ? source.biome(manager.get_biome(
+                                          pos.x, pos.y, pos.z))
+                                    : std::string_view{fixed_biome};
+                    const auto *climate = climates.get(biome);
+                    if (climate == nullptr) {
+                        return std::nullopt;
+                    }
+                    return temperatures.temperature_at(*climate, pos.x, pos.y,
+                                                       pos.z, sea_level);
+                };
+                const auto world_state =
+                    [&chunk, &block_registry](const block_pos &pos) {
+                        const jint local_x = pos.x - chunk.chunk_x() * 16;
+                        const jint local_z = pos.z - chunk.chunk_z() * 16;
+                        if (local_x < 0 || local_x > 15 || local_z < 0 ||
+                            local_z > 15) {
+                            return block_registry.air();
+                        }
+                        return chunk.state_at(local_x, pos.y, local_z);
+                    };
+                feature_placement.should_freeze =
+                    [&biome_temperature, &world_state, &block_registry,
+                     &manager, &source, &climates](const block_pos &pos) {
+                        const auto temperature = biome_temperature(
+                            block_pos{.x = pos.x, .y = pos.y + 1, .z = pos.z});
+                        if (!temperature || *temperature >= 0.15F) {
+                            return false;
+                        }
+                        return block_registry.traits(world_state(pos)).water;
+                    };
+                feature_placement.should_snow = [&biome_temperature,
+                                                 &world_state, &block_registry](
+                                                    const block_pos &pos) {
+                    const auto temperature = biome_temperature(pos);
+                    if (!temperature || *temperature >= 0.15F) {
+                        return false;
+                    }
+                    const auto state = world_state(pos);
+                    const auto name = block_registry.name(state);
+                    if (!block_registry.traits(state).air &&
+                        !name.starts_with("minecraft:snow")) {
+                        return false;
+                    }
+                    const block_pos below{
+                        .x = pos.x, .y = pos.y - 1, .z = pos.z};
+                    const auto below_state = world_state(below);
+                    if (block_registry.in_tag(
+                            below_state,
+                            "minecraft:cannot_support_snow_layer")) {
+                        return false;
+                    }
+                    if (block_registry.in_tag(
+                            below_state,
+                            "minecraft:support_override_snow_layer")) {
+                        return true;
+                    }
+                    const auto below_name = block_registry.name(below_state);
+                    // Collision shapes are not part of the block table yet;
+                    // exclude the non-full shapes this pack can place.
+                    if (below_name.ends_with("_leaves") ||
+                        below_name.starts_with("minecraft:bamboo") ||
+                        below_name.starts_with("minecraft:vine") ||
+                        below_name.starts_with("minecraft:snow")) {
+                        return false;
+                    }
+                    return block_registry.traits(below_state).blocks_motion;
+                };
+                feature_placement.resolve_state =
+                    [&block_registry](std::string_view key) -> block_state_id {
+                    if (const auto found = block_registry.find(key); found) {
+                        return *found;
+                    }
+                    const auto block = state_block_name(key);
+                    const bool air = is_air_block_name(block);
+                    const bool water = block == "minecraft:water";
+                    const bool fluid = water || block == "minecraft:lava" ||
+                                       block == "minecraft:bubble_column";
+                    const bool leaves = block.ends_with("_leaves");
+                    const bool non_solid = block == "minecraft:glow_lichen" ||
+                                           block == "minecraft:sculk_vein" ||
+                                           block == "minecraft:end_portal" ||
+                                           block == "minecraft:end_gateway" ||
+                                           block == "minecraft:torch" ||
+                                           block == "minecraft:wall_torch" ||
+                                           block == "minecraft:soul_torch" ||
+                                           block == "minecraft:soul_wall_torch";
+                    return block_registry
+                        .intern(key,
+                                {.air = air,
+                                 .fluid = fluid,
+                                 .water = water,
+                                 .blocks_motion = !air && !fluid && !non_solid,
+                                 .blocks_motion_no_leaves =
+                                     !air && !fluid && !leaves && !non_solid})
+                        .value_or(no_block_state);
+                };
                 feature::feature_context feature_ctx{.placement =
                                                          feature_placement};
+                std::optional<structure::structure_template_manager> templates;
+                std::map<std::string,
+                         std::shared_ptr<structure::structure_processor_list>,
+                         std::less<>>
+                    processor_lists;
+                if (const char *templates_root =
+                        std::getenv("REFRAIN_VANILLA_STRUCTURES");
+                    templates_root != nullptr) {
+                    templates.emplace(templates_root, block_registry);
+                    feature_ctx.templates = &*templates;
+                    feature_ctx.registry = &block_registry;
+                    feature_ctx.processor_list = [&](std::string_view id)
+                        -> const structure::structure_processor_list * {
+                        const std::string key{id};
+                        if (const auto found = processor_lists.find(key);
+                            found != processor_lists.end()) {
+                            return found->second.get();
+                        }
+                        const auto separator = key.find(':');
+                        if (separator == std::string::npos) {
+                            return nullptr;
+                        }
+                        const std::string path = std::string{data_root} + "/" +
+                                                 key.substr(0, separator) +
+                                                 "/worldgen/processor_list/" +
+                                                 key.substr(separator + 1) +
+                                                 ".json";
+                        const auto text = core::io::read_text(path);
+                        if (!text) {
+                            processor_lists.emplace(key, nullptr);
+                            return nullptr;
+                        }
+                        const auto processor_document =
+                            data::json::value::parse(*text);
+                        if (!processor_document) {
+                            processor_lists.emplace(key, nullptr);
+                            return nullptr;
+                        }
+                        auto processor_decoded =
+                            structure::decode_processor_list(
+                                block_registry, *processor_document);
+                        if (!processor_decoded) {
+                            processor_lists.emplace(key, nullptr);
+                            return nullptr;
+                        }
+                        auto &slot = processor_lists[key];
+                        slot = std::move(*processor_decoded);
+                        return slot.get();
+                    };
+                }
                 // Writes must go through a region so the write radius is
                 // enforced even though this oracle only has one chunk.
                 chunk_region feature_region_handle{chunk, 1};
@@ -774,6 +1012,30 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                                   candidate_biomes, feature_data->biomes, seed);
             }
 
+            if (skip_border_chunks) {
+                bool dirty = false;
+                for (jint y = oracle_min_y;
+                     y < oracle_min_y + oracle_height && !dirty; ++y) {
+                    for (jint z = 0; z < 16 && !dirty; ++z) {
+                        for (jint x = 0; x < 16; ++x) {
+                            if (x != 0 && x != 15 && z != 0 && z != 15) {
+                                continue;
+                            }
+                            const auto index = static_cast<std::size_t>(
+                                (y - oracle_min_y) * 256 + z * 16 + x);
+                            if (block_registry.name((*expected)[index]) ==
+                                border_block) {
+                                dirty = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (dirty) {
+                    continue;
+                }
+            }
+            ++compared_chunks;
             for (jint y = oracle_min_y; y < oracle_min_y + oracle_height; ++y) {
                 for (jint z = 0; z < 16; ++z) {
                     for (jint x = 0; x < 16; ++x) {
@@ -781,9 +1043,20 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                             (y - oracle_min_y) * 256 + z * 16 + x);
                         ++compared;
                         const auto actual = chunk.state_at(x, y, z);
-                        if (canonical_state_name(states.name(actual)) ==
-                            canonical_state_name(
-                                states.name((*expected)[index]))) {
+                        const auto actual_name =
+                            canonical_state_name(states.name(actual));
+                        const auto expected_name = canonical_state_name(
+                            states.name((*expected)[index]));
+                        if (actual_name == expected_name) {
+                            continue;
+                        }
+                        // Nylium under a solid block turns into netherrack on
+                        // a random tick. The reference server ticks while it
+                        // saves; that is a live-world effect, not worldgen.
+                        if (actual_name == "minecraft:crimson_nylium" &&
+                            expected_name == "minecraft:netherrack" &&
+                            block_registry.traits(chunk.state_at(x, y + 1, z))
+                                .blocks_motion) {
                             continue;
                         }
                         if (mismatches < 8) {
@@ -803,25 +1076,46 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 }
             }
 
-            if (const auto expected_ws =
-                    decode_expected_heightmap(*document, "WORLD_SURFACE")) {
+            const bool skip_heightmaps =
+                std::getenv("REFRAIN_VANILLA_FEATURE_SKIP_HEIGHTMAPS") !=
+                nullptr;
+            constexpr std::array<std::pair<std::string_view, heightmap_kind>, 4>
+                maps{{
+                    {"WORLD_SURFACE", heightmap_kind::world_surface},
+                    {"OCEAN_FLOOR", heightmap_kind::ocean_floor},
+                    {"MOTION_BLOCKING", heightmap_kind::motion_blocking},
+                    {"MOTION_BLOCKING_NO_LEAVES",
+                     heightmap_kind::motion_blocking_no_leaves},
+                }};
+            for (const auto &[name, kind] : maps) {
+                if (skip_heightmaps) {
+                    break;
+                }
+                const auto expected_map =
+                    decode_expected_heightmap(*document, name);
+                if (!expected_map) {
+                    continue;
+                }
                 for (jint z = 0; z < 16; ++z) {
                     for (jint x = 0; x < 16; ++x) {
-                        const auto actual_height = chunk.first_available(
-                            heightmap_kind::world_surface, x, z);
+                        const auto actual_height =
+                            chunk.first_available(kind, x, z);
                         const auto expected_height =
-                            (*expected_ws)[static_cast<std::size_t>(z * 16 +
-                                                                    x)] +
+                            (*expected_map)[static_cast<std::size_t>(z * 16 +
+                                                                     x)] +
                             oracle_min_y;
                         if (actual_height != expected_height) {
-                            if (map_mismatches < 4) {
-                                std::fprintf(stderr,
-                                             "heightmap %d,%d: got %d want "
-                                             "%d\n",
-                                             static_cast<int>(x),
-                                             static_cast<int>(z),
-                                             static_cast<int>(actual_height),
-                                             static_cast<int>(expected_height));
+                            if (map_mismatches < 12) {
+                                std::fprintf(
+                                    stderr,
+                                    "map %.*s chunk %d,%d %d,%d: got %d want "
+                                    "%d\n",
+                                    static_cast<int>(name.size()), name.data(),
+                                    static_cast<int>(chunk_x),
+                                    static_cast<int>(chunk_z),
+                                    static_cast<int>(x), static_cast<int>(z),
+                                    static_cast<int>(actual_height),
+                                    static_cast<int>(expected_height));
                             }
                             ++map_mismatches;
                         }
@@ -829,7 +1123,8 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 }
             }
         }
-        expect(compared == 5U * 384U * 256U);
+        expect(compared_chunks > 0);
+        expect(compared == compared_chunks * 384U * 256U);
         expect(mismatches == 0) << "surface mismatches: " << mismatches;
         expect(map_mismatches == 0)
             << "heightmap mismatches: " << map_mismatches;

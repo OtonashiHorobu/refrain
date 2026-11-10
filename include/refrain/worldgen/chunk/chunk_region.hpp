@@ -31,6 +31,13 @@ class chunk_region {
     /// Makes `chunk` readable (and writable when inside the write radius).
     void attach(proto_chunk &chunk);
 
+    /// Moves the write zone to `center`. The zone starts at the region's
+    /// centre chunk; a feature reference run sets it to the chunk it decorates
+    /// so each decoration writes where the reference generation region allowed
+    /// it. Writes outside the zone are dropped, so a smaller radius restricts
+    /// the applied writes without detaching the readable chunks.
+    void set_write_focus(const chunk_pos &center, jint radius);
+
     [[nodiscard]] auto center() -> proto_chunk & { return *center_; }
     [[nodiscard]] auto center() const -> const proto_chunk & {
         return *center_;
@@ -57,14 +64,29 @@ class chunk_region {
     /// when the target is absent or outside the write radius.
     auto set_block_state(jint x, jint y, jint z, block_state_id state) -> bool;
 
+    /// Marks a loaded chunk for post-processing, independent of the active
+    /// write radius.
+    auto mark_post_processing(jint x, jint y, jint z) -> bool;
+
+    /// Writes a block entity by world position with the same write-zone rule
+    /// as `set_block_state`.
+    auto set_block_entity(jint x, jint y, jint z, data::nbt::compound entity)
+        -> bool;
+
     /// Height of the centre chunk's heightmap at chunk-local coordinates.
     [[nodiscard]] auto first_available(heightmap_kind kind, jint x,
                                        jint z) const -> jint;
+
+    /// Height of the heightmap of the chunk that owns the world column. An
+    /// unattached chunk reads as `min_y`.
+    [[nodiscard]] auto height_at(heightmap_kind kind, jint x, jint z) const
+        -> jint;
 
   private:
     [[nodiscard]] auto within_write_zone(const chunk_pos &pos) const -> bool;
 
     proto_chunk *center_{nullptr};
+    chunk_pos write_center_{};
     jint write_radius_{0};
     std::map<chunk_pos, proto_chunk *> chunks_{};
     std::uint64_t dropped_writes_{0};

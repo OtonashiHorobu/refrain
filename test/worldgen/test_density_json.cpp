@@ -141,6 +141,75 @@ suite<"worldgen/density-json"> density_json_tests = [] {
         check_same("shifted-noise", **decoded, *expected);
     };
 
+    "the nether climate noises use the legacy layout"_test = [] {
+        constexpr std::string_view parameters =
+            R"({"base_amplitude":0.8,"base_octave":-5,"octave_count":3,"amplitude_modifiers":[1.0,0.5,0.25]})";
+        density_documents documents;
+        documents.seed = 24680;
+        documents.noises.emplace_back("minecraft:nether/temperature",
+                                      std::string{parameters});
+        documents.noises.emplace_back("minecraft:nether/vegetation",
+                                      std::string{parameters});
+        documents.noises.emplace_back("test:climate", std::string{parameters});
+
+        normal_noise_parameters decoded_parameters;
+        decoded_parameters.base_amplitude = 0.8;
+        decoded_parameters.base_octave = -5;
+        decoded_parameters.octave_count = 3;
+        decoded_parameters.amplitude_modifiers = {1.0, 0.5, 0.25};
+        const normal_noise normal{decoded_parameters};
+        auto factory =
+            new_positional_factory(algorithm::xoroshiro, documents.seed);
+
+        constexpr std::array<std::pair<std::string_view, jlong>, 2> legacy{{
+            {"minecraft:nether/temperature", 0},
+            {"minecraft:nether/vegetation", 1},
+        }};
+        for (const auto &[id, offset] : legacy) {
+            const auto document = std::string{"{\"type\":\"minecraft:noise\","
+                                              "\"noise\":\""} +
+                                  std::string{id} +
+                                  "\",\"xz_scale\":0.25,\"y_scale\":0.0}";
+            auto decoded = decode_density(document, documents);
+            expect(decoded.has_value()) << decoded.error().message;
+            if (!decoded) {
+                continue;
+            }
+            legacy_random_source random{documents.seed + offset};
+            auto stack = normal.create_legacy_nether_biome(random);
+            expect(stack.has_value()) << stack.error().message;
+            if (!stack) {
+                continue;
+            }
+            auto expected = density::noise(
+                std::make_shared<noise_stack>(std::move(*stack)), 0.25, 0.0);
+            check_same(id.data(), **decoded, *expected);
+        }
+
+        auto standard = decode_density(
+            R"({"type":"minecraft:noise","noise":"test:climate","xz_scale":0.25,"y_scale":0.0})",
+            documents);
+        expect(standard.has_value()) << standard.error().message;
+        if (!standard) {
+            return;
+        }
+        auto source = factory->from_hash_of("test:climate");
+        auto expected = density::noise(
+            std::make_shared<noise_stack>(normal.create(*source)), 0.25, 0.0);
+        check_same("standard climate", **standard, *expected);
+
+        legacy_random_source legacy_random{documents.seed};
+        auto legacy_stack = normal.create_legacy_nether_biome(legacy_random);
+        expect(legacy_stack.has_value());
+        if (!legacy_stack) {
+            return;
+        }
+        const sampler_context context;
+        expect(bits((*standard)->sample_value(context, 1.5, 0.0, -2.25)) !=
+               bits(legacy_stack->get(1.5 * 0.25, -2.25 * 0.25)))
+            << "the standard and legacy layouts must not agree";
+    };
+
     "old blended noise decodes"_test = [] {
         density_documents documents;
         documents.seed = 12345;

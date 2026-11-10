@@ -1,32 +1,13 @@
 {
-  "data_version": 5023,
-  "format": "refrain.vanilla-tables/1",
-  "format_version": 1,
   "game_version": "26.3",
-  "generator": "refrain-tools vanilla import",
-  "inputs": [
-    {
-      "blake3": "9a549dd7a794f76ce0a5a2f833bad97eb8385af971a080874777c7e7354c8230",
-      "path": "blocks.json"
-    },
-    {
-      "blake3": "ef878e581c098c17c4760003fcd49d44aab4f8ade3f23a85b8e8335dad3f50fc",
-      "path": "registries.json"
-    },
-    {
-      "blake3": "a7a55a7cae3dfd1502e092841d145f146b34d12adc16ca3af129b57648b371a6",
-      "path": "biome_parameters/minecraft/nether.json"
-    },
-    {
-      "blake3": "37b0968ec92034e0f03d7e9c755517c90fe95270fe17237b25dbe6884e915b4d",
-      "path": "biome_parameters/minecraft/overworld.json"
-    }
+  "data_version": 5023,
+  "datapack": "data",
+  "content_sha256": "585c5d4beda91ff6f800bad69d27becc0606fa768d3a78b1ba77b833440902b8",
+  "entry_count": 1567,
+  "kinds": [
+    "worldgen",
+    "tags/block",
+    "tags/worldgen"
   ],
-  "tables": [
-    {
-      "blake3": "60227f7fc1401c9b491d22b316f6de14a054d53350c2f50c110feaf9518e9ad2",
-      "bytes": 4503648,
-      "path": "tables.rvtb"
-    }
-  ]
+  "source": "server.jar datapack"
 }

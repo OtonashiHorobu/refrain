@@ -58,21 +58,21 @@ auto random_spread_placement::passes_frequency(jlong seed, jint chunk_x,
     worldgen_random random{std::make_unique<legacy_random_source>(0)};
     switch (frequency_method) {
     case frequency_reduction_method::default_method:
-        random.set_large_feature_with_salt(seed, salt, chunk_x, chunk_z);
+        random.set_large_feature_with_salt(seed, chunk_x, chunk_z, salt);
         return random.next_float() < frequency;
-    case frequency_reduction_method::legacy_type_1:
-        random.set_large_feature_seed(seed, chunk_x, chunk_z);
-        return random.next_double() < static_cast<double>(frequency);
-    case frequency_reduction_method::legacy_type_2:
-        random.set_large_feature_with_salt(seed, chunk_x, chunk_z, 10387320);
-        return random.next_float() < frequency;
-    case frequency_reduction_method::legacy_type_3: {
+    case frequency_reduction_method::legacy_type_1: {
         const jint cx = chunk_x >> 4;
         const jint cz = chunk_z >> 4;
-        random.set_seed(static_cast<jlong>(cx ^ (cz << 4) ^ seed));
+        random.set_seed(static_cast<jlong>(cx ^ (cz << 4)) ^ seed);
         (void)random.next_int();
         return random.next_int(static_cast<jint>(1.0F / frequency)) == 0;
     }
+    case frequency_reduction_method::legacy_type_2:
+        random.set_large_feature_with_salt(seed, chunk_x, chunk_z, 10387320);
+        return random.next_float() < frequency;
+    case frequency_reduction_method::legacy_type_3:
+        random.set_large_feature_seed(seed, chunk_x, chunk_z);
+        return random.next_double() < static_cast<double>(frequency);
     }
     return false;
 }
@@ -116,13 +116,15 @@ auto decode_random_spread(const data::json::value &document)
         if (!name) {
             return std::unexpected{name.error()};
         }
-        if (*name == "minecraft:legacy_type_1") {
+        if (*name == "minecraft:legacy_type_1" || *name == "legacy_type_1") {
             placement.frequency_method =
                 frequency_reduction_method::legacy_type_1;
-        } else if (*name == "minecraft:legacy_type_2") {
+        } else if (*name == "minecraft:legacy_type_2" ||
+                   *name == "legacy_type_2") {
             placement.frequency_method =
                 frequency_reduction_method::legacy_type_2;
-        } else if (*name == "minecraft:legacy_type_3") {
+        } else if (*name == "minecraft:legacy_type_3" ||
+                   *name == "legacy_type_3") {
             placement.frequency_method =
                 frequency_reduction_method::legacy_type_3;
         }

@@ -42,6 +42,11 @@ contract. Exceptions never cross a contract boundary.
 The composition mode of a service decides how many providers may be active:
 `exclusive` (one), `instanced` (one per instance name), `chain` (wrappers that
 forward selectively) and `registry` (contributions merged into a registry).
+`sealed` is the host-owned mode: the process bootstrap registers the only
+provider before mod loading, and a gamepack or mod cannot select or replace it.
+The sealed host services (`refrain:host.core`, `refrain:host.platform`,
+`refrain:host.kernel` and `refrain:host.metadata`) are the stable runtime API
+offered to mods.
 
 ## Composition
 

@@ -48,6 +48,11 @@ suite<"worldgen/generator"> generator_tests = [] {
 
         std::vector<std::string> order;
         generator_stages stages;
+        stages.biomes = [&order](proto_chunk &chunk) {
+            order.emplace_back("biomes");
+            chunk.set_biome(0, 1, 0, 3);
+            return refrain::status{};
+        };
         stages.fill = [&order, stone = *stone](proto_chunk &chunk) {
             order.emplace_back("fill");
             chunk.set_state(0, 1, 0, stone);
@@ -67,9 +72,11 @@ suite<"worldgen/generator"> generator_tests = [] {
         expect((*generated)->chunk_x() == 1);
         expect((*generated)->chunk_z() == 2);
         expect((*generated)->status() == chunk_status::terrain);
-        expect(order.size() == 2U);
-        expect(order[0] == "fill");
-        expect(order[1] == "surface");
+        expect(order.size() == 3U);
+        expect(order[0] == "biomes");
+        expect(order[1] == "fill");
+        expect(order[2] == "surface");
+        expect((*generated)->biome_at(0, 1, 0) == 3);
         expect((*generated)
                    ->first_available(heightmap_kind::world_surface_wg, 0, 0) ==
                3);
@@ -97,14 +104,64 @@ suite<"worldgen/generator"> generator_tests = [] {
         const auto failed = gen.generate_terrain(chunk_pos{.x = 0, .z = 0});
         expect(!failed.has_value());
 
+        generator_stages failing_biomes;
+        failing_biomes.biomes = [](proto_chunk &) -> status {
+            return std::unexpected{refrain::make_error(
+                refrain::error_code::unsupported, "biomes failed")};
+        };
+        failing_biomes.fill = [](proto_chunk &) {};
+        generator biome_gen{registry, 0, 32, std::move(failing_biomes)};
+        const auto biome_failed =
+            biome_gen.generate_terrain(chunk_pos{.x = 0, .z = 0});
+        expect(!biome_failed.has_value());
+
         generator_stages ok;
         ok.fill = [](proto_chunk &) {};
         generator status_gen{registry, 0, 32, std::move(ok)};
         const auto unsupported = status_gen.generate(chunk_pos{.x = 0, .z = 0},
-                                                     chunk_status::features);
+                                                     chunk_status::biomes);
         expect(!unsupported.has_value());
         if (!unsupported) {
             expect(unsupported.error().code == error_code::unsupported);
         }
+    };
+
+    "features and full targets run the later stages in order"_test = [] {
+        block_state_registry registry;
+        (void)registry.intern("minecraft:stone",
+                              {.air = false,
+                               .blocks_motion = true,
+                               .blocks_motion_no_leaves = true});
+        std::vector<std::string> order;
+        generator_stages stages;
+        stages.fill = [](proto_chunk &) {};
+        stages.structures = [&order](proto_chunk &) {
+            order.emplace_back("structures");
+            return refrain::status{};
+        };
+        stages.features = [&order](proto_chunk &) {
+            order.emplace_back("features");
+            return refrain::status{};
+        };
+        generator gen{registry, 0, 32, std::move(stages)};
+        const auto features =
+            gen.generate(chunk_pos{.x = 0, .z = 0}, chunk_status::features);
+        expect(features.has_value());
+        if (features) {
+            expect((*features)->status() == chunk_status::features);
+        }
+        expect(order.size() == 2U);
+        expect(order[0] == "structures");
+        expect(order[1] == "features");
+        order.clear();
+        const auto full =
+            gen.generate(chunk_pos{.x = 1, .z = 1}, chunk_status::full);
+        expect(full.has_value());
+        if (full) {
+            expect((*full)->status() == chunk_status::full);
+        }
+        expect(order.size() == 2U);
+        expect(order[0] == "structures");
+        expect(order[1] == "features");
     };
 };

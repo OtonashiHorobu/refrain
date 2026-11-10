@@ -2,7 +2,9 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/content.hpp>
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/json.hpp>
@@ -123,6 +125,11 @@ auto block_tag_set::resolve_into(std::string_view tag,
 }
 
 auto load_block_tags(std::string_view data_root) -> result<block_tag_set> {
+    const auto materialized = materialize_worldgen_data(data_root);
+    if (!materialized) {
+        return std::unexpected{materialized.error()};
+    }
+    data_root = *materialized;
     block_tag_set tags;
     const auto namespaces = core::io::list_directory(data_root);
     if (!namespaces) {
@@ -158,8 +165,93 @@ auto load_block_tags(std::string_view data_root) -> result<block_tag_set> {
     return tags;
 }
 
+auto apply_block_tags(block_state_registry &states, const block_tag_set &tags)
+    -> status {
+    const auto resolve_names = [&](std::string_view tag) {
+        std::set<std::string, std::less<>> names;
+        if (!tags.has(tag)) {
+            return names;
+        }
+        auto resolved = tags.resolve(tag);
+        if (resolved) {
+            names.insert(resolved->begin(), resolved->end());
+        }
+        return names;
+    };
+    const auto motion = resolve_names("minecraft:blocks_motion_in_heightmap");
+    const auto motion_no_leaves =
+        resolve_names("minecraft:blocks_motion_in_heightmap_no_leaves");
+    for (const auto &[tag, entries] : tags.entries()) {
+        (void)entries;
+        auto names = tags.resolve(tag);
+        if (!names) {
+            return std::unexpected{names.error()};
+        }
+        std::vector<block_state_id> ids;
+        ids.reserve(names->size());
+        for (const auto &name : *names) {
+            if (const auto found = states.find(name); found.has_value()) {
+                ids.push_back(*found);
+                continue;
+            }
+            const auto block = state_block_name(name);
+            const bool air = is_air_block_name(block);
+            const bool water = block == "minecraft:water";
+            const bool fluid = water || block == "minecraft:lava" ||
+                               block == "minecraft:bubble_column";
+            const auto interned =
+                states.intern(name, state_traits{
+                                        .air = air,
+                                        .fluid = fluid,
+                                        .water = water,
+                                        .blocks_motion = motion.contains(name),
+                                        .blocks_motion_no_leaves =
+                                            motion_no_leaves.contains(name),
+                                    });
+            if (!interned) {
+                return std::unexpected{interned.error()};
+            }
+            ids.push_back(*interned);
+        }
+        states.add_tag(tag, ids);
+    }
+    return status_ok();
+}
+
 block_state_registry::block_state_registry() {
     (void)intern("minecraft:air", state_traits{.air = true}, 0, 0);
+}
+
+auto block_state_registry::infer_traits(std::string_view key) const
+    -> state_traits {
+    const auto block = state_block_name(key);
+    const bool air = is_air_block_name(block);
+    const bool water = block == "minecraft:water" ||
+                       key.find("waterlogged=true") != std::string_view::npos;
+    const bool fluid = water || block == "minecraft:lava" ||
+                       block == "minecraft:bubble_column";
+    const auto motion = tag_names_.find("minecraft:blocks_motion_in_heightmap");
+    if (motion != tag_names_.end()) {
+        const auto no_leaves =
+            tag_names_.find("minecraft:blocks_motion_in_heightmap_no_leaves");
+        return state_traits{
+            .air = air,
+            .fluid = fluid,
+            .water = water,
+            .blocks_motion = motion->second.contains(std::string{block}),
+            .blocks_motion_no_leaves =
+                no_leaves != tag_names_.end() &&
+                no_leaves->second.contains(std::string{block}),
+        };
+    }
+    const bool leaves = block.ends_with("_leaves");
+    return state_traits{
+        .air = air,
+        .fluid = fluid,
+        .water = water,
+        .blocks_motion = !air && !fluid,
+        .blocks_motion_no_leaves = !air && !fluid && !leaves,
+    };
 }
 
 auto block_state_registry::intern(std::string_view key,
@@ -182,11 +274,42 @@ auto block_state_registry::intern(std::string_view key,
     return id;
 }
 
+void block_state_registry::add_default_state(std::string_view block,
+                                             block_state_id state) {
+    defaults_.emplace(std::string{block}, state);
+}
+
+void block_state_registry::set_block_defaults(block_default_map defaults) {
+    default_properties_ = std::move(defaults);
+}
+
+auto block_state_registry::default_properties(block_state_id id) const
+    -> std::span<const block_default_property> {
+    if (id >= keys_.size()) {
+        return {};
+    }
+    const auto found =
+        default_properties_.find(std::string{state_block_name(keys_[id])});
+    if (found == default_properties_.end()) {
+        return {};
+    }
+    return found->second;
+}
+
 auto block_state_registry::find(std::string_view key) const
     -> std::optional<block_state_id> {
-    const auto found = index_.find(key);
-    return found == index_.end() ? std::nullopt
-                                 : std::optional<block_state_id>{found->second};
+    if (const auto found = index_.find(key); found != index_.end()) {
+        return found->second;
+    }
+    // A datapack names a plain block when it wants that block's default
+    // state; the canonical key of that state spells its properties out.
+    if (key.find('[') != std::string_view::npos) {
+        return std::nullopt;
+    }
+    const auto found = defaults_.find(std::string{key});
+    return found == defaults_.end()
+               ? std::nullopt
+               : std::optional<block_state_id>{found->second};
 }
 
 auto block_state_registry::block(block_state_id id) const -> std::uint16_t {
@@ -204,6 +327,22 @@ void block_state_registry::add_tag(std::string_view tag,
     stored.assign(states.begin(), states.end());
     std::sort(stored.begin(), stored.end());
     stored.erase(std::unique(stored.begin(), stored.end()), stored.end());
+    auto &ordered = ordered_tags_[std::string{tag}];
+    ordered.clear();
+    ordered.reserve(stored.size());
+    for (const auto id : states) {
+        if (std::find(ordered.begin(), ordered.end(), id) == ordered.end()) {
+            ordered.push_back(id);
+        }
+    }
+    // Block tags name blocks, not one property variant. Keep the block names so
+    // a state variant interned after the tag was registered still matches.
+    auto &names = tag_names_[std::string{tag}];
+    for (const auto id : states) {
+        if (id < keys_.size()) {
+            names.emplace(state_block_name(keys_[id]));
+        }
+    }
 }
 
 auto block_state_registry::air() const -> block_state_id {
@@ -219,11 +358,25 @@ auto block_state_registry::name(block_state_id id) const -> std::string_view {
     return id < keys_.size() ? std::string_view{keys_[id]} : std::string_view{};
 }
 
+auto block_state_registry::tag_states(std::string_view tag) const
+    -> std::span<const block_state_id> {
+    const auto found = ordered_tags_.find(tag);
+    if (found == ordered_tags_.end()) {
+        return {};
+    }
+    return found->second;
+}
+
 auto block_state_registry::in_tag(block_state_id id, std::string_view tag) const
     -> bool {
     const auto found = tags_.find(tag);
-    return found != tags_.end() &&
-           std::binary_search(found->second.begin(), found->second.end(), id);
+    if (found != tags_.end() &&
+        std::binary_search(found->second.begin(), found->second.end(), id)) {
+        return true;
+    }
+    const auto names = tag_names_.find(tag);
+    return names != tag_names_.end() && id < keys_.size() &&
+           names->second.contains(std::string{state_block_name(keys_[id])});
 }
 
 auto build_block_state_registry(const data::vanilla_tables &tables,
@@ -248,6 +401,7 @@ auto build_block_state_registry(const data::vanilla_tables &tables,
     }
 
     block_state_registry registry;
+    block_default_map default_properties;
     std::unordered_map<std::string, std::vector<block_state_id>> by_block;
     for (std::uint32_t index = 0; index < tables.state_count(); ++index) {
         const auto state = tables.state_at(index);
@@ -280,6 +434,22 @@ auto build_block_state_registry(const data::vanilla_tables &tables,
         if (!id) {
             return std::unexpected{id.error()};
         }
+        if (index == block.default_state) {
+            registry.add_default_state(block.name, *id);
+            block_default_properties defaults_for_block;
+            const auto property_ids = tables.block_properties(state.block);
+            for (std::size_t property = 0; property < property_ids.size();
+                 ++property) {
+                defaults_for_block.push_back(block_default_property{
+                    .name = std::string{tables.property_name(
+                        property_ids[property])},
+                    .value = std::string{tables.property_value(
+                        property_ids[property], state.values[property])},
+                });
+            }
+            default_properties.emplace(block.name,
+                                       std::move(defaults_for_block));
+        }
         by_block[block_name].push_back(*id);
     }
 
@@ -299,6 +469,7 @@ auto build_block_state_registry(const data::vanilla_tables &tables,
         }
         registry.add_tag(tag, ids);
     }
+    registry.set_block_defaults(std::move(default_properties));
     return registry;
 }
 

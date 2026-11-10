@@ -89,7 +89,8 @@ struct service_decl {
     std::string version{"1.0.0"};
     std::string side{"both"};
     std::string thread{"any"};
-    /// Contract composition mode: exclusive | instanced | chain | registry.
+    /// Contract composition mode: exclusive | instanced | chain | registry |
+    /// sealed.
     /// Defaults to `exclusive` (one active provider per service).
     std::string composition{"exclusive"};
     std::vector<std::string> provides;
@@ -124,6 +125,10 @@ enum class declaration_kind : std::uint8_t {
     record,
     handle,
     service,
+    /// C function pointer type usable as a service method parameter (RIDL
+    /// only). Callbacks are not value types: they cannot appear in structs or
+    /// as return types.
+    callback,
     /// In-process, transient notification (RIDL only). Events are not
     /// C ABI structs: they carry no `struct_size` and never cross the wire.
     event,
@@ -154,6 +159,11 @@ struct declaration {
     // extension
     extension_decl extension;
     std::vector<method_decl> methods;
+
+    // callback
+    std::vector<field_decl> callback_parameters;
+    type_ref callback_return;
+    bool callback_has_return{false};
 };
 
 /// One parsed `.rsc`/`.ridl` file.

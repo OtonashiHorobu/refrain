@@ -5,13 +5,17 @@
 #include <refrain/worldgen/density/density.hpp>
 
 #include <refrain/worldgen/core/mth.hpp>
+#include <refrain/worldgen/noise/noise.hpp>
 
 #include <memory>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <deque>
 #include <functional>
 #include <limits>
+#include <stdexcept>
 #include <unordered_map>
 #include <utility>
 
@@ -43,7 +47,91 @@ auto linear_extend(float input, const std::vector<float> &locations,
                               : value + derivative * (input - locations[index]);
 }
 
+/// The values one `cache` node keeps, together with the grid they cover.
+struct cached_values {
+    volume vol;
+    buffer values;
+    /// Set while the input is sampled, so eviction never drops a buffer a
+    /// nested cache node is still writing into.
+    bool filling{false};
+};
+
+auto cache_bytes(const buffer &values) -> std::size_t {
+    return values.capacity() * sizeof(float);
+}
+
 } // namespace
+
+struct sampler_context::volume_cache {
+    /// Cache nodes are few, so a flat list beats a hash map. The entries are
+    /// stable while the input of a cache node is sampled, because that input
+    /// can reach other cache nodes and add entries to the same list.
+    std::deque<std::pair<std::size_t, cached_values>> entries;
+    /// Live bytes of `entries`. A context can outlive the graph that first
+    /// filled it (a rule compile decodes a fresh graph per chunk), so the
+    /// oldest finished entries are dropped once the budget is reached.
+    std::size_t bytes{0};
+};
+
+namespace {
+
+/// The cache keeps at most this much per sampling context. A chunk fill needs
+/// a few kilobytes of cell buffers; the budget only bounds contexts that
+/// outlive many freshly decoded graphs.
+constexpr std::size_t cache_budget_bytes = 2U * 1024U * 1024U;
+
+} // namespace
+
+sampler_context::sampler_context() = default;
+
+sampler_context::~sampler_context() = default;
+
+auto sampler_context::cached_volume(std::size_t id, const volume &vol) const
+    -> std::pair<buffer *, bool> {
+    if (cache_ == nullptr) {
+        cache_ = std::make_shared<volume_cache>();
+    }
+    for (auto &entry : cache_->entries) {
+        if (entry.first != id) {
+            continue;
+        }
+        cached_values &cached = entry.second;
+        if (cached.vol == vol) {
+            return {&cached.values, true};
+        }
+        cache_->bytes -= cache_bytes(cached.values);
+        cached.vol = vol;
+        cached.values.resize(vol.size());
+        cache_->bytes += cache_bytes(cached.values);
+        return {&cached.values, false};
+    }
+    buffer fresh{vol.size()};
+    const std::size_t wanted = cache_bytes(fresh);
+    // Evicting from the front keeps references to the other entries valid;
+    // entries still being filled are skipped.
+    for (auto entry = cache_->entries.begin();
+         cache_->bytes + wanted > cache_budget_bytes &&
+         entry != cache_->entries.end();) {
+        if (entry->second.filling) {
+            ++entry;
+            continue;
+        }
+        cache_->bytes -= cache_bytes(entry->second.values);
+        entry = cache_->entries.erase(entry);
+    }
+    cache_->bytes += wanted;
+    cache_->entries.emplace_back(id, cached_values{vol, std::move(fresh)});
+    return {&cache_->entries.back().second.values, false};
+}
+
+void sampler_context::mark_filling(std::size_t id, bool value) const {
+    for (auto &entry : cache_->entries) {
+        if (entry.first == id) {
+            entry.second.filling = value;
+            return;
+        }
+    }
+}
 
 namespace {
 
@@ -1374,6 +1462,198 @@ class slice_y_sampler final : public sampler {
     jint y_;
 };
 
+class slice_sampler final : public sampler {
+  public:
+    slice_sampler(slice_axis axis, jint coordinate, sampler_ptr input)
+        : axis_{axis}, coordinate_{coordinate}, input_{std::move(input)} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint y, jint z) const -> float override {
+        switch (axis_) {
+        case slice_axis::x:
+            return input_->sample_value(context, coordinate_, y, z);
+        case slice_axis::z:
+            return input_->sample_value(context, x, y, coordinate_);
+        case slice_axis::y:
+        default:
+            return input_->sample_value(context, x, coordinate_, z);
+        }
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        if (axis_ == slice_axis::y && vol.size_y() == 1 &&
+            vol.min_block_y() == coordinate_) {
+            input_->sample_volume(context, output, vol);
+            return;
+        }
+        // The reference samples the axis plane once and broadcasts; the plane
+        // is one cell thick so its buffer indexes by (x, z) or (x, y).
+        const bool along_y = axis_ == slice_axis::y;
+        const jint size_x = axis_ == slice_axis::x ? 1 : vol.size_x();
+        const jint size_y = axis_ == slice_axis::y ? 1 : vol.size_y();
+        const jint size_z = axis_ == slice_axis::z ? 1 : vol.size_z();
+        const jint min_x =
+            axis_ == slice_axis::x ? coordinate_ : vol.min_block_x();
+        const jint min_y =
+            axis_ == slice_axis::y ? coordinate_ : vol.min_block_y();
+        const jint min_z =
+            axis_ == slice_axis::z ? coordinate_ : vol.min_block_z();
+        const volume input_volume{size_x,
+                                  size_y,
+                                  size_z,
+                                  min_x,
+                                  min_y,
+                                  min_z,
+                                  vol.step_block_x(),
+                                  vol.step_block_y(),
+                                  vol.step_block_z()};
+        auto input_buffer = context.acquire(input_volume.size());
+        input_->sample_volume(context, input_buffer, input_volume);
+        for (jint z = 0; z < vol.size_z(); ++z) {
+            for (jint x = 0; x < vol.size_x(); ++x) {
+                if (along_y) {
+                    output.set_range(
+                        vol.index_unchecked(x, 0, z), vol.size_y(),
+                        input_buffer.get(
+                            input_volume.index_unchecked(x, 0, z)));
+                    continue;
+                }
+                for (jint y = 0; y < vol.size_y(); ++y) {
+                    const jint plane_x = axis_ == slice_axis::x ? 0 : x;
+                    const jint plane_y = axis_ == slice_axis::y ? 0 : y;
+                    const jint plane_z = axis_ == slice_axis::z ? 0 : z;
+                    output.set(vol.index_unchecked(x, y, z),
+                               input_buffer.get(input_volume.index_unchecked(
+                                   plane_x, plane_y, plane_z)));
+                }
+            }
+        }
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return input_->range();
+    }
+
+  private:
+    slice_axis axis_;
+    jint coordinate_;
+    sampler_ptr input_;
+};
+
+class distance_to_point_sampler final : public sampler {
+  public:
+    distance_to_point_sampler(jint x, jint y, jint z, distance_metric metric)
+        : x_{x}, y_{y}, z_{z}, metric_{metric} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &, jint block_x,
+                                    jint block_y, jint block_z) const
+        -> float override {
+        const float delta_x = static_cast<float>(x_ - block_x);
+        const float delta_y = static_cast<float>(y_ - block_y);
+        const float delta_z = static_cast<float>(z_ - block_z);
+        switch (metric_) {
+        case distance_metric::euclidean_squared:
+            return delta_x * delta_x + delta_y * delta_y + delta_z * delta_z;
+        case distance_metric::manhattan:
+            return std::abs(delta_x) + std::abs(delta_y) + std::abs(delta_z);
+        case distance_metric::chebyshev:
+            return std::max(std::max(std::abs(delta_x), std::abs(delta_y)),
+                            std::abs(delta_z));
+        case distance_metric::euclidean:
+        default:
+            return mth::sqrt(delta_x * delta_x + delta_y * delta_y +
+                             delta_z * delta_z);
+        }
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        for (jint z = 0; z < vol.size_z(); ++z) {
+            for (jint x = 0; x < vol.size_x(); ++x) {
+                for (jint y = 0; y < vol.size_y(); ++y) {
+                    output.set(vol.index_unchecked(x, y, z),
+                               sample_value(context, vol.block_x(x),
+                                            vol.block_y(y), vol.block_z(z)));
+                }
+            }
+        }
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return interval::of(0.0F, std::numeric_limits<float>::infinity());
+    }
+
+  private:
+    jint x_;
+    jint y_;
+    jint z_;
+    distance_metric metric_;
+};
+
+/// The reference discards 17292 draws of a legacy source seeded with the world
+/// seed before building the island simplex noise; the octave offsets and the
+/// permutation therefore start after those draws.
+class end_outer_islands_sampler final : public sampler {
+  public:
+    explicit end_outer_islands_sampler(random_source &random)
+        : island_{random, true} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &, jint block_x,
+                                    jint /*block_y*/, jint block_z) const
+        -> float override {
+        return (height_value(block_x / 8, block_z / 8) - 8.0F) / 128.0F;
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        for (jint z = 0; z < vol.size_z(); ++z) {
+            for (jint x = 0; x < vol.size_x(); ++x) {
+                const float value =
+                    sample_value(context, vol.block_x(x), 0, vol.block_z(z));
+                output.set_range(vol.index_unchecked(x, 0, z), vol.size_y(),
+                                 value);
+            }
+        }
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return interval::encapsulating(-0.84375F, 0.5625F);
+    }
+
+  private:
+    [[nodiscard]] auto height_value(jint section_x, jint section_z) const
+        -> float {
+        const jint chunk_x = section_x / 2;
+        const jint chunk_z = section_z / 2;
+        const float sub_x = static_cast<float>(section_x % 2);
+        const float sub_z = static_cast<float>(section_z % 2);
+        float offset = -100.0F;
+        for (jint xo = -12; xo <= 12; ++xo) {
+            for (jint zo = -12; zo <= 12; ++zo) {
+                const jlong total_x = chunk_x + xo;
+                const jlong total_z = chunk_z + zo;
+                if (total_x * total_x + total_z * total_z <= 4096LL ||
+                    island_.get(static_cast<double>(total_x),
+                                static_cast<double>(total_z)) >= -0.9F) {
+                    continue;
+                }
+                const float size =
+                    std::fmod(std::abs(static_cast<float>(total_x)) * 3439.0F +
+                                  std::abs(static_cast<float>(total_z)) *
+                                      147.0F,
+                              13.0F) +
+                    9.0F;
+                const float distance_x = sub_x - static_cast<float>(xo) * 2.0F;
+                const float distance_z = sub_z - static_cast<float>(zo) * 2.0F;
+                const float candidate =
+                    100.0F - mth::sqrt(distance_x * distance_x +
+                                       distance_z * distance_z) *
+                                 size;
+                offset =
+                    std::max(offset, std::clamp(candidate, -100.0F, 80.0F));
+            }
+        }
+        return offset;
+    }
+
+    simplex_noise island_;
+};
+
 class find_top_surface_sampler final : public sampler {
   public:
     find_top_surface_sampler(sampler_ptr density, sampler_ptr upper_bound,
@@ -1483,6 +1763,43 @@ class interval_select_sampler final : public sampler {
     sampler_ptr input_;
     std::vector<float> thresholds_;
     std::vector<sampler_ptr> functions_;
+};
+
+/// `minecraft:cache`: keeps the values of one input for one volume per sampling
+/// context. The scalar path is not served from the cached volume, because the
+/// scalar and bulk paths of some nodes round differently and terrain generation
+/// reads only the bulk path.
+class cache_sampler final : public sampler {
+  public:
+    explicit cache_sampler(sampler_ptr input)
+        : input_{std::move(input)}, id_{next_cache_id()} {}
+
+    [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
+                                    jint y, jint z) const -> float override {
+        return input_->sample_value(context, x, y, z);
+    }
+    void sample_volume(const sampler_context &context, buffer &output,
+                       const volume &vol) const override {
+        auto [values, cached] = context.cached_volume(id_, vol);
+        if (!cached) {
+            context.mark_filling(id_, true);
+            input_->sample_volume(context, *values, vol);
+            context.mark_filling(id_, false);
+        }
+        output.copy_from(*values);
+    }
+    [[nodiscard]] auto range() const -> interval override {
+        return input_->range();
+    }
+
+  private:
+    static auto next_cache_id() -> std::size_t {
+        static std::atomic<std::size_t> next{0};
+        return next.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    sampler_ptr input_;
+    std::size_t id_;
 };
 
 } // namespace
@@ -1732,7 +2049,9 @@ auto lerp(sampler_ptr alpha, sampler_ptr first, sampler_ptr second)
                                           std::move(second));
 }
 
-auto cache(sampler_ptr input) -> sampler_ptr { return input; }
+auto cache(sampler_ptr input) -> sampler_ptr {
+    return std::make_shared<cache_sampler>(std::move(input));
+}
 
 auto blend_alpha() -> sampler_ptr {
     return std::make_unique<context_bound_sampler>(
@@ -1794,8 +2113,24 @@ auto compute_fbm_range(jint first_octave, double smear_scale_y,
 
 } // namespace
 
+auto slice(slice_axis axis, jint coordinate, sampler_ptr input) -> sampler_ptr {
+    if (axis == slice_axis::y) {
+        return std::make_unique<slice_y_sampler>(std::move(input), coordinate);
+    }
+    return std::make_unique<slice_sampler>(axis, coordinate, std::move(input));
+}
+
 auto slice_y(sampler_ptr input, jint y) -> sampler_ptr {
     return std::make_unique<slice_y_sampler>(std::move(input), y);
+}
+
+auto distance_to_point(jint x, jint y, jint z, distance_metric metric)
+    -> sampler_ptr {
+    return std::make_unique<distance_to_point_sampler>(x, y, z, metric);
+}
+
+auto end_outer_islands(random_source &random) -> sampler_ptr {
+    return std::make_unique<end_outer_islands_sampler>(random);
 }
 
 auto find_top_surface(sampler_ptr density, sampler_ptr upper_bound,

@@ -22,7 +22,7 @@ constexpr float max_bury_distance = 6.0F;
 
 auto compute_beard_contribution(jint dx, double dy, jint dz) -> double {
     const double distance_squar = mth::length_squared(
-        static_cast<double>(dx), dy, static_cast<double>(dz));
+        static_cast<float>(dx), static_cast<float>(dy), static_cast<float>(dz));
     return std::exp(-distance_squar / 16.0);
 }
 

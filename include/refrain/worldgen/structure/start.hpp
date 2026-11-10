@@ -3,38 +3,100 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
 // Structure starts and their pieces: geometry and reference accounting that
-// the starts/references stages share with the placement and Beardifier code.
+// the starts/references stages share with the placement and terrain-adjustment
+// code.
 
 #pragma once
 
 #include <refrain/worldgen/chunk/chunk_region.hpp>
+
+#include <optional>
 #include <refrain/worldgen/core/java_compat.hpp>
+#include <refrain/worldgen/structure/bbox.hpp>
+#include <refrain/worldgen/structure/fortress.hpp>
+#include <refrain/worldgen/structure/jigsaw.hpp>
+#include <refrain/worldgen/structure/monument.hpp>
+#include <refrain/worldgen/structure/stronghold.hpp>
 
 #include <string>
 #include <vector>
 
+namespace refrain::worldgen {
+struct structure_piece_record;
+} // namespace refrain::worldgen
+
 namespace refrain::worldgen::structure {
 
-struct structure_bbox {
-    jint min_x{0};
-    jint min_y{0};
-    jint min_z{0};
-    jint max_x{0};
-    jint max_y{0};
-    jint max_z{0};
-
-    [[nodiscard]] auto intersects(const structure_bbox &other) const -> bool;
-    [[nodiscard]] auto is_close_to(const chunk_pos &chunk, jint radius) const
-        -> bool;
+struct ruined_portal_properties {
+    std::string placement{"on_land_surface"};
+    float mossiness{0.0F};
+    bool air_pocket{false};
+    bool overgrown{false};
+    bool vines{false};
+    bool replace_with_blackstone{false};
+    bool cold{false};
 };
 
 struct structure_piece {
     std::string type{};
     structure_bbox bounds{};
+    jint orientation{-1}; ///< 2D direction index, -1 when unset
+
+    /// Template pieces (`minecraft:igl`) carry the template id and the
+    /// placement transform; procedural pieces leave these empty.
+    std::string template_id{};
+    block_pos template_origin{};
+    jint template_rotation{0}; ///< 0 none, 1 clockwise 90, 2 180, 3 ccw 90
+    jint template_mirror{0};
+    block_pos template_pivot{};
+    jint height_position{-1};
+    jint height_offset{0};
+    float integrity{1.0F};
+    bool large{false};
+    bool beached{false};
+    std::vector<structure_bbox> entrances{};
+    jint sections{0};
+    bool rails{false};
+    bool spider{false};
+    bool two_floored{false};
+    bool mesa{false};
+    /// End city template pieces ignore air in addition to the structure
+    /// block; every other template piece overwrites air.
+    bool overwrite{true};
+    std::optional<ruined_portal_properties> portal{};
+    /// Ocean monument pieces: the room definition and neighbouring room
+    /// states the interior reads at placement time.
+    std::optional<monument_piece_data> monument{};
+    /// Stronghold pieces are flat start pieces; the payload carries the
+    /// constructor random choices their interiors read.
+    std::optional<stronghold_piece_data> stronghold{};
+    /// Nether fortress pieces: the bridge/castle kind and its constructor
+    /// random choices.
+    std::optional<fortress_piece_data> fortress{};
+    /// `minecraft:jigsaw` pieces: the pool element, ground level delta,
+    /// liquid setting and the junctions both sides of a connection record.
+    std::optional<jigsaw_piece_data> jigsaw{};
+    /// The monument building carries its child pieces so its `postProcess`
+    /// can run them before the outer piece loop runs them again.
+    std::vector<structure_piece> children{};
 };
+
+/// Converts a start piece to the placement record shared with the chunk.
+[[nodiscard]] auto to_piece_record(const structure_piece &piece)
+    -> ::refrain::worldgen::structure_piece_record;
+
+/// Reference position of a structure start: the centre of its first piece's
+/// box on the horizontal axes, at the box floor. A rule position predicate
+/// measures distance from this point, which is the same for every chunk the
+/// start reaches.
+[[nodiscard]] auto start_reference_position(const structure_bbox &first)
+    -> block_pos;
+[[nodiscard]] auto start_reference_position(
+    const ::refrain::worldgen::structure_piece_record &first) -> block_pos;
 
 struct structure_start {
     std::string structure{};
+    std::string step{};
     chunk_pos chunk{};
     std::vector<structure_piece> pieces{};
     jint references{0};
@@ -56,7 +118,10 @@ struct structure_start {
                                     const chunk_pos &chunk, jint radius)
     -> std::vector<const structure_start *>;
 
-/// Adds one reference from `chunk` to every nearby start with a free slot.
+/// Adds one reference from `chunk` to every start whose bounding box overlaps
+/// the chunk and which still has a free reference slot. `radius` names the
+/// source-chunk search radius the caller scanned; the reference test itself is
+/// the exact block-box overlap.
 [[nodiscard]] auto collect_references(std::vector<structure_start> &starts,
                                       const chunk_pos &chunk, jint radius)
     -> std::vector<structure_reference>;

@@ -62,6 +62,219 @@ REFRAIN_VANILLA_SURFACE_FIXED_BIOME=minecraft:eroded_badlands \
     ./build/Release/bin/refrain-tests
 ```
 
+### Fixed-biome feature worlds
+
+`--keep-features` keeps the fixed real biome's surface pass, carvers and
+features and leaves structures disabled, so the saved chunk is the production
+terrain plus the real feature writes. The runtime compares it with
+`reference_world=false`, one `structure_sets` entry that names no shipped set
+(so no start is placed) and neighbour decoration enabled:
+
+* `<PREFIX>_NEIGHBOURS` decorates the target chunk and then its eight
+  neighbours through the same region, which reproduces the feature writes a
+  saved reference chunk receives from the chunks next to it;
+* `<PREFIX>_NEIGHBOURS_FIRST` reverses that order, which matches a target the
+  reference generated before its neighbours;
+* `<PREFIX>_NEIGHBOURS_ORDER` follows the order a force-load uses: the
+  neighbours that precede the target in ascending x and then z decorate first,
+  then the target, then the rest. Features that write across a chunk border
+  resolve contacts the way the saved reference chunk did.
+* `<PREFIX>_NEIGHBOUR_RADIUS` sets how many chunks around the target decorate.
+  The default is one; two also decorates the ring beyond the eight neighbours,
+  whose chunks a neighbour feature can read even though they cannot write into
+  the target, and makes the runtime attach one further terrain ring. The radius
+  is limited to eight chunks.
+* `<PREFIX>_NEIGHBOUR_BOX` gives the reference world's generated chunk
+  rectangle as `min_x,min_z,max_x,max_z` in absolute chunk coordinates. The
+  whole rectangle decorates in force-load order and chunks outside it stay
+  terrain only. A feature that spreads across more than one border, such as a
+  sculk patch, needs this form rather than the symmetric radius. The reported
+  rectangle is the force-loaded area the reference world generated; the spawn
+  area and dependency rings are visible in the saved chunk statuses.
+* `<PREFIX>_NEIGHBOURS_SWEEP` follows the ticket queue of the force-load
+  instead of the flat ascending order. A forced chunk keeps its own two rings
+  at the full status, so the generation task of every force-loaded chunk first
+  runs the feature layer of the three-by-three around it; the tickets
+  propagated two rings out are full chunks themselves and run one more layer
+  each. The sweep therefore decorates the rectangle expanded by three chunks,
+  and the runtime attaches one more terrain ring for the chunks every
+  decoration reads. Use it when a feature's contact with a neighbour depends
+  on that dependency order; it requires `_NEIGHBOUR_BOX`.
+
+The four chunks below match block for block and in all four final heightmaps.
+The terrain is ocean at the spawn area of seed 1, so the surface vegetation of
+the target biomes does not place there; the compared chunks exercise the
+underground feature families of the fixed biome (ores, disks, geodes, lava
+lakes and springs) together with their fluid placement. The tests take every
+input from the environment, so no seed or coordinate is fixed in them.
+
+```bash
+python3 tools/worldgen/oracle/generate.py --fixed-biome minecraft:cherry_grove \
+    --keep-features --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2feature-cherry
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_FEATURE_CHERRY_GROVE_REGION=/tmp/t2feature-cherry/world/dimensions/minecraft/overworld/region/r.-1.0.mca \
+REFRAIN_FEATURE_CHERRY_GROVE_CHUNK_X=-2 \
+REFRAIN_FEATURE_CHERRY_GROVE_CHUNK_Z=1 \
+REFRAIN_FEATURE_CHERRY_GROVE_SEED=1 \
+REFRAIN_FEATURE_CHERRY_GROVE_BIOME=minecraft:cherry_grove \
+REFRAIN_FEATURE_CHERRY_GROVE_NEIGHBOURS=1 \
+    ./build/Release/bin/refrain-tests \
+    "the runtime feature oracle reproduces a cherry grove chunk"
+
+for biome in plains desert badlands; do
+    python3 tools/worldgen/oracle/generate.py --fixed-biome minecraft:$biome \
+        --keep-features --server-jar /path/to/server.jar --seed 1 \
+        --output /tmp/t2feature-$biome
+done
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_FEATURE_PLAINS_REGION=/tmp/t2feature-plains/world/dimensions/minecraft/overworld/region/r.-1.0.mca \
+REFRAIN_FEATURE_PLAINS_CHUNK_X=-1 REFRAIN_FEATURE_PLAINS_CHUNK_Z=1 \
+REFRAIN_FEATURE_PLAINS_SEED=1 \
+REFRAIN_FEATURE_PLAINS_BIOME=minecraft:plains \
+REFRAIN_FEATURE_PLAINS_NEIGHBOURS=1 \
+REFRAIN_FEATURE_PLAINS_NEIGHBOURS_FIRST=1 \
+    ./build/Release/bin/refrain-tests \
+    "the runtime feature oracle reproduces a plains chunk"
+```
+
+Repeat the second block for `minecraft:desert` and `minecraft:badlands` with
+the same chunk and region coordinates; the test titles are `a desert chunk`
+and `a badlands chunk`. The desert and badlands cases use their own
+`REFRAIN_FEATURE_DESERT_*` and `REFRAIN_FEATURE_BADLANDS_*` prefixes.
+
+`--force-load-box` moves the feature reference area. A land area chosen with a
+probe run is a much stronger test of the surface feature families, but the
+chunks compared there are not yet stable: a plains land chunk at seed 1
+(`--force-load-box -114752 -8256 -114625 -8145`, chunk `(-7169,-511)`) has one
+remaining granite/iron overlap after all other blocks match. Trees and large
+surface patches write across chunk borders and depend on the reference
+world's generation order, so a single-chunk comparison only matches when the
+order reproduced by the neighbour mode is the one the server used.
+
+A warm ocean reference world with neighbour decoration in force-load order
+matches its chunk block for block and in all four final heightmaps. The chunk
+exercises the weighted tall and short seagrass selection, sea pickles, and the
+cross-border writes of both.
+
+```bash
+python3 tools/worldgen/oracle/generate.py --fixed-biome minecraft:warm_ocean \
+    --keep-features --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2feature-warm
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_FEATURE_WARM_OCEAN_REGION=/tmp/t2feature-warm/world/dimensions/minecraft/overworld/region/r.0.-1.mca \
+REFRAIN_FEATURE_WARM_OCEAN_CHUNK_X=0 \
+REFRAIN_FEATURE_WARM_OCEAN_CHUNK_Z=-1 \
+REFRAIN_FEATURE_WARM_OCEAN_SEED=1 \
+REFRAIN_FEATURE_WARM_OCEAN_BIOME=minecraft:warm_ocean \
+REFRAIN_FEATURE_WARM_OCEAN_NEIGHBOURS=1 \
+REFRAIN_FEATURE_WARM_OCEAN_NEIGHBOURS_ORDER=1 \
+    ./build/Release/bin/refrain-tests \
+    "the runtime feature oracle reproduces a warm ocean chunk"
+```
+
+The other target biomes do not yield a stable single chunk oracle yet. The
+best scanned chunks and the remaining differences are:
+
+* `minecraft:lush_caves`: chunk `(-1,0)` matches block for block and in all
+  four final heightmaps with `REFRAIN_FEATURE_LUSH_CAVES_NEIGHBOUR_RADIUS=2`.
+  The wider region lets the vegetation patches read the chunks their own
+  generation regions cover, so their edge-column draws and hash-set vegetation
+  order match; the block-default report then supplies the default `half=lower`
+  of the bare tall-grass placement so the upper half is placed as well.
+```bash
+python3 tools/worldgen/oracle/generate.py --fixed-biome minecraft:lush_caves \
+    --keep-features --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2feature-lush
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_FEATURE_LUSH_CAVES_REGION=/tmp/t2feature-lush/world/dimensions/minecraft/overworld/region/r.-1.0.mca \
+REFRAIN_FEATURE_LUSH_CAVES_CHUNK_X=-1 \
+REFRAIN_FEATURE_LUSH_CAVES_CHUNK_Z=0 \
+REFRAIN_FEATURE_LUSH_CAVES_SEED=1 \
+REFRAIN_FEATURE_LUSH_CAVES_BIOME=minecraft:lush_caves \
+REFRAIN_FEATURE_LUSH_CAVES_NEIGHBOURS=1 \
+REFRAIN_FEATURE_LUSH_CAVES_NEIGHBOURS_ORDER=1 \
+REFRAIN_FEATURE_LUSH_CAVES_NEIGHBOUR_RADIUS=2 \
+    ./build/Release/bin/refrain-tests \
+    "the runtime feature oracle reproduces a lush caves chunk"
+```
+
+```bash
+python3 tools/worldgen/oracle/generate.py --fixed-biome minecraft:deep_dark \
+    --keep-features --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2feature-deep-dark
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_FEATURE_DEEP_DARK_REGION=/tmp/t2feature-deep-dark/world/dimensions/minecraft/overworld/region/r.0.-1.mca \
+REFRAIN_FEATURE_DEEP_DARK_CHUNK_X=1 \
+REFRAIN_FEATURE_DEEP_DARK_CHUNK_Z=-2 \
+REFRAIN_FEATURE_DEEP_DARK_SEED=1 \
+REFRAIN_FEATURE_DEEP_DARK_BIOME=minecraft:deep_dark \
+REFRAIN_FEATURE_DEEP_DARK_NEIGHBOURS=1 \
+REFRAIN_FEATURE_DEEP_DARK_NEIGHBOURS_ORDER=1 \
+REFRAIN_FEATURE_DEEP_DARK_NEIGHBOUR_RADIUS=2 \
+    ./build/Release/bin/refrain-tests \
+    "the runtime feature oracle reproduces a deep dark chunk"
+```
+
+* `minecraft:deep_dark`: chunk `(1,-2)` matches block for block and in all
+  four final heightmaps with `REFRAIN_FEATURE_DEEP_DARK_NEIGHBOUR_RADIUS=2`.
+  The sculk spreader reproduces the reference charge cursor, decay, movement,
+  face choice, vein merging and state writes exactly in isolated traces,
+  including three sequential patches over water, gravel, tuff and an existing
+  vein field. Each patch moves its charge cursors at most twelve blocks from
+  the origin, so a neighbour chunk's patches must read the chunks their own
+  generation regions cover; the wider radius attaches those chunks and gives
+  every decoration its own write region.
+* `minecraft:basalt_deltas`: chunk `(0,0)` matches block for block and in all
+  four final heightmaps with the ticket sweep of the reference force-load.
+  The delta, small/large basalt column and basalt blob families run against
+  the noise-settings generation depth rather than the level height, which
+  keeps their height-range draws inside the nether's 128-block generation
+  area. The reference palette abbreviates a default state as the bare block
+  name, so a state key that spells only default property values folds onto
+  that name. A spring names a fluid state, and the feature writes the fluid's
+  legacy block, which keeps the level but not the falling flag. A mushroom
+  needs a solid-render substrate. The compared chunk exercises all of them.
+
+```bash
+python3 tools/worldgen/oracle/generate.py --dimension the_nether \
+    --fixed-biome minecraft:basalt_deltas --keep-features \
+    --force-load-box -48 -48 47 47 \
+    --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2feature-basalt
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_FEATURE_BASALT_DELTAS_REGION=/tmp/t2feature-basalt/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+REFRAIN_FEATURE_BASALT_DELTAS_CHUNK_X=0 \
+REFRAIN_FEATURE_BASALT_DELTAS_CHUNK_Z=0 \
+REFRAIN_FEATURE_BASALT_DELTAS_SEED=1 \
+REFRAIN_FEATURE_BASALT_DELTAS_BIOME=minecraft:basalt_deltas \
+REFRAIN_FEATURE_BASALT_DELTAS_DIMENSION=the_nether \
+REFRAIN_FEATURE_BASALT_DELTAS_NEIGHBOURS=1 \
+REFRAIN_FEATURE_BASALT_DELTAS_NEIGHBOURS_ORDER=1 \
+REFRAIN_FEATURE_BASALT_DELTAS_NEIGHBOURS_SWEEP=1 \
+REFRAIN_FEATURE_BASALT_DELTAS_NEIGHBOUR_BOX="-3,-3,2,2" \
+    ./build/Release/bin/refrain-tests \
+    "the runtime feature oracle reproduces a basalt deltas chunk"
+```
+
+Lush caves, deep dark and basalt deltas use their own
+`REFRAIN_FEATURE_LUSH_CAVES_*`, `REFRAIN_FEATURE_DEEP_DARK_*` and
+`REFRAIN_FEATURE_BASALT_DELTAS_*` prefixes. The basalt deltas world is
+generated with `--dimension the_nether` and its test sets
+`REFRAIN_FEATURE_BASALT_DELTAS_DIMENSION=the_nether`. The deep dark and lush
+caves chunks use the flat force-load order; the basalt deltas chunk uses the
+ticket sweep because its blobs, columns and delta read and write across the
+chunk borders the dependency rings create.
+
+The default-state report is part of the datapack snapshot the tests load
+(`content/vanilla/<version>/reports/block_defaults/`). Regenerate it after a
+game update with the data generator's `blocks.json` report:
+`python3 tools/worldgen/block_defaults.py --blocks generated/reports/blocks.json
+--out content/vanilla/<version>/reports/block_defaults`.
+
+`--force-load-box` also applies to the default fixed-biome mode, so a feature
+reference can be generated away from the spawn area.
+
 The biome oracle uses a plain overworld instead: `--plain` skips the data pack,
 so the normal multi-noise biome source writes real biomes (surface rules,
 features and structures still run but do not affect the biome grid):
@@ -74,7 +287,533 @@ REFRAIN_VANILLA_BIOME_REGION=/tmp/t2biome/world/dimensions/minecraft/overworld/r
     ./build/Release/bin/refrain-tests
 ```
 
+The same switch combines with `--dimension the_nether`: the normal nether
+preset stays in place, so the stored biome grid comes from the real multi-noise
+source and the climate noises use the historical nether-biome layout. The test
+compares every chunk present in the region and takes the seed from the
+environment, so neither a seed nor a chunk coordinate is fixed in the test:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --plain \
+    --dimension the_nether \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2nether-biome
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_ORACLE_SEED=1 \
+REFRAIN_VANILLA_NETHER_BIOME_REGION=/tmp/t2nether-biome/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+    ./build/Release/bin/refrain-tests
+```
+
 The generator needs a JDK (26.3 requires Java 25 or newer) and a locally owned
 `server.jar`; it never ships game data. The world it writes is a normal
 vanilla world directory under `--output`, with the region files in
 `world/dimensions/minecraft/overworld/region/`.
+
+`--dimension the_nether|the_end` writes a reference world of that dimension
+instead. The preset of the targeted dimension gets a fixed real biome
+(`minecraft:nether_wastes` or `minecraft:the_end`) whose carvers and features
+are stripped, the real material rule is kept, `allow-nether` is enabled, and
+the force-load command runs inside the dimension. The region lands under
+`world/dimensions/minecraft/<dimension>/region`:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --dimension the_nether \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2nether
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_ORACLE_SEED=1 \
+REFRAIN_VANILLA_NETHER_REGION=/tmp/t2nether/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+    ./build/Release/bin/refrain-tests
+
+python3 tools/worldgen/oracle/generate.py --dimension the_end \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2end
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_ORACLE_SEED=1 \
+REFRAIN_VANILLA_END_REGION=/tmp/t2end/world/dimensions/minecraft/the_end/region/r.0.0.mca \
+    ./build/Release/bin/refrain-tests
+```
+
+The dimension suites compare chunks `(0,0)`, `(1,0)` and `(0,1)` of the nether
+and `(0,0)` and `(1,1)` of the end block for block and all four final
+heightmaps. `--fixed-biome` overrides the real biome, and the dimension mode
+rejects the overworld-only reference flags.
+
+`--keep-carvers` combines with `--dimension the_nether`: the fixed real biome
+keeps its real carvers while features stay stripped and structures stay
+disabled. The saved chunks are therefore terrain fill, the real surface pass
+and cave carving. The test takes every input from the environment, so no seed
+or chunk coordinate is baked into it:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --dimension the_nether \
+    --keep-carvers --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2nether-caves
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_NETHER_CARVER_REGION=/tmp/t2nether-caves/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+REFRAIN_NETHER_CARVER_CHUNK_X=3 REFRAIN_NETHER_CARVER_CHUNK_Z=0 \
+REFRAIN_NETHER_CARVER_SEED=1 \
+REFRAIN_NETHER_CARVER_BIOME=minecraft:nether_wastes \
+    ./build/Release/bin/refrain-tests \
+    "the runtime service reproduces a reference nether carver chunk"
+```
+
+Chunk `(3,0)` is visibly carved: with the same seed, a reference world whose
+default dimension mode strips the carvers differs in 6404 blocks in that
+chunk. The runtime reproduces the carved chunk block for block and in all four
+final heightmaps.
+
+`--carvers` combines with `--dimension the_nether` to keep the normal
+multi-noise nether preset and the biome carvers while every biome's features
+are stripped. The saved chunks are the real terrain of the climate-selected
+biomes: fill, surface and cave carving. The test reads the seed and the chunk
+coordinate from the environment and compares the chunk block for block and in
+all four final heightmaps:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --carvers \
+    --dimension the_nether --settle 40 \
+    --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2nether-multi
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_ORACLE_SEED=1 \
+REFRAIN_VANILLA_NETHER_MULTI_REGION=/tmp/t2nether-multi/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+REFRAIN_VANILLA_NETHER_CHUNK_X=0 REFRAIN_VANILLA_NETHER_CHUNK_Z=0 \
+    ./build/Release/bin/refrain-tests \
+    "nether multi-noise terrain matches the reference"
+```
+
+`--structures` combines with `--dimension`: the targeted dimension gets a real
+fixed biome whose carvers and features are stripped, the material rule is
+emptied, structures stay enabled and the force-load box runs inside the
+dimension. `--only-structure-set` empties every other structure set so a
+compared chunk contains one structure type only. The nether run below uses the
+fortress candidate in set `minecraft:nether_complexes`; the end run fixes
+`minecraft:end_highlands` because end cities only select from the end highlands
+and midlands tags:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --dimension the_nether --only-structure-set nether_complexes \
+    --fixed-biome minecraft:nether_wastes --settle 40 \
+    --force-load-box 208 -256 463 -1 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2nether-fortress
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_ORACLE_SEED=1 REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_VANILLA_FORTRESS_REGION=/tmp/t2nether-fortress/world/dimensions/minecraft/the_nether/region/r.0.-1.mca \
+REFRAIN_VANILLA_FORTRESS_CHUNK_X=21 REFRAIN_VANILLA_FORTRESS_CHUNK_Z=-8 \
+    ./build/Release/bin/refrain-tests "the fortress piece list matches the reference start"
+
+REFRAIN_FULL_STAGE_STRUCTURES=1 REFRAIN_FULL_STAGE_DIMENSION=the_nether \
+REFRAIN_FULL_STAGE_REGION=/tmp/t2nether-fortress/world/dimensions/minecraft/the_nether/region/r.0.-1.mca \
+REFRAIN_FULL_STAGE_CHUNK_X=21 REFRAIN_FULL_STAGE_CHUNK_Z=-8 \
+REFRAIN_FULL_STAGE_START_CHUNK_X=21 REFRAIN_FULL_STAGE_START_CHUNK_Z=-8 \
+REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:nether_wastes \
+    ./build/Release/bin/refrain-tests "fill and structure placement reproduce the reference chunk"
+
+python3 tools/worldgen/oracle/generate.py --structures \
+    --dimension the_end --only-structure-set end_cities \
+    --fixed-biome minecraft:end_highlands --settle 60 \
+    --force-load-box -1296 -368 -1056 -128 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2end-city
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_ORACLE_SEED=1 REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_VANILLA_END_CITY_REGION=/tmp/t2end-city/world/dimensions/minecraft/the_end/region/r.-3.-1.mca \
+REFRAIN_VANILLA_END_CITY_CHUNK_X=-73 REFRAIN_VANILLA_END_CITY_CHUNK_Z=-15 \
+    ./build/Release/bin/refrain-tests "the end city piece list matches the reference start"
+
+REFRAIN_FULL_STAGE_STRUCTURES=1 REFRAIN_FULL_STAGE_DIMENSION=the_end \
+REFRAIN_FULL_STAGE_REGION=/tmp/t2end-city/world/dimensions/minecraft/the_end/region/r.-3.-1.mca \
+REFRAIN_FULL_STAGE_CHUNK_X=-73 REFRAIN_FULL_STAGE_CHUNK_Z=-15 \
+REFRAIN_FULL_STAGE_START_CHUNK_X=-73 REFRAIN_FULL_STAGE_START_CHUNK_Z=-15 \
+REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:end_highlands \
+    ./build/Release/bin/refrain-tests "fill and structure placement reproduce the reference chunk"
+```
+
+Bastion remnants share the nether complexes set with fortresses. Seed 1 puts a
+bastion start at chunk `(12, 0)`; the reference world force-loads its pieces and
+keeps only `minecraft:nether_complexes`:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --dimension the_nether --only-structure-set nether_complexes \
+    --fixed-biome minecraft:nether_wastes --settle 40 \
+    --force-load-box 160 0 271 63 \
+    --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2nether-bastion
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_ORACLE_SEED=1 REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_VANILLA_BASTION_REGION=/tmp/t2nether-bastion/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+REFRAIN_VANILLA_BASTION_CHUNK_X=12 REFRAIN_VANILLA_BASTION_CHUNK_Z=0 \
+    ./build/Release/bin/refrain-tests
+
+REFRAIN_FULL_STAGE_STRUCTURES=1 REFRAIN_FULL_STAGE_DIMENSION=the_nether \
+REFRAIN_FULL_STAGE_REGION=/tmp/t2nether-bastion/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+REFRAIN_FULL_STAGE_CHUNK_X=12 REFRAIN_FULL_STAGE_CHUNK_Z=0 \
+REFRAIN_FULL_STAGE_START_CHUNK_X=12 REFRAIN_FULL_STAGE_START_CHUNK_Z=0 \
+REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:nether_wastes \
+    ./build/Release/bin/refrain-tests
+```
+
+The treasure branch also builds two high-rampart wall pieces that reach north
+of that box. A second reference world force-loads those chunks and the
+dedicated test compares one chunk the walls cross, including its container
+block entities:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --dimension the_nether --only-structure-set nether_complexes \
+    --fixed-biome minecraft:nether_wastes --settle 40 \
+    --force-load-box 160 -64 271 63 \
+    --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2nether-rampart
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_DIMENSION=the_nether \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_REGION=/tmp/t2nether-rampart/world/dimensions/minecraft/the_nether/region/r.0.-1.mca \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_CHUNK_X=13 \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_CHUNK_Z=-2 \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_START_CHUNK_X=12 \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_START_CHUNK_Z=0 \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_SEED=1 \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_BIOME=minecraft:nether_wastes \
+REFRAIN_BASTION_RAMPART_FULL_STAGE_TEMPLATE_DIRS=minecraft/structure/bastion \
+    ./build/Release/bin/refrain-tests \
+    "a bastion high rampart chunk matches the reference full-stage world"
+```
+
+The bastion start suite compares the complete piece list, including the pool
+element, rotation, ground-level delta and junctions. The nether fossils set has
+a two-chunk spacing, so seed 1 with a force-load box near the origin yields
+several starts. The fossil biome tag only contains soul sand valleys, so the
+fixed biome for that run is `minecraft:soul_sand_valley` rather than
+`minecraft:nether_wastes`:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --dimension the_nether --only-structure-set nether_fossils \
+    --fixed-biome minecraft:soul_sand_valley --settle 40 \
+    --force-load-box 0 0 127 63 \
+    --server-jar /path/to/server.jar --seed 1 \
+    --output /tmp/t2nether-fossil
+REFRAIN_FULL_STAGE_STRUCTURES=1 REFRAIN_FULL_STAGE_DIMENSION=the_nether \
+REFRAIN_FULL_STAGE_REGION=/tmp/t2nether-fossil/world/dimensions/minecraft/the_nether/region/r.0.0.mca \
+REFRAIN_FULL_STAGE_CHUNK_X=2 REFRAIN_FULL_STAGE_CHUNK_Z=0 \
+REFRAIN_FULL_STAGE_START_CHUNK_X=2 REFRAIN_FULL_STAGE_START_CHUNK_Z=0 \
+REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:soul_sand_valley \
+    ./build/Release/bin/refrain-tests
+```
+
+A nether fossil reference chunk compares the fossil blocks, the ignored air and
+structure blocks, and the dried ghast the piece may add at its floor. The same
+command with chunk `(2, 2)` covers a rotated fossil whose piece spans two
+chunks.
+
+The start tests compare the complete piece list (bounds, orientation, piece id,
+template name, rotation and overwrite flag) against the reference chunk. The
+full-stage run compares the selected chunk block for block and all four final
+heightmaps, including the `structure_generator` service path. The end city
+world uses a fixed highlands biome, so its start anchors are the same terrain
+corners the reference queries; the compared chunk has no block or heightmap
+gap. Entity markers (shulkers and elytra) are outside the block comparison.
+
+The structure oracle keeps the normal world preset and generates structures
+for a fixed biome. `--force-load-box` moves the force-loaded area when the
+structure candidates are not near the origin:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:plains --settle 60 \
+    --force-load-box -272 -592 -240 -560 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2portal
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_FULL_STAGE_REGION=/tmp/t2portal/world/dimensions/minecraft/overworld/region/r.-1.-2.mca \
+REFRAIN_FULL_STAGE_CHUNK_X=-16 REFRAIN_FULL_STAGE_CHUNK_Z=-36 \
+REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:plains \
+    ./build/Release/bin/refrain-tests "fill and structure placement reproduce the reference chunk"
+```
+
+`REFRAIN_VANILLA_STRUCTURES` points at a directory containing the extracted
+`<namespace>/structure/...nbt` templates. The full-stage test fills the chunk
+and its neighbours, generates the starts, places the pieces and compares both
+blocks and the final heightmaps.
+
+An ocean monument owns its child pieces, so its start covers sixteen chunks.
+Set `REFRAIN_FULL_STAGE_START_CHUNK_X` and
+`REFRAIN_FULL_STAGE_START_CHUNK_Z` to place the start owned by another chunk
+into the target chunk:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:deep_ocean --settle 60 \
+    --force-load-box 128 304 287 463 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2monument
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_FULL_STAGE_REGION=/tmp/t2monument/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_FULL_STAGE_CHUNK_X=10 REFRAIN_FULL_STAGE_CHUNK_Z=21 \
+REFRAIN_FULL_STAGE_START_CHUNK_X=12 \
+REFRAIN_FULL_STAGE_START_CHUNK_Z=23 \
+REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:deep_ocean \
+    ./build/Release/bin/refrain-tests "fill and structure placement reproduce the reference chunk"
+```
+
+The monument candidate is chunk `(12, 23)`; its building covers chunks
+`(10..13, 21..24)`.
+
+Strongholds use concentric rings instead of a random spread. Seed 1 with a
+fixed `minecraft:plains` biome places one at chunk `(108, 51)`; a force-load box
+around chunks `(101..115, 44..58)` covers its pieces. Because the box is away
+from the origin the generated regions are `r.3.0.mca` and `r.3.1.mca`; the
+generator prints the region it found.
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:plains --settle 60 \
+    --force-load-box 1616 704 1855 943 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2stronghold
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_VANILLA_STRONGHOLD_REGION=/tmp/t2stronghold/world/dimensions/minecraft/overworld/region/r.3.1.mca \
+REFRAIN_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_FULL_STAGE_REGION=/tmp/t2stronghold/world/dimensions/minecraft/overworld/region/r.3.1.mca \
+REFRAIN_FULL_STAGE_CHUNK_X=104 REFRAIN_FULL_STAGE_CHUNK_Z=50 \
+REFRAIN_FULL_STAGE_START_CHUNK_X=108 \
+REFRAIN_FULL_STAGE_START_CHUNK_Z=51 \
+REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:plains \
+    ./build/Release/bin/refrain-tests "fill and structure placement reproduce the reference chunk"
+```
+
+`worldgen/chunk-generator` runs the production service against the same
+reference worlds. It reads the village case from the `REFRAIN_FULL_STAGE_*`
+variables above and the mansion and stronghold cases from
+`REFRAIN_RUNTIME_MANSION_*` and `REFRAIN_RUNTIME_STRONGHOLD_*` variables with
+the same `_REGION`, `_CHUNK_X`, `_CHUNK_Z`, `_SEED`, `_BIOME` and `_DIMENSION`
+suffixes. The optional `_STRUCTURE_SET` suffix restricts the generation to one
+structure set. Each case compares the chunk and its four final heightmaps:
+
+```bash
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_RUNTIME_MANSION_REGION=/tmp/t2mansion/world/dimensions/minecraft/overworld/region/r.1.0.mca \
+REFRAIN_RUNTIME_MANSION_CHUNK_X=46 REFRAIN_RUNTIME_MANSION_CHUNK_Z=5 \
+REFRAIN_RUNTIME_MANSION_SEED=1 REFRAIN_RUNTIME_MANSION_BIOME=minecraft:dark_forest \
+REFRAIN_RUNTIME_STRONGHOLD_REGION=/tmp/t2stronghold/world/dimensions/minecraft/overworld/region/r.3.1.mca \
+REFRAIN_RUNTIME_STRONGHOLD_CHUNK_X=108 REFRAIN_RUNTIME_STRONGHOLD_CHUNK_Z=51 \
+REFRAIN_RUNTIME_STRONGHOLD_SEED=1 REFRAIN_RUNTIME_STRONGHOLD_BIOME=minecraft:plains \
+REFRAIN_RUNTIME_STRONGHOLD_STRUCTURE_SET=minecraft:strongholds \
+    ./build/Release/bin/refrain-tests "the runtime service reproduces"
+```
+
+### Jigsaw coverage: outpost, taiga village, ancient city, trial chambers and trail ruins
+
+Five further jigsaw structures have reference starts and full-stage chunks.
+The candidates come from `locate structure` in a probe world with the same
+fixed biome; the force-load boxes below cover the start and the pieces the
+compared chunk needs.
+
+A pillager outpost uses the plains tag. Seed 1 places its start at chunk
+`(5, 20)`; the box covers chunks `(0..11, 16..27)` and the start chunk holds
+the base plate, the watchtower list element and every feature plate:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:plains --only-structure-set pillager_outposts \
+    --settle 30 --force-load-box 0 256 191 447 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2outpost
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_PILLAGER_OUTPOST_REGION=/tmp/t2outpost/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_PILLAGER_OUTPOST_CHUNK_X=5 \
+REFRAIN_JIGSAW_PILLAGER_OUTPOST_CHUNK_Z=20 \
+REFRAIN_JIGSAW_PILLAGER_OUTPOST_SEED=1 \
+    ./build/Release/bin/refrain-tests \
+    "the pillager outpost start matches the reference piece list"
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_REGION=/tmp/t2outpost/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_CHUNK_X=5 \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_CHUNK_Z=20 \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_START_CHUNK_X=5 \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_START_CHUNK_Z=20 \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_SEED=1 \
+REFRAIN_JIGSAW_OUTPOST_FULL_STAGE_BIOME=minecraft:plains \
+    ./build/Release/bin/refrain-tests \
+    "a pillager outpost chunk matches the reference full-stage world"
+```
+
+A taiga village only selects the taiga biome. Seed 1 places its start at
+chunk `(15, 8)`. The full-stage case compares chunk `(15, 9)`, one chunk south
+of the start, where every piece comes from the village templates; the patch of
+taiga grass at the start chunk corner reads neighbouring structure blocks and
+depends on the reference world's chunk generation order:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:taiga --only-structure-set villages \
+    --settle 30 --force-load-box 128 0 303 159 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2village-taiga
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_VILLAGE_TAIGA_REGION=/tmp/t2village-taiga/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_VILLAGE_TAIGA_CHUNK_X=15 \
+REFRAIN_JIGSAW_VILLAGE_TAIGA_CHUNK_Z=8 \
+REFRAIN_JIGSAW_VILLAGE_TAIGA_SEED=1 \
+    ./build/Release/bin/refrain-tests \
+    "the taiga village start matches the reference piece list"
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_REGION=/tmp/t2village-taiga/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_CHUNK_X=15 \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_CHUNK_Z=9 \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_START_CHUNK_X=15 \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_START_CHUNK_Z=8 \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_SEED=1 \
+REFRAIN_JIGSAW_VILLAGE_FULL_STAGE_BIOME=minecraft:taiga \
+    ./build/Release/bin/refrain-tests \
+    "a taiga village chunk matches the reference full-stage world"
+```
+
+An ancient city only selects the deep dark. Seed 1 places its start at chunk
+`(9, 11)` and the box covers chunks `(0..11, 4..14)`. The start chunk contains
+the city's water and lava pools, and the reference world lets those fluids
+flow after saving, so the start chunk is not a stable block oracle. The
+full-stage case therefore compares chunk `(11, 12)`, a dry chunk the start's
+pieces cover:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:deep_dark --only-structure-set ancient_cities \
+    --settle 40 --force-load-box 0 64 191 239 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2ancient
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_ANCIENT_CITY_REGION=/tmp/t2ancient/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_ANCIENT_CITY_CHUNK_X=9 \
+REFRAIN_JIGSAW_ANCIENT_CITY_CHUNK_Z=11 \
+REFRAIN_JIGSAW_ANCIENT_CITY_SEED=1 \
+    ./build/Release/bin/refrain-tests \
+    "the ancient city start matches the reference piece list"
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_REGION=/tmp/t2ancient/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_CHUNK_X=11 \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_CHUNK_Z=12 \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_START_CHUNK_X=9 \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_START_CHUNK_Z=11 \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_SEED=1 \
+REFRAIN_JIGSAW_ANCIENT_FULL_STAGE_BIOME=minecraft:deep_dark \
+    ./build/Release/bin/refrain-tests \
+    "an ancient city chunk matches the reference full-stage world"
+```
+
+Trial chambers select from every overworld biome except oceans, mushroom
+fields and the deep dark. Seed 1 places its start at chunk `(18, 14)`; the
+structure uses a uniform start height, pool aliases and encapsulating terrain
+adaptation, and the start chunk is dry:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:plains --only-structure-set trial_chambers \
+    --settle 40 --force-load-box 224 160 367 303 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2trial
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_TRIAL_CHAMBERS_REGION=/tmp/t2trial/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_TRIAL_CHAMBERS_CHUNK_X=18 \
+REFRAIN_JIGSAW_TRIAL_CHAMBERS_CHUNK_Z=14 \
+REFRAIN_JIGSAW_TRIAL_CHAMBERS_SEED=1 \
+    ./build/Release/bin/refrain-tests \
+    "the trial chambers start matches the reference piece list"
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_REGION=/tmp/t2trial/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_CHUNK_X=18 \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_CHUNK_Z=14 \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_START_CHUNK_X=18 \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_START_CHUNK_Z=14 \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_SEED=1 \
+REFRAIN_JIGSAW_TRIAL_FULL_STAGE_BIOME=minecraft:plains \
+    ./build/Release/bin/refrain-tests \
+    "a trial chambers chunk matches the reference full-stage world"
+```
+
+A trail ruins start is underground and only selects the taiga-family biomes.
+Seed 1 places its start at chunk `(0, -12)`; the box covers the start and every
+piece the compared chunk needs. The chunk holds six brushable block entities,
+three from the common capped list and three from the rare one, so the case
+exercises capped delegates and the `append_loot` rule modifier:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:taiga --only-structure-set trail_ruins \
+    --settle 25 --force-load-box -128 -288 143 -81 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2trail
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_REGION=/tmp/t2trail/world/dimensions/minecraft/overworld/region/r.0.-1.mca \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_CHUNK_X=0 \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_CHUNK_Z=-12 \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_START_CHUNK_X=0 \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_START_CHUNK_Z=-12 \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_SEED=1 \
+REFRAIN_TRAIL_RUINS_FULL_STAGE_BIOME=minecraft:taiga \
+    ./build/Release/bin/refrain-tests \
+    "a trail ruins chunk matches the reference full-stage world"
+```
+
+The trail ruins case compares loot-table block entities by default: every
+reference block entity that stores `LootTable` must exist at the same position
+with the same `LootTable` and `LootTableSeed`. The same comparison runs for a
+trial chambers chest chunk; chunk `(21, 15)` with start chunk `(18, 14)` holds
+two chests:
+
+```bash
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/templates \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_REGION=/tmp/t2trial/world/dimensions/minecraft/overworld/region/r.0.0.mca \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_CHUNK_X=21 \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_CHUNK_Z=15 \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_START_CHUNK_X=18 \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_START_CHUNK_Z=14 \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_SEED=1 \
+REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_BIOME=minecraft:plains \
+    ./build/Release/bin/refrain-tests \
+    "a trial chambers chest chunk matches the reference loot block entities"
+```
+
+Any other full-stage case enables the same comparison with a non-empty
+`<PREFIX>_BLOCK_ENTITIES` variable.
+
+The start cases read `_STRUCTURE`, `_BIOME` and `_TEMPLATE_DIRS` overrides when
+the structure document differs from the defaults. Every candidate value comes
+from the environment, so no seed or chunk coordinate is fixed in the tests.
+
+The full-stage runs compare blocks and all four final heightmaps; the full
+heightmap and runtime-service checks only run when the compared chunk owns the
+start, as in the outpost case. `REFRAIN_FULL_STAGE_MISMATCHES` raises the
+number of differing positions a failing comparison prints.
+
+Other structure sets generate starts in neighbouring chunks of the reference
+world. For a whole-structure sweep, replace every other
+`worldgen/structure_set/*.json` in the generated datapack with an empty
+`structures` list, delete the overworld region files, and rerun the server
+with the same force-load box; chunks `(104..110, 49..57)` then reference only
+the stronghold.

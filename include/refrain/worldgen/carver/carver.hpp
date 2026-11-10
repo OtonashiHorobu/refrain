@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// The carver stage: cave and canyon shapes write a local `CarvingMask`, which
+// The carver stage: cave and canyon shapes write a local carving mask, which
 // the terrain stage applies to the chunk after the surface pass.
 
 #pragma once
@@ -24,16 +24,16 @@ class value;
 
 namespace refrain::worldgen::carver {
 
-/// `WorldCarver.CarveSkipChecker`.
+/// Decides whether a position inside a carving ellipsoid is skipped.
 using skip_checker =
     std::function<bool(double xd, double yd, double zd, jint y)>;
 
-/// `WorldCarver.carveEllipsoid`.
+/// Carves one ellipsoid into the carver output.
 void carve_ellipsoid(const chunk_pos &chunk_pos, double x, double y, double z,
                      double horizontal_radius, double vertical_radius,
                      carver_output &output, const skip_checker &skip);
 
-/// `WorldCarver.canReach`.
+/// Whether a carve step can reach the target chunk.
 [[nodiscard]] auto can_reach(const chunk_pos &chunk_pos, double x, double z,
                              jint current_step, jint total_steps,
                              float thickness) -> bool;

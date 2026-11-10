@@ -2,9 +2,9 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// Density sampling grid: the `DensityVolume` rectangle and the flat float
-// `DensityBuffer` the samplers fill. Index order is Java's
-// `indexY + (indexX + indexZ * sizeX) * sizeY`, i.e. Y is contiguous.
+// Density sampling grid: the sampling-volume rectangle and the flat float
+// buffer the samplers fill. Index order keeps Y contiguous:
+// `indexY + (indexX + indexZ * sizeX) * sizeY`.
 
 #pragma once
 
@@ -15,8 +15,8 @@
 
 namespace refrain::worldgen {
 
-/// Java `DensityVolume`: an axis-aligned grid of block coordinates with
-/// per-axis steps. Sizes and steps are positive.
+/// An axis-aligned grid of block coordinates with per-axis steps. Sizes and
+/// steps are positive.
 class volume {
   public:
     volume(jint size_x, jint size_y, jint size_z, jint min_block_x,
@@ -79,8 +79,20 @@ class volume {
                static_cast<std::size_t>(size_z_);
     }
 
-    /// `DensityVolume.indexOfBlock`: the buffer index of a block coordinate, or
-    /// `npos` when the block is outside the grid or not on a sample.
+    /// Every field compared, so two grids are equal exactly when they address
+    /// the same block coordinates with the same steps.
+    [[nodiscard]] auto operator==(const volume &other) const noexcept -> bool {
+        return size_x_ == other.size_x_ && size_y_ == other.size_y_ &&
+               size_z_ == other.size_z_ && min_block_x_ == other.min_block_x_ &&
+               min_block_y_ == other.min_block_y_ &&
+               min_block_z_ == other.min_block_z_ &&
+               step_block_x_ == other.step_block_x_ &&
+               step_block_y_ == other.step_block_y_ &&
+               step_block_z_ == other.step_block_z_;
+    }
+
+    /// The buffer index of a block coordinate, or `npos` when the block is
+    /// outside the grid or not on a sample.
     [[nodiscard]] auto index_of_block(jint block_x, jint block_y,
                                       jint block_z) const noexcept
         -> std::size_t;
@@ -99,8 +111,8 @@ class volume {
     jint step_block_z_{1};
 };
 
-/// Java `DensityBuffer`: a flat float array with the sampling helpers the
-/// samplers use (`fill`, `addTo`, `setRange`, `copyFrom`).
+/// A flat float array with the sampling helpers the samplers use: fill, add,
+/// set a range and copy from another buffer.
 class buffer {
   public:
     explicit buffer(std::size_t size) : values_(size, 0.0F) {}
@@ -123,9 +135,15 @@ class buffer {
         }
     }
     void copy_from(const buffer &other) { values_ = other.values_; }
+    /// Resizes the storage. An enlarged buffer reads zero in the new range; a
+    /// cache node overwrites every value before it is read.
+    void resize(std::size_t size) { values_.resize(size); }
 
     [[nodiscard]] auto size() const noexcept -> std::size_t {
         return values_.size();
+    }
+    [[nodiscard]] auto capacity() const noexcept -> std::size_t {
+        return values_.capacity();
     }
     [[nodiscard]] auto data() noexcept -> float * { return values_.data(); }
     [[nodiscard]] auto data() const noexcept -> const float * {

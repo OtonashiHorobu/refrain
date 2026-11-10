@@ -8,10 +8,12 @@
 
 #pragma once
 
+#include <refrain/worldgen/chunk/block_defaults.hpp>
 #include <refrain/worldgen/core/java_compat.hpp>
 
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <string_view>
 
 namespace refrain::worldgen {
@@ -48,6 +50,14 @@ class block_state_table {
         -> std::string_view = 0;
     [[nodiscard]] virtual auto in_tag(block_state_id id,
                                       std::string_view tag) const -> bool = 0;
+
+    /// Properties of the block's default state, sorted by name. A table
+    /// without default-state data returns an empty span, so callers treat a
+    /// property absent from a bare key as unknown rather than default.
+    [[nodiscard]] virtual auto default_properties(block_state_id) const
+        -> std::span<const block_default_property> {
+        return {};
+    }
 };
 
 } // namespace refrain::worldgen

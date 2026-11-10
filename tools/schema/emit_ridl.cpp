@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -410,6 +411,9 @@ struct ridl_context {
     if (composition == "registry") {
         return "REFRAIN_COMPOSITION_REGISTRY";
     }
+    if (composition == "sealed") {
+        return "REFRAIN_COMPOSITION_SEALED";
+    }
     return "REFRAIN_COMPOSITION_EXCLUSIVE";
 }
 
@@ -423,6 +427,9 @@ struct ridl_context {
     }
     if (composition == "registry") {
         return "registry";
+    }
+    if (composition == "sealed") {
+        return "sealed";
     }
     return "exclusive";
 }
@@ -494,6 +501,7 @@ void collect_slice_types(const model &program, const resolved_type &type,
     case declaration_kind::flags:
     case declaration_kind::handle:
     case declaration_kind::service:
+    case declaration_kind::callback:
     // Events are in-process values with their own `event_traits` metadata;
     // they are not reflectable contract records.
     case declaration_kind::event:
@@ -1090,6 +1098,10 @@ void emit_service_query_slot(code_writer &writer, const decl_model &decl) {
         case primitive_kind::bytes:
             return std::format("::refrain::contracts::as_bytes({})",
                                expression);
+        case primitive_kind::mut_bytes:
+            return std::format("std::span<std::uint8_t>{{{}.data, "
+                               "static_cast<std::size_t>({}.len)}}",
+                               expression, expression);
         default:
             return std::format("static_cast<{}>({})", cpp_type(program, type),
                                expression);
@@ -1135,6 +1147,8 @@ void emit_service_query_slot(code_writer &writer, const decl_model &decl) {
         case primitive_kind::string:
         case primitive_kind::bytes:
             return "::refrain::contracts::to_borrowed(" + parameter.name + ")";
+        case primitive_kind::mut_bytes:
+            return "::refrain::contracts::to_mut(" + parameter.name + ")";
         case primitive_kind::boolean:
             return "static_cast<std::uint8_t>(" + parameter.name + ")";
         case primitive_kind::void_type:
@@ -1230,6 +1244,56 @@ void emit_service_query_slot(code_writer &writer, const decl_model &decl) {
     return writer.take();
 }
 
+[[nodiscard]] auto callback_parameters_c(const model &program,
+                                         const decl_model &decl)
+    -> std::string {
+    std::string parameters;
+    for (const auto &parameter : decl.callback_parameters) {
+        if (!parameters.empty()) {
+            parameters += ", ";
+        }
+        parameters += c_type(program, parameter.type) + " " + parameter.name;
+    }
+    return parameters;
+}
+
+[[nodiscard]] auto callback_parameters_cpp(const model &program,
+                                           const decl_model &decl)
+    -> std::string {
+    std::string parameters;
+    for (const auto &parameter : decl.callback_parameters) {
+        if (!parameters.empty()) {
+            parameters += ", ";
+        }
+        parameters += cpp_type(program, parameter.type) + " " + parameter.name;
+    }
+    return parameters;
+}
+
+[[nodiscard]] auto emit_callback_abi(const model &program,
+                                     std::uint32_t module_index,
+                                     const decl_model &decl) -> std::string {
+    code_writer writer;
+    writer.raw(emit::doc_block(decl.documentation, "// "));
+    writer.line("typedef {} (*{})({});",
+                c_type(program, decl.callback_return_type),
+                c_decl_name(program, module_index, decl),
+                callback_parameters_c(program, decl));
+    writer.blank();
+    return writer.take();
+}
+
+[[nodiscard]] auto emit_callback_cpp(const model &program,
+                                     const decl_model &decl) -> std::string {
+    code_writer writer;
+    writer.raw(emit::doc_block(decl.documentation, "/// "));
+    writer.line("using {} = {} (*)({});", decl.name,
+                cpp_type(program, decl.callback_return_type),
+                callback_parameters_cpp(program, decl));
+    writer.blank();
+    return writer.take();
+}
+
 [[nodiscard]] auto emit_abi_header(const ridl_context &context,
                                    std::uint32_t module_index) -> std::string {
     const auto &program{context.program};
@@ -1282,6 +1346,11 @@ void emit_service_query_slot(code_writer &writer, const decl_model &decl) {
         writer.line("#define {}_INVALID (({})(REFRAIN_HANDLE_INVALID))",
                     emit::upper(c_name), c_name);
         writer.blank();
+    }
+    for (const auto &decl : module.declarations) {
+        if (decl.kind == declaration_kind::callback) {
+            writer.raw(emit_callback_abi(program, module_index, decl));
+        }
     }
     for (const auto &decl : module.declarations) {
         if (decl.kind != declaration_kind::event) {
@@ -1551,6 +1620,12 @@ void emit_service_query_slot(code_writer &writer, const decl_model &decl) {
                 decl.name, decl.name);
         }
         writer.blank();
+    }
+
+    for (const auto &decl : module.declarations) {
+        if (decl.kind == declaration_kind::callback) {
+            writer.raw(emit_callback_cpp(program, decl));
+        }
     }
 
     // Events: after the handle aliases, before the contract structs.
@@ -1978,6 +2053,488 @@ auto emit_reflection(const model &program, std::string_view schema_hash)
     writer.blank();
     writer.line("#endif // {}", guard);
     return emit::generated_file{path, writer.take()};
+}
+
+auto emit_metadata(const model &program, std::string_view schema_hash)
+    -> emit::generated_file {
+    const auto path{emit::cpp_metadata_header_path()};
+    const auto guard{emit::guard_for(path)};
+    code_writer writer;
+    writer.raw(emit::banner(schema_hash));
+    writer.line("#ifndef {}", guard);
+    writer.line("#define {}", guard);
+    writer.blank();
+    writer.line("#include <array>");
+    writer.line("#include <cstddef>");
+    writer.line("#include <cstdint>");
+    writer.line("#include <span>");
+    writer.line("#include <string_view>");
+    writer.blank();
+    writer.line("// Generated runtime schema metadata. This is data for the");
+    writer.line(
+        "// sealed `refrain:host.metadata` service, not C++ `reflect<T>`.");
+    writer.line("namespace refrain::metadata {{");
+    writer.blank();
+    writer.line("struct enum_value_entry {{");
+    writer.line("    std::string_view name;");
+    writer.line("    std::int64_t value;");
+    writer.line("}};");
+    writer.blank();
+    writer.line("struct field_entry {{");
+    writer.line("    std::string_view name;");
+    writer.line("    std::string_view type_id;");
+    writer.line("    std::uint32_t offset;");
+    writer.line("    std::uint32_t size;");
+    writer.line("    std::uint32_t flags;");
+    writer.line("}};");
+    writer.blank();
+    writer.line("struct type_entry {{");
+    writer.line("    std::string_view id;");
+    writer.line("    std::uint32_t kind;");
+    writer.line("    std::uint32_t size;");
+    writer.line("    std::uint32_t alignment;");
+    writer.line("    std::span<const field_entry> fields;");
+    writer.line("    std::span<const enum_value_entry> values;");
+    writer.line("}};");
+    writer.blank();
+    writer.line("struct contract_entry {{");
+    writer.line("    std::string_view id;");
+    writer.line("    std::uint32_t abi_major;");
+    writer.line("    std::uint32_t abi_minor;");
+    writer.line("    std::uint32_t abi_patch;");
+    writer.line("    std::string_view schema_hash;");
+    writer.line("    std::uint32_t method_count;");
+    writer.line("}};");
+    writer.blank();
+
+    const auto type_id = [&](const auto &self,
+                             const resolved_type &type) -> std::string {
+        switch (type.kind) {
+        case resolved_type::category::primitive:
+            return std::string{primitive_name(type.primitive)};
+        case resolved_type::category::named:
+            return cpp_type_name(
+                program, type.module_index,
+                decl_of(program, type.module_index, type.decl_index));
+        case resolved_type::category::handle:
+            return "handle:" +
+                   decl_of(program, type.module_index, type.decl_index).name;
+        case resolved_type::category::slice:
+            return "slice<" + self(self, type.arguments.front()) + ">";
+        case resolved_type::category::array:
+            return "array<" + self(self, type.arguments.front()) + ">";
+        case resolved_type::category::optional:
+            return "optional<" + self(self, type.arguments.front()) + ">";
+        case resolved_type::category::repeated:
+            return "repeated<" + self(self, type.arguments.front()) + ">";
+        }
+        return "?";
+    };
+    const auto type_id_of = [&](const resolved_type &type) {
+        return type_id(type_id, type);
+    };
+    const auto integer_size = [](std::string_view name) -> std::uint32_t {
+        if (name == "u8" || name == "i8" || name == "bool") {
+            return 1;
+        }
+        if (name == "u16" || name == "i16") {
+            return 2;
+        }
+        if (name == "u32" || name == "i32" || name == "f32") {
+            return 4;
+        }
+        if (name == "u64" || name == "i64" || name == "f64") {
+            return 8;
+        }
+        return 0;
+    };
+
+    writer.line("namespace detail {{");
+    std::vector<std::string> detail_arrays{};
+    for (const auto &module : program.modules) {
+        if (module.kind != dialect::ridl) {
+            continue;
+        }
+        for (const auto &decl : module.declarations) {
+            const auto prefix{emit::abi_prefix(module.name) + "_" + decl.name};
+            if (decl.kind == declaration_kind::structure) {
+                writer.line("inline constexpr std::array<field_entry, {}> "
+                            "{}_fields{{",
+                            decl.fields.size(), prefix);
+                for (const auto &field : decl.fields) {
+                    writer.line(
+                        "    field_entry{{\"{}\" , \"{}\", {}, {}, 0}},",
+                        emit::escape_text(field.name),
+                        emit::escape_text(type_id_of(field.type)),
+                        field.abi_offset, field.abi_size);
+                }
+                writer.line("}};");
+                detail_arrays.push_back(prefix + "_fields");
+            } else if (decl.kind == declaration_kind::enumeration ||
+                       decl.kind == declaration_kind::flags) {
+                writer.line("inline constexpr std::array<enum_value_entry, {}> "
+                            "{}_values{{",
+                            decl.entries.size(), prefix);
+                for (const auto &entry : decl.entries) {
+                    writer.line("    enum_value_entry{{\"{}\" , {}}},",
+                                emit::escape_text(entry.name),
+                                entry.value.value_or(0));
+                }
+                writer.line("}};");
+                detail_arrays.push_back(prefix + "_values");
+            }
+        }
+    }
+    writer.line("}} // namespace detail");
+    writer.blank();
+
+    std::vector<std::string> type_entries{};
+    for (const auto &module : program.modules) {
+        if (module.kind != dialect::ridl) {
+            continue;
+        }
+        for (const auto &decl : module.declarations) {
+            if (decl.kind != declaration_kind::structure &&
+                decl.kind != declaration_kind::enumeration &&
+                decl.kind != declaration_kind::flags) {
+                continue;
+            }
+            const auto id{cpp_type_name(
+                program,
+                static_cast<std::uint32_t>(&module - program.modules.data()),
+                decl)};
+            const auto kind{
+                decl.kind == declaration_kind::structure
+                    ? 0U
+                    : (decl.kind == declaration_kind::enumeration ? 1U : 2U)};
+            const auto size{decl.kind == declaration_kind::structure
+                                ? decl.abi_size
+                                : integer_size(decl.underlying)};
+            const auto alignment{decl.kind == declaration_kind::structure
+                                     ? decl.abi_alignment
+                                     : integer_size(decl.underlying)};
+            const auto prefix{emit::abi_prefix(module.name) + "_" + decl.name};
+            std::string fields{
+                "std::span<const field_entry>{detail::" + prefix + "_fields}"};
+            std::string values{"std::span<const enum_value_entry>{detail::" +
+                               prefix + "_values}"};
+            if (decl.kind != declaration_kind::structure) {
+                fields = "std::span<const field_entry>{}";
+            } else {
+                values = "std::span<const enum_value_entry>{}";
+            }
+            type_entries.push_back(std::format(
+                "    type_entry{{\"{}\", {}, {}, {}, {}, {}}},",
+                emit::escape_text(id), kind, size, alignment, fields, values));
+        }
+    }
+    writer.line("inline constexpr std::array<type_entry, {}> types{{",
+                type_entries.size());
+    for (const auto &entry : type_entries) {
+        writer.line("{}", entry);
+    }
+    writer.line("}};");
+    writer.blank();
+
+    std::vector<std::string> contract_entries{};
+    for (const auto &module : program.modules) {
+        if (module.kind != dialect::ridl) {
+            continue;
+        }
+        for (const auto &decl : module.declarations) {
+            if (decl.kind != declaration_kind::service) {
+                continue;
+            }
+            const auto id{service_id_of(
+                program,
+                static_cast<std::uint32_t>(&module - program.modules.data()),
+                decl)};
+            contract_entries.push_back(std::format(
+                "    contract_entry{{\"{}\", {}, {}, {}, \"{}\", {}}},",
+                emit::escape_text(id), decl.service_version_major,
+                decl.service_version_minor, decl.service_version_patch,
+                emit::escape_text(schema_hash), decl.methods.size()));
+        }
+    }
+    writer.line("inline constexpr std::array<contract_entry, {}> contracts{{",
+                contract_entries.size());
+    for (const auto &entry : contract_entries) {
+        writer.line("{}", entry);
+    }
+    writer.line("}};");
+    writer.blank();
+    writer.line("inline constexpr std::string_view schema_hash = \"{}\";",
+                emit::escape_text(schema_hash));
+    writer.blank();
+    writer.line("}} // namespace refrain::metadata");
+    writer.blank();
+    writer.line("#endif // {}", guard);
+    return emit::generated_file{path, writer.take()};
+}
+
+auto emit_rust(const model &program, std::string_view schema_hash)
+    -> emit::generated_file {
+    const auto path{emit::rust_bindings_path()};
+    code_writer writer;
+    writer.raw(emit::banner(schema_hash));
+    writer.line("// Rust bindings for the sealed Refrain host contracts.");
+    writer.line("// C ABI layout is authoritative; this file mirrors it.");
+    writer.line("#![allow(non_camel_case_types, non_snake_case, dead_code)]");
+    writer.blank();
+    writer.line("#[repr(C)]");
+    writer.line("pub struct RefrainStr {{");
+    writer.line("    pub data: *const u8,");
+    writer.line("    pub len: u64,");
+    writer.line("}}");
+    writer.blank();
+    writer.line("#[repr(C)]");
+    writer.line("pub struct RefrainBytes {{");
+    writer.line("    pub data: *const u8,");
+    writer.line("    pub len: u64,");
+    writer.line("}}");
+    writer.blank();
+    writer.line("#[repr(C)]");
+    writer.line("pub struct RefrainMutBytes {{");
+    writer.line("    pub data: *mut u8,");
+    writer.line("    pub len: u64,");
+    writer.line("}}");
+    writer.blank();
+    writer.line("#[repr(C)]");
+    writer.line("pub struct RefrainSlice<T> {{");
+    writer.line("    pub data: *const T,");
+    writer.line("    pub len: u64,");
+    writer.line("}}");
+    writer.blank();
+    writer.line("pub type RefrainStatus = u32;");
+    writer.line("pub const REFRAIN_STATUS_OK: RefrainStatus = 0;");
+    writer.line("pub const REFRAIN_HANDLE_INVALID: u64 = 0;");
+    writer.blank();
+
+    const auto rust_type = [&](const auto &self,
+                               const resolved_type &type) -> std::string {
+        switch (type.kind) {
+        case resolved_type::category::primitive:
+            switch (type.primitive) {
+            case primitive_kind::u8:
+                return "u8";
+            case primitive_kind::u16:
+                return "u16";
+            case primitive_kind::u32:
+                return "u32";
+            case primitive_kind::u64:
+                return "u64";
+            case primitive_kind::i8:
+                return "i8";
+            case primitive_kind::i16:
+                return "i16";
+            case primitive_kind::i32:
+                return "i32";
+            case primitive_kind::i64:
+                return "i64";
+            case primitive_kind::f32:
+                return "f32";
+            case primitive_kind::f64:
+                return "f64";
+            case primitive_kind::boolean:
+                return "u8";
+            case primitive_kind::string:
+                return "RefrainStr";
+            case primitive_kind::bytes:
+                return "RefrainBytes";
+            case primitive_kind::mut_bytes:
+                return "RefrainMutBytes";
+            case primitive_kind::opaque_ptr:
+                return "*mut ::core::ffi::c_void";
+            case primitive_kind::void_type:
+                return "()";
+            }
+            return "()";
+        case resolved_type::category::named:
+            return decl_of(program, type.module_index, type.decl_index).name;
+        case resolved_type::category::handle:
+            return decl_of(program, type.module_index, type.decl_index).name;
+        case resolved_type::category::slice:
+            return "RefrainSlice<" + self(self, type.arguments.front()) + ">";
+        case resolved_type::category::array:
+        case resolved_type::category::optional:
+        case resolved_type::category::repeated:
+            return "()";
+        }
+        return "()";
+    };
+    const auto rust_type_of = [&](const resolved_type &type) {
+        return rust_type(rust_type, type);
+    };
+    const auto rust_field = [](std::string_view name) -> std::string {
+        if (name == "self") {
+            return "self_";
+        }
+        static const std::set<std::string_view> keywords{
+            "as",       "break",  "const", "continue", "crate",  "else",
+            "enum",     "extern", "false", "fn",       "for",    "if",
+            "impl",     "in",     "let",   "loop",     "match",  "mod",
+            "move",     "mut",    "pub",   "ref",      "return", "static",
+            "struct",   "super",  "trait", "true",     "type",   "unsafe",
+            "use",      "where",  "while", "async",    "await",  "dyn",
+            "abstract", "become", "box",   "do",       "final",  "macro",
+            "override", "priv",   "try",   "typeof",   "union",  "unsized",
+            "virtual",  "yield",
+        };
+        if (keywords.contains(name)) {
+            return "r#" + std::string{name};
+        }
+        return std::string{name};
+    };
+    const auto rust_method = [&](std::string_view name) {
+        return rust_field(name);
+    };
+
+    for (const auto &module : program.modules) {
+        if (module.kind != dialect::ridl ||
+            !module.name.starts_with("refrain::host")) {
+            continue;
+        }
+        const auto module_index{
+            static_cast<std::uint32_t>(&module - program.modules.data())};
+        writer.line("pub mod {} {{", module_last_segment(module.name));
+        writer.line("    use super::*;");
+        writer.blank();
+
+        for (const auto &decl : module.declarations) {
+            if (decl.kind == declaration_kind::enumeration ||
+                decl.kind == declaration_kind::flags) {
+                writer.line("    pub type {} = u32;", decl.name);
+                for (const auto &entry : decl.entries) {
+                    writer.line("    pub const {}_{}: {} = {};",
+                                emit::upper(decl.name), emit::upper(entry.name),
+                                decl.name, entry.value.value_or(0));
+                }
+                writer.blank();
+            }
+        }
+        for (const auto &decl : module.declarations) {
+            if (decl.kind == declaration_kind::handle) {
+                writer.line("    pub type {} = u64;", decl.name);
+                writer.line("    pub const {}_INVALID: {} = 0;",
+                            emit::upper(decl.name), decl.name);
+                writer.blank();
+            }
+        }
+        for (const auto &decl : module.declarations) {
+            if (decl.kind != declaration_kind::callback) {
+                continue;
+            }
+            std::string parameters;
+            for (const auto &parameter : decl.callback_parameters) {
+                if (!parameters.empty()) {
+                    parameters += ", ";
+                }
+                parameters += rust_field(parameter.name) + ": " +
+                              rust_type_of(parameter.type);
+            }
+            writer.line("    pub type {} = Option<unsafe extern \"C\" fn({})>;",
+                        decl.name, parameters);
+            writer.blank();
+        }
+        for (const auto &decl : module.declarations) {
+            if (decl.kind != declaration_kind::structure) {
+                continue;
+            }
+            writer.line("    #[repr(C)]");
+            writer.line("    pub struct {} {{", decl.name);
+            writer.line("        pub struct_size: u32,");
+            for (const auto &field : decl.fields) {
+                writer.line("        pub {}: {},", rust_field(field.name),
+                            rust_type_of(field.type));
+            }
+            writer.line("    }}");
+            writer.blank();
+        }
+        for (const auto &decl : module.declarations) {
+            if (decl.kind != declaration_kind::structure) {
+                continue;
+            }
+            writer.line(
+                "    const _: () = assert!(::core::mem::size_of::<{}>() == "
+                "{});",
+                decl.name, decl.abi_size);
+            writer.line(
+                "    const _: () = assert!(::core::mem::align_of::<{}>() == "
+                "{});",
+                decl.name, decl.abi_alignment);
+            for (const auto &field : decl.fields) {
+                writer.line(
+                    "    const _: () = assert!(::core::mem::offset_of!({}, "
+                    "{}) == {});",
+                    decl.name, rust_field(field.name), field.abi_offset);
+            }
+            writer.blank();
+        }
+        for (const auto &decl : module.declarations) {
+            if (decl.kind != declaration_kind::service) {
+                continue;
+            }
+            const auto prefix{service_prefix(program, module_index, decl)};
+            const auto service{service_id_of(program, module_index, decl)};
+            writer.line("    #[repr(C)]");
+            writer.line("    pub struct {}_vtable {{", prefix);
+            writer.line("        pub struct_size: u32,");
+            writer.line("        pub abi_major: u32,");
+            writer.line("        pub abi_minor: u32,");
+            writer.line("        pub abi_patch: u32,");
+            for (const auto &method : decl.methods) {
+                std::string parameters{"self_: *mut ::core::ffi::c_void"};
+                for (const auto &parameter : method.parameters) {
+                    parameters += ", ";
+                    parameters += rust_field(parameter.name) + ": ";
+                    if (parameter.out) {
+                        parameters += "*mut " + rust_type_of(parameter.type);
+                    } else if (parameter.type.kind ==
+                                   resolved_type::category::named &&
+                               decl_of(program, parameter.type.module_index,
+                                       parameter.type.decl_index)
+                                       .kind == declaration_kind::structure) {
+                        parameters += "*const " + rust_type_of(parameter.type);
+                    } else {
+                        parameters += rust_type_of(parameter.type);
+                    }
+                }
+                std::string return_type{"RefrainStatus"};
+                if (method.can_fail) {
+                    if (!method.result_type.is_void()) {
+                        parameters += ", out_value: *mut " +
+                                      rust_type_of(method.result_type);
+                    }
+                } else if (!method.result_type.is_void()) {
+                    return_type = rust_type_of(method.result_type);
+                } else {
+                    return_type = "()";
+                }
+                writer.line(
+                    "        pub {}: Option<unsafe extern \"C\" fn({}) -> "
+                    "{}>,",
+                    rust_method(method.name), parameters, return_type);
+            }
+            writer.line("    }}");
+            writer.blank();
+            writer.line("    pub const {}_SERVICE_ID: &str = \"{}\";",
+                        emit::upper(prefix), emit::escape_text(service));
+            writer.line("    pub const {}_ABI_MAJOR: u32 = {};",
+                        emit::upper(prefix), decl.service_version_major);
+            writer.line("    pub const {}_ABI_MINOR: u32 = {};",
+                        emit::upper(prefix), decl.service_version_minor);
+            writer.line("    pub const {}_ABI_PATCH: u32 = {};",
+                        emit::upper(prefix), decl.service_version_patch);
+            writer.blank();
+        }
+        writer.line("}} // pub mod {}", module_last_segment(module.name));
+        writer.blank();
+    }
+    auto text{writer.take()};
+    while (text.size() >= 2 && text.ends_with("\n\n")) {
+        text.pop_back();
+    }
+    return emit::generated_file{path, std::move(text)};
 }
 
 } // namespace refrain::schema

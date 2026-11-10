@@ -2,6 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/worldgen/content.hpp>
 #include <refrain/worldgen/density/density_router.hpp>
 
 #include <refrain/core/io.hpp>
@@ -75,18 +76,17 @@ auto collect_documents(std::string_view data_root, std::string_view directory,
     return status_ok();
 }
 
-auto decode_by_id(std::string_view id, const density_documents &documents)
-    -> result<sampler_ptr> {
-    const std::string quoted = "\"" + std::string{id} + "\"";
-    return decode_density(quoted, documents);
-}
-
 } // namespace
 
 auto load_noise_settings(std::string_view worldgen_root,
                          std::string_view settings_id,
                          algorithm random_algorithm, jlong seed)
     -> result<noise_settings> {
+    const auto materialized = materialize_worldgen_data(worldgen_root);
+    if (!materialized) {
+        return std::unexpected{materialized.error()};
+    }
+    worldgen_root = *materialized;
     const std::string settings_id_text{settings_id};
     const auto slash = settings_id_text.find('/');
     if (slash == std::string::npos) {
@@ -105,6 +105,19 @@ auto load_noise_settings(std::string_view worldgen_root,
         return std::unexpected{parsed_settings.error()};
     }
 
+    // The document selects the algorithm of every positional draw; the
+    // caller's value is used only when the document omits the field.
+    const json *legacy_node = parsed_settings->find("legacy_random_source");
+    bool legacy_random_source = false;
+    if (legacy_node != nullptr) {
+        if (const auto value = legacy_node->as_bool(); value.has_value()) {
+            legacy_random_source = *value;
+        }
+    }
+    if (legacy_random_source) {
+        random_algorithm = algorithm::legacy;
+    }
+
     density_documents documents;
     documents.seed = seed;
     documents.random_algorithm = random_algorithm;
@@ -120,6 +133,22 @@ auto load_noise_settings(std::string_view worldgen_root,
     }
 
     noise_settings settings;
+    const auto *noise_node = parsed_settings->find("noise");
+    if (noise_node == nullptr || !noise_node->is_object()) {
+        return std::unexpected{fail("noise settings have no noise geometry")};
+    }
+    const auto *min_y_node = noise_node->find("min_y");
+    const auto *height_node = noise_node->find("height");
+    if (min_y_node == nullptr || height_node == nullptr ||
+        !min_y_node->is_number() || !height_node->is_number()) {
+        return std::unexpected{fail("noise geometry is incomplete")};
+    }
+    settings.min_y = static_cast<jint>(*min_y_node->as_double());
+    settings.height = static_cast<jint>(*height_node->as_double());
+    if (settings.height <= 0) {
+        return std::unexpected{fail("noise geometry has no height")};
+    }
+    settings.legacy_random_source = legacy_random_source;
     const auto router_node = parsed_settings->find("noise_router");
     if (router_node == nullptr || !router_node->is_object()) {
         return std::unexpected{fail("noise settings have no router")};
@@ -140,10 +169,12 @@ auto load_noise_settings(std::string_view worldgen_root,
     }};
     for (const auto &field : fields) {
         const json *value = router_node->find(field.id);
-        if (value == nullptr || !value->is_string()) {
+        if (value == nullptr) {
             return std::unexpected{fail("noise router field is missing")};
         }
-        auto decoded = decode_by_id(*value->as_string(), documents);
+        // The router fields accept an inline density node (a constant number,
+        // an object or a reference), the same nodes the documents use.
+        auto decoded = decode_density(value->dump(), documents);
         if (!decoded) {
             return std::unexpected{decoded.error()};
         }
@@ -157,6 +188,11 @@ auto load_noise_settings(std::string_view worldgen_root,
         fluid != nullptr && fluid->is_string()) {
         settings.default_fluid = std::string{*fluid->as_string()};
     }
+    const json *rule = parsed_settings->find("material_rule");
+    if (rule == nullptr || !rule->is_string()) {
+        return std::unexpected{fail("noise settings have no material rule")};
+    }
+    settings.material_rule = std::string{*rule->as_string()};
     if (const json *sea = parsed_settings->find("sea_level");
         sea != nullptr && sea->is_number()) {
         settings.sea_level = static_cast<jint>(*sea->as_double());

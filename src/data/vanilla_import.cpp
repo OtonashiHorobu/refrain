@@ -268,9 +268,13 @@ auto parse_biomes(std::string_view name, std::string_view json,
         return std::unexpected{
             parse_fail(name, simdjson::error_message(error))};
     }
+    simdjson::dom::object root;
+    if (document.get_object().get(root) != simdjson::SUCCESS) {
+        return std::unexpected{parse_fail(name, "root is not an object")};
+    }
     simdjson::dom::element entries_element;
     simdjson::dom::array entries;
-    if (!member(document.get_object().value(), "biomes", entries_element) ||
+    if (!member(root, "biomes", entries_element) ||
         entries_element.get_array().get(entries) != simdjson::SUCCESS) {
         return std::unexpected{parse_fail(name, "biomes is not an array")};
     }

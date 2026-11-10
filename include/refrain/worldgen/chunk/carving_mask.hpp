@@ -2,8 +2,8 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// The write-only output a carver fills. `CarvingMask` is the bit set the
-// terrain stage applies after the surface pass; it is local to that stage.
+// The write-only output a carver fills. The mask is the bit set the terrain
+// stage applies after the surface pass; it is local to that stage.
 
 #pragma once
 
@@ -30,7 +30,7 @@ class carver_output {
     [[nodiscard]] virtual auto max_y() const -> jint = 0;
 };
 
-/// `CarvingMask`: one bit per block of the 16x16 column set between `min_y`
+/// One bit per block of the 16x16 column set between `min_y`
 /// and `max_y` inclusive. Bits are indexed
 /// `(y - min_y) + (z + (x << 4)) * height`.
 class carving_mask final : public carver_output {

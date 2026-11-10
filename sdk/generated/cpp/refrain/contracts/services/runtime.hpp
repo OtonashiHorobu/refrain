@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 617516b9e3302208
+// Schema hash: 3a0899b8b7e5f861
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_RUNTIME_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_RUNTIME_HPP
@@ -42,34 +42,35 @@ using runtime_config = ::refrain_services_runtime_runtime_config;
     return value;
 }
 
-static_assert(sizeof(runtime_config) == 184);
+static_assert(sizeof(runtime_config) == 200);
 static_assert(alignof(runtime_config) == 8);
 static_assert(offsetof(runtime_config, struct_size) == 0);
 static_assert(offsetof(runtime_config, world_path) == 8);
-static_assert(offsetof(runtime_config, ticks) == 24);
-static_assert(offsetof(runtime_config, command_file) == 32);
-static_assert(offsetof(runtime_config, script_file) == 48);
-static_assert(offsetof(runtime_config, hash_every) == 64);
-static_assert(offsetof(runtime_config, world_zstd_level) == 72);
-static_assert(offsetof(runtime_config, zstd_near_level) == 76);
-static_assert(offsetof(runtime_config, zstd_mid_level) == 80);
-static_assert(offsetof(runtime_config, zstd_far_level) == 84);
-static_assert(offsetof(runtime_config, zstd_near_radius) == 88);
-static_assert(offsetof(runtime_config, zstd_mid_radius) == 92);
-static_assert(offsetof(runtime_config, watchdog_timeout_ms) == 96);
-static_assert(offsetof(runtime_config, autosave_interval_ticks) == 104);
-static_assert(offsetof(runtime_config, compact_interval_ticks) == 112);
-static_assert(offsetof(runtime_config, compact_min_bytes) == 120);
-static_assert(offsetof(runtime_config, compact_garbage_percent) == 128);
-static_assert(offsetof(runtime_config, store_compact_interval_ticks) == 136);
-static_assert(offsetof(runtime_config, content_store) == 144);
-static_assert(offsetof(runtime_config, content_gc_apply) == 160);
-static_assert(offsetof(runtime_config, content_gc_keep_days) == 164);
-static_assert(offsetof(runtime_config, content_gc_budget_ms) == 168);
-static_assert(offsetof(runtime_config, content_gc_interval_ticks) == 176);
+static_assert(offsetof(runtime_config, server_properties) == 24);
+static_assert(offsetof(runtime_config, ticks) == 40);
+static_assert(offsetof(runtime_config, command_file) == 48);
+static_assert(offsetof(runtime_config, script_file) == 64);
+static_assert(offsetof(runtime_config, hash_every) == 80);
+static_assert(offsetof(runtime_config, world_zstd_level) == 88);
+static_assert(offsetof(runtime_config, zstd_near_level) == 92);
+static_assert(offsetof(runtime_config, zstd_mid_level) == 96);
+static_assert(offsetof(runtime_config, zstd_far_level) == 100);
+static_assert(offsetof(runtime_config, zstd_near_radius) == 104);
+static_assert(offsetof(runtime_config, zstd_mid_radius) == 108);
+static_assert(offsetof(runtime_config, watchdog_timeout_ms) == 112);
+static_assert(offsetof(runtime_config, autosave_interval_ticks) == 120);
+static_assert(offsetof(runtime_config, compact_interval_ticks) == 128);
+static_assert(offsetof(runtime_config, compact_min_bytes) == 136);
+static_assert(offsetof(runtime_config, compact_garbage_percent) == 144);
+static_assert(offsetof(runtime_config, store_compact_interval_ticks) == 152);
+static_assert(offsetof(runtime_config, content_store) == 160);
+static_assert(offsetof(runtime_config, content_gc_apply) == 176);
+static_assert(offsetof(runtime_config, content_gc_keep_days) == 180);
+static_assert(offsetof(runtime_config, content_gc_budget_ms) == 184);
+static_assert(offsetof(runtime_config, content_gc_interval_ticks) == 192);
 
 inline constexpr std::string_view service_id = "refrain:runtime";
-inline constexpr std::uint32_t abi_major = 2;
+inline constexpr std::uint32_t abi_major = 1;
 inline constexpr std::uint32_t abi_minor = 0;
 inline constexpr std::uint32_t abi_patch = 0;
 inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::side_kind::server;

@@ -244,6 +244,41 @@ class uniform_float final : public float_provider {
     float max_{0.0F};
 };
 
+class clamped_normal_float final : public float_provider {
+  public:
+    clamped_normal_float(float mean, float deviation, float min, float max)
+        : mean_{mean}, deviation_{deviation}, min_{min}, max_{max} {}
+    [[nodiscard]] auto sample(worldgen_random &random) const -> float override {
+        const float normal =
+            mean_ + static_cast<float>(random.next_gaussian()) * deviation_;
+        return std::clamp(normal, min_, max_);
+    }
+
+  private:
+    float mean_{0.0F};
+    float deviation_{0.0F};
+    float min_{0.0F};
+    float max_{0.0F};
+};
+
+class clamped_normal_int final : public int_provider {
+  public:
+    clamped_normal_int(float mean, float deviation, jint min, jint max)
+        : mean_{mean}, deviation_{deviation}, min_{min}, max_{max} {}
+    [[nodiscard]] auto sample(worldgen_random &random) const -> jint override {
+        const float normal =
+            mean_ + static_cast<float>(random.next_gaussian()) * deviation_;
+        return static_cast<jint>(std::clamp(normal, static_cast<float>(min_),
+                                            static_cast<float>(max_)));
+    }
+
+  private:
+    float mean_{0.0F};
+    float deviation_{0.0F};
+    jint min_{0};
+    jint max_{0};
+};
+
 class trapezoid_float final : public float_provider {
   public:
     trapezoid_float(float min, float max, float plateau)
@@ -416,6 +451,27 @@ auto decode_int(const value &input) -> result<std::unique_ptr<int_provider>> {
         }
         return std::make_unique<constant_int>(*constant);
     }
+    if (*type == "minecraft:clamped_normal") {
+        const auto *mean = input.find("mean");
+        const auto *deviation = input.find("deviation");
+        const auto *min_value = input.find("min_inclusive");
+        const auto *max_value = input.find("max_inclusive");
+        if (mean == nullptr || deviation == nullptr || min_value == nullptr ||
+            max_value == nullptr) {
+            return std::unexpected{invalid("clamped normal int is incomplete")};
+        }
+        const auto mean_value = mean->as_double();
+        const auto deviation_value = deviation->as_double();
+        const auto min_int = min_value->as_int64();
+        const auto max_int = max_value->as_int64();
+        if (!mean_value || !deviation_value || !min_int || !max_int) {
+            return std::unexpected{invalid("clamped normal int is invalid")};
+        }
+        return std::make_unique<clamped_normal_int>(
+            static_cast<float>(*mean_value),
+            static_cast<float>(*deviation_value), static_cast<jint>(*min_int),
+            static_cast<jint>(*max_int));
+    }
     if (*type == "minecraft:uniform") {
         auto min = int_field("min_inclusive");
         auto max = int_field("max_inclusive");
@@ -520,6 +576,21 @@ auto decode_float(const value &input)
             return std::unexpected{constant.error()};
         }
         return std::make_unique<constant_float>(*constant);
+    }
+    if (*type == "minecraft:clamped_normal") {
+        auto mean = float_field("mean");
+        auto deviation = float_field("deviation");
+        auto min = float_field("min");
+        auto max = float_field("max");
+        if (!mean || !deviation || !min || !max) {
+            return std::unexpected{
+                invalid("clamped normal float is incomplete")};
+        }
+        if (*max < *min) {
+            return std::unexpected{invalid("clamped normal range is inverted")};
+        }
+        return std::make_unique<clamped_normal_float>(*mean, *deviation, *min,
+                                                      *max);
     }
     if (*type == "minecraft:uniform") {
         auto min = float_field("min_inclusive");

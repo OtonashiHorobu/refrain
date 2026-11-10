@@ -6,23 +6,21 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 617516b9e3302208
+// Schema hash: 3a0899b8b7e5f861
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_H
 
 #include <refrain/contracts/core_abi.h>
+#include <refrain/contracts/host/core_abi.h>
+#include <refrain/contracts/host/kernel_abi.h>
+#include <refrain/contracts/host/metadata_abi.h>
+#include <refrain/contracts/host/platform_abi.h>
 #include <refrain/contracts/services/data_packs_abi.h>
 #include <refrain/contracts/services/net_protocol_abi.h>
-#include <refrain/contracts/services/net_session_abi.h>
-#include <refrain/contracts/services/net_translator_abi.h>
 #include <refrain/contracts/services/runtime_abi.h>
-#include <refrain/contracts/services/session_lifecycle_abi.h>
-#include <refrain/contracts/services/session_status_abi.h>
-#include <refrain/contracts/services/session_tab_abi.h>
 #include <refrain/contracts/services/sim_abi.h>
 #include <refrain/contracts/services/storage_abi.h>
-#include <refrain/contracts/services/transport_abi.h>
 #include <refrain/contracts/services/world_abi.h>
 #include <refrain/contracts/services/worldgen_abi.h>
 

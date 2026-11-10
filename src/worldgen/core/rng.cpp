@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string_view>
@@ -30,7 +31,7 @@ constexpr jlong mask_32 = 0xFFFFFFFFLL;
 
 } // namespace
 
-// --- random_source defaults (BitRandomSource) ------------------------------
+// --- random_source defaults (the composed base draws) ---------------------
 
 auto random_source::next_int() -> jint { return next(32); }
 
@@ -89,6 +90,26 @@ auto legacy_random_source::next(int bits) -> jint {
 
 void legacy_random_source::set_seed(jlong seed) {
     state_ = (seed ^ multiplier) & mask;
+    has_next_gaussian_ = false;
+}
+
+auto legacy_random_source::next_gaussian() -> double {
+    if (has_next_gaussian_) {
+        has_next_gaussian_ = false;
+        return next_gaussian_;
+    }
+    double x = 0.0;
+    double y = 0.0;
+    double radius = 0.0;
+    do {
+        x = 2.0 * next_double() - 1.0;
+        y = 2.0 * next_double() - 1.0;
+        radius = x * x + y * y;
+    } while (radius >= 1.0 || radius == 0.0);
+    const double factor = std::sqrt(-2.0 * std::log(radius) / radius);
+    next_gaussian_ = y * factor;
+    has_next_gaussian_ = true;
+    return x * factor;
 }
 
 auto legacy_random_source::fork() -> std::unique_ptr<random_source> {
@@ -120,6 +141,26 @@ xoroshiro_random_source::xoroshiro_random_source(jlong seed) noexcept {
 void xoroshiro_random_source::set_seed(jlong seed) {
     const auto upgraded = random_support::upgrade_seed_to_128bit(seed);
     generator_ = xoroshiro128pp{upgraded.seed_lo, upgraded.seed_hi};
+    has_next_gaussian_ = false;
+}
+
+auto xoroshiro_random_source::next_gaussian() -> double {
+    if (has_next_gaussian_) {
+        has_next_gaussian_ = false;
+        return next_gaussian_;
+    }
+    double x = 0.0;
+    double y = 0.0;
+    double radius = 0.0;
+    do {
+        x = 2.0 * next_double() - 1.0;
+        y = 2.0 * next_double() - 1.0;
+        radius = x * x + y * y;
+    } while (radius >= 1.0 || radius == 0.0);
+    const double factor = std::sqrt(-2.0 * std::log(radius) / radius);
+    next_gaussian_ = y * factor;
+    has_next_gaussian_ = true;
+    return x * factor;
 }
 
 auto xoroshiro_random_source::next(int bits) -> jint {
@@ -298,7 +339,29 @@ auto worldgen_random::next_double() -> double {
 
 auto worldgen_random::next_boolean() -> bool { return next(1) != 0; }
 
-void worldgen_random::set_seed(jlong seed) { source_->set_seed(seed); }
+auto worldgen_random::next_gaussian() -> double {
+    if (has_next_gaussian_) {
+        has_next_gaussian_ = false;
+        return next_gaussian_;
+    }
+    double x = 0.0;
+    double y = 0.0;
+    double radius = 0.0;
+    do {
+        x = 2.0 * next_double() - 1.0;
+        y = 2.0 * next_double() - 1.0;
+        radius = x * x + y * y;
+    } while (radius >= 1.0 || radius == 0.0);
+    const double factor = std::sqrt(-2.0 * std::log(radius) / radius);
+    next_gaussian_ = y * factor;
+    has_next_gaussian_ = true;
+    return x * factor;
+}
+
+void worldgen_random::set_seed(jlong seed) {
+    source_->set_seed(seed);
+    has_next_gaussian_ = false;
+}
 
 auto worldgen_random::fork() -> std::unique_ptr<random_source> {
     return source_->fork();

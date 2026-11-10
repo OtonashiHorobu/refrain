@@ -4,8 +4,9 @@
 //
 // The six heightmaps a generated chunk keeps. A heightmap stores, for every
 // column, the first y above the highest state that matches its predicate; an
-// empty column stores `min_y`. Updates and priming follow `Heightmap` exactly,
-// including the downward rescan when the current top stops matching.
+// empty column stores `min_y`. Updates and priming follow the reference
+// rescan rules, including the downward walk when the current top stops
+// matching.
 
 #pragma once
 
@@ -17,7 +18,7 @@
 
 namespace refrain::worldgen {
 
-/// Java `Heightmap.Types`, in registration order.
+/// Heightmap kinds, in registration order.
 enum class heightmap_kind : std::uint8_t {
     world_surface_wg = 0,
     world_surface = 1,
@@ -45,12 +46,12 @@ class heightmap {
     heightmap() = default;
     heightmap(heightmap_kind kind, jint min_y, jint height);
 
-    /// `Heightmap.update`: observes one block write. `state` must describe the
+    /// Observes one block write. `state` must describe the
     /// block now present at `(x, y, z)`.
     void update(jint x, jint y, jint z, std::uint16_t state,
                 const heightmap_source &source);
 
-    /// `Heightmap.primeHeightmaps`: recomputes every column from the chunk.
+    /// Recomputes every column from the chunk.
     void prime(const heightmap_source &source);
 
     /// Raw first-available y (the highest matching y plus one, or `min_y`).

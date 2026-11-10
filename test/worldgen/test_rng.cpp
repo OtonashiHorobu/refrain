@@ -230,6 +230,16 @@ suite<"worldgen/rng"> rng_tests = [] {
         salt.set_large_feature_with_salt(12345, -3, 7, 10387312);
         expect(salt.next_int() == k_salt_int);
 
+        worldgen_random gaussian{std::make_unique<legacy_random_source>(12345)};
+        expect(std::abs(gaussian.next_gaussian() - (-0.187808989658912)) <
+               1e-15);
+        expect(std::abs(gaussian.next_gaussian() - 0.5884363051154796) < 1e-15);
+        expect(std::abs(gaussian.next_gaussian() - 0.9488047804400426) < 1e-15);
+        worldgen_random gaussian2{std::make_unique<legacy_random_source>(1)};
+        expect(std::abs(gaussian2.next_gaussian() - 1.561581040188955) < 1e-15);
+        expect(std::abs(gaussian2.next_gaussian() - (-0.6081826070068602)) <
+               1e-15);
+
         worldgen_random legacy_delegate{
             std::make_unique<legacy_random_source>(0)};
         legacy_delegate.set_large_feature_seed(12345, -3, 7);

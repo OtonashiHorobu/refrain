@@ -2,19 +2,21 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// 26.3 gradient noise: `PerlinNoise`, `SmearedPerlinNoise`, `NoiseStack` and
-// `NormalNoise`.
+// 26.3 gradient noise: Perlin noise, its smeared variant, noise stacks and the
+// octave-layout normal-noise builder.
 //
-// The 26.3 noise hierarchy differs from older versions: `NormalNoise` owns the
-// octave layout and normalization, and `create` builds two `PerlinNoise`
-// instances per octave (the second at a slightly different frequency) into a
-// `NoiseStack`. `BlendedNoise` builds stacks of `SmearedPerlinNoise` instead.
+// The 26.3 noise hierarchy differs from older versions: normal noise owns the
+// octave layout and normalization, and builds two Perlin instances per octave
+// (the second at a slightly different frequency) into a noise stack. Blended
+// noise builds stacks of smeared Perlin noise instead.
 //
 // Every draw and every float expression follows the reference implementation;
-// the vectors in `test/worldgen/test_noise.cpp` come from the real classes.
+// the vectors in `test/worldgen/test_noise.cpp` come from the reference
+// implementation.
 
 #pragma once
 
+#include <refrain/core/error.hpp>
 #include <refrain/worldgen/core/java_compat.hpp>
 #include <refrain/worldgen/core/rng.hpp>
 #include <refrain/worldgen/density/density_buffer.hpp>
@@ -29,7 +31,7 @@
 
 namespace refrain::worldgen {
 
-/// Java `Noise`: the common surface of the Perlin variants and the stacks.
+/// Common surface of the Perlin variants and noise stacks.
 class noise {
   public:
     noise() = default;
@@ -53,7 +55,7 @@ class noise {
     [[nodiscard]] virtual auto range() const -> interval = 0;
 };
 
-/// Java `PerlinNoise`: a 256-entry permutation, three world offsets and the
+/// Perlin noise: a 256-entry permutation, three world offsets and the
 /// 16-entry gradient table, sampled with smoothstep interpolation.
 class perlin_noise : public noise {
   public:
@@ -91,8 +93,8 @@ class perlin_noise : public noise {
     double offset_z_{0.0};
 };
 
-/// Java `SmearedPerlinNoise`: a Perlin variant whose Y coordinate is snapped to
-/// a smear grid before interpolation. Used by `BlendedNoise`.
+/// Smeared Perlin noise: a Perlin variant whose Y coordinate is snapped to a
+/// smear grid before interpolation. Used by blended noise.
 class smeared_perlin_noise final : public perlin_noise {
   public:
     smeared_perlin_noise(random_source &random, double fudge_y_scale);
@@ -115,8 +117,8 @@ class smeared_perlin_noise final : public perlin_noise {
     double fudge_y_scale_{0.0};
 };
 
-/// Java `SimplexNoise`: the legacy simplex variant still used by biome
-/// temperature and a few structure helpers.
+/// Legacy simplex noise still used by biome temperature and a few structure
+/// helpers.
 class simplex_noise final : public noise {
   public:
     /// Consumes three `nextDouble` draws and then 256 `nextInt(256 - i)` draws.
@@ -143,7 +145,12 @@ class simplex_noise final : public noise {
     double offset_z_{0.0};
 };
 
-/// Java `NoiseStack`: a sum of layers at fixed frequencies.
+/// The shared biome-info noise. Its permutation table is seeded once, so
+/// placement counts and climate edge variation observe the same field for the
+/// lifetime of the process.
+[[nodiscard]] auto biome_info_noise() -> const noise &;
+
+/// A sum of layers at fixed frequencies.
 class noise_stack final : public noise {
   public:
     struct layer {
@@ -187,29 +194,39 @@ struct normal_noise_parameters {
     std::vector<double> amplitude_modifiers{};
 };
 
-/// Java `NormalNoise`: octave layout, normalization and the two-per-octave
-/// `NoiseStack` construction.
+/// Octave layout, normalization and the two-per-octave noise-stack
+/// construction.
 class normal_noise {
   public:
     explicit normal_noise(normal_noise_parameters parameters);
 
-    /// Legacy-normalised construction used by the nether noises:
-    /// `NormalNoise.createParity(firstOctave, amplitudes)`.
+    /// Legacy-normalised construction used by the nether noises: one noise per
+    /// octave with the given amplitudes.
     [[nodiscard]] static auto create_parity(jint first_octave,
                                             std::span<const double> amplitudes)
         -> normal_noise;
 
-    /// Builds the stack. The random source is the one derived from
-    /// `RandomState.random.fromHashOf(noise_id)`; two positional forks are
-    /// taken from it in order.
+    /// Builds the stack. Derived streams are taken from the noise id hash; two
+    /// positional forks are taken from it in order.
     [[nodiscard]] auto create(random_source &random) const -> noise_stack;
+
+    /// Builds the stack with the historical nether-biome octave layout. The
+    /// octave generators are drawn from `random` in descending octave order,
+    /// with a discarded generator in front and 262 draws for every octave the
+    /// layout leaves empty. Two independent stacks are built from the same
+    /// stream: the first at the base frequencies and the second at the
+    /// slightly higher frequency the standard layout gives its second octave
+    /// generator. Every layer of each stack is scaled by `base_amplitude`;
+    /// the stack amplitudes follow the unnormalised geometric series.
+    [[nodiscard]] auto create_legacy_nether_biome(random_source &random) const
+        -> result<noise_stack>;
 
     [[nodiscard]] auto parameters() const noexcept
         -> const normal_noise_parameters & {
         return parameters_;
     }
 
-    /// Symmetric bound of `NormalNoise.range()` as a positive float.
+    /// Symmetric bound of the noise range as a positive float.
     [[nodiscard]] auto range() const noexcept -> float { return range_bound_; }
 
   private:
@@ -241,6 +258,10 @@ class normal_noise {
         const std::vector<double> &amplitude_modifiers) -> double;
     [[nodiscard]] static auto parity_expected_deviation(jint octave_span)
         -> double;
+    [[nodiscard]] static auto
+    build_legacy_nether_layers(random_source &random, jint first_octave,
+                               const std::vector<double> &amplitudes)
+        -> result<std::vector<noise_stack::layer>>;
 
     normal_noise_parameters parameters_{};
     std::vector<octave_info> octaves_{};

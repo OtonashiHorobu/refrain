@@ -8,10 +8,13 @@
 #include <refrain/worldgen/noise/noise.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace refrain::worldgen::density {
 
@@ -21,6 +24,24 @@ using json = data::json::value;
 
 auto fail(std::string_view message) -> error {
     return make_error(error_code::parse_error, message);
+}
+
+/// The two climate noises of the nether keep the historical octave layout;
+/// their generators are drawn from legacy streams seeded with the world seed
+/// plus a fixed per-noise offset instead of a positional fork. Every other
+/// noise document uses the standard layout.
+auto legacy_nether_climate_offset(std::string_view noise_id)
+    -> std::optional<jlong> {
+    constexpr std::array<std::pair<std::string_view, jlong>, 2> offsets{{
+        {"minecraft:nether/temperature", 0},
+        {"minecraft:nether/vegetation", 1},
+    }};
+    for (const auto &[id, offset] : offsets) {
+        if (noise_id == id) {
+            return offset;
+        }
+    }
+    return std::nullopt;
 }
 
 auto string_member(const json &node, std::string_view key)
@@ -137,7 +158,11 @@ class decoder {
             return decode_interpolated(node);
         }
         if (kind == "minecraft:cache") {
-            return child(node, "input");
+            auto input = child(node, "input");
+            if (!input) {
+                return input;
+            }
+            return cache(std::move(*input));
         }
         if (kind == "minecraft:blend_density") {
             auto input = child(node, "input");
@@ -167,12 +192,32 @@ class decoder {
         if (kind == "minecraft:find_top_surface") {
             return decode_find_top_surface(node);
         }
+        if (kind == "minecraft:slice") {
+            return decode_slice(node);
+        }
+        if (kind == "minecraft:distance_to_point") {
+            return decode_distance_to_point(node);
+        }
+        if (kind == "minecraft:end_outer_islands") {
+            // The reference builds the island noise from a legacy source seeded
+            // with the world seed after discarding 17292 draws.
+            auto source = new_random_source(algorithm::legacy, documents_.seed);
+            worldgen_random stream{std::move(source)};
+            for (jint draw = 0; draw < 17292; ++draw) {
+                (void)stream.next_int();
+            }
+            return end_outer_islands(stream.source());
+        }
         return std::unexpected{
             fail("unsupported density function type: " + std::string{kind})};
     }
 
     auto decode_reference(std::string_view id) -> result<sampler_ptr> {
         const std::string key{id};
+        if (const auto decoded = decoded_.find(key);
+            decoded != decoded_.end()) {
+            return decoded->second;
+        }
         if (active_.contains(key)) {
             return std::unexpected{fail("density function reference cycle")};
         }
@@ -189,6 +234,13 @@ class decoder {
         active_.insert(key);
         auto result = decode_value(*parsed);
         active_.erase(key);
+        if (!result) {
+            return result;
+        }
+        // A document is a pure function of position, so every reference to it
+        // shares one compiled graph. The reference compiler does the same; not
+        // sharing multiplies the sampling work by the number of references.
+        decoded_.emplace(key, *result);
         return result;
     }
 
@@ -343,6 +395,13 @@ class decoder {
             }
         }
         const normal_noise normal{parameters};
+        if (const auto offset = legacy_nether_climate_offset(key)) {
+            const auto seed =
+                static_cast<jlong>(static_cast<std::uint64_t>(documents_.seed) +
+                                   static_cast<std::uint64_t>(*offset));
+            legacy_random_source random{seed};
+            return normal.create_legacy_nether_biome(random);
+        }
         auto source = factory_->from_hash_of(key);
         return normal.create(*source);
     }
@@ -577,8 +636,76 @@ class decoder {
         parameters.xz_factor = *xz_factor;
         parameters.y_factor = *y_factor;
         parameters.smear_scale_multiplier = *smear;
+        // The reference derives the blended-noise stream from the world seed
+        // when the settings select the legacy random source, and from the
+        // "minecraft:terrain" name hash otherwise.
+        if (documents_.random_algorithm == algorithm::legacy) {
+            auto source = new_random_source(algorithm::legacy, documents_.seed);
+            return blended_noise(parameters, *source);
+        }
         auto source = factory_->from_hash_of("minecraft:terrain");
         return blended_noise(parameters, *source);
+    }
+
+    auto decode_slice(const json &node) -> result<sampler_ptr> {
+        const auto axis_name = string_member(node, "axis");
+        const auto coordinate = int_member(node, "coordinate");
+        auto input = child(node, "input");
+        if (!axis_name || !coordinate || !input) {
+            return std::unexpected{fail("slice is incomplete")};
+        }
+        slice_axis axis = slice_axis::y;
+        if (*axis_name == "x") {
+            axis = slice_axis::x;
+        } else if (*axis_name == "z") {
+            axis = slice_axis::z;
+        } else if (*axis_name != "y") {
+            return std::unexpected{fail("slice axis is unknown")};
+        }
+        return slice(axis, *coordinate, std::move(*input));
+    }
+
+    auto decode_distance_metric(std::string_view name)
+        -> std::optional<distance_metric> {
+        if (name == "euclidean") {
+            return distance_metric::euclidean;
+        }
+        if (name == "euclidean_squared") {
+            return distance_metric::euclidean_squared;
+        }
+        if (name == "manhattan") {
+            return distance_metric::manhattan;
+        }
+        if (name == "chebyshev") {
+            return distance_metric::chebyshev;
+        }
+        return std::nullopt;
+    }
+
+    auto decode_distance_to_point(const json &node) -> result<sampler_ptr> {
+        const json *point = node.find("point");
+        const auto metric_name = string_member(node, "metric");
+        if (point == nullptr || !point->is_array() || !metric_name) {
+            return std::unexpected{fail("distance_to_point is incomplete")};
+        }
+        const auto coordinates = point->as_array();
+        if (!coordinates || coordinates->size() != 3U) {
+            return std::unexpected{fail("distance_to_point has no point")};
+        }
+        std::array<jint, 3> values{};
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            const auto value = (*coordinates)[index].as_int64();
+            if (!value) {
+                return std::unexpected{
+                    fail("distance_to_point point is not integer")};
+            }
+            values[index] = static_cast<jint>(*value);
+        }
+        const auto metric = decode_distance_metric(*metric_name);
+        if (!metric) {
+            return std::unexpected{fail("distance metric is unknown")};
+        }
+        return distance_to_point(values[0], values[1], values[2], *metric);
     }
 
     auto decode_find_top_surface(const json &node) -> result<sampler_ptr> {
@@ -618,6 +745,7 @@ class decoder {
     const density_documents &documents_;
     std::unique_ptr<positional_random_factory> factory_;
     std::unordered_set<std::string> active_;
+    std::unordered_map<std::string, sampler_ptr> decoded_;
 };
 
 } // namespace

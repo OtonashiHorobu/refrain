@@ -27,6 +27,7 @@ struct generation_context {
     jint min_y{-64};
     jint height{384};
     jint sea_level{63};
+    jlong world_seed{0};
 };
 
 [[nodiscard]] auto make_constant_float(float value)

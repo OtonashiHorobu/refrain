@@ -7,9 +7,13 @@
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/feature/block_predicate.hpp>
+#include <refrain/worldgen/noise/noise.hpp>
 
 #include <refrain/data/json.hpp>
 
+#include <cmath>
+#include <limits>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -39,14 +43,6 @@ auto field(const data::json::value &input, std::string_view name)
             make_error(error_code::parse_error, "placement field is missing")};
     }
     return found;
-}
-
-auto as_int(const data::json::value &input) -> result<jint> {
-    const auto value = input.as_int64();
-    if (!value) {
-        return std::unexpected{value.error()};
-    }
-    return static_cast<jint>(*value);
 }
 
 auto as_float(const data::json::value &input) -> result<float> {
@@ -114,10 +110,15 @@ class heightmap_placement final : public placement_modifier {
     void modify(const placement_context &context, worldgen_random &,
                 const block_pos &origin,
                 std::vector<block_pos> &out) const override {
-        const jint local_x = origin.x - context.chunk->chunk_x() * 16;
-        const jint local_z = origin.z - context.chunk->chunk_z() * 16;
+        // A candidate spread by the offset modifier can land outside the
+        // decorated chunk; the height is then read from the chunk that holds
+        // the column, exactly like every other world-coordinate probe.
         const jint height =
-            context.chunk->first_available(kind_, local_x, local_z);
+            context.height
+                ? context.height(kind_, origin.x, origin.z)
+                : context.chunk->first_available(
+                      kind_, origin.x - context.chunk->chunk_x() * 16,
+                      origin.z - context.chunk->chunk_z() * 16);
         if (height > context.chunk->min_y()) {
             out.push_back(block_pos{.x = origin.x, .y = height, .z = origin.z});
         }
@@ -163,18 +164,25 @@ class rarity_filter final : public placement_modifier {
 
 class offset_placement final : public placement_modifier {
   public:
-    offset_placement(jint x, jint y, jint z) : x_{x}, y_{y}, z_{z} {}
-    void modify(const placement_context &, worldgen_random &,
+    offset_placement(std::unique_ptr<provider::int_provider> x,
+                     std::unique_ptr<provider::int_provider> y,
+                     std::unique_ptr<provider::int_provider> z)
+        : x_{std::move(x)}, y_{std::move(y)}, z_{std::move(z)} {}
+    void modify(const placement_context &, worldgen_random &random,
                 const block_pos &origin,
                 std::vector<block_pos> &out) const override {
-        out.push_back(block_pos{
-            .x = origin.x + x_, .y = origin.y + y_, .z = origin.z + z_});
+        // `OffsetPlacement.modify` samples x, then y, then z.
+        const auto x = x_->sample(random);
+        const auto y = y_->sample(random);
+        const auto z = z_->sample(random);
+        out.push_back(
+            block_pos{.x = origin.x + x, .y = origin.y + y, .z = origin.z + z});
     }
 
   private:
-    jint x_{0};
-    jint y_{0};
-    jint z_{0};
+    std::unique_ptr<provider::int_provider> x_{};
+    std::unique_ptr<provider::int_provider> y_{};
+    std::unique_ptr<provider::int_provider> z_{};
 };
 
 class random_chance final : public placement_modifier {
@@ -207,23 +215,24 @@ class count_on_every_layer final : public placement_modifier {
             for (jint i = 0; i < count; ++i) {
                 const jint x = random.next_int(16) + origin.x;
                 const jint z = random.next_int(16) + origin.z;
-                const jint local_x = x - context.chunk->chunk_x() * 16;
-                const jint local_z = z - context.chunk->chunk_z() * 16;
-                if (local_x < 0 || local_x > 15 || local_z < 0 ||
-                    local_z > 15) {
-                    continue;
-                }
-                const jint start_y = context.chunk->first_available(
-                    heightmap_kind::motion_blocking, local_x, local_z);
+                // A column spread this way can leave the decorated chunk; the
+                // height and the scanned blocks come from whichever chunk
+                // holds the column.
+                const jint start_y =
+                    context.height
+                        ? context.height(
+                              worldgen::heightmap_kind::motion_blocking, x, z)
+                        : context.chunk->first_available(
+                              worldgen::heightmap_kind::motion_blocking,
+                              x - context.chunk->chunk_x() * 16,
+                              z - context.chunk->chunk_z() * 16);
                 jint y = start_y;
                 jint current_layer = 0;
                 bool current_air = false;
-                const auto current = context.chunk->state_at(
-                    static_cast<jint>(x), start_y, static_cast<jint>(z));
+                const auto current = context.region->state_at(x, start_y, z);
                 current_air = is_empty(context, current);
                 for (; y >= context.chunk->min_y() + 1; --y) {
-                    const auto below = context.chunk->state_at(
-                        static_cast<jint>(x), y - 1, static_cast<jint>(z));
+                    const auto below = context.region->state_at(x, y - 1, z);
                     if (!is_empty(context, below) && current_air &&
                         state_block_name(context.states->name(below)) !=
                             "minecraft:bedrock") {
@@ -263,11 +272,10 @@ class environment_scan final : public placement_modifier {
                 std::vector<block_pos> &out) const override {
         block_pos pos = origin;
         const auto allowed = [&](const block_pos &value) {
-            return allowed_ == nullptr ||
-                   allowed_->test(*context.region, *context.states, value);
+            return allowed_ == nullptr || allowed_->test(context, value);
         };
         const auto target = [&](const block_pos &value) {
-            return target_->test(*context.region, *context.states, value);
+            return target_->test(context, value);
         };
         if (!allowed(pos)) {
             return;
@@ -305,15 +313,15 @@ class surface_water_depth_filter final : public placement_modifier {
     void modify(const placement_context &context, worldgen_random &,
                 const block_pos &position,
                 std::vector<block_pos> &out) const override {
-        const jint local_x = position.x - context.chunk->chunk_x() * 16;
-        const jint local_z = position.z - context.chunk->chunk_z() * 16;
-        if (local_x < 0 || local_x > 15 || local_z < 0 || local_z > 15) {
-            return;
-        }
-        const jint surface = context.chunk->first_available(
-            heightmap_kind::world_surface, local_x, local_z);
-        const jint floor = context.chunk->first_available(
-            heightmap_kind::ocean_floor, local_x, local_z);
+        const auto height = [&](worldgen::heightmap_kind kind) {
+            return context.height
+                       ? context.height(kind, position.x, position.z)
+                       : context.chunk->first_available(
+                             kind, position.x - context.chunk->chunk_x() * 16,
+                             position.z - context.chunk->chunk_z() * 16);
+        };
+        const jint surface = height(worldgen::heightmap_kind::world_surface);
+        const jint floor = height(worldgen::heightmap_kind::ocean_floor);
         if (surface - floor <= max_depth_) {
             out.push_back(position);
         }
@@ -330,7 +338,7 @@ class block_predicate_filter final : public placement_modifier {
     void modify(const placement_context &context, worldgen_random &,
                 const block_pos &position,
                 std::vector<block_pos> &out) const override {
-        if (predicate_->test(*context.region, *context.states, position)) {
+        if (predicate_->test(context, position)) {
             out.push_back(position);
         }
     }
@@ -362,6 +370,178 @@ class fixed_placement final : public placement_modifier {
 
   private:
     std::vector<block_pos> positions_;
+};
+
+class biome_filter final : public placement_modifier {
+  public:
+    void modify(const placement_context &context, worldgen_random &,
+                const block_pos &origin,
+                std::vector<block_pos> &out) const override {
+        if (context.top_feature.empty() || !context.biome ||
+            !context.biome_has_feature) {
+            return;
+        }
+        const auto biome = context.biome(origin);
+        if (context.biome_has_feature(biome, context.top_feature)) {
+            out.push_back(origin);
+        }
+    }
+};
+
+/// Emits the origin a fixed or noise-selected number of times. Neither count
+/// consumes randomness.
+class repeated_count_placement : public placement_modifier {
+  public:
+    void modify(const placement_context &context, worldgen_random &random,
+                const block_pos &origin,
+                std::vector<block_pos> &out) const override {
+        const jint emitted = count(context, random, origin);
+        for (jint i = 0; i < emitted; ++i) {
+            out.push_back(origin);
+        }
+    }
+
+  protected:
+    [[nodiscard]] virtual auto count(const placement_context &context,
+                                     worldgen_random &random,
+                                     const block_pos &origin) const -> jint = 0;
+};
+
+class noise_threshold_count_placement final : public repeated_count_placement {
+  public:
+    noise_threshold_count_placement(double noise_level, jint below_noise,
+                                    jint above_noise)
+        : noise_level_{noise_level}, below_noise_{below_noise},
+          above_noise_{above_noise} {}
+
+  protected:
+    [[nodiscard]] auto count(const placement_context &, worldgen_random &,
+                             const block_pos &origin) const -> jint override {
+        const double noise = static_cast<double>(
+            biome_info_noise().get(static_cast<double>(origin.x) / 200.0,
+                                   static_cast<double>(origin.z) / 200.0));
+        return noise < noise_level_ ? below_noise_ : above_noise_;
+    }
+
+  private:
+    double noise_level_{0.0};
+    jint below_noise_{0};
+    jint above_noise_{0};
+};
+
+class noise_based_count_placement final : public repeated_count_placement {
+  public:
+    noise_based_count_placement(jint ratio, double factor, double offset)
+        : ratio_{ratio}, factor_{factor}, offset_{offset} {}
+
+  protected:
+    [[nodiscard]] auto count(const placement_context &, worldgen_random &,
+                             const block_pos &origin) const -> jint override {
+        const double noise = static_cast<double>(
+            biome_info_noise().get(static_cast<double>(origin.x) / factor_,
+                                   static_cast<double>(origin.z) / factor_));
+        return java_int_cast(std::ceil((noise + offset_) * ratio_));
+    }
+
+  private:
+    jint ratio_{0};
+    double factor_{1.0};
+    double offset_{0.0};
+};
+
+class surface_relative_threshold_filter final : public placement_modifier {
+  public:
+    surface_relative_threshold_filter(worldgen::heightmap_kind kind,
+                                      jint min_inclusive, jint max_inclusive)
+        : kind_{kind}, min_inclusive_{min_inclusive},
+          max_inclusive_{max_inclusive} {}
+
+    void modify(const placement_context &context, worldgen_random &,
+                const block_pos &origin,
+                std::vector<block_pos> &out) const override {
+        if (!context.height) {
+            return;
+        }
+        const jlong surface =
+            static_cast<jlong>(context.height(kind_, origin.x, origin.z));
+        const jlong min_y = surface + min_inclusive_;
+        const jlong max_y = surface + max_inclusive_;
+        if (min_y <= origin.y && origin.y <= max_y) {
+            out.push_back(origin);
+        }
+    }
+
+  private:
+    worldgen::heightmap_kind kind_{worldgen::heightmap_kind::world_surface};
+    jint min_inclusive_{0};
+    jint max_inclusive_{0};
+};
+
+/// Emits every cell of a randomly sized box. The reference samples the y size,
+/// then the two horizontal sizes, and emits x-major, then y, then z.
+class cuboid_placement final : public placement_modifier {
+  public:
+    cuboid_placement(std::unique_ptr<provider::int_provider> xz_size,
+                     std::unique_ptr<provider::int_provider> y_size,
+                     bool include_edges, bool include_interior)
+        : xz_size_{std::move(xz_size)}, y_size_{std::move(y_size)},
+          include_edges_{include_edges}, include_interior_{include_interior} {}
+
+    void modify(const placement_context &, worldgen_random &random,
+                const block_pos &origin,
+                std::vector<block_pos> &out) const override {
+        const jint height = y_size_->sample(random);
+        const jint width = xz_size_->sample(random);
+        const jint length = xz_size_->sample(random);
+        for (jint x = 0; x <= width; ++x) {
+            for (jint y = 0; y <= height; ++y) {
+                for (jint z = 0; z <= length; ++z) {
+                    const bool edge_x = x == 0 || x == width;
+                    const bool edge_y = y == 0 || y == height;
+                    const bool edge_z = z == 0 || z == length;
+                    const bool on_edge = (edge_x && edge_y) ||
+                                         (edge_y && edge_z) ||
+                                         (edge_x && edge_z);
+                    if (!include_edges_ && on_edge) {
+                        continue;
+                    }
+                    if (!include_interior_ && !edge_x && !edge_y && !edge_z) {
+                        continue;
+                    }
+                    out.push_back(block_pos{.x = origin.x + x,
+                                            .y = origin.y + y,
+                                            .z = origin.z + z});
+                }
+            }
+        }
+    }
+
+  private:
+    std::unique_ptr<provider::int_provider> xz_size_;
+    std::unique_ptr<provider::int_provider> y_size_;
+    bool include_edges_{true};
+    bool include_interior_{true};
+};
+
+class randomly_selected_placement final : public placement_modifier {
+  public:
+    explicit randomly_selected_placement(
+        std::vector<std::unique_ptr<placement_modifier>> placements)
+        : placements_{std::move(placements)} {}
+
+    void modify(const placement_context &context, worldgen_random &random,
+                const block_pos &origin,
+                std::vector<block_pos> &out) const override {
+        if (placements_.empty()) {
+            return;
+        }
+        const auto index = static_cast<std::size_t>(
+            random.next_int(static_cast<jint>(placements_.size())));
+        placements_[index]->modify(context, random, origin, out);
+    }
+
+  private:
+    std::vector<std::unique_ptr<placement_modifier>> placements_;
 };
 
 } // namespace
@@ -431,21 +611,38 @@ auto decode_placement(const data::json::value &document,
             std::make_unique<rarity_filter>(*chance)};
     }
     if (*type == "minecraft:offset") {
-        jint x = 0;
-        jint y = 0;
-        jint z = 0;
+        std::unique_ptr<provider::int_provider> x;
+        std::unique_ptr<provider::int_provider> y;
+        std::unique_ptr<provider::int_provider> z;
         for (const auto &[name, slot] :
              {std::pair{"x", &x}, std::pair{"y", &y}, std::pair{"z", &z}}) {
-            if (const auto *value = document.find(name); value != nullptr) {
-                auto parsed = as_int(*value);
-                if (!parsed) {
-                    return std::unexpected{parsed.error()};
-                }
-                *slot = *parsed;
+            const auto *value = document.find(name);
+            if (value == nullptr) {
+                continue;
             }
+            auto parsed = provider::int_provider::decode(*value);
+            if (!parsed) {
+                return std::unexpected{parsed.error()};
+            }
+            *slot = std::move(*parsed);
+        }
+        const auto constant_zero = [] {
+            auto decoded = provider::int_provider::decode(data::json::value{0});
+            return decoded ? std::move(*decoded)
+                           : std::unique_ptr<provider::int_provider>{};
+        };
+        if (!x) {
+            x = constant_zero();
+        }
+        if (!y) {
+            y = constant_zero();
+        }
+        if (!z) {
+            z = constant_zero();
         }
         return std::unique_ptr<placement_modifier>{
-            std::make_unique<offset_placement>(x, y, z)};
+            std::make_unique<offset_placement>(std::move(x), std::move(y),
+                                               std::move(z))};
     }
     if (*type == "minecraft:environment_scan") {
         const auto *direction = document.find("direction_of_search");
@@ -568,8 +765,157 @@ auto decode_placement(const data::json::value &document,
         return std::unique_ptr<placement_modifier>{
             std::make_unique<fixed_placement>(std::move(decoded))};
     }
+    if (*type == "minecraft:biome") {
+        return std::unique_ptr<placement_modifier>{
+            std::make_unique<biome_filter>()};
+    }
+    if (*type == "minecraft:noise_threshold_count") {
+        const auto *noise_level = document.find("noise_level");
+        const auto *below = document.find("below_noise");
+        const auto *above = document.find("above_noise");
+        if (noise_level == nullptr || below == nullptr || above == nullptr) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                "noise_threshold_count is missing a required field")};
+        }
+        const auto level = noise_level->as_double();
+        const auto below_value = below->as_int64();
+        const auto above_value = above->as_int64();
+        if (!level || !below_value || !above_value) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "noise_threshold_count has a non-numeric field")};
+        }
+        return std::unique_ptr<placement_modifier>{
+            std::make_unique<noise_threshold_count_placement>(
+                *level, static_cast<jint>(*below_value),
+                static_cast<jint>(*above_value))};
+    }
+    if (*type == "minecraft:noise_based_count") {
+        const auto *ratio = document.find("noise_to_count_ratio");
+        const auto *factor = document.find("noise_factor");
+        if (ratio == nullptr || factor == nullptr) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "noise_based_count is missing a required field")};
+        }
+        const auto ratio_value = ratio->as_int64();
+        const auto factor_value = factor->as_double();
+        if (!ratio_value || !factor_value) {
+            return std::unexpected{
+                make_error(error_code::parse_error,
+                           "noise_based_count has a non-numeric field")};
+        }
+        double offset = 0.0;
+        if (const auto *field = document.find("noise_offset");
+            field != nullptr) {
+            const auto value = field->as_double();
+            if (!value) {
+                return std::unexpected{value.error()};
+            }
+            offset = *value;
+        }
+        return std::unique_ptr<placement_modifier>{
+            std::make_unique<noise_based_count_placement>(
+                static_cast<jint>(*ratio_value), *factor_value, offset)};
+    }
+    if (*type == "minecraft:surface_relative_threshold_filter") {
+        const auto *heightmap_field = document.find("heightmap");
+        if (heightmap_field == nullptr) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                "surface_relative_threshold_filter has no heightmap")};
+        }
+        const auto name = heightmap_field->as_string();
+        if (!name) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                "surface_relative_threshold_filter heightmap is not a string")};
+        }
+        const auto kind = heightmap_kind(*name);
+        if (!kind) {
+            return std::unexpected{kind.error()};
+        }
+        jint min_inclusive = std::numeric_limits<jint>::min();
+        jint max_inclusive = std::numeric_limits<jint>::max();
+        if (const auto *field = document.find("min_inclusive");
+            field != nullptr) {
+            const auto value = field->as_int64();
+            if (!value) {
+                return std::unexpected{value.error()};
+            }
+            min_inclusive = static_cast<jint>(*value);
+        }
+        if (const auto *field = document.find("max_inclusive");
+            field != nullptr) {
+            const auto value = field->as_int64();
+            if (!value) {
+                return std::unexpected{value.error()};
+            }
+            max_inclusive = static_cast<jint>(*value);
+        }
+        return std::unique_ptr<placement_modifier>{
+            std::make_unique<surface_relative_threshold_filter>(
+                *kind, min_inclusive, max_inclusive)};
+    }
+    if (*type == "minecraft:cuboid") {
+        const auto *xz_field = document.find("xz_size");
+        const auto *y_field = document.find("y_size");
+        if (xz_field == nullptr || y_field == nullptr) {
+            return std::unexpected{make_error(
+                error_code::parse_error, "cuboid is missing a size field")};
+        }
+        auto xz_size = provider::int_provider::decode(*xz_field);
+        auto y_size = provider::int_provider::decode(*y_field);
+        if (!xz_size || !y_size) {
+            return std::unexpected{
+                make_error(error_code::parse_error, "cuboid size is invalid")};
+        }
+        bool include_edges = true;
+        bool include_interior = true;
+        if (const auto *edges = document.find("include_edges");
+            edges != nullptr) {
+            const auto value = edges->as_bool();
+            if (!value) {
+                return std::unexpected{value.error()};
+            }
+            include_edges = *value;
+        }
+        if (const auto *interior = document.find("include_interior");
+            interior != nullptr) {
+            const auto value = interior->as_bool();
+            if (!value) {
+                return std::unexpected{value.error()};
+            }
+            include_interior = *value;
+        }
+        return std::unique_ptr<placement_modifier>{
+            std::make_unique<cuboid_placement>(
+                std::move(*xz_size), std::move(*y_size), include_edges,
+                include_interior)};
+    }
+    if (*type == "minecraft:randomly_selected") {
+        const auto *placements = document.find("placements");
+        if (placements == nullptr || !placements->is_array() ||
+            placements->as_array()->empty()) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                "randomly_selected needs a non-empty placements list")};
+        }
+        std::vector<std::unique_ptr<placement_modifier>> decoded;
+        for (const auto &entry : *placements->as_array()) {
+            auto modifier = decode_placement(entry, states);
+            if (!modifier) {
+                return std::unexpected{modifier.error()};
+            }
+            decoded.push_back(std::move(*modifier));
+        }
+        return std::unique_ptr<placement_modifier>{
+            std::make_unique<randomly_selected_placement>(std::move(decoded))};
+    }
     return std::unexpected{
-        make_error(error_code::unsupported, "unsupported placement modifier")};
+        make_error(error_code::unsupported, "unsupported placement modifier '" +
+                                                std::string{*type} + "'")};
 }
 
 } // namespace refrain::worldgen::feature

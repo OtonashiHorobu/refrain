@@ -60,7 +60,13 @@ auto with_state_property(std::string_view key, std::string_view property,
                          std::string_view value) -> std::string {
     const auto open = key.find('[');
     if (open == std::string_view::npos) {
-        return std::string{key};
+        std::string expanded{key};
+        expanded.push_back('[');
+        expanded.append(property);
+        expanded.push_back('=');
+        expanded.append(value);
+        expanded.push_back(']');
+        return expanded;
     }
     const auto close = key.rfind(']');
     if (close == std::string_view::npos || close < open) {

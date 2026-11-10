@@ -2,6 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/worldgen/content.hpp>
 #include <refrain/worldgen/feature/feature_data.hpp>
 
 #include <refrain/core/io.hpp>
@@ -85,6 +86,11 @@ auto biome_lists(const data::json::value &document)
 } // namespace
 
 auto load_feature_data(std::string_view data_root) -> result<feature_data_set> {
+    const auto materialized = materialize_worldgen_data(data_root);
+    if (!materialized) {
+        return std::unexpected{materialized.error()};
+    }
+    data_root = *materialized;
     feature_data_set result;
     const auto namespaces = core::io::list_directory(data_root);
     if (!namespaces) {

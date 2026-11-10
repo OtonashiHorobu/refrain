@@ -2,8 +2,8 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// Java `BiomeManager`: the fuzzy biome lookup used by surface material rules
-// and feature placement. It picks one of the eight quart corners around a block
+// The fuzzy biome lookup used by surface material rules and feature
+// placement. It picks one of the eight quart corners around a block
 // position by the smallest "fiddled" distance, then resolves that quart with
 // the biome source.
 
@@ -16,7 +16,7 @@
 
 namespace refrain::worldgen {
 
-/// Java `BiomeResolver`: quart coordinates to a biome id.
+/// Maps quart coordinates to a biome id.
 class biome_resolver {
   public:
     biome_resolver() = default;
@@ -50,14 +50,14 @@ class climate_biome_resolver final : public biome_resolver {
     const climate_sampler *sampler_{nullptr};
 };
 
-/// Java `BiomeManager`.
+/// Fuzzy biome lookup around a block position.
 class biome_manager {
   public:
     /// `biome_zoom_seed` is already obfuscated; use `obfuscate_seed(seed)`.
     biome_manager(biome_resolver &resolver, jlong biome_zoom_seed)
         : resolver_{&resolver}, biome_zoom_seed_{biome_zoom_seed} {}
 
-    /// `BiomeManager.obfuscateSeed`: SHA-256 of the little-endian seed, first
+    /// Obfuscates the zoom seed: SHA-256 of the little-endian seed, first
     /// eight bytes read as a big-endian long.
     [[nodiscard]] static auto obfuscate_seed(jlong seed) -> jlong;
 

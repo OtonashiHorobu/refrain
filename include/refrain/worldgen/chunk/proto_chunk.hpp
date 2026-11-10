@@ -5,7 +5,7 @@
 // The mutable chunk the generation stages share before it becomes a level
 // chunk: dense block states, the 4x4x4 biome grid, the six heightmaps, block
 // entities and scheduled fluid post-processing. Status drives which heightmaps
-// a write updates, mirroring `ChunkStatus.heightmapsAfter`.
+// a write updates, following the heightmap set of the current status.
 
 #pragma once
 
@@ -13,12 +13,18 @@
 #include <refrain/worldgen/chunk/block_state.hpp>
 #include <refrain/worldgen/chunk/heightmap.hpp>
 #include <refrain/worldgen/chunk/status.hpp>
+#include <refrain/worldgen/structure/bbox.hpp>
+#include <refrain/worldgen/structure/fortress.hpp>
+#include <refrain/worldgen/structure/jigsaw.hpp>
+#include <refrain/worldgen/structure/monument.hpp>
+#include <refrain/worldgen/structure/stronghold.hpp>
 
 #include <array>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -34,8 +40,56 @@ struct block_pos {
                                       const block_pos &) = default;
 };
 
+struct structure_piece_record {
+    std::string type{};
+    jint min_x{0};
+    jint min_y{0};
+    jint min_z{0};
+    jint max_x{0};
+    jint max_y{0};
+    jint max_z{0};
+    jint orientation{-1};
+    std::string template_id{};
+    jint template_x{0};
+    jint template_y{0};
+    jint template_z{0};
+    jint template_rotation{0};
+    jint template_mirror{0};
+    jint template_pivot_x{0};
+    jint template_pivot_y{0};
+    jint template_pivot_z{0};
+    jint height_position{-1};
+    jint height_offset{0};
+    float integrity{1.0F};
+    bool large{false};
+    bool beached{false};
+    std::vector<structure::structure_bbox> entrances{};
+    jint sections{0};
+    bool rails{false};
+    bool spider{false};
+    bool two_floored{false};
+    bool mesa{false};
+    bool overwrite{true};
+    bool portal_valid{false};
+    std::string portal_placement{};
+    float portal_mossiness{0.0F};
+    bool portal_air_pocket{false};
+    bool portal_overgrown{false};
+    bool portal_vines{false};
+    bool portal_blackstone{false};
+    bool portal_cold{false};
+    std::optional<structure::monument_piece_data> monument{};
+    std::optional<structure::stronghold_piece_data> stronghold{};
+    std::optional<structure::fortress_piece_data> fortress{};
+    /// Pool-element pieces carry their element, ground level delta, liquid
+    /// setting and junctions.
+    std::optional<structure::jigsaw_piece_data> jigsaw{};
+    std::vector<structure_piece_record> children{};
+};
+
 struct structure_start {
     std::string structure{};
+    std::string step{};
     jint chunk_x{0};
     jint chunk_z{0};
     jint min_x{0};
@@ -44,6 +98,7 @@ struct structure_start {
     jint max_x{0};
     jint max_y{0};
     jint max_z{0};
+    std::vector<structure_piece_record> pieces{};
 };
 
 struct structure_reference {
@@ -121,7 +176,7 @@ class proto_chunk {
         return block_entities_;
     }
 
-    /// `ChunkAccess.markPosForPostProcessing`: packed `x | y<<4 | z<<8`.
+    /// Marks a position for post-processing: packed `x | y<<4 | z<<8`.
     void mark_post_processing(jint x, jint y, jint z);
     [[nodiscard]] auto post_processing() const
         -> const std::vector<std::vector<std::uint16_t>> & {

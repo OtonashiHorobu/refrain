@@ -194,6 +194,52 @@ suite<"worldgen/block-state-registry"> block_state_registry_tests = [] {
         std::filesystem::remove_all(root);
     };
 
+    "uninterned state traits follow the heightmap tags"_test = [] {
+        block_state_registry registry;
+        const auto stone = registry.intern("minecraft:stone",
+                                           {.air = false,
+                                            .blocks_motion = true,
+                                            .blocks_motion_no_leaves = true});
+        const auto leaves = registry.intern("minecraft:oak_leaves",
+                                            {.air = false,
+                                             .blocks_motion = true,
+                                             .blocks_motion_no_leaves = false});
+        expect(stone.has_value() && leaves.has_value());
+        if (!stone || !leaves) {
+            return;
+        }
+        const std::array<block_state_id, 2> motion{*stone, *leaves};
+        const std::array<block_state_id, 1> motion_no_leaves{*stone};
+        registry.add_tag("minecraft:blocks_motion_in_heightmap", motion);
+        registry.add_tag("minecraft:blocks_motion_in_heightmap_no_leaves",
+                         motion_no_leaves);
+
+        const auto leaf_variant =
+            registry.infer_traits("minecraft:oak_leaves[distance=7,"
+                                  "persistent=false]");
+        expect(leaf_variant.blocks_motion);
+        expect(!leaf_variant.blocks_motion_no_leaves);
+        const auto flower = registry.infer_traits("minecraft:dandelion");
+        expect(!flower.blocks_motion);
+        expect(!flower.blocks_motion_no_leaves);
+        const auto water = registry.infer_traits("minecraft:water[level=0]");
+        expect(water.fluid);
+        expect(water.water);
+        expect(!water.blocks_motion);
+        const auto snowy = registry.infer_traits("minecraft:dirt[snowy=true]");
+        expect(!snowy.air);
+        expect(!snowy.fluid);
+
+        block_state_registry untagged;
+        const auto plain_leaves = untagged.infer_traits("minecraft:oak_leaves");
+        expect(plain_leaves.blocks_motion);
+        expect(!plain_leaves.blocks_motion_no_leaves);
+        const auto plain_water = untagged.infer_traits("minecraft:water");
+        expect(plain_water.fluid);
+        expect(plain_water.water);
+        expect(!plain_water.blocks_motion);
+    };
+
     "the RVTB table and tag sets build a registry"_test = [] {
         const auto spec = sample_spec();
         const auto bytes = build_vanilla_tables(spec);
@@ -225,6 +271,7 @@ suite<"worldgen/block-state-registry"> block_state_registry_tests = [] {
         const auto water = registry->find("minecraft:water[level=0]");
         const auto slab =
             registry->find("minecraft:oak_slab[waterlogged=true]");
+        const auto slab_default = registry->find("minecraft:oak_slab");
         const auto bedrock = registry->find("minecraft:bedrock");
         expect(stone.has_value());
         expect(leaves.has_value());
@@ -244,6 +291,18 @@ suite<"worldgen/block-state-registry"> block_state_registry_tests = [] {
         expect(registry->traits(*water).air == false);
         expect(registry->traits(*slab).fluid);
         expect(registry->in_tag(*bedrock, "minecraft:uncarvable"));
+        expect(slab_default.has_value());
+        if (slab_default) {
+            expect(*slab_default != *slab);
+            expect(registry->name(*slab_default) ==
+                   "minecraft:oak_slab[waterlogged=false]");
+            const auto properties = registry->default_properties(*slab);
+            expect(properties.size() == 1U);
+            if (properties.size() == 1U) {
+                expect(properties[0].name == "waterlogged");
+                expect(properties[0].value == "false");
+            }
+        }
         expect(!registry->in_tag(*stone, "minecraft:uncarvable"));
         expect(registry->name(registry->air()) == "minecraft:air");
         expect(registry->vanilla_id(*stone) == 1);

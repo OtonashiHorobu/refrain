@@ -15,15 +15,30 @@ namespace refrain::worldgen::climate {
 namespace {
 
 auto square(coord value) noexcept -> coord {
-    // Java `Mth.square(long)` wraps on overflow; unsigned arithmetic keeps that
-    // defined before converting back.
+    // The reference squares a long with wrap-around; unsigned arithmetic keeps
+    // the multiplication well-defined before converting back.
     return static_cast<coord>(static_cast<std::uint64_t>(value) *
                               static_cast<std::uint64_t>(value));
 }
 
+auto magnitude(coord value) noexcept -> coord {
+    // Java's Math.abs(long) keeps the same bits for LONG_MIN.
+    return value < 0
+               ? static_cast<coord>(0ULL - static_cast<std::uint64_t>(value))
+               : value;
+}
+
 auto center(const parameter &value) noexcept -> coord {
-    // Java long division truncates toward zero, like C++.
-    return (value.min + value.max) / 2;
+    // The reference adds two longs with wrap-around, then divides toward zero.
+    const auto sum = static_cast<coord>(static_cast<std::uint64_t>(value.min) +
+                                        static_cast<std::uint64_t>(value.max));
+    return sum / 2;
+}
+
+auto wrapped_distance(coord minimum, coord maximum) noexcept -> coord {
+    // The reference subtracts with wrap-around before taking the magnitude.
+    return static_cast<coord>(static_cast<std::uint64_t>(maximum) -
+                              static_cast<std::uint64_t>(minimum));
 }
 
 } // namespace
@@ -144,13 +159,13 @@ auto parameter_list::build(std::vector<std::size_t> children) -> std::size_t {
     if (children.size() <= children_per_node) {
         std::stable_sort(children.begin(), children.end(),
                          [this](std::size_t left, std::size_t right) {
-                             coord left_magnitude = 0;
-                             coord right_magnitude = 0;
+                             std::uint64_t left_magnitude = 0;
+                             std::uint64_t right_magnitude = 0;
                              for (std::size_t d = 0; d < 7; ++d) {
-                                 left_magnitude +=
-                                     std::abs(center(nodes_[left].space[d]));
-                                 right_magnitude +=
-                                     std::abs(center(nodes_[right].space[d]));
+                                 left_magnitude += static_cast<std::uint64_t>(
+                                     magnitude(center(nodes_[left].space[d])));
+                                 right_magnitude += static_cast<std::uint64_t>(
+                                     magnitude(center(nodes_[right].space[d])));
                              }
                              return left_magnitude < right_magnitude;
                          });
@@ -198,8 +213,9 @@ auto parameter_list::build(std::vector<std::size_t> children) -> std::size_t {
         std::uint64_t total_cost = 0;
         for (const auto &bucket : buckets) {
             for (const auto &dimension_space : space_of(bucket)) {
-                total_cost += static_cast<std::uint64_t>(
-                    std::abs(dimension_space.max - dimension_space.min));
+                total_cost +=
+                    static_cast<std::uint64_t>(magnitude(wrapped_distance(
+                        dimension_space.min, dimension_space.max)));
             }
         }
         if (min_cost > total_cost) {

@@ -16,6 +16,7 @@
 #include <deque>
 #include <map>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -74,6 +75,9 @@ class block_state_registry final : public block_state_table {
                               std::uint16_t vanilla_id = no_block_state)
         -> result<block_state_id>;
 
+    /// Looks a state up by its canonical key. A bare block name resolves to
+    /// the block's default state, which is how the datapack spells a state
+    /// when it names no properties.
     [[nodiscard]] auto find(std::string_view key) const
         -> std::optional<block_state_id>;
     [[nodiscard]] auto size() const noexcept -> std::size_t {
@@ -82,7 +86,28 @@ class block_state_registry final : public block_state_table {
     [[nodiscard]] auto block(block_state_id id) const -> std::uint16_t;
     [[nodiscard]] auto vanilla_id(block_state_id id) const -> std::uint16_t;
 
+    /// Records the default state of `block`. `find` resolves a bare block
+    /// name to it, and the registry builder fills it from the block table.
+    void add_default_state(std::string_view block, block_state_id state);
+
+    /// Replaces the default-property table. A datapack state key that names a
+    /// block without properties can then answer the state-dependent questions
+    /// the reference asks its default state.
+    void set_block_defaults(block_default_map defaults);
+
     void add_tag(std::string_view tag, std::span<const block_state_id> states);
+
+    /// Tag members in the order the tag document listed them, without
+    /// duplicates. Empty when the tag is unknown.
+    [[nodiscard]] auto tag_states(std::string_view tag) const
+        -> std::span<const block_state_id>;
+
+    /// Traits for a state key that is not interned yet. When the registry
+    /// carries the heightmap motion tags, membership is decided by the block
+    /// name the tags list, matching how reference worlds classify states.
+    /// Without those tags the name alone decides: air and fluids never block,
+    /// leaves are excluded from the leaf-less variant.
+    [[nodiscard]] auto infer_traits(std::string_view key) const -> state_traits;
 
     // block_state_table
     [[nodiscard]] auto air() const -> block_state_id override;
@@ -91,6 +116,8 @@ class block_state_registry final : public block_state_table {
         -> std::string_view override;
     [[nodiscard]] auto in_tag(block_state_id id, std::string_view tag) const
         -> bool override;
+    [[nodiscard]] auto default_properties(block_state_id id) const
+        -> std::span<const block_default_property> override;
 
   private:
     std::deque<std::string> keys_{};
@@ -98,8 +125,21 @@ class block_state_registry final : public block_state_table {
     std::vector<std::uint16_t> blocks_{};
     std::vector<std::uint16_t> vanilla_ids_{};
     std::unordered_map<std::string_view, block_state_id> index_{};
+    std::map<std::string, block_state_id, std::less<>> defaults_{};
+    block_default_map default_properties_{};
     std::map<std::string, std::vector<block_state_id>, std::less<>> tags_{};
+    std::map<std::string, std::vector<block_state_id>, std::less<>>
+        ordered_tags_{};
+    std::map<std::string, std::set<std::string, std::less<>>, std::less<>>
+        tag_names_{};
 };
+
+/// Registers every tag target on `states`, interning target names that are not
+/// present with traits inferred from the name. Data readers that build a
+/// registry from generation output rather than the vanilla block table use it
+/// so predicates can query block tags.
+[[nodiscard]] auto apply_block_tags(block_state_registry &states,
+                                    const block_tag_set &tags) -> status;
 
 /// Builds a registry from an RVTB block table and the data pack's block tags.
 /// The tags supply the two motion-blocking traits; `waterlogged=true` and the

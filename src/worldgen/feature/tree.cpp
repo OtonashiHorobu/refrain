@@ -6,10 +6,15 @@
 
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/core/mth.hpp>
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
+#include <functional>
+#include <numbers>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -44,6 +49,37 @@ struct tree_bounds {
         return x + (max_x - min_x + 1) * (y + (max_y - min_y + 1) * z);
     }
 };
+
+struct tree_direction {
+    jint dx;
+    jint dy;
+    jint dz;
+};
+
+/// The six block faces in the order the reference enumerates them.
+constexpr std::array<tree_direction, 6> all_directions{{
+    {.dx = 0, .dy = -1, .dz = 0},
+    {.dx = 0, .dy = 1, .dz = 0},
+    {.dx = 0, .dy = 0, .dz = -1},
+    {.dx = 0, .dy = 0, .dz = 1},
+    {.dx = -1, .dy = 0, .dz = 0},
+    {.dx = 1, .dy = 0, .dz = 0},
+}};
+
+/// Fisher-Yates over indices, matching the reference's shuffle helper.
+auto shuffled(std::size_t count, worldgen_random &random)
+    -> std::vector<std::size_t> {
+    std::vector<std::size_t> order(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        order[i] = i;
+    }
+    for (std::size_t i = count; i > 1; --i) {
+        const auto swap_to =
+            static_cast<std::size_t>(random.next_int(static_cast<jint>(i)));
+        std::swap(order[i - 1], order[swap_to]);
+    }
+    return order;
+}
 
 void expand(tree_bounds &bounds, const block_pos &pos, bool &first) {
     if (first) {
@@ -644,6 +680,115 @@ void alter_ground_decorator::place(
     }
 }
 
+namespace {
+
+auto resolve_tree_state(const tree_decorator_context &context,
+                        std::string_view key) -> block_state_id {
+    if (const auto found = context.states.find(key); found.has_value()) {
+        return *found;
+    }
+    const auto traits = context.states.infer_traits(key);
+    const auto interned = context.states.intern(key, traits);
+    return interned ? *interned : no_block_state;
+}
+
+} // namespace
+
+void pale_moss_decorator::add_hanger(const tree_decorator_context &context,
+                                     const block_pos &start) const {
+    block_pos pos = start;
+    auto top =
+        resolve_tree_state(context, "minecraft:pale_hanging_moss[tip=true]");
+    auto body =
+        resolve_tree_state(context, "minecraft:pale_hanging_moss[tip=false]");
+    while (context.is_air(block_pos{.x = pos.x, .y = pos.y - 1, .z = pos.z}) &&
+           !(context.random.next_float() < 0.5F)) {
+        if (body != no_block_state) {
+            context.set_block(pos, body);
+        }
+        --pos.y;
+    }
+    if (top != no_block_state) {
+        context.set_block(pos, top);
+    }
+}
+
+void pale_moss_decorator::place(const tree_decorator_context &context) const {
+    if (context.logs.empty()) {
+        return;
+    }
+    const auto order = shuffled(context.logs.size(), context.random);
+    block_pos lowest = context.logs[order.front()];
+    for (const auto index : order) {
+        if (context.logs[index].y < lowest.y) {
+            lowest = context.logs[index];
+        }
+    }
+    if (context.random.next_float() < ground_probability_ &&
+        !patch_feature_.empty() && context.context.place_configured) {
+        (void)context.context.place_configured(
+            patch_feature_, context.random,
+            block_pos{.x = lowest.x, .y = lowest.y + 1, .z = lowest.z});
+    }
+    for (const auto &log : context.logs) {
+        if (context.random.next_float() < trunk_probability_) {
+            const block_pos below{.x = log.x, .y = log.y - 1, .z = log.z};
+            if (context.is_air(below)) {
+                add_hanger(context, below);
+            }
+        }
+    }
+    for (const auto &leaf : context.leaves) {
+        if (context.random.next_float() < leaves_probability_) {
+            const block_pos below{.x = leaf.x, .y = leaf.y - 1, .z = leaf.z};
+            if (context.is_air(below)) {
+                add_hanger(context, below);
+            }
+        }
+    }
+}
+
+void creaking_heart_decorator::place(
+    const tree_decorator_context &context) const {
+    if (context.logs.empty()) {
+        return;
+    }
+    if (!(context.random.next_float() < probability_)) {
+        return;
+    }
+    const auto order = shuffled(context.logs.size(), context.random);
+    constexpr std::array<block_pos, 6> neighbours{{
+        {.x = 0, .y = -1, .z = 0},
+        {.x = 0, .y = 1, .z = 0},
+        {.x = 0, .y = 0, .z = -1},
+        {.x = 0, .y = 0, .z = 1},
+        {.x = -1, .y = 0, .z = 0},
+        {.x = 1, .y = 0, .z = 0},
+    }};
+    for (const auto index : order) {
+        const auto &pos = context.logs[index];
+        bool surrounded = true;
+        for (const auto &offset : neighbours) {
+            const auto state = context.context.placement.region->state_at(
+                pos.x + offset.x, pos.y + offset.y, pos.z + offset.z);
+            if (!context.states.in_tag(state, "minecraft:logs")) {
+                surrounded = false;
+                break;
+            }
+        }
+        if (!surrounded) {
+            continue;
+        }
+        const auto heart = resolve_tree_state(
+            context,
+            "minecraft:creaking_heart[axis=y,natural=true,state=dormant]");
+        if (heart != no_block_state) {
+            context.set_block(pos, heart);
+        }
+        return;
+    }
+}
+
 auto fallen_tree_feature::place(feature_context &context,
                                 worldgen_random &random,
                                 const block_pos &origin) const -> bool {
@@ -683,7 +828,6 @@ auto fallen_tree_feature::place(feature_context &context,
         }
         (void)context.placement.region->set_block_state(pos.x, pos.y, pos.z,
                                                         state);
-        context.placement.chunk->mark_post_processing(pos.x, pos.y + 1, pos.z);
         return pos;
     };
     const auto decorate =
@@ -815,6 +959,11 @@ void tree_feature::place_leaves_row(feature_context &context,
                     (random.next_int(2) == 0 || y == 0)) {
                     skip = true;
                 }
+            } else if (foliage_ == foliage_kind::bush) {
+                if (min_dx == radius && min_dz == radius &&
+                    random.next_int(2) == 0) {
+                    skip = true;
+                }
             } else if (foliage_ == foliage_kind::acacia) {
                 if (y == 0
                         ? (min_dx > 1 || min_dz > 1) && dx != 0 && dz != 0
@@ -880,6 +1029,51 @@ void tree_feature::place_leaves_row(feature_context &context,
             }
         }
     }
+}
+
+auto tree_feature::place_leaf(feature_context &context, worldgen_random &random,
+                              const block_pos &pos,
+                              std::vector<block_pos> &leaves,
+                              bool &placed) const -> bool {
+    const auto current =
+        context.placement.region->state_at(pos.x, pos.y, pos.z);
+    const auto current_key = context.placement.states->name(current);
+    const auto persistent = state_property(current_key, "persistent");
+    if (persistent.has_value() && *persistent == "true") {
+        return false;
+    }
+    if (!valid_tree_pos(context, pos)) {
+        return false;
+    }
+    auto state = foliage_provider_->get(context.placement, random, pos);
+    const auto key = context.placement.states->name(state);
+    if (state_property(key, "waterlogged").has_value()) {
+        auto modified = std::string{key};
+        const bool water =
+            state_block_name(context.placement.states->name(
+                context.placement.region->state_at(pos.x, pos.y, pos.z))) ==
+            "minecraft:water";
+        modified = with_state_property(modified, "waterlogged",
+                                       water ? "true" : "false");
+        auto found = states_->find(modified);
+        if (!found) {
+            const auto interned = states_->intern(
+                modified, context.placement.states->traits(state));
+            if (interned) {
+                found = *interned;
+            }
+        }
+        if (found) {
+            state = *found;
+        }
+    }
+    if (!context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                   state)) {
+        return false;
+    }
+    leaves.push_back(pos);
+    placed = true;
+    return true;
 }
 
 void tree_feature::place_foliage(feature_context &context,
@@ -954,6 +1148,24 @@ void tree_feature::place_foliage(feature_context &context,
         }
         return;
     }
+    if (foliage_ == foliage_kind::jungle) {
+        const jint height =
+            double_trunk ? foliage_height : 1 + random.next_int(2);
+        for (jint yo = offset; yo >= offset - height; --yo) {
+            const jint current = leaf_radius + radius_offset + 1 - yo;
+            place_leaves_row(context, random, attachment, current, yo,
+                             double_trunk, leaves, placed);
+        }
+        return;
+    }
+    if (foliage_ == foliage_kind::bush) {
+        for (jint yo = offset; yo >= offset - foliage_height; --yo) {
+            const jint current = leaf_radius + radius_offset - 1 - yo;
+            place_leaves_row(context, random, attachment, current, yo,
+                             double_trunk, leaves, placed);
+        }
+        return;
+    }
     if (foliage_ == foliage_kind::fancy) {
         for (jint yo = offset; yo >= offset - foliage_height; --yo) {
             const jint current =
@@ -980,6 +1192,233 @@ void tree_feature::place_foliage(feature_context &context,
                 ++current;
             }
         }
+        return;
+    }
+    if (foliage_ == foliage_kind::random_spread) {
+        const block_pos position{
+            .x = attachment.x, .y = attachment.y + offset, .z = attachment.z};
+        for (jint i = 0; i < options_.random_spread_leaf_attempts; ++i) {
+            const block_pos pos{
+                .x = position.x + random.next_int(leaf_radius) -
+                     random.next_int(leaf_radius),
+                .y = position.y + random.next_int(foliage_height) -
+                     random.next_int(foliage_height),
+                .z = position.z + random.next_int(leaf_radius) -
+                     random.next_int(leaf_radius),
+            };
+            (void)place_leaf(context, random, pos, leaves, placed);
+        }
+        return;
+    }
+    if (foliage_ == foliage_kind::cherry) {
+        const block_pos foliage_pos{
+            .x = attachment.x, .y = attachment.y + offset, .z = attachment.z};
+        const jint current_radius = leaf_radius + radius_offset - 1;
+        const jint height_with_offset = foliage_height;
+        std::set<block_pos> placed_leaves(leaves.begin(), leaves.end());
+        const auto place_one = [&](const block_pos &pos) {
+            if (place_leaf(context, random, pos, leaves, placed)) {
+                placed_leaves.insert(pos);
+            }
+        };
+        const auto skip = [&](jint dx, jint y, jint dz, jint radius) -> bool {
+            if (y == -1 && (dx == radius || dz == radius) &&
+                random.next_float() < options_.cherry_wide_bottom_hole_chance) {
+                return true;
+            }
+            const bool corner = dx == radius && dz == radius;
+            if (radius > 2) {
+                return corner || (dx + dz > radius * 2 - 2 &&
+                                  random.next_float() <
+                                      options_.cherry_corner_hole_chance);
+            }
+            return corner &&
+                   random.next_float() < options_.cherry_corner_hole_chance;
+        };
+        const auto row = [&](jint radius, jint y) {
+            const jint extent = radius + (double_trunk ? 1 : 0);
+            for (jint dx = -radius; dx <= extent; ++dx) {
+                for (jint dz = -radius; dz <= extent; ++dz) {
+                    const jint min_dx =
+                        double_trunk ? std::min(std::abs(dx), std::abs(dx - 1))
+                                     : std::abs(dx);
+                    const jint min_dz =
+                        double_trunk ? std::min(std::abs(dz), std::abs(dz - 1))
+                                     : std::abs(dz);
+                    if (skip(min_dx, y, min_dz, radius)) {
+                        continue;
+                    }
+                    place_one(block_pos{.x = foliage_pos.x + dx,
+                                        .y = foliage_pos.y + y,
+                                        .z = foliage_pos.z + dz});
+                }
+            }
+        };
+        const auto extension = [&](const block_pos &pos, float chance) {
+            if (std::abs(pos.x - foliage_pos.x) +
+                    std::abs(pos.y - (foliage_pos.y - 1)) +
+                    std::abs(pos.z - foliage_pos.z) >=
+                7) {
+                return false;
+            }
+            if (random.next_float() > chance) {
+                return false;
+            }
+            place_one(pos);
+            return true;
+        };
+        const auto hanging_row = [&](jint radius, jint y) {
+            row(radius, y);
+            const jint extra = double_trunk ? 1 : 0;
+            constexpr std::array<std::pair<jint, jint>, 4> horizontal{{
+                {0, -1},
+                {1, 0},
+                {0, 1},
+                {-1, 0},
+            }};
+            for (std::size_t along = 0; along < horizontal.size(); ++along) {
+                const std::size_t to_edge = (along + 1) % horizontal.size();
+                const auto &[edge_dx, edge_dz] = horizontal[to_edge];
+                const auto &[along_dx, along_dz] = horizontal[along];
+                const bool positive = edge_dx > 0 || edge_dz > 0;
+                const jint offset_to_edge = positive ? radius + extra : radius;
+                block_pos pos{.x = foliage_pos.x,
+                              .y = foliage_pos.y + y - 1,
+                              .z = foliage_pos.z};
+                pos.x += edge_dx * offset_to_edge;
+                pos.z += edge_dz * offset_to_edge;
+                pos.x -= along_dx * radius;
+                pos.z -= along_dz * radius;
+                jint offset_along = -radius;
+                while (offset_along < radius + extra) {
+                    const block_pos above{
+                        .x = pos.x, .y = pos.y + 1, .z = pos.z};
+                    if (placed_leaves.contains(above) &&
+                        extension(pos, options_.cherry_hanging_leaves_chance)) {
+                        --pos.y;
+                        (void)extension(
+                            pos, options_.cherry_hanging_extension_chance);
+                        ++pos.y;
+                    }
+                    ++offset_along;
+                    pos.x += along_dx;
+                    pos.z += along_dz;
+                }
+            }
+        };
+        row(current_radius - 2, height_with_offset - 3);
+        row(current_radius - 1, height_with_offset - 4);
+        for (jint y = height_with_offset - 5; y >= 0; --y) {
+            row(current_radius, y);
+        }
+        hanging_row(current_radius, -1);
+        hanging_row(current_radius - 1, -2);
+        return;
+    }
+    if (foliage_ == foliage_kind::poplar) {
+        const block_pos foliage_pos{
+            .x = attachment.x, .y = attachment.y + offset, .z = attachment.z};
+        const jint current_radius = leaf_radius + radius_offset - 1;
+        const bool flip = random.next_boolean();
+        const jint height_with_offset = foliage_height;
+        const auto partial_row = [&](jint y) {
+            return height_with_offset - 1 == y || height_with_offset - 2 == y;
+        };
+        const auto corner_cut = [&](jint dx, jint dz, jint radius,
+                                    bool partial) {
+            const bool small = flip
+                                   ? ((dx > 0 && dz > 0) || (dz < 0 && dx < 0))
+                                   : ((dx > 0 && dz < 0) || (dz > 0 && dx < 0));
+            return small ? radius - 1 : (partial ? radius + 1 : radius);
+        };
+        const auto within = [](jint radius, jint abs_dx, jint abs_dz, jint cut,
+                               jint extra) {
+            return abs_dx + abs_dz <= radius * 2 - (cut + extra);
+        };
+        const auto row = [&](jint radius, jint y) {
+            const jint extent = radius + (double_trunk ? 1 : 0);
+            for (jint dx = -radius; dx <= extent; ++dx) {
+                for (jint dz = -radius; dz <= extent; ++dz) {
+                    const jint abs_dx = std::abs(dx);
+                    const jint abs_dz = std::abs(dz);
+                    const bool partial = partial_row(y);
+                    const jint cut = corner_cut(dx, dz, radius, partial);
+                    const bool edge = abs_dx == radius || abs_dz == radius;
+                    if (partial && edge) {
+                        continue;
+                    }
+                    const jint additional =
+                        random.next_float() <= options_.poplar_side_hole_chance
+                            ? 1
+                            : 0;
+                    if (!within(radius, abs_dx, abs_dz, cut, additional)) {
+                        continue;
+                    }
+                    (void)place_leaf(context, random,
+                                     block_pos{.x = foliage_pos.x + dx,
+                                               .y = foliage_pos.y + y,
+                                               .z = foliage_pos.z + dz},
+                                     leaves, placed);
+                }
+            }
+        };
+        const auto replace_with_log = [&](jint radius, jint y) {
+            const jint extent = radius + (double_trunk ? 1 : 0);
+            const bool partial = partial_row(y);
+            for (jint dx = -radius; dx <= extent; ++dx) {
+                for (jint dz = -radius; dz <= extent; ++dz) {
+                    const jint abs_dx = std::abs(dx);
+                    const jint abs_dz = std::abs(dz);
+                    const jint cut = corner_cut(dx, dz, radius, partial);
+                    const bool arm = (abs_dz == 0 && radius - abs_dx >= 4) ||
+                                     (abs_dx == 0 && radius - abs_dz >= 4);
+                    if (!within(radius, abs_dx, abs_dz, cut, 2) || !arm) {
+                        continue;
+                    }
+                    const block_pos pos{.x = foliage_pos.x + dx,
+                                        .y = foliage_pos.y + y,
+                                        .z = foliage_pos.z + dz};
+                    const auto current =
+                        context.placement.region->state_at(pos.x, pos.y, pos.z);
+                    const auto leaf =
+                        foliage_provider_->get(context.placement, random, pos);
+                    if (context.placement.states->name(current) !=
+                        context.placement.states->name(leaf)) {
+                        continue;
+                    }
+                    const auto state =
+                        trunk_provider_->get(context.placement, random, pos);
+                    auto modified =
+                        std::string{context.placement.states->name(state)};
+                    modified = with_state_property(modified, "axis",
+                                                   abs_dz == 0 ? "x" : "z");
+                    auto found = states_->find(modified);
+                    if (!found) {
+                        const auto interned = states_->intern(
+                            modified, context.placement.states->traits(state));
+                        if (interned) {
+                            found = *interned;
+                        }
+                    }
+                    if (found) {
+                        if (context.placement.region->set_block_state(
+                                pos.x, pos.y, pos.z, *found)) {
+                            leaves.push_back(pos);
+                            placed = true;
+                        }
+                    }
+                }
+            }
+        };
+        row(current_radius - 2, height_with_offset - 1);
+        row(current_radius - 1, height_with_offset - 2);
+        row(current_radius - 1, height_with_offset - 3);
+        for (jint y = height_with_offset - 4; y >= 1; --y) {
+            row(current_radius, y);
+        }
+        replace_with_log(current_radius, height_with_offset - 4);
+        row(current_radius - 1, 0);
+        row(std::clamp(current_radius - 2, 1, 2), -1);
         return;
     }
     const block_pos position{
@@ -1094,6 +1533,165 @@ void tree_feature::update_leaves(feature_context &context,
     }
 }
 
+auto tree_feature::place_roots(feature_context &context,
+                               worldgen_random &random, const block_pos &origin,
+                               const block_pos &trunk_origin) const -> bool {
+    auto &region = *context.placement.region;
+    const auto &states = *context.placement.states;
+    const auto state_at = [&](const block_pos &pos) {
+        return region.state_at(pos.x, pos.y, pos.z);
+    };
+    const auto valid_tree_pos = [&](const block_pos &pos) {
+        const auto state = state_at(pos);
+        return is_air_block_name(states.name(state)) ||
+               states.in_tag(state, "minecraft:replaceable_by_trees");
+    };
+    const auto can_grow_through = [&](block_state_id state) {
+        return !options_.mangrove_can_grow_through.empty() &&
+               states.in_tag(state, options_.mangrove_can_grow_through);
+    };
+    const auto can_place_root = [&](const block_pos &pos) {
+        return valid_tree_pos(pos) || can_grow_through(state_at(pos));
+    };
+    const auto is_muddy = [&](block_state_id state) {
+        const auto name = states.name(state);
+        return std::any_of(
+            options_.mangrove_muddy_roots_in.begin(),
+            options_.mangrove_muddy_roots_in.end(),
+            [&](const std::string &entry) { return name == entry; });
+    };
+    const auto waterlogged = [&](const block_pos &pos,
+                                 block_state_id state) -> block_state_id {
+        const auto key = states.name(state);
+        if (key.find("waterlogged=") == std::string_view::npos) {
+            return state;
+        }
+        auto modified = std::string{key};
+        modified = with_state_property(
+            modified, "waterlogged",
+            states.traits(state_at(pos)).water ? "true" : "false");
+        if (const auto found = states_->find(modified); found.has_value()) {
+            return *found;
+        }
+        const auto interned = states_->intern(modified, states.traits(state));
+        return interned ? *interned : state;
+    };
+    const auto write = [&](const block_pos &pos, block_state_id state) {
+        (void)region.set_block_state(pos.x, pos.y, pos.z,
+                                     waterlogged(pos, state));
+    };
+    const auto place_root = [&](const block_pos &pos) {
+        if (!can_place_root(pos)) {
+            return;
+        }
+        if (is_muddy(state_at(pos)) && options_.muddy_roots_provider) {
+            write(pos, options_.muddy_roots_provider->get(context.placement,
+                                                          random, pos));
+        } else {
+            write(pos,
+                  options_.root_provider->get(context.placement, random, pos));
+        }
+        if (!options_.above_root_provider) {
+            return;
+        }
+        if (random.next_float() >= options_.above_root_chance) {
+            return;
+        }
+        const block_pos above{.x = pos.x, .y = pos.y + 1, .z = pos.z};
+        if (!states.traits(state_at(above)).air) {
+            return;
+        }
+        write(above, options_.above_root_provider->get(context.placement,
+                                                       random, above));
+    };
+
+    std::vector<block_pos> root_positions;
+    block_pos column = origin;
+    while (column.y < trunk_origin.y) {
+        if (!can_place_root(column)) {
+            return false;
+        }
+        ++column.y;
+    }
+    root_positions.push_back(block_pos{
+        .x = trunk_origin.x, .y = trunk_origin.y - 1, .z = trunk_origin.z});
+    constexpr std::array<std::pair<jint, jint>, 4> horizontal{{
+        {0, -1},
+        {1, 0},
+        {0, 1},
+        {-1, 0},
+    }};
+    const auto potential_roots = [&](const block_pos &pos, jint direction,
+                                     const block_pos &root_origin) {
+        std::vector<block_pos> out;
+        const block_pos below{.x = pos.x, .y = pos.y - 1, .z = pos.z};
+        const auto &step = horizontal[static_cast<std::size_t>(direction)];
+        const block_pos next_to{
+            .x = pos.x + step.first, .y = pos.y, .z = pos.z + step.second};
+        const jint width = std::abs(pos.x - root_origin.x) +
+                           std::abs(pos.y - root_origin.y) +
+                           std::abs(pos.z - root_origin.z);
+        const jint max_width = options_.mangrove_max_root_width;
+        if (width > max_width - 3 && width <= max_width) {
+            if (random.next_float() < options_.mangrove_random_skew_chance) {
+                out.push_back(below);
+                out.push_back(block_pos{
+                    .x = next_to.x, .y = next_to.y - 1, .z = next_to.z});
+            } else {
+                out.push_back(below);
+            }
+        } else if (width > max_width) {
+            out.push_back(below);
+        } else if (random.next_float() < options_.mangrove_random_skew_chance) {
+            out.push_back(below);
+        } else if (random.next_boolean()) {
+            out.push_back(next_to);
+        } else {
+            out.push_back(below);
+        }
+        return out;
+    };
+    std::function<bool(const block_pos &, jint, jint, std::vector<block_pos> &)>
+        simulate;
+    simulate = [&](const block_pos &pos, jint direction, jint layer,
+                   std::vector<block_pos> &positions) -> bool {
+        if (layer == options_.mangrove_max_root_length ||
+            positions.size() >
+                static_cast<std::size_t>(options_.mangrove_max_root_length)) {
+            return false;
+        }
+        for (const auto &candidate :
+             potential_roots(pos, direction, trunk_origin)) {
+            if (!can_place_root(candidate)) {
+                continue;
+            }
+            positions.push_back(candidate);
+            if (!simulate(candidate, direction, layer + 1, positions)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    for (std::size_t direction = 0; direction < horizontal.size();
+         ++direction) {
+        const auto &[dx, dz] = horizontal[direction];
+        const block_pos pos{.x = trunk_origin.x + dx,
+                            .y = trunk_origin.y,
+                            .z = trunk_origin.z + dz};
+        std::vector<block_pos> positions;
+        if (!simulate(pos, static_cast<jint>(direction), 0, positions)) {
+            return false;
+        }
+        root_positions.insert(root_positions.end(), positions.begin(),
+                              positions.end());
+        root_positions.push_back(pos);
+    }
+    for (const auto &root : root_positions) {
+        place_root(root);
+    }
+    return true;
+}
+
 auto tree_feature::place(feature_context &context, worldgen_random &random,
                          const block_pos &origin) const -> bool {
     const jint tree_height = base_height_ +
@@ -1108,32 +1706,57 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
             std::max(4, tree_height - spruce_trunk_height_->sample(random));
     } else if (foliage_ == foliage_kind::mega_pine ||
                foliage_ == foliage_kind::pine) {
-        if (!mega_pine_crown_) {
+        if (!pine_foliage_height_) {
             return false;
         }
-        foliage_height = mega_pine_crown_->sample(random);
+        foliage_height = pine_foliage_height_->sample(random);
+    } else if (foliage_ == foliage_kind::cherry ||
+               foliage_ == foliage_kind::poplar ||
+               foliage_ == foliage_kind::random_spread) {
+        if (!options_.foliage_height) {
+            return false;
+        }
+        foliage_height = options_.foliage_height->sample(random);
     }
     jint leaf_radius = foliage_radius_->sample(random);
     if (foliage_ == foliage_kind::pine) {
         const jint trunk_height = tree_height - foliage_height;
         leaf_radius += random.next_int(std::max(trunk_height + 1, 1));
     }
-    const jint min_y = origin.y;
-    const jint max_y = origin.y + tree_height + 1;
+    block_pos trunk_origin = origin;
+    if (options_.has_root_placer()) {
+        trunk_origin.y += options_.root_trunk_offset_y->sample(random);
+    }
+    const jint min_y = std::min(origin.y, trunk_origin.y);
+    const jint max_y = std::max(origin.y, trunk_origin.y) + tree_height + 1;
     if (min_y < context.placement.chunk->min_y() + 1 ||
         max_y > context.placement.chunk->min_y() +
                     context.placement.chunk->height() + 1) {
         return false;
     }
+    const auto trunk_valid_pos = [&](const block_pos &pos) {
+        if (valid_tree_pos(context, pos)) {
+            return true;
+        }
+        return kind_ == trunk_kind::upwards_branching &&
+               !options_.upwards_can_grow_through.empty() &&
+               context.placement.states->in_tag(
+                   context.placement.region->state_at(pos.x, pos.y, pos.z),
+                   options_.upwards_can_grow_through);
+    };
+    const auto trunk_free = [&](const block_pos &pos) {
+        return is_free(context, pos) || trunk_valid_pos(pos);
+    };
     jint clipped = tree_height;
     for (jint y = 0; y <= tree_height + 1; ++y) {
         const jint radius = size_at_height(tree_height, y);
         bool blocked = false;
         for (jint x = -radius; x <= radius && !blocked; ++x) {
             for (jint z = -radius; z <= radius; ++z) {
-                const block_pos pos{
-                    .x = origin.x + x, .y = origin.y + y, .z = origin.z + z};
-                if (!is_free(context, pos) ||
+                const block_pos pos{.x = trunk_origin.x + x,
+                                    .y = trunk_origin.y + y,
+                                    .z = trunk_origin.z + z};
+                if (!trunk_free(pos) ||
                     (!ignore_vines_ && is_vine(context, pos))) {
                     clipped = y - 2;
                     blocked = true;
@@ -1153,9 +1776,15 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
         return false;
     }
 
+    if (options_.has_root_placer() &&
+        !place_roots(context, random, origin, trunk_origin)) {
+        return false;
+    }
+
     std::vector<block_pos> logs;
-    if (below_trunk_provider_) {
-        const block_pos below{.x = origin.x, .y = origin.y - 1, .z = origin.z};
+    if (below_trunk_provider_ && kind_ != trunk_kind::upwards_branching) {
+        const block_pos below{
+            .x = trunk_origin.x, .y = trunk_origin.y - 1, .z = trunk_origin.z};
         const auto state =
             below_trunk_provider_->get(context.placement, random, below);
         (void)context.placement.region->set_block_state(below.x, below.y,
@@ -1163,7 +1792,7 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
     }
     const auto place_log = [&](jint x, jint y, jint z) {
         const block_pos pos{.x = x, .y = y, .z = z};
-        if (!valid_tree_pos(context, pos)) {
+        if (!trunk_valid_pos(pos)) {
             return false;
         }
         const auto state = trunk_provider_->get(context.placement, random, pos);
@@ -1177,7 +1806,7 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
     const auto place_log_axis = [&](jint x, jint y, jint z, jint start_x,
                                     jint start_z) {
         const block_pos pos{.x = x, .y = y, .z = z};
-        if (!valid_tree_pos(context, pos)) {
+        if (!trunk_valid_pos(pos)) {
             return false;
         }
         const auto state = trunk_provider_->get(context.placement, random, pos);
@@ -1203,6 +1832,32 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
             return false;
         }
         if (!context.placement.region->set_block_state(x, y, z, *found)) {
+            return false;
+        }
+        logs.push_back(pos);
+        return true;
+    };
+    const auto place_log_with_axis = [&](const block_pos &pos,
+                                         std::string_view axis) {
+        if (!trunk_valid_pos(pos)) {
+            return false;
+        }
+        const auto state = trunk_provider_->get(context.placement, random, pos);
+        auto modified = std::string{context.placement.states->name(state)};
+        modified = with_state_property(modified, "axis", axis);
+        auto found = states_->find(modified);
+        if (!found) {
+            const auto interned = states_->intern(
+                modified, context.placement.states->traits(state));
+            if (interned) {
+                found = *interned;
+            }
+        }
+        if (!found) {
+            return false;
+        }
+        if (!context.placement.region->set_block_state(pos.x, pos.y, pos.z,
+                                                       *found)) {
             return false;
         }
         logs.push_back(pos);
@@ -1479,7 +2134,7 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
                 }
             }
         }
-    } else {
+    } else if (kind_ == trunk_kind::giant || kind_ == trunk_kind::mega_jungle) {
         const std::array<std::array<jint, 2>, 4> below_offsets{{
             {0, 0},
             {1, 0},
@@ -1522,6 +2177,279 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
                                              .y = origin.y + clipped,
                                              .z = origin.z},
                             .double_trunk = true});
+        if (kind_ == trunk_kind::mega_jungle) {
+            // Branch height and direction are drawn in the loop order the
+            // reference uses: one segment height, then one angle per limb.
+            for (jint branch_height = clipped - 2 - random.next_int(4);
+                 branch_height > clipped / 2;
+                 branch_height -= 2 + random.next_int(4)) {
+                const float angle = random.next_float() *
+                                    static_cast<float>(std::numbers::pi * 2.0);
+                jint branch_x = 0;
+                jint branch_z = 0;
+                for (jint step = 0; step < 5; ++step) {
+                    branch_x = static_cast<jint>(
+                        1.5F + mth::cos(angle) * static_cast<float>(step));
+                    branch_z = static_cast<jint>(
+                        1.5F + mth::sin(angle) * static_cast<float>(step));
+                    const block_pos pos{.x = origin.x + branch_x,
+                                        .y = origin.y + branch_height - 3 +
+                                             step / 2,
+                                        .z = origin.z + branch_z};
+                    if (!is_free(context, pos)) {
+                        continue;
+                    }
+                    const auto state =
+                        trunk_provider_->get(context.placement, random, pos);
+                    if (context.placement.region->set_block_state(
+                            pos.x, pos.y, pos.z, state)) {
+                        logs.push_back(pos);
+                    }
+                }
+                attachments.push_back(tree_attachment{
+                    .pos = block_pos{.x = origin.x + branch_x,
+                                     .y = origin.y + branch_height,
+                                     .z = origin.z + branch_z},
+                    .radius_offset = -2});
+            }
+        }
+    } else if (kind_ == trunk_kind::cherry) {
+        if (!options_.cherry_branch_count ||
+            !options_.cherry_branch_horizontal_length ||
+            !options_.cherry_branch_end_offset) {
+            return false;
+        }
+        constexpr std::array<std::pair<jint, jint>, 4> hdirs{{
+            {0, -1},
+            {1, 0},
+            {0, 1},
+            {-1, 0},
+        }};
+        const auto sample_uniform = [&](jint minimum, jint maximum) {
+            return minimum + random.next_int(maximum - minimum + 1);
+        };
+        const jint start_min = options_.cherry_branch_start_min;
+        const jint start_max = options_.cherry_branch_start_max;
+        const jint first_offset =
+            std::max(0, clipped - 1 + sample_uniform(start_min, start_max));
+        const jint second_offset =
+            std::max(0, clipped - 1 + sample_uniform(start_min, start_max - 1));
+        jint resolved_second = second_offset;
+        if (resolved_second >= first_offset) {
+            ++resolved_second;
+        }
+        const jint branches = options_.cherry_branch_count->sample(random);
+        const bool middle = branches == 3;
+        const bool both = branches >= 2;
+        jint trunk_height = first_offset + 1;
+        if (middle) {
+            trunk_height = clipped;
+        } else if (both) {
+            trunk_height = std::max(first_offset, resolved_second) + 1;
+        }
+        for (jint y = 0; y < trunk_height; ++y) {
+            (void)place_log(trunk_origin.x, trunk_origin.y + y, trunk_origin.z);
+        }
+        if (middle) {
+            attachments.push_back(tree_attachment{
+                .pos = block_pos{.x = trunk_origin.x,
+                                 .y = trunk_origin.y + trunk_height,
+                                 .z = trunk_origin.z}});
+        }
+        const auto generate_branch = [&](std::size_t direction, jint offset,
+                                         bool middle_continues) {
+            block_pos log_pos{.x = trunk_origin.x,
+                              .y = trunk_origin.y + offset,
+                              .z = trunk_origin.z};
+            const jint end_offset =
+                clipped - 1 + options_.cherry_branch_end_offset->sample(random);
+            const bool extend = middle_continues || end_offset < offset;
+            const jint distance =
+                options_.cherry_branch_horizontal_length->sample(random) +
+                (extend ? 1 : 0);
+            const auto &[dx, dz] = hdirs[direction];
+            const block_pos end{.x = trunk_origin.x + dx * distance,
+                                .y = trunk_origin.y + end_offset,
+                                .z = trunk_origin.z + dz * distance};
+            const jint horizontal_steps = extend ? 2 : 1;
+            const std::string_view side_axis = dx != 0 ? "x" : "z";
+            for (jint step = 0; step < horizontal_steps; ++step) {
+                log_pos.x += dx;
+                log_pos.z += dz;
+                (void)place_log_with_axis(log_pos, side_axis);
+            }
+            const jint vertical = end.y > log_pos.y ? 1 : -1;
+            for (;;) {
+                const jint remaining = std::abs(end.x - log_pos.x) +
+                                       std::abs(end.y - log_pos.y) +
+                                       std::abs(end.z - log_pos.z);
+                if (remaining == 0) {
+                    return tree_attachment{
+                        .pos =
+                            block_pos{.x = end.x, .y = end.y + 1, .z = end.z}};
+                }
+                const float chance =
+                    static_cast<float>(std::abs(end.y - log_pos.y)) /
+                    static_cast<float>(remaining);
+                const bool vertical_step = random.next_float() < chance;
+                if (vertical_step) {
+                    log_pos.y += vertical;
+                } else {
+                    log_pos.x += dx;
+                    log_pos.z += dz;
+                }
+                (void)place_log_with_axis(
+                    log_pos, vertical_step ? std::string_view{"y"} : side_axis);
+            }
+        };
+        const auto direction = static_cast<std::size_t>(random.next_int(4));
+        attachments.push_back(generate_branch(direction, first_offset,
+                                              first_offset < trunk_height - 1));
+        if (both) {
+            attachments.push_back(
+                generate_branch((direction + 2) % 4, resolved_second,
+                                resolved_second < trunk_height - 1));
+        }
+    } else if (kind_ == trunk_kind::poplar) {
+        if (!options_.poplar_trunk_above_branches ||
+            !options_.poplar_branch_amount) {
+            return false;
+        }
+        const jint trunk_up_to =
+            clipped - options_.poplar_trunk_above_branches->sample(random);
+        for (jint y = 0; y < clipped; ++y) {
+            (void)place_log(trunk_origin.x, trunk_origin.y + y, trunk_origin.z);
+            const auto order = shuffled(all_directions.size(), random);
+            if (trunk_up_to - 1 == y) {
+                const jint branches =
+                    options_.poplar_branch_amount->sample(random);
+                std::vector<std::size_t> directions;
+                for (const auto index : order) {
+                    if (all_directions[index].dy == 0) {
+                        directions.push_back(index);
+                    }
+                }
+                for (jint branch = 0;
+                     branch < branches &&
+                     branch < static_cast<jint>(directions.size());
+                     ++branch) {
+                    const auto &offset =
+                        all_directions[directions[static_cast<std::size_t>(
+                            branch)]];
+                    (void)place_log_with_axis(
+                        block_pos{.x = trunk_origin.x + offset.dx,
+                                  .y = trunk_origin.y + y,
+                                  .z = trunk_origin.z + offset.dz},
+                        offset.dx != 0 ? std::string_view{"x"}
+                                       : std::string_view{"z"});
+                }
+            }
+        }
+        attachments.push_back(
+            tree_attachment{.pos = block_pos{.x = trunk_origin.x,
+                                             .y = trunk_origin.y + trunk_up_to,
+                                             .z = trunk_origin.z}});
+    } else if (kind_ == trunk_kind::bending) {
+        if (!options_.bending_bend_length) {
+            return false;
+        }
+        constexpr std::array<std::pair<jint, jint>, 4> hdirs{{
+            {0, -1},
+            {1, 0},
+            {0, 1},
+            {-1, 0},
+        }};
+        const auto &[dx, dz] =
+            hdirs[static_cast<std::size_t>(random.next_int(4))];
+        const jint log_height = clipped - 1;
+        block_pos pos = trunk_origin;
+        for (jint i = 0; i <= log_height; ++i) {
+            if (i + 1 >= log_height + random.next_int(2)) {
+                pos.x += dx;
+                pos.z += dz;
+            }
+            if (valid_tree_pos(context, pos)) {
+                (void)place_log(pos.x, pos.y, pos.z);
+            }
+            if (i >= options_.bending_min_height_for_leaves) {
+                attachments.push_back(tree_attachment{.pos = pos});
+            }
+            ++pos.y;
+        }
+        const jint bend = options_.bending_bend_length->sample(random);
+        for (jint i = 0; i <= bend; ++i) {
+            if (valid_tree_pos(context, pos)) {
+                (void)place_log(pos.x, pos.y, pos.z);
+            }
+            attachments.push_back(tree_attachment{.pos = pos});
+            pos.x += dx;
+            pos.z += dz;
+        }
+    } else if (kind_ == trunk_kind::upwards_branching) {
+        if (!options_.upwards_extra_branch_steps ||
+            !options_.upwards_extra_branch_length) {
+            return false;
+        }
+        constexpr std::array<std::pair<jint, jint>, 4> hdirs{{
+            {0, -1},
+            {1, 0},
+            {0, 1},
+            {-1, 0},
+        }};
+        for (jint height_pos = 0; height_pos < clipped; ++height_pos) {
+            const jint current_height = trunk_origin.y + height_pos;
+            if (place_log(trunk_origin.x, current_height, trunk_origin.z) &&
+                height_pos < clipped - 1 &&
+                random.next_float() < options_.upwards_branch_probability) {
+                const auto &[dx, dz] =
+                    hdirs[static_cast<std::size_t>(random.next_int(4))];
+                const jint branch_length =
+                    options_.upwards_extra_branch_length->sample(random);
+                const jint branch_pos = std::max(
+                    0,
+                    branch_length -
+                        options_.upwards_extra_branch_length->sample(random) -
+                        1);
+                jint branch_steps =
+                    options_.upwards_extra_branch_steps->sample(random);
+                jint height_along = current_height + branch_pos;
+                jint log_x = trunk_origin.x;
+                jint log_z = trunk_origin.z;
+                jint index = branch_pos;
+                while (index < clipped && branch_steps > 0) {
+                    if (index >= 1) {
+                        const jint placement_height = current_height + index;
+                        log_x += dx;
+                        log_z += dz;
+                        height_along = placement_height;
+                        if (place_log(log_x, placement_height, log_z)) {
+                            height_along = placement_height + 1;
+                        }
+                        attachments.push_back(tree_attachment{
+                            .pos = block_pos{.x = log_x,
+                                             .y = placement_height,
+                                             .z = log_z}});
+                    }
+                    ++index;
+                    --branch_steps;
+                }
+                if (height_along - current_height > 1) {
+                    const block_pos foliage_pos{
+                        .x = log_x, .y = height_along, .z = log_z};
+                    attachments.push_back(tree_attachment{.pos = foliage_pos});
+                    attachments.push_back(
+                        tree_attachment{.pos = block_pos{.x = foliage_pos.x,
+                                                         .y = foliage_pos.y - 2,
+                                                         .z = foliage_pos.z}});
+                }
+            }
+            if (height_pos == clipped - 1) {
+                attachments.push_back(
+                    tree_attachment{.pos = block_pos{.x = trunk_origin.x,
+                                                     .y = current_height + 1,
+                                                     .z = trunk_origin.z}});
+            }
+        }
     }
 
     std::vector<block_pos> leaves;

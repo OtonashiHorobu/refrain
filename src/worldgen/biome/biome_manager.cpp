@@ -128,7 +128,7 @@ auto next_random(jlong value, jlong addend) noexcept -> jlong {
 
 auto get_fiddle(jlong value) noexcept -> double {
     const auto uniform =
-        static_cast<double>(floor_mod(value >> 24, 1024)) / 1024.0;
+        static_cast<double>(floor_mod(value >> 24, jlong{1024})) / 1024.0;
     return (uniform - 0.5) * 0.9;
 }
 
@@ -163,7 +163,8 @@ auto biome_manager::obfuscate_seed(jlong seed) -> jlong {
                                              (i * 8U));
     }
     const auto digest = sha256(bytes);
-    // Guava's `HashCode.asLong()` reads the first eight bytes little-endian.
+    // The reference reads the first eight digest bytes as a little-endian
+    // long.
     std::uint64_t value = 0;
     for (std::size_t i = 0; i < 8U; ++i) {
         value |= static_cast<std::uint64_t>(digest[i]) << (i * 8U);

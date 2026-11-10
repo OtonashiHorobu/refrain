@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// The `RuleTest` subset ore targets use: block/tag matches, height matches and
+// The rule-test subset ore targets use: block/tag matches, height matches and
 // the boolean combinators.
 
 #pragma once

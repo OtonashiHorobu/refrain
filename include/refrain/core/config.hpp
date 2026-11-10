@@ -8,6 +8,7 @@
 #include <refrain/core/io.hpp>
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <span>
 #include <string>
@@ -171,6 +172,10 @@ class view {
     ~view();
 
     [[nodiscard]] auto name() const noexcept -> std::string_view;
+
+    /// True when the view has a mounted snapshot. A default view is empty:
+    /// every getter returns its fallback and `contains` is false.
+    [[nodiscard]] auto valid() const noexcept -> bool;
 
     [[nodiscard]] auto contains(std::string_view key) const noexcept -> bool;
     [[nodiscard]] auto kind(std::string_view key) const noexcept -> value_kind;

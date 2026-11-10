@@ -7,6 +7,7 @@
 
 #include <boost/ut.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string_view>
@@ -167,6 +168,17 @@ suite<"worldgen/provider"> provider_tests = [] {
     };
 
     "malformed providers are rejected"_test = [] {
+        auto normal = float_provider::decode(parse(
+            R"({"type":"minecraft:clamped_normal","mean":0.1,"deviation":0.3,"min":0.1,"max":0.9})"));
+        expect(normal.has_value());
+        if (normal) {
+            auto random = pool();
+            const float expected[] = {0.1F, 0.2765309F, 0.38464144F, 0.1F,
+                                      0.1F};
+            for (const auto value : expected) {
+                expect(std::abs((*normal)->sample(random) - value) < 1e-6F);
+            }
+        }
         expect(!int_provider::decode(parse("{}")).has_value());
         expect(
             !int_provider::decode(

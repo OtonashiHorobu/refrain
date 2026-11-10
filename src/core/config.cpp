@@ -891,6 +891,10 @@ auto view::name() const noexcept -> std::string_view {
                             : std::string_view{};
 }
 
+auto view::valid() const noexcept -> bool {
+    return impl_ != nullptr;
+}
+
 auto view::contains(std::string_view key) const noexcept -> bool {
     return impl_ != nullptr && flat_node(impl_->table, key) != nullptr;
 }

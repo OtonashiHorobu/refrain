@@ -68,8 +68,8 @@ const suite schema_generator_tests = [] {
             return;
         }
         expect(first->source_count == 1U);
-        // c abi + cpp + 2 aggregators + the reflection index.
-        expect(first->files.size() == 5U);
+        // c abi + cpp + 2 aggregators + reflection + metadata + Rust.
+        expect(first->files.size() == 7U);
         expect(first->schema_hash.size() == 16U);
 
         const auto *abi{find_file(*first, "c/refrain/contracts/demo_abi.h")};

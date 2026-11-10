@@ -21,7 +21,12 @@ enum class trunk_kind : std::uint8_t {
     forking,
     fancy,
     dark_oak,
-    giant
+    giant,
+    mega_jungle,
+    cherry,
+    poplar,
+    bending,
+    upwards_branching
 };
 
 class tree_feature;
@@ -158,6 +163,39 @@ class leave_vine_decorator final : public tree_decorator {
   private:
     float probability_{0.0F};
 };
+/// Hangs pale moss under leaves and logs and optionally runs the pale moss
+/// patch feature above the lowest log.
+class pale_moss_decorator final : public tree_decorator {
+  public:
+    pale_moss_decorator(float leaves_probability, float trunk_probability,
+                        float ground_probability, std::string patch_feature)
+        : leaves_probability_{leaves_probability},
+          trunk_probability_{trunk_probability},
+          ground_probability_{ground_probability},
+          patch_feature_{std::move(patch_feature)} {}
+    void place(const tree_decorator_context &context) const override;
+
+  private:
+    void add_hanger(const tree_decorator_context &context,
+                    const block_pos &pos) const;
+
+    float leaves_probability_{0.0F};
+    float trunk_probability_{0.0F};
+    float ground_probability_{0.0F};
+    std::string patch_feature_{};
+};
+
+/// Replaces one fully surrounded log with a dormant, natural creaking heart.
+class creaking_heart_decorator final : public tree_decorator {
+  public:
+    explicit creaking_heart_decorator(float probability)
+        : probability_{probability} {}
+    void place(const tree_decorator_context &context) const override;
+
+  private:
+    float probability_{0.0F};
+};
+
 class fallen_tree_feature final : public feature {
   public:
     fallen_tree_feature(block_state_registry &states,
@@ -188,7 +226,57 @@ enum class foliage_kind : std::uint8_t {
     fancy,
     dark_oak,
     mega_pine,
-    pine
+    pine,
+    jungle,
+    bush,
+    cherry,
+    poplar,
+    random_spread
+};
+
+/// Parameters the placers beyond the shared height/radius pair need, plus the
+/// optional mangrove root placer.
+struct tree_placer_options {
+    /// Cherry trunk.
+    std::unique_ptr<provider::int_provider> cherry_branch_count{};
+    std::unique_ptr<provider::int_provider> cherry_branch_horizontal_length{};
+    jint cherry_branch_start_min{0};
+    jint cherry_branch_start_max{0};
+    std::unique_ptr<provider::int_provider> cherry_branch_end_offset{};
+    /// Poplar trunk.
+    std::unique_ptr<provider::int_provider> poplar_trunk_above_branches{};
+    std::unique_ptr<provider::int_provider> poplar_branch_amount{};
+    /// Bending trunk.
+    jint bending_min_height_for_leaves{1};
+    std::unique_ptr<provider::int_provider> bending_bend_length{};
+    /// Upwards branching trunk.
+    std::unique_ptr<provider::int_provider> upwards_extra_branch_steps{};
+    std::unique_ptr<provider::int_provider> upwards_extra_branch_length{};
+    float upwards_branch_probability{0.0F};
+    std::string upwards_can_grow_through{};
+    /// Cherry, poplar and random-spread foliage.
+    std::unique_ptr<provider::int_provider> foliage_height{};
+    float cherry_wide_bottom_hole_chance{0.0F};
+    float cherry_corner_hole_chance{0.0F};
+    float cherry_hanging_leaves_chance{0.0F};
+    float cherry_hanging_extension_chance{0.0F};
+    float poplar_side_hole_chance{0.0F};
+    jint random_spread_leaf_attempts{0};
+    /// Mangrove root placer.
+    std::unique_ptr<provider::int_provider> root_trunk_offset_y{};
+    std::unique_ptr<state_provider> root_provider{};
+    std::unique_ptr<state_provider> above_root_provider{};
+    float above_root_chance{0.0F};
+    std::string mangrove_can_grow_through{};
+    std::vector<std::string> mangrove_muddy_roots_in{};
+    std::unique_ptr<state_provider> muddy_roots_provider{};
+    jint mangrove_max_root_width{0};
+    jint mangrove_max_root_length{0};
+    float mangrove_random_skew_chance{0.0F};
+
+    [[nodiscard]] auto has_root_placer() const -> bool {
+        return root_trunk_offset_y != nullptr;
+    }
 };
 
 class tree_feature final : public feature {
@@ -202,12 +290,13 @@ class tree_feature final : public feature {
                  std::unique_ptr<provider::int_provider> foliage_radius,
                  std::unique_ptr<provider::int_provider> foliage_offset,
                  std::unique_ptr<provider::int_provider> spruce_trunk_height,
-                 std::unique_ptr<provider::int_provider> mega_pine_crown,
+                 std::unique_ptr<provider::int_provider> pine_foliage_height,
                  jint foliage_height, jint size_limit, jint lower_size,
                  jint upper_size, bool three_layers, jint upper_limit,
                  jint middle_size, bool has_min_clipped, jint min_clipped,
                  bool ignore_vines,
-                 std::vector<std::unique_ptr<tree_decorator>> decorators = {})
+                 std::vector<std::unique_ptr<tree_decorator>> decorators = {},
+                 tree_placer_options options = {})
         : states_{&states}, kind_{kind}, foliage_{foliage},
           trunk_provider_{std::move(trunk_provider)},
           foliage_provider_{std::move(foliage_provider)},
@@ -217,13 +306,13 @@ class tree_feature final : public feature {
           foliage_radius_{std::move(foliage_radius)},
           foliage_offset_{std::move(foliage_offset)},
           spruce_trunk_height_{std::move(spruce_trunk_height)},
-          mega_pine_crown_{std::move(mega_pine_crown)},
+          pine_foliage_height_{std::move(pine_foliage_height)},
           foliage_height_{foliage_height}, size_limit_{size_limit},
           lower_size_{lower_size}, upper_size_{upper_size},
           three_layers_{three_layers}, upper_limit_{upper_limit},
           middle_size_{middle_size}, has_min_clipped_{has_min_clipped},
           min_clipped_{min_clipped}, ignore_vines_{ignore_vines},
-          decorators_{std::move(decorators)} {}
+          decorators_{std::move(decorators)}, options_{std::move(options)} {}
 
     [[nodiscard]] auto place(feature_context &context, worldgen_random &random,
                              const block_pos &origin) const -> bool override;
@@ -244,7 +333,18 @@ class tree_feature final : public feature {
                           const block_pos &origin, jint radius, jint y,
                           bool double_trunk, std::vector<block_pos> &leaves,
                           bool &placed) const;
+    /// Places one leaf state if the position admits it, consuming the foliage
+    /// provider draw like the shared leaf setter.
+    [[nodiscard]] auto place_leaf(feature_context &context,
+                                  worldgen_random &random, const block_pos &pos,
+                                  std::vector<block_pos> &leaves,
+                                  bool &placed) const -> bool;
     [[nodiscard]] auto size_at_height(jint tree_height, jint y) const -> jint;
+    /// Places the mangrove root system; false when a root column is blocked.
+    [[nodiscard]] auto place_roots(feature_context &context,
+                                   worldgen_random &random,
+                                   const block_pos &origin,
+                                   const block_pos &trunk_origin) const -> bool;
 
     void update_leaves(feature_context &context,
                        const std::vector<block_pos> &logs,
@@ -262,7 +362,7 @@ class tree_feature final : public feature {
     std::unique_ptr<provider::int_provider> foliage_radius_{};
     std::unique_ptr<provider::int_provider> foliage_offset_{};
     std::unique_ptr<provider::int_provider> spruce_trunk_height_{};
-    std::unique_ptr<provider::int_provider> mega_pine_crown_{};
+    std::unique_ptr<provider::int_provider> pine_foliage_height_{};
     jint foliage_height_{0};
     jint size_limit_{1};
     jint lower_size_{0};
@@ -274,6 +374,7 @@ class tree_feature final : public feature {
     jint min_clipped_{0};
     bool ignore_vines_{false};
     std::vector<std::unique_ptr<tree_decorator>> decorators_{};
+    tree_placer_options options_{};
 };
 
 } // namespace refrain::worldgen::feature
