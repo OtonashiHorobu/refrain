@@ -1040,6 +1040,9 @@ grep -q '"schema":"refrain.data-manifest/1"' \
 [[ -f "$EXTRACT_DIR/cooked/data/minecraft/recipe/stone.json" ]] \
     || die "extract: data/minecraft/recipe/stone.json was not written"
 echo "  manifest + data extraction OK"
+python3 tools/worldgen/test_extract_templates.py \
+    || die "worldgen: template extractor accepted an unsafe path"
+echo "  template extractor: traversal and absolute paths rejected"
 
 say "[10/11] Crashpad minidump smoke"
 HANDLER="$(find "$CONAN_HOME_DIR" -type f -name crashpad_handler \

@@ -20,15 +20,35 @@ import json
 import pathlib
 import zipfile
 
+# A hostile or corrupt jar is untrusted input: the extractor writes files, so
+# it bounds the entry count and the decompressed bytes, and it refuses any
+# entry whose name leaves the output directory.
+max_entries = 20_000
+max_entry_bytes = 16 * 1024 * 1024
+max_total_bytes = 256 * 1024 * 1024
 
-def read_inner_jar(outer: zipfile.ZipFile) -> zipfile.ZipFile:
-    version = json.loads(outer.read("version.json"))["id"]
+
+def read_inner_jar(outer: zipfile.ZipFile, version: str) -> zipfile.ZipFile:
     inner_path = f"META-INF/versions/{version}/server-{version}.jar"
     try:
         payload = outer.read(inner_path)
     except KeyError as error:
         raise SystemExit(f"server jar has no {inner_path}") from error
     return zipfile.ZipFile(io.BytesIO(payload))
+
+
+def template_relative_path(name: str) -> pathlib.PurePosixPath:
+    """Return the path below the output directory, or stop on an unsafe name."""
+    relative = pathlib.PurePosixPath(name[len("data/") :])
+    if (
+        not relative.parts
+        or relative.is_absolute()
+        or ".." in relative.parts
+        or "\\" in name
+        or (relative.parts and ":" in relative.parts[0])
+    ):
+        raise SystemExit(f"server jar has an unsafe template path: {name}")
+    return relative
 
 
 def main() -> int:
@@ -40,7 +60,7 @@ def main() -> int:
 
     with zipfile.ZipFile(args.server_jar) as outer:
         version = args.version or json.loads(outer.read("version.json"))["id"]
-        inner = read_inner_jar(outer)
+        inner = read_inner_jar(outer, version)
         entries = sorted(
             name
             for name in inner.namelist()
@@ -50,15 +70,29 @@ def main() -> int:
         )
         if not entries:
             raise SystemExit("server jar has no structure templates")
+        if len(entries) > max_entries:
+            raise SystemExit(
+                f"server jar has too many templates: {len(entries)}"
+            )
+        output_root = args.out.resolve()
         digest = hashlib.sha256()
         count = 0
+        total_bytes = 0
         for name in entries:
-            relative = name[len("data/") :]
-            destination = args.out / relative
+            relative = template_relative_path(name)
+            destination = (args.out / relative).resolve()
+            if not destination.is_relative_to(output_root):
+                raise SystemExit(f"template path escapes the output: {name}")
+            size = inner.getinfo(name).file_size
+            if size > max_entry_bytes:
+                raise SystemExit(f"template entry is too large: {name}")
+            total_bytes += size
+            if total_bytes > max_total_bytes:
+                raise SystemExit("server jar has too many template bytes")
             destination.parent.mkdir(parents=True, exist_ok=True)
             payload = inner.read(name)
             destination.write_bytes(payload)
-            digest.update(relative.encode("utf-8"))
+            digest.update(str(relative).encode("utf-8"))
             digest.update(b"\0")
             digest.update(payload)
             count += 1
