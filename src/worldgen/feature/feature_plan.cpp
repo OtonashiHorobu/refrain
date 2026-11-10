@@ -28,8 +28,6 @@ struct feature_data {
         }
         return left.step < right.step;
     }
-    friend auto operator==(const feature_data &, const feature_data &)
-        -> bool = default;
 };
 
 auto depth_first_search(
