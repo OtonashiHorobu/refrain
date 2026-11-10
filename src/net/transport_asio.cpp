@@ -279,10 +279,8 @@ void transport_impl::stop() noexcept {
             connection->finish("transport stopped");
         }
     });
-    // Let the posted cleanup run: stopping the context here would discard it,
-    // so open sessions would never report their close. Releasing the work
-    // guard lets the io threads drain and return once the handlers finish.
     work_.reset();
+    context_.stop();
     for (auto &thread : threads_) {
         if (thread.joinable()) {
             thread.join();
