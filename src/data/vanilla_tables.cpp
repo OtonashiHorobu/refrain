@@ -861,11 +861,15 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
         if (read_u32(bytes, base) >= table.info_.strings) {
             return std::unexpected{fail("block name out of range")};
         }
-        if (count == 0 || first + count > table.info_.states ||
-            default_state < first || default_state >= first + count) {
+        if (count == 0 ||
+            static_cast<std::uint64_t>(first) + count > table.info_.states ||
+            default_state < first ||
+            static_cast<std::uint64_t>(default_state) >=
+                static_cast<std::uint64_t>(first) + count) {
             return std::unexpected{fail("block state range invalid")};
         }
-        if (first_property + property_count > table.block_properties_.size) {
+        if (static_cast<std::uint64_t>(first_property) + property_count >
+            table.block_properties_.size) {
             return std::unexpected{fail("block property range invalid")};
         }
     }
@@ -877,7 +881,8 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
             return std::unexpected{fail("property name out of range")};
         }
         if (value_count_property == 0 ||
-            first_value + value_count_property > value_count) {
+            static_cast<std::uint64_t>(first_value) + value_count_property >
+                value_count) {
             return std::unexpected{fail("property value range invalid")};
         }
     }
@@ -922,8 +927,12 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
         const auto base = table.biomes_.offset + 4U + i * preset_record_size;
         const auto first_entry = read_u32(bytes, base + 4);
         const auto entry_count = read_u32(bytes, base + 8);
-        const auto required = 4U + table.info_.presets * preset_record_size +
-                              (first_entry + entry_count) * biome_entry_size;
+        const auto required =
+            4ULL +
+            static_cast<std::uint64_t>(table.info_.presets) *
+                preset_record_size +
+            (static_cast<std::uint64_t>(first_entry) + entry_count) *
+                biome_entry_size;
         if (read_u32(bytes, base) >= table.info_.strings ||
             required > table.biomes_.size) {
             return std::unexpected{fail("biome preset record invalid")};
@@ -934,9 +943,12 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
             table.registries_.offset + 4U + i * registry_record_size;
         const auto first_entry = read_u32(bytes, base + 4);
         const auto entry_count = read_u32(bytes, base + 8);
-        const auto required = 4U +
-                              table.info_.registries * registry_record_size +
-                              (first_entry + entry_count) * registry_entry_size;
+        const auto required =
+            4ULL +
+            static_cast<std::uint64_t>(table.info_.registries) *
+                registry_record_size +
+            (static_cast<std::uint64_t>(first_entry) + entry_count) *
+                registry_entry_size;
         if (read_u32(bytes, base) >= table.info_.strings ||
             required > table.registries_.size) {
             return std::unexpected{fail("registry record invalid")};
