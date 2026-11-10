@@ -15,6 +15,7 @@
 #include <deque>
 #include <functional>
 #include <limits>
+#include <stdexcept>
 #include <unordered_map>
 #include <utility>
 
