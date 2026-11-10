@@ -2,6 +2,8 @@
 #
 # SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+import os
+
 from conan import ConanFile
 from conan.errors import ConanException
 from conan.tools.cmake import CMakeDeps, CMakeToolchain, cmake_layout
@@ -247,6 +249,15 @@ class RefrainConan(ConanFile):
             branch = (git.run("symbolic-ref --short -q HEAD") or "").strip()
         except ConanException:
             branch = ""
+        if not branch:
+            # A detached checkout has no symbolic HEAD. CI still names the
+            # source branch in the environment, so the version string keeps
+            # the [branch@commit] metadata crash symbolication relies on.
+            branch = (
+                os.environ.get("GITHUB_HEAD_REF")
+                or os.environ.get("GITHUB_REF_NAME")
+                or ""
+            ).strip()
         try:
             commit = (git.run("rev-parse --short HEAD") or "").strip()
         except ConanException:
