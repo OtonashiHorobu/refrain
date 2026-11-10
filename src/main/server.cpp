@@ -717,7 +717,7 @@ int main(int argc, char **argv) {
                 refrain::log::warn("config: unknown server.properties key '{}'",
                                    key);
             }
-            refrain::log::info("config: imported {} propert(ies) from {}",
+            refrain::log::info("config: imported properties={} source={}",
                                imported->applied, import_properties_path);
         }
         if (auto view{config_store.module("world")}) {
@@ -809,7 +809,7 @@ int main(int argc, char **argv) {
             !status) {
             return report_error(status.error());
         }
-        refrain::log::info("config: {} namespace(s) from {}",
+        refrain::log::info("config: namespaces={} source={}",
                            config_store.names().size(), config_dir);
     }
 

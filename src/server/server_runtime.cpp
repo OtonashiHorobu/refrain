@@ -601,7 +601,8 @@ void execute_config_command(std::span<const std::string_view> tokens,
             }
             joined += name;
         }
-        refrain::log::info("config: {} namespace(s): {}", names.size(), joined);
+        refrain::log::info("config: namespaces={} list={}", names.size(),
+                           joined);
         return;
     }
     if (tokens.size() >= 2 && tokens[1] == "save") {
@@ -671,7 +672,7 @@ void execute_config_command(std::span<const std::string_view> tokens,
                                module->get_string(key, ""));
         } else if (kind == cfg::value_kind::array) {
             const auto values{module->get_strings(key)};
-            refrain::log::info("config: {}.{} = {} string(s)", name_space, key,
+            refrain::log::info("config: {}.{} = {} strings", name_space, key,
                                values.size());
         } else {
             refrain::log::info("config: {}.{} = <table>", name_space, key);
@@ -1449,8 +1450,7 @@ auto run_server(const server_run_options &options) -> int {
                                 built.error().message);
         } else {
             spawn_chunks = std::move(*built);
-            refrain::log::info("network: encoded {} spawn chunk(s)",
-                               spawn_chunks.size());
+            refrain::log::info("network: spawn_chunks={}", spawn_chunks.size());
         }
     }
     auto command_environment{
