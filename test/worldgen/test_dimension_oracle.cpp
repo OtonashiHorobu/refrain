@@ -98,14 +98,14 @@ auto ceil_log2(std::size_t value) -> int {
     return bits;
 }
 
-auto int_value(const data::nbt::value &tag) -> std::optional<jint> {
-    if (const auto value = tag.as_int(); value.has_value()) {
+auto int_value(const data::nbt::value &nbt_tag) -> std::optional<jint> {
+    if (const auto value = nbt_tag.as_int(); value.has_value()) {
         return *value;
     }
-    if (const auto value = tag.as_short(); value.has_value()) {
+    if (const auto value = nbt_tag.as_short(); value.has_value()) {
         return *value;
     }
-    if (const auto value = tag.as_byte(); value.has_value()) {
+    if (const auto value = nbt_tag.as_byte(); value.has_value()) {
         return *value;
     }
     return std::nullopt;
