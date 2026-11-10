@@ -1,8 +1,8 @@
 # Agent and contributor guide
 
-Refrain is a clean-room C++26 implementation of a Minecraft Java Edition 26.3
-server. The repository ships code, contracts, tests and user documentation; it
-does not ship game code, assets or data.
+Refrain is a C++26 reimplementation of a Minecraft Java Edition 26.3 server.
+The repository ships code, contracts, tests and user documentation; it ships no
+game code and no game assets.
 
 ## Ground rules
 
@@ -10,10 +10,18 @@ Read the surrounding code, tests and documentation before changing behavior.
 Prefer the smallest change that solves the problem, and keep unrelated
 refactors out of the same commit.
 
-Do not copy code, assets or data from Minecraft or from any decompiled source.
-Behavior may be studied through public documentation, the wire format and a
-locally owned game installation. Fixtures in this repository are synthetic and
-must stay that way.
+Every feature that reproduces vanilla behavior starts by reading the complete
+relevant source of the target version (26.3, official mappings): the entry
+point, the full call chain, every branch, the data it reads, where it consumes
+randomness and in what order, and the order of its writes. Read the target
+version itself; summaries, older versions and memory are not evidence. Record
+the files and call chains read in the feature's specification before writing
+code, and review the implementation against that specification.
+
+Code is written independently from the specification. Do not paste vanilla
+source into this tree and do not translate it line by line. Game assets never
+live in source files. Test fixtures that do not derive from the game stay
+synthetic.
 
 ## Repository map
 

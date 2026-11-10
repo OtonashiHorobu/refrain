@@ -1,10 +1,10 @@
 # Contributing to Refrain
 
-Refrain is a clean-room implementation. Contributions must not include code,
-assets or data extracted from Minecraft, and must not be derived from
-decompiled or leaked sources. Behavior may be studied through public
-documentation, the wire format and black-box observation of a locally owned
-game installation.
+Refrain reproduces the behavior of a proprietary game. A contribution that
+implements vanilla behavior starts by reading the complete relevant source of
+the target version (26.3, official mappings) and recording what was read in a
+specification. Code is written from that specification, not copied or
+translated from the source. Game assets are never committed.
 
 ## Workflow
 

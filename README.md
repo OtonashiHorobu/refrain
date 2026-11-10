@@ -1,6 +1,6 @@
 # Refrain
 
-Refrain is a clean-room server implementation of Minecraft Java Edition 26.3
+Refrain is a server implementation of Minecraft Java Edition 26.3
 (protocol 777, DataVersion 5023), written in C++26. The project targets a
 server-first architecture: a dedicated server that loads worlds, runs a
 deterministic simulation and exposes storage and content tooling through
