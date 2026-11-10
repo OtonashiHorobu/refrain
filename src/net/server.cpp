@@ -200,6 +200,7 @@ struct server::impl {
         uuid session{};
         game_mode mode{game_mode::creative};
         bool login_started{false};
+        bool login_finished{false};
         bool status_requested{false};
         bool leave_reported{false};
         bool closed{false};
@@ -725,9 +726,20 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
         }
         if (*packet_id == login_sb::login_acknowledged::packet_id) {
             std::string name;
+            bool finished{false};
             {
                 const std::lock_guard lock{connections_mutex};
-                name = connections.at(id).name;
+                const auto found{connections.find(id)};
+                if (found != connections.end() && !found->second.closed) {
+                    name = found->second.name;
+                    finished = found->second.login_finished;
+                }
+            }
+            // Login is acknowledged only after the server finished it; without
+            // this guard a client could skip hello and encryption entirely.
+            if (!finished) {
+                reject(id, "malformed or unexpected packet");
+                return;
             }
             login_sb::login_acknowledged packet{};
             if (auto decoded{login_sb::decode_login_acknowledged(in, packet)};
@@ -1051,6 +1063,7 @@ void server::impl::send_login_finished(std::uint64_t id) {
         profile = found->second.profile;
         session = found->second.session;
         name = found->second.name;
+        found->second.login_finished = true;
     }
     const auto [profile_high, profile_low] = uuid_halves(profile);
     const auto [session_high, session_low] = uuid_halves(session);
