@@ -384,8 +384,7 @@ auto host::load_one(const composition &plan, const package_source &package,
     if (manifest->is_external()) {
         const auto activate_external{!declares_provides || selected_provider};
         if (declares_provides && !selected_provider) {
-            log::info("mod '{}': provider not selected; code not activated "
-                      "(provides {})",
+            log::info("mod: id={} provider=none provides={}",
                       manifest->common.id, provides_summary(*manifest));
         }
         loaded_mod loaded{.id = manifest->common.id,
@@ -430,9 +429,8 @@ auto host::load_one(const composition &plan, const package_source &package,
                         provides_summary(*manifest)))};
     }
     if (declares_provides && !selected_provider) {
-        log::info("mod '{}': provider not selected; code not activated "
-                  "(provides {})",
-                  manifest->common.id, provides_summary(*manifest));
+        log::info("mod: id={} provider=none provides={}", manifest->common.id,
+                  provides_summary(*manifest));
     }
 
     loaded_mod loaded{.id = manifest->common.id,
