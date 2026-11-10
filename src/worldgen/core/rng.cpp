@@ -52,7 +52,11 @@ auto random_source::next_int(jint bound) -> jint {
 auto random_source::next_long() -> jlong {
     const jint upper = next(32);
     const jint lower = next(32);
-    return (static_cast<jlong>(upper) << 32) + static_cast<jlong>(lower);
+    // Java shifts the sign-extended upper half and adds the sign-extended
+    // lower half; both steps wrap modulo 2^64.
+    return static_cast<jlong>(
+        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(upper)) << 32U) +
+        static_cast<std::uint64_t>(static_cast<jlong>(lower)));
 }
 
 auto random_source::next_float() -> float {
@@ -322,7 +326,11 @@ auto worldgen_random::next_int(jint bound) -> jint {
 auto worldgen_random::next_long() -> jlong {
     const jint upper = next(32);
     const jint lower = next(32);
-    return (static_cast<jlong>(upper) << 32) + static_cast<jlong>(lower);
+    // Java shifts the sign-extended upper half and adds the sign-extended
+    // lower half; both steps wrap modulo 2^64.
+    return static_cast<jlong>(
+        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(upper)) << 32U) +
+        static_cast<std::uint64_t>(static_cast<jlong>(lower)));
 }
 
 auto worldgen_random::next_float() -> float {
@@ -377,15 +385,17 @@ auto worldgen_random::set_decoration_seed(jlong seed, jint chunk_x,
     set_seed(seed);
     const jlong x_scale = next_long() | 1;
     const jlong z_scale = next_long() | 1;
-    const jlong result = ((static_cast<jlong>(chunk_x) * x_scale) +
-                          (static_cast<jlong>(chunk_z) * z_scale)) ^
-                         seed;
+    const jlong result =
+        wrap_add(wrap_mul(static_cast<jlong>(chunk_x), x_scale),
+                 wrap_mul(static_cast<jlong>(chunk_z), z_scale)) ^
+        seed;
     set_seed(result);
     return result;
 }
 
 void worldgen_random::set_feature_seed(jlong seed, jint index, jint step) {
-    set_seed(seed + static_cast<jlong>(index) + (10000LL * step));
+    set_seed(wrap_add(wrap_add(seed, static_cast<jlong>(index)),
+                      static_cast<jlong>(10000LL * step)));
 }
 
 void worldgen_random::set_large_feature_seed(jlong seed, jint chunk_x,
@@ -393,14 +403,15 @@ void worldgen_random::set_large_feature_seed(jlong seed, jint chunk_x,
     set_seed(seed);
     const jlong x_scale = next_long();
     const jlong z_scale = next_long();
-    set_seed((static_cast<jlong>(chunk_x) * x_scale) ^
-             (static_cast<jlong>(chunk_z) * z_scale) ^ seed);
+    set_seed(wrap_mul(static_cast<jlong>(chunk_x), x_scale) ^
+             wrap_mul(static_cast<jlong>(chunk_z), z_scale) ^ seed);
 }
 
 void worldgen_random::set_large_feature_with_salt(jlong seed, jint x, jint z,
                                                   jint salt) {
-    set_seed((static_cast<jlong>(x) * 341873128712LL) +
-             (static_cast<jlong>(z) * 132897987541LL) + seed + salt);
+    set_seed(wrap_add(wrap_add(wrap_mul(static_cast<jlong>(x), 341873128712LL),
+                               wrap_mul(static_cast<jlong>(z), 132897987541LL)),
+                      wrap_add(seed, static_cast<jlong>(salt))));
 }
 
 // --- construction -----------------------------------------------------------
