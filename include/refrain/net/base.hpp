@@ -26,10 +26,12 @@ inline constexpr std::size_t max_compressed_length = 2'097'152;
 /// Decompressed packet ceiling enforced by the compression stage.
 inline constexpr std::size_t max_uncompressed_length = 8'388'608;
 
-/// Upper bound for a single string field before UTF-8 decoding. Vanilla limits
-/// strings in characters; four bytes per character is the widest legal
-/// encoding, so this bound can reject oversize input before allocation.
-inline constexpr std::size_t max_string_bytes = 32'767 * 4;
+/// Vanilla character ceiling for a single string field (UTF-16 code units).
+inline constexpr std::size_t max_string_characters = 32'767;
+
+/// Byte ceiling for encoding a string field: four bytes per character is the
+/// widest legal UTF-8 encoding.
+inline constexpr std::size_t max_string_bytes = max_string_characters * 4;
 
 enum class connection_state : std::uint8_t {
     handshake = 0,
@@ -92,9 +94,12 @@ class reader {
     [[nodiscard]] auto read_varint() -> result<std::uint32_t>;
     [[nodiscard]] auto read_varlong() -> result<std::uint64_t>;
 
-    /// VarInt byte length + UTF-8 payload. `max_bytes` is the encoded byte
-    /// ceiling for the field; the caller supplies the per-field value.
-    [[nodiscard]] auto read_string(std::size_t max_bytes = max_string_bytes)
+    /// VarInt byte length + UTF-8 payload. `max_characters` is the UTF-16
+    /// code-unit ceiling for the field; the payload is additionally bounded by
+    /// four bytes per code unit, so an oversize string is rejected before it is
+    /// allocated.
+    [[nodiscard]] auto
+    read_string(std::size_t max_characters = max_string_characters)
         -> result<std::string>;
 
     /// Resource location: VarInt byte length + `namespace:path`.
