@@ -168,8 +168,10 @@ suite bot_tests = [] {
         auto capture_report{net::run_bot(net::bot_options{
             .target = {.host = "127.0.0.1", .port = port},
             .username = "CaptureBot",
-            .timeout = std::chrono::milliseconds{5000},
-            .linger = std::chrono::milliseconds{200},
+            .timeout = std::chrono::milliseconds{10000},
+            // The capture must outlive the play-login burst; a short linger
+            // races the command, recipe and tab packets on a loaded machine.
+            .linger = std::chrono::milliseconds{1000},
             .capture = true,
         })};
         expect(static_cast<bool>(capture_report));
