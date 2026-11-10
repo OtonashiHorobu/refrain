@@ -205,7 +205,7 @@ suite<"worldgen/density-json"> density_json_tests = [] {
             return;
         }
         const sampler_context context;
-        expect(bits((*standard)->sample_value(context, 1.5, 0.0, -2.25)) !=
+        expect(bits((*standard)->sample_value(context, 1, 0, -2)) !=
                bits(legacy_stack->get(1.5 * 0.25, -2.25 * 0.25)))
             << "the standard and legacy layouts must not agree";
     };
