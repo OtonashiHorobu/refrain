@@ -6,6 +6,7 @@
 
 #include <refrain/archive/zip.hpp>
 #include <refrain/core/io.hpp>
+#include <refrain/data/checksum.hpp>
 
 #include <filesystem>
 #include <mutex>
@@ -34,15 +35,29 @@ auto materialize_worldgen_data(std::string_view path) -> result<std::string> {
         return std::unexpected{archive.error()};
     }
     const auto name = std::filesystem::path{std::string{path}}.stem().string();
-    const auto digest =
-        static_cast<std::uint64_t>(std::filesystem::file_size(path));
-    const auto root =
-        std::filesystem::temp_directory_path() /
-        ("refrain-worldgen-" + name + "-" + std::to_string(digest));
+    // The cache identity is the archive content, not its name and size: two
+    // different packs with the same basename and byte count must not share a
+    // directory, and a pre-created marker must not redirect the loader.
+    auto archive_bytes{
+        core::io::read_file(path, {.max_bytes = 256ULL * 1024ULL * 1024ULL,
+                                   .allow_symlink = false})};
+    if (!archive_bytes) {
+        return std::unexpected{archive_bytes.error()};
+    }
+    const auto digest{data::to_hex(data::blake3(*archive_bytes))};
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("refrain-worldgen-" + name + "-" + digest.substr(0, 32));
     const auto marker =
         root.parent_path() / (root.filename().string() + ".ready");
     if (std::filesystem::is_regular_file(marker)) {
-        return root.string();
+        auto existing{core::io::read_text(
+            marker.string(), {.max_bytes = 128ULL, .allow_symlink = false})};
+        if (existing && *existing == digest) {
+            return root.string();
+        }
+        // A marker for different content cannot vouch for this tree.
+        std::error_code removed;
+        std::filesystem::remove(marker, removed);
     }
     std::error_code error;
     std::filesystem::remove_all(root, error);
@@ -59,10 +74,10 @@ auto materialize_worldgen_data(std::string_view path) -> result<std::string> {
             return std::unexpected{extracted.error()};
         }
     }
-    const std::string marker_text{"ok"};
-    const auto marker_bytes =
-        std::as_bytes(std::span{marker_text.data(), marker_text.size()});
-    (void)core::io::write_file(marker.string(), marker_bytes);
+    if (const auto written{core::io::write_text(marker.string(), digest)};
+        !written) {
+        return std::unexpected{written.error()};
+    }
     return root.string();
 }
 
