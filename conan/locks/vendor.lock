@@ -37,7 +37,9 @@
         "gnu-config/cci.20210814#466e9d4d7779e1c142443f7ea44b4284%1762363589.329",
         "cmake/3.31.5#e3bab375e96b9be619fd62f6e406c5cf%1739197479.641",
         "automake/1.16.5#b91b7c384c3deaa9d535be02da14d04f%1755524470.56",
-        "autoconf/2.71#51077f068e61700d65bb05541ea1e4b0%1731054366.86"
+        "autoconf/2.71#51077f068e61700d65bb05541ea1e4b0%1731054366.86",
+        "nasm/2.16.01#31e26f2ee3c4346ecd347911bd126904%1745483323.489",
+        "strawberryperl/5.32.1.1#8d114504d172cfea8ea1662d09b6333e%1751971032.423"
     ],
     "python_requires": [],
     "config_requires": []
