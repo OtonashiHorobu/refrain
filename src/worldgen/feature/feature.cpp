@@ -2196,7 +2196,6 @@ auto end_spike_feature::place(feature_context &context, worldgen_random &random,
             std::swap(sizes[static_cast<std::size_t>(i - 1)],
                       sizes[static_cast<std::size_t>(swap)]);
         }
-        constexpr double pi = 3.14159265358979323846;
         for (jint i = 0; i < 10; ++i) {
             const double angle = 2.0 * (-pi + (pi / 10.0) * i);
             const auto size = sizes[static_cast<std::size_t>(i)];
