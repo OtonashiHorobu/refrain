@@ -103,6 +103,27 @@ using jlong = std::int64_t;
     return a - (floor_div(a, b) * b);
 }
 
+/// `Math.floorDiv(long, long)`. `LONG_MIN / -1` returns `LONG_MIN`, as in
+/// Java.
+[[nodiscard]] constexpr auto floor_div(jlong a, jlong b) noexcept -> jlong {
+    if (b == 0) {
+        return 0; // Java throws; callers never divide by zero.
+    }
+    if (a == std::numeric_limits<jlong>::min() && b == -1) {
+        return a;
+    }
+    jlong quotient = a / b;
+    if ((a % b != 0) && ((a < 0) != (b < 0))) {
+        --quotient;
+    }
+    return quotient;
+}
+
+/// `Math.floorMod(long, long)`.
+[[nodiscard]] constexpr auto floor_mod(jlong a, jlong b) noexcept -> jlong {
+    return a - (floor_div(a, b) * b);
+}
+
 /// Java's unsigned right shift on a 64-bit value.
 [[nodiscard]] constexpr auto ushr(jlong value, int bits) noexcept -> jlong {
     return static_cast<jlong>(static_cast<std::uint64_t>(value) >>

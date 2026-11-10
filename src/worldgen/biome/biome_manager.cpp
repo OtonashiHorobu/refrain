@@ -128,7 +128,7 @@ auto next_random(jlong value, jlong addend) noexcept -> jlong {
 
 auto get_fiddle(jlong value) noexcept -> double {
     const auto uniform =
-        static_cast<double>(floor_mod(value >> 24, 1024)) / 1024.0;
+        static_cast<double>(floor_mod(value >> 24, jlong{1024})) / 1024.0;
     return (uniform - 0.5) * 0.9;
 }
 

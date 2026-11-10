@@ -162,7 +162,7 @@ using sampler_ptr = std::shared_ptr<sampler>;
                                      std::shared_ptr<const noise_stack> stack)
     -> sampler_ptr;
 
-class spline;
+struct spline;
 struct spline_point {
     float location{0.0F};
     float derivative{0.0F};
