@@ -15,6 +15,7 @@
 #include <refrain/builtin/image.hpp>
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/runtime.hpp>
+#include <refrain/core/config.hpp>
 #include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/core/version.hpp>
@@ -35,6 +36,7 @@
 #include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/startup_content.hpp>
+#include <refrain/server/server_properties.hpp>
 
 #include <CLI/CLI.hpp>
 #include <fmt/format.h>
@@ -162,10 +164,10 @@ int main(int argc, char **argv) {
 
     std::string gamepack{"gamepack/gamepack.toml"};
     app.add_option("-g,--gamepack", gamepack, "Path to gamepack.toml");
-    std::string config_dir;
+    std::string config_dir{"config"};
     app.add_option("--config-dir", config_dir,
-                   "Host config directory (TOML namespaces; disabled when "
-                   "empty)");
+                   "Directory with per-namespace TOML configuration files "
+                   "(disabled when empty)");
     std::string log_level{"info"};
     app.add_option("--log-level", log_level, "Console log level");
     // Crash reporting is opt-in: without --crash-dir the server never creates a
@@ -181,10 +183,11 @@ int main(int argc, char **argv) {
                  "Print the resolved gamepack/provider graph and exit");
     std::string world_path;
     app.add_option("--world", world_path,
-                   "RWF world directory to run (enables the tick loop)");
-    std::string server_properties_path{"server.properties"};
-    app.add_option("--server-properties", server_properties_path,
-                   "Java server.properties path (missing file keeps defaults)");
+                   "RWF world directory (overrides world.path; enables the "
+                   "tick loop)");
+    std::string import_properties_path;
+    app.add_option("--import-properties", import_properties_path,
+                   "Import a Java server.properties file as a fallback layer");
     std::int64_t run_ticks{0};
     app.add_option("--ticks", run_ticks,
                    "Run N ticks then stop (0 = until 'stop'/EOF)");
@@ -417,8 +420,25 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    // CLI --log-level wins; otherwise refrain.toml [logging].level is read
+    // before the full store exists so early startup logs already honor it.
+    std::string effective_log_level{log_level};
+    if (app.get_option("--log-level")->count() == 0) {
+        const auto path{std::filesystem::path{config_dir} / "refrain.toml"};
+        if (std::filesystem::exists(path)) {
+            auto host_config{
+                refrain::core::config::document::parse_file(path.string())};
+            if (!host_config) {
+                fmt::println(stderr, "refrain-server: {}",
+                             host_config.error().message);
+                return 1;
+            }
+            effective_log_level =
+                host_config->get_string("logging.level", log_level);
+        }
+    }
     refrain::log::config cfg{};
-    cfg.console_level = refrain::log::level_from_string(log_level);
+    cfg.console_level = refrain::log::level_from_string(effective_log_level);
     if (!refrain::log::init(cfg)) {
         fmt::println(stderr, "refrain-server: failed to initialize logging");
         return 1;
@@ -638,58 +658,180 @@ int main(int argc, char **argv) {
     // Load the resolved gamepack's internal mods through the mod host
     // (manifest gates -> static factories -> service providers). Composition is
     // frozen on success; a failure aborts startup with the offending mod.
-    refrain::core::config::store host_config{};
-    if (!config_dir.empty()) {
-        if (auto mounted{host_config.mount(
-                "host", refrain::data::join_path(config_dir, "refrain.toml"))};
-            !mounted) {
-            return report_fatal(mounted.error());
+    refrain::core::config::store config_store{};
+    std::string config_world_path{};
+    {
+        const std::filesystem::path root{config_dir};
+        const auto mount_namespace = [&](std::string name,
+                                         const std::filesystem::path &path) {
+            if (config_dir.empty()) {
+                return refrain::status_ok();
+            }
+            return config_store.mount(
+                {.name = std::move(name), .path = path.string()});
+        };
+        if (auto status{mount_namespace("host", root / "refrain.toml")};
+            !status) {
+            return report_error(status.error());
         }
-        if (refrain::core::io::is_directory(config_dir)) {
-            auto entries{refrain::core::io::list_directory(config_dir)};
-            if (!entries) {
-                return report_fatal(entries.error());
-            }
-            for (const auto &name : *entries) {
-                if (name == "refrain.toml" || !name.ends_with(".toml")) {
-                    continue;
-                }
-                const auto ns{name.substr(0, name.size() - 5)};
-                if (auto mounted{host_config.mount(
-                        ns, refrain::data::join_path(config_dir, name))};
-                    !mounted) {
-                    return report_fatal(mounted.error());
-                }
-            }
-            const auto mods_dir{refrain::data::join_path(config_dir, "mods")};
-            if (refrain::core::io::is_directory(mods_dir)) {
-                auto mod_entries{refrain::core::io::list_directory(mods_dir)};
-                if (!mod_entries) {
-                    return report_fatal(mod_entries.error());
-                }
-                for (const auto &name : *mod_entries) {
-                    if (!name.ends_with(".toml")) {
-                        continue;
-                    }
-                    const auto ns{"mod/" + name.substr(0, name.size() - 5)};
-                    if (auto mounted{host_config.mount(
-                            ns, refrain::data::join_path(mods_dir, name))};
-                        !mounted) {
-                        return report_fatal(mounted.error());
-                    }
-                }
+        for (const auto *name : {"runtime", "network", "world", "storage"}) {
+            if (auto status{mount_namespace(
+                    name, root / (std::string{name} + ".toml"))};
+                !status) {
+                return report_error(status.error());
             }
         }
-        refrain::log::info("config: dir={} namespaces={}", config_dir,
-                           host_config.size());
+        for (const auto &provider : plan->providers) {
+            auto id{provider.provider};
+            if (const auto at{id.find('@')}; at != std::string::npos) {
+                id.resize(at);
+            }
+            const auto path{root / "providers" / (id + ".toml")};
+            std::error_code error;
+            if (config_dir.empty() || !std::filesystem::exists(path, error)) {
+                continue;
+            }
+            if (auto status{mount_namespace("provider/" + id, path)}; !status) {
+                return report_error(status.error());
+            }
+        }
+        for (const auto &selected : plan->mods) {
+            const auto path{root / "mods" / (selected.id + ".toml")};
+            std::error_code error;
+            if (config_dir.empty() || !std::filesystem::exists(path, error)) {
+                continue;
+            }
+            if (auto status{mount_namespace("mod/" + selected.id, path)};
+                !status) {
+                return report_error(status.error());
+            }
+        }
+        if (auto status{config_store.load_all()}; !status) {
+            return report_error(status.error());
+        }
+        if (!import_properties_path.empty()) {
+            auto text{refrain::core::io::read_text(
+                import_properties_path, {.max_bytes = 1ULL * 1024ULL * 1024ULL,
+                                         .allow_symlink = false})};
+            if (!text) {
+                return report_error(text.error());
+            }
+            auto imported{refrain::server::apply_server_properties(
+                *text, config_store, refrain::core::config::layer::fallback,
+                false)};
+            if (!imported) {
+                return report_error(imported.error());
+            }
+            for (const auto &key : imported->unknown_keys) {
+                refrain::log::warn("config: unknown server.properties key '{}'",
+                                   key);
+            }
+            refrain::log::info("config: imported properties={} source={}",
+                               imported->applied, import_properties_path);
+        }
+        if (auto view{config_store.module("world")}) {
+            config_world_path = view->get_string("path", "");
+        }
+        const auto override_int =
+            [&](const char *option, std::string_view name_space,
+                std::string_view key, std::int64_t value) -> refrain::status {
+            if (app.get_option(option)->count() == 0) {
+                return refrain::status_ok();
+            }
+            return config_store.set_int64(
+                name_space, key, value, refrain::core::config::layer::override);
+        };
+        const auto apply_override =
+            [&](const char *option, std::string_view name_space,
+                std::string_view key, std::int64_t value) {
+                if (auto status{override_int(option, name_space, key, value)};
+                    !status) {
+                    return status;
+                }
+                return refrain::status_ok();
+            };
+        if (auto status{apply_override("--world-zstd-level", "storage",
+                                       "zstd_level", world_zstd_level)};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override("--zstd-near-level", "storage",
+                                       "zstd_near_level", zstd_near_level)};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override("--zstd-mid-level", "storage",
+                                       "zstd_mid_level", zstd_mid_level)};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override("--zstd-far-level", "storage",
+                                       "zstd_far_level", zstd_far_level)};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override("--zstd-near-radius", "storage",
+                                       "zstd_near_radius", zstd_near_radius)};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override("--zstd-mid-radius", "storage",
+                                       "zstd_mid_radius", zstd_mid_radius)};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override("--watchdog-timeout-ms", "runtime",
+                                       "watchdog_timeout_ms",
+                                       watchdog_timeout_ms)};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override(
+                "--autosave-interval-ticks", "storage",
+                "autosave_interval_ticks",
+                static_cast<std::int64_t>(autosave_interval_ticks))};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override(
+                "--compact-interval-ticks", "storage", "compact_interval_ticks",
+                static_cast<std::int64_t>(compact_interval_ticks))};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override(
+                "--store-compact-interval-ticks", "storage",
+                "store_compact_interval_ticks",
+                static_cast<std::int64_t>(store_compact_interval_ticks))};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override(
+                "--compact-min-bytes", "storage", "compact_min_bytes",
+                static_cast<std::int64_t>(compact_min_bytes))};
+            !status) {
+            return report_error(status.error());
+        }
+        if (auto status{apply_override("--compact-garbage-percent", "storage",
+                                       "compact_garbage_percent",
+                                       compact_garbage_percent)};
+            !status) {
+            return report_error(status.error());
+        }
+        refrain::log::info("config: namespaces={} source={}",
+                           config_store.names().size(), config_dir);
     }
 
+    const std::string resolved_world_path{world_path.empty() ? config_world_path
+                                                             : world_path};
+    refrain::log::info("config: world.path='{}'", resolved_world_path);
+
     refrain::mod::host mods{};
+    mods.set_config(config_store);
     // The host runtime API is a sealed service: register the process-owned
     // provider before any mod factory runs. Mods may query it through the
     // frozen registry, but cannot provide or replace it.
-    refrain::app::host_context host_context{
-        mods, {}, config_dir.empty() ? nullptr : &host_config};
+    refrain::app::host_context host_context{mods, {}, &config_store};
     const refrain::mod::provider_api host_core_api{
         .vtable = &refrain::host::core_vtable(),
         .self = &host_context,
@@ -930,7 +1072,7 @@ int main(int argc, char **argv) {
     // explicit `--world` asks the active `refrain:runtime` provider to run the
     // tick loop; without it the process keeps the startup-check
     // behaviour (`--dump-gamepack` and CI composition smokes).
-    if (world_path.empty()) {
+    if (resolved_world_path.empty()) {
         return 0;
     }
 
@@ -958,9 +1100,7 @@ int main(int argc, char **argv) {
     // and stays alive for the whole `run` call.
     auto runtime_config{refrain::services::runtime::make_runtime_config()};
     runtime_config.world_path =
-        refrain::contracts::to_borrowed(std::string_view{world_path});
-    runtime_config.server_properties = refrain::contracts::to_borrowed(
-        std::string_view{server_properties_path});
+        refrain::contracts::to_borrowed(std::string_view{resolved_world_path});
     runtime_config.ticks = run_ticks;
     runtime_config.command_file =
         refrain::contracts::to_borrowed(std::string_view{command_file});

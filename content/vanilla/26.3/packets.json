@@ -1,0 +1,1822 @@
+[
+  {
+    "stage": "handshake",
+    "flow": "serverbound",
+    "id": 0,
+    "name": "minecraft:intention",
+    "class": "net.minecraft.network.protocol.handshake.ClientIntentionPacket"
+  },
+  {
+    "stage": "status",
+    "flow": "clientbound",
+    "id": 0,
+    "name": "minecraft:status_response",
+    "class": "net.minecraft.network.protocol.status.ClientboundStatusResponsePacket"
+  },
+  {
+    "stage": "status",
+    "flow": "clientbound",
+    "id": 1,
+    "name": "minecraft:pong_response",
+    "class": "net.minecraft.network.protocol.ping.ClientboundPongResponsePacket"
+  },
+  {
+    "stage": "status",
+    "flow": "serverbound",
+    "id": 0,
+    "name": "minecraft:status_request",
+    "class": "net.minecraft.network.protocol.status.ServerboundStatusRequestPacket"
+  },
+  {
+    "stage": "status",
+    "flow": "serverbound",
+    "id": 1,
+    "name": "minecraft:ping_request",
+    "class": "net.minecraft.network.protocol.ping.ServerboundPingRequestPacket"
+  },
+  {
+    "stage": "login",
+    "flow": "clientbound",
+    "id": 0,
+    "name": "minecraft:login_disconnect",
+    "class": "net.minecraft.network.protocol.login.ClientboundLoginDisconnectPacket"
+  },
+  {
+    "stage": "login",
+    "flow": "clientbound",
+    "id": 1,
+    "name": "minecraft:hello",
+    "class": "net.minecraft.network.protocol.login.ClientboundHelloPacket"
+  },
+  {
+    "stage": "login",
+    "flow": "clientbound",
+    "id": 2,
+    "name": "minecraft:login_finished",
+    "class": "net.minecraft.network.protocol.login.ClientboundLoginFinishedPacket"
+  },
+  {
+    "stage": "login",
+    "flow": "clientbound",
+    "id": 3,
+    "name": "minecraft:login_compression",
+    "class": "net.minecraft.network.protocol.login.ClientboundLoginCompressionPacket"
+  },
+  {
+    "stage": "login",
+    "flow": "clientbound",
+    "id": 4,
+    "name": "minecraft:custom_query",
+    "class": "net.minecraft.network.protocol.login.ClientboundCustomQueryPacket"
+  },
+  {
+    "stage": "login",
+    "flow": "clientbound",
+    "id": 5,
+    "name": "minecraft:cookie_request",
+    "class": "net.minecraft.network.protocol.cookie.ClientboundCookieRequestPacket"
+  },
+  {
+    "stage": "login",
+    "flow": "serverbound",
+    "id": 0,
+    "name": "minecraft:hello",
+    "class": "net.minecraft.network.protocol.login.ServerboundHelloPacket"
+  },
+  {
+    "stage": "login",
+    "flow": "serverbound",
+    "id": 1,
+    "name": "minecraft:key",
+    "class": "net.minecraft.network.protocol.login.ServerboundKeyPacket"
+  },
+  {
+    "stage": "login",
+    "flow": "serverbound",
+    "id": 2,
+    "name": "minecraft:custom_query_answer",
+    "class": "net.minecraft.network.protocol.login.ServerboundCustomQueryAnswerPacket"
+  },
+  {
+    "stage": "login",
+    "flow": "serverbound",
+    "id": 3,
+    "name": "minecraft:login_acknowledged",
+    "class": "net.minecraft.network.protocol.login.ServerboundLoginAcknowledgedPacket"
+  },
+  {
+    "stage": "login",
+    "flow": "serverbound",
+    "id": 4,
+    "name": "minecraft:cookie_response",
+    "class": "net.minecraft.network.protocol.cookie.ServerboundCookieResponsePacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 0,
+    "name": "minecraft:cookie_request",
+    "class": "net.minecraft.network.protocol.cookie.ClientboundCookieRequestPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 1,
+    "name": "minecraft:custom_payload",
+    "class": "net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 2,
+    "name": "minecraft:disconnect",
+    "class": "net.minecraft.network.protocol.common.ClientboundDisconnectPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 3,
+    "name": "minecraft:finish_configuration",
+    "class": "net.minecraft.network.protocol.configuration.ClientboundFinishConfigurationPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 4,
+    "name": "minecraft:keep_alive",
+    "class": "net.minecraft.network.protocol.common.ClientboundKeepAlivePacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 5,
+    "name": "minecraft:ping",
+    "class": "net.minecraft.network.protocol.common.ClientboundPingPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 6,
+    "name": "minecraft:reset_chat",
+    "class": "net.minecraft.network.protocol.configuration.ClientboundResetChatPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 7,
+    "name": "minecraft:registry_data",
+    "class": "net.minecraft.network.protocol.configuration.ClientboundRegistryDataPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 8,
+    "name": "minecraft:resource_pack_pop",
+    "class": "net.minecraft.network.protocol.common.ClientboundResourcePackPopPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 9,
+    "name": "minecraft:resource_pack_push",
+    "class": "net.minecraft.network.protocol.common.ClientboundResourcePackPushPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 10,
+    "name": "minecraft:post_effects",
+    "class": "net.minecraft.network.protocol.common.ClientboundPostEffectsPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 11,
+    "name": "minecraft:store_cookie",
+    "class": "net.minecraft.network.protocol.common.ClientboundStoreCookiePacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 12,
+    "name": "minecraft:transfer",
+    "class": "net.minecraft.network.protocol.common.ClientboundTransferPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 13,
+    "name": "minecraft:update_enabled_features",
+    "class": "net.minecraft.network.protocol.configuration.ClientboundUpdateEnabledFeaturesPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 14,
+    "name": "minecraft:update_tags",
+    "class": "net.minecraft.network.protocol.common.ClientboundUpdateTagsPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 15,
+    "name": "minecraft:select_known_packs",
+    "class": "net.minecraft.network.protocol.configuration.ClientboundSelectKnownPacks"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 16,
+    "name": "minecraft:custom_report_details",
+    "class": "net.minecraft.network.protocol.common.ClientboundCustomReportDetailsPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 17,
+    "name": "minecraft:server_links",
+    "class": "net.minecraft.network.protocol.common.ClientboundServerLinksPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 18,
+    "name": "minecraft:clear_dialog",
+    "class": "net.minecraft.network.protocol.common.ClientboundClearDialogPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 19,
+    "name": "minecraft:show_dialog",
+    "class": "net.minecraft.network.protocol.common.ClientboundShowDialogPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "clientbound",
+    "id": 20,
+    "name": "minecraft:code_of_conduct",
+    "class": "net.minecraft.network.protocol.configuration.ClientboundCodeOfConductPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "serverbound",
+    "id": 0,
+    "name": "minecraft:client_information",
+    "class": "net.minecraft.network.protocol.common.ServerboundClientInformationPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "serverbound",
+    "id": 1,
+    "name": "minecraft:cookie_response",
+    "class": "net.minecraft.network.protocol.cookie.ServerboundCookieResponsePacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "serverbound",
+    "id": 2,
+    "name": "minecraft:custom_payload",
+    "class": "net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "serverbound",
+    "id": 3,
+    "name": "minecraft:finish_configuration",
+    "class": "net.minecraft.network.protocol.configuration.ServerboundFinishConfigurationPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "serverbound",
+    "id": 4,
+    "name": "minecraft:keep_alive",
+    "class": "net.minecraft.network.protocol.common.ServerboundKeepAlivePacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "serverbound",
+    "id": 5,
+    "name": "minecraft:pong",
+    "class": "net.minecraft.network.protocol.common.ServerboundPongPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "serverbound",
+    "id": 6,
+    "name": "minecraft:resource_pack",
+    "class": "net.minecraft.network.protocol.common.ServerboundResourcePackPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "serverbound",
+    "id": 7,
+    "name": "minecraft:select_known_packs",
+    "class": "net.minecraft.network.protocol.configuration.ServerboundSelectKnownPacks"
+  },
+  {
+    "stage": "configuration",
+    "flow": "serverbound",
+    "id": 8,
+    "name": "minecraft:custom_click_action",
+    "class": "net.minecraft.network.protocol.common.ServerboundCustomClickActionPacket"
+  },
+  {
+    "stage": "configuration",
+    "flow": "serverbound",
+    "id": 9,
+    "name": "minecraft:accept_code_of_conduct",
+    "class": "net.minecraft.network.protocol.configuration.ServerboundAcceptCodeOfConductPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 0,
+    "name": "minecraft:bundle_delimiter",
+    "class": "net.minecraft.network.protocol.game.ClientboundBundleDelimiterPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 1,
+    "name": "minecraft:add_entity",
+    "class": "net.minecraft.network.protocol.game.ClientboundAddEntityPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 2,
+    "name": "minecraft:animate",
+    "class": "net.minecraft.network.protocol.game.ClientboundAnimatePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 3,
+    "name": "minecraft:award_stats",
+    "class": "net.minecraft.network.protocol.game.ClientboundAwardStatsPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 4,
+    "name": "minecraft:block_changed_ack",
+    "class": "net.minecraft.network.protocol.game.ClientboundBlockChangedAckPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 5,
+    "name": "minecraft:block_destruction",
+    "class": "net.minecraft.network.protocol.game.ClientboundBlockDestructionPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 6,
+    "name": "minecraft:block_entity_data",
+    "class": "net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 7,
+    "name": "minecraft:block_event",
+    "class": "net.minecraft.network.protocol.game.ClientboundBlockEventPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 8,
+    "name": "minecraft:block_update",
+    "class": "net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 9,
+    "name": "minecraft:boss_event",
+    "class": "net.minecraft.network.protocol.game.ClientboundBossEventPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 10,
+    "name": "minecraft:change_difficulty",
+    "class": "net.minecraft.network.protocol.game.ClientboundChangeDifficultyPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 11,
+    "name": "minecraft:chunk_batch_finished",
+    "class": "net.minecraft.network.protocol.game.ClientboundChunkBatchFinishedPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 12,
+    "name": "minecraft:chunk_batch_start",
+    "class": "net.minecraft.network.protocol.game.ClientboundChunkBatchStartPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 13,
+    "name": "minecraft:chunks_biomes",
+    "class": "net.minecraft.network.protocol.game.ClientboundChunksBiomesPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 14,
+    "name": "minecraft:clear_titles",
+    "class": "net.minecraft.network.protocol.game.ClientboundClearTitlesPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 15,
+    "name": "minecraft:command_suggestions",
+    "class": "net.minecraft.network.protocol.game.ClientboundCommandSuggestionsPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 16,
+    "name": "minecraft:commands",
+    "class": "net.minecraft.network.protocol.game.ClientboundCommandsPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 17,
+    "name": "minecraft:container_close",
+    "class": "net.minecraft.network.protocol.game.ClientboundContainerClosePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 18,
+    "name": "minecraft:container_set_content",
+    "class": "net.minecraft.network.protocol.game.ClientboundContainerSetContentPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 19,
+    "name": "minecraft:container_set_data",
+    "class": "net.minecraft.network.protocol.game.ClientboundContainerSetDataPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 20,
+    "name": "minecraft:container_set_slot",
+    "class": "net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 21,
+    "name": "minecraft:cookie_request",
+    "class": "net.minecraft.network.protocol.cookie.ClientboundCookieRequestPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 22,
+    "name": "minecraft:cooldown",
+    "class": "net.minecraft.network.protocol.game.ClientboundCooldownPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 23,
+    "name": "minecraft:custom_chat_completions",
+    "class": "net.minecraft.network.protocol.game.ClientboundCustomChatCompletionsPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 24,
+    "name": "minecraft:custom_payload",
+    "class": "net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 25,
+    "name": "minecraft:damage_event",
+    "class": "net.minecraft.network.protocol.game.ClientboundDamageEventPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 26,
+    "name": "minecraft:debug/block_value",
+    "class": "net.minecraft.network.protocol.game.ClientboundDebugBlockValuePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 27,
+    "name": "minecraft:debug/chunk_value",
+    "class": "net.minecraft.network.protocol.game.ClientboundDebugChunkValuePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 28,
+    "name": "minecraft:debug/entity_value",
+    "class": "net.minecraft.network.protocol.game.ClientboundDebugEntityValuePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 29,
+    "name": "minecraft:debug/event",
+    "class": "net.minecraft.network.protocol.game.ClientboundDebugEventPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 30,
+    "name": "minecraft:debug_sample",
+    "class": "net.minecraft.network.protocol.game.ClientboundDebugSamplePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 31,
+    "name": "minecraft:delete_chat",
+    "class": "net.minecraft.network.protocol.game.ClientboundDeleteChatPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 32,
+    "name": "minecraft:disconnect",
+    "class": "net.minecraft.network.protocol.common.ClientboundDisconnectPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 33,
+    "name": "minecraft:disguised_chat",
+    "class": "net.minecraft.network.protocol.game.ClientboundDisguisedChatPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 34,
+    "name": "minecraft:entity_event",
+    "class": "net.minecraft.network.protocol.game.ClientboundEntityEventPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 35,
+    "name": "minecraft:entity_position_sync",
+    "class": "net.minecraft.network.protocol.game.ClientboundEntityPositionSyncPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 36,
+    "name": "minecraft:explode",
+    "class": "net.minecraft.network.protocol.game.ClientboundExplodePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 37,
+    "name": "minecraft:add_transient_block",
+    "class": "net.minecraft.network.protocol.game.ClientboundAddTransientBlockPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 38,
+    "name": "minecraft:forget_level_chunk",
+    "class": "net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 39,
+    "name": "minecraft:game_event",
+    "class": "net.minecraft.network.protocol.game.ClientboundGameEventPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 40,
+    "name": "minecraft:game_rule_values",
+    "class": "net.minecraft.network.protocol.game.ClientboundGameRuleValuesPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 41,
+    "name": "minecraft:game_test_highlight_pos",
+    "class": "net.minecraft.network.protocol.game.ClientboundGameTestHighlightPosPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 42,
+    "name": "minecraft:mount_screen_open",
+    "class": "net.minecraft.network.protocol.game.ClientboundMountScreenOpenPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 43,
+    "name": "minecraft:hurt_animation",
+    "class": "net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 44,
+    "name": "minecraft:initialize_border",
+    "class": "net.minecraft.network.protocol.game.ClientboundInitializeBorderPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 45,
+    "name": "minecraft:keep_alive",
+    "class": "net.minecraft.network.protocol.common.ClientboundKeepAlivePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 46,
+    "name": "minecraft:level_chunk_with_light",
+    "class": "net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 47,
+    "name": "minecraft:level_event",
+    "class": "net.minecraft.network.protocol.game.ClientboundLevelEventPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 48,
+    "name": "minecraft:level_particles",
+    "class": "net.minecraft.network.protocol.game.ClientboundLevelParticlesPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 49,
+    "name": "minecraft:light_update",
+    "class": "net.minecraft.network.protocol.game.ClientboundLightUpdatePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 50,
+    "name": "minecraft:login",
+    "class": "net.minecraft.network.protocol.game.ClientboundLoginPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 51,
+    "name": "minecraft:low_disk_space_warning",
+    "class": "net.minecraft.network.protocol.game.ClientboundLowDiskSpaceWarningPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 52,
+    "name": "minecraft:map_item_data",
+    "class": "net.minecraft.network.protocol.game.ClientboundMapItemDataPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 53,
+    "name": "minecraft:merchant_offers",
+    "class": "net.minecraft.network.protocol.game.ClientboundMerchantOffersPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 54,
+    "name": "minecraft:move_entity_pos",
+    "class": "net.minecraft.network.protocol.game.ClientboundMoveEntityPacket$Pos"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 55,
+    "name": "minecraft:move_entity_pos_rot",
+    "class": "net.minecraft.network.protocol.game.ClientboundMoveEntityPacket$PosRot"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 56,
+    "name": "minecraft:move_minecart_along_track",
+    "class": "net.minecraft.network.protocol.game.ClientboundMoveMinecartPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 57,
+    "name": "minecraft:move_entity_rot",
+    "class": "net.minecraft.network.protocol.game.ClientboundMoveEntityPacket$Rot"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 58,
+    "name": "minecraft:move_vehicle",
+    "class": "net.minecraft.network.protocol.game.ClientboundMoveVehiclePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 59,
+    "name": "minecraft:open_book",
+    "class": "net.minecraft.network.protocol.game.ClientboundOpenBookPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 60,
+    "name": "minecraft:open_screen",
+    "class": "net.minecraft.network.protocol.game.ClientboundOpenScreenPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 61,
+    "name": "minecraft:open_sign_editor",
+    "class": "net.minecraft.network.protocol.game.ClientboundOpenSignEditorPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 62,
+    "name": "minecraft:ping",
+    "class": "net.minecraft.network.protocol.common.ClientboundPingPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 63,
+    "name": "minecraft:pong_response",
+    "class": "net.minecraft.network.protocol.ping.ClientboundPongResponsePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 64,
+    "name": "minecraft:place_ghost_recipe",
+    "class": "net.minecraft.network.protocol.game.ClientboundPlaceGhostRecipePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 65,
+    "name": "minecraft:player_abilities",
+    "class": "net.minecraft.network.protocol.game.ClientboundPlayerAbilitiesPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 66,
+    "name": "minecraft:player_chat",
+    "class": "net.minecraft.network.protocol.game.ClientboundPlayerChatPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 67,
+    "name": "minecraft:player_combat_end",
+    "class": "net.minecraft.network.protocol.game.ClientboundPlayerCombatEndPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 68,
+    "name": "minecraft:player_combat_enter",
+    "class": "net.minecraft.network.protocol.game.ClientboundPlayerCombatEnterPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 69,
+    "name": "minecraft:player_combat_kill",
+    "class": "net.minecraft.network.protocol.game.ClientboundPlayerCombatKillPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 70,
+    "name": "minecraft:player_info_remove",
+    "class": "net.minecraft.network.protocol.game.ClientboundPlayerInfoRemovePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 71,
+    "name": "minecraft:player_info_update",
+    "class": "net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 72,
+    "name": "minecraft:player_look_at",
+    "class": "net.minecraft.network.protocol.game.ClientboundPlayerLookAtPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 73,
+    "name": "minecraft:player_position",
+    "class": "net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 74,
+    "name": "minecraft:player_rotation",
+    "class": "net.minecraft.network.protocol.game.ClientboundPlayerRotationPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 75,
+    "name": "minecraft:recipe_book_add",
+    "class": "net.minecraft.network.protocol.game.ClientboundRecipeBookAddPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 76,
+    "name": "minecraft:recipe_book_remove",
+    "class": "net.minecraft.network.protocol.game.ClientboundRecipeBookRemovePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 77,
+    "name": "minecraft:recipe_book_settings",
+    "class": "net.minecraft.network.protocol.game.ClientboundRecipeBookSettingsPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 78,
+    "name": "minecraft:remove_entities",
+    "class": "net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 79,
+    "name": "minecraft:remove_mob_effect",
+    "class": "net.minecraft.network.protocol.game.ClientboundRemoveMobEffectPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 80,
+    "name": "minecraft:reset_score",
+    "class": "net.minecraft.network.protocol.game.ClientboundResetScorePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 81,
+    "name": "minecraft:resource_pack_pop",
+    "class": "net.minecraft.network.protocol.common.ClientboundResourcePackPopPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 82,
+    "name": "minecraft:resource_pack_push",
+    "class": "net.minecraft.network.protocol.common.ClientboundResourcePackPushPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 83,
+    "name": "minecraft:post_effects",
+    "class": "net.minecraft.network.protocol.common.ClientboundPostEffectsPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 84,
+    "name": "minecraft:respawn",
+    "class": "net.minecraft.network.protocol.game.ClientboundRespawnPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 85,
+    "name": "minecraft:rotate_head",
+    "class": "net.minecraft.network.protocol.game.ClientboundRotateHeadPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 86,
+    "name": "minecraft:section_blocks_update",
+    "class": "net.minecraft.network.protocol.game.ClientboundSectionBlocksUpdatePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 87,
+    "name": "minecraft:select_advancements_tab",
+    "class": "net.minecraft.network.protocol.game.ClientboundSelectAdvancementsTabPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 88,
+    "name": "minecraft:server_data",
+    "class": "net.minecraft.network.protocol.game.ClientboundServerDataPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 89,
+    "name": "minecraft:set_action_bar_text",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetActionBarTextPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 90,
+    "name": "minecraft:set_border_center",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetBorderCenterPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 91,
+    "name": "minecraft:set_border_lerp_size",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetBorderLerpSizePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 92,
+    "name": "minecraft:set_border_size",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetBorderSizePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 93,
+    "name": "minecraft:set_border_warning_delay",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetBorderWarningDelayPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 94,
+    "name": "minecraft:set_border_warning_distance",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetBorderWarningDistancePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 95,
+    "name": "minecraft:set_camera",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetCameraPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 96,
+    "name": "minecraft:set_chunk_cache_center",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetChunkCacheCenterPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 97,
+    "name": "minecraft:set_chunk_cache_radius",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetChunkCacheRadiusPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 98,
+    "name": "minecraft:set_cursor_item",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetCursorItemPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 99,
+    "name": "minecraft:set_default_spawn_position",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetDefaultSpawnPositionPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 100,
+    "name": "minecraft:set_display_objective",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetDisplayObjectivePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 101,
+    "name": "minecraft:set_entity_data",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 102,
+    "name": "minecraft:set_entity_link",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetEntityLinkPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 103,
+    "name": "minecraft:set_entity_motion",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 104,
+    "name": "minecraft:set_equipment",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetEquipmentPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 105,
+    "name": "minecraft:set_experience",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetExperiencePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 106,
+    "name": "minecraft:set_health",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetHealthPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 107,
+    "name": "minecraft:set_held_slot",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetHeldSlotPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 108,
+    "name": "minecraft:set_objective",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetObjectivePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 109,
+    "name": "minecraft:set_passengers",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetPassengersPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 110,
+    "name": "minecraft:set_player_inventory",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetPlayerInventoryPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 111,
+    "name": "minecraft:set_player_team",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetPlayerTeamPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 112,
+    "name": "minecraft:set_score",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetScorePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 113,
+    "name": "minecraft:set_simulation_distance",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetSimulationDistancePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 114,
+    "name": "minecraft:set_subtitle_text",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetSubtitleTextPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 115,
+    "name": "minecraft:set_time",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetTimePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 116,
+    "name": "minecraft:set_title_text",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetTitleTextPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 117,
+    "name": "minecraft:set_titles_animation",
+    "class": "net.minecraft.network.protocol.game.ClientboundSetTitlesAnimationPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 118,
+    "name": "minecraft:sound_entity",
+    "class": "net.minecraft.network.protocol.game.ClientboundSoundEntityPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 119,
+    "name": "minecraft:sound",
+    "class": "net.minecraft.network.protocol.game.ClientboundSoundPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 120,
+    "name": "minecraft:start_configuration",
+    "class": "net.minecraft.network.protocol.game.ClientboundStartConfigurationPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 121,
+    "name": "minecraft:stop_sound",
+    "class": "net.minecraft.network.protocol.game.ClientboundStopSoundPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 122,
+    "name": "minecraft:store_cookie",
+    "class": "net.minecraft.network.protocol.common.ClientboundStoreCookiePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 123,
+    "name": "minecraft:swing_animation",
+    "class": "net.minecraft.network.protocol.game.ClientboundSwingAnimationPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 124,
+    "name": "minecraft:system_chat",
+    "class": "net.minecraft.network.protocol.game.ClientboundSystemChatPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 125,
+    "name": "minecraft:tab_list",
+    "class": "net.minecraft.network.protocol.game.ClientboundTabListPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 126,
+    "name": "minecraft:tag_query",
+    "class": "net.minecraft.network.protocol.game.ClientboundTagQueryPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 127,
+    "name": "minecraft:take_item_entity",
+    "class": "net.minecraft.network.protocol.game.ClientboundTakeItemEntityPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 128,
+    "name": "minecraft:teleport_entity",
+    "class": "net.minecraft.network.protocol.game.ClientboundTeleportEntityPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 129,
+    "name": "minecraft:test_instance_block_status",
+    "class": "net.minecraft.network.protocol.game.ClientboundTestInstanceBlockStatus"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 130,
+    "name": "minecraft:ticking_state",
+    "class": "net.minecraft.network.protocol.game.ClientboundTickingStatePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 131,
+    "name": "minecraft:ticking_step",
+    "class": "net.minecraft.network.protocol.game.ClientboundTickingStepPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 132,
+    "name": "minecraft:transfer",
+    "class": "net.minecraft.network.protocol.common.ClientboundTransferPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 133,
+    "name": "minecraft:update_advancements",
+    "class": "net.minecraft.network.protocol.game.ClientboundUpdateAdvancementsPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 134,
+    "name": "minecraft:update_attributes",
+    "class": "net.minecraft.network.protocol.game.ClientboundUpdateAttributesPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 135,
+    "name": "minecraft:update_mob_effect",
+    "class": "net.minecraft.network.protocol.game.ClientboundUpdateMobEffectPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 136,
+    "name": "minecraft:update_recipes",
+    "class": "net.minecraft.network.protocol.game.ClientboundUpdateRecipesPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 137,
+    "name": "minecraft:update_tags",
+    "class": "net.minecraft.network.protocol.common.ClientboundUpdateTagsPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 138,
+    "name": "minecraft:projectile_power",
+    "class": "net.minecraft.network.protocol.game.ClientboundProjectilePowerPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 139,
+    "name": "minecraft:custom_report_details",
+    "class": "net.minecraft.network.protocol.common.ClientboundCustomReportDetailsPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 140,
+    "name": "minecraft:server_links",
+    "class": "net.minecraft.network.protocol.common.ClientboundServerLinksPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 141,
+    "name": "minecraft:waypoint",
+    "class": "net.minecraft.network.protocol.game.ClientboundTrackedWaypointPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 142,
+    "name": "minecraft:clear_dialog",
+    "class": "net.minecraft.network.protocol.common.ClientboundClearDialogPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "clientbound",
+    "id": 143,
+    "name": "minecraft:show_dialog",
+    "class": "net.minecraft.network.protocol.common.ClientboundShowDialogPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 0,
+    "name": "minecraft:accept_teleportation",
+    "class": "net.minecraft.network.protocol.game.ServerboundAcceptTeleportationPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 1,
+    "name": "minecraft:attack",
+    "class": "net.minecraft.network.protocol.game.ServerboundAttackPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 2,
+    "name": "minecraft:block_entity_tag_query",
+    "class": "net.minecraft.network.protocol.game.ServerboundBlockEntityTagQueryPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 3,
+    "name": "minecraft:bundle_item_selected",
+    "class": "net.minecraft.network.protocol.game.ServerboundSelectBundleItemPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 4,
+    "name": "minecraft:change_difficulty",
+    "class": "net.minecraft.network.protocol.game.ServerboundChangeDifficultyPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 5,
+    "name": "minecraft:change_game_mode",
+    "class": "net.minecraft.network.protocol.game.ServerboundChangeGameModePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 6,
+    "name": "minecraft:chat_ack",
+    "class": "net.minecraft.network.protocol.game.ServerboundChatAckPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 7,
+    "name": "minecraft:chat_command",
+    "class": "net.minecraft.network.protocol.game.ServerboundChatCommandPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 8,
+    "name": "minecraft:chat_command_signed",
+    "class": "net.minecraft.network.protocol.game.ServerboundChatCommandSignedPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 9,
+    "name": "minecraft:chat",
+    "class": "net.minecraft.network.protocol.game.ServerboundChatPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 10,
+    "name": "minecraft:chat_session_update",
+    "class": "net.minecraft.network.protocol.game.ServerboundChatSessionUpdatePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 11,
+    "name": "minecraft:chunk_batch_received",
+    "class": "net.minecraft.network.protocol.game.ServerboundChunkBatchReceivedPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 12,
+    "name": "minecraft:client_command",
+    "class": "net.minecraft.network.protocol.game.ServerboundClientCommandPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 13,
+    "name": "minecraft:client_tick_end",
+    "class": "net.minecraft.network.protocol.game.ServerboundClientTickEndPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 14,
+    "name": "minecraft:client_information",
+    "class": "net.minecraft.network.protocol.common.ServerboundClientInformationPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 15,
+    "name": "minecraft:command_suggestion",
+    "class": "net.minecraft.network.protocol.game.ServerboundCommandSuggestionPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 16,
+    "name": "minecraft:configuration_acknowledged",
+    "class": "net.minecraft.network.protocol.game.ServerboundConfigurationAcknowledgedPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 17,
+    "name": "minecraft:container_button_click",
+    "class": "net.minecraft.network.protocol.game.ServerboundContainerButtonClickPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 18,
+    "name": "minecraft:container_click",
+    "class": "net.minecraft.network.protocol.game.ServerboundContainerClickPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 19,
+    "name": "minecraft:container_close",
+    "class": "net.minecraft.network.protocol.game.ServerboundContainerClosePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 20,
+    "name": "minecraft:container_slot_state_changed",
+    "class": "net.minecraft.network.protocol.game.ServerboundContainerSlotStateChangedPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 21,
+    "name": "minecraft:cookie_response",
+    "class": "net.minecraft.network.protocol.cookie.ServerboundCookieResponsePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 22,
+    "name": "minecraft:custom_payload",
+    "class": "net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 23,
+    "name": "minecraft:debug_subscription_request",
+    "class": "net.minecraft.network.protocol.game.ServerboundDebugSubscriptionRequestPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 24,
+    "name": "minecraft:edit_book",
+    "class": "net.minecraft.network.protocol.game.ServerboundEditBookPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 25,
+    "name": "minecraft:entity_tag_query",
+    "class": "net.minecraft.network.protocol.game.ServerboundEntityTagQueryPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 26,
+    "name": "minecraft:interact",
+    "class": "net.minecraft.network.protocol.game.ServerboundInteractPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 27,
+    "name": "minecraft:jigsaw_generate",
+    "class": "net.minecraft.network.protocol.game.ServerboundJigsawGeneratePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 28,
+    "name": "minecraft:keep_alive",
+    "class": "net.minecraft.network.protocol.common.ServerboundKeepAlivePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 29,
+    "name": "minecraft:lock_difficulty",
+    "class": "net.minecraft.network.protocol.game.ServerboundLockDifficultyPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 30,
+    "name": "minecraft:move_player_pos",
+    "class": "net.minecraft.network.protocol.game.ServerboundMovePlayerPacket$Pos"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 31,
+    "name": "minecraft:move_player_pos_rot",
+    "class": "net.minecraft.network.protocol.game.ServerboundMovePlayerPacket$PosRot"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 32,
+    "name": "minecraft:move_player_rot",
+    "class": "net.minecraft.network.protocol.game.ServerboundMovePlayerPacket$Rot"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 33,
+    "name": "minecraft:move_player_status_only",
+    "class": "net.minecraft.network.protocol.game.ServerboundMovePlayerPacket$StatusOnly"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 34,
+    "name": "minecraft:move_vehicle",
+    "class": "net.minecraft.network.protocol.game.ServerboundMoveVehiclePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 35,
+    "name": "minecraft:paddle_boat",
+    "class": "net.minecraft.network.protocol.game.ServerboundPaddleBoatPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 36,
+    "name": "minecraft:pick_item_from_block",
+    "class": "net.minecraft.network.protocol.game.ServerboundPickItemFromBlockPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 37,
+    "name": "minecraft:pick_item_from_entity",
+    "class": "net.minecraft.network.protocol.game.ServerboundPickItemFromEntityPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 38,
+    "name": "minecraft:ping_request",
+    "class": "net.minecraft.network.protocol.ping.ServerboundPingRequestPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 39,
+    "name": "minecraft:place_recipe",
+    "class": "net.minecraft.network.protocol.game.ServerboundPlaceRecipePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 40,
+    "name": "minecraft:player_abilities",
+    "class": "net.minecraft.network.protocol.game.ServerboundPlayerAbilitiesPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 41,
+    "name": "minecraft:player_action",
+    "class": "net.minecraft.network.protocol.game.ServerboundPlayerActionPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 42,
+    "name": "minecraft:player_command",
+    "class": "net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 43,
+    "name": "minecraft:player_input",
+    "class": "net.minecraft.network.protocol.game.ServerboundPlayerInputPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 44,
+    "name": "minecraft:player_loaded",
+    "class": "net.minecraft.network.protocol.game.ServerboundPlayerLoadedPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 45,
+    "name": "minecraft:pong",
+    "class": "net.minecraft.network.protocol.common.ServerboundPongPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 46,
+    "name": "minecraft:punch",
+    "class": "net.minecraft.network.protocol.game.ServerboundPunchPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 47,
+    "name": "minecraft:recipe_book_change_settings",
+    "class": "net.minecraft.network.protocol.game.ServerboundRecipeBookChangeSettingsPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 48,
+    "name": "minecraft:recipe_book_seen_recipe",
+    "class": "net.minecraft.network.protocol.game.ServerboundRecipeBookSeenRecipePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 49,
+    "name": "minecraft:rename_item",
+    "class": "net.minecraft.network.protocol.game.ServerboundRenameItemPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 50,
+    "name": "minecraft:resource_pack",
+    "class": "net.minecraft.network.protocol.common.ServerboundResourcePackPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 51,
+    "name": "minecraft:seen_advancements",
+    "class": "net.minecraft.network.protocol.game.ServerboundSeenAdvancementsPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 52,
+    "name": "minecraft:select_trade",
+    "class": "net.minecraft.network.protocol.game.ServerboundSelectTradePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 53,
+    "name": "minecraft:set_beacon",
+    "class": "net.minecraft.network.protocol.game.ServerboundSetBeaconPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 54,
+    "name": "minecraft:set_carried_item",
+    "class": "net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 55,
+    "name": "minecraft:set_command_block",
+    "class": "net.minecraft.network.protocol.game.ServerboundSetCommandBlockPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 56,
+    "name": "minecraft:set_command_minecart",
+    "class": "net.minecraft.network.protocol.game.ServerboundSetCommandMinecartPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 57,
+    "name": "minecraft:set_creative_mode_slot",
+    "class": "net.minecraft.network.protocol.game.ServerboundSetCreativeModeSlotPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 58,
+    "name": "minecraft:set_game_rule",
+    "class": "net.minecraft.network.protocol.game.ServerboundSetGameRulePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 59,
+    "name": "minecraft:set_jigsaw_block",
+    "class": "net.minecraft.network.protocol.game.ServerboundSetJigsawBlockPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 60,
+    "name": "minecraft:set_structure_block",
+    "class": "net.minecraft.network.protocol.game.ServerboundSetStructureBlockPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 61,
+    "name": "minecraft:set_test_block",
+    "class": "net.minecraft.network.protocol.game.ServerboundSetTestBlockPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 62,
+    "name": "minecraft:sign_update",
+    "class": "net.minecraft.network.protocol.game.ServerboundSignUpdatePacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 63,
+    "name": "minecraft:spectator_action",
+    "class": "net.minecraft.network.protocol.game.ServerboundSpectatorActionPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 64,
+    "name": "minecraft:teleport_to_entity",
+    "class": "net.minecraft.network.protocol.game.ServerboundTeleportToEntityPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 65,
+    "name": "minecraft:test_instance_block_action",
+    "class": "net.minecraft.network.protocol.game.ServerboundTestInstanceBlockActionPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 66,
+    "name": "minecraft:use_item_on",
+    "class": "net.minecraft.network.protocol.game.ServerboundUseItemOnPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 67,
+    "name": "minecraft:use_item",
+    "class": "net.minecraft.network.protocol.game.ServerboundUseItemPacket"
+  },
+  {
+    "stage": "play",
+    "flow": "serverbound",
+    "id": 68,
+    "name": "minecraft:custom_click_action",
+    "class": "net.minecraft.network.protocol.common.ServerboundCustomClickActionPacket"
+  }
+]

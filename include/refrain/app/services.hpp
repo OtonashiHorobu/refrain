@@ -42,6 +42,50 @@ struct vanilla_info_options {
     std::string tables{};
 };
 
+struct protocol_bot_options {
+    std::string target{};
+    std::string username{"Bot"};
+    int timeout_ms{10000};
+    std::size_t wait_chunks{0};
+    int linger_ms{0};
+    std::string command{};
+    std::size_t wait_messages{0};
+    double move_dx{0.0};
+    double move_dy{0.0};
+    double move_dz{0.0};
+    int move_delay_ms{0};
+    int command_delay_ms{0};
+};
+
+struct protocol_load_options {
+    std::string target{};
+    std::string username_prefix{"Bot"};
+    int bots{20};
+    int duration_ms{10000};
+    int timeout_ms{15000};
+};
+
+struct protocol_capture_options {
+    std::string target{};
+    std::string out{};
+    std::string username{"Bot"};
+    std::size_t wait_chunks{1};
+    int timeout_ms{15000};
+    int linger_ms{0};
+};
+
+struct protocol_diff_options {
+    std::string left{};
+    std::string right{};
+};
+
+struct config_import_options {
+    std::string properties{};
+    std::string config_dir{"config"};
+    bool force{false};
+    bool strict{false};
+};
+
 struct mods_check_options {
     std::string mods_dir{"mods"};
     std::string gamepack{};
@@ -154,6 +198,15 @@ struct builtin_image_options {
 [[nodiscard]] auto run_vanilla_import(const vanilla_import_options &options)
     -> int;
 [[nodiscard]] auto run_vanilla_info(const vanilla_info_options &options) -> int;
+[[nodiscard]] auto
+run_config_import_properties(const config_import_options &options) -> int;
+[[nodiscard]] auto run_protocol_bot(const protocol_bot_options &options) -> int;
+[[nodiscard]] auto run_protocol_load(const protocol_load_options &options)
+    -> int;
+[[nodiscard]] auto run_protocol_capture(const protocol_capture_options &options)
+    -> int;
+[[nodiscard]] auto run_protocol_diff(const protocol_diff_options &options)
+    -> int;
 [[nodiscard]] auto run_schema_gen(const std::string &output_root,
                                   const std::vector<std::string> &roots,
                                   bool check) -> int;

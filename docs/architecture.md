@@ -15,7 +15,8 @@ definitions and gameplay modules can evolve independently.
 | World | `include/refrain/world`, `src/world` | RWF world storage, chunk codec, Anvil import and export |
 | Simulation | `include/refrain/sim`, `src/sim` | runtime world, block registry, entities, inventory, tick loop, replay |
 | Mods | `include/refrain/mod`, `src/mod` | manifests, gamepack composition, discovery, resolution, loading, provider registry, static mod registry, startup content |
-| Server runtime | `include/refrain/server`, `src/server` | headless tick loop, console, watchdog, `server.properties` |
+| Session | `include/refrain/session`, `src/session` | player table, entity visibility/movement, chunk subscriptions |
+| Server runtime | `include/refrain/server`, `src/server` | headless tick loop, console, watchdog, per-namespace TOML configuration |
 | Application | `include/refrain/app`, `src/app`, `src/main` | composition root, service layer shared by the CLIs, CLI entry points |
 | Tools | `tools`, `src/main/tools.cpp` | schema compiler, world conversion, packaging, diagnostics |
 
@@ -58,6 +59,51 @@ First-party mods are linked into the server binary and register through the
 static mod registry. Their data, assets and scripts travel in a deterministic
 RFSI image embedded in the binary. External packages use the same manifest
 model and are installed into the content store.
+
+## Network
+
+The network stack is split along three contracts:
+
+- `refrain:transport` moves bytes. Providers declare reliability, ordering,
+  message orientation, MTU and backpressure. The bundled provider is TCP.
+- `refrain:net.protocol` turns bytes into packet ids and payloads. A provider
+  declares an edition/family descriptor, canonical and accepted versions,
+  required transport capabilities, framing/compression/encryption and the
+  optional `tab_codec` extension. Packet semantics and the connection state
+  machine stay in the network session shell; protocol providers do not own
+  world or player state.
+- `refrain:net.session` resolves offline and online player profiles. Online
+  mode uses it for the `hasJoined` check; offline mode does not require a
+  provider.
+
+Session presentation and observation are optional feature services, never
+network code:
+
+- `refrain:session.status` supplies server-list description, online and max
+  counts.
+- `refrain:session.tab` supplies tab-list header and footer.
+- `refrain:session.lifecycle` receives player join/leave and per-tick notifications.
+
+The runtime enumerates every active instance in deterministic order. An empty
+service list keeps the static `network.toml` status, sends no tab packet and
+dispatches no lifecycle events.
+
+The stable C++ facade for the current wire version is
+`include/refrain/protocol/current.hpp`. Session and server code include this
+facade; only protocol providers and client tooling name a concrete version.
+
+### Session layer
+
+`refrain::session` owns gameplay-side player and entity state:
+
+- `play_session`: connection-scoped player records, entity id allocation,
+  movement/health/game-mode updates, per-player inventory slots, visibility.
+- `chunk_tracker`: viewport changes and pending chunk subscription requests.
+
+The network shell reports neutral events (`player_join`, `player_leave`,
+`movement`, `attack`, `animation`, `play_ready`, `view_distance`) and provides a
+raw packet sink. It does not decide which entities exist, who can see them, how
+much health a player has, or when a chunk view changes.
 
 ## World storage
 

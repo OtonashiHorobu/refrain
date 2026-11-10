@@ -29,6 +29,7 @@
 #include <refrain/mod/manifest.hpp>
 #include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
+#include <refrain/net/ping.hpp>
 #include <refrain/script/wasm.hpp>
 
 #include <schema/schema.hpp>
@@ -41,6 +42,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <compare>
 #include <cstddef>
@@ -183,6 +185,26 @@ int main(int argc, char **argv) {
     vanilla_info_cmd
         ->add_option("tables", vanilla_info.tables, "tables.rvtb path")
         ->required();
+
+    config_import_options config_import{};
+    auto *config_cmd =
+        app.add_subcommand("config", "Configuration file tooling");
+    auto *config_import_cmd = config_cmd->add_subcommand(
+        "import-properties",
+        "Import Java server.properties into per-namespace TOML files");
+    config_import_cmd
+        ->add_option("-i,--in", config_import.properties,
+                     "Java server.properties path")
+        ->required();
+    config_import_cmd
+        ->add_option("-o,--out-dir", config_import.config_dir,
+                     "Target configuration directory")
+        ->default_val("config");
+    config_import_cmd->add_flag(
+        "--force", config_import.force,
+        "Overwrite keys already present in the target TOML files");
+    config_import_cmd->add_flag("--strict", config_import.strict,
+                                "Fail on unknown server.properties keys");
 
     mods_check_options mods_check{};
     auto *mods_cmd = app.add_subcommand("mods", "Mod manifest tooling");
@@ -447,6 +469,93 @@ int main(int argc, char **argv) {
         ->add_option("--handler", crash_handler,
                      "crashpad_handler executable path")
         ->required();
+    std::string protocol_target{};
+    int protocol_timeout_ms{5000};
+    protocol_bot_options protocol_bot{};
+    protocol_load_options protocol_load{};
+    protocol_capture_options protocol_capture{};
+    protocol_diff_options protocol_diff{};
+    auto *protocol_cmd =
+        app.add_subcommand("protocol", "Protocol 777 client tools");
+    auto *protocol_ping_cmd = protocol_cmd->add_subcommand(
+        "ping", "Status-list ping (handshake, status, pong)");
+    protocol_ping_cmd
+        ->add_option("target", protocol_target, "host:port (required)")
+        ->required();
+    protocol_ping_cmd->add_option("--timeout-ms", protocol_timeout_ms,
+                                  "Whole exchange timeout in milliseconds");
+
+    auto *protocol_bot_cmd = protocol_cmd->add_subcommand(
+        "bot", "Offline-mode protocol bot (handshake to play)");
+    protocol_bot_cmd
+        ->add_option("--host", protocol_bot.target, "host:port (required)")
+        ->required();
+    protocol_bot_cmd->add_option("--username", protocol_bot.username,
+                                 "Bot username");
+    protocol_bot_cmd->add_option("--timeout-ms", protocol_bot.timeout_ms,
+                                 "Connect/read timeout in milliseconds");
+    protocol_bot_cmd->add_option("--wait-chunks", protocol_bot.wait_chunks,
+                                 "Wait for N level_chunk_with_light packets");
+    protocol_bot_cmd->add_option("--linger-ms", protocol_bot.linger_ms,
+                                 "Stay in play for N milliseconds after join");
+    protocol_bot_cmd->add_option("--command", protocol_bot.command,
+                                 "Play command to send after join");
+    protocol_bot_cmd->add_option("--wait-messages", protocol_bot.wait_messages,
+                                 "Wait for N system_chat messages");
+    protocol_bot_cmd->add_option("--command-delay-ms",
+                                 protocol_bot.command_delay_ms,
+                                 "Delay the play command by N milliseconds");
+    protocol_bot_cmd->add_option("--move-dx", protocol_bot.move_dx,
+                                 "Move this many blocks along X after join");
+    protocol_bot_cmd->add_option("--move-dy", protocol_bot.move_dy,
+                                 "Move this many blocks along Y after join");
+    protocol_bot_cmd->add_option("--move-dz", protocol_bot.move_dz,
+                                 "Move this many blocks along Z after join");
+    protocol_bot_cmd->add_option("--move-delay-ms", protocol_bot.move_delay_ms,
+                                 "Delay the move packet by N milliseconds");
+
+    auto *protocol_load_cmd = protocol_cmd->add_subcommand(
+        "load", "Open N protocol bots and keep them in play");
+    protocol_load_cmd
+        ->add_option("--host", protocol_load.target, "host:port (required)")
+        ->required();
+    protocol_load_cmd->add_option("--bots", protocol_load.bots,
+                                  "Number of bots");
+    protocol_load_cmd->add_option("--username-prefix",
+                                  protocol_load.username_prefix,
+                                  "Bot username prefix");
+    protocol_load_cmd->add_option("--duration-ms", protocol_load.duration_ms,
+                                  "How long each bot stays in play");
+    protocol_load_cmd->add_option("--timeout-ms", protocol_load.timeout_ms,
+                                  "Per-bot join timeout");
+
+    auto *protocol_capture_cmd = protocol_cmd->add_subcommand(
+        "capture", "Record decoded clientbound packets into RFCAP1");
+    protocol_capture_cmd
+        ->add_option("--host", protocol_capture.target, "host:port (required)")
+        ->required();
+    protocol_capture_cmd
+        ->add_option("--out", protocol_capture.out, "Capture file (required)")
+        ->required();
+    protocol_capture_cmd->add_option("--username", protocol_capture.username,
+                                     "Bot username");
+    protocol_capture_cmd->add_option("--wait-chunks",
+                                     protocol_capture.wait_chunks,
+                                     "Chunks to wait for before stopping");
+    protocol_capture_cmd->add_option("--timeout-ms",
+                                     protocol_capture.timeout_ms,
+                                     "Join timeout in milliseconds");
+    protocol_capture_cmd->add_option("--linger-ms", protocol_capture.linger_ms,
+                                     "Keep capturing for N ms after join");
+
+    auto *protocol_diff_cmd = protocol_cmd->add_subcommand(
+        "diff", "Compare two RFCAP1 packet sequences");
+    protocol_diff_cmd->add_option("--left", protocol_diff.left, "First capture")
+        ->required();
+    protocol_diff_cmd
+        ->add_option("--right", protocol_diff.right, "Second capture")
+        ->required();
+
     auto *wasm_cmd = app.add_subcommand("wasm", "WASM runtime smoke tests");
     auto *wasm_smoke_cmd =
         wasm_cmd->add_subcommand("smoke", "Compile and run a WAT module");
@@ -591,6 +700,9 @@ int main(int argc, char **argv) {
     if (vanilla_info_cmd->parsed()) {
         return app_services::run_vanilla_info(vanilla_info);
     }
+    if (config_import_cmd->parsed()) {
+        return app_services::run_config_import_properties(config_import);
+    }
     if (mods_check_cmd->parsed()) {
         return app_services::run_mods_check(mods_check);
     }
@@ -675,6 +787,51 @@ int main(int argc, char **argv) {
     }
     if (crash_smoke_cmd->parsed()) {
         return app_services::run_crash_smoke(crash_out, crash_handler);
+    }
+    if (protocol_bot_cmd->parsed()) {
+        return app_services::run_protocol_bot(protocol_bot);
+    }
+    if (protocol_load_cmd->parsed()) {
+        return app_services::run_protocol_load(protocol_load);
+    }
+    if (protocol_capture_cmd->parsed()) {
+        return app_services::run_protocol_capture(protocol_capture);
+    }
+    if (protocol_diff_cmd->parsed()) {
+        return app_services::run_protocol_diff(protocol_diff);
+    }
+    if (protocol_ping_cmd->parsed()) {
+        const auto separator{protocol_target.rfind(':')};
+        if (separator == std::string::npos || separator == 0 ||
+            separator + 1 >= protocol_target.size()) {
+            fmt::print(stderr, "protocol ping: expected host:port\n");
+            return 1;
+        }
+        refrain::net::endpoint endpoint{};
+        endpoint.host = protocol_target.substr(0, separator);
+        std::uint16_t port{0};
+        const auto port_text{protocol_target.substr(separator + 1)};
+        const auto parsed{std::from_chars(
+            port_text.data(), port_text.data() + port_text.size(), port)};
+        if (parsed.ec != std::errc{} ||
+            parsed.ptr != port_text.data() + port_text.size()) {
+            fmt::print(stderr, "protocol ping: invalid port '{}'\n", port_text);
+            return 1;
+        }
+        endpoint.port = port;
+        auto result{refrain::net::ping(
+            endpoint, std::chrono::milliseconds{protocol_timeout_ms})};
+        if (!result) {
+            fmt::print(stderr, "protocol ping: {}\n", result.error().message);
+            return 1;
+        }
+        std::cout << "protocol: " << result->status.protocol << '\n';
+        std::cout << "version: " << result->status.version_name << '\n';
+        std::cout << "motd: " << result->status.description << '\n';
+        std::cout << "players: " << result->status.online_players << '/'
+                  << result->status.max_players << '\n';
+        std::cout << "latency_ms: " << result->latency.count() << '\n';
+        return 0;
     }
 
     std::cout << app.help();

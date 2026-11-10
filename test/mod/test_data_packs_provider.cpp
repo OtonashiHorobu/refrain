@@ -244,7 +244,8 @@ const suite data_packs_provider_tests = [] {
         if (!loaded) {
             return;
         }
-        expect(host.mods().size() == 10U) << "all ten built-in mods must load";
+        expect(host.mods().size() == 11U)
+            << "all eleven built-in mods must load";
         expect(
             !host.services().active_provider("refrain:data.packs").has_value());
         const auto *data_mod{host.find("refrain.data.vanilla")};

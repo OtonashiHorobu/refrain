@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <charconv>
 #include <chrono>
 #include <compare>
 #include <cstddef>
@@ -19,6 +21,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <refrain/archive/manifest.hpp>
 #include <refrain/archive/zip.hpp>
@@ -48,13 +51,16 @@
 #include <refrain/mod/manifest.hpp>
 #include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
+#include <refrain/net/bot.hpp>
 #include <refrain/script/wasm.hpp>
+#include <refrain/server/server_properties.hpp>
 #include <schema/schema.hpp>
 #include <set>
 #include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -69,6 +75,7 @@ namespace kernel = refrain::kernel;
 namespace log = refrain::log;
 namespace mod = refrain::mod;
 namespace schema = refrain::schema;
+namespace server = refrain::server;
 namespace script = refrain::script;
 
 // --- vanilla ---------------------------------------------------------------
@@ -92,6 +99,324 @@ auto run_vanilla_import(const vanilla_import_options &options) -> int {
               << result->tables_bytes << " bytes, blake3 "
               << result->tables_digest << ")\n";
     std::cout << "  manifest: " << result->manifest_path << '\n';
+    return 0;
+}
+
+auto run_protocol_bot(const protocol_bot_options &options) -> int {
+    const auto separator{options.target.rfind(':')};
+    if (separator == std::string::npos ||
+        separator + 1 >= options.target.size()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol bot: expected host:port"));
+    }
+    std::uint16_t port{0};
+    const auto port_text{options.target.substr(separator + 1)};
+    const auto parsed{std::from_chars(
+        port_text.data(), port_text.data() + port_text.size(), port)};
+    if (parsed.ec != std::errc{} ||
+        parsed.ptr != port_text.data() + port_text.size()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol bot: invalid port"));
+    }
+    refrain::net::bot_options bot{};
+    bot.target.host = options.target.substr(0, separator);
+    bot.target.port = port;
+    bot.username = options.username;
+    bot.timeout = std::chrono::milliseconds{options.timeout_ms};
+    bot.wait_chunks = options.wait_chunks;
+    bot.linger = std::chrono::milliseconds{options.linger_ms};
+    bot.command = options.command;
+    bot.wait_messages = options.wait_messages;
+    bot.move_dx = options.move_dx;
+    bot.move_dy = options.move_dy;
+    bot.move_dz = options.move_dz;
+    bot.move_delay = std::chrono::milliseconds{options.move_delay_ms};
+    bot.command_delay = std::chrono::milliseconds{options.command_delay_ms};
+    auto result{refrain::net::run_bot(bot)};
+    if (!result) {
+        return report_error(result.error());
+    }
+    fmt::print("bot: joined as '{}' after {} packet(s), {} chunk(s), {} "
+               "message(s)\n",
+               result->name, result->packets, result->chunks,
+               result->messages.size());
+    if (!result->messages.empty()) {
+        fmt::print("bot: first message: {}\n", result->messages.front());
+    }
+    return 0;
+}
+
+namespace {
+
+struct captured_entry {
+    std::uint8_t state{0};
+    std::uint32_t id{0};
+    std::vector<std::byte> body{};
+};
+
+[[nodiscard]] auto read_capture(std::string_view path,
+                                std::vector<captured_entry> &entries)
+    -> refrain::status {
+    auto bytes{refrain::core::io::read_file(
+        path,
+        {.max_bytes = 64ULL * 1024ULL * 1024ULL, .allow_symlink = false})};
+    if (!bytes) {
+        return std::unexpected{std::move(bytes.error())};
+    }
+    constexpr std::string_view magic{"RFCAP1\n"};
+    if (bytes->size() < magic.size() ||
+        !std::equal(magic.begin(), magic.end(), bytes->begin(),
+                    [](char expected, std::byte actual) {
+                        return static_cast<std::byte>(
+                                   static_cast<unsigned char>(expected)) ==
+                               actual;
+                    })) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::parse_error, "not an RFCAP1 capture")};
+    }
+    std::size_t position{magic.size()};
+    const auto read_u32 = [&](std::uint32_t &value) {
+        if (position + 4 > bytes->size()) {
+            return false;
+        }
+        value = 0;
+        for (int shift{0}; shift < 32; shift += 8) {
+            value |= static_cast<std::uint32_t>(
+                         std::to_integer<unsigned int>(bytes->at(position)))
+                     << shift;
+            ++position;
+        }
+        return true;
+    };
+    while (position < bytes->size()) {
+        if (position + 1 > bytes->size()) {
+            break;
+        }
+        captured_entry entry{};
+        entry.state = std::to_integer<std::uint8_t>(bytes->at(position));
+        ++position;
+        std::uint32_t length{0};
+        if (!read_u32(entry.id) || !read_u32(length) ||
+            position + length > bytes->size()) {
+            return std::unexpected{refrain::make_error(
+                refrain::error_code::parse_error, "truncated capture entry")};
+        }
+        entry.body.assign(
+            bytes->begin() + static_cast<std::ptrdiff_t>(position),
+            bytes->begin() + static_cast<std::ptrdiff_t>(position + length));
+        position += length;
+        entries.push_back(std::move(entry));
+    }
+    return refrain::status_ok();
+}
+
+} // namespace
+
+auto run_protocol_diff(const protocol_diff_options &options) -> int {
+    std::vector<captured_entry> left{};
+    std::vector<captured_entry> right{};
+    if (auto read{read_capture(options.left, left)}; !read) {
+        return report_error(read.error());
+    }
+    if (auto read{read_capture(options.right, right)}; !read) {
+        return report_error(read.error());
+    }
+    fmt::print("diff: left {} packet(s), right {} packet(s)\n", left.size(),
+               right.size());
+    const auto common{std::min(left.size(), right.size())};
+    for (std::size_t index{0}; index < common; ++index) {
+        if (left[index].state != right[index].state ||
+            left[index].id != right[index].id) {
+            fmt::print("diff: first mismatch at {}: left state={} id={}, right "
+                       "state={} id={}\n",
+                       index, left[index].state, left[index].id,
+                       right[index].state, right[index].id);
+            break;
+        }
+    }
+    if (left.size() == right.size() && common == left.size()) {
+        bool identical{true};
+        for (std::size_t index{0}; index < left.size(); ++index) {
+            if (left[index].state != right[index].state ||
+                left[index].id != right[index].id) {
+                identical = false;
+                break;
+            }
+        }
+        if (identical) {
+            fmt::print("diff: packet sequence is identical\n");
+        }
+    }
+    const auto summarize = [](const std::vector<captured_entry> &entries) {
+        std::set<std::pair<std::uint8_t, std::uint32_t>> ids{};
+        for (const auto &entry : entries) {
+            ids.emplace(entry.state, entry.id);
+        }
+        return ids;
+    };
+    const auto left_ids{summarize(left)};
+    const auto right_ids{summarize(right)};
+    std::size_t only_left{0};
+    std::size_t only_right{0};
+    for (const auto &id : left_ids) {
+        if (!right_ids.contains(id)) {
+            ++only_left;
+        }
+    }
+    for (const auto &id : right_ids) {
+        if (!left_ids.contains(id)) {
+            ++only_right;
+        }
+    }
+    fmt::print("diff: unique ids left={}, right={}, only-left={}, "
+               "only-right={}\n",
+               left_ids.size(), right_ids.size(), only_left, only_right);
+    return 0;
+}
+
+auto run_protocol_capture(const protocol_capture_options &options) -> int {
+    const auto separator{options.target.rfind(':')};
+    if (separator == std::string::npos ||
+        separator + 1 >= options.target.size() || options.out.empty()) {
+        return report_error(refrain::make_error(
+            refrain::error_code::invalid_argument,
+            "protocol capture: expected --host host:port --out file"));
+    }
+    std::uint16_t port{0};
+    const auto port_text{options.target.substr(separator + 1)};
+    const auto parsed{std::from_chars(
+        port_text.data(), port_text.data() + port_text.size(), port)};
+    if (parsed.ec != std::errc{} ||
+        parsed.ptr != port_text.data() + port_text.size()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol capture: invalid port"));
+    }
+    refrain::net::bot_options bot{};
+    bot.target.host = options.target.substr(0, separator);
+    bot.target.port = port;
+    bot.username = options.username;
+    bot.timeout = std::chrono::milliseconds{options.timeout_ms};
+    bot.wait_chunks = options.wait_chunks;
+    bot.linger = std::chrono::milliseconds{options.linger_ms};
+    bot.capture = true;
+    auto result{refrain::net::run_bot(bot)};
+    if (!result) {
+        return report_error(result.error());
+    }
+    std::vector<std::byte> file{};
+    constexpr std::string_view magic{"RFCAP1\n"};
+    for (const char character : magic) {
+        file.push_back(
+            static_cast<std::byte>(static_cast<unsigned char>(character)));
+    }
+    const auto append_u32 = [&file](std::uint32_t value) {
+        for (int shift{0}; shift < 32; shift += 8) {
+            file.push_back(static_cast<std::byte>((value >> shift) & 0xFFU));
+        }
+    };
+    for (const auto &packet : result->capture) {
+        file.push_back(static_cast<std::byte>(packet.state));
+        append_u32(packet.id);
+        append_u32(static_cast<std::uint32_t>(packet.body.size()));
+        file.insert(file.end(), packet.body.begin(), packet.body.end());
+    }
+    if (auto written{io::write_file(options.out, file)}; !written) {
+        return report_error(written.error());
+    }
+    fmt::print("capture: {} packet(s), {} byte(s) -> {}\n",
+               result->capture.size(), file.size(), options.out);
+    return 0;
+}
+
+auto run_protocol_load(const protocol_load_options &options) -> int {
+    const auto separator{options.target.rfind(':')};
+    if (separator == std::string::npos ||
+        separator + 1 >= options.target.size()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol load: expected host:port"));
+    }
+    std::uint16_t port{0};
+    const auto port_text{options.target.substr(separator + 1)};
+    const auto parsed{std::from_chars(
+        port_text.data(), port_text.data() + port_text.size(), port)};
+    if (parsed.ec != std::errc{} ||
+        parsed.ptr != port_text.data() + port_text.size()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol load: invalid port"));
+    }
+    if (options.bots <= 0) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol load: bots must be positive"));
+    }
+
+    std::atomic<int> joined{0};
+    std::mutex errors_mutex{};
+    std::vector<std::string> errors{};
+    std::vector<std::thread> threads{};
+    threads.reserve(static_cast<std::size_t>(options.bots));
+    for (int index{0}; index < options.bots; ++index) {
+        threads.emplace_back([&, index] {
+            refrain::log::set_thread_name("bot-" + std::to_string(index));
+            refrain::net::bot_options bot{};
+            bot.target.host = options.target.substr(0, separator);
+            bot.target.port = port;
+            bot.username = options.username_prefix + std::to_string(index);
+            bot.timeout = std::chrono::milliseconds{options.timeout_ms};
+            bot.linger = std::chrono::milliseconds{options.duration_ms};
+            auto result{refrain::net::run_bot(bot)};
+            if (result) {
+                ++joined;
+            } else {
+                const std::lock_guard lock{errors_mutex};
+                errors.push_back(result.error().message);
+            }
+        });
+    }
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    fmt::print("load: {}/{} joined\n", joined.load(), options.bots);
+    if (joined.load() != options.bots) {
+        if (!errors.empty()) {
+            fmt::print(stderr, "load: first error: {}\n", errors.front());
+        }
+        return 1;
+    }
+    return 0;
+}
+
+auto run_config_import_properties(const config_import_options &options) -> int {
+    constexpr io::read_options read_options{
+        .max_bytes = 1ULL * 1024ULL * 1024ULL, .allow_symlink = false};
+    auto text{io::read_text(options.properties, read_options)};
+    if (!text) {
+        return report_error(text.error());
+    }
+    const auto mode{options.force
+                        ? server::server_properties_import_mode::force
+                        : server::server_properties_import_mode::merge};
+    auto report{server::import_server_properties(*text, options.config_dir,
+                                                 mode, options.strict)};
+    if (!report) {
+        return report_error(report.error());
+    }
+    for (const auto &key : report->unknown_keys) {
+        fmt::print(stderr,
+                   "config: warning: unknown server.properties key "
+                   "'{}'\n",
+                   key);
+    }
+    fmt::print("config: imported {} key(s) into {}\n", report->applied,
+               options.config_dir);
+    for (const auto &path : report->written_files) {
+        fmt::print("config: wrote {}\n", path);
+    }
     return 0;
 }
 

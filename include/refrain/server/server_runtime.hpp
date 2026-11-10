@@ -4,7 +4,13 @@
 
 #pragma once
 
+#include <refrain/core/config.hpp>
+#include <refrain/net/protocol_codec.hpp>
+#include <refrain/net/server.hpp>
+#include <refrain/net/transport.hpp>
+
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace refrain::server {
@@ -17,8 +23,31 @@ namespace refrain::server {
 struct server_run_options {
     /// RWF world directory (`world_store::open`).
     std::string world_path{};
-    /// Optional Java `server.properties`; missing file keeps defaults.
-    std::string server_properties_path{"server.properties"};
+    /// Per-namespace configuration views supplied by the host. Empty views
+    /// fall back to the built-in defaults.
+    core::config::view network{};
+    core::config::view world{};
+    core::config::view storage{};
+    core::config::view runtime{};
+    /// Optional transport provider factory. Empty keeps the built-in Asio
+    /// TCP transport.
+    std::function<result<std::unique_ptr<net::transport>>(
+        net::transport_handler, std::size_t)>
+        make_transport{};
+    /// Optional protocol codec provider. Empty keeps the built-in 777 codec.
+    std::shared_ptr<net::protocol_codec> protocol{};
+    /// Optional session feature views. Empty keeps static status and sends no
+    /// tab list.
+    net::status_provider status{};
+    net::tab_provider tab{};
+    net::tab_encoder encode_tab{};
+    net::player_event player_join{};
+    net::player_event player_leave{};
+    net::session_verifier verify_session{};
+    std::function<void(std::uint64_t)> on_tick{};
+    /// Host-owned store used by the console `/config` commands and the
+    /// shutdown save. Null disables both.
+    core::config::store *config{nullptr};
     /// Run exactly this many ticks, then stop. 0 = until `stop`/EOF.
     std::int64_t ticks{0};
     /// Optional batch command file (one console command per line, all at tick

@@ -11,6 +11,7 @@
 #include <schema/sema.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -71,6 +72,24 @@ struct generated_file {
     std::string path; ///< relative to the generated output root, '/'-separated
     std::string content;
 };
+
+/// C++ spelling for a declaration name. Declarations whose schema name is not
+/// a C++ identifier (quoted packet names such as `debug/block_value`) map to a
+/// sanitized identifier while the schema/name string keeps its original form.
+[[nodiscard]] inline auto cpp_identifier(std::string_view name) -> std::string {
+    std::string result;
+    result.reserve(name.size() + 1);
+    for (const char character : name) {
+        const auto byte{static_cast<unsigned char>(character)};
+        result.push_back(std::isalnum(byte) != 0 || character == '_' ? character
+                                                                     : '_');
+    }
+    if (result.empty() ||
+        std::isdigit(static_cast<unsigned char>(result.front())) != 0) {
+        result.insert(result.begin(), '_');
+    }
+    return result;
+}
 
 [[nodiscard]] inline auto split_module(std::string_view module)
     -> std::vector<std::string> {
@@ -349,6 +368,44 @@ attribute_comment(const std::vector<attribute> &attributes,
         return "void *";
     case primitive_kind::mut_bytes:
         return "refrain_mut_bytes";
+    case primitive_kind::identifier:
+    case primitive_kind::uuid:
+    case primitive_kind::text_component:
+    case primitive_kind::item_stack:
+    case primitive_kind::lp_vec3:
+    case primitive_kind::nbt:
+    case primitive_kind::varint_id:
+    case primitive_kind::message_signature_packed:
+    case primitive_kind::filter_mask:
+    case primitive_kind::stat_entry:
+    case primitive_kind::position_path:
+    case primitive_kind::map_patch:
+    case primitive_kind::advancement_seen:
+    case primitive_kind::vec_delta:
+    case primitive_kind::sound_selector:
+    case primitive_kind::objective_update:
+    case primitive_kind::team_update:
+    case primitive_kind::player_info_update:
+    case primitive_kind::tracked_waypoint:
+    case primitive_kind::component_predicate:
+    case primitive_kind::merchant_offer:
+    case primitive_kind::entity_metadata:
+    case primitive_kind::item_stack_template:
+    case primitive_kind::advancement_display:
+    case primitive_kind::advancement_requirements:
+    case primitive_kind::advancement:
+    case primitive_kind::advancement_progress:
+    case primitive_kind::holder_set:
+    case primitive_kind::slot_display:
+    case primitive_kind::recipe_display:
+    case primitive_kind::recipe_display_entry:
+    case primitive_kind::single_input_set:
+    case primitive_kind::particle_options:
+    case primitive_kind::debug_subscription_update:
+    case primitive_kind::debug_subscription_event:
+    case primitive_kind::command_tree:
+    case primitive_kind::container_click_data:
+        std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";
     }
@@ -388,6 +445,44 @@ attribute_comment(const std::vector<attribute> &attributes,
         return "void *";
     case primitive_kind::mut_bytes:
         return "std::span<std::uint8_t>";
+    case primitive_kind::identifier:
+    case primitive_kind::uuid:
+    case primitive_kind::text_component:
+    case primitive_kind::item_stack:
+    case primitive_kind::lp_vec3:
+    case primitive_kind::nbt:
+    case primitive_kind::varint_id:
+    case primitive_kind::message_signature_packed:
+    case primitive_kind::filter_mask:
+    case primitive_kind::stat_entry:
+    case primitive_kind::position_path:
+    case primitive_kind::map_patch:
+    case primitive_kind::advancement_seen:
+    case primitive_kind::vec_delta:
+    case primitive_kind::sound_selector:
+    case primitive_kind::objective_update:
+    case primitive_kind::team_update:
+    case primitive_kind::player_info_update:
+    case primitive_kind::tracked_waypoint:
+    case primitive_kind::component_predicate:
+    case primitive_kind::merchant_offer:
+    case primitive_kind::entity_metadata:
+    case primitive_kind::item_stack_template:
+    case primitive_kind::advancement_display:
+    case primitive_kind::advancement_requirements:
+    case primitive_kind::advancement:
+    case primitive_kind::advancement_progress:
+    case primitive_kind::holder_set:
+    case primitive_kind::slot_display:
+    case primitive_kind::recipe_display:
+    case primitive_kind::recipe_display_entry:
+    case primitive_kind::single_input_set:
+    case primitive_kind::particle_options:
+    case primitive_kind::debug_subscription_update:
+    case primitive_kind::debug_subscription_event:
+    case primitive_kind::command_tree:
+    case primitive_kind::container_click_data:
+        std::unreachable(); // wire-only primitives are rejected in RIDL
     case primitive_kind::void_type:
         return "void";
     }

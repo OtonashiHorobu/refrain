@@ -50,9 +50,85 @@ Tests that cover the simulation compare the state hash across two runs, or
 across an encode and a decode. A change that alters the hash must come with a
 format or behavior change that explains it.
 
+## Fuzz smoke
+
+`test/net/test_fuzz_smoke.cpp` feeds deterministic pseudo-random bytes to the
+frame decoder (compressed and uncompressed), the text-component NBT decoder and
+selected generated packet decoders. It runs in CI and asserts only that no input
+crashes or hangs the decoder; malformed input is expected to return an error.
+
+## Protocol bot
+
+`refrain-tools protocol bot` connects to an offline-mode server and walks the
+handshake -> login -> configuration -> play sequence:
+
+```bash
+build/Release/bin/refrain-tools protocol bot \
+    --host 127.0.0.1:25565 --username Bot --wait-chunks 1
+```
+
+`--wait-chunks` waits for that many chunk packets before reporting success;
+`--command` sends a play command (for example `say hello`), `--wait-messages`
+waits for system chat replies, and `--linger-ms` keeps the connection in play.
+`--move-dx/--move-dy/--move-dz` move the bot relative to its spawn, with
+`--move-delay-ms` / `--command-delay-ms` scheduling both actions.
+The bot also performs the online-mode RSA/AES handshake; whether the session is
+accepted is decided by the server's verifier.
+
+### Packet capture
+
+```bash
+build/Release/bin/refrain-tools protocol capture \
+    --host 127.0.0.1:25565 --out /tmp/join.rfcap
+```
+
+The tool records the clientbound packet bodies seen by the bot (state, packet
+id, length, payload) in the RFCAP1 container. `--linger-ms` keeps recording
+after the join, which is needed for packets sent after the first chunk. Compare
+two captures by packet sequence with:
+
+```bash
+build/Release/bin/refrain-tools protocol diff \
+    --left vanilla.rfcap --right refrain.rfcap
+```
+
+Captures are diagnostics and regression baselines; they contain no credentials.
+
+### Load harness
+
+```bash
+build/Release/bin/refrain-tools protocol load \
+    --host 127.0.0.1:25565 --bots 20 --duration-ms 5000
+```
+
+The harness opens N bots, keeps each in play for the duration and reports how
+many joined. The server logs `runtime: <ticks> tick(s), avg <ms> ms, max <ms>
+ms` on a clean shutdown, which is the baseline for MSPT checks.
+
+### Client input (X11)
+
+Run the vanilla client under XWayland when a test needs real key/mouse input:
+
+```bash
+SDL_VIDEODRIVER=x11 MC_CLIENT_HOME=... MC_SERVER=127.0.0.1:25565 \
+    scripts/dev/vanilla-client.sh
+xdotool search --class com.mojang.minecraft windowactivate --sync
+xdotool key e   # open the player inventory
+```
+
+This keeps the client unmodified; use it for manual inventory/click acceptance.
+The native Wayland window does not accept `wlrctl keyboard type` as game input.
+
 ## Adding a suite
 
 Create a file under the matching directory in `test/`, for example
 `test/world/test_my_feature.cpp`, and define a `boost::ut::suite`. The CMake
 build globs the directory, so no build file edit is needed. Prefer a negative
 case over a second happy path.
+
+
+## Network oracle (optional, local)
+
+`tools/net/oracle/` compares a capture from a locally owned vanilla 26.3 server
+with a Refrain capture. It never downloads or commits server jars, assets or
+captures. See [the oracle README](../tools/net/oracle/README.md).

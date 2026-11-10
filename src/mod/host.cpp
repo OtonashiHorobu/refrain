@@ -37,6 +37,36 @@ namespace refrain::mod {
 
 namespace {
 
+// A mod reports a contract status; the loader records the engine error code.
+// Unknown values stay unknown instead of being reinterpreted as a different
+// error taxonomy.
+[[nodiscard]] auto from_mod_status(refrain_status status) noexcept
+    -> error_code {
+    switch (static_cast<refrain::host::core::host_error>(status)) {
+    case refrain::host::core::host_error::invalid_argument:
+        return error_code::invalid_argument;
+    case refrain::host::core::host_error::not_found:
+        return error_code::not_found;
+    case refrain::host::core::host_error::permission_denied:
+        return error_code::permission_denied;
+    case refrain::host::core::host_error::version_mismatch:
+        return error_code::version_mismatch;
+    case refrain::host::core::host_error::unsupported:
+        return error_code::unsupported;
+    case refrain::host::core::host_error::already_exists:
+        return error_code::already_exists;
+    case refrain::host::core::host_error::io_error:
+        return error_code::io_error;
+    case refrain::host::core::host_error::not_initialized:
+    case refrain::host::core::host_error::out_of_memory:
+    case refrain::host::core::host_error::limit_exceeded:
+    case refrain::host::core::host_error::thread_violation:
+    case refrain::host::core::host_error::internal:
+        return error_code::unknown;
+    }
+    return error_code::unknown;
+}
+
 namespace config = core::config;
 namespace kernel = refrain::kernel;
 namespace data = refrain::data;
@@ -168,6 +198,27 @@ using mod::static_mod_registry;
            service[prefix.size() + slot.size()] == '.';
 }
 
+/// Compare `refrain:<slot with dots>` against an underscore slot, so
+/// "refrain:session.status" activates the gamepack slot "session_status".
+[[nodiscard]] auto equals_dotted_slot(std::string_view service,
+                                      std::string_view slot) -> bool {
+    constexpr std::string_view prefix{"refrain:"};
+    if (!service.starts_with(prefix)) {
+        return false;
+    }
+    const auto rest{service.substr(prefix.size())};
+    if (rest.size() != slot.size()) {
+        return false;
+    }
+    for (std::size_t index{0}; index < rest.size(); ++index) {
+        const auto character{rest[index] == '.' ? '_' : rest[index]};
+        if (character != slot[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// A gamepack names a service by its `[providers]` key ("data", "world",
 /// "protocol"), while a factory passes the full contract id
 /// ("refrain:data.packs", "refrain:net.protocol"). A service matches a slot
@@ -183,7 +234,8 @@ using mod::static_mod_registry;
     constexpr std::string_view net_prefix{"refrain:net."};
     return service == slot || equals_slot(service, namespace_prefix, slot) ||
            equals_slot(service, net_prefix, slot) ||
-           in_slot_namespace(service, namespace_prefix, slot);
+           in_slot_namespace(service, namespace_prefix, slot) ||
+           equals_dotted_slot(service, slot);
 }
 
 /// Does the manifest `[provides]` list cover `service`? Exact id match, or the
@@ -508,6 +560,18 @@ auto host::load_external_mod(const mod_manifest &manifest,
         // and do not run external code.
         return status_ok();
     }
+    // The manifest declares the entry ABI the package was built against. A
+    // mismatch is rejected before the library is opened, so no mod code runs
+    // against a host it cannot understand.
+    if (manifest.common.abi != REFRAIN_MOD_ABI_MAJOR) {
+        return std::unexpected{annotate(
+            fail(error_code::version_mismatch,
+                 fmt::format("external mod '{}' was built for entry ABI {}, "
+                             "this host provides {}",
+                             manifest.common.id, manifest.common.abi,
+                             REFRAIN_MOD_ABI_MAJOR)),
+            entry.path)};
+    }
 
     const auto root{std::filesystem::path{entry.path}.parent_path()};
     const auto library_path{root / manifest.entry->native};
@@ -609,9 +673,10 @@ auto host::load_external_mod(const mod_manifest &manifest,
     }
     if (on_load_status != REFRAIN_STATUS_OK) {
         return std::unexpected{
-            annotate(fail(static_cast<error_code>(on_load_status),
-                          fmt::format("external mod '{}' on_load failed",
-                                      manifest.common.id)),
+            annotate(fail(from_mod_status(on_load_status),
+                          fmt::format("external mod '{}' on_load failed "
+                                      "with status {}",
+                                      manifest.common.id, on_load_status)),
                      entry.path)};
     }
 

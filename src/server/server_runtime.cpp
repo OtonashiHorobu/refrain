@@ -2,7 +2,11 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/protocol/current.hpp>
 #include <refrain/server/server_runtime.hpp>
+
+#include <refrain/session/chunk_tracker.hpp>
+#include <refrain/session/play_session.hpp>
 
 #include <refrain/app/services.hpp>
 #include <refrain/core/io.hpp>
@@ -10,8 +14,13 @@
 #include <refrain/core/schedule.hpp>
 #include <refrain/core/time.hpp>
 #include <refrain/data/content_maintenance.hpp>
+#include <refrain/data/vanilla.hpp>
 #include <refrain/mod/rfmod.hpp>
-#include <refrain/server/server_properties.hpp>
+#include <refrain/net/registry.hpp>
+#include <refrain/net/server.hpp>
+#include <refrain/server/chunk_packet.hpp>
+#include <refrain/server/command_bridge.hpp>
+#include <refrain/server/inventory_menu.hpp>
 #include <refrain/sim/replay.hpp>
 #include <refrain/sim/world.hpp>
 #include <refrain/world/store.hpp>
@@ -30,11 +39,15 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
+#include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace refrain::server {
@@ -152,7 +165,22 @@ struct runtime_state {
     std::vector<std::string> commands{};
     std::atomic<bool> stop{false};
     std::atomic<std::int64_t> heartbeat_ns{0};
+    refrain::core::config::store *config{nullptr};
+    static constexpr std::size_t tick_samples{2048};
+    std::array<std::uint32_t, tick_samples> tick_us{};
+    std::size_t tick_count{0};
+    std::uint64_t tick_total_us{0};
+    std::uint64_t tick_max_us{0};
 };
+
+void record_tick_work(runtime_state &state, std::uint64_t work_ns) {
+    const auto us{static_cast<std::uint32_t>(work_ns / 1'000ULL)};
+    state.tick_us[state.tick_count % runtime_state::tick_samples] = us;
+    ++state.tick_count;
+    state.tick_total_us += us;
+    state.tick_max_us =
+        std::max(state.tick_max_us, static_cast<std::uint64_t>(us));
+}
 
 void push_command(const std::shared_ptr<runtime_state> &state,
                   std::string line) {
@@ -210,27 +238,6 @@ void start_console_thread(const std::shared_ptr<runtime_state> &state) {
     // touches the shared state, so it is safe to detach at shutdown and let
     // process exit reclaim it.
     console.detach();
-}
-
-[[nodiscard]] auto load_properties(const std::string &path,
-                                   server_properties &out) -> status {
-    if (path.empty()) {
-        return status_ok();
-    }
-    if (!refrain::core::io::exists(path)) {
-        return status_ok();
-    }
-    auto text{refrain::core::io::read_text(
-        path, {.max_bytes = max_console_file_bytes, .allow_symlink = false})};
-    if (!text) {
-        return std::unexpected{std::move(text.error())};
-    }
-    auto parsed{parse_server_properties(*text)};
-    if (!parsed) {
-        return std::unexpected{std::move(parsed.error())};
-    }
-    out = std::move(*parsed);
-    return status_ok();
 }
 
 /// Delay between two bounded drain passes when the queue still holds
@@ -520,7 +527,9 @@ void print_console_help() {
         "console: commands: stop, save, tps, hash, pos, move <dx> <dy> <dz>, "
         "walk <dx> <dz>, jump, dig <x> <y> <z>, place <x> <y> <z> <block>, "
         "give <item> <count>, inv, spawn <type> <x> <y> <z>, entities, "
-        "kill <entity-id>, palette-gc, schedules");
+        "kill <entity-id>, palette-gc, schedules, config <namespace> "
+        "get|set <key> [value], config save|reload [namespace], "
+        "config names");
 }
 
 [[nodiscard]] auto split_console_line(std::string_view line)
@@ -550,12 +559,166 @@ template <typename T>
     return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
 }
 
+[[nodiscard]] auto parse_config_value(std::string_view text)
+    -> std::variant<bool, std::int64_t, double, std::string> {
+    if (text == "true") {
+        return true;
+    }
+    if (text == "false") {
+        return false;
+    }
+    std::int64_t integer{0};
+    const auto int_parsed{
+        std::from_chars(text.data(), text.data() + text.size(), integer)};
+    if (int_parsed.ec == std::errc{} &&
+        int_parsed.ptr == text.data() + text.size()) {
+        return integer;
+    }
+    double real{0.0};
+    const auto real_parsed{
+        std::from_chars(text.data(), text.data() + text.size(), real)};
+    if (real_parsed.ec == std::errc{} &&
+        real_parsed.ptr == text.data() + text.size()) {
+        return real;
+    }
+    return std::string{text};
+}
+
+void execute_config_command(std::span<const std::string_view> tokens,
+                            refrain::core::config::store *config) {
+    namespace cfg = refrain::core::config;
+    if (config == nullptr) {
+        refrain::log::warn("config: no host configuration store");
+        return;
+    }
+    if (tokens.size() >= 2 && tokens[1] == "names") {
+        const auto names{config->names()};
+        std::string joined{};
+        for (const auto &name : names) {
+            if (!joined.empty()) {
+                joined += ' ';
+            }
+            joined += name;
+        }
+        refrain::log::info("config: namespaces={} list={}", names.size(),
+                           joined);
+        return;
+    }
+    if (tokens.size() >= 2 && tokens[1] == "save") {
+        if (tokens.size() == 2) {
+            if (auto saved{config->save_all()}; !saved) {
+                refrain::log::error("config: save failed: {}",
+                                    saved.error().message);
+            } else {
+                refrain::log::info("config: saved dirty namespaces");
+            }
+        } else if (auto saved{config->save(tokens[2])}; !saved) {
+            refrain::log::error("config: save '{}' failed: {}", tokens[2],
+                                saved.error().message);
+        } else {
+            refrain::log::info("config: saved '{}'", tokens[2]);
+        }
+        return;
+    }
+    if (tokens.size() >= 2 && tokens[1] == "reload") {
+        if (tokens.size() == 2) {
+            if (auto loaded{config->reload_all()}; !loaded) {
+                refrain::log::error("config: reload failed: {}",
+                                    loaded.error().message);
+            } else {
+                refrain::log::info(
+                    "config: reloaded; running subsystems keep their "
+                    "startup snapshot until restart");
+            }
+        } else if (auto loaded{config->reload(tokens[2])}; !loaded) {
+            refrain::log::error("config: reload '{}' failed: {}", tokens[2],
+                                loaded.error().message);
+        } else {
+            refrain::log::info(
+                "config: reloaded '{}'; restart required to apply", tokens[2]);
+        }
+        return;
+    }
+    if (tokens.size() < 4) {
+        refrain::log::warn(
+            "config: usage: config <namespace> get <key> | set <key> <value> "
+            "| save [namespace] | reload [namespace] | names");
+        return;
+    }
+    const auto name_space{tokens[1]};
+    const auto action{tokens[2]};
+    const auto key{tokens[3]};
+    auto module{config->module(name_space)};
+    if (!module) {
+        refrain::log::warn("config: unknown namespace '{}'", name_space);
+        return;
+    }
+    if (action == "get") {
+        const auto kind{module->kind(key)};
+        if (kind == cfg::value_kind::missing) {
+            refrain::log::warn("config: {}.{} is not set", name_space, key);
+        } else if (kind == cfg::value_kind::boolean) {
+            refrain::log::info("config: {}.{} = {}", name_space, key,
+                               module->get_bool(key, false));
+        } else if (kind == cfg::value_kind::integer) {
+            refrain::log::info("config: {}.{} = {}", name_space, key,
+                               module->get_int64(key, 0));
+        } else if (kind == cfg::value_kind::floating) {
+            refrain::log::info("config: {}.{} = {}", name_space, key,
+                               module->get_double(key, 0.0));
+        } else if (kind == cfg::value_kind::string) {
+            refrain::log::info("config: {}.{} = '{}'", name_space, key,
+                               module->get_string(key, ""));
+        } else if (kind == cfg::value_kind::array) {
+            const auto values{module->get_strings(key)};
+            refrain::log::info("config: {}.{} = {} strings", name_space, key,
+                               values.size());
+        } else {
+            refrain::log::info("config: {}.{} = <table>", name_space, key);
+        }
+        return;
+    }
+    if (action == "set") {
+        if (tokens.size() < 5) {
+            refrain::log::warn("config: set expects a value");
+            return;
+        }
+        const auto value{parse_config_value(tokens[4])};
+        const auto result{std::visit(
+            [&](const auto &typed) -> status {
+                using T = std::decay_t<decltype(typed)>;
+                if constexpr (std::is_same_v<T, bool>) {
+                    return config->set_bool(name_space, key, typed);
+                } else if constexpr (std::is_same_v<T, std::int64_t>) {
+                    return config->set_int64(name_space, key, typed);
+                } else if constexpr (std::is_same_v<T, double>) {
+                    return config->set_double(name_space, key, typed);
+                } else {
+                    return config->set_string(name_space, key, typed);
+                }
+            },
+            value)};
+        if (!result) {
+            refrain::log::error("config: set failed: {}",
+                                result.error().message);
+        } else {
+            refrain::log::info(
+                "config: {}.{} updated in memory; 'config save' persists it "
+                "and subsystems pick it up after restart",
+                name_space, key);
+        }
+        return;
+    }
+    refrain::log::warn("config: unknown action '{}'", action);
+}
+
 void execute_console_command(const std::string &line,
                              const std::shared_ptr<runtime_state> &state,
                              refrain::sim::world &store,
                              snapshot_writer &writer,
                              const refrain::core::tick_info &tick,
-                             refrain::core::schedule::scheduler *scheduler) {
+                             refrain::core::schedule::scheduler *scheduler,
+                             refrain::net::server *listener) {
     if (line == "stop") {
         refrain::log::info("console: stop");
         state->stop.store(true, std::memory_order_release);
@@ -596,12 +759,46 @@ void execute_console_command(const std::string &line,
         }
         return;
     }
-    if (line == "tps") {
+    if (line == "net") {
+        if (listener == nullptr) {
+            refrain::log::warn("console: net is unavailable");
+            return;
+        }
+        const auto stats{listener->stats()};
         refrain::log::info(
-            "tick: {} {}ms missed={}", tick.index,
+            "net: players={} in={} out={} bytes_in={} bytes_out={}",
+            stats.connections, stats.packets_in, stats.packets_out,
+            stats.bytes_in, stats.bytes_out);
+        return;
+    }
+    if (line == "tps") {
+        const auto samples{
+            std::min(state->tick_count, runtime_state::tick_samples)};
+        std::vector<std::uint32_t> sorted(state->tick_us.begin(),
+                                          state->tick_us.begin() + samples);
+        std::sort(sorted.begin(), sorted.end());
+        const auto percentile = [&](double fraction) {
+            if (sorted.empty()) {
+                return std::uint64_t{0};
+            }
+            const auto index{static_cast<std::size_t>(
+                static_cast<double>(sorted.size() - 1) * fraction)};
+            return static_cast<std::uint64_t>(sorted[index]);
+        };
+        const auto average{state->tick_count == 0
+                               ? 0.0
+                               : static_cast<double>(state->tick_total_us) /
+                                     static_cast<double>(state->tick_count) /
+                                     1000.0};
+        refrain::log::info(
+            "tick: {} interval={}ms missed={} work_avg={:.2f}ms "
+            "work_p99={:.2f}ms work_max={:.2f}ms samples={}",
+            tick.index,
             std::chrono::duration_cast<std::chrono::milliseconds>(tick.actual)
                 .count(),
-            tick.missed);
+            tick.missed, average,
+            static_cast<double>(percentile(0.99)) / 1000.0,
+            static_cast<double>(state->tick_max_us) / 1000.0, samples);
         return;
     }
     if (line == "hash") {
@@ -638,6 +835,10 @@ void execute_console_command(const std::string &line,
         return;
     }
     const auto tokens{split_console_line(line)};
+    if (!tokens.empty() && tokens[0] == "config") {
+        execute_config_command(tokens, state->config);
+        return;
+    }
     if (line == "jump") {
         store.jump();
         refrain::log::info("jump: on_ground={}", store.player().on_ground);
@@ -800,6 +1001,295 @@ void execute_console_command(const std::string &line,
 
 } // namespace
 
+namespace {
+
+constexpr std::uint8_t player_info_add{1U};
+constexpr std::uint8_t player_info_game_mode{4U};
+constexpr std::uint8_t player_info_listed{8U};
+constexpr std::uint8_t player_info_latency{16U};
+constexpr std::uint32_t player_entity_type{159U};
+
+template <typename Packet, typename Encoder>
+[[nodiscard]] auto encode_play_body(std::uint16_t packet_id,
+                                    const Packet &packet, Encoder encode)
+    -> std::vector<std::byte> {
+    std::vector<std::byte> body;
+    refrain::net::writer writer{body};
+    writer.write_varint(packet_id);
+    if (auto encoded{encode(writer, packet)}; !encoded) {
+        body.clear();
+    }
+    return body;
+}
+
+[[nodiscard]] auto session_entry(const refrain::session::player &value)
+    -> refrain::net::player_info_entry {
+    return refrain::net::player_info_entry{
+        .id = value.id,
+        .name = value.name,
+        .game_mode = value.game_mode,
+        .listed = true,
+        .latency = 0U,
+    };
+}
+
+void send_player_info(refrain::net::server &listener, std::uint64_t connection,
+                      std::uint8_t actions,
+                      const std::vector<refrain::session::player> &players) {
+    refrain::net::player_info_update payload{};
+    payload.actions = actions;
+    payload.entries.reserve(players.size());
+    for (const auto &player : players) {
+        payload.entries.push_back(session_entry(player));
+    }
+    refrain::protocol::current::play::clientbound::player_info_update packet{};
+    packet.payload = std::move(payload);
+    auto body{encode_play_body(refrain::protocol::current::play::clientbound::
+                                   player_info_update::packet_id,
+                               packet,
+                               refrain::protocol::current::play::clientbound::
+                                   encode_player_info_update)};
+    if (!body.empty()) {
+        listener.send_raw(connection, body);
+    }
+}
+
+void send_add_entity(refrain::net::server &listener, std::uint64_t connection,
+                     const refrain::session::player &value) {
+    refrain::protocol::current::play::clientbound::add_entity packet{
+        .id = static_cast<std::int32_t>(value.entity_id),
+        .uuid = value.id,
+        .type_ = player_entity_type,
+        .x = value.x,
+        .y = value.y,
+        .z = value.z,
+        .movement = {},
+        .x_rot = 0,
+        .y_rot = 0,
+        .y_head_rot = 0,
+        .data = 0,
+    };
+    auto body{encode_play_body(
+        refrain::protocol::current::play::clientbound::add_entity::packet_id,
+        packet,
+        refrain::protocol::current::play::clientbound::encode_add_entity)};
+    if (!body.empty()) {
+        listener.send_raw(connection, body);
+    }
+}
+
+void announce_session_join(refrain::net::server &listener,
+                           const refrain::session::play_session &players,
+                           std::uint64_t connection) {
+    const auto snapshot{players.all()};
+    send_player_info(listener, connection, player_info_add, snapshot);
+    send_player_info(listener, connection,
+                     static_cast<std::uint8_t>(player_info_game_mode |
+                                               player_info_listed |
+                                               player_info_latency),
+                     snapshot);
+    for (const auto &other : snapshot) {
+        if (other.connection == connection) {
+            continue;
+        }
+        send_add_entity(listener, connection, other);
+        std::vector<refrain::session::player> joining{};
+        for (const auto &candidate : snapshot) {
+            if (candidate.connection == connection) {
+                joining.push_back(candidate);
+                break;
+            }
+        }
+        send_player_info(
+            listener, other.connection,
+            static_cast<std::uint8_t>(player_info_add | player_info_game_mode |
+                                      player_info_listed | player_info_latency),
+            joining);
+        send_add_entity(listener, other.connection, joining.front());
+    }
+}
+
+void announce_session_leave(refrain::net::server &listener,
+                            const refrain::session::player &left,
+                            const refrain::session::play_session &players) {
+    std::vector<std::uint64_t> targets;
+    for (const auto &player : players.all()) {
+        targets.push_back(player.connection);
+    }
+    refrain::protocol::current::play::clientbound::player_info_remove remove{};
+    remove.profile_ids.push_back(left.id);
+    auto info_body{
+        encode_play_body(refrain::protocol::current::play::clientbound::
+                             player_info_remove::packet_id,
+                         remove,
+                         refrain::protocol::current::play::clientbound::
+                             encode_player_info_remove)};
+    refrain::protocol::current::play::clientbound::remove_entities entities{};
+    entities.entity_ids.push_back(left.entity_id);
+    auto entity_body{encode_play_body(
+        refrain::protocol::current::play::clientbound::remove_entities::
+            packet_id,
+        entities,
+        refrain::protocol::current::play::clientbound::encode_remove_entities)};
+    for (const auto target : targets) {
+        if (!info_body.empty()) {
+            listener.send_raw(target, info_body);
+        }
+        if (!entity_body.empty()) {
+            listener.send_raw(target, entity_body);
+        }
+    }
+}
+
+void send_session_health(refrain::net::server &listener,
+                         std::uint64_t connection, float health) {
+    refrain::protocol::current::play::clientbound::set_health packet{
+        .health = health, .food = 20, .saturation = 5.0F};
+    auto body{encode_play_body(
+        refrain::protocol::current::play::clientbound::set_health::packet_id,
+        packet,
+        refrain::protocol::current::play::clientbound::encode_set_health)};
+    if (!body.empty()) {
+        listener.send_raw(connection, body);
+    }
+}
+
+void send_session_experience(refrain::net::server &listener,
+                             std::uint64_t connection) {
+    refrain::protocol::current::play::clientbound::set_experience packet{
+        .experience_progress = 0.0F,
+        .experience_level = 0,
+        .total_experience = 0,
+    };
+    auto body{encode_play_body(
+        refrain::protocol::current::play::clientbound::set_experience::
+            packet_id,
+        packet,
+        refrain::protocol::current::play::clientbound::encode_set_experience)};
+    if (!body.empty()) {
+        listener.send_raw(connection, body);
+    }
+}
+
+void send_session_animation(refrain::net::server &listener,
+                            const refrain::session::play_session &players,
+                            std::uint64_t source, std::uint64_t target,
+                            std::int8_t action) {
+    const auto mover{players.player_of(source)};
+    if (mover == nullptr) {
+        return;
+    }
+    refrain::protocol::current::play::clientbound::animate packet{
+        .id = static_cast<std::int32_t>(mover->entity_id),
+        .action = action,
+    };
+    auto body{encode_play_body(
+        refrain::protocol::current::play::clientbound::animate::packet_id,
+        packet, refrain::protocol::current::play::clientbound::encode_animate)};
+    if (!body.empty()) {
+        listener.send_raw(target, body);
+    }
+}
+
+void send_session_hurt(refrain::net::server &listener,
+                       const refrain::session::player &target) {
+    refrain::protocol::current::play::clientbound::hurt_animation packet{
+        .id = static_cast<std::int32_t>(target.entity_id),
+        .yaw = 0.0F,
+    };
+    auto body{encode_play_body(
+        refrain::protocol::current::play::clientbound::hurt_animation::
+            packet_id,
+        packet,
+        refrain::protocol::current::play::clientbound::encode_hurt_animation)};
+    if (!body.empty()) {
+        listener.send_raw(target.connection, body);
+    }
+}
+
+void handle_session_attack(refrain::net::server &listener,
+                           refrain::session::play_session &players,
+                           const refrain::net::attack_event &event) {
+    const auto target{players.player_by_entity(
+        static_cast<std::uint32_t>(event.target_entity))};
+    if (target == nullptr || target->connection == event.connection) {
+        return;
+    }
+    const auto player_id{target->connection};
+    const auto health{std::max(0.0F, target->health - 1.0F)};
+    static_cast<void>(players.set_health(player_id, health));
+    send_session_health(listener, player_id, health);
+    send_session_hurt(listener, *target);
+    for (const auto &other : players.all()) {
+        if (other.connection != event.connection) {
+            send_session_animation(listener, players, event.connection,
+                                   other.connection, 0);
+        }
+    }
+}
+
+void broadcast_session_animation(refrain::net::server &listener,
+                                 const refrain::session::play_session &players,
+                                 std::uint64_t source, std::int8_t action) {
+    for (const auto &other : players.all()) {
+        if (other.connection != source) {
+            send_session_animation(listener, players, source, other.connection,
+                                   action);
+        }
+    }
+}
+
+void broadcast_session_moves(
+    refrain::net::server &listener,
+    const refrain::session::play_session &players,
+    std::unordered_map<std::uint64_t, refrain::net::movement_event> &last) {
+    const auto snapshot{players.all()};
+    for (const auto &mover : snapshot) {
+        const refrain::net::movement_event current{
+            .connection = mover.connection,
+            .x = mover.x,
+            .y = mover.y,
+            .z = mover.z,
+            .yaw = mover.yaw,
+            .pitch = mover.pitch,
+            .on_ground = mover.on_ground,
+        };
+        const auto previous{last.find(mover.connection)};
+        if (previous != last.end() && previous->second.x == current.x &&
+            previous->second.y == current.y &&
+            previous->second.z == current.z &&
+            previous->second.yaw == current.yaw &&
+            previous->second.pitch == current.pitch) {
+            continue;
+        }
+        last[mover.connection] = current;
+        refrain::protocol::current::play::clientbound::teleport_entity packet{};
+        packet.id = static_cast<std::int32_t>(mover.entity_id);
+        packet.change.position = {.x = mover.x, .y = mover.y, .z = mover.z};
+        packet.change.delta_movement = {};
+        packet.change.y_rot = mover.yaw;
+        packet.change.x_rot = mover.pitch;
+        packet.relatives = 0;
+        packet.on_ground = mover.on_ground;
+        auto body{encode_play_body(refrain::protocol::current::play::
+                                       clientbound::teleport_entity::packet_id,
+                                   packet,
+                                   refrain::protocol::current::play::
+                                       clientbound::encode_teleport_entity)};
+        if (body.empty()) {
+            continue;
+        }
+        for (const auto &target : snapshot) {
+            if (target.connection != mover.connection &&
+                target.world == mover.world) {
+                listener.send_raw(target.connection, body);
+            }
+        }
+    }
+}
+
+} // namespace
+
 auto run_server(const server_run_options &options) -> int {
     if (options.world_path.empty()) {
         return report_error(refrain::make_error(
@@ -807,32 +1297,85 @@ auto run_server(const server_run_options &options) -> int {
             "refrain-server: --world is required to start the tick loop"));
     }
 
-    server_properties properties{};
-    if (auto loaded{
-            load_properties(options.server_properties_path, properties)};
-        !loaded) {
-        return report_error(loaded.error());
-    }
-    refrain::log::info("properties: level={} view={} sim={} max_players={}{}",
-                       properties.level_name, properties.view_distance,
-                       properties.simulation_distance, properties.max_players,
-                       properties.online_mode ? "" : " offline");
+    const auto level_name{options.world.get_string("level_name", "world")};
+    const auto view_distance{static_cast<std::int32_t>(
+        options.network.get_int64("view_distance", 10))};
+    const auto simulation_distance{static_cast<std::int32_t>(
+        options.network.get_int64("simulation_distance", 10))};
+    const auto max_players{options.network.get_int64("status.max_players", 20)};
+    const auto online_mode{options.network.get_bool("online_mode", false)};
+    refrain::log::info(
+        "config: level={} view={} sim={} max_players={} online_mode={}",
+        level_name, view_distance, simulation_distance, max_players,
+        online_mode);
+    const auto zstd_level{static_cast<int>(
+        options.storage.get_int64("zstd_level", options.world_zstd_level))};
+    const auto zstd_near_level{static_cast<int>(
+        options.storage.get_int64("zstd_near_level", options.zstd_near_level))};
+    const auto zstd_mid_level{static_cast<int>(
+        options.storage.get_int64("zstd_mid_level", options.zstd_mid_level))};
+    const auto zstd_far_level{static_cast<int>(
+        options.storage.get_int64("zstd_far_level", options.zstd_far_level))};
+    const auto zstd_near_radius{
+        static_cast<std::int32_t>(options.storage.get_int64(
+            "zstd_near_radius", options.zstd_near_radius))};
+    const auto zstd_mid_radius{static_cast<std::int32_t>(
+        options.storage.get_int64("zstd_mid_radius", options.zstd_mid_radius))};
+    const auto autosave_interval{
+        static_cast<std::uint64_t>(options.storage.get_int64(
+            "autosave_interval_ticks",
+            static_cast<std::int64_t>(options.autosave_interval_ticks)))};
+    const auto compact_interval{
+        static_cast<std::uint64_t>(options.storage.get_int64(
+            "compact_interval_ticks",
+            static_cast<std::int64_t>(options.compact_interval_ticks)))};
+    const auto store_compact_interval{
+        static_cast<std::uint64_t>(options.storage.get_int64(
+            "store_compact_interval_ticks",
+            static_cast<std::int64_t>(options.store_compact_interval_ticks)))};
+    const auto compact_min_bytes{
+        static_cast<std::uint64_t>(options.storage.get_int64(
+            "compact_min_bytes",
+            static_cast<std::int64_t>(options.compact_min_bytes)))};
+    const auto compact_garbage_percent{
+        static_cast<std::uint32_t>(options.storage.get_int64(
+            "compact_garbage_percent", options.compact_garbage_percent))};
+    const auto watchdog_timeout{
+        static_cast<std::uint32_t>(options.runtime.get_int64(
+            "watchdog_timeout_ms", options.watchdog_timeout_ms))};
+    refrain::log::info("config: zstd={}, watchdog={}ms, autosave={}",
+                       zstd_level, watchdog_timeout, autosave_interval);
+
+    // Keep the maintenance worker's option view consistent with the resolved
+    // configuration values.
+    server_run_options effective{options};
+    effective.world_zstd_level = zstd_level;
+    effective.zstd_near_level = zstd_near_level;
+    effective.zstd_mid_level = zstd_mid_level;
+    effective.zstd_far_level = zstd_far_level;
+    effective.zstd_near_radius = zstd_near_radius;
+    effective.zstd_mid_radius = zstd_mid_radius;
+    effective.watchdog_timeout_ms = watchdog_timeout;
+    effective.autosave_interval_ticks = autosave_interval;
+    effective.compact_interval_ticks = compact_interval;
+    effective.store_compact_interval_ticks = store_compact_interval;
+    effective.compact_min_bytes = compact_min_bytes;
+    effective.compact_garbage_percent = compact_garbage_percent;
 
     auto store{refrain::sim::world::open(options.world_path)};
     if (!store) {
         return report_error(store.error());
     }
-    if (auto configured{
-            store->store().set_zstd_level(options.world_zstd_level)};
+    if (auto configured{store->store().set_zstd_level(zstd_level)};
         !configured) {
         return report_error(configured.error());
     }
     if (auto configured{store->set_zstd_policy(
-            refrain::sim::zstd_policy{.near_level = options.zstd_near_level,
-                                      .mid_level = options.zstd_mid_level,
-                                      .far_level = options.zstd_far_level,
-                                      .near_radius = options.zstd_near_radius,
-                                      .mid_radius = options.zstd_mid_radius})};
+            refrain::sim::zstd_policy{.near_level = zstd_near_level,
+                                      .mid_level = zstd_mid_level,
+                                      .far_level = zstd_far_level,
+                                      .near_radius = zstd_near_radius,
+                                      .mid_radius = zstd_mid_radius})};
         !configured) {
         return report_error(configured.error());
     }
@@ -869,6 +1412,567 @@ auto run_server(const server_run_options &options) -> int {
     refrain::log::info("spawn: {} chunks {} tickets", store->loaded_chunks(),
                        store->ticket_count(spawn_chunk));
 
+    std::optional<refrain::data::vanilla_tables> tables{};
+    auto table_bytes{
+        refrain::core::io::read_file("content/vanilla/26.3/tables.rvtb")};
+    if (!table_bytes) {
+        refrain::log::warn("network: vanilla tables unavailable: {}",
+                           table_bytes.error().message);
+    } else {
+        auto opened{refrain::data::vanilla_tables::open(*table_bytes)};
+        if (!opened) {
+            refrain::log::warn("network: vanilla tables invalid: {}",
+                               opened.error().message);
+        } else {
+            tables = std::move(*opened);
+        }
+    }
+    std::optional<refrain::net::registry_catalog> registries{};
+    auto loaded_registries{refrain::net::registry_catalog::load(
+        "content/vanilla/26.3/protocol_registry.json")};
+    if (!loaded_registries) {
+        refrain::log::warn("network: registry catalog unavailable: {}",
+                           loaded_registries.error().message);
+    } else {
+        registries = std::move(*loaded_registries);
+    }
+    std::vector<std::vector<std::byte>> spawn_chunks{};
+    if (tables && registries) {
+        refrain::server::chunk_packet_source source{
+            .world = &*store,
+            .tables = &*tables,
+            .registries = &*registries,
+        };
+        auto built{refrain::server::build_spawn_chunks(source, spawn_chunk, 3)};
+        if (!built) {
+            refrain::log::error("network: spawn chunks failed: {}",
+                                built.error().message);
+        } else {
+            spawn_chunks = std::move(*built);
+            refrain::log::info("network: spawn_chunks={}", spawn_chunks.size());
+        }
+    }
+    auto command_environment{
+        std::make_shared<refrain::server::command_environment>()};
+    command_environment->world = &store->store();
+    const auto initial_mode{
+        level->game_mode >= 0 && level->game_mode <= 3
+            ? static_cast<refrain::net::game_mode>(level->game_mode)
+            : refrain::net::game_mode::creative};
+    command_environment->default_mode = initial_mode;
+    refrain::session::play_session players{};
+    refrain::session::chunk_tracker views{};
+    std::unordered_map<std::uint64_t, refrain::net::movement_event>
+        last_moves{};
+    refrain::net::server *active_listener{nullptr};
+    const auto external_join{options.player_join};
+    const auto external_leave{options.player_leave};
+    refrain::net::server_inputs network_inputs{};
+    network_inputs.commands =
+        refrain::server::make_command_bridge(command_environment);
+    network_inputs.policy.hardcore = level->hardcore;
+    network_inputs.policy.difficulty =
+        level->difficulty >= 0 && level->difficulty <= 3
+            ? static_cast<std::uint32_t>(level->difficulty)
+            : 2U;
+    network_inputs.policy.difficulty_locked = level->difficulty_locked;
+    network_inputs.join_state =
+        [command_environment](const refrain::net::player_identity &identity) {
+            return command_environment->join_state(identity.connection);
+        };
+    network_inputs.fallback_bind_host =
+        options.network.get_string("bind_host", "0.0.0.0");
+    network_inputs.fallback_port =
+        static_cast<std::uint16_t>(options.network.get_int64("port", 25565));
+    network_inputs.fallback_compression = static_cast<std::int32_t>(
+        options.network.get_int64("compression_threshold", 256));
+    network_inputs.fallback_view_distance = static_cast<std::int32_t>(
+        options.network.get_int64("view_distance", 10));
+    network_inputs.fallback_simulation_distance = static_cast<std::int32_t>(
+        options.network.get_int64("simulation_distance", 10));
+    network_inputs.fallback_max_players = static_cast<std::int32_t>(
+        options.network.get_int64("status.max_players", 20));
+    network_inputs.fallback_online_mode =
+        options.network.get_bool("online_mode", true);
+    network_inputs.fallback_secure_chat =
+        options.network.get_bool("enforce_secure_profile", true);
+    network_inputs.fallback_motd =
+        options.network.get_string("status.motd", "A Refrain Server");
+    network_inputs.make_transport = options.make_transport;
+    network_inputs.protocol = options.protocol;
+    network_inputs.status = options.status;
+    network_inputs.tab = options.tab;
+    network_inputs.encode_tab = options.encode_tab;
+    const auto spawn_chunk_x{static_cast<std::int32_t>(level->spawn_x / 16)};
+    const auto spawn_chunk_z{static_cast<std::int32_t>(level->spawn_z / 16)};
+    network_inputs.player_join =
+        [&players, &views, &active_listener, external_join, spawn_chunk_x,
+         spawn_chunk_z](const refrain::net::player_identity &identity) {
+            const auto added{players.add_player(
+                identity.connection, identity.id, std::string{identity.name},
+                std::string{identity.world}, 0.0, 64.0, 0.0, 1)};
+            if (added) {
+                static_cast<void>(views.update(
+                    identity.connection, spawn_chunk_x, spawn_chunk_z, 10));
+            }
+            if (added && active_listener != nullptr) {
+                announce_session_join(*active_listener, players,
+                                      identity.connection);
+            }
+            if (external_join) {
+                external_join(identity);
+            }
+        };
+    network_inputs.player_leave =
+        [&players, &views, &last_moves, &active_listener,
+         external_leave](const refrain::net::player_identity &identity) {
+            const auto leaving{players.player_of(identity.connection)};
+            const auto copy{
+                leaving == nullptr
+                    ? std::nullopt
+                    : std::optional<refrain::session::player>{*leaving}};
+            static_cast<void>(players.remove_player(identity.connection));
+            static_cast<void>(views.remove(identity.connection));
+            last_moves.erase(identity.connection);
+            if (copy && active_listener != nullptr) {
+                announce_session_leave(*active_listener, *copy, players);
+            }
+            if (external_leave) {
+                external_leave(identity);
+            }
+        };
+    network_inputs.movement =
+        [&players, &views](const refrain::net::movement_event &event) {
+            static_cast<void>(players.update_position(event.connection, event.x,
+                                                      event.y, event.z,
+                                                      event.yaw, event.pitch));
+            const auto player{players.player_of(event.connection)};
+            if (player != nullptr) {
+                static_cast<void>(views.update(
+                    event.connection,
+                    static_cast<std::int32_t>(std::floor(player->x / 16.0)),
+                    static_cast<std::int32_t>(std::floor(player->z / 16.0)),
+                    player->view_distance));
+            }
+        };
+    network_inputs.view_distance =
+        [&players, &views](const refrain::net::view_distance_event &event) {
+            static_cast<void>(
+                players.set_view_distance(event.connection, event.distance));
+            const auto player{players.player_of(event.connection)};
+            if (player != nullptr) {
+                static_cast<void>(views.update(
+                    event.connection,
+                    static_cast<std::int32_t>(std::floor(player->x / 16.0)),
+                    static_cast<std::int32_t>(std::floor(player->z / 16.0)),
+                    event.distance));
+            }
+        };
+    network_inputs.attack =
+        [&players, &active_listener](const refrain::net::attack_event &event) {
+            if (active_listener != nullptr) {
+                handle_session_attack(*active_listener, players, event);
+            }
+        };
+    network_inputs.animation = [&players,
+                                &active_listener](std::uint64_t connection,
+                                                  std::int8_t action) {
+        if (active_listener != nullptr) {
+            broadcast_session_animation(*active_listener, players, connection,
+                                        action);
+        }
+    };
+    network_inputs.play_ready =
+        [&players,
+         &active_listener](const refrain::net::player_identity &identity) {
+            if (active_listener == nullptr) {
+                return;
+            }
+            const auto value{players.player_of(identity.connection)};
+            send_session_health(*active_listener, identity.connection,
+                                value == nullptr ? 20.0F : value->health);
+            send_session_experience(*active_listener, identity.connection);
+        };
+    network_inputs.respawn = [&players,
+                              &active_listener](std::uint64_t connection) {
+        static_cast<void>(players.set_health(connection, 20.0F));
+        if (active_listener != nullptr) {
+            send_session_health(*active_listener, connection, 20.0F);
+        }
+    };
+    network_inputs.verify_session = options.verify_session;
+    network_inputs.seed = level->seed;
+    network_inputs.spawn_x = static_cast<double>(level->spawn_x) + 0.5;
+    network_inputs.spawn_y = static_cast<double>(level->spawn_y);
+    network_inputs.spawn_z = static_cast<double>(level->spawn_z) + 0.5;
+    network_inputs.registry_catalog_path =
+        "content/vanilla/26.3/protocol_registry.json";
+    network_inputs.spawn_chunks =
+        std::make_shared<const std::vector<std::vector<std::byte>>>(
+            std::move(spawn_chunks));
+    network_inputs.break_block =
+        [world = &*store](std::int32_t x, std::int32_t y, std::int32_t z) {
+            if (y < std::numeric_limits<std::int16_t>::min() ||
+                y > std::numeric_limits<std::int16_t>::max()) {
+                return false;
+            }
+            return world
+                ->set_block(
+                    refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z},
+                    refrain::sim::air_block)
+                .has_value();
+        };
+    network_inputs.place_block =
+        [world = &*store](std::int32_t x, std::int32_t y, std::int32_t z) {
+            if (y < std::numeric_limits<std::int16_t>::min() ||
+                y > std::numeric_limits<std::int16_t>::max()) {
+                return false;
+            }
+            const auto stone{
+                world->registry().intern(std::string{"minecraft:stone"})};
+            return world
+                ->set_block(
+                    refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z},
+                    stone)
+                .has_value();
+        };
+    auto network{refrain::net::server::start(std::move(network_inputs),
+                                             options.network)};
+    std::unique_ptr<refrain::net::server> listener{};
+    if (!network) {
+        refrain::log::error("network: listener failed: {}",
+                            network.error().message);
+    } else {
+        listener = std::move(*network);
+        active_listener = listener.get();
+        command_environment->listener = listener.get();
+        refrain::log::info("network: listening on {}:{}",
+                           options.network.get_string("bind_host", "0.0.0.0"),
+                           listener->local_port());
+    }
+
+    // Chunk streaming: the network layer reports viewport changes, the
+    // simulation thread encodes the missing chunks in bounded batches.
+    struct chunk_stream_state {
+        std::int32_t center_x{0};
+        std::int32_t center_z{0};
+        std::int32_t radius{0};
+        bool center_dirty{false};
+        bool seeded{false};
+        bool reported{false};
+        std::size_t sent{0};
+        std::set<std::pair<std::int32_t, std::int32_t>> known{};
+        std::deque<std::pair<std::int32_t, std::int32_t>> pending{};
+    };
+    std::unordered_map<std::uint64_t, chunk_stream_state> chunk_streams{};
+    // Encoded chunks are shared by every connection and survive a tick, so a
+    // second player with the same viewport does not encode the same chunk
+    // again. The bound keeps the resident bytes proportional to the cache.
+    std::map<std::pair<std::int32_t, std::int32_t>, std::vector<std::byte>>
+        encoded_chunks{};
+    constexpr std::size_t max_encoded_chunks{256};
+    refrain::server::chunk_packet_source stream_source{};
+    bool stream_chunks{false};
+    if (tables && registries) {
+        stream_source = refrain::server::chunk_packet_source{
+            .world = &*store,
+            .tables = &*tables,
+            .registries = &*registries,
+        };
+        stream_chunks = true;
+    }
+    const auto process_chunk_streams = [&]() {
+        if (!listener || !stream_chunks) {
+            return;
+        }
+        const auto active_ids{listener->active_connections()};
+        const std::set<std::uint64_t> active{active_ids.begin(),
+                                             active_ids.end()};
+        for (auto iterator = chunk_streams.begin();
+             iterator != chunk_streams.end();) {
+            if (!active.contains(iterator->first)) {
+                iterator = chunk_streams.erase(iterator);
+            } else {
+                ++iterator;
+            }
+        }
+        for (const auto &request : views.take_requests()) {
+            auto &stream{chunk_streams[request.connection]};
+            const auto center_changed{stream.radius != request.radius ||
+                                      stream.center_x != request.chunk_x ||
+                                      stream.center_z != request.chunk_z};
+            stream.center_x = request.chunk_x;
+            stream.center_z = request.chunk_z;
+            stream.radius = request.radius;
+            if (request.seed_radius > 0 && !stream.seeded) {
+                for (std::int32_t dz{-request.seed_radius};
+                     dz <= request.seed_radius; ++dz) {
+                    for (std::int32_t dx{-request.seed_radius};
+                         dx <= request.seed_radius; ++dx) {
+                        stream.known.emplace(stream.center_x + dx,
+                                             stream.center_z + dz);
+                    }
+                }
+                stream.seeded = true;
+            }
+            if (center_changed || stream.pending.empty()) {
+                stream.pending.clear();
+                for (std::int32_t distance{0}; distance <= stream.radius;
+                     ++distance) {
+                    for (std::int32_t dz{-distance}; dz <= distance; ++dz) {
+                        for (std::int32_t dx{-distance}; dx <= distance; ++dx) {
+                            if (std::max(std::abs(dx), std::abs(dz)) !=
+                                distance) {
+                                continue;
+                            }
+                            const auto x{stream.center_x + dx};
+                            const auto z{stream.center_z + dz};
+                            if (!stream.known.contains({x, z})) {
+                                stream.pending.emplace_back(x, z);
+                            }
+                        }
+                    }
+                }
+            }
+            stream.center_dirty = stream.center_dirty || center_changed;
+            stream.reported = false;
+        }
+        std::size_t encode_budget{1};
+        for (const auto id : active_ids) {
+            auto match{chunk_streams.find(id)};
+            if (match == chunk_streams.end()) {
+                continue;
+            }
+            auto &stream{match->second};
+            std::vector<std::vector<std::byte>> packets;
+            constexpr std::size_t batch_budget{8};
+            packets.reserve(batch_budget);
+            while (!stream.pending.empty() && packets.size() < batch_budget) {
+                const auto [x, z]{stream.pending.front()};
+                if (stream.known.contains({x, z})) {
+                    stream.pending.pop_front();
+                    continue;
+                }
+                const auto cache_key{std::pair{x, z}};
+                auto cached{encoded_chunks.find(cache_key)};
+                if (cached == encoded_chunks.end()) {
+                    if (encode_budget == 0) {
+                        // Leave the coordinate pending: the next tick picks it
+                        // up again instead of dropping it from the viewport.
+                        break;
+                    }
+                    --encode_budget;
+                    auto encoded{refrain::server::encode_full_chunk(
+                        stream_source, refrain::sim::chunk_pos{x, z})};
+                    if (!encoded) {
+                        // The world may not have this chunk generated;
+                        // remember it so the same coordinate is not retried
+                        // every tick.
+                        refrain::log::debug(
+                            "network: chunk ({}, {}) encode failed: {}", x, z,
+                            encoded.error().message);
+                        stream.known.emplace(x, z);
+                        stream.pending.pop_front();
+                        continue;
+                    }
+                    cached =
+                        encoded_chunks.emplace(cache_key, std::move(*encoded))
+                            .first;
+                    if (encoded_chunks.size() > max_encoded_chunks) {
+                        encoded_chunks.erase(encoded_chunks.begin());
+                    }
+                }
+                stream.pending.pop_front();
+                packets.push_back(cached->second);
+                stream.known.emplace(x, z);
+                ++stream.sent;
+            }
+            const auto update_center{stream.center_dirty};
+            if (update_center || !packets.empty()) {
+                listener->send_chunk_batch(id, stream.center_x, stream.center_z,
+                                           packets, update_center);
+                stream.center_dirty = false;
+            }
+            if (stream.pending.empty() && !stream.reported) {
+                refrain::log::info(
+                    "network: chunk view ready for connection {} ({} "
+                    "chunk(s) streamed)",
+                    id, stream.sent);
+                stream.reported = true;
+            }
+        }
+    };
+
+    // Player inventory: map runtime item keys to protocol item ids once, then
+    // mirror the simulation inventory into the player inventory container.
+    std::unordered_map<std::string, std::uint32_t> item_ids{};
+    std::unordered_map<std::uint32_t, std::string> item_names{};
+    if (tables) {
+        if (const auto registry{tables->find_registry("minecraft:item")}) {
+            const auto count{tables->registry_entry_count(*registry)};
+            item_ids.reserve(count);
+            for (std::uint32_t index{0}; index < count; ++index) {
+                const auto entry{tables->registry_entry(*registry, index)};
+                if (entry.protocol_id >= 0) {
+                    const auto id{
+                        static_cast<std::uint32_t>(entry.protocol_id)};
+                    item_ids.emplace(std::string{entry.name}, id);
+                    item_names.emplace(id, std::string{entry.name});
+                }
+            }
+        }
+    }
+    if (auto stone{item_ids.find("minecraft:stone")}; stone != item_ids.end()) {
+        refrain::log::info("inventory: minecraft:stone -> {}", stone->second);
+    }
+    std::set<std::uint64_t> inventory_initialized{};
+    std::set<std::uint64_t> inventory_forced{};
+    std::unordered_map<std::uint64_t, refrain::sim::item_stack> carried_items{};
+    std::unordered_map<std::uint64_t, std::uint64_t> inventory_hashes{};
+    std::int32_t inventory_state{0};
+    const auto process_container_clicks = [&]() {
+        if (!listener) {
+            return;
+        }
+        for (const auto &slot : listener->take_creative_slots()) {
+            auto *inventory = players.inventory_of(slot.connection);
+            const auto index{static_cast<std::size_t>(slot.slot)};
+            if (inventory == nullptr || slot.slot < 0 ||
+                index >= inventory->size()) {
+                continue;
+            }
+            auto &target{(*inventory)[index]};
+            if (slot.item_id == 0 || slot.count == 0) {
+                target = sim::item_stack{};
+            } else {
+                const auto name{item_names.find(slot.item_id)};
+                if (name == item_names.end()) {
+                    continue;
+                }
+                target = sim::item_stack{
+                    .item = name->second,
+                    .count = slot.count,
+                };
+            }
+            inventory_forced.insert(slot.connection);
+        }
+        for (const auto &close : listener->take_container_closes()) {
+            if (close.container_id != 0) {
+                continue;
+            }
+            carried_items.erase(close.connection);
+            inventory_forced.insert(close.connection);
+        }
+        for (const auto &click : listener->take_container_clicks()) {
+            if (click.container_id != 0 || click.mode != 0) {
+                continue;
+            }
+            auto *inventory = players.inventory_of(click.connection);
+            if (inventory == nullptr) {
+                continue;
+            }
+            auto &carried{carried_items[click.connection]};
+            const auto changed{refrain::server::apply_player_click(
+                *inventory, carried, click.slot, click.button)};
+            refrain::log::debug(
+                "inventory: click conn={} slot={} button={} mode={} -> "
+                "carried='{}' x{} changed={}",
+                click.connection, click.slot, click.button, click.mode,
+                carried.item, carried.count, changed);
+            inventory_forced.insert(click.connection);
+        }
+    };
+
+    const auto process_inventory = [&]() {
+        if (!listener) {
+            return;
+        }
+        const auto active_ids{listener->active_connections()};
+        const std::set<std::uint64_t> active{active_ids.begin(),
+                                             active_ids.end()};
+        for (auto iterator = inventory_initialized.begin();
+             iterator != inventory_initialized.end();) {
+            if (!active.contains(*iterator)) {
+                iterator = inventory_initialized.erase(iterator);
+            } else {
+                ++iterator;
+            }
+        }
+        for (auto iterator = inventory_hashes.begin();
+             iterator != inventory_hashes.end();) {
+            if (!active.contains(iterator->first)) {
+                iterator = inventory_hashes.erase(iterator);
+            } else {
+                ++iterator;
+            }
+        }
+        for (const auto id : active_ids) {
+            const auto *record{players.player_of(id)};
+            if (record == nullptr) {
+                continue;
+            }
+            std::vector<refrain::net::item_stack> slots(46);
+            std::uint64_t hash{0};
+            for (std::size_t index{0}; index < record->inventory.size();
+                 ++index) {
+                const auto &stack{record->inventory[index]};
+                const auto item{item_ids.find(stack.item)};
+                hash ^= std::hash<std::string>{}(stack.item) +
+                        (static_cast<std::uint64_t>(stack.count) << 1U);
+                if (item == item_ids.end()) {
+                    continue;
+                }
+                std::size_t slot{0};
+                if (index < 9) {
+                    slot = 36U + index;
+                } else if (index < 36U) {
+                    slot = index;
+                } else {
+                    continue;
+                }
+                slots[slot] = refrain::net::item_stack{
+                    .count = stack.count,
+                    .item_id = item->second,
+                };
+            }
+            const auto previous{inventory_hashes.find(id)};
+            const auto changed{previous == inventory_hashes.end() ||
+                               previous->second != hash};
+            const auto any_new{!inventory_initialized.contains(id)};
+            const auto forced{inventory_forced.contains(id)};
+            if (!changed && !any_new && !forced) {
+                continue;
+            }
+            if (changed) {
+                inventory_hashes[id] = hash;
+                ++inventory_state;
+            }
+            auto carried{refrain::net::item_stack{}};
+            if (const auto stack{carried_items.find(id)};
+                stack != carried_items.end() && stack->second.count > 0) {
+                if (const auto item{item_ids.find(stack->second.item)};
+                    item != item_ids.end()) {
+                    carried = refrain::net::item_stack{
+                        .count = stack->second.count,
+                        .item_id = item->second,
+                    };
+                }
+            }
+            listener->send_container_content(id, 0, inventory_state, slots,
+                                             carried);
+            inventory_initialized.insert(id);
+        }
+        inventory_forced.clear();
+        for (auto iterator = carried_items.begin();
+             iterator != carried_items.end();) {
+            if (!active.contains(iterator->first)) {
+                iterator = carried_items.erase(iterator);
+            } else {
+                ++iterator;
+            }
+        }
+    };
+
     snapshot_writer writer{*store};
     // One background deleter, only for an applying GC policy. `--content-gc
     // off|dry-run` must never delete: no worker is started and a queue left by
@@ -879,6 +1983,7 @@ auto run_server(const server_run_options &options) -> int {
         gc_worker.emplace(options.content_store, options.content_gc_budget_ms);
     }
     const auto state{std::make_shared<runtime_state>()};
+    state->config = options.config;
     state->heartbeat_ns.store(refrain::core::now_ns(),
                               std::memory_order_relaxed);
 
@@ -889,7 +1994,7 @@ auto run_server(const server_run_options &options) -> int {
     refrain::core::schedule::scheduler scheduler{};
     maintenance_context maintenance{.world = &*store,
                                     .writer = &writer,
-                                    .options = &options,
+                                    .options = &effective,
                                     .gc_worker = &gc_worker};
     std::array<refrain::core::schedule::task_descriptor, 4> tasks{};
     std::size_t task_count{0};
@@ -913,21 +2018,20 @@ auto run_server(const server_run_options &options) -> int {
             .invoke = invoke,
         };
     };
-    if (options.autosave_interval_ticks > 0) {
-        add_task("autosave", options.autosave_interval_ticks,
-                 &maintenance_autosave);
+    if (autosave_interval > 0) {
+        add_task("autosave", autosave_interval, &maintenance_autosave);
     }
     if (options.content_gc_interval_ticks > 0 &&
         !options.content_store.empty()) {
         add_task("content-gc", options.content_gc_interval_ticks,
                  &maintenance_content_gc);
     }
-    if (options.store_compact_interval_ticks > 0) {
-        add_task("store-compact", options.store_compact_interval_ticks,
+    if (store_compact_interval > 0) {
+        add_task("store-compact", store_compact_interval,
                  &maintenance_store_compact);
     }
-    if (options.compact_interval_ticks > 0) {
-        add_task("region-compact", options.compact_interval_ticks,
+    if (compact_interval > 0) {
+        add_task("region-compact", compact_interval,
                  &maintenance_region_compact);
     }
     if (task_count > 0) {
@@ -971,8 +2075,8 @@ auto run_server(const server_run_options &options) -> int {
     }
 
     std::thread watchdog{};
-    if (options.watchdog_timeout_ms > 0) {
-        watchdog = std::thread{[state, timeout = options.watchdog_timeout_ms] {
+    if (watchdog_timeout > 0) {
+        watchdog = std::thread{[state, timeout = watchdog_timeout] {
             refrain::log::set_thread_name("watchdog");
             const auto timeout_ns{static_cast<std::int64_t>(timeout) *
                                   1'000'000LL};
@@ -1006,6 +2110,7 @@ auto run_server(const server_run_options &options) -> int {
             refrain::log::error("tick loop: {}", tick.error().message);
             break;
         }
+        const auto tick_start_ns{refrain::core::now_ns()};
         state->heartbeat_ns.store(refrain::core::now_ns(),
                                   std::memory_order_relaxed);
         for (const auto &batch : writer.drain_completed()) {
@@ -1013,21 +2118,33 @@ auto run_server(const server_run_options &options) -> int {
         }
         for (const auto &line : drain_commands(state)) {
             execute_console_command(line, state, *store, writer, *tick,
-                                    &scheduler);
+                                    &scheduler, listener.get());
         }
         while (replay_index < replay.size() &&
                replay[replay_index].tick == ticks_run) {
             execute_console_command(replay[replay_index].command, state, *store,
-                                    writer, *tick, &scheduler);
+                                    writer, *tick, &scheduler, listener.get());
             if (state->stop.load(std::memory_order_acquire)) {
                 break;
             }
             ++replay_index;
         }
         scheduler.run(refrain::core::schedule::phase::pre_tick, ticks_run);
+        if (listener) {
+            listener->tick();
+            broadcast_session_moves(*listener, players, last_moves);
+        }
+        process_chunk_streams();
+        process_container_clicks();
+        process_inventory();
         store->tick();
         ++ticks_run;
         scheduler.run(refrain::core::schedule::phase::post_tick, ticks_run);
+        record_tick_work(*state, static_cast<std::uint64_t>(
+                                     refrain::core::now_ns() - tick_start_ns));
+        if (options.on_tick) {
+            options.on_tick(static_cast<std::uint64_t>(ticks_run));
+        }
         if (options.hash_every > 0 &&
             (ticks_run % static_cast<std::int64_t>(options.hash_every)) == 0) {
             refrain::log::info("replay: tick={} hash={}", ticks_run,
@@ -1052,6 +2169,12 @@ auto run_server(const server_run_options &options) -> int {
     if (watchdog.joinable()) {
         watchdog.join();
     }
+    // Stop accepting connections before the world teardown so no handler can
+    // observe a half-destroyed store.
+    if (listener) {
+        listener->stop();
+        listener.reset();
+    }
     // Tasks borrow the store/writer/GC worker; drop them before teardown.
     scheduler.clear();
     writer.stop();
@@ -1070,6 +2193,20 @@ auto run_server(const server_run_options &options) -> int {
         refrain::log::error("shutdown: commit failed: {}",
                             committed.error().message);
         return 1;
+    }
+    if (options.config != nullptr) {
+        bool dirty{false};
+        for (const auto &name : options.config->names()) {
+            dirty = dirty || options.config->dirty(name);
+        }
+        if (dirty) {
+            if (auto saved{options.config->save_all()}; !saved) {
+                refrain::log::error("config: shutdown save failed: {}",
+                                    saved.error().message);
+            } else {
+                refrain::log::info("config: saved");
+            }
+        }
     }
     refrain::log::info("server stopped: {} ticks", ticks_run);
     return 0;

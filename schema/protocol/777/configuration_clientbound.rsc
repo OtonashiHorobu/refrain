@@ -1,0 +1,103 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+// Configuration phase, clientbound. Packets whose payload carries NBT
+// (registry data, tags, disconnect components) keep hand-written codecs.
+
+module refrain::protocol::v777::configuration::clientbound;
+version 777;
+import refrain::protocol::v777::wire;
+
+import refrain::protocol::v777::common;
+
+packet custom_payload = 1 {
+    channel: identifier;
+    #[rest] data: bytes;
+}
+
+packet finish_configuration = 3 {
+}
+
+packet keep_alive = 4 {
+    id: i64;
+}
+
+packet ping = 5 {
+    #[fixed] id: i32;
+}
+
+packet update_enabled_features = 13 {
+    features: array<identifier>;
+}
+
+packet select_known_packs = 15 {
+    packs: array<known_pack>;
+}
+
+// Generated protocol layouts.
+
+packet cookie_request = 0 {
+    key: identifier;
+}
+
+packet disconnect = 2 {
+    payload: text_component;
+}
+
+packet reset_chat = 6 {
+}
+
+packet registry_data = 7 {
+    registry: identifier;
+    entries: array<wire_packed_registry_entry>;
+}
+
+packet resource_pack_pop = 8 {
+    id: optional<uuid>;
+}
+
+packet resource_pack_push = 9 {
+    id: uuid;
+    #[max(32767)] url: string;
+    #[max(40)] hash: string;
+    required: bool;
+    prompt: optional<text_component>;
+}
+
+packet post_effects = 10 {
+    post_effects: array<identifier>;
+}
+
+packet store_cookie = 11 {
+    key: identifier;
+    #[max(5120)] payload: bytes;
+}
+
+packet transfer = 12 {
+    #[max(32767)] host: string;
+    #[varint] port: i32;
+}
+
+packet update_tags = 14 {
+    tags: map<identifier, wire_network_payload>;
+}
+
+packet custom_report_details = 16 {
+    details: map<string, string>;
+}
+
+packet server_links = 17 {
+    links: array<wire_untrusted_entry>;
+}
+
+packet clear_dialog = 18 {
+}
+
+packet show_dialog = 19 {
+    dialog: holder<nbt>;
+}
+
+packet code_of_conduct = 20 {
+    #[max(32767)] code_of_conduct: string;
+}

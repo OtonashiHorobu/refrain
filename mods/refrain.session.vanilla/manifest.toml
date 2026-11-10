@@ -17,5 +17,8 @@ display_name = "refrain.session.vanilla"
 description = "Session and authentication service."
 license = "MIT"
 
+[provides]
+services = ["refrain:net.session"]
+
 [requires]
 "refrain.content.vanilla" = "^1.0.0"

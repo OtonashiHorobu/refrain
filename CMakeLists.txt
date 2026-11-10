@@ -122,6 +122,10 @@ find_package(Crc32c CONFIG REQUIRED)
 # ASIO_STANDALONE, so no Boost headers are needed. Asio is a kernel
 # implementation detail: only src/core/async.cpp includes it, and no public
 # header may.
+find_package(Threads REQUIRED)
+set(OpenSSL_DIR "${CMAKE_BINARY_DIR}/generators" CACHE PATH "" FORCE)
+find_package(OpenSSL CONFIG REQUIRED)
+find_package(CURL REQUIRED)
 find_package(asio CONFIG REQUIRED)
 # Optional Linux io_uring backend for Asio's file classes. liburing is
 # Linux-only, so the option is forced OFF by the Conan toolchain elsewhere;
@@ -364,6 +368,17 @@ refrain_add_library(refrain-worldgen ${REFRAIN_WORLDGEN_SOURCES})
 target_link_libraries(refrain-worldgen PUBLIC refrain-kernel)
 add_library(Refrain::WorldGen ALIAS refrain-worldgen)
 
+# --- command dispatch: flat graph, parsers, immutable snapshots ------------
+# Gameplay code registers literals/arguments here; the network adapter converts
+# command::tree into its own packet representation. This target intentionally
+# has no net/world/server dependency. New src/command/*.cpp files are picked up
+# without editing this file.
+file(GLOB_RECURSE REFRAIN_COMMAND_SOURCES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/command/*.cpp")
+refrain_add_library(refrain-command ${REFRAIN_COMMAND_SOURCES})
+target_link_libraries(refrain-command PUBLIC refrain-kernel PRIVATE fmt::fmt)
+add_library(Refrain::Command ALIAS refrain-command)
+
 # --- simulation runtime: block registry, loaded chunks, tickets -------------
 # New src/sim files are picked up without editing this file.
 file(GLOB_RECURSE REFRAIN_SIM_SOURCES CONFIGURE_DEPENDS
@@ -372,6 +387,50 @@ refrain_add_library(refrain-sim ${REFRAIN_SIM_SOURCES})
 target_link_libraries(refrain-sim PUBLIC refrain-kernel refrain-world
                                        refrain-data refrain-contracts)
 add_library(Refrain::Sim ALIAS refrain-sim)
+
+# --- protocol codecs: versioned connection framing --------------------------
+# New src/protocol files are picked up without editing this file. The library
+# depends on the wire primitives in refrain-net and is consumed by protocol
+# providers.
+file(GLOB_RECURSE REFRAIN_PROTOCOL_SOURCES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/protocol/*.cpp")
+refrain_add_library(refrain-protocol ${REFRAIN_PROTOCOL_SOURCES})
+target_link_libraries(refrain-protocol PUBLIC refrain-kernel refrain-net)
+add_library(Refrain::Protocol ALIAS refrain-protocol)
+
+# --- network protocol: wire codec, frame, transport, sessions --------------
+# New src/net files are picked up without editing this file. OpenSSL is linked
+# privately by the online-mode crypto unit; it never appears in a public header.
+file(GLOB_RECURSE REFRAIN_NET_SOURCES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/net/*.cpp")
+refrain_add_library(refrain-net ${REFRAIN_NET_SOURCES})
+target_include_directories(refrain-net PUBLIC
+                           $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/sdk/generated/cpp>)
+target_link_libraries(refrain-net PUBLIC refrain-kernel refrain-data
+                                       PRIVATE ZLIB::ZLIB asio::asio
+                                               Threads::Threads openssl::openssl
+                                               CURL::libcurl)
+target_compile_definitions(refrain-net PRIVATE ASIO_NO_DEPRECATED=1
+                                              ASIO_NO_TYPEID=1
+                                              REFRAIN_WITH_OPENSSL=1
+                                              REFRAIN_WITH_CURL=1)
+if(WIN32)
+    # Standalone Asio's Windows backend uses AcceptEx and GetAcceptExSockaddrs
+    # from mswsock; MSVC pulls the import library in with a pragma, MinGW needs
+    # it explicitly.
+    target_link_libraries(refrain-net PRIVATE mswsock)
+endif()
+add_library(Refrain::Net ALIAS refrain-net)
+
+# --- session: gameplay player table and entity visibility ------------------
+# Sits above the network shell: transport/protocol provide bytes and packets,
+# while the session owns player entities, visibility and gameplay state.
+file(GLOB_RECURSE REFRAIN_SESSION_SOURCES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/session/*.cpp")
+refrain_add_library(refrain-session ${REFRAIN_SESSION_SOURCES})
+target_link_libraries(refrain-session PUBLIC refrain-kernel refrain-net
+                                       refrain-sim)
+add_library(Refrain::Session ALIAS refrain-session)
 
 # --- mod host: loads built-in mods against the embedded archive ------------
 # The host needs the data layer (RFSI/RFBT reader), so it is a separate library
@@ -433,7 +492,8 @@ target_link_libraries(refrain-first-party-mods PUBLIC refrain-kernel
                                                     refrain-mod-host
                                                     refrain-sim
                                                     refrain-app
-                                                    refrain-server-runtime)
+                                                    refrain-server-runtime
+                                                    refrain-protocol)
 refrain_apply_warnings(refrain-first-party-mods)
 add_library(Refrain::FirstPartyMods ALIAS refrain-first-party-mods)
 
@@ -471,12 +531,14 @@ add_library(Refrain::App ALIAS refrain-app)
 file(GLOB REFRAIN_SERVER_RUNTIME_SOURCES CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/server/*.cpp")
 refrain_add_library(refrain-server-runtime ${REFRAIN_SERVER_RUNTIME_SOURCES})
-target_link_libraries(refrain-server-runtime PUBLIC refrain-app)
+target_link_libraries(refrain-server-runtime PUBLIC refrain-app refrain-net
+                                       refrain-session
+                                               refrain-command)
 add_library(Refrain::ServerRuntime ALIAS refrain-server-runtime)
 
 # --- tools -----------------------------------------------------------------
 add_executable(refrain-tools src/main/tools.cpp)
-target_link_libraries(refrain-tools PRIVATE refrain-app
+target_link_libraries(refrain-tools PRIVATE refrain-app refrain-net
                                         refrain-first-party-mods CLI11::CLI11)
 refrain_apply_warnings(refrain-tools)
 
@@ -553,7 +615,10 @@ if(REFRAIN_BUILD_TESTS)
                                               refrain-schema refrain-contracts
                                               refrain-archive refrain-data
                                               refrain-world refrain-sim
-                                              refrain-worldgen refrain-builtin
+                                              refrain-command
+                                              refrain-net refrain-protocol
+                                              refrain-session refrain-worldgen
+                                              refrain-builtin
                                               refrain-mod-host refrain-host
                                               refrain-first-party-mods
                                               refrain-script-wasm libzip::zip

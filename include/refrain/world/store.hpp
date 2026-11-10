@@ -7,9 +7,10 @@
 // `objects/` (global data/players/assets/datapacks).
 //
 // The store owns open region handles (one per region, single-writer), decodes
-// chunk payloads through `world::decode_chunk` and keeps `meta.rfw` opaque at
-// this layer; `level()` projects the subset of vanilla `level.dat` that the
-// CLI and the server identity need.
+// chunk payloads through `world::decode_chunk` and exposes `meta.rfw` as an
+// opaque NBT document. `level()` and `read_gameplay()` project the subset of
+// vanilla `level.dat` that the CLI and the server need; `write_gameplay()`
+// rewrites only the gameplay tags of that document.
 
 #pragma once
 
@@ -40,6 +41,23 @@ struct level_info {
     std::int32_t spawn_z{0};
     std::int64_t time{0};
     std::string level_name;
+    /// `GameType` (0 survival, 1 creative, 2 adventure, 3 spectator).
+    std::int32_t game_mode{1};
+    /// `hardcore` (vanilla stores it as a byte).
+    bool hardcore{false};
+    /// `Difficulty` (0 peaceful, 1 easy, 2 normal, 3 hard).
+    std::int32_t difficulty{2};
+    /// `DifficultyLocked` (vanilla stores it as a byte).
+    bool difficulty_locked{false};
+};
+
+/// Editable gameplay subset of `meta.level`; the vanilla tag names are
+/// `GameType`, `hardcore`, `Difficulty` and `DifficultyLocked`.
+struct gameplay_settings {
+    std::int32_t game_mode{1};
+    bool hardcore{false};
+    std::int32_t difficulty{2};
+    bool difficulty_locked{false};
 };
 
 struct world_stats {
@@ -148,6 +166,21 @@ class world_store {
 
     /// Parsed view of `meta.level` (lenient projection).
     [[nodiscard]] auto level() -> result<level_info>;
+
+    /// Gameplay fields of `meta.level`, using the same lenient projection as
+    /// `level()`: missing tags keep their default and tags stored as a byte or
+    /// an int are accepted. Numeric values outside [0, 3] also keep the
+    /// default instead of failing the read.
+    [[nodiscard]] auto read_gameplay() -> result<gameplay_settings>;
+
+    /// Replace the four gameplay tags of `meta.level` and atomically rewrite
+    /// `meta.rwf`; every other tag and the single-record container are left
+    /// intact. `game_mode` and `difficulty` are validated against [0, 3]
+    /// before the file is read. A missing `meta.rwf` is an error (the store
+    /// never creates a world here). Callers serialize this with other writes
+    /// to the same world.
+    [[nodiscard]] auto write_gameplay(const gameplay_settings &settings)
+        -> status;
 
     /// Strict identity validation of `meta.level`: DataVersion, spawn.pos,
     /// Time and LevelName must exist with the expected NBT types; a

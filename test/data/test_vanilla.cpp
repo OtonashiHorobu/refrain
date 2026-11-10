@@ -230,9 +230,9 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
 
         const auto oak_log = tables->find_block("minecraft:oak_log");
         expect(oak_log.has_value());
-        const auto &log = tables->block_at(*oak_log);
-        expect(log.default_state == log.first_state + 1U);
-        expect(tables->state_at(log.default_state).key ==
+        const auto &block_log = tables->block_at(*oak_log);
+        expect(block_log.default_state == block_log.first_state + 1U);
+        expect(tables->state_at(block_log.default_state).key ==
                "minecraft:oak_log[axis=y]");
     };
 

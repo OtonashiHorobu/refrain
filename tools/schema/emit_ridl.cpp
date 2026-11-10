@@ -33,6 +33,14 @@ struct ridl_context {
     return program.modules[module_index].declarations[decl_index];
 }
 
+// Forward declarations: the extension emitters below share the service-method
+// signature/wrapper helpers defined further down.
+[[nodiscard]] auto vtable_signature(const model &program,
+                                    const method_model &method) -> std::string;
+[[nodiscard]] auto cpp_method_definition(const model &program,
+                                         const method_model &method)
+    -> std::string;
+
 [[nodiscard]] auto module_name(const model &program, std::uint32_t module_index)
     -> const std::string & {
     return program.modules[module_index].name;
@@ -52,7 +60,7 @@ struct ridl_context {
                                  std::uint32_t module_index,
                                  const decl_model &decl) -> std::string {
     return emit::cpp_namespace(module_name(program, module_index)) +
-           "::" + decl.name;
+           "::" + emit::cpp_identifier(decl.name);
 }
 
 [[nodiscard]] auto cpp_decl_name(const model &program,
@@ -108,6 +116,9 @@ struct ridl_context {
     case resolved_type::category::array:
     case resolved_type::category::optional:
     case resolved_type::category::repeated:
+    case resolved_type::category::map:
+    case resolved_type::category::either:
+    case resolved_type::category::holder:
         std::unreachable(); // sema rejects container types in the C ABI
     }
     std::unreachable();
@@ -129,6 +140,9 @@ struct ridl_context {
     case resolved_type::category::array:
     case resolved_type::category::optional:
     case resolved_type::category::repeated:
+    case resolved_type::category::map:
+    case resolved_type::category::either:
+    case resolved_type::category::holder:
         std::unreachable(); // sema rejects container types in the C ABI
     }
     std::unreachable();
@@ -148,6 +162,25 @@ struct ridl_context {
         prefix += decl.name;
     }
     return prefix;
+}
+
+[[nodiscard]] auto extension_c_prefix(const model &program,
+                                      std::uint32_t module_index,
+                                      const decl_model &decl) -> std::string {
+    return emit::abi_prefix(module_name(program, module_index)) + "_" +
+           decl.name;
+}
+
+/// True when the module's generated C header needs the shared extension-ref
+/// block: it declares an extension or hosts a service that declares extension
+/// points.
+[[nodiscard]] auto module_uses_extension_abi(const module_model &module)
+    -> bool {
+    return std::ranges::any_of(module.declarations, [](const decl_model &decl) {
+        return decl.kind == declaration_kind::extension ||
+               (decl.kind == declaration_kind::service &&
+                !decl.extension_points.empty());
+    });
 }
 
 [[nodiscard]] auto service_id_of(const model &program,
@@ -198,6 +231,9 @@ struct ridl_context {
     case resolved_type::category::array:
     case resolved_type::category::optional:
     case resolved_type::category::repeated:
+    case resolved_type::category::map:
+    case resolved_type::category::either:
+    case resolved_type::category::holder:
         std::unreachable(); // sema rejects these event field types
     }
     std::unreachable();
@@ -469,6 +505,8 @@ void collect_slice_types(const model &program, const resolved_type &type,
     // Events are in-process values with their own `event_traits` metadata;
     // they are not reflectable contract records.
     case declaration_kind::event:
+    // Extensions expose their own `custom_extension_traits` metadata.
+    case declaration_kind::extension:
         return false;
     }
     return false;
@@ -565,6 +603,245 @@ void topo_visit(const model &program, std::uint32_t module_index,
     return writer.take();
 }
 
+/// One extension's C++ wrapper: stable metadata constants plus direct
+/// vtable dispatch. The reference is validated once by
+/// `provider::extension<T>()`; no check happens per call.
+[[nodiscard]] auto emit_extension_cpp(const model &program,
+                                      std::uint32_t module_index,
+                                      const decl_model &decl) -> std::string {
+    code_writer writer;
+    const auto c_vtable{extension_c_prefix(program, module_index, decl) +
+                        "_vtable"};
+    writer.raw(emit::doc_block(decl.documentation, "/// "));
+    writer.line("/// Provider-implemented extension extending '{}'.",
+                emit::escape_text(decl.extension.extends_service));
+    writer.line("/// A host binds the reference once through "
+                "`provider::extension<T>()`;");
+    writer.line("/// method calls below dispatch through the bound vtable.");
+    writer.line("class {} final {{", decl.name);
+    writer.line("  public:");
+    writer.line("    using vtable = ::{};", c_vtable);
+    writer.line("    static constexpr std::string_view extension_id =");
+    writer.line("        \"{}\";", emit::escape_text(decl.extension_id));
+    writer.line("    static constexpr std::string_view extends_service =");
+    writer.line("        \"{}\";",
+                emit::escape_text(decl.extension.extends_service));
+    writer.line("    static constexpr std::string_view capability =");
+    writer.line("        \"{}\";",
+                emit::escape_text(decl.extension.capability));
+    writer.line("    static constexpr std::uint32_t abi_major = {};",
+                decl.extension_version_major);
+    writer.line("    static constexpr std::uint32_t abi_minor = {};",
+                decl.extension_version_minor);
+    writer.line("    static constexpr std::uint32_t abi_patch = {};",
+                decl.extension_version_patch);
+    writer.line("    /// Packed minimum version requested from a provider:");
+    writer.line("    /// (major << 16) | minor.");
+    writer.line("    static constexpr std::uint32_t abi_version =");
+    writer.line("        ({}u << 16u) | {}u;", decl.extension_version_major,
+                decl.extension_version_minor);
+    writer.blank();
+    writer.line("    {}(const vtable &table, void *self) noexcept", decl.name);
+    writer.line("        : table_{{&table}}, self_{{self}} {{}}");
+    writer.blank();
+    writer.line("    [[nodiscard]] auto table() const noexcept");
+    writer.line("        -> const vtable & {{");
+    writer.line("        return *table_;");
+    writer.line("    }}");
+    writer.blank();
+    writer.line("    [[nodiscard]] auto self() const noexcept -> void * {{");
+    writer.line("        return self_;");
+    writer.line("    }}");
+    for (const auto &method : decl.methods) {
+        writer.raw(cpp_method_definition(program, method));
+    }
+    writer.blank();
+    writer.line("  private:");
+    writer.line("    const vtable *table_;");
+    writer.line("    void *self_;");
+    writer.line("}};");
+    writer.blank();
+    writer.line("static_assert(offsetof(::{}, struct_size) == 0);", c_vtable);
+    writer.blank();
+    return writer.take();
+}
+
+/// Provider-side registration/query machinery for one service with extension
+/// points. The generated code owns id/version/struct-size dispatch so a
+/// provider only fills a binding table and forwards the vtable slot.
+[[nodiscard]] auto emit_extension_support_cpp() -> std::string {
+    return R"(namespace detail {
+[[nodiscard]] inline auto extension_failure(::refrain_status status,
+                                           std::string_view id)
+    -> ::refrain::error {
+    switch (status) {
+    case REFRAIN_EXTENSION_NOT_FOUND:
+        return ::refrain::make_error(
+            ::refrain::error_code::not_found,
+            std::string{"extension '"} + std::string{id} + "' is not provided");
+    case REFRAIN_EXTENSION_VERSION_MISMATCH:
+        return ::refrain::make_error(
+            ::refrain::error_code::version_mismatch,
+            std::string{"extension '"} + std::string{id} +
+                "' does not provide a compatible version");
+    case REFRAIN_EXTENSION_INVALID:
+    default:
+        return ::refrain::make_error(
+            ::refrain::error_code::invalid_argument,
+            std::string{"extension '"} + std::string{id} +
+                "' returned a malformed reference");
+    }
+}
+} // namespace detail
+
+/// One extension a provider offers. Build it with make_extension_binding().
+struct extension_binding {
+    std::string_view id{};
+    std::uint32_t abi_major{0};
+    std::uint32_t abi_minor{0};
+    std::uint32_t abi_patch{0};
+    const void *vtable{nullptr};
+    void *self{nullptr};
+    std::uint32_t vtable_size{0};
+};
+
+/// Stable-id registry over a provider's extension bindings. The bindings and
+/// the referenced vtables are owned by the base provider; extensions have no
+/// independent lifetime.
+class extension_registry final {
+  public:
+    constexpr explicit extension_registry(
+        std::span<const extension_binding> entries) noexcept
+        : entries_{entries} {}
+
+    [[nodiscard]] auto query(::refrain_str id, std::uint32_t min_version,
+                             ::refrain_extension_ref &out) const noexcept
+        -> ::refrain_status {
+        if (out.struct_size != REFRAIN_EXTENSION_REF_SIZE) {
+            return REFRAIN_EXTENSION_INVALID;
+        }
+        const auto requested_major{min_version >> 16u};
+        const auto requested_minor{min_version & 0xFFFFu};
+        const auto wanted{::refrain::contracts::as_string_view(id)};
+        for (const auto &entry : entries_) {
+            if (entry.id != wanted) {
+                continue;
+            }
+            if (entry.vtable == nullptr || entry.vtable_size == 0) {
+                return REFRAIN_EXTENSION_INVALID;
+            }
+            if (entry.abi_major != requested_major ||
+                entry.abi_minor < requested_minor) {
+                return REFRAIN_EXTENSION_VERSION_MISMATCH;
+            }
+            out.abi_major = entry.abi_major;
+            out.abi_minor = entry.abi_minor;
+            out.abi_patch = entry.abi_patch;
+            out.id = ::refrain::contracts::to_borrowed(entry.id);
+            out.vtable = entry.vtable;
+            out.self = entry.self;
+            return REFRAIN_STATUS_OK;
+        }
+        return REFRAIN_EXTENSION_NOT_FOUND;
+    }
+
+  private:
+    std::span<const extension_binding> entries_;
+};
+
+/// Build one registration entry for `Extension`. A vtable whose struct_size is
+/// below the generated size is stored as null and fails closed at query time.
+template <typename Extension>
+[[nodiscard]] constexpr auto make_extension_binding(
+    const typename Extension::vtable &table, void *self) noexcept
+    -> extension_binding {
+    constexpr auto expected_size{
+        static_cast<std::uint32_t>(sizeof(typename Extension::vtable))};
+    const auto valid{table.struct_size >= expected_size};
+    return extension_binding{
+        .id = Extension::extension_id,
+        .abi_major = Extension::abi_major,
+        .abi_minor = Extension::abi_minor,
+        .abi_patch = Extension::abi_patch,
+        .vtable = valid ? static_cast<const void *>(&table) : nullptr,
+        .self = self,
+        .vtable_size = expected_size,
+    };
+}
+
+/// Vtable adapter: assign `&query_extension<Provider>` to the service's
+/// `query_extension` slot. `Provider` must expose a public
+/// `extension_registry extensions;` member holding the bindings above.
+template <typename Provider>
+[[nodiscard]] auto query_extension(void *self, ::refrain_str id,
+                                   std::uint32_t min_version,
+                                   ::refrain_extension_ref *out) noexcept
+    -> ::refrain_status {
+    if (self == nullptr || out == nullptr) {
+        return REFRAIN_EXTENSION_INVALID;
+    }
+    return static_cast<const Provider *>(self)->extensions.query(
+        id, min_version, *out);
+}
+)";
+}
+
+/// `provider::extension<T>()` body. Uses the `service_vtable` alias emitted by
+/// the caller so the fixed block needs no per-service interpolation.
+[[nodiscard]] auto emit_provider_extension_api() -> std::string {
+    return R"(
+    /// Bind one extension declared by this service. The stable id, version
+    /// and struct sizes are validated once here; the returned wrapper calls
+    /// the extension vtable directly.
+    template <typename Extension>
+    [[nodiscard]] auto extension() const
+        -> std::expected<Extension, ::refrain::error> {
+        const auto slot_end{static_cast<std::uint32_t>(
+            offsetof(service_vtable, query_extension) +
+            sizeof(table_->query_extension))};
+        if (table_->struct_size < slot_end ||
+            table_->query_extension == nullptr) {
+            return std::unexpected(::refrain::make_error(
+                ::refrain::error_code::unsupported,
+                "service provider does not expose extension queries"));
+        }
+        ::refrain_extension_ref ref{};
+        ref.struct_size = REFRAIN_EXTENSION_REF_SIZE;
+        const auto status{table_->query_extension(
+            self_, ::refrain::contracts::to_borrowed(Extension::extension_id),
+            Extension::abi_version, &ref)};
+        if (status != REFRAIN_STATUS_OK) {
+            return std::unexpected(
+                detail::extension_failure(status, Extension::extension_id));
+        }
+        if (ref.struct_size != REFRAIN_EXTENSION_REF_SIZE ||
+            ref.vtable == nullptr ||
+            ::refrain::contracts::as_string_view(ref.id) !=
+                Extension::extension_id ||
+            ref.abi_major != Extension::abi_major ||
+            ref.abi_minor < Extension::abi_minor) {
+            return std::unexpected(::refrain::make_error(
+                ::refrain::error_code::invalid_argument,
+                std::string{"extension '"} +
+                    std::string{Extension::extension_id} +
+                    "' returned a malformed reference"));
+        }
+        const auto *extension_table{static_cast<
+            const typename Extension::vtable *>(ref.vtable)};
+        if (extension_table->struct_size <
+            static_cast<std::uint32_t>(
+                sizeof(typename Extension::vtable))) {
+            return std::unexpected(::refrain::make_error(
+                ::refrain::error_code::invalid_argument,
+                std::string{"extension '"} +
+                    std::string{Extension::extension_id} +
+                    "' has an undersized vtable"));
+        }
+        return Extension{*extension_table, ref.self};
+    }
+)";
+}
+
 [[nodiscard]] auto emit_struct_abi(const model &program,
                                    std::uint32_t module_index,
                                    const decl_model &decl) -> std::string {
@@ -598,6 +875,125 @@ void topo_visit(const model &program, std::uint32_t module_index,
                 c_name);
     writer.blank();
     return writer.take();
+}
+
+/// Shared extension-reference ABI. Emitted into every module header that
+/// declares an extension or hosts extension points and guarded so an aggregate
+/// translation unit including several such headers sees one definition.
+void emit_extension_abi_preamble(code_writer &writer) {
+    writer.raw(
+        R"(// Extension ABI v1: a service exposes provider-implemented extensions
+// through its `query_extension` vtable slot. A reference is a
+// struct_size-prologue value; the vtable pointer stays type-erased in C and is
+// typed by the generated C++ wrapper.
+#ifndef REFRAIN_EXTENSION_ABI_DEFINED
+#define REFRAIN_EXTENSION_ABI_DEFINED
+
+#define REFRAIN_EXTENSION_ABI_MAJOR 1u
+#define REFRAIN_EXTENSION_ABI_MINOR 0u
+
+// Query status values; the numeric codes mirror the shared core error taxonomy
+// (invalid_argument, not_found, version_mismatch).
+#define REFRAIN_EXTENSION_INVALID ((refrain_status)1u)
+#define REFRAIN_EXTENSION_NOT_FOUND ((refrain_status)2u)
+#define REFRAIN_EXTENSION_VERSION_MISMATCH ((refrain_status)8u)
+
+// Packed minimum extension version requested by a query:
+// (major << 16) | minor.
+#define REFRAIN_EXTENSION_VERSION(major, minor)                                \
+    ((((uint32_t)(major)) << 16u) | ((uint32_t)(minor) & 0xFFFFu))
+
+typedef struct refrain_extension_ref {
+    // sizeof(refrain_extension_ref) written by the producer; a host accepts
+    // only its own compiled size.
+    uint32_t struct_size;
+    uint32_t abi_major;
+    uint32_t abi_minor;
+    uint32_t abi_patch;
+    // Stable id derived from the parent service id and the declaration name.
+    refrain_str id;
+    // Provider-owned extension vtable (first member: uint32_t struct_size).
+    const void *vtable;
+    // Provider-owned extension instance passed to every vtable method.
+    void *self;
+} refrain_extension_ref;
+
+#define REFRAIN_EXTENSION_REF_SIZE ((uint32_t)sizeof(refrain_extension_ref))
+#endif // REFRAIN_EXTENSION_ABI_DEFINED
+
+)");
+}
+
+/// One extension's C vtable and stable metadata macros.
+[[nodiscard]] auto emit_extension_abi(const model &program,
+                                      std::uint32_t module_index,
+                                      const decl_model &decl) -> std::string {
+    code_writer writer;
+    const auto prefix{extension_c_prefix(program, module_index, decl)};
+    const auto upper_prefix{emit::upper(prefix)};
+    writer.raw(emit::doc_block(decl.documentation, "// "));
+    writer.line("#define {}_ID \"{}\"", upper_prefix,
+                emit::escape_text(decl.extension_id));
+    writer.line("#define {}_ABI_MAJOR {}u", upper_prefix,
+                decl.extension_version_major);
+    writer.line("#define {}_ABI_MINOR {}u", upper_prefix,
+                decl.extension_version_minor);
+    writer.line("#define {}_ABI_PATCH {}u", upper_prefix,
+                decl.extension_version_patch);
+    writer.line("#define {}_CAPABILITY \"{}\"", upper_prefix,
+                emit::escape_text(decl.extension.capability));
+    writer.line("#define {}_EXTENDS \"{}\"", upper_prefix,
+                emit::escape_text(decl.extension.extends_service));
+    writer.blank();
+    writer.line("typedef struct {}_vtable {{", prefix);
+    writer.line("    uint32_t struct_size;");
+    for (const auto &method : decl.methods) {
+        writer.raw(emit::doc_block(method.documentation, "    // "));
+        writer.raw(emit::attribute_comment(method.attributes, "    "));
+        writer.line("    {};", vtable_signature(program, method));
+    }
+    writer.line("}} {}_vtable; // extension {}", prefix,
+                emit::escape_text(decl.extension_id));
+    writer.blank();
+    writer.line("#define {}_VTABLE_SIZE ((uint32_t)sizeof({}_vtable))",
+                upper_prefix, prefix);
+    writer.blank();
+    return writer.take();
+}
+
+/// Service-side extension ABI: stable ids and the query slot appended after
+/// the contract method slots. The slot is only emitted for services that
+/// declare extension points, so services without extensions keep their exact
+/// previous vtable layout.
+void emit_service_extension_abi(code_writer &writer, const model &program,
+                                std::uint32_t module_index,
+                                const decl_model &decl) {
+    const auto prefix{service_prefix(program, module_index, decl)};
+    const auto upper_prefix{emit::upper(prefix)};
+    std::vector<std::string> ids;
+    ids.reserve(decl.extension_points.size());
+    for (const auto &point : decl.extension_points) {
+        ids.push_back(decl_of(program, point.module_index, point.decl_index)
+                          .extension_id);
+    }
+    writer.line("#define {}_EXTENSION_IDS \"{}\"", upper_prefix,
+                emit::escape_text(join(ids, ",")));
+}
+
+void emit_service_query_slot(code_writer &writer, const decl_model &decl) {
+    if (decl.extension_points.empty()) {
+        return;
+    }
+    writer.raw(
+        "    // Extension query. Returns REFRAIN_EXTENSION_NOT_FOUND when the\n"
+        "    // provider does not offer `id`, "
+        "REFRAIN_EXTENSION_VERSION_MISMATCH\n"
+        "    // when its major/minor cannot satisfy `min_version`, and\n"
+        "    // REFRAIN_EXTENSION_INVALID for a malformed reference. The host\n"
+        "    // initialises `out->struct_size` before the call.\n"
+        "    refrain_status (*query_extension)(void *self, refrain_str id,\n"
+        "                                      uint32_t min_version,\n"
+        "                                      refrain_extension_ref *out);\n");
 }
 
 [[nodiscard]] auto vtable_signature(const model &program,
@@ -720,6 +1116,9 @@ void topo_visit(const model &program, std::uint32_t module_index,
     case resolved_type::category::array:
     case resolved_type::category::optional:
     case resolved_type::category::repeated:
+    case resolved_type::category::map:
+    case resolved_type::category::either:
+    case resolved_type::category::holder:
         std::unreachable(); // sema rejects container return types
     }
     std::unreachable();
@@ -766,6 +1165,9 @@ void topo_visit(const model &program, std::uint32_t module_index,
     case resolved_type::category::array:
     case resolved_type::category::optional:
     case resolved_type::category::repeated:
+    case resolved_type::category::map:
+    case resolved_type::category::either:
+    case resolved_type::category::holder:
         std::unreachable(); // sema rejects container parameter types
     }
     std::unreachable();
@@ -914,6 +1316,10 @@ void topo_visit(const model &program, std::uint32_t module_index,
     writer.line("#endif");
     writer.blank();
 
+    if (module_uses_extension_abi(module)) {
+        emit_extension_abi_preamble(writer);
+    }
+
     // Forward declarations for every contract struct.
     for (const auto &decl : module.declarations) {
         if (is_struct(decl)) {
@@ -977,6 +1383,12 @@ void topo_visit(const model &program, std::uint32_t module_index,
     }
 
     for (const auto &decl : module.declarations) {
+        if (decl.kind == declaration_kind::extension) {
+            writer.raw(emit_extension_abi(program, module_index, decl));
+        }
+    }
+
+    for (const auto &decl : module.declarations) {
         if (decl.kind != declaration_kind::service) {
             continue;
         }
@@ -1008,6 +1420,9 @@ void topo_visit(const model &program, std::uint32_t module_index,
         // `_SERVICE_ID` for backwards compatibility).
         writer.line("#define {}_SERVICE_IDS \"{}\"", upper_prefix,
                     emit::escape_text(join(decl.service.provides, ",")));
+        if (!decl.extension_points.empty()) {
+            emit_service_extension_abi(writer, program, module_index, decl);
+        }
         writer.blank();
         writer.line("typedef struct {}_vtable {{", prefix);
         writer.line("    uint32_t struct_size;");
@@ -1021,6 +1436,7 @@ void topo_visit(const model &program, std::uint32_t module_index,
             writer.raw(emit::attribute_comment(method.attributes, "    "));
             writer.line("    {};", vtable_signature(program, method));
         }
+        emit_service_query_slot(writer, decl);
         writer.line("}} {}_vtable; // service {}", prefix,
                     emit::escape_text(service_id));
         writer.blank();
@@ -1262,6 +1678,12 @@ void topo_visit(const model &program, std::uint32_t module_index,
     writer.blank();
 
     for (const auto &decl : module.declarations) {
+        if (decl.kind == declaration_kind::extension) {
+            writer.raw(emit_extension_cpp(program, module_index, decl));
+        }
+    }
+
+    for (const auto &decl : module.declarations) {
         if (decl.kind != declaration_kind::service) {
             continue;
         }
@@ -1303,7 +1725,29 @@ void topo_visit(const model &program, std::uint32_t module_index,
             writer.raw("\"");
         }
         writer.line("}};");
+        if (!decl.extension_points.empty()) {
+            writer.line("inline constexpr std::string_view extension_ids[] = "
+                        "{{");
+            for (std::size_t index = 0; index < decl.extension_points.size();
+                 ++index) {
+                if (index != 0) {
+                    writer.raw(", ");
+                }
+                writer.raw("\"");
+                writer.raw(emit::escape_text(
+                    decl_of(program, decl.extension_points[index].module_index,
+                            decl.extension_points[index].decl_index)
+                        .extension_id));
+                writer.raw("\"");
+            }
+            writer.line("}};");
+        }
         writer.blank();
+
+        if (!decl.extension_points.empty()) {
+            writer.raw(emit_extension_support_cpp());
+            writer.blank();
+        }
 
         writer.line("/// Type-safe wrapper around `{}_vtable`. The provider "
                     "(host) owns the table and `self`; this class is a "
@@ -1331,6 +1775,10 @@ void topo_visit(const model &program, std::uint32_t module_index,
         writer.line("    }}");
         for (const auto &method : decl.methods) {
             writer.raw(cpp_method_definition(program, method));
+        }
+        if (!decl.extension_points.empty()) {
+            writer.line("    using service_vtable = ::{}_vtable;", prefix);
+            writer.raw(emit_provider_extension_api());
         }
         writer.blank();
         writer.line("  private:");
@@ -1473,36 +1921,61 @@ auto emit_reflection(const model &program, std::string_view schema_hash)
                (module.kind == dialect::ridl || !decl.source_path.empty());
     };
 
-    bool has_ridl_records{false};
+    const auto is_extension_decl = [](const decl_model &decl) {
+        return decl.kind == declaration_kind::extension;
+    };
+
+    bool has_records{false};
+    bool has_extensions{false};
     std::set<std::string> rsc_includes;
     for (std::uint32_t module_index = 0; module_index < program.modules.size();
          ++module_index) {
         const auto &module{program.modules[module_index]};
         for (const auto &decl : module.declarations) {
+            if (is_extension_decl(decl)) {
+                has_extensions = true;
+                has_records = true; // extensions live in the aggregate header
+                continue;
+            }
             if (!in_output_set(module, decl)) {
                 continue;
             }
             if (module.kind == dialect::rsc) {
                 rsc_includes.insert(emit::rsc_cpp_include(decl.source_path));
             } else {
-                has_ridl_records = true;
+                has_records = true;
             }
         }
     }
-    if (has_ridl_records) {
+    if (has_records) {
         writer.line("#include {}", emit::cpp_aggregate_include());
     }
     for (const auto &include : rsc_includes) {
         writer.line("#include {}", include);
     }
     writer.blank();
+    writer.line("#include <cstdint>");
     writer.line("#include <string_view>");
     writer.line("#include <tuple>");
     writer.blank();
     writer.line("#include <refrain/reflect.hpp>");
     writer.blank();
 
-    std::size_t emitted{0};
+    const auto any_metadata{has_records || has_extensions};
+    if (any_metadata) {
+        writer.line("namespace refrain::reflect {{");
+        writer.blank();
+    }
+    if (has_extensions) {
+        writer.raw(
+            "/// Extension metadata specialization point for generated RIDL\n"
+            "/// extensions. The primary template is empty; the generator\n"
+            "/// specializes it per declared extension.\n");
+        writer.line(
+            "template <typename T> struct custom_extension_traits {{}};");
+        writer.blank();
+    }
+
     for (std::uint32_t module_index = 0; module_index < program.modules.size();
          ++module_index) {
         const auto &module{program.modules[module_index]};
@@ -1510,11 +1983,6 @@ auto emit_reflection(const model &program, std::string_view schema_hash)
             if (!in_output_set(module, decl)) {
                 continue;
             }
-            if (emitted == 0) {
-                writer.line("namespace refrain::reflect {{");
-                writer.blank();
-            }
-            ++emitted;
             const auto type{cpp_type_name(program, module_index, decl)};
             writer.line("/// Generated {} {} '{}'.", dialect_name(module.kind),
                         declaration_kind_name(decl.kind), type);
@@ -1542,7 +2010,40 @@ auto emit_reflection(const model &program, std::string_view schema_hash)
             writer.blank();
         }
     }
-    if (emitted != 0) {
+
+    for (std::uint32_t module_index = 0; module_index < program.modules.size();
+         ++module_index) {
+        const auto &module{program.modules[module_index]};
+        for (const auto &decl : module.declarations) {
+            if (!is_extension_decl(decl)) {
+                continue;
+            }
+            const auto type{cpp_type_name(program, module_index, decl)};
+            writer.line("/// Generated RIDL extension '{}'.",
+                        emit::escape_text(decl.extension_id));
+            writer.line("template <> struct custom_extension_traits<::{}> {{",
+                        type);
+            writer.line("    static constexpr std::string_view id = "
+                        "\"{}\";",
+                        emit::escape_text(decl.extension_id));
+            writer.line("    static constexpr std::string_view extends = "
+                        "\"{}\";",
+                        emit::escape_text(decl.extension.extends_service));
+            writer.line("    static constexpr std::string_view capability = "
+                        "\"{}\";",
+                        emit::escape_text(decl.extension.capability));
+            writer.line("    static constexpr std::uint32_t abi_major = {};",
+                        decl.extension_version_major);
+            writer.line("    static constexpr std::uint32_t abi_minor = {};",
+                        decl.extension_version_minor);
+            writer.line("    static constexpr std::uint32_t abi_patch = {};",
+                        decl.extension_version_patch);
+            writer.line("}};");
+            writer.blank();
+        }
+    }
+
+    if (any_metadata) {
         writer.line("}} // namespace refrain::reflect");
     } else {
         writer.line("// No generated struct/record declarations to describe.");
@@ -1626,6 +2127,10 @@ auto emit_metadata(const model &program, std::string_view schema_hash)
             return "optional<" + self(self, type.arguments.front()) + ">";
         case resolved_type::category::repeated:
             return "repeated<" + self(self, type.arguments.front()) + ">";
+        case resolved_type::category::map:
+        case resolved_type::category::either:
+        case resolved_type::category::holder:
+            std::unreachable();
         }
         return "?";
     };
@@ -1846,6 +2351,44 @@ auto emit_rust(const model &program, std::string_view schema_hash)
                 return "*mut ::core::ffi::c_void";
             case primitive_kind::void_type:
                 return "()";
+            case primitive_kind::identifier:
+            case primitive_kind::uuid:
+            case primitive_kind::text_component:
+            case primitive_kind::item_stack:
+            case primitive_kind::lp_vec3:
+            case primitive_kind::nbt:
+            case primitive_kind::varint_id:
+            case primitive_kind::message_signature_packed:
+            case primitive_kind::filter_mask:
+            case primitive_kind::stat_entry:
+            case primitive_kind::position_path:
+            case primitive_kind::map_patch:
+            case primitive_kind::advancement_seen:
+            case primitive_kind::vec_delta:
+            case primitive_kind::sound_selector:
+            case primitive_kind::objective_update:
+            case primitive_kind::team_update:
+            case primitive_kind::player_info_update:
+            case primitive_kind::tracked_waypoint:
+            case primitive_kind::component_predicate:
+            case primitive_kind::merchant_offer:
+            case primitive_kind::entity_metadata:
+            case primitive_kind::item_stack_template:
+            case primitive_kind::advancement_display:
+            case primitive_kind::advancement_requirements:
+            case primitive_kind::advancement:
+            case primitive_kind::advancement_progress:
+            case primitive_kind::holder_set:
+            case primitive_kind::slot_display:
+            case primitive_kind::recipe_display:
+            case primitive_kind::recipe_display_entry:
+            case primitive_kind::single_input_set:
+            case primitive_kind::particle_options:
+            case primitive_kind::debug_subscription_update:
+            case primitive_kind::debug_subscription_event:
+            case primitive_kind::command_tree:
+            case primitive_kind::container_click_data:
+                std::unreachable();
             }
             return "()";
         case resolved_type::category::named:
@@ -1858,6 +2401,10 @@ auto emit_rust(const model &program, std::string_view schema_hash)
         case resolved_type::category::optional:
         case resolved_type::category::repeated:
             return "()";
+        case resolved_type::category::map:
+        case resolved_type::category::either:
+        case resolved_type::category::holder:
+            std::unreachable();
         }
         return "()";
     };

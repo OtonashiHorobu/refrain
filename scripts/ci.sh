@@ -49,6 +49,9 @@ cd "$ROOT"
 say "[1/12] vendor policy guard (tools/vendor_check.py, G1-G7)"
 python3 tools/vendor_check.py
 python3 tools/check_action_pins.py
+python3 tools/check_licenses.py
+python3 tools/check_protocol_boundary.py
+python3 tools/check_contract_versions.py
 test -s NOTICE.md || { echo "NOTICE.md is missing or empty" >&2; exit 1; }
 
 say "[2/12] platform abstraction guard (tools/platform_check.py)"
@@ -136,7 +139,7 @@ grep -q 'refrain.data.vanilla@1.0.0' "$EXTRACT_DIR/mods-check.txt" \
     -o "$EXTRACT_DIR/builtin-a.image" >"$EXTRACT_DIR/builtin-image.txt"
 "$BIN_DIR/refrain-tools" builtin image --mods "$ROOT/mods" \
     -o "$EXTRACT_DIR/builtin-b.image" >/dev/null
-grep -Eq '^builtin image: 11 file\(s\), [0-9]+ byte\(s\), BLAKE3 [0-9a-f]{64} -> ' \
+grep -Eq '^builtin image: 12 file\(s\), [0-9]+ byte\(s\), BLAKE3 [0-9a-f]{64} -> ' \
     "$EXTRACT_DIR/builtin-image.txt" \
     || die "builtin image: unexpected summary line"
 cmp "$EXTRACT_DIR/builtin-a.image" "$EXTRACT_DIR/builtin-b.image" \
@@ -852,20 +855,20 @@ cmp "$EXTRACT_DIR/gc-bad-table-before.idx" \
 echo "  content: 4 file(s) -> 3 blob(s) (2 in segments), deterministic RFRX, where/verify/gc+compact OK"
 "$BIN_DIR/refrain-tools" wasm smoke
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/presets/minimal-flat.toml" \
-    --dump-gamepack | grep -q 'worldgen -> refrain.worldgen.flat@1.0.0' \
+    --dump-gamepack | grep -Eq 'worldgen[[:space:]]*-> refrain.worldgen.flat@1.0.0' \
     || die "server did not resolve the flat-worldgen preset"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --dump-gamepack 2>&1 | grep -q 'builtin image: files=11' \
+    --dump-gamepack 2>&1 | grep -q 'builtin image: files=12' \
     || die "server did not load the embedded built-in image"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    2>&1 | grep -q 'mod host: 10 mod(s) loaded' \
+    2>&1 | grep -q 'mod host: 11 mod(s) loaded' \
     || die "server did not load the gamepack mods through the mod host"
 # Console diagnostics are stderr; stdout carries only the command's data.
 # CI/scripts grep these streams directly (`dump > out.txt`), so a console log
 # line on stdout would corrupt machine-readable output.
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --dump-gamepack >"$EXTRACT_DIR/stream-out.txt" 2>"$EXTRACT_DIR/stream-err.txt"
-grep -q 'worldgen -> ' "$EXTRACT_DIR/stream-out.txt" \
+grep -Eq 'worldgen[[:space:]]*-> ' "$EXTRACT_DIR/stream-out.txt" \
     || die "stream split: dump plan missing from stdout"
 if grep -Eq '\[[^]]*/(info|warn|error|debug|critical)\]' \
     "$EXTRACT_DIR/stream-out.txt"; then

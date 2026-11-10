@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <refrain/core/config.hpp>
 #include <refrain/core/error.hpp>
 #include <refrain/kernel/service_registry.hpp>
 #include <refrain/mod/discovery.hpp>
@@ -236,6 +237,14 @@ class host {
         return builtin_image_digest_hex_;
     }
 
+    /// Host-owned configuration store. The composition root sets it before
+    /// `load()`, so static mod factories can read their own namespace view.
+    /// The store must outlive the host; the host never takes ownership.
+    void set_config(core::config::store &store) noexcept { config_ = &store; }
+    [[nodiscard]] auto config() const noexcept -> core::config::store * {
+        return config_;
+    }
+
     /// Stable multi-line dump for `refrain-tools mods load` / server startup.
     [[nodiscard]] auto format() const -> std::string;
 
@@ -307,6 +316,7 @@ class host {
     /// Planned instance names per slot for the mod whose factory is running.
     std::map<std::string, std::set<std::string>>
         current_mod_planned_instances_{};
+    core::config::store *config_{nullptr};
     /// External native mods in load order (libraries + unload hooks).
     std::vector<external_mod_state> external_mods_{};
     bool loaded_flag_{false};

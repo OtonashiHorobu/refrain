@@ -6,9 +6,12 @@
 #include <schema/emit.hpp>
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -60,6 +63,80 @@ namespace {
         case primitive_kind::mut_bytes:
             // RIDL-only primitives; sema rejects them in RSC data schemas.
             std::unreachable();
+        case primitive_kind::identifier:
+            return "::refrain::data::resource_location";
+        case primitive_kind::uuid:
+            return "::refrain::net::uuid";
+        case primitive_kind::text_component:
+            return "::refrain::net::text_component";
+        case primitive_kind::item_stack:
+            return "::refrain::net::item_stack";
+        case primitive_kind::lp_vec3:
+            return "::refrain::net::lp_vec3";
+        case primitive_kind::nbt:
+            return "::refrain::net::nbt_blob";
+        case primitive_kind::varint_id:
+            return "std::uint32_t";
+        case primitive_kind::message_signature_packed:
+            return "::refrain::net::message_signature_packed";
+        case primitive_kind::filter_mask:
+            return "::refrain::net::filter_mask";
+        case primitive_kind::stat_entry:
+            return "::refrain::net::stat_entry";
+        case primitive_kind::position_path:
+            return "::refrain::net::position_path";
+        case primitive_kind::map_patch:
+            return "::refrain::net::map_patch";
+        case primitive_kind::advancement_seen:
+            return "::refrain::net::advancement_seen";
+        case primitive_kind::vec_delta:
+            return "::refrain::net::vec_delta";
+        case primitive_kind::sound_selector:
+            return "::refrain::net::sound_selector";
+        case primitive_kind::objective_update:
+            return "::refrain::net::objective_update";
+        case primitive_kind::team_update:
+            return "::refrain::net::team_update";
+        case primitive_kind::player_info_update:
+            return "::refrain::net::player_info_update";
+        case primitive_kind::tracked_waypoint:
+            return "::refrain::net::tracked_waypoint";
+        case primitive_kind::component_predicate:
+            return "::refrain::net::component_predicate";
+        case primitive_kind::merchant_offer:
+            return "::refrain::net::merchant_offer";
+        case primitive_kind::entity_metadata:
+            return "::refrain::net::entity_metadata";
+        case primitive_kind::item_stack_template:
+            return "::refrain::net::item_stack_template";
+        case primitive_kind::advancement_display:
+            return "::refrain::net::advancement_display";
+        case primitive_kind::advancement_requirements:
+            return "::refrain::net::advancement_requirements";
+        case primitive_kind::advancement:
+            return "::refrain::net::advancement";
+        case primitive_kind::advancement_progress:
+            return "::refrain::net::advancement_progress";
+        case primitive_kind::holder_set:
+            return "::refrain::net::holder_set";
+        case primitive_kind::slot_display:
+            return "::refrain::net::slot_display";
+        case primitive_kind::recipe_display:
+            return "::refrain::net::recipe_display";
+        case primitive_kind::recipe_display_entry:
+            return "::refrain::net::recipe_display_entry";
+        case primitive_kind::single_input_set:
+            return "::refrain::net::single_input_set";
+        case primitive_kind::particle_options:
+            return "::refrain::net::particle_options";
+        case primitive_kind::debug_subscription_update:
+            return "::refrain::net::debug_subscription_update";
+        case primitive_kind::debug_subscription_event:
+            return "::refrain::net::debug_subscription_event";
+        case primitive_kind::command_tree:
+            return "::refrain::net::command_tree";
+        case primitive_kind::container_click_data:
+            return "::refrain::net::container_click_data";
         case primitive_kind::void_type:
             return "void";
         }
@@ -75,6 +152,15 @@ namespace {
     case resolved_type::category::optional:
         return "std::optional<" +
                rsc_cpp_type(program, type.arguments.front()) + ">";
+    case resolved_type::category::map:
+        return "std::map<" + rsc_cpp_type(program, type.arguments[0]) + ", " +
+               rsc_cpp_type(program, type.arguments[1]) + ">";
+    case resolved_type::category::either:
+        return "std::variant<" + rsc_cpp_type(program, type.arguments[0]) +
+               ", " + rsc_cpp_type(program, type.arguments[1]) + ">";
+    case resolved_type::category::holder:
+        return "std::variant<std::uint32_t, " +
+               rsc_cpp_type(program, type.arguments[0]) + ">";
     case resolved_type::category::handle:
         std::unreachable(); // sema rejects handles in RSC data schemas
     }
@@ -198,10 +284,13 @@ ordered_declarations(const model &program,
     code_writer writer;
     writer.raw(emit::doc_block(decl.documentation, "/// "));
     writer.raw(emit::attribute_comment(decl.attributes));
-    writer.line("struct {} {{", decl.name);
+    writer.line("struct {} {{", emit::cpp_identifier(decl.name));
     if (decl.kind == declaration_kind::packet && decl.packet_id.has_value()) {
         writer.line("    static constexpr std::uint16_t packet_id = 0x{:X};",
                     static_cast<std::uint64_t>(*decl.packet_id));
+        writer.line(
+            R"(    static constexpr std::string_view packet_name = "{}";)",
+            emit::escape_text(decl.name));
         writer.blank();
     }
     if (decl.kind == declaration_kind::record) {
@@ -232,6 +321,1493 @@ ordered_declarations(const model &program,
     return writer.take();
 }
 
+[[nodiscard]] auto declaration_name(const model &program,
+                                    const resolved_type &type) -> std::string {
+    return emit::cpp_identifier(
+        program.modules[type.module_index].declarations[type.decl_index].name);
+}
+
+[[nodiscard]] auto declaration_namespace(const model &program,
+                                         const resolved_type &type)
+    -> std::string {
+    return emit::cpp_namespace(program.modules[type.module_index].name);
+}
+
+[[nodiscard]] auto declaration_is_enum(const model &program,
+                                       const resolved_type &type) -> bool {
+    const auto kind{
+        program.modules[type.module_index].declarations[type.decl_index].kind};
+    return kind == declaration_kind::enumeration ||
+           kind == declaration_kind::flags;
+}
+
+[[nodiscard]] auto is_struct_like(const decl_model &decl) noexcept -> bool {
+    return decl.kind == declaration_kind::structure ||
+           decl.kind == declaration_kind::record ||
+           decl.kind == declaration_kind::packet;
+}
+
+void emit_encode_integer(code_writer &writer, primitive_kind kind,
+                         integer_wire wire, const std::string &expression) {
+    const auto unsigned_expression{"static_cast<std::uint32_t>(" + expression +
+                                   ")"};
+    const auto signed_expression{"static_cast<std::int64_t>(" + expression +
+                                 ")"};
+    switch (wire) {
+    case integer_wire::varint:
+        writer.line("out.write_varint({});", unsigned_expression);
+        return;
+    case integer_wire::varlong:
+        writer.line("out.write_varlong(static_cast<std::uint64_t>({}));",
+                    expression);
+        return;
+    case integer_wire::fixed:
+        switch (kind) {
+        case primitive_kind::u8:
+        case primitive_kind::i8:
+            writer.line("out.write_u8(static_cast<std::uint8_t>({}));",
+                        expression);
+            return;
+        case primitive_kind::u16:
+        case primitive_kind::i16:
+            writer.line("out.write_u16(static_cast<std::uint16_t>({}));",
+                        expression);
+            return;
+        case primitive_kind::u32:
+        case primitive_kind::i32:
+            writer.line("out.write_i32(static_cast<std::int32_t>({}));",
+                        expression);
+            return;
+        case primitive_kind::u64:
+        case primitive_kind::i64:
+            writer.line("out.write_i64(static_cast<std::int64_t>({}));",
+                        expression);
+            return;
+        default:
+            std::unreachable();
+        }
+    case integer_wire::natural:
+        break;
+    }
+    switch (kind) {
+    case primitive_kind::u8:
+        writer.line("out.write_u8({});", expression);
+        return;
+    case primitive_kind::u16:
+        writer.line("out.write_u16({});", expression);
+        return;
+    case primitive_kind::u32:
+    case primitive_kind::u64:
+        writer.line("out.write_varint({});", unsigned_expression);
+        return;
+    case primitive_kind::i8:
+    case primitive_kind::i16:
+    case primitive_kind::i32:
+    case primitive_kind::i64:
+        writer.line("out.write_i64({});", signed_expression);
+        return;
+    default:
+        std::unreachable();
+    }
+}
+
+[[nodiscard]] auto integer_read_call(primitive_kind kind, integer_wire wire)
+    -> std::string {
+    switch (wire) {
+    case integer_wire::varint:
+        return "in.read_varint()";
+    case integer_wire::varlong:
+        return "in.read_varlong()";
+    case integer_wire::fixed:
+        switch (kind) {
+        case primitive_kind::u8:
+        case primitive_kind::i8:
+            return "in.read_u8()";
+        case primitive_kind::u16:
+        case primitive_kind::i16:
+            return "in.read_u16()";
+        case primitive_kind::u32:
+        case primitive_kind::i32:
+            return "in.read_i32()";
+        case primitive_kind::u64:
+        case primitive_kind::i64:
+            return "in.read_i64()";
+        default:
+            std::unreachable();
+        }
+    case integer_wire::natural:
+        break;
+    }
+    switch (kind) {
+    case primitive_kind::u8:
+        return "in.read_u8()";
+    case primitive_kind::u16:
+        return "in.read_u16()";
+    case primitive_kind::u32:
+    case primitive_kind::u64:
+        return "in.read_varint()";
+    case primitive_kind::i8:
+    case primitive_kind::i16:
+    case primitive_kind::i32:
+    case primitive_kind::i64:
+        return "in.read_i64()";
+    default:
+        std::unreachable();
+    }
+}
+
+void emit_decode_integer(code_writer &writer, primitive_kind kind,
+                         integer_wire wire, const std::string &target,
+                         std::size_t depth) {
+    writer.line("auto value_{} = {};", depth, integer_read_call(kind, wire));
+    writer.line(
+        "if (!value_{}) return std::unexpected{{std::move(value_{}.error())}};",
+        depth, depth);
+    writer.line("{} = static_cast<decltype({})>(*value_{});", target, target,
+                depth);
+}
+
+struct wire_hints {
+    integer_wire integer{integer_wire::natural};
+    std::optional<std::uint64_t> maximum;
+    std::optional<std::uint64_t> fixed_bytes;
+    std::optional<std::uint64_t> fixed_count;
+    bool optional_varint{false};
+    bool rest{false};
+};
+
+[[nodiscard]] auto field_hints(const field_model &field) -> wire_hints {
+    wire_hints hints;
+    hints.integer = field.wire;
+    hints.maximum = field.wire_max;
+    hints.fixed_bytes = field.wire_fixed_bytes;
+    hints.optional_varint = field.wire_optional_varint;
+    hints.rest = field.wire_rest;
+    hints.fixed_count = field.wire_fixed_count;
+    return hints;
+}
+
+/// Hints for array elements: the integer encoding applies, while bounds and
+/// fixed lengths belong to the container.
+[[nodiscard]] auto element_hints(const wire_hints &hints) -> wire_hints {
+    wire_hints result;
+    result.integer = hints.integer;
+    return result;
+}
+
+/// Hints for an optional payload: fixed-length payloads keep their length.
+[[nodiscard]] auto payload_hints(const wire_hints &hints) -> wire_hints {
+    wire_hints result;
+    result.integer = hints.integer;
+    result.fixed_bytes = hints.fixed_bytes;
+    return result;
+}
+
+void emit_encode_value(code_writer &writer, const model &program,
+                       const resolved_type &type, std::string expression,
+                       std::size_t depth, const wire_hints &hints,
+                       const std::string &label) {
+    switch (type.kind) {
+    case resolved_type::category::primitive:
+        switch (type.primitive) {
+        case primitive_kind::opaque_ptr:
+        case primitive_kind::mut_bytes:
+            // RIDL-only primitives never reach RSC data emission.
+            std::unreachable();
+        case primitive_kind::u8:
+        case primitive_kind::u16:
+        case primitive_kind::u32:
+        case primitive_kind::u64:
+        case primitive_kind::i8:
+        case primitive_kind::i16:
+        case primitive_kind::i32:
+        case primitive_kind::i64:
+            emit_encode_integer(writer, type.primitive, hints.integer,
+                                expression);
+            return;
+        case primitive_kind::f32:
+            writer.line("out.write_f32({});", expression);
+            return;
+        case primitive_kind::f64:
+            writer.line("out.write_f64({});", expression);
+            return;
+        case primitive_kind::boolean:
+            writer.line("out.write_bool({});", expression);
+            return;
+        case primitive_kind::string:
+            writer.line(
+                "if (auto written = out.write_string({}, {}); !written) {{",
+                expression, hints.maximum.value_or(32767));
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::bytes:
+            if (hints.rest) {
+                writer.line("out.write_bytes({});", expression);
+                return;
+            }
+            if (hints.fixed_bytes.has_value()) {
+                writer.line("if ({}.size() != {}) {{", expression,
+                            *hints.fixed_bytes);
+                writer.indent();
+                writer.line("return "
+                            "std::unexpected{{::refrain::make_error(::refrain::"
+                            "error_code::"
+                            "invalid_argument, \"field '{}' must be exactly {} "
+                            "byte(s)\")}};",
+                            label, *hints.fixed_bytes);
+                writer.dedent();
+                writer.line("}}");
+                writer.line(
+                    "out.write_bytes(std::span<const std::byte>{{{} }});",
+                    expression);
+                return;
+            }
+            if (hints.maximum.has_value()) {
+                writer.line("if ({}.size() > {}) {{", expression,
+                            *hints.maximum);
+                writer.indent();
+                writer.line(
+                    "return "
+                    "std::unexpected{{::refrain::make_error(::refrain::error_"
+                    "code::"
+                    "invalid_argument, \"field '{}' exceeds its declared "
+                    "maximum\")}};",
+                    label);
+                writer.dedent();
+                writer.line("}}");
+            }
+            writer.line(
+                "out.write_varint(static_cast<std::uint32_t>({}.size()));",
+                expression);
+            writer.line("out.write_bytes(std::span<const std::byte>{{{} }});",
+                        expression);
+            return;
+        case primitive_kind::identifier:
+            writer.line(
+                "if (auto written = out.write_identifier({}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::uuid:
+            writer.line("if (auto written = out.write_uuid({}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::text_component:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_text_component("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::item_stack:
+            writer.line("if (auto written = ::refrain::net::encode_item_stack("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::lp_vec3:
+            writer.line("if (auto written = ::refrain::net::encode_lp_vec3("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::nbt:
+            writer.line("if (auto written = ::refrain::net::encode_nbt("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::varint_id:
+            writer.line("out.write_varint({});", expression);
+            return;
+        case primitive_kind::message_signature_packed:
+            writer.line("if (auto written = "
+                        "::refrain::net::encode_message_signature_packed("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::filter_mask:
+            writer.line("if (auto written = ::refrain::net::encode_filter_mask("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::stat_entry:
+            writer.line("if (auto written = ::refrain::net::encode_stat_entry("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::position_path:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_position_path("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::map_patch:
+            writer.line("if (auto written = ::refrain::net::encode_map_patch("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_seen:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_advancement_seen("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::vec_delta:
+            writer.line("if (auto written = ::refrain::net::encode_vec_delta("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::sound_selector:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_sound_selector("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::objective_update:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_objective_update("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::team_update:
+            writer.line("if (auto written = ::refrain::net::encode_team_update("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::player_info_update:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_player_info_update("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::tracked_waypoint:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_tracked_waypoint("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::component_predicate:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_component_predicate("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::merchant_offer:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_merchant_offer("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::entity_metadata:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_entity_metadata("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::item_stack_template:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_item_stack_template("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_display:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_advancement_display("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_requirements:
+            writer.line("if (auto written = "
+                        "::refrain::net::encode_advancement_requirements("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement:
+            writer.line("if (auto written = ::refrain::net::encode_advancement("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_progress:
+            writer.line("if (auto written = "
+                        "::refrain::net::encode_advancement_progress("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::holder_set:
+            writer.line("if (auto written = ::refrain::net::encode_holder_set("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::slot_display:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_slot_display("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::recipe_display:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_recipe_display("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::recipe_display_entry:
+            writer.line("if (auto written = "
+                        "::refrain::net::encode_recipe_display_entry("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::single_input_set:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_single_input_set("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::particle_options:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_particle_options("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::debug_subscription_update:
+            writer.line("if (auto written = "
+                        "::refrain::net::encode_debug_subscription_update("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::debug_subscription_event:
+            writer.line("if (auto written = "
+                        "::refrain::net::encode_debug_subscription_event("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::command_tree:
+            writer.line(
+                "if (auto written = ::refrain::net::encode_command_tree("
+                "out, {}); !written) {{",
+                expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::container_click_data:
+            writer.line("if (auto written = "
+                        "::refrain::net::encode_container_click_data("
+                        "out, {}); !written) {{",
+                        expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::void_type:
+            return;
+        }
+        return;
+    case resolved_type::category::named:
+        if (declaration_is_enum(program, type)) {
+            writer.line("out.write_varint(static_cast<std::uint32_t>({}));",
+                        expression);
+        } else {
+            writer.line(
+                "if (auto written = ::{}::encode_{}(out, {}); !written) {{",
+                declaration_namespace(program, type),
+                declaration_name(program, type), expression);
+            writer.indent();
+            writer.line("return written;");
+            writer.dedent();
+            writer.line("}}");
+        }
+        return;
+    case resolved_type::category::array:
+    case resolved_type::category::slice:
+    case resolved_type::category::repeated: {
+        if (hints.fixed_count.has_value()) {
+            writer.line("if ({}.size() != {}) {{", expression,
+                        *hints.fixed_count);
+            writer.indent();
+            writer.line(
+                "return "
+                "std::unexpected{{::refrain::make_error(::refrain::error_code::"
+                "invalid_argument, \"field '{}' must have exactly {} "
+                "element(s)\")}};",
+                label, *hints.fixed_count);
+            writer.dedent();
+            writer.line("}}");
+        } else {
+            if (hints.maximum.has_value()) {
+                writer.line("if ({}.size() > {}) {{", expression,
+                            *hints.maximum);
+                writer.indent();
+                writer.line(
+                    "return "
+                    "std::unexpected{{::refrain::make_error(::refrain::error_"
+                    "code::invalid_argument, \"field '{}' exceeds its "
+                    "declared maximum\")}};",
+                    label);
+                writer.dedent();
+                writer.line("}}");
+            }
+            writer.line(
+                "out.write_varint(static_cast<std::uint32_t>({}.size()));",
+                expression);
+        }
+        const auto item{"item_" + std::to_string(depth)};
+        writer.line("for (const auto &{} : {}) {{", item, expression);
+        writer.indent();
+        emit_encode_value(writer, program, type.arguments.front(), item,
+                          depth + 1, element_hints(hints), label);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    }
+    case resolved_type::category::map: {
+        if (hints.maximum.has_value()) {
+            writer.line("if ({}.size() > {}) {{", expression, *hints.maximum);
+            writer.indent();
+            writer.line(
+                "return "
+                "std::unexpected{{::refrain::make_error(::refrain::error_code::"
+                "invalid_argument, \"field '{}' exceeds its declared "
+                "maximum\")}};",
+                label);
+            writer.dedent();
+            writer.line("}}");
+        }
+        writer.line("out.write_varint(static_cast<std::uint32_t>({}.size()));",
+                    expression);
+        const auto entry{"entry_" + std::to_string(depth)};
+        writer.line("for (const auto &{} : {}) {{", entry, expression);
+        writer.indent();
+        emit_encode_value(writer, program, type.arguments[0], entry + ".first",
+                          depth + 1, element_hints(hints), label);
+        emit_encode_value(writer, program, type.arguments[1], entry + ".second",
+                          depth + 1, element_hints(hints), label);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    }
+    case resolved_type::category::holder: {
+        writer.line("if (std::holds_alternative<std::uint32_t>({})) {{",
+                    expression);
+        writer.indent();
+        writer.line("out.write_varint(std::get<0>({}));", expression);
+        writer.dedent();
+        writer.line("}} else {{");
+        writer.indent();
+        writer.line("out.write_varint(0);");
+        emit_encode_value(writer, program, type.arguments[0],
+                          "std::get<1>(" + expression + ")", depth + 1,
+                          element_hints(hints), label);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    }
+    case resolved_type::category::either: {
+        writer.line("out.write_bool(std::holds_alternative<{}>({}));",
+                    rsc_cpp_type(program, type.arguments[0]), expression);
+        writer.line("if (std::holds_alternative<{}>({})) {{",
+                    rsc_cpp_type(program, type.arguments[0]), expression);
+        writer.indent();
+        emit_encode_value(writer, program, type.arguments[0],
+                          "std::get<0>(" + expression + ")", depth + 1,
+                          element_hints(hints), label);
+        writer.dedent();
+        writer.line("}} else {{");
+        writer.indent();
+        emit_encode_value(writer, program, type.arguments[1],
+                          "std::get<1>(" + expression + ")", depth + 1,
+                          element_hints(hints), label);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    }
+    case resolved_type::category::optional:
+        if (hints.optional_varint) {
+            writer.line("out.write_varint({}.has_value() ? "
+                        "static_cast<std::uint32_t>({}.value()) + 1U : 0U);",
+                        expression, expression);
+            return;
+        }
+        writer.line("out.write_bool({}.has_value());", expression);
+        writer.line("if ({}.has_value()) {{", expression);
+        writer.indent();
+        emit_encode_value(writer, program, type.arguments.front(),
+                          expression + ".value()", depth + 1,
+                          payload_hints(hints), label);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    case resolved_type::category::handle:
+        return;
+    }
+}
+
+void emit_decode_value(code_writer &writer, const model &program,
+                       const resolved_type &type, std::string target,
+                       std::size_t depth, const wire_hints &hints,
+                       const std::string &label) {
+    switch (type.kind) {
+    case resolved_type::category::primitive:
+        switch (type.primitive) {
+        case primitive_kind::opaque_ptr:
+        case primitive_kind::mut_bytes:
+            // RIDL-only primitives never reach RSC data emission.
+            std::unreachable();
+        case primitive_kind::u8:
+        case primitive_kind::u16:
+        case primitive_kind::u32:
+        case primitive_kind::u64:
+        case primitive_kind::i8:
+        case primitive_kind::i16:
+        case primitive_kind::i32:
+        case primitive_kind::i64:
+            emit_decode_integer(writer, type.primitive, hints.integer, target,
+                                depth);
+            return;
+        case primitive_kind::f32:
+            writer.line("auto value_{} = in.read_f32();", depth);
+            writer.line("if (!value_{}) return "
+                        "std::unexpected{{std::move(value_{}.error())}};",
+                        depth, depth);
+            writer.line("{} = *value_{};", target, depth);
+            return;
+        case primitive_kind::f64:
+            writer.line("auto value_{} = in.read_f64();", depth);
+            writer.line("if (!value_{}) return "
+                        "std::unexpected{{std::move(value_{}.error())}};",
+                        depth, depth);
+            writer.line("{} = *value_{};", target, depth);
+            return;
+        case primitive_kind::boolean:
+            writer.line("auto value_{} = in.read_bool();", depth);
+            writer.line("if (!value_{}) return "
+                        "std::unexpected{{std::move(value_{}.error())}};",
+                        depth, depth);
+            writer.line("{} = *value_{};", target, depth);
+            return;
+        case primitive_kind::string:
+            writer.line("auto value_{} = in.read_string({});", depth,
+                        hints.maximum.value_or(32767));
+            writer.line("if (!value_{}) return "
+                        "std::unexpected{{std::move(value_{}.error())}};",
+                        depth, depth);
+            writer.line("{} = std::move(*value_{});", target, depth);
+            return;
+        case primitive_kind::bytes:
+            if (hints.rest) {
+                writer.line("auto value_{} = in.read_bytes(in.remaining());",
+                            depth);
+                writer.line("if (!value_{}) return "
+                            "std::unexpected{{std::move(value_{}.error())}};",
+                            depth, depth);
+                writer.line("{} = std::vector<std::byte>{{value_{}->begin(), "
+                            "value_{}->end()}};",
+                            target, depth, depth);
+                return;
+            }
+            if (hints.fixed_bytes.has_value()) {
+                writer.line("auto value_{} = in.read_bytes({});", depth,
+                            *hints.fixed_bytes);
+                writer.line("if (!value_{}) return "
+                            "std::unexpected{{std::move(value_{}.error())}};",
+                            depth, depth);
+                writer.line("{} = std::vector<std::byte>{{value_{}->begin(), "
+                            "value_{}->end()}};",
+                            target, depth, depth);
+                return;
+            }
+            writer.line("auto length_{} = in.read_varint();", depth);
+            writer.line("if (!length_{}) return "
+                        "std::unexpected{{std::move(length_{}.error())}};",
+                        depth, depth);
+            if (hints.maximum.has_value()) {
+                writer.line("if (*length_{} > {}) {{", depth, *hints.maximum);
+                writer.indent();
+                writer.line("return "
+                            "std::unexpected{{::refrain::make_error(::refrain::"
+                            "error_code::"
+                            "parse_error, \"field '{}' exceeds its declared "
+                            "maximum\")}};",
+                            label);
+                writer.dedent();
+                writer.line("}}");
+            }
+            writer.line("auto value_{} = in.read_bytes(*length_{});", depth,
+                        depth);
+            writer.line("if (!value_{}) return "
+                        "std::unexpected{{std::move(value_{}.error())}};",
+                        depth, depth);
+            writer.line("{} = std::vector<std::byte>{{value_{}->begin(), "
+                        "value_{}->end()}};",
+                        target, depth, depth);
+            return;
+        case primitive_kind::identifier:
+            writer.line("auto value_{} = in.read_identifier();", depth);
+            writer.line("if (!value_{}) return "
+                        "std::unexpected{{std::move(value_{}.error())}};",
+                        depth, depth);
+            writer.line("{} = std::move(*value_{});", target, depth);
+            return;
+        case primitive_kind::uuid:
+            writer.line("auto value_{} = in.read_uuid();", depth);
+            writer.line("if (!value_{}) return "
+                        "std::unexpected{{std::move(value_{}.error())}};",
+                        depth, depth);
+            writer.line("{} = *value_{};", target, depth);
+            return;
+        case primitive_kind::text_component:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_text_component("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::item_stack:
+            writer.line("if (auto decoded = ::refrain::net::decode_item_stack("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::lp_vec3:
+            writer.line("if (auto decoded = ::refrain::net::decode_lp_vec3("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::nbt:
+            writer.line("if (auto decoded = ::refrain::net::decode_nbt("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::varint_id:
+            writer.line("auto value_{} = in.read_varint();", depth);
+            writer.line("if (!value_{}) return "
+                        "std::unexpected{{std::move(value_{}.error())}};",
+                        depth, depth);
+            writer.line("{} = *value_{};", target, depth);
+            return;
+        case primitive_kind::message_signature_packed:
+            writer.line("if (auto decoded = "
+                        "::refrain::net::decode_message_signature_packed("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::filter_mask:
+            writer.line("if (auto decoded = ::refrain::net::decode_filter_mask("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::stat_entry:
+            writer.line("if (auto decoded = ::refrain::net::decode_stat_entry("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::position_path:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_position_path("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::map_patch:
+            writer.line("if (auto decoded = ::refrain::net::decode_map_patch("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_seen:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_advancement_seen("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::vec_delta:
+            writer.line("if (auto decoded = ::refrain::net::decode_vec_delta("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::sound_selector:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_sound_selector("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::objective_update:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_objective_update("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::team_update:
+            writer.line("if (auto decoded = ::refrain::net::decode_team_update("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::player_info_update:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_player_info_update("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::tracked_waypoint:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_tracked_waypoint("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::component_predicate:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_component_predicate("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::merchant_offer:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_merchant_offer("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::entity_metadata:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_entity_metadata("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::item_stack_template:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_item_stack_template("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_display:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_advancement_display("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_requirements:
+            writer.line("if (auto decoded = "
+                        "::refrain::net::decode_advancement_requirements("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement:
+            writer.line("if (auto decoded = ::refrain::net::decode_advancement("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::advancement_progress:
+            writer.line("if (auto decoded = "
+                        "::refrain::net::decode_advancement_progress("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::holder_set:
+            writer.line("if (auto decoded = ::refrain::net::decode_holder_set("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::slot_display:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_slot_display("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::recipe_display:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_recipe_display("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::recipe_display_entry:
+            writer.line("if (auto decoded = "
+                        "::refrain::net::decode_recipe_display_entry("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::single_input_set:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_single_input_set("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::particle_options:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_particle_options("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::debug_subscription_update:
+            writer.line("if (auto decoded = "
+                        "::refrain::net::decode_debug_subscription_update("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::debug_subscription_event:
+            writer.line("if (auto decoded = "
+                        "::refrain::net::decode_debug_subscription_event("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::command_tree:
+            writer.line(
+                "if (auto decoded = ::refrain::net::decode_command_tree("
+                "in, {}); !decoded) {{",
+                target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::container_click_data:
+            writer.line("if (auto decoded = "
+                        "::refrain::net::decode_container_click_data("
+                        "in, {}); !decoded) {{",
+                        target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+            return;
+        case primitive_kind::void_type:
+            return;
+        }
+        return;
+    case resolved_type::category::named:
+        if (declaration_is_enum(program, type)) {
+            writer.line("auto value_{} = in.read_varint();", depth);
+            writer.line("if (!value_{}) return "
+                        "std::unexpected{{std::move(value_{}.error())}};",
+                        depth, depth);
+            writer.line("{} = static_cast<decltype({})>(*value_{});", target,
+                        target, depth);
+        } else {
+            writer.line(
+                "if (auto decoded = ::{}::decode_{}(in, {}); !decoded) {{",
+                declaration_namespace(program, type),
+                declaration_name(program, type), target);
+            writer.indent();
+            writer.line(
+                "return std::unexpected{{std::move(decoded.error())}};");
+            writer.dedent();
+            writer.line("}}");
+        }
+        return;
+    case resolved_type::category::array:
+    case resolved_type::category::slice:
+    case resolved_type::category::repeated: {
+        writer.line("{}.clear();", target);
+        const auto index{"index_" + std::to_string(depth)};
+        const auto item{"item_" + std::to_string(depth)};
+        if (hints.fixed_count.has_value()) {
+            writer.line("{}.reserve({});", target, *hints.fixed_count);
+            writer.line("for (std::uint32_t {} = 0; {} < {}; ++{}) {{", index,
+                        index, *hints.fixed_count, index);
+        } else {
+            writer.line("auto count_{} = in.read_varint();", depth);
+            writer.line("if (!count_{}) return "
+                        "std::unexpected{{std::move(count_{}.error())}};",
+                        depth, depth);
+            if (hints.maximum.has_value()) {
+                writer.line("if (*count_{} > {}) {{", depth, *hints.maximum);
+                writer.indent();
+                writer.line(
+                    "return "
+                    "std::unexpected{{::refrain::make_error(::refrain::error_"
+                    "code::parse_error, \"field '{}' exceeds its declared "
+                    "maximum\")}};",
+                    label);
+                writer.dedent();
+                writer.line("}}");
+            }
+            writer.line("for (std::uint32_t {} = 0; {} < *count_{}; ++{}) {{",
+                        index, index, depth, index);
+        }
+        writer.indent();
+        writer.line("{} value_{}{{}};",
+                    rsc_cpp_type(program, type.arguments.front()), depth);
+        emit_decode_value(writer, program, type.arguments.front(),
+                          "value_" + std::to_string(depth), depth + 1,
+                          element_hints(hints), label);
+        writer.line("{}.push_back(std::move(value_{}));", target, depth);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    }
+    case resolved_type::category::map: {
+        writer.line("auto count_{} = in.read_varint();", depth);
+        writer.line("if (!count_{}) return "
+                    "std::unexpected{{std::move(count_{}.error())}};",
+                    depth, depth);
+        if (hints.maximum.has_value()) {
+            writer.line("if (*count_{} > {}) {{", depth, *hints.maximum);
+            writer.indent();
+            writer.line(
+                "return "
+                "std::unexpected{{::refrain::make_error(::refrain::error_code::"
+                "parse_error, \"field '{}' exceeds its declared maximum\")}};",
+                label);
+            writer.dedent();
+            writer.line("}}");
+        }
+        writer.line("{}.clear();", target);
+        const auto index{"index_" + std::to_string(depth)};
+        const auto key{"map_key_" + std::to_string(depth)};
+        const auto value{"map_value_" + std::to_string(depth)};
+        writer.line("for (std::uint32_t {} = 0; {} < *count_{}; ++{}) {{",
+                    index, index, depth, index);
+        writer.indent();
+        writer.line("{} {}{{}};", rsc_cpp_type(program, type.arguments[0]),
+                    key);
+        emit_decode_value(writer, program, type.arguments[0], key, depth + 1,
+                          element_hints(hints), label);
+        writer.line("{} {}{{}};", rsc_cpp_type(program, type.arguments[1]),
+                    value);
+        emit_decode_value(writer, program, type.arguments[1], value, depth + 2,
+                          element_hints(hints), label);
+        writer.line("{}.emplace(std::move({}), std::move({}));", target, key,
+                    value);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    }
+    case resolved_type::category::holder: {
+        writer.line("auto holder_{} = in.read_varint();", depth);
+        writer.line("if (!holder_{}) return "
+                    "std::unexpected{{std::move(holder_{}.error())}};",
+                    depth, depth);
+        writer.line("if (*holder_{} != 0) {{", depth);
+        writer.indent();
+        writer.line("{}.template emplace<0>(*holder_{});", target, depth);
+        writer.dedent();
+        writer.line("}} else {{");
+        writer.indent();
+        writer.line("{} value_{}{{}};",
+                    rsc_cpp_type(program, type.arguments[0]), depth);
+        emit_decode_value(writer, program, type.arguments[0],
+                          "value_" + std::to_string(depth), depth + 1,
+                          element_hints(hints), label);
+        writer.line("{}.template emplace<1>(std::move(value_{}));", target,
+                    depth);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    }
+    case resolved_type::category::either: {
+        writer.line("auto left_{} = in.read_bool();", depth);
+        writer.line("if (!left_{}) return "
+                    "std::unexpected{{std::move(left_{}.error())}};",
+                    depth, depth);
+        writer.line("if (*left_{}) {{", depth);
+        writer.indent();
+        writer.line("{} value_{}{{}};",
+                    rsc_cpp_type(program, type.arguments[0]), depth);
+        emit_decode_value(writer, program, type.arguments[0],
+                          "value_" + std::to_string(depth), depth + 1,
+                          element_hints(hints), label);
+        writer.line("{}.template emplace<0>(std::move(value_{}));", target,
+                    depth);
+        writer.dedent();
+        writer.line("}} else {{");
+        writer.indent();
+        writer.line("{} value_{}{{}};",
+                    rsc_cpp_type(program, type.arguments[1]), depth);
+        emit_decode_value(writer, program, type.arguments[1],
+                          "value_" + std::to_string(depth), depth + 2,
+                          element_hints(hints), label);
+        writer.line("{}.template emplace<1>(std::move(value_{}));", target,
+                    depth);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    }
+    case resolved_type::category::optional:
+        if (hints.optional_varint) {
+            writer.line("auto present_{} = in.read_varint();", depth);
+            writer.line("if (!present_{}) return "
+                        "std::unexpected{{std::move(present_{}.error())}};",
+                        depth, depth);
+            writer.line("if (*present_{} != 0) {{", depth);
+            writer.indent();
+            writer.line("{} = static_cast<{}>(*present_{} - 1U);", target,
+                        rsc_cpp_type(program, type.arguments.front()), depth);
+            writer.dedent();
+            writer.line("}} else {{");
+            writer.indent();
+            writer.line("{}.reset();", target);
+            writer.dedent();
+            writer.line("}}");
+            return;
+        }
+        writer.line("auto present_{} = in.read_bool();", depth);
+        writer.line("if (!present_{}) return "
+                    "std::unexpected{{std::move(present_{}.error())}};",
+                    depth, depth);
+        writer.line("if (*present_{}) {{", depth);
+        writer.indent();
+        writer.line("{} value_{}{{}};",
+                    rsc_cpp_type(program, type.arguments.front()), depth);
+        emit_decode_value(writer, program, type.arguments.front(),
+                          "value_" + std::to_string(depth), depth + 1,
+                          payload_hints(hints), label);
+        writer.line("{} = std::move(value_{});", target, depth);
+        writer.dedent();
+        writer.line("}} else {{");
+        writer.indent();
+        writer.line("{}.reset();", target);
+        writer.dedent();
+        writer.line("}}");
+        return;
+    case resolved_type::category::handle:
+        return;
+    }
+}
+
+[[nodiscard]] auto emit_codecs(const model &program,
+                               const std::vector<const decl_model *> &ordered)
+    -> std::string {
+    code_writer writer;
+    for (const auto *decl : ordered) {
+        if (!is_struct_like(*decl)) {
+            continue;
+        }
+        writer.line(
+            "[[nodiscard]] inline auto encode_{}(::refrain::net::writer &out, "
+            "const {} &value) -> ::refrain::status {{",
+            emit::cpp_identifier(decl->name), emit::cpp_identifier(decl->name));
+        writer.indent();
+        writer.line("static_cast<void>(out);");
+        writer.line("static_cast<void>(value);");
+        for (const auto &field : decl->fields) {
+            writer.line("{{");
+            writer.indent();
+            emit_encode_value(writer, program, field.type,
+                              "value." + field.name, 0, field_hints(field),
+                              field.name);
+            writer.dedent();
+            writer.line("}}");
+        }
+        writer.line("return ::refrain::status_ok();");
+        writer.dedent();
+        writer.line("}}");
+        writer.blank();
+        writer.line(
+            "[[nodiscard]] inline auto decode_{}(::refrain::net::reader &in, "
+            "{} &value) -> ::refrain::status {{",
+            emit::cpp_identifier(decl->name), emit::cpp_identifier(decl->name));
+        writer.indent();
+        writer.line("static_cast<void>(in);");
+        writer.line("static_cast<void>(value);");
+        for (const auto &field : decl->fields) {
+            writer.line("{{");
+            writer.indent();
+            emit_decode_value(writer, program, field.type,
+                              "value." + field.name, 0, field_hints(field),
+                              field.name);
+            writer.dedent();
+            writer.line("}}");
+        }
+        writer.line("return ::refrain::status_ok();");
+        writer.dedent();
+        writer.line("}}");
+        writer.blank();
+    }
+    return writer.take();
+}
+
 [[nodiscard]] auto emit_header(const model &program, std::uint32_t module_index,
                                std::string_view source_path,
                                std::string_view schema_hash) -> std::string {
@@ -242,9 +1818,81 @@ ordered_declarations(const model &program,
     const auto guard{emit::guard_for(path)};
 
     std::set<std::string> includes;
+    bool needs_identifier{false};
+    const auto uses_identifier = [&](const auto &self,
+                                     const resolved_type &type) -> bool {
+        if (type.kind == resolved_type::category::primitive) {
+            return type.primitive == primitive_kind::identifier;
+        }
+        return std::ranges::any_of(type.arguments, [&](const auto &argument) {
+            return self(self, argument);
+        });
+    };
+    bool needs_wire{false};
+    bool needs_map{false};
+    bool needs_variant{false};
+    const auto uses_variant = [&](const auto &self,
+                                  const resolved_type &type) -> bool {
+        if (type.kind == resolved_type::category::either ||
+            type.kind == resolved_type::category::holder) {
+            return true;
+        }
+        return std::ranges::any_of(type.arguments, [&](const auto &argument) {
+            return self(self, argument);
+        });
+    };
+    const auto uses_map = [&](const auto &self,
+                              const resolved_type &type) -> bool {
+        if (type.kind == resolved_type::category::map) {
+            return true;
+        }
+        return std::ranges::any_of(type.arguments, [&](const auto &argument) {
+            return self(self, argument);
+        });
+    };
+    const auto uses_wire = [&](const auto &self,
+                               const resolved_type &type) -> bool {
+        if (type.kind == resolved_type::category::primitive) {
+            switch (type.primitive) {
+            case primitive_kind::opaque_ptr:
+            case primitive_kind::mut_bytes:
+                // RIDL-only primitives never reach RSC data emission.
+                std::unreachable();
+            case primitive_kind::u8:
+            case primitive_kind::u16:
+            case primitive_kind::u32:
+            case primitive_kind::u64:
+            case primitive_kind::i8:
+            case primitive_kind::i16:
+            case primitive_kind::i32:
+            case primitive_kind::i64:
+            case primitive_kind::f32:
+            case primitive_kind::f64:
+            case primitive_kind::boolean:
+            case primitive_kind::string:
+            case primitive_kind::bytes:
+            case primitive_kind::identifier:
+            case primitive_kind::uuid:
+            case primitive_kind::void_type:
+                return false;
+            default:
+                // Hand-written wire types live in the network wire header.
+                return true;
+            }
+        }
+        return std::ranges::any_of(type.arguments, [&](const auto &argument) {
+            return self(self, argument);
+        });
+    };
     for (const auto *decl : declarations) {
         for (const auto &field : decl->fields) {
             collect_includes(program, field.type, includes);
+            needs_identifier = needs_identifier ||
+                               uses_identifier(uses_identifier, field.type);
+            needs_wire = needs_wire || uses_wire(uses_wire, field.type);
+            needs_map = needs_map || uses_map(uses_map, field.type);
+            needs_variant =
+                needs_variant || uses_variant(uses_variant, field.type);
         }
     }
     includes.erase(emit::rsc_cpp_include(source_path));
@@ -259,6 +1907,21 @@ ordered_declarations(const model &program,
     writer.line("#include <optional>");
     writer.line("#include <string>");
     writer.line("#include <vector>");
+    writer.line("#include <refrain/core/error.hpp>");
+    writer.line("#include <refrain/net/base.hpp>");
+    if (needs_identifier) {
+        writer.line("#include <refrain/data/resource_location.hpp>");
+    }
+    if (needs_wire) {
+        writer.line("#include <refrain/net/wire.hpp>");
+    }
+    if (needs_map) {
+        writer.line("#include <map>");
+        writer.line("#include <utility>");
+    }
+    if (needs_variant) {
+        writer.line("#include <variant>");
+    }
     for (const auto &include : includes) {
         writer.line("#include {}", include);
     }
@@ -280,8 +1943,277 @@ ordered_declarations(const model &program,
         }
         writer.raw(struct_text);
     }
+    writer.raw(emit_codecs(program, ordered));
 
     writer.line("}} // namespace {}", emit::cpp_namespace(module.name));
+    writer.blank();
+    writer.line("#endif // {}", guard);
+    return writer.take();
+}
+
+struct protocol_layout {
+    std::string version;
+    std::string name_space; // refrain::protocol::v777
+    std::string stage;
+    std::string flow;
+};
+
+[[nodiscard]] auto protocol_layout_of(std::string_view module)
+    -> std::optional<protocol_layout> {
+    static constexpr std::array stages{"handshake", "status", "login",
+                                       "configuration", "play"};
+    static constexpr std::array flows{"serverbound", "clientbound"};
+    const auto parts{emit::split_module(module)};
+    if (parts.size() != 5 || parts[0] != "refrain" || parts[1] != "protocol" ||
+        !parts[2].starts_with('v')) {
+        return std::nullopt;
+    }
+    const auto version{parts[2].substr(1)};
+    const auto digits = [](std::string_view text) {
+        return !text.empty() && std::ranges::all_of(text, [](char character) {
+            return character >= '0' && character <= '9';
+        });
+    };
+    if (!digits(version) ||
+        std::ranges::find(stages, parts[3]) == stages.end() ||
+        std::ranges::find(flows, parts[4]) == flows.end()) {
+        return std::nullopt;
+    }
+    return protocol_layout{.version = std::string{version},
+                           .name_space = "refrain::protocol::" + parts[2],
+                           .stage = parts[3],
+                           .flow = parts[4]};
+}
+
+[[nodiscard]] auto generated_include(std::string_view path) -> std::string {
+    constexpr std::string_view prefix{"cpp/"};
+    if (path.starts_with(prefix)) {
+        return "<" + std::string{path.substr(prefix.size())} + ">";
+    }
+    return "<" + std::string{path} + ">";
+}
+
+struct catalog_packet {
+    protocol_layout layout;
+    std::string name;
+    std::uint16_t id{0};
+};
+
+struct stage_catalog {
+    protocol_layout layout;
+    std::set<std::string> flow_headers;
+    std::vector<catalog_packet> packets;
+};
+
+void text_line(code_writer &writer, std::string_view text) {
+    writer.line("{}", text);
+}
+
+[[nodiscard]] auto emit_packet_header(const std::string &version,
+                                      const std::string &name_space,
+                                      std::string_view schema_hash)
+    -> std::string {
+    const auto dir{"cpp/refrain/schema/protocol/" + version};
+    const auto guard{emit::guard_for(dir + "/packet.hpp")};
+    code_writer writer;
+    writer.raw(emit::banner(schema_hash));
+    writer.line("#ifndef {}", guard);
+    writer.line("#define {}", guard);
+    writer.blank();
+    text_line(writer, "#include <array>");
+    text_line(writer, "#include <cstddef>");
+    text_line(writer, "#include <cstdint>");
+    text_line(writer, "#include <string_view>");
+    text_line(writer, "#include <refrain/net/base.hpp>");
+    writer.blank();
+    writer.line("namespace {} {{", name_space);
+    writer.blank();
+    text_line(writer, "/// One packet declared by a protocol schema. `id` is");
+    text_line(writer, "/// unique within a (state, flow) pair.");
+    text_line(writer, "struct packet_descriptor {");
+    text_line(writer, "    ::refrain::net::connection_state state;");
+    text_line(writer, "    ::refrain::net::packet_flow flow;");
+    text_line(writer, "    std::uint16_t id;");
+    text_line(writer, "    std::string_view name;");
+    text_line(writer, "};");
+    writer.blank();
+    text_line(writer, "/// Locate a packet by wire id inside one stage table.");
+    text_line(writer, "template <std::size_t N>");
+    text_line(writer, "[[nodiscard]] constexpr auto find_packet("
+                      "const std::array<packet_descriptor, N> &table,");
+    text_line(writer, "                                      "
+                      "::refrain::net::packet_flow flow,");
+    text_line(
+        writer,
+        "                                      std::uint16_t id) noexcept");
+    text_line(writer, "    -> const packet_descriptor * {");
+    writer.indent();
+    text_line(writer, "for (const auto &entry : table) {");
+    writer.indent();
+    text_line(writer, "if (entry.flow == flow && entry.id == id) {");
+    writer.indent();
+    text_line(writer, "return &entry;");
+    writer.dedent();
+    text_line(writer, "}");
+    writer.dedent();
+    text_line(writer, "}");
+    text_line(writer, "return nullptr;");
+    writer.dedent();
+    text_line(writer, "}");
+    writer.blank();
+    text_line(writer,
+              "/// Locate a packet by declared name inside one stage table.");
+    text_line(writer, "template <std::size_t N>");
+    text_line(writer, "[[nodiscard]] constexpr auto find_packet("
+                      "const std::array<packet_descriptor, N> &table,");
+    text_line(writer, "                                      "
+                      "::refrain::net::packet_flow flow,");
+    text_line(writer,
+              "                                      std::string_view name) "
+              "noexcept");
+    text_line(writer, "    -> const packet_descriptor * {");
+    writer.indent();
+    text_line(writer, "for (const auto &entry : table) {");
+    writer.indent();
+    text_line(writer, "if (entry.flow == flow && entry.name == name) {");
+    writer.indent();
+    text_line(writer, "return &entry;");
+    writer.dedent();
+    text_line(writer, "}");
+    writer.dedent();
+    text_line(writer, "}");
+    text_line(writer, "return nullptr;");
+    writer.dedent();
+    text_line(writer, "}");
+    writer.blank();
+    writer.line("}} // namespace {}", name_space);
+    writer.blank();
+    writer.line("#endif // {}", guard);
+    return writer.take();
+}
+
+[[nodiscard]] auto emit_stage_header(const stage_catalog &stage,
+                                     std::string_view schema_hash)
+    -> std::string {
+    const auto dir{"cpp/refrain/schema/protocol/" + stage.layout.version};
+    const auto path{dir + "/" + stage.layout.stage + ".hpp"};
+    const auto guard{emit::guard_for(path)};
+    code_writer writer;
+    writer.raw(emit::banner(schema_hash));
+    writer.line("#ifndef {}", guard);
+    writer.line("#define {}", guard);
+    writer.blank();
+    text_line(writer, "#include <array>");
+    text_line(writer, "#include <cstdint>");
+    text_line(writer, "#include <string_view>");
+    text_line(writer, "#include <refrain/net/base.hpp>");
+    writer.line("#include {}", generated_include(dir + "/packet.hpp"));
+    for (const auto &header : stage.flow_headers) {
+        writer.line("#include {}", header);
+    }
+    writer.blank();
+    writer.line("namespace {} {{", stage.layout.name_space);
+    writer.blank();
+    auto packets{stage.packets};
+    std::ranges::sort(packets, [](const auto &lhs, const auto &rhs) {
+        if (lhs.layout.flow != rhs.layout.flow) {
+            return lhs.layout.flow < rhs.layout.flow;
+        }
+        return lhs.id < rhs.id;
+    });
+    text_line(writer,
+              "/// Packets declared for this stage, ordered by flow and id.");
+    writer.line("inline constexpr std::array<packet_descriptor, {}> "
+                "{}_packets{{{{",
+                packets.size(), stage.layout.stage);
+    writer.indent();
+    for (const auto &packet : packets) {
+        writer.line("packet_descriptor{{::refrain::net::connection_state::{}, "
+                    "::refrain::net::packet_flow::{}, 0x{:X}, \"{}\"}},",
+                    stage.layout.stage, packet.layout.flow,
+                    static_cast<std::uint64_t>(packet.id),
+                    emit::escape_text(packet.name));
+    }
+    writer.dedent();
+    text_line(writer, "}};");
+    writer.blank();
+    writer.line("}} // namespace {}", stage.layout.name_space);
+    writer.blank();
+    writer.line("#endif // {}", guard);
+    return writer.take();
+}
+
+[[nodiscard]] auto emit_catalog_header(const std::string &version,
+                                       const std::string &name_space,
+                                       const std::vector<stage_catalog> &stages,
+                                       std::string_view schema_hash)
+    -> std::string {
+    const auto dir{"cpp/refrain/schema/protocol/" + version};
+    const auto guard{emit::guard_for(dir + "/catalog.hpp")};
+    code_writer writer;
+    writer.raw(emit::banner(schema_hash));
+    writer.line("#ifndef {}", guard);
+    writer.line("#define {}", guard);
+    writer.blank();
+    text_line(writer, "#include <cstdint>");
+    text_line(writer, "#include <string_view>");
+    text_line(writer, "#include <refrain/net/base.hpp>");
+    for (const auto &stage : stages) {
+        writer.line("#include {}",
+                    generated_include(dir + "/" + stage.layout.stage + ".hpp"));
+    }
+    writer.blank();
+    writer.line("namespace {} {{", name_space);
+    writer.blank();
+    text_line(writer,
+              "/// Packet table lookup across every stage of the protocol.");
+    text_line(writer, "[[nodiscard]] constexpr auto find_packet("
+                      "::refrain::net::connection_state state,");
+    text_line(writer, "                                      "
+                      "::refrain::net::packet_flow flow,");
+    text_line(
+        writer,
+        "                                      std::uint16_t id) noexcept");
+    text_line(writer, "    -> const packet_descriptor * {");
+    writer.indent();
+    text_line(writer, "switch (state) {");
+    for (const auto &stage : stages) {
+        writer.line("case ::refrain::net::connection_state::{}:",
+                    stage.layout.stage);
+        writer.indent();
+        writer.line("return ::{}::find_packet({}_packets, flow, id);",
+                    name_space, stage.layout.stage);
+        writer.dedent();
+    }
+    text_line(writer, "}");
+    text_line(writer, "return nullptr;");
+    writer.dedent();
+    text_line(writer, "}");
+    writer.blank();
+    text_line(writer, "[[nodiscard]] constexpr auto find_packet("
+                      "::refrain::net::connection_state state,");
+    text_line(writer, "                                      "
+                      "::refrain::net::packet_flow flow,");
+    text_line(writer,
+              "                                      std::string_view name) "
+              "noexcept");
+    text_line(writer, "    -> const packet_descriptor * {");
+    writer.indent();
+    text_line(writer, "switch (state) {");
+    for (const auto &stage : stages) {
+        writer.line("case ::refrain::net::connection_state::{}:",
+                    stage.layout.stage);
+        writer.indent();
+        writer.line("return ::{}::find_packet({}_packets, flow, name);",
+                    name_space, stage.layout.stage);
+        writer.dedent();
+    }
+    text_line(writer, "}");
+    text_line(writer, "return nullptr;");
+    writer.dedent();
+    text_line(writer, "}");
+    writer.blank();
+    writer.line("}} // namespace {}", name_space);
     writer.blank();
     writer.line("#endif // {}", guard);
     return writer.take();
@@ -292,13 +2224,16 @@ ordered_declarations(const model &program,
 auto emit_rsc(const model &program, std::string_view schema_hash)
     -> std::vector<emit::generated_file> {
     std::vector<emit::generated_file> files;
+    std::map<std::string, stage_catalog> stages;
+    std::map<std::string, std::string> version_namespaces;
     for (std::uint32_t module_index = 0; module_index < program.modules.size();
          ++module_index) {
-        if (program.modules[module_index].kind != dialect::rsc) {
+        const auto &module{program.modules[module_index]};
+        if (module.kind != dialect::rsc) {
             continue;
         }
         std::vector<std::string> paths;
-        for (const auto &decl : program.modules[module_index].declarations) {
+        for (const auto &decl : module.declarations) {
             if (decl.source_path.empty()) {
                 continue;
             }
@@ -311,6 +2246,52 @@ auto emit_rsc(const model &program, std::string_view schema_hash)
             files.push_back(emit::generated_file{
                 emit::rsc_cpp_header_path(source_path),
                 emit_header(program, module_index, source_path, schema_hash)});
+        }
+        const auto layout{protocol_layout_of(module.name)};
+        if (!layout.has_value()) {
+            continue;
+        }
+        auto &stage{stages[layout->version + "/" + layout->stage]};
+        stage.layout = *layout;
+        version_namespaces[layout->version] = layout->name_space;
+        for (const auto &source_path : paths) {
+            stage.flow_headers.insert(emit::rsc_cpp_include(source_path));
+        }
+        for (const auto &decl : module.declarations) {
+            if (decl.kind == declaration_kind::packet &&
+                decl.packet_id.has_value()) {
+                stage.packets.push_back(catalog_packet{
+                    .layout = *layout,
+                    .name = decl.name,
+                    .id = static_cast<std::uint16_t>(*decl.packet_id)});
+            }
+        }
+    }
+    for (const auto &[version, name_space] : version_namespaces) {
+        files.push_back(emit::generated_file{
+            "cpp/refrain/schema/protocol/" + version + "/packet.hpp",
+            emit_packet_header(version, name_space, schema_hash)});
+        std::vector<stage_catalog> version_stages;
+        for (const auto &[key, stage] : stages) {
+            if (stage.layout.version == version) {
+                version_stages.push_back(stage);
+            }
+        }
+        std::ranges::sort(version_stages, [](const stage_catalog &lhs,
+                                             const stage_catalog &rhs) {
+            return lhs.layout.stage < rhs.layout.stage;
+        });
+        for (const auto &stage : version_stages) {
+            files.push_back(
+                emit::generated_file{"cpp/refrain/schema/protocol/" + version +
+                                         "/" + stage.layout.stage + ".hpp",
+                                     emit_stage_header(stage, schema_hash)});
+        }
+        if (!version_stages.empty()) {
+            files.push_back(emit::generated_file{
+                "cpp/refrain/schema/protocol/" + version + "/catalog.hpp",
+                emit_catalog_header(version, name_space, version_stages,
+                                    schema_hash)});
         }
     }
     std::sort(

@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// Optional dynamic server-list status provider. A mod implements this service
+// for a session instance; the session calls every active instance in
+// deterministic order and uses the first handled view.
+
+module refrain::services::session_status;
+version 1.0.0;
+
+import refrain::core;
+
+struct status_request {
+    u32 protocol;
+    string host;
+    u16 port;
+    u32 online_players;
+}
+
+struct status_view {
+    string description;
+    u32 online_players;
+    u32 max_players;
+}
+
+service session_status : 1.0.0 {
+    side = server;
+    thread = worker;
+    composition = instanced;
+    provides = [ "refrain:session.status" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "dynamic-motd", "dynamic-player-count" ];
+
+    /// Return true when this provider handled the request. `description` and
+    /// counts are borrowed until the next call on this provider instance.
+    #[thread(worker)]
+    fn status(in status_request request, out status_view view) -> bool;
+}
+

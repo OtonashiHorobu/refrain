@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -58,6 +59,80 @@ auto primitive_name(primitive_kind value) noexcept -> std::string_view {
         return "opaque_ptr";
     case primitive_kind::mut_bytes:
         return "mut_bytes";
+    case primitive_kind::identifier:
+        return "identifier";
+    case primitive_kind::uuid:
+        return "uuid";
+    case primitive_kind::text_component:
+        return "text_component";
+    case primitive_kind::item_stack:
+        return "item_stack";
+    case primitive_kind::lp_vec3:
+        return "lp_vec3";
+    case primitive_kind::nbt:
+        return "nbt";
+    case primitive_kind::varint_id:
+        return "varint_id";
+    case primitive_kind::message_signature_packed:
+        return "message_signature_packed";
+    case primitive_kind::filter_mask:
+        return "filter_mask";
+    case primitive_kind::stat_entry:
+        return "stat_entry";
+    case primitive_kind::position_path:
+        return "position_path";
+    case primitive_kind::map_patch:
+        return "map_patch";
+    case primitive_kind::advancement_seen:
+        return "advancement_seen";
+    case primitive_kind::vec_delta:
+        return "vec_delta";
+    case primitive_kind::sound_selector:
+        return "sound_selector";
+    case primitive_kind::objective_update:
+        return "objective_update";
+    case primitive_kind::team_update:
+        return "team_update";
+    case primitive_kind::player_info_update:
+        return "player_info_update";
+    case primitive_kind::tracked_waypoint:
+        return "tracked_waypoint";
+    case primitive_kind::component_predicate:
+        return "component_predicate";
+    case primitive_kind::merchant_offer:
+        return "merchant_offer";
+    case primitive_kind::entity_metadata:
+        return "entity_metadata";
+    case primitive_kind::item_stack_template:
+        return "item_stack_template";
+    case primitive_kind::advancement_display:
+        return "advancement_display";
+    case primitive_kind::advancement_requirements:
+        return "advancement_requirements";
+    case primitive_kind::advancement:
+        return "advancement";
+    case primitive_kind::advancement_progress:
+        return "advancement_progress";
+    case primitive_kind::holder_set:
+        return "holder_set";
+    case primitive_kind::slot_display:
+        return "slot_display";
+    case primitive_kind::recipe_display:
+        return "recipe_display";
+    case primitive_kind::recipe_display_entry:
+        return "recipe_display_entry";
+    case primitive_kind::single_input_set:
+        return "single_input_set";
+    case primitive_kind::particle_options:
+        return "particle_options";
+    case primitive_kind::debug_subscription_update:
+        return "debug_subscription_update";
+    case primitive_kind::debug_subscription_event:
+        return "debug_subscription_event";
+    case primitive_kind::command_tree:
+        return "command_tree";
+    case primitive_kind::container_click_data:
+        return "container_click_data";
     case primitive_kind::void_type:
         return "void";
     }
@@ -82,6 +157,47 @@ auto primitive_from_name(std::string_view name) noexcept
         std::pair{"bytes", primitive_kind::bytes},
         std::pair{"opaque_ptr", primitive_kind::opaque_ptr},
         std::pair{"mut_bytes", primitive_kind::mut_bytes},
+        std::pair{"identifier", primitive_kind::identifier},
+        std::pair{"uuid", primitive_kind::uuid},
+        std::pair{"text_component", primitive_kind::text_component},
+        std::pair{"item_stack", primitive_kind::item_stack},
+        std::pair{"lp_vec3", primitive_kind::lp_vec3},
+        std::pair{"nbt", primitive_kind::nbt},
+        std::pair{"varint_id", primitive_kind::varint_id},
+        std::pair{"message_signature_packed",
+                  primitive_kind::message_signature_packed},
+        std::pair{"filter_mask", primitive_kind::filter_mask},
+        std::pair{"stat_entry", primitive_kind::stat_entry},
+        std::pair{"position_path", primitive_kind::position_path},
+        std::pair{"map_patch", primitive_kind::map_patch},
+        std::pair{"advancement_seen", primitive_kind::advancement_seen},
+        std::pair{"vec_delta", primitive_kind::vec_delta},
+        std::pair{"sound_selector", primitive_kind::sound_selector},
+        std::pair{"objective_update", primitive_kind::objective_update},
+        std::pair{"team_update", primitive_kind::team_update},
+        std::pair{"player_info_update", primitive_kind::player_info_update},
+        std::pair{"tracked_waypoint", primitive_kind::tracked_waypoint},
+        std::pair{"component_predicate", primitive_kind::component_predicate},
+        std::pair{"merchant_offer", primitive_kind::merchant_offer},
+        std::pair{"entity_metadata", primitive_kind::entity_metadata},
+        std::pair{"item_stack_template", primitive_kind::item_stack_template},
+        std::pair{"advancement_display", primitive_kind::advancement_display},
+        std::pair{"advancement_requirements",
+                  primitive_kind::advancement_requirements},
+        std::pair{"advancement", primitive_kind::advancement},
+        std::pair{"advancement_progress", primitive_kind::advancement_progress},
+        std::pair{"holder_set", primitive_kind::holder_set},
+        std::pair{"slot_display", primitive_kind::slot_display},
+        std::pair{"recipe_display", primitive_kind::recipe_display},
+        std::pair{"recipe_display_entry", primitive_kind::recipe_display_entry},
+        std::pair{"single_input_set", primitive_kind::single_input_set},
+        std::pair{"particle_options", primitive_kind::particle_options},
+        std::pair{"debug_subscription_update",
+                  primitive_kind::debug_subscription_update},
+        std::pair{"debug_subscription_event",
+                  primitive_kind::debug_subscription_event},
+        std::pair{"command_tree", primitive_kind::command_tree},
+        std::pair{"container_click_data", primitive_kind::container_click_data},
         std::pair{"void", primitive_kind::void_type},
     };
     for (const auto &[key, value] : table) {
@@ -168,12 +284,21 @@ struct integer_info {
 
 [[nodiscard]] auto is_known_attribute(std::string_view name) noexcept -> bool {
     static constexpr std::array names{
-        "since",        "deprecated", "removed",      "breaking",
-        "default",      "unit",       "max",          "varint",
-        "zigzag",       "bits",       "sidecar",      "side",
-        "thread",       "borrow",     "owned",        "caller_provided",
-        "can_fail",     "hot_path",   "sandbox_safe", "network_sync",
-        "on_load_only", "batch",      "cancellable",  "schedule",
+        "since",        "deprecated",
+        "removed",      "breaking",
+        "default",      "unit",
+        "max",          "varint",
+        "varlong",      "fixed",
+        "fixed_bytes",  "optional_varint",
+        "rest",         "fixed_count",
+        "zigzag",       "bits",
+        "sidecar",      "side",
+        "thread",       "borrow",
+        "owned",        "caller_provided",
+        "can_fail",     "hot_path",
+        "sandbox_safe", "network_sync",
+        "on_load_only", "batch",
+        "cancellable",  "schedule",
     };
     return std::ranges::any_of(names, [name](std::string_view candidate) {
         return candidate == name;
@@ -218,6 +343,107 @@ enum class attribute_scope : std::uint8_t {
         return true;
     case primitive_kind::string:
     case primitive_kind::bytes:
+    case primitive_kind::opaque_ptr:
+    case primitive_kind::mut_bytes:
+    case primitive_kind::identifier:
+    case primitive_kind::uuid:
+    case primitive_kind::text_component:
+    case primitive_kind::item_stack:
+    case primitive_kind::lp_vec3:
+    case primitive_kind::nbt:
+    case primitive_kind::varint_id:
+    case primitive_kind::message_signature_packed:
+    case primitive_kind::filter_mask:
+    case primitive_kind::stat_entry:
+    case primitive_kind::position_path:
+    case primitive_kind::map_patch:
+    case primitive_kind::advancement_seen:
+    case primitive_kind::vec_delta:
+    case primitive_kind::sound_selector:
+    case primitive_kind::objective_update:
+    case primitive_kind::team_update:
+    case primitive_kind::player_info_update:
+    case primitive_kind::tracked_waypoint:
+    case primitive_kind::component_predicate:
+    case primitive_kind::merchant_offer:
+    case primitive_kind::entity_metadata:
+
+    case primitive_kind::item_stack_template:
+    case primitive_kind::advancement_display:
+    case primitive_kind::advancement_requirements:
+    case primitive_kind::advancement:
+    case primitive_kind::advancement_progress:
+    case primitive_kind::holder_set:
+    case primitive_kind::slot_display:
+    case primitive_kind::recipe_display:
+    case primitive_kind::recipe_display_entry:
+    case primitive_kind::single_input_set:
+    case primitive_kind::particle_options:
+    case primitive_kind::debug_subscription_update:
+    case primitive_kind::debug_subscription_event:
+    case primitive_kind::command_tree:
+    case primitive_kind::container_click_data:
+    case primitive_kind::void_type:
+        return false;
+    }
+    return false;
+}
+
+[[nodiscard]] constexpr auto is_integer_primitive(primitive_kind kind) noexcept
+    -> bool {
+    switch (kind) {
+    case primitive_kind::u8:
+    case primitive_kind::u16:
+    case primitive_kind::u32:
+    case primitive_kind::u64:
+    case primitive_kind::i8:
+    case primitive_kind::i16:
+    case primitive_kind::i32:
+    case primitive_kind::i64:
+        return true;
+    case primitive_kind::f32:
+    case primitive_kind::f64:
+    case primitive_kind::boolean:
+    case primitive_kind::string:
+    case primitive_kind::bytes:
+    case primitive_kind::identifier:
+    case primitive_kind::uuid:
+    case primitive_kind::text_component:
+    case primitive_kind::item_stack:
+    case primitive_kind::lp_vec3:
+    case primitive_kind::nbt:
+    case primitive_kind::varint_id:
+    case primitive_kind::message_signature_packed:
+    case primitive_kind::filter_mask:
+    case primitive_kind::stat_entry:
+    case primitive_kind::position_path:
+    case primitive_kind::map_patch:
+    case primitive_kind::advancement_seen:
+    case primitive_kind::vec_delta:
+    case primitive_kind::sound_selector:
+    case primitive_kind::objective_update:
+    case primitive_kind::team_update:
+    case primitive_kind::player_info_update:
+    case primitive_kind::tracked_waypoint:
+    case primitive_kind::component_predicate:
+    case primitive_kind::merchant_offer:
+    case primitive_kind::entity_metadata:
+
+    case primitive_kind::item_stack_template:
+    case primitive_kind::advancement_display:
+    case primitive_kind::advancement_requirements:
+    case primitive_kind::advancement:
+    case primitive_kind::advancement_progress:
+    case primitive_kind::holder_set:
+    case primitive_kind::slot_display:
+    case primitive_kind::recipe_display:
+    case primitive_kind::recipe_display_entry:
+    case primitive_kind::single_input_set:
+    case primitive_kind::particle_options:
+    case primitive_kind::debug_subscription_update:
+    case primitive_kind::debug_subscription_event:
+    case primitive_kind::command_tree:
+    case primitive_kind::container_click_data:
     case primitive_kind::opaque_ptr:
     case primitive_kind::mut_bytes:
     case primitive_kind::void_type:
@@ -278,7 +504,9 @@ class analyzer {
         const auto baseline{sink_.size()};
         build_modules();
         build_symbol_tables();
+        build_service_ids();
         resolve_declarations();
+        validate_extension_links();
         compute_abi();
         if (sink_.size() != baseline) {
             return std::nullopt;
@@ -301,6 +529,16 @@ class analyzer {
 
     [[nodiscard]] auto decl_at(decl_ref ref) const -> const decl_model & {
         return model_.modules[ref.module].declarations[ref.decl];
+    }
+
+    [[nodiscard]] static auto make_extension_point(decl_ref ref) noexcept
+        -> extension_point {
+        return extension_point{ref.module, ref.decl};
+    }
+
+    [[nodiscard]] static auto make_decl_ref(extension_point point) noexcept
+        -> decl_ref {
+        return decl_ref{point.module_index, point.decl_index};
     }
 
     void error(const source_location &where, std::string message) {
@@ -448,6 +686,7 @@ class analyzer {
         decl.entries = source.entries;
         decl.service = source.service;
         decl.service_version = source.service.version;
+        decl.extension = source.extension;
         return decl;
     }
 
@@ -490,6 +729,30 @@ class analyzer {
                     } else {
                         handles_.emplace(decl.name,
                                          decl_ref{module_index, decl_index});
+                    }
+                }
+            }
+        }
+    }
+
+    /// Index services by every `provides` entry. Extensions use this map to
+    /// resolve `extends = "<service-id>"` without depending on declaration
+    /// order (a service and its extensions may live in either order or in
+    /// different modules).
+    void build_service_ids() {
+        for (std::uint32_t module_index = 0;
+             module_index < model_.modules.size(); ++module_index) {
+            const auto &module{module_at(module_index)};
+            for (std::uint32_t decl_index = 0;
+                 decl_index < module.declarations.size(); ++decl_index) {
+                const auto &decl{module.declarations[decl_index]};
+                if (decl.kind != declaration_kind::service) {
+                    continue;
+                }
+                for (const auto &provided : decl.service.provides) {
+                    if (!provided.empty()) {
+                        service_ids_.emplace(
+                            provided, decl_ref{module_index, decl_index});
                     }
                 }
             }
@@ -585,6 +848,7 @@ class analyzer {
             resolve_struct_fields(module_index, decl);
             if (decl.kind == declaration_kind::packet) {
                 validate_packet(module_index, decl);
+                validate_packet_module(module_index, decl);
             }
             break;
         case declaration_kind::enumeration:
@@ -606,6 +870,14 @@ class analyzer {
                       "'service' is only valid in RIDL service contracts");
             }
             resolve_service(module_index, decl, source);
+            break;
+        case declaration_kind::extension:
+            if (!ridl) {
+                error(decl.location,
+                      "'extension' is only valid in RIDL service contracts");
+                break;
+            }
+            resolve_extension(module_index, decl, source);
             break;
         case declaration_kind::callback:
             if (!ridl) {
@@ -812,6 +1084,21 @@ class analyzer {
             return std::format("event field '{}' uses 'repeated<T>', which is "
                                "not representable in an event payload; {}",
                                field_name, allowed);
+        case resolved_type::category::map:
+            return std::format(
+                "event field '{}' uses 'map<K, V>', which is not "
+                "representable in an event payload; {}",
+                field_name, allowed);
+        case resolved_type::category::either:
+            return std::format(
+                "event field '{}' uses 'either<A, B>', which is not "
+                "representable in an event payload; {}",
+                field_name, allowed);
+        case resolved_type::category::holder:
+            return std::format(
+                "event field '{}' uses 'holder<A>', which is not "
+                "representable in an event payload; {}",
+                field_name, allowed);
         }
         return std::nullopt;
     }
@@ -855,6 +1142,46 @@ class analyzer {
         return 0;
     }
 
+    /// Protocol schemas are organised as
+    /// `refrain::protocol::v<version>::<stage>::<flow>`: the module name is
+    /// the only place the stage and direction are declared, so the generated
+    /// packet table can be derived without repeating metadata on every packet.
+    void validate_packet_module(std::uint32_t module_index,
+                                const decl_model &decl) {
+        static constexpr std::array stages{"handshake", "status", "login",
+                                           "configuration", "play"};
+        static constexpr std::array flows{"serverbound", "clientbound"};
+        std::vector<std::string_view> parts;
+        const std::string_view name{module_at(module_index).name};
+        std::size_t begin{0};
+        while (begin <= name.size()) {
+            const auto end{name.find("::", begin)};
+            if (end == std::string_view::npos) {
+                parts.emplace_back(name.substr(begin));
+                break;
+            }
+            parts.emplace_back(name.substr(begin, end - begin));
+            begin = end + 2;
+        }
+        const bool valid{parts.size() == 5 && parts[0] == "refrain" &&
+                         parts[1] == "protocol" && parts[2].starts_with("v") &&
+                         all_digits(parts[2].substr(1)) &&
+                         std::ranges::any_of(stages,
+                                             [&](std::string_view stage) {
+                                                 return stage == parts[3];
+                                             }) &&
+                         std::ranges::any_of(flows, [&](std::string_view flow) {
+                             return flow == parts[4];
+                         })};
+        if (!valid) {
+            error(
+                decl.location,
+                std::format("packet '{}' must live in module "
+                            "'refrain::protocol::v<version>::<stage>::<flow>'",
+                            decl.name));
+        }
+    }
+
     void validate_packet(std::uint32_t module_index, decl_model &decl) {
         auto &ids{packet_ids_[module_index]};
         if (!decl.packet_id.has_value()) {
@@ -896,7 +1223,189 @@ class analyzer {
         field.type = std::move(*type);
         validate_attributes(field.attributes, source.location,
                             attribute_scope::field);
+        apply_wire_attributes(field, module_at(current_module).kind);
         return field;
+    }
+
+    /// Resolve `#[varint]`/`#[varlong]`/`#[fixed]`/`#[max]` into the wire
+    /// hints consumed by the RSC emitter. These attributes only describe bytes
+    /// on the wire, so they are rejected outside RSC schemas and on field types
+    /// the selected encoding cannot represent.
+    void apply_wire_attributes(field_model &field, dialect kind) {
+        const auto *varint{find_attribute(field.attributes, "varint")};
+        const auto *varlong{find_attribute(field.attributes, "varlong")};
+        const auto *fixed{find_attribute(field.attributes, "fixed")};
+        const auto selected{static_cast<int>(varint != nullptr) +
+                            static_cast<int>(varlong != nullptr) +
+                            static_cast<int>(fixed != nullptr)};
+        const auto *max{find_attribute(field.attributes, "max")};
+        const auto *fixed_bytes{
+            find_attribute(field.attributes, "fixed_bytes")};
+        const auto *optional_varint{
+            find_attribute(field.attributes, "optional_varint")};
+        const auto *rest{find_attribute(field.attributes, "rest")};
+        const auto *fixed_count{
+            find_attribute(field.attributes, "fixed_count")};
+        if (selected == 0 && max == nullptr && fixed_bytes == nullptr &&
+            optional_varint == nullptr && rest == nullptr &&
+            fixed_count == nullptr) {
+            return;
+        }
+        if (kind != dialect::rsc) {
+            error(field.location,
+                  "wire encoding attributes are only valid in RSC schemas");
+            return;
+        }
+        if (selected > 1) {
+            error(field.location,
+                  "'#[varint]', '#[varlong]' and '#[fixed]' are mutually "
+                  "exclusive");
+            return;
+        }
+        if (selected == 1) {
+            integer_wire wire{integer_wire::natural};
+            if (varint != nullptr) {
+                wire = integer_wire::varint;
+            } else if (varlong != nullptr) {
+                wire = integer_wire::varlong;
+            } else {
+                wire = integer_wire::fixed;
+            }
+            const auto element{
+                field.type.kind == resolved_type::category::array ||
+                        field.type.kind == resolved_type::category::slice ||
+                        field.type.kind == resolved_type::category::repeated
+                    ? &field.type.arguments.front()
+                    : &field.type};
+            if (element->kind != resolved_type::category::primitive ||
+                !is_integer_primitive(element->primitive)) {
+                error(field.location,
+                      std::format("'#[{}]' requires an integer field",
+                                  varint != nullptr    ? "varint"
+                                  : varlong != nullptr ? "varlong"
+                                                       : "fixed"));
+                return;
+            }
+            if (wire == integer_wire::varlong &&
+                element->primitive != primitive_kind::u64 &&
+                element->primitive != primitive_kind::i64) {
+                error(field.location,
+                      "'#[varlong]' requires a 64-bit integer field");
+                return;
+            }
+            field.wire = wire;
+        }
+        if (fixed_count != nullptr) {
+            const auto is_array = [](const resolved_type &type) {
+                return type.kind == resolved_type::category::array;
+            };
+            if (!is_array(field.type)) {
+                error(field.location,
+                      "'#[fixed_count]' is only valid on an 'array<T>' field");
+            } else if (fixed_count->arguments.size() != 1 ||
+                       fixed_count->arguments.front().kind !=
+                           attribute_argument_kind::integer) {
+                error(field.location,
+                      "'#[fixed_count]' expects exactly one integer argument");
+            } else {
+                std::uint64_t count{0};
+                const auto &text{fixed_count->arguments.front().text};
+                const auto parsed{std::from_chars(
+                    text.data(), text.data() + text.size(), count)};
+                if (parsed.ec != std::errc{} || count == 0) {
+                    error(field.location,
+                          "'#[fixed_count]' expects a positive integer");
+                } else {
+                    field.wire_fixed_count = count;
+                }
+            }
+            return;
+        }
+        if (rest != nullptr) {
+            const auto is_bytes = [](const resolved_type &type) {
+                return type.kind == resolved_type::category::primitive &&
+                       type.primitive == primitive_kind::bytes;
+            };
+            if (!is_bytes(field.type)) {
+                error(field.location,
+                      "'#[rest]' is only valid on a 'bytes' field");
+            } else if (max != nullptr || fixed_bytes != nullptr ||
+                       selected != 0 || optional_varint != nullptr) {
+                error(field.location,
+                      "'#[rest]' cannot be combined with a length or integer "
+                      "encoding");
+            } else {
+                field.wire_rest = true;
+            }
+            return;
+        }
+        if (fixed_bytes != nullptr) {
+            const auto is_bytes = [](const resolved_type &type) {
+                return type.kind == resolved_type::category::primitive &&
+                       type.primitive == primitive_kind::bytes;
+            };
+            const auto bytes_field =
+                is_bytes(field.type) ||
+                (field.type.kind == resolved_type::category::optional &&
+                 is_bytes(field.type.arguments.front()));
+            if (!bytes_field) {
+                error(field.location,
+                      "'#[fixed_bytes]' is only valid on a 'bytes' field or "
+                      "'optional<bytes>'");
+            } else if (fixed_bytes->arguments.size() == 1 &&
+                       fixed_bytes->arguments.front().kind ==
+                           attribute_argument_kind::integer) {
+                std::uint64_t length{0};
+                const auto &text{fixed_bytes->arguments.front().text};
+                const auto parsed{std::from_chars(
+                    text.data(), text.data() + text.size(), length)};
+                if (parsed.ec != std::errc{} || length == 0) {
+                    error(field.location,
+                          "'#[fixed_bytes]' expects a positive integer");
+                } else {
+                    field.wire_fixed_bytes = length;
+                }
+            }
+        }
+        if (optional_varint != nullptr) {
+            const auto element{field.type.kind ==
+                                       resolved_type::category::optional
+                                   ? &field.type.arguments.front()
+                                   : nullptr};
+            if (element == nullptr ||
+                element->kind != resolved_type::category::primitive ||
+                !is_integer_primitive(element->primitive)) {
+                error(field.location, "'#[optional_varint]' is only valid on "
+                                      "'optional<integer>' fields");
+            } else {
+                field.wire_optional_varint = true;
+            }
+        }
+        if (max != nullptr && max->arguments.size() == 1 &&
+            max->arguments.front().kind == attribute_argument_kind::integer) {
+            std::uint64_t limit{0};
+            const auto &text{max->arguments.front().text};
+            const auto parsed{
+                std::from_chars(text.data(), text.data() + text.size(), limit)};
+            if (parsed.ec == std::errc{} && limit > 0) {
+                const auto bounded{
+                    field.type.kind == resolved_type::category::primitive
+                        ? field.type.primitive == primitive_kind::string ||
+                              field.type.primitive == primitive_kind::bytes
+                        : field.type.kind == resolved_type::category::array ||
+                              field.type.kind ==
+                                  resolved_type::category::slice ||
+                              field.type.kind ==
+                                  resolved_type::category::repeated};
+                if (!bounded) {
+                    error(field.location,
+                          "'#[max]' is only valid on strings, bytes and "
+                          "arrays");
+                } else {
+                    field.wire_max = limit;
+                }
+            }
+        }
     }
 
     [[nodiscard]] auto resolve_type(const type_ref &source,
@@ -949,6 +1458,9 @@ class analyzer {
             case declaration_kind::event:
                 return std::optional<std::string>{
                     "events cannot be referenced by name as field types"};
+            case declaration_kind::extension:
+                return std::optional<std::string>{
+                    "extensions cannot be referenced by name as field types"};
             }
             return std::nullopt;
         };
@@ -978,6 +1490,21 @@ class analyzer {
                 if (*primitive == primitive_kind::void_type && !allow_void) {
                     error(source.location,
                           "'void' is only valid as a method result type");
+                    return std::nullopt;
+                }
+                if (current_kind == dialect::ridl &&
+                    (*primitive == primitive_kind::identifier ||
+                     *primitive == primitive_kind::uuid ||
+                     *primitive == primitive_kind::text_component ||
+                     *primitive == primitive_kind::item_stack ||
+                     *primitive == primitive_kind::lp_vec3 ||
+                     *primitive == primitive_kind::nbt ||
+                     *primitive == primitive_kind::varint_id ||
+                     *primitive == primitive_kind::message_signature_packed)) {
+                    error(source.location,
+                          std::format("'{}' is only valid in RSC wire "
+                                      "schemas",
+                                      primitive_name(*primitive)));
                     return std::nullopt;
                 }
                 resolved_type type;
@@ -1014,6 +1541,67 @@ class analyzer {
         }
 
         const auto &generic{source.name};
+        if (generic == "holder") {
+            if (source.arguments.size() != 1) {
+                error(source.location,
+                      "'holder<A>' expects exactly one type argument");
+                return std::nullopt;
+            }
+            auto direct{
+                resolve_type(source.arguments[0], current_module, false)};
+            if (!direct.has_value()) {
+                return std::nullopt;
+            }
+            resolved_type type;
+            type.kind = resolved_type::category::holder;
+            type.arguments.push_back(std::move(*direct));
+            return type;
+        }
+        if (generic == "either") {
+            if (source.arguments.size() != 2) {
+                error(source.location,
+                      "'either<A, B>' expects exactly two type arguments");
+                return std::nullopt;
+            }
+            auto left{resolve_type(source.arguments[0], current_module, false)};
+            auto right{
+                resolve_type(source.arguments[1], current_module, false)};
+            if (!left.has_value() || !right.has_value()) {
+                return std::nullopt;
+            }
+            resolved_type type;
+            type.kind = resolved_type::category::either;
+            type.arguments.push_back(std::move(*left));
+            type.arguments.push_back(std::move(*right));
+            return type;
+        }
+        if (generic == "map") {
+            if (source.arguments.size() != 2) {
+                error(source.location,
+                      "'map<K, V>' expects exactly two type arguments");
+                return std::nullopt;
+            }
+            auto key{resolve_type(source.arguments[0], current_module, false)};
+            auto value{
+                resolve_type(source.arguments[1], current_module, false)};
+            if (!key.has_value() || !value.has_value()) {
+                return std::nullopt;
+            }
+            if (key->kind == resolved_type::category::array ||
+                key->kind == resolved_type::category::map ||
+                key->kind == resolved_type::category::optional ||
+                key->kind == resolved_type::category::slice ||
+                key->kind == resolved_type::category::repeated) {
+                error(source.location,
+                      "'map<K, V>' requires a scalar or named key type");
+                return std::nullopt;
+            }
+            resolved_type type;
+            type.kind = resolved_type::category::map;
+            type.arguments.push_back(std::move(*key));
+            type.arguments.push_back(std::move(*value));
+            return type;
+        }
         if (generic == "array" || generic == "slice" || generic == "optional" ||
             generic == "repeated") {
             if (source.arguments.size() != 1) {
@@ -1094,6 +1682,9 @@ class analyzer {
         case resolved_type::category::array:
         case resolved_type::category::optional:
         case resolved_type::category::repeated:
+        case resolved_type::category::map:
+        case resolved_type::category::either:
+        case resolved_type::category::holder:
             return false;
         }
         return false;
@@ -1117,6 +1708,14 @@ class analyzer {
         case resolved_type::category::repeated:
             return type.arguments.size() == 1 &&
                    is_valid_data_field_type(type.arguments.front());
+        case resolved_type::category::map:
+        case resolved_type::category::either:
+            return type.arguments.size() == 2 &&
+                   is_valid_data_field_type(type.arguments[0]) &&
+                   is_valid_data_field_type(type.arguments[1]);
+        case resolved_type::category::holder:
+            return type.arguments.size() == 1 &&
+                   is_valid_data_field_type(type.arguments[0]);
         }
         return false;
     }
@@ -1254,8 +1853,8 @@ class analyzer {
     void resolve_service(std::uint32_t module_index, decl_model &decl,
                          const declaration &source) {
         static_cast<void>(module_index);
-        const auto version{
-            parse_service_version(decl.service_version, decl.location)};
+        const auto version{parse_contract_version(decl.service_version,
+                                                  decl.location, "service")};
         if (!version.has_value()) {
             return;
         }
@@ -1299,7 +1898,7 @@ class analyzer {
                               "'provides' entry",
                               decl.name));
         }
-        resolve_methods(module_index, decl, source);
+        resolve_methods(module_index, decl, source, true);
         if (decl.methods.empty()) {
             error(decl.location,
                   std::format("service '{}' has no methods", decl.name));
@@ -1312,10 +1911,261 @@ class analyzer {
                                   method.name, decl.name));
             }
         }
+        resolve_service_extensions(module_index, decl);
+    }
+
+    /// Resolve `extensions = [ ... ]` to extension declarations and check that
+    /// every entry belongs to this service. The extension's own `extends` is
+    /// raw at this point (declarations may resolve in any order), so the check
+    /// compares the service's `provides` list instead of the resolved parent
+    /// reference. `validate_extension_links()` closes the reverse direction
+    /// after all declarations are resolved.
+    void resolve_service_extensions(std::uint32_t module_index,
+                                    decl_model &decl) {
+        std::set<std::string> names;
+        std::set<std::string> ids;
+        for (const auto &entry : decl.service.extensions) {
+            if (!names.insert(entry).second) {
+                error(decl.location,
+                      std::format("service '{}' lists extension '{}' more "
+                                  "than once",
+                                  decl.name, entry));
+                continue;
+            }
+            const auto found{
+                find_extension_decl(entry, module_index, decl.location)};
+            if (!found.has_value()) {
+                error(decl.location,
+                      std::format("service '{}' declares unknown extension "
+                                  "'{}'",
+                                  decl.name, entry));
+                continue;
+            }
+            const auto &extension{decl_at(*found)};
+            const auto declared{std::ranges::find(
+                decl.service.provides, extension.extension.extends_service)};
+            if (declared == decl.service.provides.end()) {
+                error(decl.location,
+                      std::format("service '{}' lists extension '{}', but that "
+                                  "extension extends '{}', not this service",
+                                  decl.name, entry,
+                                  extension.extension.extends_service));
+                continue;
+            }
+            const auto extension_id{extension.extension_id.empty()
+                                        ? extension.extension.extends_service +
+                                              "/" + extension.name
+                                        : extension.extension_id};
+            if (!ids.insert(extension_id).second) {
+                error(decl.location,
+                      std::format("service '{}' lists extension id '{}' more "
+                                  "than once",
+                                  decl.name, extension_id));
+                continue;
+            }
+            decl.extension_points.push_back(make_extension_point(*found));
+        }
+    }
+
+    [[nodiscard]] auto find_extension_decl(std::string_view name,
+                                           std::uint32_t current_module,
+                                           const source_location &where)
+        -> std::optional<decl_ref> {
+        const auto search =
+            [this](const std::string &key) -> std::optional<decl_ref> {
+            const auto found{symbols_.find(key)};
+            if (found == symbols_.end() ||
+                decl_at(found->second).kind != declaration_kind::extension) {
+                return std::nullopt;
+            }
+            return found->second;
+        };
+        if (name.find("::") != std::string_view::npos) {
+            return search(std::string{name});
+        }
+        const auto &module{module_at(current_module)};
+        if (auto local{search(module.name + "::" + std::string{name})};
+            local.has_value()) {
+            return local;
+        }
+        std::vector<decl_ref> matches;
+        for (const auto &imported : module.imports) {
+            if (auto found{search(imported + "::" + std::string{name})};
+                found.has_value()) {
+                matches.push_back(*found);
+            }
+        }
+        if (matches.size() == 1) {
+            return matches.front();
+        }
+        if (matches.size() > 1) {
+            error(where, std::format("ambiguous extension '{}' (imported from "
+                                     "multiple modules)",
+                                     name));
+        }
+        return std::nullopt;
+    }
+
+    /// Resolve `extends = "<service-id>"` against every declared `provides`
+    /// entry. Ambiguous ids are rejected: the stable extension id embeds the
+    /// parent id, so two owners would make it non-deterministic.
+    [[nodiscard]] auto find_service_id(std::string_view id,
+                                       std::string_view extension_name,
+                                       const source_location &where)
+        -> std::optional<decl_ref> {
+        const auto [first, last] = service_ids_.equal_range(std::string{id});
+        const auto count{std::distance(first, last)};
+        if (count == 0) {
+            error(where,
+                  std::format("extension '{}' extends unknown service '{}'",
+                              extension_name, id));
+            return std::nullopt;
+        }
+        if (count > 1) {
+            error(where,
+                  std::format("extension '{}' extends '{}', which is provided "
+                              "by more than one service",
+                              extension_name, id));
+            return std::nullopt;
+        }
+        return first->second;
+    }
+
+    /// Non-empty printable id without whitespace or comparison characters.
+    /// `extends` is embedded verbatim in the generated id string.
+    [[nodiscard]] static auto valid_contract_id(std::string_view text) noexcept
+        -> bool {
+        return !text.empty() && std::ranges::all_of(text, [](char character) {
+            const auto byte{static_cast<unsigned char>(character)};
+            return byte > 0x20U && byte < 0x7FU && character != '<' &&
+                   character != '>';
+        });
+    }
+
+    /// Capability labels are lowercase identifiers: `[a-z0-9]` followed by
+    /// `[a-z0-9._-]`, at most 64 characters.
+    [[nodiscard]] static auto valid_capability(std::string_view text) noexcept
+        -> bool {
+        if (text.empty() || text.size() > 64) {
+            return false;
+        }
+        const auto is_lower_alnum = [](char character) {
+            return (character >= 'a' && character <= 'z') ||
+                   (character >= '0' && character <= '9');
+        };
+        if (!is_lower_alnum(text.front())) {
+            return false;
+        }
+        return std::ranges::all_of(text, [&](char character) {
+            return is_lower_alnum(character) || character == '.' ||
+                   character == '-' || character == '_';
+        });
+    }
+
+    void resolve_extension(std::uint32_t module_index, decl_model &decl,
+                           const declaration &source) {
+        const auto version{parse_contract_version(decl.extension.version,
+                                                  decl.location, "extension")};
+        if (!version.has_value()) {
+            return;
+        }
+        decl.extension_version_major = version->major;
+        decl.extension_version_minor = version->minor;
+        decl.extension_version_patch = version->patch;
+        // The query slot packs the requested minimum version as
+        // `(major << 16) | minor`, so both components must fit.
+        constexpr std::uint32_t component_limit{0xFFFF};
+        if (version->major > component_limit ||
+            version->minor > component_limit) {
+            error(decl.location,
+                  std::format("extension '{}' version {}.{}.{} cannot be "
+                              "encoded in the extension query: major and minor "
+                              "must not exceed {}",
+                              decl.name, version->major, version->minor,
+                              version->patch, component_limit));
+            return;
+        }
+        const auto &parent_id{decl.extension.extends_service};
+        if (parent_id.empty()) {
+            error(decl.location,
+                  std::format("extension '{}' must declare extends = "
+                              "\"<service-id>\"",
+                              decl.name));
+        } else if (!valid_contract_id(parent_id)) {
+            error(decl.location,
+                  std::format("extension '{}' has invalid parent service id "
+                              "'{}' (expected a non-empty id without "
+                              "whitespace or comparison characters)",
+                              decl.name, parent_id));
+        } else if (auto parent{
+                       find_service_id(parent_id, decl.name, decl.location)};
+                   parent.has_value()) {
+            decl.extension_parent = make_extension_point(*parent);
+        }
+        decl.extension_id = parent_id + "/" + decl.name;
+        if (extension_ids_.contains(decl.extension_id)) {
+            error(decl.location,
+                  std::format("duplicate extension id '{}' (declared by "
+                              "another extension)",
+                              decl.extension_id));
+        } else {
+            extension_ids_.emplace(
+                decl.extension_id,
+                decl_ref{module_index, decl_index_of(module_index, decl)});
+        }
+        if (decl.extension.capability.empty()) {
+            error(decl.location,
+                  std::format("extension '{}' must declare capability = "
+                              "\"<capability>\"",
+                              decl.name));
+        } else if (!valid_capability(decl.extension.capability)) {
+            error(decl.location,
+                  std::format("extension '{}' has invalid capability '{}' "
+                              "(expected a lowercase identifier of at most 64 "
+                              "characters: a-z, 0-9, '.', '-' or '_')",
+                              decl.name, decl.extension.capability));
+        }
+        resolve_methods(module_index, decl, source, false);
+        std::set<std::string> method_names;
+        for (const auto &method : decl.methods) {
+            if (!method_names.insert(method.name).second) {
+                error(method.location,
+                      std::format("duplicate method '{}' in extension '{}'",
+                                  method.name, decl.name));
+            }
+        }
+    }
+
+    /// Reverse direction of the service/extension link: a declared extension
+    /// must be listed by the parent service it extends, otherwise hosts have
+    /// no query slot through which to reach it.
+    void validate_extension_links() {
+        for (std::uint32_t module_index = 0;
+             module_index < model_.modules.size(); ++module_index) {
+            const auto &module{module_at(module_index)};
+            for (std::uint32_t decl_index = 0;
+                 decl_index < module.declarations.size(); ++decl_index) {
+                const auto &decl{module.declarations[decl_index]};
+                if (decl.kind != declaration_kind::extension ||
+                    !decl.extension_parent.has_value()) {
+                    continue;
+                }
+                const auto &parent{
+                    decl_at(make_decl_ref(*decl.extension_parent))};
+                const auto self{extension_point{module_index, decl_index}};
+                if (std::ranges::find(parent.extension_points, self) ==
+                    parent.extension_points.end()) {
+                    error(decl.location,
+                          std::format("extension '{}' is not listed by its "
+                                      "parent service '{}'",
+                                      decl.name, parent.name));
+                }
+            }
+        }
     }
 
     void resolve_methods(std::uint32_t module_index, decl_model &decl,
-                         const declaration &source) {
+                         const declaration &source, bool schedules_allowed) {
         for (const auto &method_source : source.methods) {
             validate_attributes(method_source.attributes,
                                 method_source.location,
@@ -1447,7 +2297,16 @@ class analyzer {
             if (const auto *schedule{
                     find_attribute(method_source.attributes, "schedule")};
                 schedule != nullptr) {
-                resolve_schedule(*schedule, method, method_source);
+                if (schedules_allowed) {
+                    resolve_schedule(*schedule, method, method_source);
+                } else {
+                    // Extension vtables have no tick descriptor table, so a
+                    // schedule on an extension method would otherwise be
+                    // silently ignored by the emitter.
+                    error(schedule->location,
+                          "'#[schedule]' is only valid on service methods, "
+                          "not on extension methods");
+                }
             }
             decl.methods.push_back(std::move(method));
         }
@@ -1606,41 +2465,42 @@ class analyzer {
         });
     }
 
-    struct service_version {
+    struct contract_version {
         std::uint32_t major{0};
         std::uint32_t minor{0};
         std::uint32_t patch{0};
     };
 
-    /// Full SemVer 2.0.0 service version. Parsing is delegated to the shared
-    /// `refrain::core::semver` (same parser and rules as the gamepack
-    /// resolver); sema stores the parsed triple in the model so the emitters
-    /// never re-parse the version string. Published contract services
-    /// must be release versions: the emitted ABI constants have no place to
+    /// Full SemVer 2.0.0 contract version (service or extension). Parsing is
+    /// delegated to the shared `refrain::core::semver` (same parser and rules
+    /// as the gamepack resolver); sema stores the parsed triple in the model so
+    /// the emitters never re-parse the version string. Published contract
+    /// versions must be releases: the emitted ABI constants have no place to
     /// encode prerelease identifiers, while build metadata is accepted and
     /// ignored for ABI purposes.
-    [[nodiscard]] auto parse_service_version(std::string_view text,
-                                             const source_location &where)
-        -> std::optional<service_version> {
+    [[nodiscard]] auto parse_contract_version(std::string_view text,
+                                              const source_location &where,
+                                              std::string_view kind)
+        -> std::optional<contract_version> {
         const auto parsed{core::semver::parse(text)};
         if (!parsed.has_value()) {
             error(where,
-                  std::format("invalid service version '{}': expected a full "
-                              "SemVer 2.0.0 version major.minor.patch ({})",
-                              text, error_text(parsed.error())));
+                  std::format("invalid {} version '{}': expected a full SemVer "
+                              "2.0.0 version major.minor.patch ({})",
+                              kind, text, error_text(parsed.error())));
             return std::nullopt;
         }
         if (parsed->is_prerelease()) {
             error(where,
-                  std::format("invalid service version '{}': published "
-                              "contracts must declare a release version "
-                              "(prerelease identifiers cannot be encoded in "
-                              "the ABI constants; use build metadata instead, "
-                              "e.g. 1.0.0+dev)",
-                              text));
+                  std::format("invalid {} version '{}': published contracts "
+                              "must declare a release version (prerelease "
+                              "identifiers cannot be encoded in the ABI "
+                              "constants; use build metadata instead, e.g. "
+                              "1.0.0+dev)",
+                              kind, text));
             return std::nullopt;
         }
-        return service_version{parsed->major, parsed->minor, parsed->patch};
+        return contract_version{parsed->major, parsed->minor, parsed->patch};
     }
 
     /// Validate one RIDL `requires` entry: `<service_id><op><semver>` with
@@ -1742,6 +2602,46 @@ class analyzer {
                 error(attribute.location,
                       std::format("'#[{}]' expects exactly one argument",
                                   attribute.name));
+                continue;
+            }
+            if (attribute.name == "varint" || attribute.name == "varlong" ||
+                attribute.name == "fixed" ||
+                attribute.name == "optional_varint" ||
+                attribute.name == "rest" || attribute.name == "zigzag") {
+                if (!attribute.arguments.empty()) {
+                    error(attribute.location,
+                          std::format("'#[{}]' takes no arguments",
+                                      attribute.name));
+                }
+                continue;
+            }
+            if (attribute.name == "fixed_bytes" || attribute.name == "max" ||
+                attribute.name == "fixed_count") {
+                const auto name{attribute.name};
+                if (attribute.arguments.size() != 1) {
+                    error(attribute.location,
+                          std::format("'#[{}]' expects exactly one integer "
+                                      "argument",
+                                      name));
+                } else if (attribute.arguments.front().kind !=
+                           attribute_argument_kind::integer) {
+                    error(attribute.location,
+                          std::format("'#[{}]' expects an integer argument",
+                                      name));
+                } else {
+                    std::uint64_t limit{0};
+                    const auto &text{attribute.arguments.front().text};
+                    const auto *first{text.data()};
+                    const auto *last{first + text.size()};
+                    const auto parsed{std::from_chars(first, last, limit)};
+                    if (parsed.ec != std::errc{} || parsed.ptr != last ||
+                        limit == 0) {
+                        error(attribute.location,
+                              std::format("'#[{}]' expects a positive "
+                                          "integer",
+                                          name));
+                    }
+                }
                 continue;
             }
             if (attribute.arguments.empty()) {
@@ -1902,6 +2802,46 @@ class analyzer {
             case primitive_kind::bytes:
             case primitive_kind::mut_bytes:
                 return size_align{16, 8};
+            case primitive_kind::identifier:
+            case primitive_kind::uuid:
+            case primitive_kind::text_component:
+            case primitive_kind::item_stack:
+            case primitive_kind::lp_vec3:
+            case primitive_kind::nbt:
+            case primitive_kind::varint_id:
+            case primitive_kind::message_signature_packed:
+            case primitive_kind::filter_mask:
+            case primitive_kind::stat_entry:
+            case primitive_kind::position_path:
+            case primitive_kind::map_patch:
+            case primitive_kind::advancement_seen:
+            case primitive_kind::vec_delta:
+            case primitive_kind::sound_selector:
+            case primitive_kind::objective_update:
+            case primitive_kind::team_update:
+            case primitive_kind::player_info_update:
+            case primitive_kind::tracked_waypoint:
+            case primitive_kind::component_predicate:
+            case primitive_kind::merchant_offer:
+            case primitive_kind::entity_metadata:
+            case primitive_kind::item_stack_template:
+            case primitive_kind::advancement_display:
+            case primitive_kind::advancement_requirements:
+            case primitive_kind::advancement:
+            case primitive_kind::advancement_progress:
+            case primitive_kind::holder_set:
+            case primitive_kind::slot_display:
+            case primitive_kind::recipe_display:
+            case primitive_kind::recipe_display_entry:
+            case primitive_kind::single_input_set:
+            case primitive_kind::particle_options:
+            case primitive_kind::debug_subscription_update:
+            case primitive_kind::debug_subscription_event:
+            case primitive_kind::command_tree:
+            case primitive_kind::container_click_data:
+                // Rejected for RIDL in resolve_type(); a wire-only primitive
+                // has no in-process ABI layout.
+                return std::nullopt;
             case primitive_kind::void_type:
                 return std::nullopt;
             }
@@ -1931,6 +2871,9 @@ class analyzer {
         case resolved_type::category::array:
         case resolved_type::category::optional:
         case resolved_type::category::repeated:
+        case resolved_type::category::map:
+        case resolved_type::category::either:
+        case resolved_type::category::holder:
             return std::nullopt;
         }
         return std::nullopt;
@@ -1980,6 +2923,8 @@ class analyzer {
     std::vector<std::vector<const declaration *>> ast_declarations_;
     std::map<std::string, decl_ref> symbols_;
     std::map<std::string, decl_ref> handles_;
+    std::multimap<std::string, decl_ref> service_ids_;
+    std::map<std::string, decl_ref> extension_ids_;
     std::map<std::string, size_align> layouts_;
     std::map<std::uint32_t, std::set<std::int64_t>> packet_ids_;
     std::set<std::string> layout_stack_;

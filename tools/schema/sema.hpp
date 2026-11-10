@@ -12,6 +12,7 @@
 #include <schema/ast.hpp>
 #include <schema/diagnostic.hpp>
 
+#include <compare>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -34,6 +35,81 @@ enum class primitive_kind : std::uint8_t {
     boolean,
     string,
     bytes,
+    /// Protocol resource location (`namespace:path`); RSC wire schemas only.
+    identifier,
+    /// Protocol 128-bit identifier in wire order; RSC wire schemas only.
+    uuid,
+    /// Network NBT text component; RSC wire schemas only.
+    text_component,
+    /// Item stack; RSC wire schemas only. The current codec encodes empty
+    /// stacks and rejects non-empty payloads.
+    item_stack,
+    /// Quantized low-precision vector; RSC wire schemas only.
+    lp_vec3,
+    /// Network NBT tag; RSC wire schemas only.
+    nbt,
+    /// Registry/identifier number encoded as a VarInt; RSC wire schemas only.
+    varint_id,
+    /// Chat signature reference or full 256-byte signature; RSC wire only.
+    message_signature_packed,
+    /// Chat filter mask: a type id plus an optional byte mask; RSC wire only.
+    filter_mask,
+    /// Statistic identity: type id and value id; RSC wire only.
+    stat_entry,
+    /// Entity position path: linear vector or stepped list; RSC wire only.
+    position_path,
+    /// Map colour patch: optional width/height/origin and colours.
+    map_patch,
+    /// Advancement screen selection: action id plus an optional tab.
+    advancement_seen,
+    /// Entity movement delta: packed flags/step count plus deltas.
+    vec_delta,
+    /// Sound source/name selector used by stop-sound.
+    sound_selector,
+    /// Scoreboard objective add/change/remove payload.
+    objective_update,
+    /// Scoreboard team add/change/join/leave payload.
+    team_update,
+    /// Player list entries with per-action optional fields.
+    player_info_update,
+    /// Tracked waypoint add/update/remove payload.
+    tracked_waypoint,
+    /// Empty exact component predicate.
+    component_predicate,
+    /// Merchant trade offer.
+    merchant_offer,
+    /// Entity metadata list terminated by the 255 marker.
+    entity_metadata,
+    /// Hand-written wire payload: item_stack_template.
+    item_stack_template,
+    /// Hand-written wire payload: advancement_display.
+    advancement_display,
+    /// Hand-written wire payload: advancement_requirements.
+    advancement_requirements,
+    /// Hand-written wire payload: advancement.
+    advancement,
+    /// Hand-written wire payload: advancement_progress.
+    advancement_progress,
+    /// Hand-written wire payload: holder_set.
+    holder_set,
+    /// Hand-written wire payload: slot_display.
+    slot_display,
+    /// Hand-written wire payload: recipe_display.
+    recipe_display,
+    /// Hand-written wire payload: recipe_display_entry.
+    recipe_display_entry,
+    /// Hand-written wire payload: single_input_set.
+    single_input_set,
+    /// Hand-written wire payload: particle_options.
+    particle_options,
+    /// Hand-written wire payload: debug_subscription_update.
+    debug_subscription_update,
+    /// Hand-written wire payload: debug_subscription_event.
+    debug_subscription_event,
+    /// Hand-written wire payload: command_tree.
+    command_tree,
+    /// Hand-written wire payload: container_click_data.
+    container_click_data,
     /// Opaque 64-bit pointer (C `void *`). Only valid in RIDL contracts and
     /// only on 64-bit targets; the C ABI layout assumes 8-byte pointers, the
     /// same assumption already made for `string`/`bytes`/`slice`.
@@ -42,6 +118,16 @@ enum class primitive_kind : std::uint8_t {
     /// unless the contract documents host ownership.
     mut_bytes,
     void_type,
+};
+
+/// Wire encoding of an integer field. RSC storage defaults preserve the
+/// original compact encoding; `#[varint]`, `#[varlong]` and `#[fixed]` select
+/// the protocol encoding explicitly.
+enum class integer_wire : std::uint8_t {
+    natural,
+    varint,
+    varlong,
+    fixed,
 };
 
 [[nodiscard]] auto primitive_name(primitive_kind value) noexcept
@@ -60,6 +146,9 @@ struct resolved_type {
         slice,
         optional,
         repeated,
+        map,
+        either,
+        holder,
     };
 
     category kind{category::primitive};
@@ -82,6 +171,22 @@ struct field_model {
     bool out{false};
     std::optional<std::string> default_value;
     source_location location;
+
+    /// Wire encoding selected by `#[varint]`/`#[varlong]`/`#[fixed]`.
+    integer_wire wire{integer_wire::natural};
+    /// `#[max(N)]`: maximum character count for strings, byte count for
+    /// `bytes`, element count for arrays. Unset means the codec default.
+    std::optional<std::uint64_t> wire_max;
+    /// `#[fixed_bytes(N)]`: a `bytes` field encoded without a length prefix.
+    std::optional<std::uint64_t> wire_fixed_bytes;
+    /// `#[rest]`: a `bytes` field that consumes the remaining packet body.
+    bool wire_rest{false};
+    /// `#[fixed_count(N)]`: an array field with a fixed element count and no
+    /// count prefix.
+    std::optional<std::uint64_t> wire_fixed_count;
+    /// `#[optional_varint]`: an optional integer encoded as one VarInt where
+    /// zero means absent and a stored value `v` is encoded as `v + 1`.
+    bool wire_optional_varint{false};
 
     // Computed for RIDL contract structs only.
     std::uint32_t abi_offset{0};
@@ -110,6 +215,16 @@ struct method_model {
     std::int64_t schedule_interval_ticks{1};
     schedule_phase_kind schedule_phase_of{schedule_phase_kind::post_tick};
     source_location location;
+};
+
+/// Resolved reference to an extension declaration. Plain indices keep the
+/// model deterministic and independent of pointer identity.
+struct extension_point {
+    std::uint32_t module_index{0};
+    std::uint32_t decl_index{0};
+
+    friend auto operator<=>(const extension_point &,
+                            const extension_point &) = default;
 };
 
 struct decl_model {
@@ -141,6 +256,20 @@ struct decl_model {
     std::uint32_t service_version_patch{0};
     service_decl service;
     std::vector<method_model> methods;
+
+    // extension (`declaration_kind::extension` only)
+    extension_decl extension;
+    std::uint32_t extension_version_major{0};
+    std::uint32_t extension_version_minor{0};
+    std::uint32_t extension_version_patch{0};
+    /// Stable id derived from the parent service id and the declaration name:
+    /// `<extends>/<name>`. Empty until sema resolves the declaration.
+    std::string extension_id;
+    /// Resolved parent service (`extends`), when the id is known.
+    std::optional<extension_point> extension_parent;
+
+    // service extension points (resolved refs, declaration order)
+    std::vector<extension_point> extension_points;
 
     // ABI layout (RIDL structs; empty for RSC data types).
     std::uint32_t abi_size{0};

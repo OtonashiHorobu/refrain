@@ -1,0 +1,61 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// Optional cross-version packet translator. The repository ships this contract
+// and the host-side loading rules only; no translator implementation, mappings
+// or game data are distributed here. A user-installed translator is selected
+// explicitly and remains outside the MIT host.
+
+module refrain::services::net_translator;
+version 1.0.0;
+
+import refrain::core;
+
+enum translation_error : u32 {
+    unsupported = 1,
+    malformed_packet = 2,
+    internal = 3,
+}
+
+struct translator_descriptor {
+    string name;
+    /// Source edition/family, for example `minecraft-java`.
+    string source_family;
+    /// Target edition/family served by the session.
+    string target_family;
+    string capabilities;
+}
+
+struct translation_request {
+    u64 connection;
+    u32 source_protocol;
+    u32 target_protocol;
+    u32 packet_id;
+    /// Borrowed packet payload, valid for the duration of the call.
+    bytes payload;
+}
+
+struct translation_result {
+    u32 packet_id;
+    /// Borrowed translated payload; the provider keeps it valid until the next
+    /// call on the same connection.
+    bytes payload;
+}
+
+service net_translator : 1.0.0 {
+    side = server;
+    thread = worker;
+    composition = exclusive;
+    provides = [ "refrain:net.translator" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "packet-rewrite" ];
+
+    #[thread(any)]
+    fn descriptor(out translator_descriptor value);
+
+    #[thread(worker)] #[can_fail]
+    fn translate(in translation_request request,
+                 out translation_result result)
+        -> result<void, translation_error>;
+}

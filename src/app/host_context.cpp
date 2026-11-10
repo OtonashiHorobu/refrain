@@ -90,17 +90,22 @@ auto host_context::config_i64(std::string_view ns, std::string_view key)
             refrain::error_code::unsupported, "host config store is disabled")};
     }
     const auto view{config_->module(ns)};
-    if (!view.valid() || !view.contains(key)) {
+    if (!view || !view->valid()) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::not_found,
+            "config namespace '" + std::string{ns} + "' is not mounted")};
+    }
+    if (!view->contains(key)) {
         return std::unexpected{refrain::make_error(
             refrain::error_code::not_found,
             "config key is missing in namespace '" + std::string{ns} + "'")};
     }
-    if (view.kind(key) != refrain::core::config::value_kind::integer) {
+    if (view->kind(key) != refrain::core::config::value_kind::integer) {
         return std::unexpected{
             refrain::make_error(refrain::error_code::invalid_argument,
                                 "config key is not an integer")};
     }
-    return view.get_int64(key, 0);
+    return view->get_int64(key, 0);
 }
 
 auto host_context::config_bool(std::string_view ns, std::string_view key)
@@ -110,17 +115,22 @@ auto host_context::config_bool(std::string_view ns, std::string_view key)
             refrain::error_code::unsupported, "host config store is disabled")};
     }
     const auto view{config_->module(ns)};
-    if (!view.valid() || !view.contains(key)) {
+    if (!view || !view->valid()) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::not_found,
+            "config namespace '" + std::string{ns} + "' is not mounted")};
+    }
+    if (!view->contains(key)) {
         return std::unexpected{refrain::make_error(
             refrain::error_code::not_found,
             "config key is missing in namespace '" + std::string{ns} + "'")};
     }
-    if (view.kind(key) != refrain::core::config::value_kind::boolean) {
+    if (view->kind(key) != refrain::core::config::value_kind::boolean) {
         return std::unexpected{
             refrain::make_error(refrain::error_code::invalid_argument,
                                 "config key is not a boolean")};
     }
-    return view.get_bool(key, false);
+    return view->get_bool(key, false);
 }
 
 auto host_context::config_string(std::string_view ns, std::string_view key)
@@ -130,18 +140,23 @@ auto host_context::config_string(std::string_view ns, std::string_view key)
             refrain::error_code::unsupported, "host config store is disabled")};
     }
     const auto view{config_->module(ns)};
-    if (!view.valid() || !view.contains(key)) {
+    if (!view || !view->valid()) {
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::not_found,
+            "config namespace '" + std::string{ns} + "' is not mounted")};
+    }
+    if (!view->contains(key)) {
         return std::unexpected{refrain::make_error(
             refrain::error_code::not_found,
             "config key is missing in namespace '" + std::string{ns} + "'")};
     }
-    if (view.kind(key) != refrain::core::config::value_kind::string) {
+    if (view->kind(key) != refrain::core::config::value_kind::string) {
         return std::unexpected{
             refrain::make_error(refrain::error_code::invalid_argument,
                                 "config key is not a string")};
     }
     try {
-        config_string_buffer = view.get_string(key, {});
+        config_string_buffer = view->get_string(key, {});
     } catch (const std::bad_alloc &) {
         return std::unexpected{refrain::make_error(
             refrain::error_code::out_of_memory, "config string copy failed")};

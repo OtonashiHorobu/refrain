@@ -10,8 +10,10 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -62,6 +64,32 @@ void remove_quietly(const std::filesystem::path &path) noexcept {
 namespace {
 
 using namespace boost::ut;
+
+using refrain::core::config::layer;
+
+/// Unique temporary directory for one store test.
+[[nodiscard]] auto make_temp_dir() -> std::filesystem::path {
+    const auto stamp{
+        std::chrono::steady_clock::now().time_since_epoch().count()};
+    const auto path{std::filesystem::temp_directory_path() /
+                    ("refrain_config_store_" + std::to_string(stamp))};
+    std::error_code error;
+    std::filesystem::create_directories(path, error);
+    return path;
+}
+
+void write_text_file(const std::filesystem::path &path, std::string_view text) {
+    std::ofstream stream{path, std::ios::binary | std::ios::trunc};
+    stream << text;
+}
+
+[[nodiscard]] auto read_text_file(const std::filesystem::path &path)
+    -> std::string {
+    std::ifstream stream{path, std::ios::binary};
+    std::ostringstream buffer;
+    buffer << stream.rdbuf();
+    return buffer.str();
+}
 
 // Registered at static init; test/main.cpp runs it via cfg<override>.run().
 suite config_tests = [] {
@@ -393,67 +421,241 @@ name = "x"
     };
 
     "config/store mounts namespaces and isolates keys"_test = [] {
+        const auto root{make_temp_dir()};
+        write_text_file(root / "network.toml", "port = 25565\nmotd = \"hi\"\n");
+        write_text_file(root / "world.toml", "level_name = \"world\"\n");
         config::store store;
-        expect(static_cast<bool>(store.mount_text(
-            "network", "port = 25565\nmotd = \"hi\"\n", "<network>")));
-        expect(static_cast<bool>(
-            store.mount_text("world", "level_name = \"world\"\n", "<world>")));
-        expect(store.size() == 2U);
+        expect(static_cast<bool>(store.mount(
+            {.name = "network", .path = (root / "network.toml").string()})));
+        expect(static_cast<bool>(store.mount(
+            {.name = "world", .path = (root / "world.toml").string()})));
+        expect(static_cast<bool>(store.load_all()));
         expect(store.names() == (std::vector<std::string>{"network", "world"}));
-        expect(store.contains("network"));
-        expect(!store.contains("missing"));
 
         const auto network{store.module("network")};
-        expect(network.valid());
-        expect(network.name() == "network");
-        expect(network.contains("port"));
-        expect(network.get_int64("port", 0) == 25565);
-        expect(network.get_string("motd", "") == "hi");
-        expect(network.get_strings("motd") == (std::vector<std::string>{}));
-        expect(network.kind("port") == config::value_kind::integer);
-        expect(network.kind("missing") == config::value_kind::missing);
-        expect(!network.contains("level_name"));
+        expect(static_cast<bool>(network));
+        if (!network) {
+            return;
+        }
+        expect(network->name() == "network");
+        expect(network->contains("port"));
+        expect(network->get_int64("port", 0) == 25565);
+        expect(network->get_string("motd", "") == "hi");
+        expect(network->get_strings("motd") == (std::vector<std::string>{}));
+        expect(network->kind("port") == config::value_kind::integer);
+        expect(network->kind("missing") == config::value_kind::missing);
+        expect(!network->contains("level_name"));
 
         const auto missing{store.module("missing")};
-        expect(!missing.valid());
-        expect(!missing.contains("port"));
-        expect(missing.get_int64("port", 7) == 7);
-        expect(missing.get_string("motd", "fallback") == "fallback");
+        expect(!missing);
+        if (!missing) {
+            expect(missing.error().code == refrain::error_code::not_found);
+        }
 
-        const auto duplicate{store.mount_text("network", "x = 1")};
+        const auto duplicate{store.mount(
+            {.name = "network", .path = (root / "network.toml").string()})};
         expect(!duplicate);
         if (!duplicate) {
             expect(duplicate.error().code ==
                    refrain::error_code::already_exists);
         }
-        expect(static_cast<bool>(store.mount_text("empty", "", "<empty>")));
-        expect(store.module("empty").valid());
-        expect(!store.module("empty").contains("port"));
     };
 
     "config/store reads a TOML file and a missing mount is empty"_test = [] {
         config::store store;
         const auto path{std::string{REFRAIN_SOURCE_DIR} +
                         "/test/fixtures/gamepack/data-only.toml"};
-        expect(static_cast<bool>(store.mount("game", path)));
+        expect(static_cast<bool>(store.mount({.name = "game", .path = path})));
+        expect(static_cast<bool>(store.load_all()));
         const auto game{store.module("game")};
-        expect(game.get_string("gamepack.id", "") == "refrain.test.data_only");
-        expect(game.get_string("gamepack.abi", "") == "1");
-        expect(game.get_strings("mods.list") ==
+        expect(static_cast<bool>(game));
+        if (!game) {
+            return;
+        }
+        expect(game->get_string("gamepack.id", "") == "refrain.test.data_only");
+        expect(game->get_string("gamepack.abi", "") == "1");
+        expect(game->get_strings("mods.list") ==
                (std::vector<std::string>{"refrain.test.content@1.0.0",
                                          "refrain.test.data@1.0.0"}));
 
-        const auto missing{
-            store.mount("missing", "/nonexistent/refrain-config-missing.toml")};
+        expect(static_cast<bool>(
+            store.mount({.name = "missing",
+                         .path = "/nonexistent/refrain-config-missing.toml"})));
+        expect(static_cast<bool>(store.load_all()));
+        const auto missing{store.module("missing")};
         expect(static_cast<bool>(missing));
-        expect(store.module("missing").valid());
-        expect(!store.module("missing").contains("x"));
+        if (missing) {
+            expect(!missing->contains("x"));
+        }
     };
 
     "config/default origin is memory"_test = [] {
         const auto parsed{document::parse_text("x = 1")};
         expect(static_cast<bool>(parsed));
         expect(parsed->origin() == "<memory>");
+    };
+
+    "config/store keeps namespaces isolated and merges defaults"_test = [] {
+        const auto dir{make_temp_dir()};
+        write_text_file(dir / "network.toml",
+                        "port = 25565\n[status]\nmotd = \"user\"\n");
+        write_text_file(dir / "network.defaults.toml",
+                        "port = 1\n[status]\nenabled = true\n"
+                        "motd = \"default\"\n");
+        write_text_file(dir / "world.toml", "path = \"w\"\n");
+
+        auto store{refrain::core::config::store::empty()};
+        expect(static_cast<bool>(store.mount(
+            {.name = "network",
+             .path = (dir / "network.toml").string(),
+             .defaults_path = (dir / "network.defaults.toml").string()})));
+        expect(static_cast<bool>(store.mount(
+            {.name = "world", .path = (dir / "world.toml").string()})));
+        expect(static_cast<bool>(store.load_all()));
+
+        auto network{store.module("network")};
+        expect(static_cast<bool>(network));
+        if (network) {
+            expect(network->get_int64("port", 0) == 25565);
+            expect(network->kind("port") ==
+                   refrain::core::config::value_kind::integer);
+            expect(network->kind("missing") ==
+                   refrain::core::config::value_kind::missing);
+            expect(network->get_bool("status.enabled", false));
+            expect(network->get_string("status.motd", "") == "user");
+            expect(network->contains("status.motd"));
+            expect(!network->contains("path"));
+        }
+        auto world{store.module("world")};
+        expect(static_cast<bool>(world));
+        if (world) {
+            expect(world->get_string("path", "") == "w");
+            expect(!world->contains("port"));
+        }
+        auto missing{store.module("missing")};
+        expect(!missing);
+        expect(missing.error().code == refrain::error_code::not_found);
+
+        expect(static_cast<bool>(store.mount(
+                   {.name = "network",
+                    .path = (dir / "other.toml").string()})) == false);
+        auto bad{store.mount({.name = "bad name", .path = "x.toml"})};
+        expect(!bad);
+        expect(bad.error().code == refrain::error_code::invalid_argument);
+        std::error_code error;
+        std::filesystem::remove_all(dir, error);
+    };
+
+    "config/store routes writes and saves only the dirty namespace"_test = [] {
+        const auto dir{make_temp_dir()};
+        write_text_file(dir / "network.toml", "port = 25565\n");
+        write_text_file(dir / "world.toml", "path = \"w\"\n");
+
+        auto store{refrain::core::config::store::empty()};
+        expect(static_cast<bool>(store.mount(
+            {.name = "network", .path = (dir / "network.toml").string()})));
+        expect(static_cast<bool>(store.mount(
+            {.name = "world", .path = (dir / "world.toml").string()})));
+        expect(static_cast<bool>(store.load_all()));
+
+        expect(!store.dirty("network"));
+        expect(static_cast<bool>(store.set_int64("network", "port", 25566)));
+        expect(store.dirty("network"));
+        expect(!store.dirty("world"));
+        expect(static_cast<bool>(store.save("network")));
+        expect(!store.dirty("network"));
+
+        const auto network_text{read_text_file(dir / "network.toml")};
+        expect(network_text.find("25566") != std::string::npos);
+        const auto world_text{read_text_file(dir / "world.toml")};
+        expect(world_text.find("path = \"w\"") != std::string::npos);
+
+        expect(static_cast<bool>(store.set_string("world", "path", "w2")));
+        expect(static_cast<bool>(store.save_all()));
+        const auto world_after{read_text_file(dir / "world.toml")};
+        expect(world_after.find("w2") != std::string::npos);
+
+        // Overrides win over the file and are never persisted.
+        expect(static_cast<bool>(
+            store.set_int64("network", "port", 1234, layer::override)));
+        auto network{store.module("network")};
+        expect(static_cast<bool>(network));
+        if (network) {
+            expect(network->get_int64("port", 0) == 1234);
+        }
+        expect(static_cast<bool>(store.save("network")));
+        expect(read_text_file(dir / "network.toml").find("1234") ==
+               std::string::npos);
+
+        // fallback sits below user and override, and is never persisted.
+        expect(static_cast<bool>(
+            store.set_int64("network", "port", 5, layer::fallback)));
+        auto layered{store.module("network")};
+        expect(static_cast<bool>(layered));
+        if (layered) {
+            expect(layered->get_int64("port", 0) == 1234);
+        }
+        expect(
+            static_cast<bool>(store.erase("network", "port", layer::override)));
+        auto user_layer{store.module("network")};
+        expect(static_cast<bool>(user_layer));
+        if (user_layer) {
+            expect(user_layer->get_int64("port", 0) == 25566);
+        }
+        expect(static_cast<bool>(store.erase("network", "port", layer::user)));
+        auto fallback_layer{store.module("network")};
+        expect(static_cast<bool>(fallback_layer));
+        if (fallback_layer) {
+            expect(fallback_layer->get_int64("port", 0) == 5);
+        }
+        expect(static_cast<bool>(store.save("network")));
+        expect(read_text_file(dir / "network.toml").find("port") ==
+               std::string::npos);
+
+        // A parent leaf and its descendants cannot coexist.
+        expect(static_cast<bool>(store.set_string("world", "status", "x")));
+        auto conflict{store.set_string("world", "status.motd", "y")};
+        expect(!conflict);
+        expect(conflict.error().code == refrain::error_code::invalid_argument);
+
+        std::error_code error;
+        std::filesystem::remove_all(dir, error);
+    };
+
+    "config/store reloads one namespace and reports parse errors"_test = [] {
+        const auto dir{make_temp_dir()};
+        write_text_file(dir / "network.toml", "port = 25565\n");
+        auto store{refrain::core::config::store::empty()};
+        expect(static_cast<bool>(store.mount(
+            {.name = "network", .path = (dir / "network.toml").string()})));
+        expect(static_cast<bool>(store.load_all()));
+        auto initial{store.module("network")};
+        expect(static_cast<bool>(initial));
+        if (initial) {
+            expect(initial->get_int64("port", 0) == 25565);
+        }
+
+        write_text_file(dir / "network.toml", "port = 25567\n");
+        expect(static_cast<bool>(store.reload("network")));
+        auto reloaded{store.module("network")};
+        expect(static_cast<bool>(reloaded));
+        if (reloaded) {
+            expect(reloaded->get_int64("port", 0) == 25567);
+        }
+
+        write_text_file(dir / "network.toml", "port = [\n");
+        auto failure{store.reload("network")};
+        expect(!failure);
+        expect(failure.error().code == refrain::error_code::parse_error);
+        // A failed reload keeps the previous snapshot.
+        auto kept{store.module("network")};
+        expect(static_cast<bool>(kept));
+        if (kept) {
+            expect(kept->get_int64("port", 0) == 25567);
+        }
+
+        std::error_code error;
+        std::filesystem::remove_all(dir, error);
     };
 };
 
