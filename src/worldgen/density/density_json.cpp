@@ -396,7 +396,10 @@ class decoder {
         }
         const normal_noise normal{parameters};
         if (const auto offset = legacy_nether_climate_offset(key)) {
-            legacy_random_source random{wrap_add(documents_.seed, *offset)};
+            const auto seed =
+                static_cast<jlong>(static_cast<std::uint64_t>(documents_.seed) +
+                                   static_cast<std::uint64_t>(*offset));
+            legacy_random_source random{seed};
             return normal.create_legacy_nether_biome(random);
         }
         auto source = factory_->from_hash_of(key);
