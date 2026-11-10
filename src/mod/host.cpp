@@ -475,7 +475,11 @@ void host::unload_external_mods() noexcept {
     for (auto entry{external_mods_.rbegin()}; entry != external_mods_.rend();
          ++entry) {
         if (entry->on_unload != nullptr) {
-            entry->on_unload(entry->user);
+            try {
+                entry->on_unload(entry->user);
+            } catch (...) {
+                // A mod must not terminate the host during shutdown.
+            }
         }
     }
     external_mods_.clear();
@@ -553,7 +557,15 @@ auto host::load_external_mod(const mod_manifest &manifest,
     init.host_core = static_cast<const refrain_host_core_vtable *>(api->vtable);
     init.host_core_self = api->self;
 
-    const auto *desc{main_fn(&init)};
+    const refrain_mod_desc *desc{nullptr};
+    try {
+        desc = main_fn(&init);
+    } catch (...) {
+        return std::unexpected{
+            annotate(fail(error_code::unknown,
+                          fmt::format("'{}' entry point threw", symbol_name)),
+                     entry.path)};
+    }
     if (desc == nullptr) {
         return std::unexpected{
             fail(error_code::parse_error,
@@ -585,7 +597,16 @@ auto host::load_external_mod(const mod_manifest &manifest,
     context.host_core = init.host_core;
     context.host_core_self = init.host_core_self;
     void *user{nullptr};
-    auto on_load_status{desc->on_load(&context, &user)};
+    refrain_status on_load_status{REFRAIN_STATUS_OK};
+    try {
+        on_load_status = desc->on_load(&context, &user);
+    } catch (...) {
+        return std::unexpected{
+            annotate(fail(error_code::unknown,
+                          fmt::format("external mod '{}' on_load threw",
+                                      manifest.common.id)),
+                     entry.path)};
+    }
     if (on_load_status != REFRAIN_STATUS_OK) {
         return std::unexpected{
             annotate(fail(static_cast<error_code>(on_load_status),
