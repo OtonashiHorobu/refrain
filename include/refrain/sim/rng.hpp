@@ -12,7 +12,7 @@ namespace refrain::sim {
 ///
 /// Reproducibility is the requirement here: the same world seed and input
 /// script must produce the same tick hash. Vanilla's per-subsystem
-/// `RandomSource` streams (legacy LCG / Xoroshiro) and exact call ordering are
+/// random streams (legacy LCG / Xoroshiro) and exact call ordering are
 /// not reproduced yet; this generator is isolated so replacing it does not
 /// touch the world model.
 ///

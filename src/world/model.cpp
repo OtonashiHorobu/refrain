@@ -546,11 +546,10 @@ auto validate(const chunk &value) -> status {
         }
     }
 
-    // Light layers are independent of block sections, like vanilla's
-    // `LevelLightEngine`: `getMinLightSection()` is `yPos - 1` and
-    // `getMaxLightSection()` is one above the top block section. A light
-    // layer without a block section is the vanilla padding section
-    // (`SerializableChunkData.SectionData.chunkSection == null`).
+    // Light layers are independent of block sections: the lowest light
+    // section is one below the lowest block section and the highest is one
+    // above the top block section. A light layer without a block section is
+    // the vanilla padding section.
     if (value.light_sections.size() > max_light_sections) {
         return fail(error_code::parse_error,
                     fmt::format("chunk has {} light sections (limit {})",

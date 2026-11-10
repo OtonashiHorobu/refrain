@@ -1,0 +1,14 @@
+{
+  "format": 1,
+  "game_version": "26.3",
+  "data_version": 5023,
+  "dimension": "minecraft:the_nether",
+  "entry_count": 5,
+  "entries": [
+    {"biome": "minecraft:nether_wastes", "temperature": [0, 0], "humidity": [0, 0], "continentalness": [0, 0], "erosion": [0, 0], "depth": [0, 0], "weirdness": [0, 0], "offset": 0},
+    {"biome": "minecraft:soul_sand_valley", "temperature": [0, 0], "humidity": [-5000, -5000], "continentalness": [0, 0], "erosion": [0, 0], "depth": [0, 0], "weirdness": [0, 0], "offset": 0},
+    {"biome": "minecraft:crimson_forest", "temperature": [4000, 4000], "humidity": [0, 0], "continentalness": [0, 0], "erosion": [0, 0], "depth": [0, 0], "weirdness": [0, 0], "offset": 0},
+    {"biome": "minecraft:warped_forest", "temperature": [0, 0], "humidity": [5000, 5000], "continentalness": [0, 0], "erosion": [0, 0], "depth": [0, 0], "weirdness": [3750, 3750], "offset": 0},
+    {"biome": "minecraft:basalt_deltas", "temperature": [-5000, -5000], "humidity": [0, 0], "continentalness": [0, 0], "erosion": [0, 0], "depth": [0, 0], "weirdness": [1750, 1750], "offset": 0}
+]
+}

@@ -1,0 +1,20 @@
+{
+  "data_version": 5023,
+  "files": {
+    "nether.json": {
+      "bytes": 1098,
+      "dimension": "minecraft:the_nether",
+      "entry_count": 5,
+      "sha256": "5b7753998a6f24097e190ce5dafcadec0eb335c242c5969011063dd432aac45e"
+    },
+    "overworld.json": {
+      "bytes": 1659218,
+      "dimension": "minecraft:overworld",
+      "entry_count": 7594,
+      "sha256": "a15c847d12084df62079ffa28ddc83c10b4746ada2f53c54b0028a342d1b3967"
+    }
+  },
+  "game_version": "26.3",
+  "kind": "biome_parameters",
+  "notice": "../../../NOTICE.md"
+}

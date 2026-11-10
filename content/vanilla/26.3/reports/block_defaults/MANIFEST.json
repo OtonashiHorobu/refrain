@@ -1,0 +1,13 @@
+{
+  "data_version": 5023,
+  "files": {
+    "defaults.json": {
+      "block_count": 884,
+      "bytes": 67955,
+      "sha256": "40c8a7d65236b4f7ad3218685d31cb0eb7c95e7d38a2ed4078345fabbd8f41de"
+    }
+  },
+  "game_version": "26.3",
+  "kind": "block_defaults",
+  "notice": "../../../NOTICE.md"
+}

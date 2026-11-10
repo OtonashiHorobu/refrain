@@ -86,6 +86,13 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${REFRAIN_OUTPUT_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
+# Java never contracts a multiply and an add into one FMA, and world
+# generation must reproduce Java's float/double results bit for bit. Keep
+# contraction off for every first-party target; -ffast-math is forbidden.
+if(NOT MSVC)
+    add_compile_options(-ffp-contract=off)
+endif()
+
 include(cmake/refrain_target.cmake)
 
 # --- third-party (Conan / CMakeDeps) --------------------------------------
@@ -347,6 +354,16 @@ target_link_libraries(refrain-world PUBLIC refrain-kernel refrain-contracts
                                                Crc32c::crc32c ZLIB::ZLIB)
 add_library(Refrain::World ALIAS refrain-world)
 
+# --- world generation: random sources, registries, pipelines ---------------
+# Grows in phases; phase 1 covers the Java-semantics shim, MD5-derived seeds and
+# the random sources. New src/worldgen/*.cpp files are picked up without
+# editing this file.
+file(GLOB_RECURSE REFRAIN_WORLDGEN_SOURCES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/worldgen/*.cpp")
+refrain_add_library(refrain-worldgen ${REFRAIN_WORLDGEN_SOURCES})
+target_link_libraries(refrain-worldgen PUBLIC refrain-kernel)
+add_library(Refrain::WorldGen ALIAS refrain-worldgen)
+
 # --- simulation runtime: block registry, loaded chunks, tickets -------------
 # New src/sim files are picked up without editing this file.
 file(GLOB_RECURSE REFRAIN_SIM_SOURCES CONFIGURE_DEPENDS
@@ -536,8 +553,8 @@ if(REFRAIN_BUILD_TESTS)
                                               refrain-schema refrain-contracts
                                               refrain-archive refrain-data
                                               refrain-world refrain-sim
-                                              refrain-builtin refrain-mod-host
-                                              refrain-host
+                                              refrain-worldgen refrain-builtin
+                                              refrain-mod-host refrain-host
                                               refrain-first-party-mods
                                               refrain-script-wasm libzip::zip
                                               LZ4::lz4_static
@@ -563,8 +580,18 @@ if(REFRAIN_BUILD_BENCH)
     target_include_directories(refrain-bench PRIVATE "${PROJECT_SOURCE_DIR}/bench/include")
     target_link_libraries(refrain-bench PRIVATE refrain-kernel
                           refrain-contracts refrain-world refrain-sim
-                          refrain-data benchmark::benchmark_main)
+                          refrain-worldgen refrain-data
+                          benchmark::benchmark_main)
     refrain_apply_warnings(refrain-bench)
+
+    # Runtime generator benchmark: a standalone executable because it reports
+    # per-scenario tail latency and resident memory, which the Google Benchmark
+    # reporters do not. It skips itself when the datapack root is unset.
+    add_executable(refrain-bench-runtime
+                   "${PROJECT_SOURCE_DIR}/bench/runtime/bench_chunk_generator.cpp")
+    target_link_libraries(refrain-bench-runtime PRIVATE refrain-worldgen
+                          refrain-data refrain-kernel fmt::fmt)
+    refrain_apply_warnings(refrain-bench-runtime)
 
     # Library-comparison benchmarks: the sources are optional and live outside
     # this tree, so the target exists only when the option is enabled and
