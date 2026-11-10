@@ -414,6 +414,12 @@ target_compile_definitions(refrain-net PRIVATE ASIO_NO_DEPRECATED=1
                                               ASIO_NO_TYPEID=1
                                               REFRAIN_WITH_OPENSSL=1
                                               REFRAIN_WITH_CURL=1)
+if(WIN32)
+    # Standalone Asio's Windows backend uses AcceptEx and GetAcceptExSockaddrs
+    # from mswsock; MSVC pulls the import library in with a pragma, MinGW needs
+    # it explicitly.
+    target_link_libraries(refrain-net PRIVATE mswsock)
+endif()
 add_library(Refrain::Net ALIAS refrain-net)
 
 # --- session: gameplay player table and entity visibility ------------------
