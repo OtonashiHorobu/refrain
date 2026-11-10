@@ -469,7 +469,7 @@ def main() -> int:
             if key in ignored_fields:
                 continue
             if key == "levels":
-                # M4 opens only the overworld; vanilla still lists every
+                # The oracle opens only the overworld; vanilla still lists every
                 # registered level key even when the nether is disabled.
                 value = [level for level in value if level == "minecraft:overworld"]
                 right_levels = [

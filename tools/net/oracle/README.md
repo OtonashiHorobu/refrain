@@ -7,8 +7,8 @@ captures; it requires a locally owned vanilla 26.3 server jar.
 ## Why
 
 A client joining successfully only proves that the packets it happened to need
-were accepted. M4 requires field-level parity for login, configuration,
-registries, tags and a chunk. The worldgen branch has the same pattern: an
+were accepted. The oracle requires field-level parity for login, configuration,
+registries, tags and a chunk. World generation follows the same pattern: an
 external oracle generates reference data, the repository keeps only the
 comparison tooling.
 

@@ -4,7 +4,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 #
 # Join N protocol bots and wait for their chunk view. The caller owns the
-# server; this is the repeatable shape of the M4 multi-client smoke.
+# server; this is the repeatable shape of the multi-client smoke.
 #
 #   scripts/dev/net-load.sh 127.0.0.1:25565 [count] [linger-ms]
 set -euo pipefail
