@@ -1546,6 +1546,14 @@ auto run_server(const server_run_options &options) -> int {
             static_cast<void>(players.update_position(event.connection, event.x,
                                                       event.y, event.z,
                                                       event.yaw, event.pitch));
+            const auto player{players.player_of(event.connection)};
+            if (player != nullptr) {
+                static_cast<void>(views.update(
+                    event.connection,
+                    static_cast<std::int32_t>(std::floor(player->x / 16.0)),
+                    static_cast<std::int32_t>(std::floor(player->z / 16.0)),
+                    player->view_distance));
+            }
         };
     network_inputs.view_distance =
         [&players, &views](const refrain::net::view_distance_event &event) {
@@ -1657,6 +1665,12 @@ auto run_server(const server_run_options &options) -> int {
         std::deque<std::pair<std::int32_t, std::int32_t>> pending{};
     };
     std::unordered_map<std::uint64_t, chunk_stream_state> chunk_streams{};
+    // Encoded chunks are shared by every connection and survive a tick, so a
+    // second player with the same viewport does not encode the same chunk
+    // again. The bound keeps the resident bytes proportional to the cache.
+    std::map<std::pair<std::int32_t, std::int32_t>, std::vector<std::byte>>
+        encoded_chunks{};
+    constexpr std::size_t max_encoded_chunks{256};
     refrain::server::chunk_packet_source stream_source{};
     bool stream_chunks{false};
     if (tables && registries) {
@@ -1723,8 +1737,6 @@ auto run_server(const server_run_options &options) -> int {
             stream.center_dirty = stream.center_dirty || center_changed;
             stream.reported = false;
         }
-        std::map<std::pair<std::int32_t, std::int32_t>, std::vector<std::byte>>
-            encoded_cache{};
         std::size_t encode_budget{1};
         for (const auto id : active_ids) {
             auto match{chunk_streams.find(id)};
@@ -1737,14 +1749,16 @@ auto run_server(const server_run_options &options) -> int {
             packets.reserve(batch_budget);
             while (!stream.pending.empty() && packets.size() < batch_budget) {
                 const auto [x, z]{stream.pending.front()};
-                stream.pending.pop_front();
                 if (stream.known.contains({x, z})) {
+                    stream.pending.pop_front();
                     continue;
                 }
                 const auto cache_key{std::pair{x, z}};
-                auto cached{encoded_cache.find(cache_key)};
-                if (cached == encoded_cache.end()) {
+                auto cached{encoded_chunks.find(cache_key)};
+                if (cached == encoded_chunks.end()) {
                     if (encode_budget == 0) {
+                        // Leave the coordinate pending: the next tick picks it
+                        // up again instead of dropping it from the viewport.
                         break;
                     }
                     --encode_budget;
@@ -1758,12 +1772,17 @@ auto run_server(const server_run_options &options) -> int {
                             "network: chunk ({}, {}) encode failed: {}", x, z,
                             encoded.error().message);
                         stream.known.emplace(x, z);
+                        stream.pending.pop_front();
                         continue;
                     }
                     cached =
-                        encoded_cache.emplace(cache_key, std::move(*encoded))
+                        encoded_chunks.emplace(cache_key, std::move(*encoded))
                             .first;
+                    if (encoded_chunks.size() > max_encoded_chunks) {
+                        encoded_chunks.erase(encoded_chunks.begin());
+                    }
                 }
+                stream.pending.pop_front();
                 packets.push_back(cached->second);
                 stream.known.emplace(x, z);
                 ++stream.sent;
