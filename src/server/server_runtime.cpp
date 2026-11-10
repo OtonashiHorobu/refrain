@@ -3,7 +3,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/protocol/current.hpp>
-#include <refrain/server/server_properties.hpp>
 #include <refrain/server/server_runtime.hpp>
 
 #include <refrain/session/chunk_tracker.hpp>
@@ -1481,18 +1480,24 @@ auto run_server(const server_run_options &options) -> int {
         [command_environment](const refrain::net::player_identity &identity) {
             return command_environment->join_state(identity.connection);
         };
-    network_inputs.fallback_bind_host = properties.server_ip;
+    network_inputs.fallback_bind_host =
+        options.network.get_string("bind_host", "0.0.0.0");
     network_inputs.fallback_port =
-        static_cast<std::uint16_t>(properties.server_port);
-    network_inputs.fallback_compression =
-        properties.network_compression_threshold;
-    network_inputs.fallback_view_distance = properties.view_distance;
-    network_inputs.fallback_simulation_distance =
-        properties.simulation_distance;
-    network_inputs.fallback_max_players = properties.max_players;
-    network_inputs.fallback_online_mode = properties.online_mode;
-    network_inputs.fallback_secure_chat = properties.enforce_secure_profile;
-    network_inputs.fallback_motd = properties.motd;
+        static_cast<std::uint16_t>(options.network.get_int64("port", 25565));
+    network_inputs.fallback_compression = static_cast<std::int32_t>(
+        options.network.get_int64("compression_threshold", 256));
+    network_inputs.fallback_view_distance = static_cast<std::int32_t>(
+        options.network.get_int64("view_distance", 10));
+    network_inputs.fallback_simulation_distance = static_cast<std::int32_t>(
+        options.network.get_int64("simulation_distance", 10));
+    network_inputs.fallback_max_players = static_cast<std::int32_t>(
+        options.network.get_int64("status.max_players", 20));
+    network_inputs.fallback_online_mode =
+        options.network.get_bool("online_mode", true);
+    network_inputs.fallback_secure_chat =
+        options.network.get_bool("enforce_secure_profile", true);
+    network_inputs.fallback_motd =
+        options.network.get_string("status.motd", "A Refrain Server");
     network_inputs.make_transport = options.make_transport;
     network_inputs.protocol = options.protocol;
     network_inputs.status = options.status;
