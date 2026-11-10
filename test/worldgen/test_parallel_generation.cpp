@@ -2,9 +2,9 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
-// Opt-in determinism check: the fill stage must produce the same blocks
-// whether chunks are generated on one worker or several. Input:
-// REFRAIN_VANILLA_WORLDGEN pointing at the datapack `data` root.
+// Determinism check: the fill stage must produce the same blocks whether
+// chunks are generated on one worker or several. REFRAIN_VANILLA_WORLDGEN
+// overrides the datapack `data` root; the shipped snapshot is the default.
 
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -47,10 +48,11 @@ auto make_registry() -> block_state_registry {
 
 suite<"worldgen/parallel"> parallel_generation_tests = [] {
     "the fill stage is deterministic across worker counts"_test = [] {
-        const char *data_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
-        if (data_root == nullptr) {
-            return;
-        }
+        const char *override_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+        const std::string data_root = override_root != nullptr
+                                          ? std::string{override_root}
+                                          : std::string{REFRAIN_SOURCE_DIR} +
+                                                "/content/vanilla/26.3/data";
         auto settings = density::load_noise_settings(
             data_root, "minecraft/overworld", algorithm::xoroshiro, seed);
         expect(settings.has_value());
