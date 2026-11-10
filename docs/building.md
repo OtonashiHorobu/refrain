@@ -72,20 +72,30 @@ targets and stays off unless those sources are present.
 
 ## Hardening and optimization
 
-Optimized builds use `-O3 -DNDEBUG`. Both hardening layers and LTO are
-opt-in: the regular CI build and local development builds stay fast and
-unhardened, while release archives use the hardened profile described below.
+Optimized builds use `-O3 -DNDEBUG`. Link-time optimization is on for those
+builds (`Release`, `RelWithDebInfo`, `MinSizeRel`) and off for `Debug`,
+sanitizer builds and MSVC, where it only costs link time. Hardening stays
+opt-in; release archives use the hardened profile described below.
 
 | Option | Default | Effect |
 |---|---|---|
 | `REFRAIN_HARDEN` | OFF | Stack protector and stack-clash protection, CET (`-fcf-protection=full`) on x86, hidden symbol visibility, `_FORTIFY_SOURCE=3`, and ELF `RELRO`/`BIND_NOW`/non-executable stack. MSVC uses `/guard:cf`; MinGW adds `--dynamicbase --nxcompat --high-entropy-va`. |
 | `REFRAIN_HARDEN_MAX` | OFF | Adds `-ftrivial-auto-var-init=zero` and `-fzero-call-used-regs=used-gpr` on top of the baseline. |
-| `REFRAIN_LTO` | OFF | Link-time optimization for optimized GCC/Clang builds (the Conan `lto` option feeds it). Sanitizer builds and MSVC skip LTO automatically. |
+| `REFRAIN_LTO` | ON | Link-time optimization for optimized GCC/Clang builds (the Conan `lto` option feeds it). `Debug`, sanitizer builds, MSVC and the MinGW cross build skip LTO automatically. |
 
 In a regular build only first-party targets get these flags; third-party
 libraries come prebuilt from Conan. The flags apply to `Release`,
 `RelWithDebInfo` and `MinSizeRel`; `Debug` keeps the stack protector but skips
 FORTIFY and LTO.
+
+LTO dominates the link step of a `Release` build. For a faster edit-build-test
+loop, turn it off for the local build only:
+
+```bash
+conan install . -pr gcc-release --build=missing -o "&:lto=False" \
+    --lockfile=conan/locks/vendor.lock
+cmake --preset conan-release -DREFRAIN_LTO=OFF
+```
 
 `scripts/dist.sh` is the release path. It rebuilds every Conan dependency from
 source with the hardening flags in an isolated Conan home, builds the server and

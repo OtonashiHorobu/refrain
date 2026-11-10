@@ -62,7 +62,7 @@ option(REFRAIN_HARDEN_MAX
 # builds stay fast; release builds enable it through scripts/dist.sh. It is
 # skipped for sanitizer builds (instrumentation and LTO interact poorly) and
 # for the MSVC toolchain (LTCG build time is not worth the CI budget).
-option(REFRAIN_LTO "Enable link-time optimization for optimized builds" OFF)
+option(REFRAIN_LTO "Enable link-time optimization for optimized builds" ON)
 
 if(NOT REFRAIN_WITH_MIMALLOC)
     set(REFRAIN_MIMALLOC_OVERRIDE_NEW OFF)
@@ -181,7 +181,9 @@ endfunction()
 # doubles). CMake's IPO property adds the right -flto/-fno-fat-lto-objects pair
 # for GCC/Clang and /GL + /LTCG for MSVC.
 function(refrain_apply_lto target)
-    if(NOT REFRAIN_LTO OR REFRAIN_SANITIZE OR MSVC)
+    # MinGW: GCC 16's LTO miscompiles exception handling across the static
+    # runtime, so the Windows cross build stays without it.
+    if(NOT REFRAIN_LTO OR REFRAIN_SANITIZE OR MSVC OR MINGW)
         return()
     endif()
     if(NOT CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
