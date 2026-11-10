@@ -337,13 +337,14 @@ auto palette_block(std::initializer_list<jint> pos, jint state,
 
 auto jigsaw_nbt(std::string name, std::string target, std::string pool,
                 std::string joint) -> data::nbt::compound {
-    data::nbt::compound tag;
-    tag["name"] = data::nbt::value{std::move(name)};
-    tag["target"] = data::nbt::value{std::move(target)};
-    tag["pool"] = data::nbt::value{std::move(pool)};
-    tag["joint"] = data::nbt::value{std::move(joint)};
-    tag["final_state"] = data::nbt::value{std::string{"minecraft:stone"}};
-    return tag;
+    data::nbt::compound compound_tag;
+    compound_tag["name"] = data::nbt::value{std::move(name)};
+    compound_tag["target"] = data::nbt::value{std::move(target)};
+    compound_tag["pool"] = data::nbt::value{std::move(pool)};
+    compound_tag["joint"] = data::nbt::value{std::move(joint)};
+    compound_tag["final_state"] =
+        data::nbt::value{std::string{"minecraft:stone"}};
+    return compound_tag;
 }
 
 /// Writes a one-jigsaw connector template. `top` names the orientation's top

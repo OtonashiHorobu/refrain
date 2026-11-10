@@ -529,9 +529,9 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             const auto loaded_tags = load_block_tags(data_root);
             expect(loaded_tags.has_value());
             if (loaded_tags) {
-                for (const auto &[tag, raw] : loaded_tags->entries()) {
+                for (const auto &[tag_name, raw] : loaded_tags->entries()) {
                     (void)raw;
-                    const auto names = loaded_tags->resolve(tag);
+                    const auto names = loaded_tags->resolve(tag_name);
                     if (!names) {
                         continue;
                     }
@@ -559,7 +559,7 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                             ids.push_back(*interned);
                         }
                     }
-                    block_registry.add_tag(tag, ids);
+                    block_registry.add_tag(tag_name, ids);
                 }
             }
             expect(coal_ore_state.has_value());

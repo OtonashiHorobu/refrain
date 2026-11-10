@@ -1976,8 +1976,8 @@ auto byte_flag(const data::nbt::value &nbt_tag) -> bool {
 auto bbox_of(const data::nbt::compound &compound)
     -> std::optional<structure::structure_bbox> {
     const auto read = [&](std::string_view key) -> std::optional<jint> {
-        const auto *tag = child(&compound, key);
-        return tag == nullptr ? std::nullopt : int_value(*tag);
+        const auto *nbt_tag = child(&compound, key);
+        return nbt_tag == nullptr ? std::nullopt : int_value(*nbt_tag);
     };
     const auto min_x = read("minX");
     const auto min_y = read("minY");
