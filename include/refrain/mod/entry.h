@@ -15,6 +15,7 @@
 
 #include <refrain/contracts/abi.h>
 #include <refrain/contracts/host/core_abi.h>
+#include <refrain/platform/export.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -67,12 +68,6 @@ typedef struct refrain_mod_desc {
 typedef const refrain_mod_desc *(*refrain_mod_main_fn)(
     const refrain_mod_init *init);
 
-#if defined(_WIN32)
-#define REFRAIN_MOD_EXPORT __declspec(dllexport)
-#else
-#define REFRAIN_MOD_EXPORT __attribute__((visibility("default")))
-#endif
-
 #ifdef __cplusplus
 #define REFRAIN_MOD_EXTERN_C extern "C"
 #else
@@ -86,7 +81,7 @@ typedef const refrain_mod_desc *(*refrain_mod_main_fn)(
 ///       return &desc;
 ///   }
 #define REFRAIN_MOD_MAIN(name)                                                 \
-    REFRAIN_MOD_EXTERN_C REFRAIN_MOD_EXPORT const refrain_mod_desc *name(      \
+    REFRAIN_MOD_EXTERN_C REFRAIN_EXPORT const refrain_mod_desc *name(      \
         const refrain_mod_init *init)
 
 #ifdef __cplusplus
