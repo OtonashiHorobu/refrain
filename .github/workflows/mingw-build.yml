@@ -52,8 +52,10 @@ jobs:
                 cmake ninja mingw-w64-gcc mingw-w64-binutils wine \
                 xorg-server-xvfb nasm perl
               # The OpenSSL MinGW makefile invokes windres without the target
-              # prefix; expose the cross resource compiler under that name.
-              ln -sf /usr/bin/x86_64-w64-mingw32-windres /usr/local/bin/windres
+              # prefix; a wrapper keeps argv[0] so the tool finds its sysroot.
+              printf "#!/bin/sh\nexec /usr/bin/x86_64-w64-mingw32-windres \"\$@\"\n" \
+                > /usr/local/bin/windres
+              chmod +x /usr/local/bin/windres
               python3 -m pip install --break-system-packages "conan==2.31.2"
 
               conan profile detect --force
