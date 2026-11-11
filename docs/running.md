@@ -172,6 +172,27 @@ build/Release/bin/refrain-server \
 Two runs over the same world and script produce the same hash for the same
 tick.
 
+## Client
+
+The server speaks the 26.3 protocol (777), so an unmodified client joins with
+the address the server prints on startup (`network: listening on ...`). Set
+`online_mode = false` in `network.toml` to accept any username; enable it when
+the server is reachable from outside the machine.
+
+The client is accepted when the following hold on a fresh join:
+
+- the join screen leaves `Loading terrain` and the player stands on the
+  generated terrain at the world spawn;
+- the tab list shows the player, and a second client sees the first one move;
+- opening the inventory shows the hotbar and the 27 main slots, and a
+  left-click moves a stack between a slot and the cursor;
+- closing the inventory with a stack on the cursor puts the stack back into
+  the first free inventory slot.
+
+The server owns the viewport: it streams `view_distance` chunks around the
+player and tells the client to unload the chunks that leave that square, so a
+client with a larger render distance still sees only the server viewport.
+
 ## World conversion
 
 ```bash
