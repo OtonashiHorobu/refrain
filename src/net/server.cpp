@@ -1665,6 +1665,13 @@ void server::send_chunk_batch(std::uint64_t connection, std::int32_t chunk_x,
                       finished, play_cb::encode_chunk_batch_finished);
 }
 
+auto server::backlog(std::uint64_t connection) const -> std::size_t {
+    if (!impl_ || !impl_->socket) {
+        return 0;
+    }
+    return impl_->socket->backlog(connection);
+}
+
 auto server::stats() const -> server_stats {
     if (!impl_) {
         return {};

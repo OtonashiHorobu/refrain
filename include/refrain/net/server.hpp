@@ -291,6 +291,10 @@ class server {
     /// Connections currently in play (closed connections excluded).
     [[nodiscard]] auto active_connections() const -> std::vector<std::uint64_t>;
 
+    /// Bytes still queued for one connection. Optional updates skip a client
+    /// that is this far behind.
+    [[nodiscard]] auto backlog(std::uint64_t connection) const -> std::size_t;
+
     /// Cumulative counters since `start`.
     [[nodiscard]] auto stats() const -> server_stats;
 

@@ -89,6 +89,14 @@ class transport {
     /// them. Must not be called from a transport callback.
     virtual void stop() noexcept = 0;
 
+    /// Bytes still queued for the connection. A transport without an internal
+    /// queue reports zero. Callers use it to skip optional updates for a
+    /// client that is behind.
+    [[nodiscard]] virtual auto backlog(std::uint64_t /*connection*/) const
+        -> std::size_t {
+        return 0;
+    }
+
     [[nodiscard]] virtual auto connection_count() const -> std::size_t = 0;
 
     /// Bound listener port (0 when not listening).

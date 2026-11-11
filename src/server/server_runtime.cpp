@@ -1057,8 +1057,8 @@ void send_player_info(refrain::net::server &listener, std::uint64_t connection,
     }
 }
 
-void send_add_entity(refrain::net::server &listener, std::uint64_t connection,
-                     const refrain::session::player &value) {
+[[nodiscard]] auto encode_add_entity_body(const refrain::session::player &value)
+    -> std::vector<std::byte> {
     refrain::protocol::current::play::clientbound::add_entity packet{
         .id = static_cast<std::int32_t>(value.entity_id),
         .uuid = value.id,
@@ -1072,24 +1072,29 @@ void send_add_entity(refrain::net::server &listener, std::uint64_t connection,
         .y_head_rot = 0,
         .data = 0,
     };
-    auto body{encode_play_body(
+    return encode_play_body(
         refrain::protocol::current::play::clientbound::add_entity::packet_id,
         packet,
-        refrain::protocol::current::play::clientbound::encode_add_entity)};
-    if (!body.empty()) {
-        listener.send_raw(connection, body);
-    }
+        refrain::protocol::current::play::clientbound::encode_add_entity);
+}
+
+void send_remove_entity(refrain::net::server &listener,
+                        std::uint64_t connection, std::uint64_t entity_id);
+
+[[nodiscard]] auto encode_remove_entity_body(std::uint64_t entity_id)
+    -> std::vector<std::byte> {
+    refrain::protocol::current::play::clientbound::remove_entities packet{};
+    packet.entity_ids.push_back(entity_id);
+    return encode_play_body(
+        refrain::protocol::current::play::clientbound::remove_entities::
+            packet_id,
+        packet,
+        refrain::protocol::current::play::clientbound::encode_remove_entities);
 }
 
 void send_remove_entity(refrain::net::server &listener,
                         std::uint64_t connection, std::uint64_t entity_id) {
-    refrain::protocol::current::play::clientbound::remove_entities packet{};
-    packet.entity_ids.push_back(entity_id);
-    auto body{encode_play_body(
-        refrain::protocol::current::play::clientbound::remove_entities::
-            packet_id,
-        packet,
-        refrain::protocol::current::play::clientbound::encode_remove_entities)};
+    auto body{encode_remove_entity_body(entity_id)};
     if (!body.empty()) {
         listener.send_raw(connection, body);
     }
@@ -1256,6 +1261,14 @@ void sync_player_visibility(
             std::lround(static_cast<double>(degrees) * (256.0 / 360.0)));
     };
     const auto snapshot{players.all()};
+    // One buffer per target per tick: the transport then copies and posts once
+    // per target instead of once per entity update.
+    std::unordered_map<std::uint64_t, std::vector<std::byte>> outbox;
+    const auto append = [&outbox](std::uint64_t target,
+                                  const std::vector<std::byte> &body) {
+        auto &buffer{outbox[target]};
+        buffer.insert(buffer.end(), body.begin(), body.end());
+    };
 
     // Visibility transitions first: a viewer that has just come into range
     // needs the spawn packet, one that left needs the removal.
@@ -1275,11 +1288,15 @@ void sync_player_visibility(
                 query, other.world, other.x, other.z, tracking_chunks)};
             const bool was{seen.contains(other.connection)};
             if (now && !was) {
-                send_add_entity(listener, viewer.connection, other);
+                if (auto body{encode_add_entity_body(other)}; !body.empty()) {
+                    append(viewer.connection, body);
+                }
                 seen.insert(other.connection);
             } else if (!now && was) {
-                send_remove_entity(listener, viewer.connection,
-                                   other.entity_id);
+                if (auto body{encode_remove_entity_body(other.entity_id)};
+                    !body.empty()) {
+                    append(viewer.connection, body);
+                }
                 seen.erase(other.connection);
             }
         }
@@ -1411,7 +1428,13 @@ void sync_player_visibility(
                 !found->second.contains(mover.connection)) {
                 continue;
             }
-            listener.send_raw(target.connection, body);
+            append(target.connection, body);
+        }
+    }
+
+    for (const auto &[target, buffer] : outbox) {
+        if (!buffer.empty()) {
+            listener.send_raw(target, buffer);
         }
     }
 }
@@ -1878,10 +1901,25 @@ auto run_server(const server_run_options &options) -> int {
             stream.center_dirty = stream.center_dirty || center_changed;
             stream.reported = false;
         }
+        // Bound the bytes queued for clients that cannot drain them. A slow
+        // client keeps its pending list and resumes once the socket catches
+        // up; the whole stream pauses when the aggregate backlog is large.
+        constexpr std::size_t max_connection_backlog{1U * 1024U * 1024U};
+        constexpr std::size_t max_total_backlog{64U * 1024U * 1024U};
+        std::size_t total_backlog{0};
+        for (const auto id : active_ids) {
+            total_backlog += listener->backlog(id);
+        }
+        if (total_backlog > max_total_backlog) {
+            return;
+        }
         std::size_t encode_budget{1};
         for (const auto id : active_ids) {
             auto match{chunk_streams.find(id)};
             if (match == chunk_streams.end()) {
+                continue;
+            }
+            if (listener->backlog(id) > max_connection_backlog) {
                 continue;
             }
             auto &stream{match->second};
