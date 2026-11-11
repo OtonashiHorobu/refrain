@@ -31,6 +31,12 @@ namespace net = refrain::net;
 
 class memory_transport final : public net::transport {
   public:
+    /// `stopped_state` outlives the transport: the server owns and destroys
+    /// the injected transport when it stops, so the test cannot read a member
+    /// of the transport afterwards.
+    explicit memory_transport(std::shared_ptr<bool> stopped_state)
+        : stopped_state_{std::move(stopped_state)} {}
+
     [[nodiscard]] auto listen(const net::endpoint &)
         -> refrain::status override {
         listened = true;
@@ -42,7 +48,11 @@ class memory_transport final : public net::transport {
     }
     void send(std::uint64_t, std::span<const std::byte>) override {}
     void close(std::uint64_t) override {}
-    void stop() noexcept override { stopped = true; }
+    void stop() noexcept override {
+        if (stopped_state_ != nullptr) {
+            *stopped_state_ = true;
+        }
+    }
     [[nodiscard]] auto connection_count() const -> std::size_t override {
         return 0;
     }
@@ -63,7 +73,9 @@ class memory_transport final : public net::transport {
     }
 
     bool listened{false};
-    bool stopped{false};
+
+  private:
+    std::shared_ptr<bool> stopped_state_;
 };
 
 [[nodiscard]] auto make_temp_dir() -> std::filesystem::path {
@@ -96,11 +108,12 @@ suite transport_factory_tests = [] {
             return;
         }
         memory_transport *created{nullptr};
+        auto stopped{std::make_shared<bool>(false)};
         net::server_inputs inputs{};
         inputs.protocol = refrain::test::make_test_protocol();
-        inputs.make_transport = [&created](net::transport_handler,
-                                           std::size_t) {
-            auto transport{std::make_unique<memory_transport>()};
+        inputs.make_transport = [&created, stopped](net::transport_handler,
+                                                    std::size_t) {
+            auto transport{std::make_unique<memory_transport>(stopped)};
             created = transport.get();
             return refrain::result<std::unique_ptr<net::transport>>{
                 std::move(transport)};
@@ -115,9 +128,9 @@ suite transport_factory_tests = [] {
                        net::transport_protocol::memory_stream);
             }
             (*server)->stop();
-            if (created != nullptr) {
-                expect(created->stopped);
-            }
+            // The server destroys the injected transport on stop, so the
+            // observation goes through the shared flag, not the transport.
+            expect(*stopped);
         }
         std::error_code error;
         std::filesystem::remove_all(dir, error);

@@ -49,7 +49,10 @@ using sha1_digest = std::array<std::byte, 20>;
 /// 16-byte MD5 digest in network (big-endian) byte order.
 using md5_digest = std::array<std::byte, 16>;
 
-/// RSA modulus size mandated by the login protocol.
+/// RSA modulus size mandated by the login protocol: the client sends a
+/// 128-byte ciphertext block in the encryption response, so the key size is
+/// part of the wire format. The key only protects one login exchange and is
+/// never reused for other traffic.
 inline constexpr std::size_t rsa_key_bits = 1024;
 
 /// Size of one RSA-1024 ciphertext block (`rsa_key_bits / 8`).

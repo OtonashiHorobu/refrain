@@ -171,7 +171,7 @@ suite bot_tests = [] {
             .timeout = std::chrono::milliseconds{10000},
             // The capture must outlive the play-login burst; a short linger
             // races the command, recipe and tab packets on a loaded machine.
-            .linger = std::chrono::milliseconds{1000},
+            .linger = std::chrono::milliseconds{2000},
             .capture = true,
         })};
         expect(static_cast<bool>(capture_report));
@@ -189,8 +189,17 @@ suite bot_tests = [] {
             expect(has_id(136U)); // update_recipes
             expect(has_id(125U)); // tab_list
         }
+        // The bots close their sockets before returning and the server drops
+        // the play state on its io threads, so wait for the count to drain
+        // instead of asserting a mid-shutdown value.
+        std::size_t live_connections{(*server)->stats().connections};
+        for (int attempt{0}; attempt < 200 && live_connections != 0U;
+             ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{10});
+            live_connections = (*server)->stats().connections;
+        }
         const auto stats{(*server)->stats()};
-        expect(stats.connections == 1U);
+        expect(live_connections == 0U);
         expect(stats.packets_out > 0U);
         expect(stats.bytes_out > 0U);
         expect(stats.packets_in > 0U);
