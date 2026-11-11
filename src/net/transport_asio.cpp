@@ -52,6 +52,8 @@ class transport_impl final : public transport {
     void close(std::uint64_t connection) override;
     void stop() noexcept override;
     [[nodiscard]] auto connection_count() const -> std::size_t override;
+    [[nodiscard]] auto backlog(std::uint64_t connection) const
+        -> std::size_t override;
     [[nodiscard]] auto local_port() const -> std::uint16_t override;
     [[nodiscard]] auto descriptor() const -> transport_descriptor override;
 
@@ -80,6 +82,11 @@ class transport_impl final : public transport {
         asio::strand<asio::io_context::executor_type> strand;
         std::array<std::byte, 64 * 1024> read_buffer{};
         std::deque<std::vector<std::byte>> writes{};
+        /// Bytes currently queued for the socket. A client that stops reading
+        /// would otherwise grow this without bound, so the session is closed
+        /// once the backlog passes the cap.
+        std::atomic<std::size_t> queued_bytes{0};
+        static constexpr std::size_t max_queued_bytes = 16U * 1024U * 1024U;
         bool connected{false};
         bool writing{false};
         bool closed{false};
@@ -87,7 +94,7 @@ class transport_impl final : public transport {
 
     void accept_next();
     void remove(std::uint64_t connection);
-    [[nodiscard]] auto session_for(std::uint64_t connection)
+    [[nodiscard]] auto session_for(std::uint64_t connection) const
         -> std::shared_ptr<session>;
 
     transport_handler handler_{};
@@ -239,6 +246,14 @@ auto transport_impl::connect(const endpoint &target) -> result<std::uint64_t> {
     return id;
 }
 
+auto transport_impl::backlog(std::uint64_t connection) const -> std::size_t {
+    const auto target{session_for(connection)};
+    if (!target) {
+        return 0;
+    }
+    return target->queued_bytes.load(std::memory_order_relaxed);
+}
+
 void transport_impl::send(std::uint64_t connection,
                           std::span<const std::byte> bytes) {
     auto target{session_for(connection)};
@@ -305,7 +320,7 @@ void transport_impl::remove(std::uint64_t connection) {
     sessions_.erase(connection);
 }
 
-auto transport_impl::session_for(std::uint64_t connection)
+auto transport_impl::session_for(std::uint64_t connection) const
     -> std::shared_ptr<session> {
     const std::lock_guard lock{mutex_};
     const auto found{sessions_.find(connection)};
@@ -355,22 +370,33 @@ void transport_impl::session::writer() {
                     self->finish(error.message());
                     return;
                 }
+                self->queued_bytes.store(
+                    self->queued_bytes.load(std::memory_order_relaxed) -
+                        self->writes.front().size(),
+                    std::memory_order_relaxed);
                 self->writes.pop_front();
                 self->writer();
             }));
 }
 
 void transport_impl::session::send_copy(std::vector<std::byte> bytes) {
-    asio::post(strand,
-               [self = shared_from_this(), data = std::move(bytes)]() mutable {
-                   if (self->closed) {
-                       return;
-                   }
-                   self->writes.push_back(std::move(data));
-                   if (!self->writing) {
-                       self->writer();
-                   }
-               });
+    asio::post(strand, [self = shared_from_this(),
+                        data = std::move(bytes)]() mutable {
+        if (self->closed) {
+            return;
+        }
+        const auto queued{self->queued_bytes.load(std::memory_order_relaxed)};
+        if (queued + data.size() > session::max_queued_bytes) {
+            self->finish("write backlog");
+            return;
+        }
+        self->queued_bytes.store(queued + data.size(),
+                                 std::memory_order_relaxed);
+        self->writes.push_back(std::move(data));
+        if (!self->writing) {
+            self->writer();
+        }
+    });
 }
 
 void transport_impl::session::finish(std::string reason) {
