@@ -140,21 +140,24 @@ int main(int argc, char **argv) {
 
     extract_options extract{};
     auto *extract_cmd = app.add_subcommand(
-        "extract", "Import data/assets from a user-local jar into the RFS "
-                   "(Refrain Store; data manifest skeleton)");
+        "extract", "Import data/assets from a user-local jar into the RFS; "
+                   "the datapack is generated locally, never committed");
     extract_cmd
         ->add_option("-j,--jar", extract.jar,
                      "Path to a user-local 26.3 jar (never committed)")
         ->required();
     extract_cmd->add_option(
         "-o,--out", extract.out,
-        "Output directory for the manifest/RFS (Refrain Store)");
+        "Output directory for the manifest/RFS (content/vanilla/<version> "
+        "for a local datapack)");
     extract_cmd->add_option("--manifest-out", extract.manifest_out,
                             "Manifest path (default: <out>/manifest.json)");
     extract_cmd->add_option("--filter", extract.filter,
                             "Entry filter: all, data or assets");
     extract_cmd->add_flag("--extract", extract.extract,
-                          "Also extract the selected entries under --out");
+                          "Also write the selected entries under --out "
+                          "(with --filter data this creates the local "
+                          "datapack)");
 
     vanilla_import_options vanilla_import{};
     auto *vanilla_cmd =

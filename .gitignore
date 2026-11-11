@@ -26,3 +26,8 @@ __pycache__/
 
 # Benchmark output is regenerated per machine and never committed.
 /bench/results/
+
+# The world generation datapack is generated from the user's own server.jar by
+# scripts/fetch-content.sh and is never committed; see content/vanilla/NOTICE.md.
+content/vanilla/*/data/
+content/vanilla/*/MANIFEST.json

@@ -9,6 +9,8 @@
 #include <refrain/worldgen/biome/dimension_biome_source.hpp>
 #include <refrain/worldgen/density/density.hpp>
 
+#include "support/vanilla_data.hpp"
+
 #include <boost/ut.hpp>
 
 #include <array>
@@ -19,10 +21,6 @@ namespace {
 
 using namespace boost::ut;
 using namespace refrain::worldgen;
-
-auto data_root() -> std::string {
-    return std::string{REFRAIN_SOURCE_DIR} + "/content/vanilla/26.3/data";
-}
 
 /// Six constant climate samplers so one test can place a target point exactly
 /// on a parameter entry.
@@ -54,8 +52,12 @@ using namespace boost::ut;
 
 suite<"worldgen/dimension-biome-source"> dimension_biome_source_tests = [] {
     "the nether selects from the parameter report"_test = [] {
+        const auto snapshot = refrain::test_support::vanilla_data();
+        if (!snapshot.available) {
+            return;
+        }
         auto source =
-            dimension_biome_source::load(data_root(), dimension_kind::nether);
+            dimension_biome_source::load(snapshot.path, dimension_kind::nether);
         expect(source.has_value()) << source.error().message;
         if (!source) {
             return;
@@ -90,8 +92,12 @@ suite<"worldgen/dimension-biome-source"> dimension_biome_source_tests = [] {
     };
 
     "the end selects from its island bands"_test = [] {
+        const auto snapshot = refrain::test_support::vanilla_data();
+        if (!snapshot.available) {
+            return;
+        }
         auto source =
-            dimension_biome_source::load(data_root(), dimension_kind::end);
+            dimension_biome_source::load(snapshot.path, dimension_kind::end);
         expect(source.has_value()) << source.error().message;
         if (!source) {
             return;
@@ -135,7 +141,8 @@ suite<"worldgen/dimension-biome-source"> dimension_biome_source_tests = [] {
 
     "a missing parameter report is rejected for the nether"_test = [] {
         const auto missing = dimension_biome_source::load(
-            data_root() + "/missing", dimension_kind::nether);
+            refrain::test_support::vanilla_data_root() + "/missing",
+            dimension_kind::nether);
         expect(!missing.has_value());
     };
 };

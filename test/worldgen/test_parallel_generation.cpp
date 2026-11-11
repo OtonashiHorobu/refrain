@@ -12,6 +12,8 @@
 #include <refrain/worldgen/terrain/aquifer.hpp>
 #include <refrain/worldgen/terrain/terrain.hpp>
 
+#include "support/vanilla_data.hpp"
+
 #include <boost/ut.hpp>
 
 #include <array>
@@ -49,10 +51,16 @@ auto make_registry() -> block_state_registry {
 suite<"worldgen/parallel"> parallel_generation_tests = [] {
     "the fill stage is deterministic across worker counts"_test = [] {
         const char *override_root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
-        const std::string data_root = override_root != nullptr
-                                          ? std::string{override_root}
-                                          : std::string{REFRAIN_SOURCE_DIR} +
-                                                "/content/vanilla/26.3/data";
+        std::string data_root{};
+        if (override_root != nullptr) {
+            data_root = override_root;
+        } else {
+            const auto snapshot = refrain::test_support::vanilla_data();
+            if (!snapshot.available) {
+                return;
+            }
+            data_root = snapshot.path;
+        }
         auto settings = density::load_noise_settings(
             data_root, "minecraft/overworld", algorithm::xoroshiro, seed);
         expect(settings.has_value());

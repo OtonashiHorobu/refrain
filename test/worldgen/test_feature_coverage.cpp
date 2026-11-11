@@ -10,6 +10,8 @@
 #include <refrain/worldgen/chunk_generator.hpp>
 #include <refrain/worldgen/dimension_generator.hpp>
 
+#include "support/vanilla_data.hpp"
+
 #include <boost/ut.hpp>
 
 #include <algorithm>
@@ -25,15 +27,15 @@ using namespace boost::ut;
 using namespace refrain;
 using namespace refrain::worldgen;
 
-auto source_data_root() -> std::string {
-    return std::string{REFRAIN_SOURCE_DIR} + "/content/vanilla/26.3/data";
-}
-
 } // namespace
 
 suite<"worldgen/feature-coverage"> feature_coverage_tests = [] {
     "every standard biome builds a generator and generates a chunk"_test = [] {
-        const auto data_root = source_data_root();
+        const auto snapshot = refrain::test_support::vanilla_data();
+        if (!snapshot.available) {
+            return;
+        }
+        const auto &data_root = snapshot.path;
         std::map<std::string, dimension_kind> biome_kind;
         for (const auto kind : {dimension_kind::overworld,
                                 dimension_kind::nether, dimension_kind::end}) {
