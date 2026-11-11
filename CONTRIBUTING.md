@@ -55,6 +55,24 @@ with a period.
 Commit messages describe the resulting behavior. They do not reference
 internal planning documents, task identifiers, review threads or dates.
 
+## Developer Certificate of Origin
+
+Every commit must carry a `Signed-off-by: Name <email>` trailer certifying the
+[Developer Certificate of Origin 1.1](https://developercertificate.org/). The
+trailer states that you have the right to submit the contribution under the
+repository license, and it is required on every commit in a pull request.
+
+Sign the commits you write:
+
+```bash
+git commit -s
+git commit --amend -s
+git rebase --signoff <base>
+```
+
+The name and email in the sign-off must match the commit author. A pull request
+that contains a commit without a matching sign-off is not merged.
+
 ## Tests and fixtures
 
 Fixtures must be synthetic or generated from data you own. Do not commit game
