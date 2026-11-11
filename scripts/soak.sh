@@ -120,12 +120,31 @@ fi
 set -e
 SERVER_RSS_KB="$(awk '/VmHWM/ {print $2}' "/proc/$SERVER_PID/status" 2>/dev/null || echo "")"
 
+# Shutdown time: the stop command fires on the tick grid, so record when the
+# console command lands and how long the process needs to leave afterwards.
+STOP_MS=""
+for _ in $(seq 1 6000); do
+    if grep -q "console: stop" "$WORK/server.log"; then
+        STOP_MS=$(date +%s%3N)
+        break
+    fi
+    kill -0 "$SERVER_PID" 2>/dev/null || break
+    sleep 0.005
+done
 wait "$SERVER_PID" 2>/dev/null || true
+EXIT_MS=$(date +%s%3N)
 ELAPSED=$(( $(date +%s) - STARTED ))
+SHUTDOWN_MS=""
+if [[ -n "$STOP_MS" ]]; then
+    SHUTDOWN_MS=$(( EXIT_MS - STOP_MS ))
+fi
 
 TICK_LINE="$(grep -E "tick: .*work_p99=" "$WORK/server.log" | tail -1 || true)"
 NET_LINE="$(grep -E "net: players=" "$WORK/server.log" | tail -1 || true)"
 echo "soak: elapsed=${ELAPSED}s"
+if [[ -n "$SHUTDOWN_MS" ]]; then
+    echo "soak: shutdown=${SHUTDOWN_MS}ms"
+fi
 if [[ -n "${SERVER_RSS_KB:-}" ]]; then
     echo "soak: server_peak_rss=$((SERVER_RSS_KB / 1024))MiB"
 fi

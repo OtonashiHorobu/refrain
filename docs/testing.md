@@ -127,6 +127,38 @@ under load. The shared transport keeps client-side memory and thread count
 flat, which makes it the client to use when the measurement target is the
 server.
 
+### Load baseline
+
+`scripts/soak.sh` generates a world, starts the server on it, runs the load
+client and prints one summary line per measurement:
+
+```bash
+scripts/soak.sh --bots 100 --seconds 120 --view-distance 6
+```
+
+The reference run uses 100 bots, a 6 chunk view distance and bots walking in an
+8 block circle. On an Intel Core i7-10700K with the release build it reports:
+
+```text
+load: 100/100 joined packets=269209 chunks=400 join_ms p50=262 p99=281 max=281
+soak: elapsed=125s
+soak: shutdown=89ms
+soak: server_peak_rss=48MiB
+soak: bots_peak_rss=382MiB
+soak: tick: 2480 interval=50ms missed=0 work_avg=1.79ms work_p99=3.51ms work_max=14.88ms samples=2048
+soak: net: players=0 in=121498 out=271851 bytes_in=4335818 bytes_out=75668261
+```
+
+Read the numbers as follows:
+
+- `work_p99` is the server tick work per 50 ms interval; `missed=0` means no
+  interval overran its budget.
+- `server_peak_rss` is the peak resident set of the server process, bots
+  excluded.
+- `out` and `bytes_out` are the clientbound packet count and payload over the
+  whole run, so the 120 s run sends roughly 630 KiB/s to 100 players.
+- `shutdown` is the time from the `stop` console command to process exit.
+
 ### Client input (X11)
 
 Run the vanilla client under XWayland when a test needs real key/mouse input:
