@@ -529,6 +529,11 @@ int main(int argc, char **argv) {
                                   "Bot username prefix");
     protocol_load_cmd->add_option("--duration-ms", protocol_load.duration_ms,
                                   "How long each bot stays in play");
+    protocol_load_cmd->add_option("--walk-radius", protocol_load.walk_radius,
+                                  "Walk in a circle of this radius (blocks)");
+    protocol_load_cmd->add_option("--walk-period-ms",
+                                  protocol_load.walk_period_ms,
+                                  "Milliseconds between walk steps");
     protocol_load_cmd->add_option("--timeout-ms", protocol_load.timeout_ms,
                                   "Per-bot join timeout");
 

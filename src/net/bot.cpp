@@ -5,6 +5,8 @@
 #include <refrain/core/log.hpp>
 #include <refrain/net/bot.hpp>
 
+#include <cmath>
+
 #include <refrain/net/base.hpp>
 #include <refrain/net/crypto.hpp>
 #include <refrain/net/frame.hpp>
@@ -72,7 +74,14 @@ enum class bot_state : std::uint8_t { login, configuration, play };
 class bot_session {
   public:
     explicit bot_session(bot_options options)
-        : options_{std::move(options)}, profile_{random_uuid()} {}
+        : options_{std::move(options)}, profile_{random_uuid()} {
+        // Stagger walkers so a load test does not stack every bot on one
+        // point.
+        static std::atomic<std::uint32_t> walkers{0};
+        const auto index{walkers.fetch_add(1, std::memory_order_relaxed)};
+        walk_phase_ =
+            static_cast<double>(index % 64U) * (6.283185307179586 / 64.0);
+    }
 
     [[nodiscard]] auto run() -> result<bot_report> {
         auto transport{transport::open(
@@ -120,6 +129,7 @@ class bot_session {
         if (joined_ && options_.linger.count() > 0) {
             std::this_thread::sleep_for(options_.linger);
         }
+        running_.store(false, std::memory_order_relaxed);
         if (command_thread_.joinable()) {
             command_thread_.join();
         }
@@ -453,8 +463,25 @@ class bot_session {
                     }};
                 }
             }
-            if (options_.move_dx != 0.0 || options_.move_dy != 0.0 ||
-                options_.move_dz != 0.0) {
+            if (options_.walk_radius > 0.0) {
+                move_thread_ = std::thread{[this] {
+                    log::set_thread_name("bot-walk");
+                    if (options_.move_delay.count() > 0) {
+                        std::this_thread::sleep_for(options_.move_delay);
+                    }
+                    const auto period{options_.walk_period.count() > 0
+                                          ? options_.walk_period
+                                          : std::chrono::milliseconds{100}};
+                    std::uint32_t step{0};
+                    while (running_.load(std::memory_order_relaxed)) {
+                        send_walk(walk_phase_ +
+                                  static_cast<double>(step) * 0.15);
+                        ++step;
+                        std::this_thread::sleep_for(period);
+                    }
+                }};
+            } else if (options_.move_dx != 0.0 || options_.move_dy != 0.0 ||
+                       options_.move_dz != 0.0) {
                 move_thread_ = std::thread{[this] {
                     log::set_thread_name("bot-move");
                     if (options_.move_delay.count() > 0) {
@@ -464,6 +491,21 @@ class bot_session {
                 }};
             }
         }
+    }
+
+    void send_walk(double phase) {
+        play_sb::move_player_pos_rot packet{};
+        packet.x = spawn_x_ + options_.walk_origin_x +
+                   std::cos(phase) * options_.walk_radius;
+        packet.y = spawn_y_;
+        packet.z = spawn_z_ + options_.walk_origin_z +
+                   std::sin(phase) * options_.walk_radius;
+        packet.y_rot =
+            static_cast<float>(phase * (180.0 / 3.141592653589793)) + 90.0F;
+        packet.x_rot = 0.0F;
+        packet.flags = 1U;
+        send_packet(play_sb::move_player_pos_rot::packet_id, packet,
+                    play_sb::encode_move_player_pos_rot);
     }
 
     void send_command() {
@@ -531,6 +573,8 @@ class bot_session {
     double spawn_z_{0.0};
     std::thread command_thread_{};
     std::thread move_thread_{};
+    std::atomic<bool> running_{true};
+    double walk_phase_{0.0};
 };
 
 } // namespace
