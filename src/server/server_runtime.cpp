@@ -1084,7 +1084,7 @@ void send_remove_entity(refrain::net::server &listener,
 [[nodiscard]] auto encode_remove_entity_body(std::uint64_t entity_id)
     -> std::vector<std::byte> {
     refrain::protocol::current::play::clientbound::remove_entities packet{};
-    packet.entity_ids.push_back(entity_id);
+    packet.entity_ids.push_back(static_cast<std::uint32_t>(entity_id));
     return encode_play_body(
         refrain::protocol::current::play::clientbound::remove_entities::
             packet_id,
