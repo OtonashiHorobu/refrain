@@ -65,6 +65,17 @@ struct protocol_load_options {
     int timeout_ms{15000};
 };
 
+struct protocol_pool_load_options {
+    std::string target{};
+    std::string username_prefix{"Bot"};
+    int bots{1000};
+    int duration_ms{15000};
+    int timeout_ms{15000};
+    double walk_radius{0.0};
+    int walk_period_ms{100};
+    int view_distance{8};
+};
+
 struct protocol_capture_options {
     std::string target{};
     std::string out{};
@@ -203,6 +214,8 @@ run_config_import_properties(const config_import_options &options) -> int;
 [[nodiscard]] auto run_protocol_bot(const protocol_bot_options &options) -> int;
 [[nodiscard]] auto run_protocol_load(const protocol_load_options &options)
     -> int;
+[[nodiscard]] auto
+run_protocol_pool_load(const protocol_pool_load_options &options) -> int;
 [[nodiscard]] auto run_protocol_capture(const protocol_capture_options &options)
     -> int;
 [[nodiscard]] auto run_protocol_diff(const protocol_diff_options &options)
