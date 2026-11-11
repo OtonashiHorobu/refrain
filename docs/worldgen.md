@@ -1,30 +1,31 @@
 # World generation data
 
-Refrain contains no game assets. World generation reads two kinds of
+Refrain contains no game assets or datapack. World generation reads two kinds of
 data that come from the Minecraft version the server is built for: the
 datapack documents that drive biomes, features, structures and carvers,
 and the structure templates that provide the prebuilt pieces.
 
-## Datapack snapshot
+## Datapack
 
-The datapack documents are copied into `content/vanilla/<version>/data`
-by `tools/worldgen/pack_content.py`, which also writes `MANIFEST.json`
-with the game version, data version, entry count and content digest:
+The datapack documents that drive biomes, features, structures and carvers are
+not part of the repository. Generate the datapack and its manifest from the
+`server.jar` you own:
 
 ```bash
-python3 tools/worldgen/pack_content.py \
-    --data-root /path/to/extracted/data \
-    --out content/vanilla/26.3
+scripts/fetch-content.sh /path/to/server.jar
 ```
 
-The snapshot is game-derived data and is covered by the notice in
-`content/vanilla/`; it is not part of the repository license.
+The script extracts the data entries with `refrain-tools extract` and packs the
+worldgen documents and tags with `tools/worldgen/pack_content.py`. It writes
+`content/vanilla/<version>/{data,MANIFEST.json}`; pass `--version` or
+`--data-version` when they differ from the defaults. Both are game-derived data
+covered by the notice in `content/vanilla/`, are not part of the repository
+license and are not tracked by git.
 
 ## Biome parameter reports
 
-The overworld and nether biome selection tables are game data. They are
-committed next to the datapack snapshot under
-`content/vanilla/<version>/reports/biome_parameters/`:
+The overworld and nether biome selection tables are game data. The derived
+reports ship under `content/vanilla/<version>/reports/biome_parameters/`:
 
 ```text
 reports/biome_parameters/
@@ -66,7 +67,7 @@ at any time from the jar.
 
 ## Consuming the data
 
-The worldgen layer loads the datapack snapshot from a data root and
+The worldgen layer loads the datapack from a data root and
 templates from the extracted directory. Tests and oracles take both
 locations from the environment so the same code paths run against the
 files an installation would use.
@@ -76,7 +77,7 @@ files an installation would use.
 A datapack names a plain block when a feature places the block's default
 state, and a reference chunk palette writes that default state as the bare
 block name. The property values of the default are not part of the datapack,
-so the snapshot ships a derived report next to it:
+so the repository ships a derived report:
 `reports/block_defaults/defaults.json` maps every block whose default state
 carries properties to those values, and its `MANIFEST.json` records the game
 version, data version, size and digest. `tools/worldgen/block_defaults.py`
@@ -86,7 +87,7 @@ The generator loads the report when it is installed. A bare state key then
 answers the state-dependent questions the reference asks its default state:
 the simple-block feature places the second half of a double plant, and shape
 families read the default properties a state key omits. Without the report the
-generator keeps the spelling-only behaviour, so an older snapshot still loads.
+generator keeps the spelling-only behaviour, so an older datapack still loads.
 
 ## Dimensions
 
@@ -346,7 +347,7 @@ The reference-backed suites currently cover:
   placement, template placement, feature freeze and decoration.
 
 Known gaps: the feature registry decodes every configured feature, placement
-modifier, block predicate and state-provider type the shipped snapshot uses,
+modifier, block predicate and state-provider type the 26.3 datapack uses,
 including the cherry, poplar, bending and upwards-branching tree placers, the
 mangrove root placer and the pale moss and creaking heart decorators. The pine
 and mega pine foliage placers read their canopy height provider under the name
@@ -362,7 +363,7 @@ layers, paths, farmland, speleothems, cave vines, multiface layers and sculk
 sensors answer per direction; a bare state key takes the properties its
 default state carries from the default-state report. States outside those
 families still fall back to the heightmap motion-blocking tags. The substrate
-checks of a simple-block placement cover the families the shipped snapshot
+checks of a simple-block placement cover the families the 26.3 datapack
 places: a mushroom needs a solid-render block below it or a block that
 overrides its light requirement. Generation carries no light data, so the
 reference's light gate is not modelled; it admits every position in a
@@ -433,7 +434,7 @@ chunks `(0,0)` and `(1,1)` block for block and in all four final heightmaps.
 Both reference worlds fix a real biome and strip its carvers and features, so
 they contain exactly the fill and surface output of that dimension. The
 deterministic dimension test repeats the fixed-biome chunks without a reference
-world, using the snapshot this repository ships.
+world, using a locally generated 26.3 datapack.
 
 A nether reference world keeps the fixed biome's real carvers and the real
 material rule while features and structures stay off. The runtime service

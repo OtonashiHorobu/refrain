@@ -7,8 +7,9 @@ deterministic simulation and exposes storage and content tooling through
 stable contracts.
 
 Refrain is not affiliated with, approved by or associated with Mojang or
-Microsoft. It contains no Mojang code, assets or data. Minecraft is a trademark
-of Mojang Synergies AB.
+Microsoft. It contains no Mojang code or assets. The game-derived tables under
+`content/vanilla/` carry their own [notice](content/vanilla/NOTICE.md).
+Minecraft is a trademark of Mojang Synergies AB.
 
 NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR
 MICROSOFT.
