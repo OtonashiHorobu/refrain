@@ -21,6 +21,12 @@ CTest runs the same binary:
 ctest --preset conan-release --output-on-failure
 ```
 
+World generation has data-driven cases that read the datapack from
+`content/vanilla/<version>/data`. The datapack is not distributed; generate it
+from a locally owned `server.jar` with `scripts/fetch-content.sh` as described
+in [World generation data](worldgen.md). When it is absent, those cases are
+skipped with a diagnostic.
+
 ## Continuous integration
 
 ```bash

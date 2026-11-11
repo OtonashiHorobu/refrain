@@ -1,10 +1,11 @@
 # Agent and contributor guide
 
 Refrain is a C++26 reimplementation of a Minecraft Java Edition 26.3 server.
-The repository ships code, contracts, tests and user documentation; it ships no
-game code and no game assets. Data derived from the game lives only under
-`content/vanilla/`, carries its own notice and is not covered by the repository
-license.
+The repository ships code, contracts, tests, user documentation and the
+game-derived tables under `content/vanilla/`; it ships no game code, no game
+assets and no datapack. Those tables carry their own notice and are not covered
+by the repository license; the datapack is generated locally from the user's
+own `server.jar`.
 
 ## Ground rules
 
@@ -22,10 +23,10 @@ code, and review the implementation against that specification.
 
 Code is written independently from the specification. Do not paste vanilla
 source into this tree and do not translate it line by line. Game assets never
-live in source files; data derived from Minecraft lives only under
+live in source files. The game-derived tables live only under
 `content/vanilla/`, which carries its own notice and is not covered by the
-repository license. Test fixtures that do not derive from the game stay
-synthetic.
+repository license; the datapack is generated locally and never committed.
+Test fixtures that do not derive from the game stay synthetic.
 
 ## Repository map
 
@@ -40,7 +41,7 @@ synthetic.
 | `tools/` | schema compiler, vendor tooling and repository checks |
 | `cmake/`, `conan/` | build modules, in-repo recipes and the dependency lock |
 | `mods/`, `gamepack/` | bundled mod manifests and the default composition |
-| `content/vanilla/` | game-derived data with its own notice, outside the repository license |
+| `content/vanilla/` | derived game tables with their own notice, outside the repository license |
 | `docs/` | architecture, build, run, test, schema and modding guides |
 
 ## Build and test
