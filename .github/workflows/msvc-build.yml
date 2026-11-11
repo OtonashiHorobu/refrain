@@ -46,12 +46,24 @@ jobs:
           cmake --version | Select-Object -First 1
 
       - name: Restore Conan cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: conan-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.conan2
           key: conan-msvc-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
           restore-keys: |
             conan-msvc-
+
+      # Ninja keeps the object graph in the build directory, so restoring it
+      # turns the next run into an incremental build. Only `main` writes it.
+      - name: Restore build tree
+        id: build-tree
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/Release
+          key: msvc-build-${{ github.sha }}
+          restore-keys: |
+            msvc-build-
 
       - name: Create MSVC Conan profile
         shell: pwsh
@@ -85,6 +97,7 @@ jobs:
         run: |
           conan install . -pr msvc --build=missing `
             -o "&:with_crashpad=False" -o "&:with_wasm=False" `
+            -o "&:lto=False" `
             -o "&:build_bench=False" `
             --lockfile=conan/locks/vendor.lock
 
@@ -93,6 +106,20 @@ jobs:
 
       - name: Build
         run: cmake --build --preset conan-release -j 4
+
+      - name: Save build tree
+        if: github.ref == 'refs/heads/main' && steps.build-tree.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/Release
+          key: msvc-build-${{ github.sha }}
+
+      - name: Save Conan cache
+        if: github.ref == 'refs/heads/main' && steps.conan-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.conan2
+          key: conan-msvc-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
 
       - name: Test
         run: ctest --test-dir build/Release --output-on-failure

@@ -33,12 +33,23 @@ jobs:
           persist-credentials: false
 
       - name: Restore Conan cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: conan-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .conan-cache
           key: conan-mingw-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
           restore-keys: |
             conan-mingw-
+
+      # Object cache for the cross compiler; only `main` writes it.
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-mingw-${{ github.sha }}
+          restore-keys: |
+            ccache-mingw-
 
       - name: Build in container
         run: |
@@ -48,8 +59,11 @@ jobs:
             -v "$PWD/.conan-cache:/root/.conan2" \
             -w /src archlinux:latest bash -lc '
               set -euo pipefail
+              export CCACHE_DIR=/src/.ccache
+              export CCACHE_MAXSIZE=1G
+              export CCACHE_COMPRESS=true
               pacman -Syu --noconfirm --needed base-devel git python python-pip \
-                cmake ninja mingw-w64-gcc mingw-w64-binutils wine \
+                cmake ninja ccache mingw-w64-gcc mingw-w64-binutils wine \
                 xorg-server-xvfb nasm perl
               # The OpenSSL MinGW makefile invokes windres without the target
               # prefix; a wrapper keeps argv[0] so the tool finds its sysroot.
@@ -94,9 +108,12 @@ jobs:
 
               conan install . -pr gcc-release -of build/host --build=missing \
                 -o "&:with_crashpad=False" -o "&:with_wasm=False" \
+                -o "&:lto=False" \
                 -o "&:build_tests=False" -o "&:build_bench=False"
               cmake -S . -B build/host/build/Release -G Ninja \
                 -DCMAKE_TOOLCHAIN_FILE=build/host/build/Release/generators/conan_toolchain.cmake \
+                -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DREFRAIN_BUILD_SERVER=OFF \
                 -DREFRAIN_BUILD_TESTS=OFF \
@@ -107,10 +124,13 @@ jobs:
 
               conan install . -pr mingw --build=missing \
                 -o "&:with_crashpad=False" -o "&:with_wasm=False" \
+                -o "&:lto=False" \
                 -o "&:build_tests=False" -o "&:build_bench=False" \
                 --lockfile=conan/locks/vendor.lock
               cmake -S . -B build/Release -G Ninja \
                 -DCMAKE_TOOLCHAIN_FILE=build/Release/generators/conan_toolchain.cmake \
+                -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DREFRAIN_BUILD_TESTS=OFF \
                 -DREFRAIN_BUILD_BENCH=OFF \
@@ -124,3 +144,17 @@ jobs:
               xvfb-run -a wine build/Release/bin/refrain-tools.exe version
               xvfb-run -a wine build/Release/bin/refrain-server.exe --help
             '
+
+      - name: Save ccache
+        if: github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-mingw-${{ github.sha }}
+
+      - name: Save Conan cache
+        if: github.ref == 'refs/heads/main' && steps.conan-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .conan-cache
+          key: conan-mingw-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
