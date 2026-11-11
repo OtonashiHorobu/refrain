@@ -63,6 +63,12 @@ frame decoder (compressed and uncompressed), the text-component NBT decoder and
 selected generated packet decoders. It runs in CI and asserts only that no input
 crashes or hangs the decoder; malformed input is expected to return an error.
 
+`test/net/test_fuzz_matrix.cpp` widens that to every serverbound decoder in the
+schema: play, configuration and login. Each decoder sees random bytes, every
+truncated prefix of a valid encoding and a byte-flipped copy, which is the shape
+a truncated or corrupted client packet has. Adding a packet to the schema means
+adding its decoder to that list.
+
 ## Protocol bot
 
 `refrain-tools protocol bot` connects to an offline-mode server and walks the
