@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Copy the worldgen datapack documents into the content snapshot.
+"""Copy the worldgen datapack documents into a locally generated snapshot.
 
 The snapshot contains only the files world generation reads: every
 `<namespace>/worldgen/**` document plus the block and biome tag trees. It is
 game-derived data, so the output belongs under `content/vanilla/<version>/`
-and carries the directory notice.
+and carries the directory notice. The snapshot is generated from the user's
+own server jar and is not committed.
 
 Usage:
     pack_content.py --data-root /path/to/server/data --out content/vanilla/26.3
