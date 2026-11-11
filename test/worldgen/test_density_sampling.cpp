@@ -16,12 +16,13 @@
 #include <refrain/worldgen/density/density_router.hpp>
 #include <refrain/worldgen/noise/noise.hpp>
 
+#include "support/vanilla_data.hpp"
+
 #include <boost/ut.hpp>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -204,18 +205,9 @@ class reference_interpolated {
     float cell_size_y_inv_;
 };
 
-auto real_data_root() -> std::string {
-    return std::string{REFRAIN_SOURCE_DIR} + "/content/vanilla/26.3/data";
-}
-
-auto has_real_data() -> bool {
-    return std::filesystem::exists(
-        real_data_root() + "/minecraft/worldgen/noise_settings/overworld.json");
-}
-
 auto load_settings(std::string_view id) -> refrain::result<noise_settings> {
-    return load_noise_settings(real_data_root(), id, algorithm::xoroshiro,
-                               12345);
+    return load_noise_settings(refrain::test_support::vanilla_data_root(), id,
+                               algorithm::xoroshiro, 12345);
 }
 
 /// Compares `sampler`'s cell output with the independent reference on one
@@ -274,7 +266,7 @@ suite<"worldgen/density-sampling"> density_sampling_tests = [] {
 
     "the cell lattice matches the reference on real dimension densities"_test =
         [] {
-            if (!has_real_data()) {
+            if (!refrain::test_support::vanilla_data().available) {
                 return;
             }
             struct dimension_case {
@@ -333,6 +325,9 @@ suite<"worldgen/density-sampling"> density_sampling_tests = [] {
         // The cell lattice is an approximation: the reference guarantees the
         // lattice arithmetic, not equality with a per-block sample. This is
         // why the final density cannot be sampled on a lattice as a whole.
+        if (!refrain::test_support::vanilla_data().available) {
+            return;
+        }
         auto settings = load_settings("minecraft/overworld");
         if (!settings) {
             return;

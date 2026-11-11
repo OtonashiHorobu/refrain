@@ -15,6 +15,7 @@
 #include <refrain/worldgen/chunk_generator.hpp>
 #include <refrain/worldgen/dimension.hpp>
 
+#include "support/vanilla_data.hpp"
 #include "worldgen/full_stage_support.hpp"
 
 #include <boost/ut.hpp>
@@ -42,7 +43,7 @@ using namespace refrain::worldgen;
 using namespace refrain::worldgen::test_support;
 
 auto source_data_root() -> std::string {
-    return std::string{REFRAIN_SOURCE_DIR} + "/content/vanilla/26.3/data";
+    return refrain::test_support::vanilla_data_root();
 }
 
 auto environment(std::string_view name) -> const char * {
@@ -415,6 +416,9 @@ void run_carver_reference_case() {
 auto make_terrain_generator(generation_target target,
                             std::vector<std::string> structure_sets)
     -> std::unique_ptr<chunk_generator> {
+    if (!refrain::test_support::vanilla_data().available) {
+        return nullptr;
+    }
     auto created = chunk_generator::create(chunk_generator_config{
         .data_root = source_data_root(),
         .templates_root = "",
@@ -449,6 +453,9 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
     };
 
     "the carver reference mode keeps the dimension terrain stages"_test = [] {
+        if (!refrain::test_support::vanilla_data().available) {
+            return;
+        }
         const auto create_nether = [](bool reference_world,
                                       bool reference_carvers) {
             return chunk_generator::create(chunk_generator_config{
@@ -543,6 +550,9 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
     };
 
     "serial and parallel batches agree on structure chunks"_test = [] {
+        if (!refrain::test_support::vanilla_data().available) {
+            return;
+        }
         auto created = chunk_generator::create(chunk_generator_config{
             .data_root = source_data_root(),
             .templates_root = "",
@@ -584,6 +594,9 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
     };
 
     "full batches are identical across repeats and workers"_test = [] {
+        if (!refrain::test_support::vanilla_data().available) {
+            return;
+        }
         auto created = chunk_generator::create(chunk_generator_config{
             .data_root = source_data_root(),
             .templates_root = "",
@@ -695,6 +708,9 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         });
         expect(!missing.has_value());
 
+        if (!refrain::test_support::vanilla_data().available) {
+            return;
+        }
         auto generator = make_terrain_generator(generation_target::terrain, {});
         if (generator == nullptr) {
             return;
@@ -718,6 +734,9 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
     };
 
     "the runtime generator creates the reference overworld biomes"_test = [] {
+        if (!refrain::test_support::vanilla_data().available) {
+            return;
+        }
         constexpr std::array<std::string_view, 9> biomes{{
             "minecraft:plains",
             "minecraft:forest",
@@ -751,6 +770,9 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
     };
 
     "a full plains chunk generates at the features and full targets"_test = [] {
+        if (!refrain::test_support::vanilla_data().available) {
+            return;
+        }
         for (const auto target :
              {generation_target::features, generation_target::full}) {
             auto created = chunk_generator::create(chunk_generator_config{
@@ -781,6 +803,9 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
     };
 
     "neighbour decoration follows the configured radius and box"_test = [] {
+        if (!refrain::test_support::vanilla_data().available) {
+            return;
+        }
         const auto make = [](chunk_rectangle box, jint radius) {
             return chunk_generator::create(chunk_generator_config{
                 .data_root = source_data_root(),
@@ -889,6 +914,9 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         };
         expect(!create(chunk_rectangle{}, -1).has_value());
         expect(!create(chunk_rectangle{}, 9).has_value());
+        if (!refrain::test_support::vanilla_data().available) {
+            return;
+        }
         auto outside = create(
             chunk_rectangle{.min_x = 4, .min_z = 4, .max_x = 6, .max_z = 6}, 1);
         expect(outside.has_value()) << outside.error().message;
