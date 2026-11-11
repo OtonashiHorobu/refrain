@@ -6,10 +6,37 @@
 
 #include <refrain/sim/world.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace refrain::server {
+
+/// Menu slot that mirrors an inventory index, or -1 when the index has no
+/// menu slot in the modeled player menu.
+[[nodiscard]] auto menu_slot_of(std::size_t inventory_index) -> std::int16_t;
+
+/// Inventory index behind a menu slot, or `npos` when the slot is not part of
+/// the modeled player menu.
+[[nodiscard]] auto inventory_index_of(std::int16_t menu_slot) -> std::size_t;
+
+inline constexpr std::size_t no_inventory_index = static_cast<std::size_t>(-1);
+
+/// Menu slots whose stack differs between two inventory snapshots.
+///
+/// A missing index counts as an empty stack, so a snapshot that grew reports
+/// the new slots. Slots without a menu slot are skipped and the result is
+/// ordered by menu slot.
+[[nodiscard]] auto changed_menu_slots(std::span<const sim::item_stack> before,
+                                      std::span<const sim::item_stack> after)
+    -> std::vector<std::int16_t>;
+
+/// Put a stack back into the player inventory, merging into matching stacks
+/// first and using empty slots afterwards. Returns the remainder that did not
+/// fit; a remainder count of zero means the stack was placed completely.
+[[nodiscard]] auto place_back(std::vector<sim::item_stack> &inventory,
+                              sim::item_stack stack) -> sim::item_stack;
 
 /// Apply one mouse click to the player inventory menu.
 ///
