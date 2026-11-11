@@ -1739,6 +1739,33 @@ void server::send_container_content(std::uint64_t connection,
                        packet, play_cb::encode_container_set_content);
 }
 
+void server::send_container_set_slot(std::uint64_t connection,
+                                     std::int32_t container_id,
+                                     std::int32_t state_id, std::int16_t slot,
+                                     const item_stack &item) {
+    if (!impl_) {
+        return;
+    }
+    play_cb::container_set_slot packet{};
+    packet.container_id = container_id;
+    packet.state_id = state_id;
+    packet.slot = slot;
+    packet.item_stack = item;
+    impl_->send_packet(connection, play_cb::container_set_slot::packet_id,
+                       packet, play_cb::encode_container_set_slot);
+}
+
+void server::send_cursor_item(std::uint64_t connection,
+                              const item_stack &item) {
+    if (!impl_) {
+        return;
+    }
+    play_cb::set_cursor_item packet{};
+    packet.contents = item;
+    impl_->send_packet(connection, play_cb::set_cursor_item::packet_id, packet,
+                       play_cb::encode_set_cursor_item);
+}
+
 void server::send_raw(std::uint64_t connection,
                       std::span<const std::byte> body) {
     if (impl_) {
@@ -2434,6 +2461,7 @@ void server::impl::handle_play(std::uint64_t id,
         container_clicks.push_back(container_click_event{
             .connection = id,
             .container_id = packet.payload.container_id,
+            .state_id = packet.payload.state_id,
             .slot = packet.payload.slot_num,
             .button = packet.payload.button_num,
             .mode = packet.payload.container_input,

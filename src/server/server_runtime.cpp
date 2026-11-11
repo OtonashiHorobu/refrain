@@ -1825,11 +1825,36 @@ auto run_server(const server_run_options &options) -> int {
     if (auto stone{item_ids.find("minecraft:stone")}; stone != item_ids.end()) {
         refrain::log::info("inventory: minecraft:stone -> {}", stone->second);
     }
-    std::set<std::uint64_t> inventory_initialized{};
     std::set<std::uint64_t> inventory_forced{};
     std::unordered_map<std::uint64_t, refrain::sim::item_stack> carried_items{};
-    std::unordered_map<std::uint64_t, std::uint64_t> inventory_hashes{};
-    std::int32_t inventory_state{0};
+    std::unordered_map<std::uint64_t, std::vector<refrain::sim::item_stack>>
+        inventory_snapshots{};
+    std::unordered_map<std::uint64_t, refrain::net::item_stack>
+        carried_snapshots{};
+    // The client echoes the last menu state id it received in every click.
+    // Ids wrap at 15 bits like the client counter; any other echoed value
+    // means the client missed an update and gets the full menu state.
+    std::unordered_map<std::uint64_t, std::int32_t> inventory_states{};
+    // Runtime stack to protocol stack; unknown items and empty stacks encode
+    // as an empty stack.
+    const auto protocol_stack = [&](const refrain::sim::item_stack &stack) {
+        if (stack.count == 0 || stack.item.empty()) {
+            return refrain::net::item_stack{};
+        }
+        const auto item{item_ids.find(stack.item)};
+        if (item == item_ids.end()) {
+            return refrain::net::item_stack{};
+        }
+        return refrain::net::item_stack{
+            .count = stack.count,
+            .item_id = item->second,
+        };
+    };
+    const auto next_state = [&](std::uint64_t id) {
+        auto &state{inventory_states[id]};
+        state = (state + 1) & 32767;
+        return state;
+    };
     const auto process_container_clicks = [&]() {
         if (!listener) {
             return;
@@ -1860,26 +1885,48 @@ auto run_server(const server_run_options &options) -> int {
             if (close.container_id != 0) {
                 continue;
             }
-            carried_items.erase(close.connection);
+            if (auto *inventory = players.inventory_of(close.connection)) {
+                const auto carried{carried_items.find(close.connection)};
+                if (carried != carried_items.end()) {
+                    const auto remainder{refrain::server::place_back(
+                        *inventory, carried->second)};
+                    if (remainder.count == 0) {
+                        carried_items.erase(close.connection);
+                    } else {
+                        carried->second = remainder;
+                    }
+                }
+            }
             inventory_forced.insert(close.connection);
         }
         for (const auto &click : listener->take_container_clicks()) {
-            if (click.container_id != 0 || click.mode != 0) {
+            if (click.container_id != 0) {
                 continue;
             }
             auto *inventory = players.inventory_of(click.connection);
             if (inventory == nullptr) {
                 continue;
             }
+            const auto known{inventory_states.find(click.connection)};
+            const auto stale{known == inventory_states.end() ||
+                             known->second != click.state_id};
+            if (click.mode != 0) {
+                // Shift, drag and number-key clicks are not modeled; resend
+                // the authoritative state so the client prediction reverts.
+                inventory_forced.insert(click.connection);
+                continue;
+            }
             auto &carried{carried_items[click.connection]};
             const auto changed{refrain::server::apply_player_click(
                 *inventory, carried, click.slot, click.button)};
             refrain::log::debug(
-                "inventory: click conn={} slot={} button={} mode={} -> "
-                "carried='{}' x{} changed={}",
+                "inventory: click conn={} slot={} button={} mode={} "
+                "state={} stale={} -> carried='{}' x{} changed={}",
                 click.connection, click.slot, click.button, click.mode,
-                carried.item, carried.count, changed);
-            inventory_forced.insert(click.connection);
+                click.state_id, stale, carried.item, carried.count, changed);
+            if (stale) {
+                inventory_forced.insert(click.connection);
+            }
         }
     };
 
@@ -1890,18 +1937,26 @@ auto run_server(const server_run_options &options) -> int {
         const auto active_ids{listener->active_connections()};
         const std::set<std::uint64_t> active{active_ids.begin(),
                                              active_ids.end()};
-        for (auto iterator = inventory_initialized.begin();
-             iterator != inventory_initialized.end();) {
-            if (!active.contains(*iterator)) {
-                iterator = inventory_initialized.erase(iterator);
+        for (auto iterator = inventory_snapshots.begin();
+             iterator != inventory_snapshots.end();) {
+            if (!active.contains(iterator->first)) {
+                iterator = inventory_snapshots.erase(iterator);
             } else {
                 ++iterator;
             }
         }
-        for (auto iterator = inventory_hashes.begin();
-             iterator != inventory_hashes.end();) {
+        for (auto iterator = carried_snapshots.begin();
+             iterator != carried_snapshots.end();) {
             if (!active.contains(iterator->first)) {
-                iterator = inventory_hashes.erase(iterator);
+                iterator = carried_snapshots.erase(iterator);
+            } else {
+                ++iterator;
+            }
+        }
+        for (auto iterator = inventory_states.begin();
+             iterator != inventory_states.end();) {
+            if (!active.contains(iterator->first)) {
+                iterator = inventory_states.erase(iterator);
             } else {
                 ++iterator;
             }
@@ -1911,56 +1966,50 @@ auto run_server(const server_run_options &options) -> int {
             if (record == nullptr) {
                 continue;
             }
-            std::vector<refrain::net::item_stack> slots(46);
-            std::uint64_t hash{0};
-            for (std::size_t index{0}; index < record->inventory.size();
-                 ++index) {
-                const auto &stack{record->inventory[index]};
-                const auto item{item_ids.find(stack.item)};
-                hash ^= std::hash<std::string>{}(stack.item) +
-                        (static_cast<std::uint64_t>(stack.count) << 1U);
-                if (item == item_ids.end()) {
-                    continue;
-                }
-                std::size_t slot{0};
-                if (index < 9) {
-                    slot = 36U + index;
-                } else if (index < 36U) {
-                    slot = index;
-                } else {
-                    continue;
-                }
-                slots[slot] = refrain::net::item_stack{
-                    .count = stack.count,
-                    .item_id = item->second,
-                };
-            }
-            const auto previous{inventory_hashes.find(id)};
-            const auto changed{previous == inventory_hashes.end() ||
-                               previous->second != hash};
-            const auto any_new{!inventory_initialized.contains(id)};
+            const auto &inventory{record->inventory};
+            const auto previous{inventory_snapshots.find(id)};
             const auto forced{inventory_forced.contains(id)};
-            if (!changed && !any_new && !forced) {
-                continue;
-            }
-            if (changed) {
-                inventory_hashes[id] = hash;
-                ++inventory_state;
-            }
-            auto carried{refrain::net::item_stack{}};
-            if (const auto stack{carried_items.find(id)};
-                stack != carried_items.end() && stack->second.count > 0) {
-                if (const auto item{item_ids.find(stack->second.item)};
-                    item != item_ids.end()) {
-                    carried = refrain::net::item_stack{
-                        .count = stack->second.count,
-                        .item_id = item->second,
-                    };
+            if (previous == inventory_snapshots.end() || forced) {
+                std::vector<refrain::net::item_stack> slots(46);
+                for (std::size_t index{0}; index < inventory.size(); ++index) {
+                    const auto slot{refrain::server::menu_slot_of(index)};
+                    if (slot < 0) {
+                        continue;
+                    }
+                    slots[static_cast<std::size_t>(slot)] =
+                        protocol_stack(inventory[index]);
+                }
+                auto carried{refrain::net::item_stack{}};
+                if (const auto stack{carried_items.find(id)};
+                    stack != carried_items.end()) {
+                    carried = protocol_stack(stack->second);
+                }
+                listener->send_container_content(id, 0, next_state(id), slots,
+                                                 carried);
+                carried_snapshots[id] = carried;
+            } else {
+                for (const auto slot : refrain::server::changed_menu_slots(
+                         previous->second, inventory)) {
+                    const auto index{refrain::server::inventory_index_of(slot)};
+                    const auto stack{index < inventory.size()
+                                         ? protocol_stack(inventory[index])
+                                         : refrain::net::item_stack{}};
+                    listener->send_container_set_slot(id, 0, next_state(id),
+                                                      slot, stack);
+                }
+                auto carried{refrain::net::item_stack{}};
+                if (const auto stack{carried_items.find(id)};
+                    stack != carried_items.end()) {
+                    carried = protocol_stack(stack->second);
+                }
+                const auto sent{carried_snapshots.find(id)};
+                if (sent == carried_snapshots.end() ||
+                    sent->second != carried) {
+                    listener->send_cursor_item(id, carried);
+                    carried_snapshots[id] = carried;
                 }
             }
-            listener->send_container_content(id, 0, inventory_state, slots,
-                                             carried);
-            inventory_initialized.insert(id);
+            inventory_snapshots[id] = inventory;
         }
         inventory_forced.clear();
         for (auto iterator = carried_items.begin();

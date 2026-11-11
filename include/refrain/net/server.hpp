@@ -46,6 +46,7 @@ struct container_close_event {
 struct container_click_event {
     std::uint64_t connection{0};
     std::int32_t container_id{0};
+    std::int32_t state_id{0};
     std::int16_t slot{0};
     std::int8_t button{0};
     std::uint32_t mode{0};
@@ -348,6 +349,16 @@ class server {
                                 std::int32_t state_id,
                                 std::span<const item_stack> items,
                                 const item_stack &carried);
+
+    /// Send one container slot update.
+    void send_container_set_slot(std::uint64_t connection,
+                                 std::int32_t container_id,
+                                 std::int32_t state_id, std::int16_t slot,
+                                 const item_stack &item);
+
+    /// Send the stack held on the cursor. Carried stacks have no container
+    /// slot and no state id on the wire.
+    void send_cursor_item(std::uint64_t connection, const item_stack &item);
 
   private:
     struct impl;
