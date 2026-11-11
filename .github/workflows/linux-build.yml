@@ -41,6 +41,11 @@ env:
   CONAN_LOGIN_USERNAME: ""
   CONAN_NON_INTERACTIVE: "1"
 
+# Container jobs default to `sh`; the steps use bash-only syntax.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   # ---------------------------------------------------------------------------
   # Fast policy gate: vendoring rules + pin manifest (no compiler needed).
