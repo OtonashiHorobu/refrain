@@ -52,6 +52,7 @@
 #include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
 #include <refrain/net/bot.hpp>
+#include <refrain/net/bot_pool.hpp>
 #include <refrain/script/wasm.hpp>
 #include <refrain/server/server_properties.hpp>
 #include <schema/schema.hpp>
@@ -419,6 +420,76 @@ auto run_protocol_load(const protocol_load_options &options) -> int {
     if (joined.load() != options.bots) {
         if (!errors.empty()) {
             fmt::print(stderr, "load: first error: {}\n", errors.front());
+        }
+        return 1;
+    }
+    return 0;
+}
+
+auto run_protocol_pool_load(const protocol_pool_load_options &options) -> int {
+    const auto separator{options.target.rfind(':')};
+    if (separator == std::string::npos ||
+        separator + 1 >= options.target.size()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol pool-load: expected host:port"));
+    }
+    std::uint16_t port{0};
+    const auto port_text{options.target.substr(separator + 1)};
+    const auto parsed{std::from_chars(
+        port_text.data(), port_text.data() + port_text.size(), port)};
+    if (parsed.ec != std::errc{} ||
+        parsed.ptr != port_text.data() + port_text.size()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol pool-load: invalid port"));
+    }
+    if (options.bots <= 0) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "protocol pool-load: bots must be positive"));
+    }
+    if (options.duration_ms < 0) {
+        return report_error(refrain::make_error(
+            refrain::error_code::invalid_argument,
+            "protocol pool-load: duration must not be negative"));
+    }
+    if (options.timeout_ms <= 0) {
+        return report_error(refrain::make_error(
+            refrain::error_code::invalid_argument,
+            "protocol pool-load: timeout must be positive"));
+    }
+    if (options.walk_radius < 0.0) {
+        return report_error(refrain::make_error(
+            refrain::error_code::invalid_argument,
+            "protocol pool-load: walk radius must not be negative"));
+    }
+    if (options.view_distance <= 0 || options.view_distance > 32) {
+        return report_error(refrain::make_error(
+            refrain::error_code::invalid_argument,
+            "protocol pool-load: view distance must be between 1 and 32"));
+    }
+
+    refrain::net::bot_pool_options pool{};
+    pool.target.host = options.target.substr(0, separator);
+    pool.target.port = port;
+    pool.bots = static_cast<std::size_t>(options.bots);
+    pool.duration = std::chrono::milliseconds{options.duration_ms};
+    pool.timeout = std::chrono::milliseconds{options.timeout_ms};
+    pool.walk_radius = options.walk_radius;
+    pool.walk_period = std::chrono::milliseconds{options.walk_period_ms};
+    pool.username_prefix = options.username_prefix;
+    pool.view_distance = static_cast<std::uint8_t>(options.view_distance);
+
+    const auto report{refrain::net::run_bot_pool(pool)};
+    fmt::print("pool-load: joined={}/{} packets={} chunks={} "
+               "join_ms p50={} p99={}\n",
+               report.joined, report.requested, report.packets, report.chunks,
+               report.join_p50.count(), report.join_p99.count());
+    if (report.joined != report.requested) {
+        if (!report.errors.empty()) {
+            fmt::print(stderr, "pool-load: first error: {}\n",
+                       report.errors.front());
         }
         return 1;
     }

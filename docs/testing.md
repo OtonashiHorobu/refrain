@@ -111,6 +111,22 @@ The harness opens N bots, keeps each in play for the duration and reports how
 many joined. The server logs `runtime: <ticks> tick(s), avg <ms> ms, max <ms>
 ms` on a clean shutdown, which is the baseline for MSPT checks.
 
+`protocol load` opens one connection per bot. For runs beyond a few hundred
+bots, `protocol pool-load` multiplexes every bot over one transport and one
+timer thread:
+
+```bash
+build/Release/bin/refrain-tools protocol pool-load \
+    --host 127.0.0.1:25565 --bots 1000 --duration-ms 60000 \
+    --walk-radius 8 --walk-period-ms 100
+```
+
+It reports the joined count, join latency percentiles and packet counts, and
+keeps each bot walking so the server exercises visibility and chunk streaming
+under load. The shared transport keeps client-side memory and thread count
+flat, which makes it the client to use when the measurement target is the
+server.
+
 ### Client input (X11)
 
 Run the vanilla client under XWayland when a test needs real key/mouse input:

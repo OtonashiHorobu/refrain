@@ -476,6 +476,7 @@ int main(int argc, char **argv) {
     int protocol_timeout_ms{5000};
     protocol_bot_options protocol_bot{};
     protocol_load_options protocol_load{};
+    protocol_pool_load_options protocol_pool_load{};
     protocol_capture_options protocol_capture{};
     protocol_diff_options protocol_diff{};
     auto *protocol_cmd =
@@ -536,6 +537,32 @@ int main(int argc, char **argv) {
                                   "Milliseconds between walk steps");
     protocol_load_cmd->add_option("--timeout-ms", protocol_load.timeout_ms,
                                   "Per-bot join timeout");
+
+    auto *protocol_pool_load_cmd = protocol_cmd->add_subcommand(
+        "pool-load", "Open N protocol bots on one shared transport");
+    protocol_pool_load_cmd
+        ->add_option("--host", protocol_pool_load.target,
+                     "host:port (required)")
+        ->required();
+    protocol_pool_load_cmd->add_option("--bots", protocol_pool_load.bots,
+                                       "Number of bots");
+    protocol_pool_load_cmd->add_option("--duration-ms",
+                                       protocol_pool_load.duration_ms,
+                                       "How long each bot stays in play");
+    protocol_pool_load_cmd->add_option("--walk-radius",
+                                       protocol_pool_load.walk_radius,
+                                       "Circle radius in blocks; 0 disables");
+    protocol_pool_load_cmd->add_option("--walk-period-ms",
+                                       protocol_pool_load.walk_period_ms,
+                                       "Milliseconds between move packets");
+    protocol_pool_load_cmd->add_option("--username-prefix",
+                                       protocol_pool_load.username_prefix,
+                                       "Bot username prefix");
+    protocol_pool_load_cmd->add_option(
+        "--timeout-ms", protocol_pool_load.timeout_ms, "Per-bot join timeout");
+    protocol_pool_load_cmd->add_option("--view-distance",
+                                       protocol_pool_load.view_distance,
+                                       "Client view distance");
 
     auto *protocol_capture_cmd = protocol_cmd->add_subcommand(
         "capture", "Record decoded clientbound packets into RFCAP1");
@@ -801,6 +828,9 @@ int main(int argc, char **argv) {
     }
     if (protocol_load_cmd->parsed()) {
         return app_services::run_protocol_load(protocol_load);
+    }
+    if (protocol_pool_load_cmd->parsed()) {
+        return app_services::run_protocol_pool_load(protocol_pool_load);
     }
     if (protocol_capture_cmd->parsed()) {
         return app_services::run_protocol_capture(protocol_capture);
