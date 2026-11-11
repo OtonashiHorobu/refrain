@@ -38,6 +38,15 @@ struct bot_options {
     double move_dz{0.0};
     std::chrono::milliseconds move_delay{0};
     std::chrono::milliseconds command_delay{0};
+    /// Walk in a circle of this radius around the spawn position until the
+    /// connection ends. Zero keeps the single `move_dx/dy/dz` step.
+    double walk_radius{0.0};
+    /// Time between walk steps.
+    std::chrono::milliseconds walk_period{100};
+    /// Walk around this offset from the spawn position, so a load test can
+    /// spread its bots over the world instead of stacking them.
+    double walk_origin_x{0.0};
+    double walk_origin_z{0.0};
     /// Record decoded packet bodies for capture tooling.
     bool capture{false};
 };
