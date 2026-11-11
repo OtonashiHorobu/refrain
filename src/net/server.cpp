@@ -1632,6 +1632,23 @@ void server::impl::broadcast_system_chat(std::string_view text) {
     }
 }
 
+void server::send_forget_chunk(std::uint64_t connection, std::int32_t chunk_x,
+                               std::int32_t chunk_z) {
+    if (!impl_) {
+        return;
+    }
+    play_cb::forget_level_chunk packet{};
+    // ChunkPos.pack: the low half carries x, the high half carries z.
+    const auto low{
+        static_cast<std::uint64_t>(static_cast<std::uint32_t>(chunk_x))};
+    const auto high{
+        static_cast<std::uint64_t>(static_cast<std::uint32_t>(chunk_z)) << 32U};
+    const auto packed{low | high};
+    packet.pos = static_cast<std::int64_t>(packed);
+    impl_->send_packet(connection, play_cb::forget_level_chunk::packet_id,
+                       packet, play_cb::encode_forget_level_chunk);
+}
+
 void server::send_chunk_batch(std::uint64_t connection, std::int32_t chunk_x,
                               std::int32_t chunk_z,
                               std::span<const std::vector<std::byte>> packets,
