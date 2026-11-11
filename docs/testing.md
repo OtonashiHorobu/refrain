@@ -149,6 +149,21 @@ build globs the directory, so no build file edit is needed. Prefer a negative
 case over a second happy path.
 
 
+## Acceptance
+
+A change that touches the join path or the play loop is accepted against a real
+client, not only against the protocol bot. The reproducible steps are:
+
+1. `scripts/soak.sh --bots 20 --seconds 60` proves the server starts on a
+   generated world, accepts joins and shuts down cleanly.
+2. `refrain-tools protocol bot --host 127.0.0.1:25565 --username Bot
+   --wait-chunks 1` proves the handshake, configuration and first chunks.
+3. A vanilla client joins the same server and passes the checks listed in
+   [running.md](running.md#client).
+4. `refrain-tools protocol capture --host 127.0.0.1:25565 --out join.rfcap
+   --wait-chunks 1` records the clientbound stream for a later comparison with
+   `protocol diff` or the oracle below.
+
 ## Network oracle (optional, local)
 
 `tools/net/oracle/` compares a capture from a locally owned vanilla 26.3 server
