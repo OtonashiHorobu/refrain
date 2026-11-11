@@ -66,6 +66,18 @@ using jlong = std::int64_t;
                              static_cast<std::uint32_t>(b));
 }
 
+/// Java's `long` multiplication: wraps modulo 2^64.
+[[nodiscard]] constexpr auto wrap_mul(jlong a, jlong b) noexcept -> jlong {
+    return static_cast<jlong>(static_cast<std::uint64_t>(a) *
+                              static_cast<std::uint64_t>(b));
+}
+
+/// Java's `long` addition with wrap-around.
+[[nodiscard]] constexpr auto wrap_add(jlong a, jlong b) noexcept -> jlong {
+    return static_cast<jlong>(static_cast<std::uint64_t>(a) +
+                              static_cast<std::uint64_t>(b));
+}
+
 /// Java's narrowing `(int)` conversion: NaN becomes zero, values outside the
 /// int range saturate at the nearer bound, and the rest truncate toward zero.
 /// C++ leaves out-of-range conversions undefined, so arithmetic that can

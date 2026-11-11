@@ -179,7 +179,7 @@ inline constexpr jlong silver_ratio_64 = 7640891576956012809LL;
 [[nodiscard]] constexpr auto upgrade_seed_to_128bit(jlong legacy_seed) noexcept
     -> seed128bit {
     const jlong low = legacy_seed ^ silver_ratio_64;
-    const jlong high = low + golden_ratio_64;
+    const jlong high = wrap_add(low, golden_ratio_64);
     return seed128bit{
         .seed_lo = mix_stafford13(low),
         .seed_hi = mix_stafford13(high),

@@ -18,6 +18,7 @@
 #include <refrain/schema/protocol/777/play_clientbound.hpp>
 #include <refrain/schema/protocol/777/play_serverbound.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -507,7 +508,9 @@ class bot_session {
     bot_options options_{};
     uuid profile_{};
     std::unique_ptr<transport> transport_{};
-    std::uint64_t connection_{0};
+    // The transport thread assigns this from `on_open` while `run` assigns it
+    // from the caller's thread; the load harness reads it from both.
+    std::atomic<std::uint64_t> connection_{0};
     frame_encoder encoder_{-1};
     frame_decoder decoder_{-1};
     std::unique_ptr<aes128_cfb8> cipher_{};
