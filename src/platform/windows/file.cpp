@@ -123,7 +123,7 @@ auto atomic_replace(std::string_view path, std::span<const std::byte> data)
     // Indexers, scanners and concurrent replacers can hold the target open for
     // a moment; MoveFileEx then reports a sharing violation. A short bounded
     // retry keeps the atomic-replace contract without masking permanent errors.
-    for (int attempt{0}; attempt < 16; ++attempt) {
+    for (int attempt{0}; attempt < 32; ++attempt) {
         if (::MoveFileExW(temp.c_str(), target.c_str(),
                           MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) !=
             0) {
@@ -137,7 +137,14 @@ auto atomic_replace(std::string_view path, std::span<const std::byte> data)
             (void)::DeleteFileW(temp.c_str());
             return std::unexpected{failure};
         }
-        ::SwitchToThread();
+        // Another writer replacing the same path only holds it for the
+        // duration of its own move, so yield the CPU first and back off to a
+        // real sleep once yielding stops helping.
+        if (attempt < 4) {
+            ::SwitchToThread();
+        } else {
+            ::Sleep(1);
+        }
     }
     const auto failure{
         io_failure("failed to replace file", path, ::GetLastError())};
