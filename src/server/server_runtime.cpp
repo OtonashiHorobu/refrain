@@ -19,6 +19,7 @@
 #include <refrain/net/registry.hpp>
 #include <refrain/net/server.hpp>
 #include <refrain/server/chunk_packet.hpp>
+#include <refrain/server/chunk_view.hpp>
 #include <refrain/server/command_bridge.hpp>
 #include <refrain/server/entity_broadcast.hpp>
 #include <refrain/server/inventory_menu.hpp>
@@ -1878,6 +1879,23 @@ auto run_server(const server_run_options &options) -> int {
                     }
                 }
                 stream.seeded = true;
+            }
+            if (center_changed) {
+                // Chunks that leave the viewport are dropped from the client
+                // cache, so a walking player keeps a bounded chunk set.
+                std::vector<refrain::server::chunk_coordinate> tracked{};
+                tracked.reserve(stream.known.size());
+                for (const auto &[x, z] : stream.known) {
+                    tracked.push_back({x, z});
+                }
+                for (const auto &position :
+                     refrain::server::chunks_outside_view(
+                         tracked, {stream.center_x, stream.center_z},
+                         stream.radius)) {
+                    listener->send_forget_chunk(request.connection, position.x,
+                                                position.z);
+                    stream.known.erase({position.x, position.z});
+                }
             }
             if (center_changed || stream.pending.empty()) {
                 stream.pending.clear();

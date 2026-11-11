@@ -281,6 +281,10 @@ class server {
     [[nodiscard]] auto take_chunk_view_requests()
         -> std::vector<chunk_view_request>;
 
+    /// Tell the client to drop one chunk from its cache.
+    void send_forget_chunk(std::uint64_t connection, std::int32_t chunk_x,
+                           std::int32_t chunk_z);
+
     /// Send one chunk batch (bodies include their packet id). `update_center`
     /// also emits `set_chunk_cache_center`; an empty batch with a center
     /// update is valid.
