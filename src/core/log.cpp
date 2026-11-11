@@ -411,7 +411,9 @@ void set_thread_name(std::string_view name) noexcept {
                 g_thread_names.insert_or_assign(id, std::string{name});
             }
         }
-        if (!name.empty()) {
+        // On Linux the main thread's name is the process name, so the "main"
+        // label must stay a log label instead of renaming the server.
+        if (!name.empty() && name != "main") {
             // Diagnostics only: a platform without thread naming (old Windows,
             // restricted sandbox) still gets the log-side name.
             (void)platform::set_current_thread_name(name);
