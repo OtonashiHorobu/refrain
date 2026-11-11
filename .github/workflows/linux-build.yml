@@ -129,6 +129,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     needs: vendor-guard
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -139,10 +143,21 @@ jobs:
       - name: Install toolchain
         run: |
           set -euo pipefail
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          # Launchpad occasionally answers with 500 GPGKeyTemporarilyNotFound;
+          # retry before giving up on the toolchain PPA.
+          for attempt in 1 2 3 4 5; do
+            if sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test; then
+              break
+            fi
+            if [ "$attempt" = 5 ]; then
+              echo "cannot add the toolchain PPA after 5 attempts" >&2
+              exit 1
+            fi
+            sleep 10
+          done
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build gcc-16 g++-16
+            ninja-build gcc-16 g++-16 ccache
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-16 160
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-16 160
           gcc --version | head -1
@@ -156,12 +171,25 @@ jobs:
       # sha256-keyed source download cache. Key changes whenever a recipe,
       # the top-level conanfile or the lockfile changes.
       - name: Restore Conan cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: conan-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.conan2
           key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
           restore-keys: |
             conan-${{ runner.os }}-
+
+      # Object cache: a warm hit makes the 400-translation-unit build
+      # incremental. Only `main` writes it, so pull requests reuse one copy
+      # instead of storing a copy per branch.
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-linux-build-${{ github.sha }}
+          restore-keys: |
+            ccache-linux-build-
 
       - name: Create Conan profile
         run: bash scripts/bootstrap.sh --profile-only
@@ -177,13 +205,31 @@ jobs:
             exit 1
           }
           conan install . -pr "${REFRAIN_CONAN_PROFILE}" --build=missing \
-            --lockfile=conan/locks/vendor.lock
+            -o "&:lto=False" --lockfile=conan/locks/vendor.lock
 
       - name: Configure
-        run: cmake --preset conan-release
-
+        run: >-
+          cmake --preset conan-release
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build
         run: cmake --build --preset conan-release -j "$(nproc)"
+
+      - name: Save ccache
+        if: github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-linux-build-${{ github.sha }}
+
+      - name: Save Conan cache
+        if: github.ref == 'refs/heads/main' && steps.conan-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.conan2
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
+
+
 
       - name: Test
         run: |
@@ -351,7 +397,13 @@ jobs:
     name: asan+ubsan
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    needs: build
+    # Runs alongside `build`: the Conan packages come from the cache, so the
+    # job does not need the build artifact.
+    needs: vendor-guard
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -362,21 +414,42 @@ jobs:
       - name: Install toolchain
         run: |
           set -euo pipefail
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          # Launchpad occasionally answers with 500 GPGKeyTemporarilyNotFound;
+          # retry before giving up on the toolchain PPA.
+          for attempt in 1 2 3 4 5; do
+            if sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test; then
+              break
+            fi
+            if [ "$attempt" = 5 ]; then
+              echo "cannot add the toolchain PPA after 5 attempts" >&2
+              exit 1
+            fi
+            sleep 10
+          done
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build gcc-16 g++-16
+          sudo apt-get install -y --no-install-recommends ninja-build gcc-16 g++-16 ccache
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-16 160
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-16 160
           python3 -m pip install --upgrade pip
           python3 -m pip install "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
 
       - name: Restore Conan cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: conan-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.conan2
           key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
           restore-keys: |
             conan-${{ runner.os }}-
+
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-linux-asan-${{ github.sha }}
+          restore-keys: |
+            ccache-linux-asan-
 
       - name: Create Conan profile
         run: bash scripts/bootstrap.sh --profile-only
@@ -385,7 +458,8 @@ jobs:
         run: |
           set -euo pipefail
           conan install . -pr "${REFRAIN_CONAN_PROFILE}" --build=missing \
-            --lockfile=conan/locks/vendor.lock -of build/sanitizer-deps
+            -o "&:lto=False" --lockfile=conan/locks/vendor.lock \
+            -of build/sanitizer-deps
 
       - name: Configure
         run: |
@@ -394,13 +468,30 @@ jobs:
           test -n "$toolchain"
           cmake -S . -B build/sanitizers -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$toolchain" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DREFRAIN_SANITIZE=address,undefined \
             -DREFRAIN_WITH_CRASHPAD=OFF -DREFRAIN_WITH_WASM=OFF \
             -DREFRAIN_WITH_MIMALLOC=OFF -DREFRAIN_MIMALLOC_OVERRIDE_NEW=OFF \
             -DREFRAIN_BUILD_BENCH=OFF
-
       - name: Build
         run: cmake --build build/sanitizers -j "$(nproc)"
+
+      - name: Save ccache
+        if: github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-linux-asan-${{ github.sha }}
+
+      - name: Save Conan cache
+        if: github.ref == 'refs/heads/main' && steps.conan-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.conan2
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
+
+
 
       - name: Test
         run: |
@@ -418,7 +509,11 @@ jobs:
     name: tsan
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    needs: build
+    needs: vendor-guard
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -429,21 +524,42 @@ jobs:
       - name: Install toolchain
         run: |
           set -euo pipefail
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          # Launchpad occasionally answers with 500 GPGKeyTemporarilyNotFound;
+          # retry before giving up on the toolchain PPA.
+          for attempt in 1 2 3 4 5; do
+            if sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test; then
+              break
+            fi
+            if [ "$attempt" = 5 ]; then
+              echo "cannot add the toolchain PPA after 5 attempts" >&2
+              exit 1
+            fi
+            sleep 10
+          done
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build gcc-16 g++-16
+          sudo apt-get install -y --no-install-recommends ninja-build gcc-16 g++-16 ccache
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-16 160
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-16 160
           python3 -m pip install --upgrade pip
           python3 -m pip install "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
 
       - name: Restore Conan cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: conan-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.conan2
           key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
           restore-keys: |
             conan-${{ runner.os }}-
+
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-linux-tsan-${{ github.sha }}
+          restore-keys: |
+            ccache-linux-tsan-
 
       - name: Create Conan profile
         run: bash scripts/bootstrap.sh --profile-only
@@ -452,7 +568,8 @@ jobs:
         run: |
           set -euo pipefail
           conan install . -pr "${REFRAIN_CONAN_PROFILE}" --build=missing \
-            --lockfile=conan/locks/vendor.lock -of build/tsan-deps
+            -o "&:lto=False" --lockfile=conan/locks/vendor.lock \
+            -of build/tsan-deps
 
       - name: Configure
         run: |
@@ -461,13 +578,30 @@ jobs:
           test -n "$toolchain"
           cmake -S . -B build/tsan -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$toolchain" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DREFRAIN_SANITIZE=thread \
             -DREFRAIN_WITH_CRASHPAD=OFF -DREFRAIN_WITH_WASM=OFF \
             -DREFRAIN_WITH_MIMALLOC=OFF -DREFRAIN_MIMALLOC_OVERRIDE_NEW=OFF \
             -DREFRAIN_BUILD_BENCH=OFF
-
       - name: Build
         run: cmake --build build/tsan -j "$(nproc)"
+
+      - name: Save ccache
+        if: github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-linux-tsan-${{ github.sha }}
+
+      - name: Save Conan cache
+        if: github.ref == 'refs/heads/main' && steps.conan-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.conan2
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
+
+
 
       - name: Test
         run: |
