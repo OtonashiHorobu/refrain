@@ -8,17 +8,24 @@
 #include <refrain/worldgen/density/density_router.hpp>
 #include <refrain/worldgen/structure/structure_data.hpp>
 
+#include "support/vanilla_data.hpp"
+
 #include <boost/ut.hpp>
 
+#include <filesystem>
 #include <string>
+#include <system_error>
 
 using namespace boost::ut;
 using namespace refrain::worldgen;
 
 suite<"worldgen/content"> worldgen_content_tests = [] {
     "the shipped snapshot materialises without the game directory"_test = [] {
-        const std::string archive =
-            std::string{REFRAIN_SOURCE_DIR} + "/content/vanilla/26.3/data";
+        const auto snapshot = refrain::test_support::vanilla_data();
+        if (!snapshot.available) {
+            return;
+        }
+        const std::string archive = snapshot.path;
         const auto root = materialize_worldgen_data(archive);
         expect(root.has_value()) << "cannot materialise the snapshot";
         if (!root) {
@@ -47,9 +54,27 @@ suite<"worldgen/content"> worldgen_content_tests = [] {
         }
     };
 
+    "a missing snapshot reports the generation command"_test = [] {
+        const auto root = materialize_worldgen_data(
+            std::string{REFRAIN_SOURCE_DIR} + "/content/vanilla/26.3/missing");
+        expect(!root.has_value());
+        if (root) {
+            return;
+        }
+        expect(root.error().code == refrain::error_code::not_found);
+        expect(root.error().message.find("scripts/fetch-content.sh") !=
+               std::string::npos);
+    };
+
     "the manifest records the archive hash and entry count"_test = [] {
         const std::string directory =
             std::string{REFRAIN_SOURCE_DIR} + "/content/vanilla/26.3";
+        // The manifest is generated together with the datapack.
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(directory + "/MANIFEST.json",
+                                              error)) {
+            return;
+        }
         auto manifest = refrain::data::json::value::parse_file(
             directory + "/MANIFEST.json");
         expect(manifest.has_value()) << "cannot read MANIFEST.json";

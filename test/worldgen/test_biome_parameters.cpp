@@ -11,6 +11,8 @@
 #include <refrain/worldgen/biome/biome_parameters.hpp>
 #include <refrain/worldgen/biome/biome_source.hpp>
 
+#include "support/vanilla_data.hpp"
+
 #include <boost/ut.hpp>
 
 #include <chrono>
@@ -84,10 +86,6 @@ constexpr std::string_view two_entries = R"([
     {"biome": "test:cold", "temperature": [-10000, 0], "humidity": [-10000, 10000], "continentalness": [-10000, 10000], "erosion": [-10000, 10000], "depth": [0, 0], "weirdness": [-10000, 10000], "offset": 0},
     {"biome": "test:warm", "temperature": [1, 10000], "humidity": [5000, 10000], "continentalness": [-10000, 10000], "erosion": [-10000, 10000], "depth": [0, 10000], "weirdness": [-10000, 10000], "offset": 250}
 ])";
-
-auto content_root() -> std::string {
-    return std::string{REFRAIN_SOURCE_DIR} + "/content/vanilla/26.3/data";
-}
 
 } // namespace
 
@@ -226,15 +224,15 @@ suite<"worldgen/biome-parameters"> biome_parameters_tests = [] {
     };
 
     "the shipped reports drive a multi-noise source"_test = [] {
-        const auto root = content_root();
-        if (!core::io::is_regular_file(std::string{root} +
-                                       "/../reports/biome_parameters/"
-                                       "overworld.json")) {
+        const auto root = refrain::test_support::vanilla_data_root();
+        const auto report = (std::filesystem::path{root}.parent_path() /
+                             "reports/biome_parameters/overworld.json")
+                                .string();
+        if (!core::io::is_regular_file(report)) {
             std::fprintf(stderr,
                          "skipping content-backed biome parameter cases: %s "
-                         "is absent; the checkout has no worldgen content "
-                         "snapshot\n",
-                         root.c_str());
+                         "is absent\n",
+                         report.c_str());
             return;
         }
 
