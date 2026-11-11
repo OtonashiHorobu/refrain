@@ -52,10 +52,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.12"
-
       - name: Check tool scripts
         run: |
           python3 -m py_compile tools/vendor_check.py tools/vendor_export.py \
@@ -103,10 +99,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.12"
-
       - name: Install clang-format
         run: python3 -m pip install "clang-format==23.1.4"
 
@@ -127,6 +119,8 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-24.04
+    container:
+      image: gcc:16
     timeout-minutes: 90
     needs: vendor-guard
     env:
@@ -136,40 +130,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.12"
-
       - name: Install toolchain
         run: |
           set -euo pipefail
-          # Launchpad occasionally answers with 500 GPGKeyTemporarilyNotFound;
-          # retry before giving up on the toolchain PPA.
-          for attempt in 1 2 3 4 5; do
-            if sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test; then
-              break
-            fi
-            if [ "$attempt" = 5 ]; then
-              echo "cannot add the toolchain PPA after 5 attempts" >&2
-              exit 1
-            fi
-            sleep 10
-          done
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build gcc-16 g++-16 ccache
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-16 160
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-16 160
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ninja-build ccache python3 python3-pip git ca-certificates
+          python3 -m pip install --break-system-packages \
+            "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
           gcc --version | head -1
-          python3 -m pip install --upgrade pip
-          python3 -m pip install "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
           conan --version
           cmake --version | head -1
           ninja --version
 
-      # Cache the full Conan home: recipe cache, package binaries and the
-      # sha256-keyed source download cache. Key changes whenever a recipe,
-      # the top-level conanfile or the lockfile changes.
       - name: Restore Conan cache
         id: conan-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -396,6 +369,8 @@ jobs:
   asan-ubsan:
     name: asan+ubsan
     runs-on: ubuntu-24.04
+    container:
+      image: gcc:16
     timeout-minutes: 60
     # Runs alongside `build`: the Conan packages come from the cache, so the
     # job does not need the build artifact.
@@ -407,31 +382,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.12"
-
       - name: Install toolchain
         run: |
           set -euo pipefail
-          # Launchpad occasionally answers with 500 GPGKeyTemporarilyNotFound;
-          # retry before giving up on the toolchain PPA.
-          for attempt in 1 2 3 4 5; do
-            if sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test; then
-              break
-            fi
-            if [ "$attempt" = 5 ]; then
-              echo "cannot add the toolchain PPA after 5 attempts" >&2
-              exit 1
-            fi
-            sleep 10
-          done
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build gcc-16 g++-16 ccache
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-16 160
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-16 160
-          python3 -m pip install --upgrade pip
-          python3 -m pip install "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ninja-build ccache python3 python3-pip git ca-certificates
+          python3 -m pip install --break-system-packages \
+            "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
+          gcc --version | head -1
+          conan --version
+          cmake --version | head -1
+          ninja --version
 
       - name: Restore Conan cache
         id: conan-cache
@@ -453,6 +415,9 @@ jobs:
 
       - name: Create Conan profile
         run: bash scripts/bootstrap.sh --profile-only
+
+      - name: Build vendor recipes
+        run: python3 tools/vendor_export.py --build --profile "${REFRAIN_CONAN_PROFILE}"
 
       - name: Install dependencies
         run: |
@@ -508,6 +473,8 @@ jobs:
   tsan:
     name: tsan
     runs-on: ubuntu-24.04
+    container:
+      image: gcc:16
     timeout-minutes: 60
     needs: vendor-guard
     env:
@@ -517,31 +484,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.12"
-
       - name: Install toolchain
         run: |
           set -euo pipefail
-          # Launchpad occasionally answers with 500 GPGKeyTemporarilyNotFound;
-          # retry before giving up on the toolchain PPA.
-          for attempt in 1 2 3 4 5; do
-            if sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test; then
-              break
-            fi
-            if [ "$attempt" = 5 ]; then
-              echo "cannot add the toolchain PPA after 5 attempts" >&2
-              exit 1
-            fi
-            sleep 10
-          done
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build gcc-16 g++-16 ccache
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-16 160
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-16 160
-          python3 -m pip install --upgrade pip
-          python3 -m pip install "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ninja-build ccache python3 python3-pip git ca-certificates
+          python3 -m pip install --break-system-packages \
+            "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
+          gcc --version | head -1
+          conan --version
+          cmake --version | head -1
+          ninja --version
 
       - name: Restore Conan cache
         id: conan-cache
@@ -563,6 +517,9 @@ jobs:
 
       - name: Create Conan profile
         run: bash scripts/bootstrap.sh --profile-only
+
+      - name: Build vendor recipes
+        run: python3 tools/vendor_export.py --build --profile "${REFRAIN_CONAN_PROFILE}"
 
       - name: Install dependencies
         run: |
@@ -623,10 +580,6 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.12"
 
       - name: Install Conan
         run: python3 -m pip install "conan==${CONAN_VERSION}"
