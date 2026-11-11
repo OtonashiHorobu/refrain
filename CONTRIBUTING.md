@@ -4,9 +4,9 @@ Refrain reproduces the behavior of a proprietary game. A contribution that
 implements vanilla behavior starts by reading the complete relevant source of
 the target version (26.3, official mappings) and recording what was read in a
 specification. Code is written from that specification, not copied or
-translated from the source. Game assets are never committed; data derived from
-Minecraft lives only under `content/vanilla/` and is covered by its own notice,
-not by the repository license.
+translated from the source. Game assets and datapacks are never committed. The
+game-derived tables live only under `content/vanilla/` and are covered by their
+own notice, not by the repository license.
 
 ## Workflow
 

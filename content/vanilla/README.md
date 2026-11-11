@@ -1,31 +1,32 @@
 # Game-derived data
 
-This directory holds data derived from Minecraft: block state tables, biome
-parameters, registry listings and data pack snapshots. It is the only place in
-the repository where such data may live.
+This directory holds data derived from Minecraft Java Edition 26.3: compiled
+block-state, biome and registry tables, climate and default-state reports, the
+packet catalog and the protocol registry. The material is Copyright (c) Mojang
+Studios / Microsoft Corporation, is not covered by the MIT license of the
+repository and is included solely for interoperability with a locally owned
+copy of the game. See `NOTICE.md` for the full terms.
 
-The directory is empty until the content pipeline lands. When it does, it is
-laid out per game version:
+The repository tracks only the derived data:
 
 ```text
 content/vanilla/<version>/
-  MANIFEST.json        game version, data version, entry count, content digest
-  data/                worldgen documents and block/biome tags
-  reports/             compact tables converted from the game's datagen reports
+  tables.rvtb               compiled block-state, biome-preset and registry tables
+  packets.json              packet catalog for protocol 777
+  protocol_registry.json    registry entries, ids and client order
+  reports/biome_parameters/ overworld and nether climate parameter points
+  reports/block_defaults/   default property values per block
 ```
 
-`MANIFEST.json` records the game and data version, the entry count and a
-`content_sha256` digest over every entry name and its bytes. A regenerated
-snapshot is compared against the committed digest; per-file hashes and the
-source jar digest are not recorded.
-
-The contents are not covered by the repository license; see `NOTICE.md` and the
-root `NOTICE.md`. Data is regenerated from a locally owned copy of the game:
+The datapack and its `MANIFEST.json` are generated into the same directory from
+the `server.jar` you own and are not tracked by git:
 
 ```bash
-python3 tools/worldgen/pack_content.py --data-root <extracted>/data \
-    --out content/vanilla/<version>
+scripts/fetch-content.sh <server.jar>
 ```
 
-Removing the directory is supported: the build then requires the user's jar and
-generates the snapshot at install time.
+The script chains `refrain-tools extract` and `tools/worldgen/pack_content.py`,
+writing `data/` with the worldgen documents and block and biome tags plus the
+manifest. Pass `--version` or `--data-version` when they differ from the
+defaults. Without the datapack, the world generation data-driven tests are
+skipped.

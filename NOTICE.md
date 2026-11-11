@@ -7,11 +7,18 @@ The exact license texts are distributed with each Conan package under its
 
 ## Minecraft-derived data
 
-Data derived from Minecraft (block state tables, biome parameters, registry
-listings, data pack snapshots) lives only under `content/vanilla/`. That
-directory is not covered by the MIT license; see `content/vanilla/NOTICE.md`
-for its copyright and usage terms. No such data ships in source files or in
-the libraries below.
+The game-derived tables that Refrain ships — compiled block-state and registry
+tables, biome parameters, block default states, the packet catalog and the
+protocol registry — live under `content/vanilla/`. That directory is not
+covered by the MIT license; the material is Copyright (c) Mojang Studios /
+Microsoft Corporation and is included solely for interoperability with a
+locally owned copy of the game. See `content/vanilla/NOTICE.md` for the full
+terms.
+
+Vanilla Minecraft datapacks are not distributed in this repository; the
+datapack and its manifest are generated locally from the user's own
+`server.jar` with `scripts/fetch-content.sh`. No Mojang code or assets ship in
+source files or in the libraries below.
 
 ## Runtime and content libraries
 
@@ -50,8 +57,10 @@ the libraries below.
 
 ## Notes
 
-- Minecraft code, assets and data are not part of this repository or its
-  distributions. Local game files are used only as an interoperability oracle.
+- Minecraft code and assets are not part of this repository or its
+  distributions. The derived tables under `content/vanilla/` are the only
+  game-derived material that ships; local game files are used only as an
+  interoperability oracle.
 - Release archives carry the license text of every runtime dependency under
   `licenses/`. MinGW archives also carry the GCC runtime license and exception
   because libstdc++ and libgcc are linked statically; MSVC archives carry a note
