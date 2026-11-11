@@ -356,7 +356,11 @@ auto run_protocol_load(const protocol_load_options &options) -> int {
     }
 
     std::atomic<int> joined{0};
+    std::atomic<std::uint64_t> packets{0};
+    std::atomic<std::uint64_t> chunks{0};
     std::mutex errors_mutex{};
+    std::mutex latency_mutex{};
+    std::vector<std::int64_t> join_ms{};
     std::vector<std::string> errors{};
     std::vector<std::thread> threads{};
     threads.reserve(static_cast<std::size_t>(options.bots));
@@ -369,9 +373,26 @@ auto run_protocol_load(const protocol_load_options &options) -> int {
             bot.username = options.username_prefix + std::to_string(index);
             bot.timeout = std::chrono::milliseconds{options.timeout_ms};
             bot.linger = std::chrono::milliseconds{options.duration_ms};
+            bot.walk_radius = options.walk_radius;
+            // Spread the bots over a grid so the tracking radius matters.
+            constexpr int grid{32};
+            bot.walk_origin_x = static_cast<double>(index % grid) * 16.0;
+            bot.walk_origin_z =
+                static_cast<double>((index / grid) % grid) * 16.0;
+            bot.walk_period = std::chrono::milliseconds{
+                options.walk_period_ms > 0 ? options.walk_period_ms : 100};
+            const auto started{std::chrono::steady_clock::now()};
             auto result{refrain::net::run_bot(bot)};
             if (result) {
                 ++joined;
+                packets.fetch_add(result->packets);
+                chunks.fetch_add(result->chunks);
+                const auto elapsed{
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - started)};
+                const std::lock_guard lock{latency_mutex};
+                join_ms.push_back(static_cast<std::int64_t>(elapsed.count()) -
+                                  options.duration_ms);
             } else {
                 const std::lock_guard lock{errors_mutex};
                 errors.push_back(result.error().message);
@@ -381,7 +402,20 @@ auto run_protocol_load(const protocol_load_options &options) -> int {
     for (auto &thread : threads) {
         thread.join();
     }
-    fmt::print("load: {}/{} joined\n", joined.load(), options.bots);
+    std::sort(join_ms.begin(), join_ms.end());
+    const auto percentile = [&](double fraction) {
+        if (join_ms.empty()) {
+            return std::int64_t{0};
+        }
+        const auto index{static_cast<std::size_t>(
+            static_cast<double>(join_ms.size() - 1) * fraction)};
+        return join_ms[index];
+    };
+    fmt::print("load: {}/{} joined packets={} chunks={} join_ms p50={} p99={} "
+               "max={}\n",
+               joined.load(), options.bots, packets.load(), chunks.load(),
+               percentile(0.5), percentile(0.99),
+               join_ms.empty() ? std::int64_t{0} : join_ms.back());
     if (joined.load() != options.bots) {
         if (!errors.empty()) {
             fmt::print(stderr, "load: first error: {}\n", errors.front());

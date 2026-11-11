@@ -63,6 +63,9 @@ struct protocol_load_options {
     int bots{20};
     int duration_ms{10000};
     int timeout_ms{15000};
+    /// Walk in a circle of this radius while the connection is open.
+    double walk_radius{0.0};
+    int walk_period_ms{100};
 };
 
 struct protocol_capture_options {
