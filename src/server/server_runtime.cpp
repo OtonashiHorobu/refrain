@@ -20,7 +20,9 @@
 #include <refrain/net/server.hpp>
 #include <refrain/server/chunk_packet.hpp>
 #include <refrain/server/command_bridge.hpp>
+#include <refrain/server/entity_broadcast.hpp>
 #include <refrain/server/inventory_menu.hpp>
+#include <refrain/server/player_visibility.hpp>
 #include <refrain/sim/replay.hpp>
 #include <refrain/sim/world.hpp>
 #include <refrain/world/store.hpp>
@@ -46,6 +48,7 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -1078,6 +1081,20 @@ void send_add_entity(refrain::net::server &listener, std::uint64_t connection,
     }
 }
 
+void send_remove_entity(refrain::net::server &listener,
+                        std::uint64_t connection, std::uint64_t entity_id) {
+    refrain::protocol::current::play::clientbound::remove_entities packet{};
+    packet.entity_ids.push_back(entity_id);
+    auto body{encode_play_body(
+        refrain::protocol::current::play::clientbound::remove_entities::
+            packet_id,
+        packet,
+        refrain::protocol::current::play::clientbound::encode_remove_entities)};
+    if (!body.empty()) {
+        listener.send_raw(connection, body);
+    }
+}
+
 void announce_session_join(refrain::net::server &listener,
                            const refrain::session::play_session &players,
                            std::uint64_t connection) {
@@ -1092,7 +1109,6 @@ void announce_session_join(refrain::net::server &listener,
         if (other.connection == connection) {
             continue;
         }
-        send_add_entity(listener, connection, other);
         std::vector<refrain::session::player> joining{};
         for (const auto &candidate : snapshot) {
             if (candidate.connection == connection) {
@@ -1105,7 +1121,6 @@ void announce_session_join(refrain::net::server &listener,
             static_cast<std::uint8_t>(player_info_add | player_info_game_mode |
                                       player_info_listed | player_info_latency),
             joining);
-        send_add_entity(listener, other.connection, joining.front());
     }
 }
 
@@ -1124,19 +1139,9 @@ void announce_session_leave(refrain::net::server &listener,
                          remove,
                          refrain::protocol::current::play::clientbound::
                              encode_player_info_remove)};
-    refrain::protocol::current::play::clientbound::remove_entities entities{};
-    entities.entity_ids.push_back(left.entity_id);
-    auto entity_body{encode_play_body(
-        refrain::protocol::current::play::clientbound::remove_entities::
-            packet_id,
-        entities,
-        refrain::protocol::current::play::clientbound::encode_remove_entities)};
     for (const auto target : targets) {
         if (!info_body.empty()) {
             listener.send_raw(target, info_body);
-        }
-        if (!entity_body.empty()) {
-            listener.send_raw(target, entity_body);
         }
     }
 }
@@ -1239,11 +1244,48 @@ void broadcast_session_animation(refrain::net::server &listener,
     }
 }
 
-void broadcast_session_moves(
+void sync_player_visibility(
     refrain::net::server &listener,
     const refrain::session::play_session &players,
-    std::unordered_map<std::uint64_t, refrain::net::movement_event> &last) {
+    std::unordered_map<std::uint64_t, refrain::net::movement_event> &last,
+    std::unordered_map<std::uint64_t, std::unordered_set<std::uint64_t>>
+        &visible,
+    std::int32_t tracking_chunks) {
+    const auto angle = [](float degrees) {
+        return static_cast<std::int8_t>(
+            std::lround(static_cast<double>(degrees) * (256.0 / 360.0)));
+    };
     const auto snapshot{players.all()};
+
+    // Visibility transitions first: a viewer that has just come into range
+    // needs the spawn packet, one that left needs the removal.
+    for (const auto &viewer : snapshot) {
+        auto &seen{visible[viewer.connection]};
+        for (const auto &other : snapshot) {
+            if (other.connection == viewer.connection) {
+                continue;
+            }
+            const refrain::server::visibility_query query{
+                .world = viewer.world,
+                .x = viewer.x,
+                .z = viewer.z,
+                .view_distance = viewer.view_distance,
+            };
+            const bool now{refrain::server::player_visible(
+                query, other.world, other.x, other.z, tracking_chunks)};
+            const bool was{seen.contains(other.connection)};
+            if (now && !was) {
+                send_add_entity(listener, viewer.connection, other);
+                seen.insert(other.connection);
+            } else if (!now && was) {
+                send_remove_entity(listener, viewer.connection,
+                                   other.entity_id);
+                seen.erase(other.connection);
+            }
+        }
+    }
+
+    // Movement reaches only viewers that already track the mover.
     for (const auto &mover : snapshot) {
         const refrain::net::movement_event current{
             .connection = mover.connection,
@@ -1262,28 +1304,114 @@ void broadcast_session_moves(
             previous->second.pitch == current.pitch) {
             continue;
         }
+        std::vector<std::byte> body;
+        if (previous == last.end()) {
+            refrain::protocol::current::play::clientbound::teleport_entity
+                packet{};
+            packet.id = static_cast<std::int32_t>(mover.entity_id);
+            packet.change.position = {.x = mover.x, .y = mover.y, .z = mover.z};
+            packet.change.delta_movement = {};
+            packet.change.y_rot = mover.yaw;
+            packet.change.x_rot = mover.pitch;
+            packet.relatives = 0;
+            packet.on_ground = mover.on_ground;
+            body = encode_play_body(refrain::protocol::current::play::
+                                        clientbound::teleport_entity::packet_id,
+                                    packet,
+                                    refrain::protocol::current::play::
+                                        clientbound::encode_teleport_entity);
+        } else {
+            const auto move{
+                refrain::server::choose_entity_move(previous->second, current)};
+            switch (move.kind) {
+            case refrain::server::entity_move_kind::teleport: {
+                refrain::protocol::current::play::clientbound::teleport_entity
+                    packet{};
+                packet.id = static_cast<std::int32_t>(mover.entity_id);
+                packet.change.position = {
+                    .x = mover.x, .y = mover.y, .z = mover.z};
+                packet.change.delta_movement = {};
+                packet.change.y_rot = mover.yaw;
+                packet.change.x_rot = mover.pitch;
+                packet.relatives = 0;
+                packet.on_ground = mover.on_ground;
+                body = encode_play_body(
+                    refrain::protocol::current::play::clientbound::
+                        teleport_entity::packet_id,
+                    packet,
+                    refrain::protocol::current::play::clientbound::
+                        encode_teleport_entity);
+                break;
+            }
+            case refrain::server::entity_move_kind::position: {
+                refrain::protocol::current::play::clientbound::move_entity_pos
+                    packet{};
+                packet.entity_id = static_cast<std::uint32_t>(mover.entity_id);
+                packet.delta = {.on_ground = current.on_ground,
+                                .x = move.dx,
+                                .y = move.dy,
+                                .z = move.dz,
+                                .steps = {}};
+                body = encode_play_body(
+                    refrain::protocol::current::play::clientbound::
+                        move_entity_pos::packet_id,
+                    packet,
+                    refrain::protocol::current::play::clientbound::
+                        encode_move_entity_pos);
+                break;
+            }
+            case refrain::server::entity_move_kind::position_rotation: {
+                refrain::protocol::current::play::clientbound::
+                    move_entity_pos_rot packet{};
+                packet.entity_id = static_cast<std::uint32_t>(mover.entity_id);
+                packet.delta = {.on_ground = current.on_ground,
+                                .x = move.dx,
+                                .y = move.dy,
+                                .z = move.dz,
+                                .steps = {}};
+                packet.y_rot = angle(current.yaw);
+                packet.x_rot = angle(current.pitch);
+                body = encode_play_body(
+                    refrain::protocol::current::play::clientbound::
+                        move_entity_pos_rot::packet_id,
+                    packet,
+                    refrain::protocol::current::play::clientbound::
+                        encode_move_entity_pos_rot);
+                break;
+            }
+            case refrain::server::entity_move_kind::rotation: {
+                refrain::protocol::current::play::clientbound::move_entity_rot
+                    packet{};
+                packet.entity_id = static_cast<std::uint32_t>(mover.entity_id);
+                packet.on_ground = current.on_ground;
+                packet.y_rot = angle(current.yaw);
+                packet.x_rot = angle(current.pitch);
+                body = encode_play_body(
+                    refrain::protocol::current::play::clientbound::
+                        move_entity_rot::packet_id,
+                    packet,
+                    refrain::protocol::current::play::clientbound::
+                        encode_move_entity_rot);
+                break;
+            }
+            case refrain::server::entity_move_kind::none:
+                break;
+            }
+        }
         last[mover.connection] = current;
-        refrain::protocol::current::play::clientbound::teleport_entity packet{};
-        packet.id = static_cast<std::int32_t>(mover.entity_id);
-        packet.change.position = {.x = mover.x, .y = mover.y, .z = mover.z};
-        packet.change.delta_movement = {};
-        packet.change.y_rot = mover.yaw;
-        packet.change.x_rot = mover.pitch;
-        packet.relatives = 0;
-        packet.on_ground = mover.on_ground;
-        auto body{encode_play_body(refrain::protocol::current::play::
-                                       clientbound::teleport_entity::packet_id,
-                                   packet,
-                                   refrain::protocol::current::play::
-                                       clientbound::encode_teleport_entity)};
         if (body.empty()) {
             continue;
         }
         for (const auto &target : snapshot) {
-            if (target.connection != mover.connection &&
-                target.world == mover.world) {
-                listener.send_raw(target.connection, body);
+            if (target.connection == mover.connection) {
+                continue;
             }
+            const auto found{visible.find(target.connection)};
+            if (found == visible.end() ||
+                !found->second.contains(mover.connection)) {
+                continue;
+            }
+            listener.send_raw(target.connection, body);
         }
     }
 }
@@ -1464,6 +1592,10 @@ auto run_server(const server_run_options &options) -> int {
     refrain::session::chunk_tracker views{};
     std::unordered_map<std::uint64_t, refrain::net::movement_event>
         last_moves{};
+    std::unordered_map<std::uint64_t, std::unordered_set<std::uint64_t>>
+        visible_players{};
+    const auto tracking_chunks{static_cast<std::int32_t>(std::max<std::int64_t>(
+        1, options.network.get_int64("entity_tracking_range", 512) / 16))};
     refrain::net::server *active_listener{nullptr};
     const auto external_join{options.player_join};
     const auto external_leave{options.player_leave};
@@ -1524,7 +1656,7 @@ auto run_server(const server_run_options &options) -> int {
             }
         };
     network_inputs.player_leave =
-        [&players, &views, &last_moves, &active_listener,
+        [&players, &views, &last_moves, &visible_players, &active_listener,
          external_leave](const refrain::net::player_identity &identity) {
             const auto leaving{players.player_of(identity.connection)};
             const auto copy{
@@ -1534,6 +1666,15 @@ auto run_server(const server_run_options &options) -> int {
             static_cast<void>(players.remove_player(identity.connection));
             static_cast<void>(views.remove(identity.connection));
             last_moves.erase(identity.connection);
+            visible_players.erase(identity.connection);
+            if (copy && active_listener != nullptr) {
+                for (auto &[viewer, seen] : visible_players) {
+                    if (seen.erase(identity.connection) > 0) {
+                        send_remove_entity(*active_listener, viewer,
+                                           copy->entity_id);
+                    }
+                }
+            }
             if (copy && active_listener != nullptr) {
                 announce_session_leave(*active_listener, *copy, players);
             }
@@ -2132,7 +2273,8 @@ auto run_server(const server_run_options &options) -> int {
         scheduler.run(refrain::core::schedule::phase::pre_tick, ticks_run);
         if (listener) {
             listener->tick();
-            broadcast_session_moves(*listener, players, last_moves);
+            sync_player_visibility(*listener, players, last_moves,
+                                   visible_players, tracking_chunks);
         }
         process_chunk_streams();
         process_container_clicks();
