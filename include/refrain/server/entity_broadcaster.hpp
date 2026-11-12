@@ -10,11 +10,14 @@
 
 #include <refrain/net/server.hpp>
 #include <refrain/server/play_gateway.hpp>
+#include <refrain/server/player_visibility.hpp>
 #include <refrain/session/play_session.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace refrain::server {
 
@@ -58,10 +61,17 @@ class entity_broadcaster {
   private:
     play_gateway &gateway_;
     std::int32_t tracking_chunks_{0};
+    player_visibility_index index_;
     std::unordered_map<std::uint64_t, refrain::net::movement_event>
         last_moves_{};
     std::unordered_map<std::uint64_t, std::unordered_set<std::uint64_t>>
         visible_{};
+    /// Per-tick scratch, kept across ticks so the hot path does not allocate
+    /// three vectors per player per tick.
+    std::vector<const refrain::session::player *> snapshot_{};
+    std::vector<visibility_entity> entities_{};
+    std::vector<std::size_t> candidates_{};
+    std::vector<std::uint64_t> despawns_{};
 };
 
 } // namespace refrain::server

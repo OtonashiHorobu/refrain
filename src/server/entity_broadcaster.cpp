@@ -265,7 +265,8 @@ void broadcast_session_animation(play_gateway &gateway,
 
 entity_broadcaster::entity_broadcaster(play_gateway &gateway,
                                        std::int32_t tracking_chunks)
-    : gateway_(gateway), tracking_chunks_(tracking_chunks) {}
+    : gateway_(gateway), tracking_chunks_(tracking_chunks),
+      index_(tracking_chunks) {}
 
 void entity_broadcaster::tick(const refrain::session::play_session &players) {
     const auto angle = [](float degrees) {
@@ -274,15 +275,34 @@ void entity_broadcaster::tick(const refrain::session::play_session &players) {
     };
     // Pointers into the session table: the simulation thread is the only
     // writer, and copying every player record per tick is pure overhead.
-    std::vector<const refrain::session::player *> snapshot{};
-    snapshot.reserve(players.size());
-    players.for_each([&snapshot](const refrain::session::player &value) {
-        snapshot.push_back(&value);
+    snapshot_.clear();
+    snapshot_.reserve(players.size());
+    players.for_each([this](const refrain::session::player &value) {
+        snapshot_.push_back(&value);
     });
-    // One buffer per target per tick: the transport then copies and posts once
-    // per target instead of once per entity update.
-    std::unordered_map<std::uint64_t, std::vector<std::byte>> outbox;
-    const auto append = [&outbox](std::uint64_t target,
+    // The index and every emitted stream follow ascending entity id; the
+    // session table itself iterates in hash order.
+    std::sort(snapshot_.begin(), snapshot_.end(),
+              [](const refrain::session::player *left,
+                 const refrain::session::player *right) {
+                  return left->entity_id < right->entity_id;
+              });
+    entities_.clear();
+    entities_.reserve(snapshot_.size());
+    for (const auto *value : snapshot_) {
+        entities_.push_back(visibility_entity{
+            .entity_id = value->entity_id,
+            .world = value->world,
+            .x = value->x,
+            .z = value->z,
+            .view_distance = value->view_distance,
+        });
+    }
+    index_.rebuild(entities_);
+    // One buffer per viewer, indexed like the snapshot: the transport copies
+    // and posts once per viewer instead of once per entity update.
+    std::vector<std::vector<std::byte>> outbox(snapshot_.size());
+    const auto append = [&outbox](std::size_t target,
                                   const std::vector<std::byte> &body) {
         auto &buffer{outbox[target]};
         buffer.insert(buffer.end(), body.begin(), body.end());
@@ -290,38 +310,62 @@ void entity_broadcaster::tick(const refrain::session::play_session &players) {
 
     // Visibility transitions first: a viewer that has just come into range
     // needs the spawn packet, one that left needs the removal.
-    for (const auto *viewer : snapshot) {
+    for (std::size_t viewer_position{0}; viewer_position < snapshot_.size();
+         ++viewer_position) {
+        const auto *viewer{snapshot_[viewer_position]};
+        const refrain::server::visibility_query query{
+            .world = viewer->world,
+            .x = viewer->x,
+            .z = viewer->z,
+            .view_distance = viewer->view_distance,
+        };
         auto &seen{visible_[viewer->connection]};
-        for (const auto *other : snapshot) {
-            if (other->connection == viewer->connection) {
+        // Tracked entities are checked directly: one that left the viewport is
+        // no longer returned by the index, so it cannot be found there.
+        despawns_.clear();
+        for (auto tracked{seen.begin()}; tracked != seen.end();) {
+            const auto *other{players.player_of(*tracked)};
+            if (other != nullptr &&
+                refrain::server::player_visible(query, other->world, other->x,
+                                                other->z, tracking_chunks_)) {
+                ++tracked;
                 continue;
             }
-            const refrain::server::visibility_query query{
-                .world = viewer->world,
-                .x = viewer->x,
-                .z = viewer->z,
-                .view_distance = viewer->view_distance,
-            };
-            const bool now{refrain::server::player_visible(
-                query, other->world, other->x, other->z, tracking_chunks_)};
-            const bool was{seen.contains(other->connection)};
-            if (now && !was) {
-                if (auto body{encode_add_entity_body(*other)}; !body.empty()) {
-                    append(viewer->connection, body);
-                }
-                seen.insert(other->connection);
-            } else if (!now && was) {
-                if (auto body{encode_remove_entity_body(other->entity_id)};
-                    !body.empty()) {
-                    append(viewer->connection, body);
-                }
-                seen.erase(other->connection);
+            if (other != nullptr) {
+                despawns_.push_back(other->entity_id);
             }
+            tracked = seen.erase(tracked);
+        }
+        std::sort(despawns_.begin(), despawns_.end());
+        for (const auto entity_id : despawns_) {
+            if (auto body{encode_remove_entity_body(entity_id)};
+                !body.empty()) {
+                append(viewer_position, body);
+            }
+        }
+        // The index narrows the spawn candidates to the viewer's chunk
+        // viewport; player_visible still decides every pair.
+        index_.candidates(query, candidates_);
+        for (const auto position : candidates_) {
+            const auto *other{snapshot_[position]};
+            if (other == viewer || seen.contains(other->connection)) {
+                continue;
+            }
+            if (!refrain::server::player_visible(query, other->world, other->x,
+                                                 other->z, tracking_chunks_)) {
+                continue;
+            }
+            if (auto body{encode_add_entity_body(*other)}; !body.empty()) {
+                append(viewer_position, body);
+            }
+            seen.insert(other->connection);
         }
     }
 
     // Movement reaches only viewers that already track the mover.
-    for (const auto *mover : snapshot) {
+    for (std::size_t mover_position{0}; mover_position < snapshot_.size();
+         ++mover_position) {
+        const auto *mover{snapshot_[mover_position]};
         const refrain::net::movement_event current{
             .connection = mover->connection,
             .x = mover->x,
@@ -438,8 +482,12 @@ void entity_broadcaster::tick(const refrain::session::play_session &players) {
         if (body.empty()) {
             continue;
         }
-        for (const auto *target : snapshot) {
-            if (target->connection == mover->connection) {
+        // The index returns every viewer whose viewport can hold the mover's
+        // chunk; the tracking set is the authority on who receives the move.
+        index_.viewers(mover->world, mover->x, mover->z, candidates_);
+        for (const auto target_position : candidates_) {
+            const auto *target{snapshot_[target_position]};
+            if (target == mover) {
                 continue;
             }
             const auto found{visible_.find(target->connection)};
@@ -447,13 +495,14 @@ void entity_broadcaster::tick(const refrain::session::play_session &players) {
                 !found->second.contains(mover->connection)) {
                 continue;
             }
-            append(target->connection, body);
+            append(target_position, body);
         }
     }
 
-    for (const auto &[target, buffer] : outbox) {
-        if (!buffer.empty()) {
-            gateway_.send_raw(target, buffer);
+    for (std::size_t position{0}; position < snapshot_.size(); ++position) {
+        if (!outbox[position].empty()) {
+            gateway_.send_raw(snapshot_[position]->connection,
+                              outbox[position]);
         }
     }
 }
