@@ -60,6 +60,14 @@ auto cache_bytes(const buffer &values) -> std::size_t {
     return values.capacity() * sizeof(float);
 }
 
+/// Every node that keeps a volume in the sampling context needs an id of its
+/// own; one is handed out per decoded node, and the ids of a context are what
+/// its cache entries are keyed by.
+auto next_cache_id() -> std::size_t {
+    static std::atomic<std::size_t> next{0};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
+
 } // namespace
 
 struct sampler_context::volume_cache {
@@ -844,7 +852,8 @@ class interpolated_sampler final : public sampler {
         : input_{std::move(input)}, cell_size_xz_{cell_size_xz},
           cell_size_y_{cell_size_y},
           cell_size_xz_inv_{1.0F / static_cast<float>(cell_size_xz)},
-          cell_size_y_inv_{1.0F / static_cast<float>(cell_size_y)} {}
+          cell_size_y_inv_{1.0F / static_cast<float>(cell_size_y)},
+          id_{next_cache_id()} {}
 
     [[nodiscard]] auto sample_value(const sampler_context &context,
                                     jint block_x, jint block_y,
@@ -855,29 +864,47 @@ class interpolated_sampler final : public sampler {
         if (x_in_cell == 0 && y_in_cell == 0 && z_in_cell == 0) {
             return input_->sample_value(context, block_x, block_y, block_z);
         }
-        const volume vol{2,
-                         2,
-                         2,
+        // A block on a cell boundary along one axis interpolates with a zero
+        // fraction there, so both corners of that axis carry the same value
+        // and sampling the far one cannot change the result. Sampling the
+        // exact corner set keeps the value bit-identical for finite input
+        // while skipping up to half of the corners on a boundary.
+        const jint size_x = x_in_cell == 0 ? 1 : 2;
+        const jint size_y = y_in_cell == 0 ? 1 : 2;
+        const jint size_z = z_in_cell == 0 ? 1 : 2;
+        const volume vol{size_x,
+                         size_y,
+                         size_z,
                          block_x - x_in_cell,
                          block_y - y_in_cell,
                          block_z - z_in_cell,
                          cell_size_xz_,
                          cell_size_y_,
                          cell_size_xz_};
-        auto input_buffer = context.acquire(vol.size());
-        input_->sample_volume(context, input_buffer, vol);
+        // One cell is queried by every block inside it, so the corner values
+        // are kept in the sampling context and reused until the query leaves
+        // the cell.
+        auto [corner_values, cached] = context.cached_volume(id_, vol);
+        if (!cached) {
+            context.mark_filling(id_, true);
+            input_->sample_volume(context, *corner_values, vol);
+            context.mark_filling(id_, false);
+        }
+        const jint far_x = size_x - 1;
+        const jint far_y = size_y - 1;
+        const jint far_z = size_z - 1;
         return mth::lerp3(
             static_cast<float>(x_in_cell) / static_cast<float>(cell_size_xz_),
             static_cast<float>(y_in_cell) / static_cast<float>(cell_size_y_),
             static_cast<float>(z_in_cell) / static_cast<float>(cell_size_xz_),
-            input_buffer.get(vol.index_unchecked(0, 0, 0)),
-            input_buffer.get(vol.index_unchecked(1, 0, 0)),
-            input_buffer.get(vol.index_unchecked(0, 1, 0)),
-            input_buffer.get(vol.index_unchecked(1, 1, 0)),
-            input_buffer.get(vol.index_unchecked(0, 0, 1)),
-            input_buffer.get(vol.index_unchecked(1, 0, 1)),
-            input_buffer.get(vol.index_unchecked(0, 1, 1)),
-            input_buffer.get(vol.index_unchecked(1, 1, 1)));
+            corner_values->get(vol.index_unchecked(0, 0, 0)),
+            corner_values->get(vol.index_unchecked(far_x, 0, 0)),
+            corner_values->get(vol.index_unchecked(0, far_y, 0)),
+            corner_values->get(vol.index_unchecked(far_x, far_y, 0)),
+            corner_values->get(vol.index_unchecked(0, 0, far_z)),
+            corner_values->get(vol.index_unchecked(far_x, 0, far_z)),
+            corner_values->get(vol.index_unchecked(0, far_y, far_z)),
+            corner_values->get(vol.index_unchecked(far_x, far_y, far_z)));
     }
 
     void sample_volume(const sampler_context &context, buffer &output,
@@ -1042,6 +1069,7 @@ class interpolated_sampler final : public sampler {
     jint cell_size_y_;
     float cell_size_xz_inv_;
     float cell_size_y_inv_;
+    std::size_t id_;
 };
 
 class range_choice_sampler final : public sampler {
@@ -1839,11 +1867,6 @@ class cache_sampler final : public sampler {
     }
 
   private:
-    static auto next_cache_id() -> std::size_t {
-        static std::atomic<std::size_t> next{0};
-        return next.fetch_add(1, std::memory_order_relaxed);
-    }
-
     sampler_ptr input_;
     std::size_t id_;
 };
