@@ -193,10 +193,16 @@ A change that touches the join path or the play loop is accepted against a real
 client, not only against the protocol bot. The reproducible steps are:
 
 1. `scripts/soak.sh --bots 20 --seconds 60` proves the server starts on a
-   generated world, accepts joins and shuts down cleanly.
+   generated world, accepts joins and shuts down cleanly. A client needs a
+   viewport of real terrain, so generate a world with
+   `tools/make_test_world.py gen --chunks 256` rather than the default
+   three-chunk fixture when the acceptance is a client join.
 2. `refrain-tools protocol bot --host 127.0.0.1:25565 --username Bot
    --wait-chunks 1` proves the handshake, configuration and first chunks.
-3. A vanilla client joins the same server and passes the checks listed in
+3. `MC_CLIENT_HOME=/path/to/26.3-runtime scripts/dev/vanilla-acceptance.sh
+   --world /path/to/rwf-world` joins with the unmodified client through the
+   acceptance agent in `tools/net/client-agent/`, which asserts the level load
+   and writes a screenshot. A vanilla client also passes the checks listed in
    [running.md](running.md#client).
 4. `refrain-tools protocol capture --host 127.0.0.1:25565 --out join.rfcap
    --wait-chunks 1` records the clientbound stream for a later comparison with

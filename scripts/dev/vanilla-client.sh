@@ -22,6 +22,7 @@
 #   MC_NATIVES_DIR  native scratch space (default: $MC_CLIENT_HOME/natives)
 #   MC_JAVA         java executable (default: $JAVA_HOME/bin/java, else java)
 #   MC_USERNAME     offline username (default: Dev)
+#   MC_JAVA_ARGS    extra JVM arguments, word-split (for example a -javaagent)
 
 set -euo pipefail
 
@@ -311,6 +312,18 @@ ARGS=(
 
 if [[ -n "$SERVER" ]]; then
     ARGS+=(--quickPlayMultiplayer "$SERVER")
+fi
+
+# Extra JVM arguments must land before the main class: everything after it is
+# a program argument, not a JVM option.
+if [[ -n "${MC_JAVA_ARGS:-}" ]]; then
+    read -r -a EXTRA_ARGS <<<"$MC_JAVA_ARGS"
+    for index in "${!ARGS[@]}"; do
+        if [[ "${ARGS[$index]}" == "net.minecraft.client.main.Main" ]]; then
+            ARGS=("${ARGS[@]:0:$index}" "${EXTRA_ARGS[@]}" "${ARGS[@]:$index}")
+            break
+        fi
+    done
 fi
 
 # log4j's file appender uses a path relative to the working directory.  Run
