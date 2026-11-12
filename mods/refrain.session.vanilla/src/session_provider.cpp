@@ -260,7 +260,7 @@ auto menu_set_slot(void *self,
     }
     const auto item_view{as_string_view(item)};
     const auto clears{item_view.empty() || count == 0};
-    if (!clears && count > refrain::sim::max_stack_size) {
+    if (!clears && count > refrain::sim::absolute_stack_size) {
         return REFRAIN_SERVICES_NET_SESSION_SESSION_ERROR_INVALID_ARGUMENT;
     }
     bool changed{false};
@@ -321,9 +321,11 @@ auto menu_click(void *self,
                 : static_cast<std::int16_t>(-1)};
         if (button >= std::numeric_limits<std::int8_t>::min() &&
             button <= std::numeric_limits<std::int8_t>::max()) {
+            // This provider drives its own menu without the item registry
+            // data, so the click uses the default stack limit.
             changed = refrain::server::apply_player_click(
                 open->inventory, open->carried, menu_slot,
-                static_cast<std::int8_t>(button));
+                static_cast<std::int8_t>(button), refrain::sim::item_table{});
         }
         if (index != refrain::server::no_inventory_index &&
             index < open->inventory.size()) {

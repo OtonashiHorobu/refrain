@@ -125,6 +125,16 @@ auto sample_spec() -> vanilla_spec {
                                             .protocol_id = 0}},
         },
     };
+    spec.items = {
+        item_spec{
+            .name = "minecraft:stone", .max_stack_size = 64, .max_damage = 0},
+        item_spec{.name = "minecraft:oak_stairs",
+                  .max_stack_size = 64,
+                  .max_damage = 0},
+        item_spec{.name = "minecraft:diamond_sword",
+                  .max_stack_size = 1,
+                  .max_damage = 1561},
+    };
     return spec;
 }
 
@@ -167,6 +177,16 @@ auto reports() -> vanilla_reports {
             "minecraft:plains": {"protocol_id": 0}
         }}
     })";
+    value.item_components.emplace_back("minecraft:stone", R"({
+        "components": {"minecraft:max_stack_size": 64}
+    })");
+    value.item_components.emplace_back("minecraft:diamond_sword", R"({
+        "components": {
+            "minecraft:damage": 0,
+            "minecraft:max_damage": 1561,
+            "minecraft:max_stack_size": 1
+        }
+    })");
     return value;
 }
 
@@ -221,12 +241,28 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
         expect(tables->property_count() == 2U);
         expect(tables->preset_count() == 2U);
         expect(tables->registry_count() == 2U);
+        expect(tables->item_count() == 3U);
         expect(tables->data_version() == 5023);
 
         const auto air = tables->find_block("minecraft:air");
         expect(air.has_value());
         expect(tables->block_at(*air).name == "minecraft:air");
         expect(tables->block_at(*air).state_count == 1U);
+
+        const auto sword = tables->find_item("minecraft:diamond_sword");
+        expect(sword.has_value());
+        if (sword.has_value()) {
+            const auto item = tables->item_at(*sword);
+            expect(item.name == "minecraft:diamond_sword");
+            expect(item.max_stack_size == 1U);
+            expect(item.max_damage == 1561U);
+        }
+        const auto stone = tables->find_item("minecraft:stone");
+        expect(stone.has_value());
+        if (stone.has_value()) {
+            expect(tables->item_at(*stone).max_damage == 0U);
+        }
+        expect(!tables->find_item("minecraft:missing").has_value());
 
         const auto oak_log = tables->find_block("minecraft:oak_log");
         expect(oak_log.has_value());
@@ -311,6 +347,7 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
         std::reverse(reversed.biome_presets.begin(),
                      reversed.biome_presets.end());
         std::reverse(reversed.registries.begin(), reversed.registries.end());
+        std::reverse(reversed.items.begin(), reversed.items.end());
         auto second = build_vanilla_tables(reversed);
         expect(second.has_value());
         if (first.has_value() && second.has_value()) {
@@ -347,6 +384,14 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
         const auto registry = tables->find_registry("minecraft:block");
         expect(registry.has_value());
         expect(tables->registry_entry_count(*registry) == 2U);
+        expect(tables->item_count() == 2U);
+        const auto sword = tables->find_item("minecraft:diamond_sword");
+        expect(sword.has_value());
+        if (sword.has_value()) {
+            expect(tables->item_at(*sword).max_stack_size == 1U);
+            expect(tables->item_at(*sword).max_damage == 1561U);
+        }
+        expect(tables->find_item("minecraft:stone").has_value());
     };
 
     "invalid specifications are rejected"_test = [] {
@@ -369,6 +414,19 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
         auto no_default_water = sample_spec();
         no_default_water.blocks[2].states[0].is_default = false;
         expect(!build_vanilla_tables(no_default_water).has_value());
+
+        auto duplicate_item = sample_spec();
+        duplicate_item.items.push_back(item_spec{.name = "minecraft:stone"});
+        expect(!build_vanilla_tables(duplicate_item).has_value());
+
+        auto empty_item = sample_spec();
+        empty_item.items.push_back(item_spec{.name = ""});
+        expect(!build_vanilla_tables(empty_item).has_value());
+
+        auto oversized_stack = sample_spec();
+        oversized_stack.items.push_back(
+            item_spec{.name = "minecraft:stack", .max_stack_size = 100});
+        expect(!build_vanilla_tables(oversized_stack).has_value());
     };
 
     "corrupted containers are rejected"_test = [] {
@@ -403,6 +461,13 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
         expect(write_text_file(reports_dir / "biome_parameters" / "minecraft" /
                                    "overworld.json",
                                fixture.biome_presets.at(0).second));
+        for (const auto &[name, json] : fixture.item_components) {
+            const auto short_name{name.substr(
+                name.find(':') == std::string::npos ? 0 : name.find(':') + 1)};
+            expect(write_text_file(reports_dir / "minecraft" / "components" /
+                                       "item" / (short_name + ".json"),
+                                   json));
+        }
 
         vanilla_import_options options;
         options.reports = reports_dir.string();
@@ -417,6 +482,7 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
         expect(imported->states == 5U);
         expect(imported->presets == 1U);
         expect(imported->registries == 2U);
+        expect(imported->items == 2U);
 
         auto tables_bytes =
             refrain::core::io::read_file((out_dir / "tables.rvtb").string());
@@ -429,6 +495,7 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
             expect(tables.has_value());
             if (tables.has_value()) {
                 expect(tables->block_count() == 2U);
+                expect(tables->item_count() == 2U);
                 expect(tables
                            ->find_state(
                                "minecraft:oak_stairs[facing=south,half=top]")

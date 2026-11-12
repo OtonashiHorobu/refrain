@@ -33,10 +33,13 @@ inline constexpr std::size_t no_inventory_index = static_cast<std::size_t>(-1);
     -> std::vector<std::int16_t>;
 
 /// Put a stack back into the player inventory, merging into matching stacks
-/// first and using empty slots afterwards. Returns the remainder that did not
-/// fit; a remainder count of zero means the stack was placed completely.
+/// first and using empty slots afterwards. Stacks merge only when their item
+/// and components match, and the item's own stack limit caps each slot.
+/// Returns the remainder that did not fit; a remainder count of zero means the
+/// stack was placed completely.
 [[nodiscard]] auto place_back(std::vector<sim::item_stack> &inventory,
-                              sim::item_stack stack) -> sim::item_stack;
+                              sim::item_stack stack,
+                              const sim::item_table &items) -> sim::item_stack;
 
 /// Apply one mouse click to the player inventory menu.
 ///
@@ -50,6 +53,7 @@ inline constexpr std::size_t no_inventory_index = static_cast<std::size_t>(-1);
 [[nodiscard]] auto apply_player_click(std::vector<sim::item_stack> &inventory,
                                       sim::item_stack &carried,
                                       std::int16_t menu_slot,
-                                      std::int8_t button) -> bool;
+                                      std::int8_t button,
+                                      const sim::item_table &items) -> bool;
 
 } // namespace refrain::server

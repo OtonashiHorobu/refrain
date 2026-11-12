@@ -523,6 +523,23 @@ void console_commands::execute(std::string_view line,
         if (gained && player != nullptr) {
             (void)store.add_item(*player, *gained, 1);
         }
+        if (tokens[0] == "dig" && player != nullptr) {
+            // Mining is the console player's use of its tool. There is no
+            // selected hotbar slot yet, so the first damageable stack stands
+            // in for the main hand.
+            //
+            // TODO: damage the main-hand item only when it is the correct tool
+            // for the broken block, and wire the same rule into the network
+            // block-break path, which does not pass the acting connection.
+            for (std::size_t index{0}; index < player->inventory.size();
+                 ++index) {
+                if (refrain::sim::stack_max_damage(player->inventory[index],
+                                                   store.items()) != 0) {
+                    (void)store.damage_item(*player, index);
+                    break;
+                }
+            }
+        }
         if (tokens[0] == "place" && player != nullptr) {
             // The server remains creative-permissive: consume when available,
             // but do not reject a scripted placement without a prior `give`.

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
+#include <refrain/sim/item.hpp>
 
 #include <array>
 #include <cstddef>
@@ -28,19 +29,6 @@ using entity_id = std::uint64_t;
 /// scripts drive. Network connections use positive ids, so the synthetic player
 /// is never reachable by a client.
 inline constexpr std::uint64_t synthetic_connection = 0;
-
-/// One inventory stack: an item key plus a count, with no components or
-/// metadata.
-struct item_stack {
-    std::string item{};
-    std::uint32_t count{0};
-};
-
-/// Maximum stack size for the current item model.
-///
-/// TODO: every item shares this ceiling and stacks carry no components or
-/// durability; per-item stack sizes and damage come from the item registry.
-inline constexpr std::uint32_t max_stack_size = 64;
 
 /// The one authoritative record of a player. The simulation owns the table of
 /// these records; the session layer only projects a record onto the fields the

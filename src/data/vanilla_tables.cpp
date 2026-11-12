@@ -33,6 +33,7 @@ constexpr std::size_t preset_record_size = 16;
 constexpr std::size_t biome_entry_size = 56;
 constexpr std::size_t registry_record_size = 16;
 constexpr std::size_t registry_entry_size = 8;
+constexpr std::size_t item_record_size = 16;
 constexpr std::size_t max_sections = 16;
 
 constexpr std::array<std::byte, 4> magic{std::byte{'R'}, std::byte{'V'},
@@ -189,6 +190,12 @@ struct built_registry {
 struct built_registry_entry {
     std::uint32_t name{0};
     std::int32_t protocol_id{0};
+};
+
+struct built_item {
+    std::uint32_t name{0};
+    std::uint16_t max_stack_size{0};
+    std::uint32_t max_damage{0};
 };
 
 /// Canonical state key: `name` or `name[k=v,...]` with sorted property names.
@@ -488,6 +495,37 @@ auto build_vanilla_tables(const vanilla_spec &spec)
         out_registries.push_back(built);
     }
 
+    std::vector<const item_spec *> items;
+    items.reserve(spec.items.size());
+    for (const auto &item : spec.items) {
+        if (item.name.empty()) {
+            return std::unexpected{fail("item with an empty name")};
+        }
+        if (item.max_stack_size < 1U || item.max_stack_size > 99U) {
+            return std::unexpected{
+                fail("item max stack size out of range: " + item.name)};
+        }
+        items.push_back(&item);
+    }
+    std::sort(items.begin(), items.end(),
+              [](const item_spec *left, const item_spec *right) {
+                  return left->name < right->name;
+              });
+    for (std::size_t i = 1; i < items.size(); ++i) {
+        if (items[i - 1]->name == items[i]->name) {
+            return std::unexpected{fail("duplicate item: " + items[i]->name)};
+        }
+    }
+    std::vector<built_item> out_items;
+    out_items.reserve(items.size());
+    for (const auto *item : items) {
+        out_items.push_back(built_item{
+            .name = pool.add(item->name),
+            .max_stack_size = item->max_stack_size,
+            .max_damage = item->max_damage,
+        });
+    }
+
     if (out_states.size() > 0xFFFFU) {
         return std::unexpected{fail("too many block states")};
     }
@@ -597,6 +635,16 @@ auto build_vanilla_tables(const vanilla_spec &spec)
         put_i32(registries_section, entry.protocol_id);
     }
 
+    std::vector<std::byte> items_section;
+    put_u32(items_section, static_cast<std::uint32_t>(out_items.size()));
+    for (const auto &item : out_items) {
+        put_u32(items_section, item.name);
+        put_u16(items_section, item.max_stack_size);
+        put_u16(items_section, 0);
+        put_u32(items_section, item.max_damage);
+        put_u32(items_section, 0);
+    }
+
     std::vector<std::byte> block_properties_section;
     block_properties_section.reserve(block_property_ids.size());
     for (const auto id : block_property_ids) {
@@ -614,6 +662,7 @@ auto build_vanilla_tables(const vanilla_spec &spec)
          .bytes = std::move(block_properties_section)},
         {.tag = {'P', 'R', 'P', 'S'}, .bytes = std::move(properties_section)},
         {.tag = {'P', 'V', 'A', 'L'}, .bytes = std::move(values_section)},
+        {.tag = {'I', 'T', 'M', 'S'}, .bytes = std::move(items_section)},
         {.tag = {'R', 'E', 'G', 'S'}, .bytes = std::move(registries_section)},
         {.tag = {'S', 'T', 'A', 'T'}, .bytes = std::move(states_section)},
         {.tag = {'S', 'T', 'R', 'S'}, .bytes = std::move(strings)},
@@ -734,6 +783,7 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
     bool have_states = false;
     bool have_biomes = false;
     bool have_registries = false;
+    bool have_items = false;
 
     for (std::uint32_t i = 0; i < section_count; ++i) {
         const auto base =
@@ -782,11 +832,14 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
         } else if (name == "REGS") {
             table.registries_ = record;
             have_registries = true;
+        } else if (name == "ITMS") {
+            table.items_ = record;
+            have_items = true;
         }
     }
     if (!have_strings || !have_blocks || !have_block_properties ||
         !have_properties || !have_values || !have_states || !have_biomes ||
-        !have_registries) {
+        !have_registries || !have_items) {
         return std::unexpected{fail("missing section")};
     }
     table.section_table_ =
@@ -844,6 +897,10 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
     if (table.registries_.size <
         4U + table.info_.registries * registry_record_size) {
         return std::unexpected{fail("registry section truncated")};
+    }
+    table.info_.items = read_u32(bytes, table.items_.offset);
+    if (table.items_.size < 4U + table.info_.items * item_record_size) {
+        return std::unexpected{fail("item section truncated")};
     }
 
     const auto block_base = table.blocks_.offset + 4U;
@@ -1177,6 +1234,33 @@ auto vanilla_tables::registry_entry(std::uint32_t registry,
         .name = string_at(read_u32(bytes_, entry_base)),
         .protocol_id = read_i32(bytes_, entry_base + 4),
     };
+}
+
+auto vanilla_tables::item_at(std::uint32_t index) const -> item_view {
+    const auto base = items_.offset + 4U + index * item_record_size;
+    return item_view{
+        .name = string_at(read_u32(bytes_, base)),
+        .max_stack_size = read_u16(bytes_, base + 4),
+        .max_damage = read_u32(bytes_, base + 8),
+    };
+}
+
+auto vanilla_tables::find_item(std::string_view name) const
+    -> std::optional<std::uint32_t> {
+    std::uint32_t low = 0;
+    std::uint32_t high = info_.items;
+    while (low < high) {
+        const auto middle = low + (high - low) / 2;
+        if (item_at(middle).name < name) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    if (low < info_.items && item_at(low).name == name) {
+        return low;
+    }
+    return std::nullopt;
 }
 
 } // namespace refrain::data

@@ -8,9 +8,11 @@
 #include <refrain/core/time.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/server/console_service.hpp>
+#include <refrain/sim/item.hpp>
 #include <refrain/sim/player.hpp>
 #include <refrain/sim/replay.hpp>
 #include <refrain/sim/world.hpp>
+#include <refrain/world/model.hpp>
 #include <refrain/world/store.hpp>
 
 #include <boost/ut.hpp>
@@ -66,6 +68,30 @@ namespace server = refrain::server;
         return std::nullopt;
     }
     return std::optional<sim::world>{std::move(*opened)};
+}
+
+/// One full section of stone, enough for a console dig to have a block.
+[[nodiscard]] auto flat_chunk() -> refrain::world::chunk {
+    refrain::world::chunk chunk{};
+    chunk.format_version = refrain::world::chunk_format_version;
+    chunk.status = refrain::storage::chunk_status::full;
+    chunk.y_pos = 0;
+    refrain::storage::section_record section{};
+    section.y = 0;
+    section.kind = refrain::storage::section_kind::single_value;
+    section.bits_per_entry = 0;
+    section.block_count =
+        static_cast<std::uint16_t>(refrain::world::section_volume);
+    section.biome_kind = refrain::storage::section_kind::single_value;
+    section.biome_bits_per_entry = 0;
+    section.biome_palette.push_back("minecraft:plains");
+    section.palette.push_back(refrain::storage::palette_entry{
+        .key = "minecraft:stone",
+        .count = static_cast<std::uint16_t>(refrain::world::section_volume),
+        .state = 0,
+    });
+    chunk.sections.push_back(std::move(section));
+    return chunk;
 }
 
 [[nodiscard]] auto register_player(sim::world &world, std::uint64_t connection,
@@ -155,6 +181,44 @@ suite console_player_tests = [] {
         // Reporting never moves the record.
         expect(bob->x == 10.5) << bob->x;
         expect(console_player->x == 0.5) << console_player->x;
+        std::error_code error;
+        fs::remove_all(directory, error);
+    };
+
+    "server/dig wears the held tool and breaks it"_test = [] {
+        const auto directory{scratch_directory()};
+        auto world{make_world_with_players(directory)};
+        expect(world.has_value());
+        if (!world) {
+            std::error_code error;
+            fs::remove_all(directory, error);
+            return;
+        }
+        sim::item_table items;
+        items.insert("minecraft:diamond_sword",
+                     {.max_stack_size = 1, .max_damage = 2});
+        world->set_item_table(std::move(items));
+        auto inserted{world->insert_chunk({0, 0}, flat_chunk())};
+        expect(inserted.has_value())
+            << (inserted ? "" : inserted.error().message);
+        server::tick_metrics metrics{};
+        server::console_commands commands{
+            server::console_dependencies{.world = &*world}, metrics};
+        const refrain::core::tick_info tick{};
+        auto *player{find_player(*world, "@console")};
+        expect(player != nullptr);
+        if (player == nullptr) {
+            std::error_code error;
+            fs::remove_all(directory, error);
+            return;
+        }
+        expect(
+            world->add_item(*player, "minecraft:diamond_sword", 1).has_value());
+        commands.execute("dig 1 1 1", tick);
+        expect(sim::stack_damage(player->inventory[0]) == 1U);
+        commands.execute("dig 2 1 1", tick);
+        expect(player->inventory[0].count == 0U);
+        expect(player->inventory[0].components.empty());
         std::error_code error;
         fs::remove_all(directory, error);
     };

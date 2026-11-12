@@ -4,7 +4,7 @@ This directory contains data derived from Minecraft Java Edition 26.3.
 
 Tracked in the repository:
 
-- `tables.rvtb` — compiled block-state, biome-preset and registry tables.
+- `tables.rvtb` — compiled block-state, biome-preset, registry and item tables.
 - `reports/biome_parameters/` — climate parameter points that select the
   overworld and nether biomes.
 - `reports/block_defaults/` — default property values for blocks whose default

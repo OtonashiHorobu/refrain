@@ -8,8 +8,12 @@
 
 #include <compare>
 #include <cstdint>
+#include <map>
+#include <memory>
 #include <optional>
+#include <set>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace refrain::net {
@@ -339,22 +343,91 @@ struct tracked_waypoint {
 [[nodiscard]] auto decode_tracked_waypoint(reader &in, tracked_waypoint &value)
     -> status;
 
-/// An item stack on the wire. Stacks without a data-component patch are
-/// implemented; a non-empty patch is reported as unsupported because the
-/// component graph is not modelled yet.
+/// Durability already lost by a stack.
+struct item_component_damage {
+    std::uint32_t amount{0};
+
+    friend auto operator==(const item_component_damage &,
+                           const item_component_damage &) -> bool = default;
+};
+
+/// Replacement display name of a stack.
+struct item_component_custom_name {
+    text_component name{};
+
+    friend auto operator==(const item_component_custom_name &,
+                           const item_component_custom_name &)
+        -> bool = default;
+};
+
+/// One enchantment and its level.
+struct item_enchantment {
+    std::uint32_t enchantment_id{0};
+    std::uint32_t level{1};
+
+    friend auto operator==(const item_enchantment &, const item_enchantment &)
+        -> bool = default;
+};
+
+/// Enchantments carried by the stack itself, sorted by id.
+struct item_component_enchantments {
+    std::vector<item_enchantment> entries{};
+
+    friend auto operator==(const item_component_enchantments &,
+                           const item_component_enchantments &)
+        -> bool = default;
+};
+
+using item_component =
+    std::variant<item_component_damage, item_component_custom_name,
+                 item_component_enchantments>;
+
+/// Wire ids of the data component types the item-stack codec understands.
+///
+/// The patch on the wire is keyed by registry ids, so the decoder needs the
+/// mapping the running server loaded. The server installs it once before it
+/// accepts connections; a codec with no mapping decodes only empty patches and
+/// reports any other patch as unsupported.
+struct item_component_ids {
+    std::uint32_t damage{0};
+    std::uint32_t custom_name{0};
+    std::uint32_t enchantments{0};
+};
+
+/// Install the component ids used by later decodes. Safe to call from any
+/// thread; readers keep the snapshot they started with.
+void set_item_component_ids(item_component_ids ids);
+
+/// Current decode mapping, or an empty pointer before one is installed.
+[[nodiscard]] auto item_component_ids_current() noexcept
+    -> std::shared_ptr<const item_component_ids>;
+
+/// An item stack on the wire.
+///
+/// `components` holds the added data components keyed by their wire type id and
+/// is iterated in ascending id order, so the encoding is deterministic. The key
+/// must be the wire id of the type the stored alternative encodes: a
+/// `item_component_damage` under any other key writes a value the peer decodes
+/// with the wrong codec.
+/// `removed_components` holds the ids the patch removes from the item's
+/// defaults. A stack with neither encodes the same two zero patch counts as a
+/// stack without components.
 struct item_stack {
     std::uint32_t count{0};
     std::uint32_t item_id{0};
+    std::map<std::uint32_t, item_component> components{};
+    std::set<std::uint32_t> removed_components{};
 
     friend auto operator==(const item_stack &, const item_stack &)
         -> bool = default;
 };
 
-/// Writes the count, item id and an empty component patch.
+/// Writes the count, the item id and the data-component patch.
 [[nodiscard]] auto encode_item_stack(writer &out, const item_stack &value)
     -> status;
 
-/// Reads a stack; a non-empty component patch is reported as unsupported.
+/// Reads a stack. A component type the codec does not model is reported as
+/// unsupported, because its payload cannot be skipped without its codec.
 [[nodiscard]] auto decode_item_stack(reader &in, item_stack &value) -> status;
 
 /// An exact data-component predicate. Only the empty predicate is implemented.

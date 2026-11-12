@@ -268,6 +268,9 @@ auto run_server(const server_run_options &options) -> int {
             tables = std::move(*opened);
         }
     }
+    if (tables) {
+        store->set_item_table(refrain::sim::item_table::from_tables(*tables));
+    }
     std::optional<refrain::net::registry_catalog> registries{};
     auto loaded_registries{refrain::net::registry_catalog::load(
         "content/vanilla/26.3/protocol_registry.json")};
@@ -504,8 +507,9 @@ auto run_server(const server_run_options &options) -> int {
                                });
     }
 
-    refrain::server::inventory_sync inventory{gateway,
-                                              tables ? &*tables : nullptr};
+    refrain::server::inventory_sync inventory{
+        gateway, tables ? &*tables : nullptr,
+        registries ? &*registries : nullptr};
 
     maintenance_service maintenance{};
     if (auto started{maintenance.start(*store, effective)}; !started) {

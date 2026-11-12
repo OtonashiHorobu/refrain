@@ -11,18 +11,15 @@ namespace refrain::server {
 
 namespace {
 
-[[nodiscard]] auto empty(const sim::item_stack &stack) noexcept -> bool {
-    return stack.count == 0 || stack.item.empty();
-}
-
 void clear(sim::item_stack &stack) noexcept {
     stack.item.clear();
     stack.count = 0;
+    stack.components.clear();
 }
 
 [[nodiscard]] auto same_stack(const sim::item_stack &left,
                               const sim::item_stack &right) noexcept -> bool {
-    return left.count == right.count && left.item == right.item;
+    return left.count == right.count && sim::same_item(left, right);
 }
 
 } // namespace
@@ -63,20 +60,24 @@ auto changed_menu_slots(std::span<const sim::item_stack> before,
     return changed;
 }
 
-auto place_back(std::vector<sim::item_stack> &inventory, sim::item_stack stack)
-    -> sim::item_stack {
-    if (empty(stack)) {
+auto place_back(std::vector<sim::item_stack> &inventory, sim::item_stack stack,
+                const sim::item_table &items) -> sim::item_stack {
+    if (sim::stack_empty(stack)) {
         return sim::item_stack{};
     }
+    const auto limit{items.stack_limit(stack.item)};
     for (std::size_t index{0}; index < 36; ++index) {
         if (inventory.size() <= index) {
             inventory.resize(index + 1);
         }
         auto &target{inventory[index]};
-        if (empty(target) || target.item != stack.item) {
+        if (sim::stack_empty(target) || !sim::same_item(target, stack)) {
             continue;
         }
-        const auto space{sim::max_stack_size - target.count};
+        if (target.count >= limit) {
+            continue;
+        }
+        const auto space{limit - target.count};
         const auto moved{std::min(space, stack.count)};
         target.count += moved;
         stack.count -= moved;
@@ -89,7 +90,7 @@ auto place_back(std::vector<sim::item_stack> &inventory, sim::item_stack stack)
             inventory.resize(index + 1);
         }
         auto &target{inventory[index]};
-        if (!empty(target)) {
+        if (!sim::stack_empty(target)) {
             continue;
         }
         target = stack;
@@ -100,7 +101,8 @@ auto place_back(std::vector<sim::item_stack> &inventory, sim::item_stack stack)
 
 auto apply_player_click(std::vector<sim::item_stack> &inventory,
                         sim::item_stack &carried, std::int16_t menu_slot,
-                        std::int8_t button) -> bool {
+                        std::int8_t button, const sim::item_table &items)
+    -> bool {
     const auto index{inventory_index_of(menu_slot)};
     if (index == no_inventory_index || (button != 0 && button != 1)) {
         return false;
@@ -111,21 +113,25 @@ auto apply_player_click(std::vector<sim::item_stack> &inventory,
     auto &stack{inventory[index]};
 
     if (button == 0) {
-        if (empty(carried)) {
-            if (empty(stack)) {
+        if (sim::stack_empty(carried)) {
+            if (sim::stack_empty(stack)) {
                 return false;
             }
             carried = stack;
             clear(stack);
             return true;
         }
-        if (empty(stack)) {
+        if (sim::stack_empty(stack)) {
             stack = carried;
             clear(carried);
             return true;
         }
-        if (stack.item == carried.item) {
-            const auto space{sim::max_stack_size - stack.count};
+        if (sim::same_item(stack, carried)) {
+            const auto limit{items.stack_limit(stack.item)};
+            if (stack.count >= limit) {
+                return false;
+            }
+            const auto space{limit - stack.count};
             const auto moved{std::min(space, carried.count)};
             if (moved == 0) {
                 return false;
@@ -141,8 +147,8 @@ auto apply_player_click(std::vector<sim::item_stack> &inventory,
         return true;
     }
 
-    if (empty(carried)) {
-        if (empty(stack)) {
+    if (sim::stack_empty(carried)) {
+        if (sim::stack_empty(stack)) {
             return false;
         }
         const auto taken{(stack.count + 1U) / 2U};
@@ -154,12 +160,14 @@ auto apply_player_click(std::vector<sim::item_stack> &inventory,
         }
         return true;
     }
-    if (empty(stack) || stack.item == carried.item) {
-        if (stack.count >= sim::max_stack_size) {
+    if (sim::stack_empty(stack) || sim::same_item(stack, carried)) {
+        const auto limit{items.stack_limit(carried.item)};
+        if (stack.count >= limit) {
             return false;
         }
-        if (empty(stack)) {
-            stack.item = carried.item;
+        if (sim::stack_empty(stack)) {
+            stack = carried;
+            stack.count = 0;
         }
         ++stack.count;
         --carried.count;

@@ -49,6 +49,9 @@ inline constexpr std::size_t max_state_properties = 8;
 /// Upper bound on the string pool, in bytes.
 inline constexpr std::size_t max_string_pool_bytes = 64U * 1024U * 1024U;
 
+/// Stack size an item has when its registry data names none.
+inline constexpr std::uint16_t default_item_stack_size = 64;
+
 /// One state as supplied by the importer. `values` is aligned with the owning
 /// block's property list and uses the same order.
 struct state_spec {
@@ -89,12 +92,22 @@ struct registry_spec {
     std::vector<registry_entry_spec> entries{};
 };
 
+/// One item as supplied by the importer. The values come from the item's
+/// default data components, which are the per-item registry data of the
+/// target version.
+struct item_spec {
+    std::string name{};
+    std::uint16_t max_stack_size{default_item_stack_size};
+    std::uint32_t max_damage{0};
+};
+
 /// Everything the container stores.
 struct vanilla_spec {
     std::int32_t data_version{0};
     std::vector<block_spec> blocks{};
     std::vector<biome_preset_spec> biome_presets{};
     std::vector<registry_spec> registries{};
+    std::vector<item_spec> items{};
 };
 
 /// Serializes `spec` into an RVTB v1 file.
@@ -120,6 +133,7 @@ struct vanilla_table_info {
     std::uint32_t properties{0};
     std::uint32_t presets{0};
     std::uint32_t registries{0};
+    std::uint32_t items{0};
 };
 
 /// One block record.
@@ -149,6 +163,15 @@ struct biome_parameter_view {
 struct registry_entry_view {
     std::string_view name{};
     std::int32_t protocol_id{0};
+};
+
+/// One item record: the item key and the stack size and durability its
+/// registry data declares. `max_damage` is zero for an item that cannot be
+/// damaged.
+struct item_view {
+    std::string_view name{};
+    std::uint16_t max_stack_size{0};
+    std::uint32_t max_damage{0};
 };
 
 /// Read-only view over an RVTB v1 container.
@@ -233,6 +256,17 @@ class vanilla_tables {
                                       std::uint32_t index) const
         -> registry_entry_view;
 
+    /// Items in the container, sorted by name. The builder always writes the
+    /// section, so a container whose source reports carried no item records
+    /// still opens and answers every lookup with nothing.
+    [[nodiscard]] auto item_count() const noexcept -> std::uint32_t {
+        return info_.items;
+    }
+    [[nodiscard]] auto item_at(std::uint32_t index) const -> item_view;
+    /// Binary search over the name-sorted item records.
+    [[nodiscard]] auto find_item(std::string_view name) const
+        -> std::optional<std::uint32_t>;
+
   private:
     struct section {
         std::uint32_t offset{0};
@@ -250,6 +284,7 @@ class vanilla_tables {
     section states_{};
     section biomes_{};
     section registries_{};
+    section items_{};
     section section_table_{};
     vanilla_table_info info_{};
 
@@ -264,10 +299,13 @@ struct vanilla_reports {
     std::string blocks_json{};
     std::vector<std::pair<std::string, std::string>> biome_presets{};
     std::string registries_json{};
+    /// Item name and the `components/item/<name>.json` document that holds the
+    /// item's default data components.
+    std::vector<std::pair<std::string, std::string>> item_components{};
 };
 
-/// Converts the three report documents into a container. Ordering and
-/// validation follow `build_vanilla_tables`.
+/// Converts the report documents into a container. Ordering and validation
+/// follow `build_vanilla_tables`.
 [[nodiscard]] auto build_vanilla_from_reports(const vanilla_reports &reports,
                                               std::int32_t data_version)
     -> result<std::vector<std::byte>>;
@@ -289,10 +327,12 @@ struct vanilla_import_result {
     std::uint32_t states{0};
     std::uint32_t presets{0};
     std::uint32_t registries{0};
+    std::uint32_t items{0};
 };
 
-/// Reads `blocks.json`, `biome_parameters/minecraft/*.json` and
-/// `registries.json` from `options.reports`, writes `tables.rvtb` and
+/// Reads `blocks.json`, `biome_parameters/minecraft/*.json`,
+/// `registries.json` and `minecraft/components/item/*.json` from
+/// `options.reports`, writes `tables.rvtb` and
 /// `MANIFEST.json` into `options.out`, and returns their hashes.
 [[nodiscard]] auto import_vanilla_reports(const vanilla_import_options &options)
     -> result<vanilla_import_result>;
