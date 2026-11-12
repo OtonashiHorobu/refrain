@@ -87,6 +87,14 @@ class perlin_noise : public noise {
                                        float original_relative_y) const
         -> float;
 
+    /// Bulk sampling of the eight-corner lattice, shared by the plain and the
+    /// smeared variant. `smeared` selects the fudged Y coordinate and reads
+    /// `fudge_y_scale`; the plain variant passes zero and never divides by it.
+    template <bool smeared>
+    void add_perlin_volume(buffer &output, const volume &volume,
+                           double xz_scale, double y_scale, float amplitude,
+                           double fudge_y_scale) const;
+
     std::array<std::uint8_t, 256> perms_{};
     double offset_x_{0.0};
     double offset_y_{0.0};

@@ -507,21 +507,67 @@ class const_max_sampler final : public sampler {
     float right_;
 };
 
+/// The pointwise operations a single-input node can apply. The dense graph
+/// builder names one per node, so a switch replaces the type-erased callable
+/// and keeps the operation visible to the optimiser.
+enum class unary_kind : std::uint8_t {
+    absolute,
+    square,
+    cube,
+    square_root,
+    half_negative,
+    quarter_negative,
+    reciprocal,
+    negate,
+    squeeze,
+    logarithm,
+    sign,
+};
+
+[[nodiscard]] auto apply_unary(unary_kind kind, float value) -> float {
+    switch (kind) {
+    case unary_kind::absolute:
+        return std::abs(value);
+    case unary_kind::square:
+        return value * value;
+    case unary_kind::cube:
+        return cube_value(value);
+    case unary_kind::square_root:
+        return static_cast<float>(std::sqrt(value));
+    case unary_kind::half_negative:
+        return leaky_relu(value, 0.5F);
+    case unary_kind::quarter_negative:
+        return leaky_relu(value, 0.25F);
+    case unary_kind::reciprocal:
+        return 1.0F / value;
+    case unary_kind::negate:
+        return -value;
+    case unary_kind::squeeze:
+        return squeeze_value(value);
+    case unary_kind::logarithm:
+        return static_cast<float>(std::log(value));
+    case unary_kind::sign:
+        return value > 0.0F ? 1.0F : (value < 0.0F ? -1.0F : value);
+    }
+    return value;
+}
+
 class unary_sampler final : public sampler {
   public:
-    unary_sampler(sampler_ptr input, interval range,
-                  std::function<float(float)> op)
-        : input_{std::move(input)}, range_{range}, op_{std::move(op)} {}
+    unary_sampler(sampler_ptr input, interval range, unary_kind kind)
+        : input_{std::move(input)}, range_{range}, kind_{kind} {}
 
     [[nodiscard]] auto sample_value(const sampler_context &context, jint x,
                                     jint y, jint z) const -> float override {
-        return op_(input_->sample_value(context, x, y, z));
+        return apply_unary(kind_, input_->sample_value(context, x, y, z));
     }
     void sample_volume(const sampler_context &context, buffer &output,
                        const volume &vol) const override {
         input_->sample_volume(context, output, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            output.set(i, op_(output.get(i)));
+        auto *values = output.data();
+        const std::size_t count = output.size();
+        for (std::size_t i = 0; i < count; ++i) {
+            values[i] = apply_unary(kind_, values[i]);
         }
     }
     [[nodiscard]] auto range() const -> interval override { return range_; }
@@ -529,7 +575,7 @@ class unary_sampler final : public sampler {
   private:
     sampler_ptr input_;
     interval range_;
-    std::function<float(float)> op_;
+    unary_kind kind_;
 };
 
 class clamp_sampler final : public sampler {
@@ -1890,77 +1936,74 @@ auto max(sampler_ptr left, sampler_ptr right) -> sampler_ptr {
 auto abs(sampler_ptr input) -> sampler_ptr {
     const interval range = interval::abs(input->range());
     return std::make_unique<unary_sampler>(std::move(input), range,
-                                           [](float x) { return std::abs(x); });
+                                           unary_kind::absolute);
 }
 
 auto square(sampler_ptr input) -> sampler_ptr {
     const interval range = interval::square(input->range());
     return std::make_unique<unary_sampler>(std::move(input), range,
-                                           [](float x) { return x * x; });
+                                           unary_kind::square);
 }
 
 auto cube(sampler_ptr input) -> sampler_ptr {
     const interval range = interval::map_monotonic(
         input->range(), [](float x) { return x * x * x; });
     return std::make_unique<unary_sampler>(std::move(input), range,
-                                           [](float x) { return x * x * x; });
+                                           unary_kind::cube);
 }
 
 auto sqrt(sampler_ptr input) -> sampler_ptr {
     const interval range =
         interval::pow(input->range(), interval::of_exact(0.5F));
-    return std::make_unique<unary_sampler>(
-        std::move(input), range,
-        [](float x) { return static_cast<float>(std::sqrt(x)); });
+    return std::make_unique<unary_sampler>(std::move(input), range,
+                                           unary_kind::square_root);
 }
 
 auto half_negative(sampler_ptr input) -> sampler_ptr {
     const interval range = interval::map_monotonic(
         input->range(), [](float x) { return leaky_relu(x, 0.5F); });
-    return std::make_unique<unary_sampler>(
-        std::move(input), range, [](float x) { return leaky_relu(x, 0.5F); });
+    return std::make_unique<unary_sampler>(std::move(input), range,
+                                           unary_kind::half_negative);
 }
 
 auto quarter_negative(sampler_ptr input) -> sampler_ptr {
     const interval range = interval::map_monotonic(
         input->range(), [](float x) { return leaky_relu(x, 0.25F); });
-    return std::make_unique<unary_sampler>(
-        std::move(input), range, [](float x) { return leaky_relu(x, 0.25F); });
+    return std::make_unique<unary_sampler>(std::move(input), range,
+                                           unary_kind::quarter_negative);
 }
 
 auto reciprocal(sampler_ptr input) -> sampler_ptr {
     const interval range =
         interval::div(interval::of_exact(1.0F), input->range());
     return std::make_unique<unary_sampler>(std::move(input), range,
-                                           [](float x) { return 1.0F / x; });
+                                           unary_kind::reciprocal);
 }
 
 auto negate(sampler_ptr input) -> sampler_ptr {
     const interval range =
         interval::sub(interval::of_exact(0.0F), input->range());
     return std::make_unique<unary_sampler>(std::move(input), range,
-                                           [](float x) { return -x; });
+                                           unary_kind::negate);
 }
 
 auto squeeze(sampler_ptr input) -> sampler_ptr {
     const interval range = interval::map_monotonic(
         input->range(), [](float x) { return squeeze_value(x); });
-    return std::make_unique<unary_sampler>(
-        std::move(input), range, [](float x) { return squeeze_value(x); });
+    return std::make_unique<unary_sampler>(std::move(input), range,
+                                           unary_kind::squeeze);
 }
 
 auto log(sampler_ptr input) -> sampler_ptr {
     const interval range = interval::log(input->range());
-    return std::make_unique<unary_sampler>(
-        std::move(input), range,
-        [](float x) { return static_cast<float>(std::log(x)); });
+    return std::make_unique<unary_sampler>(std::move(input), range,
+                                           unary_kind::logarithm);
 }
 
 auto sign(sampler_ptr input) -> sampler_ptr {
     const interval range = interval::sign(input->range());
-    return std::make_unique<unary_sampler>(
-        std::move(input), range,
-        [](float x) { return x > 0.0F ? 1.0F : (x < 0.0F ? -1.0F : x); });
+    return std::make_unique<unary_sampler>(std::move(input), range,
+                                           unary_kind::sign);
 }
 
 auto clamp(sampler_ptr input, float min_value, float max_value) -> sampler_ptr {
