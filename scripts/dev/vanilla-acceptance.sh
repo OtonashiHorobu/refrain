@@ -103,11 +103,11 @@ mkfifo "$WORK/stdin"
 SERVER_PID=$!
 exec 9>"$WORK/stdin"
 for _ in $(seq 1 600); do
-    grep -q "network: listening" "$WORK/server.log" && break
+    grep -q "\[net\]: listening" "$WORK/server.log" && break
     kill -0 "$SERVER_PID" 2>/dev/null || break
     sleep 0.1
 done
-if ! grep -q "network: listening" "$WORK/server.log"; then
+if ! grep -q "\[net\]: listening" "$WORK/server.log"; then
     echo "acceptance: server did not start" >&2
     tail -20 "$WORK/server.log" >&2
     exit 1
@@ -148,10 +148,10 @@ if [[ "$STATUS" == "joined" ]]; then
     # for them while the client is still connected, not after it left.
     printf 'net\n' >&9
     for _ in $(seq 1 100); do
-        grep -q "net: players=1 " "$WORK/server.log" && break
+        grep -q "\[net\]: players=1 " "$WORK/server.log" && break
         sleep 0.05
     done
-    if grep -q "net: players=1 " "$WORK/server.log"; then
+    if grep -q "\[net\]: players=1 " "$WORK/server.log"; then
         echo "acceptance: the server counts one player in play"
     else
         echo "acceptance: FAILED (the server does not count the client)" >&2

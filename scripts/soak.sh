@@ -89,11 +89,11 @@ EOF
 SERVER_PID=$!
 
 for _ in $(seq 1 600); do
-    grep -q "network: listening" "$WORK/server.log" && break
+    grep -q "\[net\]: listening" "$WORK/server.log" && break
     kill -0 "$SERVER_PID" 2>/dev/null || break
     sleep 0.1
 done
-if ! grep -q "network: listening" "$WORK/server.log"; then
+if ! grep -q "\[net\]: listening" "$WORK/server.log"; then
     echo "soak: server did not start" >&2
     tail -20 "$WORK/server.log" >&2
     exit 1
@@ -124,7 +124,7 @@ SERVER_RSS_KB="$(awk '/VmHWM/ {print $2}' "/proc/$SERVER_PID/status" 2>/dev/null
 # console command lands and how long the process needs to leave afterwards.
 STOP_MS=""
 for _ in $(seq 1 6000); do
-    if grep -q "console: stop" "$WORK/server.log"; then
+    if grep -q "\[server\]: stop" "$WORK/server.log"; then
         STOP_MS=$(date +%s%3N)
         break
     fi
@@ -139,8 +139,8 @@ if [[ -n "$STOP_MS" ]]; then
     SHUTDOWN_MS=$(( EXIT_MS - STOP_MS ))
 fi
 
-TICK_LINE="$(grep -E "tick: .*work_p99=" "$WORK/server.log" | tail -1 || true)"
-NET_LINE="$(grep -E "net: players=" "$WORK/server.log" | tail -1 || true)"
+TICK_LINE="$(grep -E "work_p99=" "$WORK/server.log" | tail -1 || true)"
+NET_LINE="$(grep -E "\[net\]: players=" "$WORK/server.log" | tail -1 || true)"
 echo "soak: elapsed=${ELAPSED}s"
 if [[ -n "$SHUTDOWN_MS" ]]; then
     echo "soak: shutdown=${SHUTDOWN_MS}ms"
