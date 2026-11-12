@@ -11,6 +11,7 @@
 #include <refrain/net/base.hpp>
 #include <refrain/net/crypto.hpp>
 #include <refrain/net/frame.hpp>
+#include <refrain/net/primitives.hpp>
 #include <refrain/net/rate_limit.hpp>
 #include <refrain/net/registry.hpp>
 #include <refrain/protocol/current.hpp>
@@ -130,20 +131,6 @@ namespace play_sb = ::refrain::protocol::current::play::serverbound;
     return true;
 }
 
-[[nodiscard]] auto block_position(std::int64_t packed)
-    -> std::array<std::int32_t, 3> {
-    return {static_cast<std::int32_t>((packed >> 38) & 0x3FFFFFF),
-            static_cast<std::int32_t>(packed & 0xFFF),
-            static_cast<std::int32_t>((packed >> 12) & 0x3FFFFFF)};
-}
-
-[[nodiscard]] auto packed_block_position(std::int32_t x, std::int32_t y,
-                                         std::int32_t z) -> std::int64_t {
-    return ((static_cast<std::int64_t>(x) & 0x3FFFFFF) << 38) |
-           ((static_cast<std::int64_t>(z) & 0x3FFFFFF) << 12) |
-           (static_cast<std::int64_t>(y) & 0xFFF);
-}
-
 [[nodiscard]] auto brand_payload() -> std::vector<std::byte> {
     constexpr std::string_view name{"refrain"};
     std::vector<std::byte> bytes;
@@ -151,16 +138,6 @@ namespace play_sb = ::refrain::protocol::current::play::serverbound;
     out.write_varint(static_cast<std::uint32_t>(name.size()));
     out.write_bytes(std::as_bytes(std::span{name}));
     return bytes;
-}
-
-/// Encoded length of a packet-id varint.
-[[nodiscard]] constexpr auto varint_length(std::uint32_t value) -> std::size_t {
-    std::size_t length{1};
-    while (value >= 0x80U) {
-        value >>= 7U;
-        ++length;
-    }
-    return length;
 }
 
 /// Encode one generated packet with its wire id in front. The body is what the
@@ -415,8 +392,7 @@ struct server::impl {
         // The id is already known; skip the varint prefix instead of parsing
         // it back out of the body that was just encoded.
         send(id, packet_id,
-             std::span<const std::byte>{*body}.subspan(
-                 varint_length(packet_id)));
+             std::span<const std::byte>{*body}.subspan(varint_size(packet_id)));
     }
 };
 
@@ -1479,10 +1455,10 @@ void server::impl::send_play_login(std::uint64_t id) {
     const auto send_spawn = [&] {
         play_cb::set_default_spawn_position spawn{
             .dimension = overworld(),
-            .position = packed_block_position(
-                static_cast<std::int32_t>(config.spawn_x),
-                static_cast<std::int32_t>(config.spawn_y),
-                static_cast<std::int32_t>(config.spawn_z)),
+            .position =
+                pack_block_position(static_cast<std::int32_t>(config.spawn_x),
+                                    static_cast<std::int32_t>(config.spawn_y),
+                                    static_cast<std::int32_t>(config.spawn_z)),
             .yaw = 0.0F,
             .pitch = 0.0F,
         };
@@ -2283,7 +2259,7 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        const auto [x, y, z] = block_position(packet.position);
+        const auto [x, y, z] = unpack_block_position(packet.position);
         // Only START_DESTROY_BLOCK changes the world; the other actions
         // stop or abort a prediction that the client resolves locally.
         if (packet.action == 0 && config.break_block &&
@@ -2304,7 +2280,7 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        auto [x, y, z] = block_position(packet.position);
+        auto [x, y, z] = unpack_block_position(packet.position);
         switch (packet.face) {
         case 0:
             --y;
@@ -2330,7 +2306,7 @@ void server::impl::handle_play(std::uint64_t id,
         if (packet.face <= 5 && config.place_block &&
             config.place_block(x, y, z)) {
             play_cb::block_update update{
-                .position = packed_block_position(x, y, z),
+                .position = pack_block_position(x, y, z),
                 .state = 1, // minecraft:stone
             };
             send_packet(id, play_cb::block_update::packet_id, update,
