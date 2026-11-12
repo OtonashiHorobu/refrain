@@ -26,9 +26,11 @@ build/Release/bin/refrain-server \
     --ticks 200
 ```
 
-`--world` is required to enter the tick loop. Without it the server validates
-the composition and exits. `--ticks 0` runs until `stop`, EOF on stdin or a
-scripted stop command.
+The server enters the tick loop as soon as it starts: it creates the world
+directory when it does not exist yet. `--check` stops after the composition, the
+mod lock and the content layers have been verified, without creating a world or
+starting the loop, which is what a configuration check or a CI smoke wants.
+`--ticks 0` runs until `stop`, EOF on stdin or a scripted stop command.
 
 ## Inputs
 
@@ -37,7 +39,7 @@ scripted stop command.
 | `--gamepack <file>` | composition file; defaults to the bundled gamepack |
 | `--config-dir <dir>` | host config directory; each `*.toml` becomes a read-only host runtime namespace (`refrain.toml` is `host`, `mods/*.toml` is `mod/<id>`); empty disables |
 | `--world <dir>` | RWF world directory |
-| `--config-dir <dir>` | per-namespace TOML configuration; missing files keep defaults |
+| `--check` | verify configuration, composition and lock, then exit without starting |
 | `--import-properties <file>` | import Java `server.properties` as a fallback layer (not written) |
 | `--ticks <n>` | stop after n ticks, 0 disables the limit |
 | `--script <file>` | tick-indexed commands, one `<tick> <command>` per line |
