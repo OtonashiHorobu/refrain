@@ -56,6 +56,20 @@ auto proto_chunk::biome_index(jint x, jint y, jint z) const -> std::size_t {
     return section * 64U + cell;
 }
 
+auto proto_chunk::clone() const -> std::unique_ptr<proto_chunk> {
+    auto copy = std::make_unique<proto_chunk>(*table_, chunk_x_, chunk_z_,
+                                              min_y_, height_);
+    copy->structure_starts_ = structure_starts_;
+    copy->structure_references_ = structure_references_;
+    copy->states_ = states_;
+    copy->biomes_ = biomes_;
+    copy->heightmaps_ = heightmaps_;
+    copy->block_entities_ = block_entities_;
+    copy->post_processing_ = post_processing_;
+    copy->status_ = status_;
+    return copy;
+}
+
 auto proto_chunk::state_at(jint x, jint y, jint z) const -> block_state_id {
     if (x < 0 || x > 15 || z < 0 || z > 15 || y < min_y_ ||
         y >= min_y_ + height_) {

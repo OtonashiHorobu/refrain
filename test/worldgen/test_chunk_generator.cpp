@@ -931,6 +931,41 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         expect(generated.error().code == error_code::invalid_argument);
     };
 
+    "the neighbour terrain cache returns the same chunk on a repeat"_test = [] {
+        auto generator = make_terrain_generator(generation_target::full,
+                                                {"oracle:no_structure_set"});
+        if (generator == nullptr) {
+            return;
+        }
+        const std::array<chunk_pos, 4> area{{
+            {.x = 0, .z = 0},
+            {.x = 1, .z = 0},
+            {.x = 0, .z = 1},
+            {.x = 1, .z = 1},
+        }};
+        std::vector<std::unique_ptr<proto_chunk>> first;
+        first.reserve(area.size());
+        for (const auto &position : area) {
+            auto generated = generator->generate(position);
+            expect(generated.has_value()) << generated.error().message;
+            if (!generated) {
+                return;
+            }
+            first.push_back(std::move(*generated));
+        }
+        // The first pass filled the cache; the second target of each chunk
+        // reads its terrain back from the cache instead of sampling it.
+        for (std::size_t index = 0; index < area.size(); ++index) {
+            auto generated = generator->generate(area[index]);
+            expect(generated.has_value()) << generated.error().message;
+            if (!generated) {
+                return;
+            }
+            expect(same_chunk(*first[index], **generated))
+                << "a cached neighbour differs from a fresh fill";
+        }
+    };
+
     "the target ladder advances terrain, features and full"_test = [] {
         auto terrain_generator = make_terrain_generator(
             generation_target::terrain, {"oracle:no_structure_set"});

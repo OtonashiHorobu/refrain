@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -128,6 +129,10 @@ class proto_chunk {
     [[nodiscard]] auto table() const noexcept -> const block_state_table & {
         return *table_;
     }
+
+    /// Deep copy of the chunk. The generation stages write into chunks they
+    /// borrow from a cache, so a cached chunk is never handed out directly.
+    [[nodiscard]] auto clone() const -> std::unique_ptr<proto_chunk>;
 
     [[nodiscard]] auto state_at(jint x, jint y, jint z) const -> block_state_id;
     /// Writes one block and updates the heightmaps the current status keeps.
