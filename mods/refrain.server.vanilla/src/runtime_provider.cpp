@@ -8,6 +8,10 @@
 // The tick loop still uses the C++ app API directly; routing its internals
 // through `refrain:world`/`refrain:sim`/`refrain:storage` is not implemented
 // here.
+//
+// TODO: the runtime bypasses the service contracts, so a mod that replaces the
+// world or storage provider changes nothing; the tick loop must call the
+// contract ABI instead of the concrete types.
 
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/net_protocol.hpp>

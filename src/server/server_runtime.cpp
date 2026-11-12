@@ -1011,6 +1011,8 @@ constexpr std::uint8_t player_info_add{1U};
 constexpr std::uint8_t player_info_game_mode{4U};
 constexpr std::uint8_t player_info_listed{8U};
 constexpr std::uint8_t player_info_latency{16U};
+// TODO: the protocol entity type id is hard-coded for the player; non-player
+// entities need a table built from the entity_type registry.
 constexpr std::uint32_t player_entity_type{159U};
 
 template <typename Packet, typename Encoder>
@@ -1775,6 +1777,8 @@ auto run_server(const server_run_options &options) -> int {
     network_inputs.spawn_chunks =
         std::make_shared<const std::vector<std::vector<std::byte>>>(
             std::move(spawn_chunks));
+    // TODO: breaking ignores block hardness, the held tool, drops and
+    // neighbour updates; every block becomes air immediately.
     network_inputs.break_block =
         [world = &*store](std::int32_t x, std::int32_t y, std::int32_t z) {
             if (y < std::numeric_limits<std::int16_t>::min() ||
@@ -1787,6 +1791,8 @@ auto run_server(const server_run_options &options) -> int {
                     refrain::sim::air_block)
                 .has_value();
         };
+    // TODO: placing ignores the held item, placement rules and orientation;
+    // every placement writes minecraft:stone.
     network_inputs.place_block =
         [world = &*store](std::int32_t x, std::int32_t y, std::int32_t z) {
             if (y < std::numeric_limits<std::int16_t>::min() ||
