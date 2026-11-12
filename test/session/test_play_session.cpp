@@ -13,10 +13,12 @@ using boost::ut::suite;
 using namespace boost::ut::literals;
 
 namespace session = refrain::session;
+namespace sim = refrain::sim;
 
 suite play_session_tests = [] {
     "session/player table assigns entity ids and visibility"_test = [] {
-        session::play_session players{};
+        sim::player_table table{};
+        session::play_session players{table};
         const auto first{
             players.add_player(1, {}, "Alice", "overworld", 0.0, 0.0, 0.0, 1)};
         expect(first.has_value());
@@ -43,7 +45,8 @@ suite play_session_tests = [] {
     };
 
     "session/inventories are owned per player"_test = [] {
-        session::play_session players{};
+        sim::player_table table{};
+        session::play_session players{table};
         expect(players.add_player(1, {}, "Alice", "overworld", 0.0, 0.0, 0.0, 1)
                    .has_value());
         expect(players.add_player(2, {}, "Bob", "overworld", 0.0, 0.0, 0.0, 1)
@@ -64,8 +67,40 @@ suite play_session_tests = [] {
         expect(players.inventory_of(99) == nullptr);
     };
 
+    "session/the synthetic player stays out of connection views"_test = [] {
+        sim::player_table table{};
+        expect(table
+                   .add(sim::player_table::registration{
+                       .connection = sim::synthetic_connection,
+                       .name = "@console",
+                       .world = "overworld",
+                   })
+                   .has_value());
+        expect(table
+                   .add(sim::player_table::registration{
+                       .connection = 1,
+                       .name = "Alice",
+                       .world = "overworld",
+                   })
+                   .has_value());
+        session::play_session players{table};
+        expect(players.size() == 1U);
+        expect(players.player_of(sim::synthetic_connection) == nullptr);
+        expect(players.player_by_entity(1) == nullptr);
+        expect(players.player_by_entity(2) != nullptr);
+        expect(players.inventory_of(sim::synthetic_connection) == nullptr);
+        const auto visible{players.all()};
+        expect(visible.size() == 1U);
+        if (!visible.empty()) {
+            expect(visible.front().name == "Alice");
+        }
+        expect(players.update_position(sim::synthetic_connection, 1.0, 2.0, 3.0,
+                                       0.0F, 0.0F) == false);
+    };
+
     "session/player removal releases the record"_test = [] {
-        session::play_session players{};
+        sim::player_table table{};
+        session::play_session players{table};
         expect(players.add_player(3, {}, "Carol", "overworld", 0.0, 0.0, 0.0, 1)
                    .has_value());
         expect(players.remove_player(3));

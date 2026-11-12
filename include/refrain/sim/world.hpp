@@ -10,6 +10,7 @@
 
 #include <functional>
 #include <refrain/data/checksum.hpp>
+#include <refrain/sim/player.hpp>
 #include <refrain/sim/rng.hpp>
 #include <refrain/world/maintenance.hpp>
 #include <refrain/world/model.hpp>
@@ -102,24 +103,6 @@ class block_registry {
     mutable std::shared_mutex mutex_{};
 };
 
-/// One inventory stack: an item key plus a count, with no components or
-/// metadata.
-struct item_stack {
-    std::string item{};
-    std::uint32_t count{0};
-};
-
-/// Maximum stack size for the current item model.
-///
-/// TODO: every item shares this ceiling and stacks carry no components or
-/// durability; per-item stack sizes and damage come from the item registry.
-inline constexpr std::uint32_t max_stack_size = 64;
-
-/// Process-local runtime entity id. Ids are assigned in spawn order and are
-/// never persisted (the storage entity format is not implemented yet); the sim
-/// needs a deterministic, replay-stable identifier for the entity table.
-using entity_id = std::uint64_t;
-
 /// Minimal entity: type key plus position/velocity. It is deliberately
 /// not a LivingEntity model; the sim needs a deterministic entity tick and
 /// state hash, not AI/pathfinding.
@@ -137,18 +120,6 @@ struct entity_state {
 
 /// Minimal player state. Collision/physics is not implemented yet; the scripted
 /// driver only needs a deterministic position and orientation.
-struct player_state {
-    double x{0.0};
-    double y{0.0};
-    double z{0.0};
-    double vx{0.0};
-    double vy{0.0};
-    double vz{0.0};
-    float yaw{0.0F};
-    float pitch{0.0F};
-    bool on_ground{false};
-    std::vector<item_stack> inventory{};
-};
 
 /// One runtime section. Uniform sections (air/stone/water columns) do not
 /// allocate the 4096-entry block array; the storage-record base keeps biome
@@ -420,29 +391,50 @@ class world {
     [[nodiscard]] auto random() noexcept -> rng &;
     [[nodiscard]] auto random() const noexcept -> const rng &;
 
+    /// Player records, addressed by entity id. The table is the one
+    /// authoritative player model: the console and the session layer read and
+    /// mutate these records, never a copy.
+    [[nodiscard]] auto players() noexcept -> player_table &;
+    [[nodiscard]] auto players() const noexcept -> const player_table &;
+
+    /// Register a player record and allocate its entity id.
+    [[nodiscard]] auto add_player(player_table::registration record)
+        -> result<entity_id>;
+
+    /// Remove the player owned by `connection`; false when it is unknown.
+    [[nodiscard]] auto remove_player(std::uint64_t connection) -> bool;
+
+    [[nodiscard]] auto player(entity_id id) noexcept -> player_state *;
+    [[nodiscard]] auto player(entity_id id) const noexcept
+        -> const player_state *;
+
+    /// Re-seat `player` at `(x, y, z)` and clear its velocity.
+    void set_player_position(player_state &player, double x, double y,
+                             double z) noexcept;
+
     /// Collision-aware displacement of the player's feet. Returns true when at
     /// least one axis moved. Y is resolved first, then X/Z (vanilla order).
-    [[nodiscard]] auto move_player(double dx, double dy, double dz) -> bool;
+    [[nodiscard]] auto move_player(player_state &player, double dx, double dy,
+                                   double dz) -> bool;
 
-    /// Apply one tick of gravity/vertical collision. Called by `tick()`.
-    void tick_player() noexcept;
-
-    void jump() noexcept;
+    void jump(player_state &player) noexcept;
     [[nodiscard]] auto block_solid(block_state_id id) const noexcept -> bool;
 
     /// Basic inventory mutation. Stacks are capped at `max_stack_size`; adding
     /// more fills existing partial stacks first and then appends full stacks
     /// (deterministic order). `item_count` sums every stack, `remove_item`
     /// consumes across stacks in order.
-    [[nodiscard]] auto add_item(std::string_view item, std::uint32_t count = 1)
-        -> status;
-    [[nodiscard]] auto remove_item(std::string_view item,
+    [[nodiscard]] auto add_item(player_state &player, std::string_view item,
+                                std::uint32_t count = 1) -> status;
+    [[nodiscard]] auto remove_item(player_state &player, std::string_view item,
                                    std::uint32_t count = 1) -> bool;
-    [[nodiscard]] auto item_count(std::string_view item) const noexcept
+    [[nodiscard]] auto item_count(const player_state &player,
+                                  std::string_view item) const noexcept
         -> std::uint32_t;
 
     /// Spawn an entity of `type` at `(x, y, z)` (feet position). The id is
-    /// process-local and deterministic for the same spawn order.
+    /// process-local and deterministic for the same spawn order; it shares the
+    /// player id sequence so a client never sees two entities with one id.
     [[nodiscard]] auto spawn_entity(std::string_view type, double x, double y,
                                     double z) -> result<entity_id>;
 
@@ -462,14 +454,14 @@ class world {
     /// `tick()` before the tick counter advances).
     void tick_entities() noexcept;
 
-    [[nodiscard]] auto player() noexcept -> player_state &;
-    [[nodiscard]] auto player() const noexcept -> const player_state &;
-    void set_player_position(double x, double y, double z) noexcept;
-
     /// Deterministic BLAKE3 over the loaded chunks (sorted by position), every
-    /// section's block ids, the player state and the tick counter. Replay
-    /// compares this value across runs and thread counts; the canonical byte
-    /// order is part of the test contract, not a saved format.
+    /// section's block ids, every player record in ascending entity id order
+    /// and the tick counter. The player record fields hashed are the entity id,
+    /// position/velocity, rotation, ground flag, game mode, health and
+    /// inventory; identity fields (connection, profile uuid, name, world) are
+    /// not simulation state. Replay compares this value across runs and thread
+    /// counts; the canonical byte order is part of the test contract, not a
+    /// saved format.
     [[nodiscard]] auto state_hash() const -> data::digest32;
     [[nodiscard]] auto loaded_chunks() const noexcept -> std::size_t {
         return chunks_.size();
@@ -501,16 +493,18 @@ class world {
     [[nodiscard]] static auto local_index(std::int32_t y, std::int32_t z,
                                           std::int32_t x) noexcept
         -> std::size_t;
+    /// One player's gravity/vertical collision step; `tick()` applies it to
+    /// every record in ascending entity id order.
+    void tick_player(player_state &player) noexcept;
 
     store_type store_;
     mutable std::mutex store_mutex_{};
     block_registry registry_{};
     std::map<chunk_pos, chunk, chunk_order> chunks_{};
     std::map<chunk_pos, std::uint32_t, chunk_order> tickets_{};
-    player_state player_{};
+    player_table players_{};
     zstd_policy zstd_policy_{};
     std::map<entity_id, entity_state> entities_{};
-    entity_id next_entity_id_{1};
     struct scheduled_task {
         std::int64_t due{0};
         timer_id id{0};

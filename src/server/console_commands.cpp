@@ -41,12 +41,13 @@ namespace {
 
 void print_console_help() {
     log_server.info(
-        "commands: stop, save, tps, hash, pos, move <dx> <dy> <dz>, "
-        "walk <dx> <dz>, jump, dig <x> <y> <z>, place <x> <y> <z> <block>, "
-        "give <item> <count>, inv, spawn <type> <x> <y> <z>, entities, "
-        "kill <entity-id>, palette-gc, schedules, config <namespace> "
-        "get|set <key> [value], config save|reload [namespace], "
-        "config names");
+        "commands: stop, save, tps, hash, pos [name], "
+        "move [name] <dx> <dy> <dz>, walk [name] <dx> <dz>, jump [name], "
+        "dig <x> <y> <z>, place <x> <y> <z> <block>, "
+        "give [name] <item> <count>, inv [name], "
+        "spawn <type> <x> <y> <z>, entities, kill <entity-id>, palette-gc, "
+        "schedules, config <namespace> get|set <key> [value], "
+        "config save|reload [namespace], config names");
 }
 
 [[nodiscard]] auto split_console_line(std::string_view line)
@@ -224,6 +225,19 @@ void execute_config_command(std::span<const std::string_view> tokens,
     log_config.warn("unknown action '{}'", action);
 }
 
+/// Resolve the player a console command addresses. An empty name selects the
+/// first player by entity id (the console's default); the server registers the
+/// synthetic replay player before any client can connect, so a replay never
+/// changes target when clients join.
+[[nodiscard]] auto select_player(refrain::sim::world &world,
+                                 std::string_view name)
+    -> refrain::sim::player_state * {
+    if (name.empty()) {
+        return world.players().first();
+    }
+    return world.players().find_by_name(name);
+}
+
 } // namespace
 
 void tick_metrics::record(std::uint64_t work_ns) {
@@ -325,20 +339,33 @@ void console_commands::execute(std::string_view line,
         log_sim.info("{}", refrain::data::to_hex(store.state_hash()));
         return;
     }
-    if (line == "inv") {
-        if (store.player().inventory.empty()) {
-            log_server.info("empty");
+    const auto tokens{split_console_line(line)};
+    if ((tokens.size() == 1 || tokens.size() == 2) && tokens[0] == "inv") {
+        const auto *player{
+            select_player(store, tokens.size() == 2 ? tokens[1] : "")};
+        if (player == nullptr) {
+            log_server.warn("no player");
+            return;
+        }
+        if (player->inventory.empty()) {
+            log_server.info("{}: empty", player->name);
         } else {
-            for (const auto &stack : store.player().inventory) {
-                log_server.info("{} x{}", stack.item, stack.count);
+            for (const auto &stack : player->inventory) {
+                log_server.info("{}: {} x{}", player->name, stack.item,
+                                stack.count);
             }
         }
         return;
     }
-    if (line == "pos") {
-        const auto &player{store.player()};
-        log_server.info("x={:.1f} y={:.1f} z={:.1f}", player.x, player.y,
-                        player.z);
+    if ((tokens.size() == 1 || tokens.size() == 2) && tokens[0] == "pos") {
+        const auto *player{
+            select_player(store, tokens.size() == 2 ? tokens[1] : "")};
+        if (player == nullptr) {
+            log_server.warn("no player");
+            return;
+        }
+        log_server.info("{} x={:.1f} y={:.1f} z={:.1f}", player->name,
+                        player->x, player->y, player->z);
         return;
     }
     if (line == "entities") {
@@ -352,28 +379,39 @@ void console_commands::execute(std::string_view line,
         }
         return;
     }
-    const auto tokens{split_console_line(line)};
     if (!tokens.empty() && tokens[0] == "config") {
         execute_config_command(tokens, dependencies_.config);
         return;
     }
-    if (line == "jump") {
-        store.jump();
-        log_server.info("on_ground={}", store.player().on_ground);
+    if ((tokens.size() == 1 || tokens.size() == 2) && tokens[0] == "jump") {
+        auto *player{select_player(store, tokens.size() == 2 ? tokens[1] : "")};
+        if (player == nullptr) {
+            log_server.warn("no player");
+            return;
+        }
+        store.jump(*player);
+        log_server.info("{} on_ground={}", player->name, player->on_ground);
         return;
     }
-    if (tokens.size() == 3 && tokens[0] == "give") {
+    if ((tokens.size() == 3 || tokens.size() == 4) && tokens[0] == "give") {
+        const bool named{tokens.size() == 4};
+        auto *player{select_player(store, named ? tokens[1] : "")};
+        if (player == nullptr) {
+            log_server.warn("no player");
+            return;
+        }
         std::uint32_t count{0};
-        if (!parse_number(tokens[2], count) || count == 0) {
+        if (!parse_number(tokens[named ? 3 : 2], count) || count == 0) {
             log_server.warn("give expects a positive count");
             return;
         }
-        auto added{store.add_item(tokens[1], count)};
+        const auto item{tokens[named ? 2 : 1]};
+        auto added{store.add_item(*player, item, count)};
         if (!added) {
             log_server.warn("give failed: {}", added.error().message);
             return;
         }
-        log_server.info("{} x{}", tokens[1], count);
+        log_server.info("{}: {} x{}", player->name, item, count);
         return;
     }
     if (tokens.size() == 5 && tokens[0] == "spawn") {
@@ -406,31 +444,45 @@ void console_commands::execute(std::string_view line,
         log_server.info("#{}", id);
         return;
     }
-    if (tokens.size() == 3 && tokens[0] == "walk") {
+    if ((tokens.size() == 3 || tokens.size() == 4) && tokens[0] == "walk") {
+        const bool named{tokens.size() == 4};
+        auto *player{select_player(store, named ? tokens[1] : "")};
+        if (player == nullptr) {
+            log_server.warn("no player");
+            return;
+        }
         double dx{0.0};
         double dz{0.0};
-        if (!parse_number(tokens[1], dx) || !parse_number(tokens[2], dz)) {
+        if (!parse_number(tokens[named ? 2 : 1], dx) ||
+            !parse_number(tokens[named ? 3 : 2], dz)) {
             log_server.warn("walk expects two numbers");
             return;
         }
-        const auto moved{store.move_player(dx, 0.0, dz)};
-        log_server.info("{:.1f},{:.1f},{:.1f} {}", store.player().x,
-                        store.player().y, store.player().z,
-                        moved ? "moved" : "blocked");
+        const auto moved{store.move_player(*player, dx, 0.0, dz)};
+        log_server.info("{} {:.1f},{:.1f},{:.1f} {}", player->name, player->x,
+                        player->y, player->z, moved ? "moved" : "blocked");
         return;
     }
-    if (tokens.size() == 4 && tokens[0] == "move") {
+    if ((tokens.size() == 4 || tokens.size() == 5) && tokens[0] == "move") {
+        const bool named{tokens.size() == 5};
+        auto *player{select_player(store, named ? tokens[1] : "")};
+        if (player == nullptr) {
+            log_server.warn("no player");
+            return;
+        }
         double dx{0.0};
         double dy{0.0};
         double dz{0.0};
-        if (!parse_number(tokens[1], dx) || !parse_number(tokens[2], dy) ||
-            !parse_number(tokens[3], dz)) {
+        if (!parse_number(tokens[named ? 2 : 1], dx) ||
+            !parse_number(tokens[named ? 3 : 2], dy) ||
+            !parse_number(tokens[named ? 4 : 3], dz)) {
             log_server.warn("move expects three numbers");
             return;
         }
-        auto &player{store.player()};
-        store.set_player_position(player.x + dx, player.y + dy, player.z + dz);
-        log_server.info("{:.1f},{:.1f},{:.1f}", player.x, player.y, player.z);
+        store.set_player_position(*player, player->x + dx, player->y + dy,
+                                  player->z + dz);
+        log_server.info("{} {:.1f},{:.1f},{:.1f}", player->name, player->x,
+                        player->y, player->z);
         return;
     }
     if ((tokens.size() == 4 && tokens[0] == "dig") ||
@@ -467,13 +519,14 @@ void console_commands::execute(std::string_view line,
                             applied.error().message);
             return;
         }
-        if (gained) {
-            (void)store.add_item(*gained, 1);
+        auto *player{store.players().first()};
+        if (gained && player != nullptr) {
+            (void)store.add_item(*player, *gained, 1);
         }
-        if (tokens[0] == "place") {
+        if (tokens[0] == "place" && player != nullptr) {
             // The server remains creative-permissive: consume when available,
             // but do not reject a scripted placement without a prior `give`.
-            (void)store.remove_item(tokens[4], 1);
+            (void)store.remove_item(*player, tokens[4], 1);
         }
         log_server.info("{}: {},{},{} -> {}", tokens[0], x, y, z,
                         tokens[0] == "place" ? tokens[4] : "air");

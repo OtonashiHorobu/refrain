@@ -6,18 +6,21 @@
 
 #include <refrain/core/error.hpp>
 #include <refrain/net/base.hpp>
-#include <refrain/sim/world.hpp>
+#include <refrain/sim/player.hpp>
 
 #include <cstdint>
-#include <optional>
+#include <map>
 #include <string>
-#include <unordered_map>
+#include <string_view>
 #include <vector>
 
 namespace refrain::session {
 
-/// Gameplay-side player record. Entity ids are assigned by the session, not by
-/// the network connection id.
+/// Protocol-facing projection of one simulation player record.
+///
+/// The simulation owns the record (`sim::player_state`); this struct only
+/// carries the fields the network shell encodes. It is refreshed from the
+/// authoritative record on access and is never written back.
 struct player {
     std::uint64_t connection{0};
     net::uuid id{};
@@ -46,12 +49,30 @@ struct visibility_entry {
     float pitch{0.0F};
 };
 
-/// Session-owned player table and visibility model. The network layer reports
-/// connection-scoped events; this object decides which entities exist and who
-/// can see them.
+/// Gameplay-side adapter over the simulation's player table. The network layer
+/// reports connection-scoped events; this object resolves them to the one
+/// authoritative player record and decides which entities a connection can see.
+///
+/// It owns no player data: mutations go straight to `sim::player_table`, and
+/// the projection cache only holds the last encoded view of each record. The
+/// synthetic player that the console and replay scripts drive has no network
+/// connection, so it is excluded from the connection-scoped views.
 class play_session {
   public:
-    /// Register a joined player and allocate a process-local entity id.
+    /// Standalone session with its own player table, for callers that are not
+    /// attached to a running simulation (tests and tooling). The server always
+    /// passes the world's table so the console and the protocol share one
+    /// record.
+    play_session();
+    explicit play_session(sim::player_table &players);
+    play_session(const play_session &) = delete;
+    auto operator=(const play_session &) -> play_session & = delete;
+    play_session(play_session &&other) noexcept;
+    auto operator=(play_session &&other) noexcept -> play_session &;
+
+    /// Register the player owned by `connection` and allocate its entity id.
+    /// The record lives in the simulation table; this layer only attaches it to
+    /// the connection.
     [[nodiscard]] auto add_player(std::uint64_t connection, net::uuid id,
                                   std::string name, std::string world, double x,
                                   double y, double z, std::uint32_t game_mode)
@@ -66,7 +87,7 @@ class play_session {
         -> const session::player *;
 
     /// Mutable inventory owned by one player. The simulation thread is the
-    /// only writer; the pointer is invalidated by remove_player().
+    /// only writer; the pointer is invalidated by `remove_player()`.
     [[nodiscard]] auto inventory_of(std::uint64_t connection)
         -> std::vector<sim::item_stack> *;
 
@@ -90,13 +111,17 @@ class play_session {
     [[nodiscard]] auto visible_to(std::uint64_t observer, double radius) const
         -> std::vector<visibility_entry>;
 
+    /// Connected players in ascending entity id order.
     [[nodiscard]] auto all() const -> std::vector<player>;
 
-    /// Visit every player without copying the records. The simulation thread
-    /// is the only writer, so this is the cheap path for per-tick iteration.
+    /// Visit every connected player in ascending entity id order without
+    /// copying the projection. The pointers stay valid until the next call and
+    /// observe mutations made through this object (the cached projection is
+    /// refreshed in place).
     template <typename F> void for_each(F &&visit) const {
-        for (const auto &[connection, value] : players_) {
-            static_cast<void>(connection);
+        refresh_all();
+        for (const auto &[id, value] : views_) {
+            static_cast<void>(id);
             visit(value);
         }
     }
@@ -104,8 +129,21 @@ class play_session {
     [[nodiscard]] auto size() const -> std::size_t;
 
   private:
-    std::unordered_map<std::uint64_t, player> players_{};
-    std::uint32_t next_entity_id_{1};
+    [[nodiscard]] auto find_connected(std::uint64_t connection) const noexcept
+        -> const sim::player_state *;
+    [[nodiscard]] static auto project(const sim::player_state &record)
+        -> player;
+    void refresh(const sim::player_state &record) const;
+    void refresh_if_cached(const sim::player_state &record) const;
+    void refresh_all() const;
+
+    /// Table owned by the standalone constructor; unused when the server
+    /// attaches the world's table.
+    sim::player_table own_players_{};
+    sim::player_table *players_{nullptr};
+    /// Projection cache keyed by entity id so pointers stay valid while the
+    /// network shell holds them for one tick.
+    mutable std::map<sim::entity_id, player> views_{};
 };
 
 } // namespace refrain::session

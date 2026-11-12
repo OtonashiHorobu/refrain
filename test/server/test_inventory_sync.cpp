@@ -69,7 +69,8 @@ suite<"server/inventory-sync"> inventory_sync_tests = [] {
         const auto stone{item_protocol_id(*opened, "minecraft:stone")};
         expect(stone != 0U) << "stone must have a protocol id";
 
-        session::play_session players{};
+        sim::player_table table{};
+        session::play_session players{table};
         join(players);
         players.inventory_of(1)->at(0) = sim::item_stack{
             .item = "minecraft:stone",
@@ -106,7 +107,8 @@ suite<"server/inventory-sync"> inventory_sync_tests = [] {
         const auto stone{item_protocol_id(*opened, "minecraft:stone")};
         expect(stone != 0U);
 
-        session::play_session players{};
+        sim::player_table table{};
+        session::play_session players{table};
         join(players);
         auto *inventory{players.inventory_of(1)};
         inventory->at(0) = sim::item_stack{
@@ -146,7 +148,8 @@ suite<"server/inventory-sync"> inventory_sync_tests = [] {
             const auto stone{item_protocol_id(*opened, "minecraft:stone")};
             expect(stone != 0U);
 
-            session::play_session players{};
+            sim::player_table table{};
+            session::play_session players{table};
             join(players);
             auto *inventory{players.inventory_of(1)};
             inventory->at(0) = sim::item_stack{
@@ -195,7 +198,8 @@ suite<"server/inventory-sync"> inventory_sync_tests = [] {
         const auto stone{item_protocol_id(*opened, "minecraft:stone")};
         expect(stone != 0U);
 
-        session::play_session players{};
+        sim::player_table table{};
+        session::play_session players{table};
         join(players);
         support::fake_play_gateway gateway{};
         gateway.active = {1};
@@ -218,7 +222,8 @@ suite<"server/inventory-sync"> inventory_sync_tests = [] {
     };
 
     "an unavailable gateway sends nothing and keeps no state"_test = [] {
-        session::play_session players{};
+        sim::player_table table{};
+        session::play_session players{table};
         join(players);
         support::fake_play_gateway gateway{false};
         gateway.active = {1};

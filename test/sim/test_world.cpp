@@ -104,6 +104,24 @@ namespace world = refrain::world;
     return refrain::sim::far_zstd_level;
 }
 
+/// Register the synthetic player the console and replay scripts drive and
+/// return its entity id (0 when registration failed).
+[[nodiscard]] auto make_console_player(refrain::sim::world &world,
+                                       double x = 0.5, double y = 0.0,
+                                       double z = 0.5)
+    -> refrain::sim::entity_id {
+    auto added{world.add_player(refrain::sim::player_table::registration{
+        .connection = refrain::sim::synthetic_connection,
+        .name = "@console",
+        .world = "overworld",
+        .x = x,
+        .y = y,
+        .z = z,
+        .game_mode = 1,
+    })};
+    return added ? *added : 0;
+}
+
 [[maybe_unused]] const suite tests = [] {
     "sim/block registry interns air and states"_test = [] {
         refrain::sim::block_registry registry{};
@@ -479,34 +497,42 @@ namespace world = refrain::world;
                 if (!runtime) {
                     return;
                 }
-                expect(runtime->add_item("minecraft:dirt", 100).has_value());
-                expect(runtime->item_count("minecraft:dirt") == 100U);
-                expect(runtime->player().inventory.size() == 2U);
-                if (runtime->player().inventory.size() == 2U) {
-                    expect(runtime->player().inventory[0].count ==
+                const auto player_id{make_console_player(*runtime)};
+                auto *player{runtime->player(player_id)};
+                expect(player != nullptr);
+                if (player == nullptr) {
+                    return;
+                }
+                expect(runtime->add_item(*player, "minecraft:dirt", 100)
+                           .has_value());
+                expect(runtime->item_count(*player, "minecraft:dirt") == 100U);
+                expect(player->inventory.size() == 2U);
+                if (player->inventory.size() == 2U) {
+                    expect(player->inventory[0].count ==
                            refrain::sim::max_stack_size);
-                    expect(runtime->player().inventory[1].count == 36U);
+                    expect(player->inventory[1].count == 36U);
                 }
-                expect(runtime->add_item("minecraft:dirt", 30).has_value());
-                expect(runtime->item_count("minecraft:dirt") == 130U);
-                expect(runtime->player().inventory.size() == 3U);
-                if (runtime->player().inventory.size() == 3U) {
-                    expect(runtime->player().inventory[1].count ==
+                expect(runtime->add_item(*player, "minecraft:dirt", 30)
+                           .has_value());
+                expect(runtime->item_count(*player, "minecraft:dirt") == 130U);
+                expect(player->inventory.size() == 3U);
+                if (player->inventory.size() == 3U) {
+                    expect(player->inventory[1].count ==
                            refrain::sim::max_stack_size);
-                    expect(runtime->player().inventory[2].count == 2U);
+                    expect(player->inventory[2].count == 2U);
                 }
-                expect(runtime->remove_item("minecraft:dirt", 70));
-                expect(runtime->item_count("minecraft:dirt") == 60U);
-                expect(runtime->player().inventory.size() == 2U);
-                if (runtime->player().inventory.size() == 2U) {
-                    expect(runtime->player().inventory[0].count == 58U);
-                    expect(runtime->player().inventory[1].count == 2U);
+                expect(runtime->remove_item(*player, "minecraft:dirt", 70));
+                expect(runtime->item_count(*player, "minecraft:dirt") == 60U);
+                expect(player->inventory.size() == 2U);
+                if (player->inventory.size() == 2U) {
+                    expect(player->inventory[0].count == 58U);
+                    expect(player->inventory[1].count == 2U);
                 }
-                expect(runtime->remove_item("minecraft:dirt", 60));
-                expect(runtime->item_count("minecraft:dirt") == 0U);
-                expect(runtime->player().inventory.empty());
-                expect(!runtime->remove_item("minecraft:dirt", 61));
-                expect(runtime->item_count("minecraft:dirt") == 0U);
+                expect(runtime->remove_item(*player, "minecraft:dirt", 60));
+                expect(runtime->item_count(*player, "minecraft:dirt") == 0U);
+                expect(player->inventory.empty());
+                expect(!runtime->remove_item(*player, "minecraft:dirt", 61));
+                expect(runtime->item_count(*player, "minecraft:dirt") == 0U);
             }
             std::error_code error;
             fs::remove_all(directory, error);
@@ -527,14 +553,18 @@ namespace world = refrain::world;
             }
             auto ensured{runtime->ensure_chunk({0, 0})};
             expect(ensured.has_value());
-            runtime->set_player_position(0.5, 30.0, 0.5);
+            const auto player_id{make_console_player(*runtime)};
+            auto *player{runtime->player(player_id)};
+            expect(player != nullptr);
+            if (player == nullptr) {
+                return;
+            }
+            runtime->set_player_position(*player, 0.5, 30.0, 0.5);
             for (int tick{0}; tick < 200; ++tick) {
                 runtime->tick();
             }
-            expect(runtime->player().y >= 15.99 &&
-                   runtime->player().y <= 16.001)
-                << runtime->player().y;
-            expect(runtime->player().on_ground);
+            expect(player->y >= 15.99 && player->y <= 16.001) << player->y;
+            expect(player->on_ground);
             expect(runtime->block_solid(
                 *runtime->registry().find("minecraft:stone")));
             expect(!runtime->block_solid(refrain::sim::air_block));
@@ -564,17 +594,23 @@ namespace world = refrain::world;
                 }
                 const auto stone{*runtime->registry().find("minecraft:stone")};
                 expect(runtime->set_block({1, 16, 0}, stone).has_value());
-                runtime->set_player_position(0.5, 16.0, 0.5);
-                expect(runtime->move_player(1.0, 0.0, 0.0));
-                expect(runtime->player().x < 0.71) << runtime->player().x;
-                expect(runtime->player().x > 0.5) << runtime->player().x;
+                const auto player_id{make_console_player(*runtime)};
+                auto *player{runtime->player(player_id)};
+                expect(player != nullptr);
+                if (player == nullptr) {
+                    return;
+                }
+                runtime->set_player_position(*player, 0.5, 16.0, 0.5);
+                expect(runtime->move_player(*player, 1.0, 0.0, 0.0));
+                expect(player->x < 0.71) << player->x;
+                expect(player->x > 0.5) << player->x;
 
                 runtime->tick(); // settle on the floor so jump() is legal
-                expect(runtime->player().on_ground);
-                runtime->jump();
-                expect(!runtime->player().on_ground);
+                expect(player->on_ground);
+                runtime->jump(*player);
+                expect(!player->on_ground);
                 runtime->tick();
-                expect(runtime->player().y > 16.0);
+                expect(player->y > 16.0);
             }
             std::error_code error;
             fs::remove_all(directory, error);
@@ -593,14 +629,21 @@ namespace world = refrain::world;
             if (!runtime) {
                 return;
             }
-            expect(runtime->add_item("minecraft:dirt", 2).has_value());
-            expect(runtime->item_count("minecraft:dirt") == 2U);
-            expect(runtime->remove_item("minecraft:dirt", 1));
-            expect(runtime->item_count("minecraft:dirt") == 1U);
-            expect(!runtime->remove_item("minecraft:dirt", 2));
-            expect(runtime->item_count("minecraft:stone") == 0U);
-            expect(runtime->add_item("minecraft:stone", 3).has_value());
-            expect(runtime->player().inventory.size() == 2U);
+            const auto player_id{make_console_player(*runtime, 0.0, 0.0, 0.0)};
+            auto *player{runtime->player(player_id)};
+            expect(player != nullptr);
+            if (player == nullptr) {
+                return;
+            }
+            expect(runtime->add_item(*player, "minecraft:dirt", 2).has_value());
+            expect(runtime->item_count(*player, "minecraft:dirt") == 2U);
+            expect(runtime->remove_item(*player, "minecraft:dirt", 1));
+            expect(runtime->item_count(*player, "minecraft:dirt") == 1U);
+            expect(!runtime->remove_item(*player, "minecraft:dirt", 2));
+            expect(runtime->item_count(*player, "minecraft:stone") == 0U);
+            expect(
+                runtime->add_item(*player, "minecraft:stone", 3).has_value());
+            expect(player->inventory.size() == 2U);
         }
         std::error_code error;
         fs::remove_all(directory, error);
@@ -679,7 +722,13 @@ namespace world = refrain::world;
                 fs::remove_all(directory, error);
                 return;
             }
-            runtime->set_player_position(0.5, 30.0, 0.5);
+            const auto player_id{make_console_player(*runtime)};
+            auto *player{runtime->player(player_id)};
+            expect(player != nullptr);
+            if (player == nullptr) {
+                return;
+            }
+            runtime->set_player_position(*player, 0.5, 30.0, 0.5);
             // Chebyshev boundaries (player chunk is (0, 0)).
             expect(runtime->compression_level_for(world::chunk_pos{0, 0}) ==
                    refrain::sim::near_zstd_level);
@@ -697,14 +746,14 @@ namespace world = refrain::world;
                    refrain::sim::far_zstd_level);
 
             // Negative player coordinates must use floor, not truncation.
-            runtime->set_player_position(-0.5, 30.0, -0.5);
+            runtime->set_player_position(*player, -0.5, 30.0, -0.5);
             expect(runtime->compression_level_for(world::chunk_pos{-1, -1}) ==
                    refrain::sim::near_zstd_level);
             expect(runtime->compression_level_for(world::chunk_pos{-3, -3}) ==
                    refrain::sim::near_zstd_level);
             expect(runtime->compression_level_for(world::chunk_pos{-4, 0}) ==
                    refrain::sim::mid_zstd_level);
-            runtime->set_player_position(0.5, 30.0, 0.5);
+            runtime->set_player_position(*player, 0.5, 30.0, 0.5);
 
             const auto dirt{runtime->registry().intern("minecraft:dirt")};
             for (const auto &pos : dirty_chunks) {
@@ -963,7 +1012,13 @@ namespace world = refrain::world;
             expect(
                 runtime->add_ticket({0, 0}, refrain::sim::ticket_kind::player)
                     .has_value());
-            runtime->set_player_position(3.0, 64.0, 3.0);
+            const auto player_id{make_console_player(*runtime)};
+            auto *player{runtime->player(player_id)};
+            expect(player != nullptr);
+            if (player == nullptr) {
+                return;
+            }
+            runtime->set_player_position(*player, 3.0, 64.0, 3.0);
             for (int index{0}; index < 3; ++index) {
                 runtime->tick();
             }

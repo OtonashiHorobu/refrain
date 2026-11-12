@@ -127,8 +127,8 @@ world::world(store_type store) : store_{std::move(store)} {}
 world::world(world &&other) noexcept
     : store_{std::move(other.store_)}, registry_{std::move(other.registry_)},
       chunks_{std::move(other.chunks_)}, tickets_{std::move(other.tickets_)},
-      player_{std::move(other.player_)}, entities_{std::move(other.entities_)},
-      next_entity_id_{other.next_entity_id_}, rng_{other.rng_},
+      players_{std::move(other.players_)},
+      entities_{std::move(other.entities_)}, rng_{other.rng_},
       tick_{other.tick_} {}
 
 auto world::operator=(world &&other) noexcept -> world & {
@@ -137,9 +137,8 @@ auto world::operator=(world &&other) noexcept -> world & {
         registry_ = std::move(other.registry_);
         chunks_ = std::move(other.chunks_);
         tickets_ = std::move(other.tickets_);
-        player_ = std::move(other.player_);
+        players_ = std::move(other.players_);
         entities_ = std::move(other.entities_);
-        next_entity_id_ = other.next_entity_id_;
         rng_ = other.rng_;
         tick_ = other.tick_;
     }
@@ -562,11 +561,16 @@ auto world::set_zstd_policy(const zstd_policy &policy) -> status {
 
 auto world::compression_level_for(const chunk_pos &pos) const noexcept -> int {
     // Player positions are block coordinates; a chunk is 16 blocks. `floor`
-    // (not truncation) keeps negative coordinates on the correct chunk.
+    // (not truncation) keeps negative coordinates on the correct chunk. The
+    // first player by entity id is the reference; with no players the chunk
+    // distance is measured from the origin.
+    const auto *primary{players_.first()};
     const auto player_x{
-        std::floor(player_.x / static_cast<double>(world_ns::section_edge))};
+        std::floor((primary == nullptr ? 0.0 : primary->x) /
+                   static_cast<double>(world_ns::section_edge))};
     const auto player_z{
-        std::floor(player_.z / static_cast<double>(world_ns::section_edge))};
+        std::floor((primary == nullptr ? 0.0 : primary->z) /
+                   static_cast<double>(world_ns::section_edge))};
     // Doubles avoid an overflow-prone float→int cast for hostile positions;
     // the magnitudes here are exact (well below 2^53).
     const auto dx{std::fabs(player_x - static_cast<double>(pos.x))};
@@ -792,9 +796,38 @@ void world::mark_clean(std::span<const snapshot_entry> snapshot) noexcept {
     }
 }
 
-auto world::player() noexcept -> player_state & { return player_; }
+auto world::players() noexcept -> player_table & { return players_; }
 
-auto world::player() const noexcept -> const player_state & { return player_; }
+auto world::players() const noexcept -> const player_table & {
+    return players_;
+}
+
+auto world::add_player(player_table::registration record) -> result<entity_id> {
+    return players_.add(std::move(record));
+}
+
+auto world::remove_player(std::uint64_t connection) -> bool {
+    return players_.remove(connection);
+}
+
+auto world::player(entity_id id) noexcept -> player_state * {
+    return players_.find(id);
+}
+
+auto world::player(entity_id id) const noexcept -> const player_state * {
+    return players_.find(id);
+}
+
+void world::set_player_position(player_state &player, double x, double y,
+                                double z) noexcept {
+    player.x = x;
+    player.y = y;
+    player.z = z;
+    player.vx = 0.0;
+    player.vy = 0.0;
+    player.vz = 0.0;
+    player.on_ground = false;
+}
 
 auto world::schedule_after(std::int64_t delay, std::function<void()> fn)
     -> timer_id {
@@ -818,7 +851,10 @@ auto world::cancel_timer(timer_id id) -> bool {
 }
 
 void world::tick() noexcept {
-    tick_player();
+    // Players tick in ascending entity id order; a player record's physics
+    // depends only on its own state and the world blocks, so the order does not
+    // couple the records but stays fixed for the state hash.
+    players_.for_each([this](player_state &player) { tick_player(player); });
     tick_entities();
     ++tick_;
     (void)rng_.next_u64();
@@ -865,29 +901,20 @@ auto world::random() noexcept -> rng & { return rng_; }
 
 auto world::random() const noexcept -> const rng & { return rng_; }
 
-void world::set_player_position(double x, double y, double z) noexcept {
-    player_.x = x;
-    player_.y = y;
-    player_.z = z;
-    player_.vx = 0.0;
-    player_.vy = 0.0;
-    player_.vz = 0.0;
-    player_.on_ground = false;
-}
-
-auto world::add_item(std::string_view item, std::uint32_t count) -> status {
+auto world::add_item(player_state &player, std::string_view item,
+                     std::uint32_t count) -> status {
     if (item.empty() || count == 0) {
         return std::unexpected{make_error(error_code::invalid_argument,
                                           "inventory item/count is empty")};
     }
-    const auto current{item_count(item)};
+    const auto current{item_count(player, item)};
     if (static_cast<std::uint64_t>(current) + count >
         std::numeric_limits<std::uint32_t>::max()) {
         return std::unexpected{make_error(error_code::invalid_argument,
                                           "inventory item count overflows")};
     }
     auto remaining{count};
-    for (auto &stack : player_.inventory) {
+    for (auto &stack : player.inventory) {
         if (remaining == 0) {
             break;
         }
@@ -901,23 +928,24 @@ auto world::add_item(std::string_view item, std::uint32_t count) -> status {
     }
     while (remaining != 0) {
         const auto added{std::min(max_stack_size, remaining)};
-        player_.inventory.push_back(
+        player.inventory.push_back(
             item_stack{.item = std::string{item}, .count = added});
         remaining -= added;
     }
     return status_ok();
 }
 
-auto world::remove_item(std::string_view item, std::uint32_t count) -> bool {
+auto world::remove_item(player_state &player, std::string_view item,
+                        std::uint32_t count) -> bool {
     if (count == 0) {
         return true;
     }
-    if (item_count(item) < count) {
+    if (item_count(player, item) < count) {
         return false;
     }
     auto remaining{count};
-    for (auto iterator{player_.inventory.begin()};
-         iterator != player_.inventory.end();) {
+    for (auto iterator{player.inventory.begin()};
+         iterator != player.inventory.end();) {
         if (iterator->item != item) {
             ++iterator;
             continue;
@@ -926,7 +954,7 @@ auto world::remove_item(std::string_view item, std::uint32_t count) -> bool {
         iterator->count -= removed;
         remaining -= removed;
         if (iterator->count == 0) {
-            iterator = player_.inventory.erase(iterator);
+            iterator = player.inventory.erase(iterator);
         } else {
             ++iterator;
         }
@@ -937,9 +965,10 @@ auto world::remove_item(std::string_view item, std::uint32_t count) -> bool {
     return true;
 }
 
-auto world::item_count(std::string_view item) const noexcept -> std::uint32_t {
+auto world::item_count(const player_state &player,
+                       std::string_view item) const noexcept -> std::uint32_t {
     std::uint64_t total{0};
-    for (const auto &stack : player_.inventory) {
+    for (const auto &stack : player.inventory) {
         if (stack.item == item) {
             total += stack.count;
         }
@@ -954,15 +983,14 @@ auto world::spawn_entity(std::string_view type, double x, double y, double z)
         return std::unexpected{make_error(error_code::invalid_argument,
                                           "entity type must not be empty")};
     }
-    if (next_entity_id_ == std::numeric_limits<entity_id>::max()) {
-        return std::unexpected{make_error(error_code::invalid_argument,
-                                          "entity id space exhausted")};
+    auto id{players_.allocate_entity_id()};
+    if (!id) {
+        return std::unexpected{std::move(id.error())};
     }
-    const auto id{next_entity_id_++};
     entities_.emplace(
-        id, entity_state{
-                .id = id, .type = std::string{type}, .x = x, .y = y, .z = z});
-    return id;
+        *id, entity_state{
+                 .id = *id, .type = std::string{type}, .x = x, .y = y, .z = z});
+    return *id;
 }
 
 auto world::remove_entity(entity_id id) -> bool {
@@ -1059,7 +1087,8 @@ struct aabb {
 }
 } // namespace
 
-auto world::move_player(double dx, double dy, double dz) -> bool {
+auto world::move_player(player_state &player, double dx, double dy, double dz)
+    -> bool {
     bool moved{false};
     const auto collides = [this](const aabb &box) {
         const auto min_x{static_cast<std::int32_t>(std::floor(box.min_x))};
@@ -1084,14 +1113,14 @@ auto world::move_player(double dx, double dy, double dz) -> bool {
         return false;
     };
     enum class axis { y, x, z };
-    const auto move_axis = [this, &collides, &moved](double &position,
-                                                     double delta, axis which) {
+    const auto move_axis = [this, &collides, &moved, &player](
+                               double &position, double delta, axis which) {
         if (delta == 0.0) {
             return;
         }
         const auto original{position};
         position += delta;
-        auto box{player_box(player_.x, player_.y, player_.z)};
+        auto box{player_box(player.x, player.y, player.z)};
         if (!collides(box)) {
             moved = moved || position != original;
             return;
@@ -1103,7 +1132,7 @@ auto world::move_player(double dx, double dy, double dz) -> bool {
         for (int iteration{0}; iteration < 32; ++iteration) {
             const auto middle{(low + high) * 0.5};
             position = original + delta * middle;
-            box = player_box(player_.x, player_.y, player_.z);
+            box = player_box(player.x, player.y, player.z);
             if (collides(box)) {
                 high = middle;
             } else {
@@ -1112,25 +1141,25 @@ auto world::move_player(double dx, double dy, double dz) -> bool {
         }
         position = original + delta * low;
         if (which == axis::y) {
-            player_.vy = 0.0;
+            player.vy = 0.0;
             if (delta < 0.0) {
-                player_.on_ground = true;
+                player.on_ground = true;
             }
         } else if (which == axis::x) {
-            player_.vx = 0.0;
+            player.vx = 0.0;
         } else {
-            player_.vz = 0.0;
+            player.vz = 0.0;
         }
         moved = moved || position != original;
     };
 
-    move_axis(player_.y, dy, axis::y);
-    move_axis(player_.x, dx, axis::x);
-    move_axis(player_.z, dz, axis::z);
+    move_axis(player.y, dy, axis::y);
+    move_axis(player.x, dx, axis::x);
+    move_axis(player.z, dz, axis::z);
     return moved;
 }
 
-void world::tick_player() noexcept {
+void world::tick_player(player_state &player) noexcept {
     // Gravity: vanilla-shaped enough for a deterministic player walk, not
     // a full LivingEntity/fluid model. The RNG draw in tick() is unrelated.
     constexpr double gravity{0.08};
@@ -1138,25 +1167,25 @@ void world::tick_player() noexcept {
     // Always probe downward: standing on a block is represented by the
     // collision clamp, so walking off an edge starts falling without an extra
     // "supported" flag.
-    player_.vy = (player_.vy - gravity) * vertical_drag;
-    const auto before{player_.y};
-    (void)move_player(0.0, player_.vy, 0.0);
-    if (player_.vy <= 0.0 && player_.y == before) {
-        player_.on_ground = true;
-    } else if (player_.vy != 0.0) {
-        player_.on_ground = false;
+    player.vy = (player.vy - gravity) * vertical_drag;
+    const auto before{player.y};
+    (void)move_player(player, 0.0, player.vy, 0.0);
+    if (player.vy <= 0.0 && player.y == before) {
+        player.on_ground = true;
+    } else if (player.vy != 0.0) {
+        player.on_ground = false;
     }
-    player_.vx *= 0.91;
-    player_.vz *= 0.91;
-    if (player_.vx != 0.0 || player_.vz != 0.0) {
-        (void)move_player(player_.vx, 0.0, player_.vz);
+    player.vx *= 0.91;
+    player.vz *= 0.91;
+    if (player.vx != 0.0 || player.vz != 0.0) {
+        (void)move_player(player, player.vx, 0.0, player.vz);
     }
 }
 
-void world::jump() noexcept {
-    if (player_.on_ground) {
-        player_.vy = 0.42;
-        player_.on_ground = false;
+void world::jump(player_state &player) noexcept {
+    if (player.on_ground) {
+        player.vy = 0.42;
+        player.on_ground = false;
     }
 }
 
@@ -1186,22 +1215,31 @@ auto world::state_hash() const -> data::digest32 {
     const auto append_double = [&append_u64](double value) {
         append_u64(std::bit_cast<std::uint64_t>(value));
     };
-    append_double(player_.x);
-    append_double(player_.y);
-    append_double(player_.z);
-    append_double(player_.vx);
-    append_double(player_.vy);
-    append_double(player_.vz);
-    append_u32(std::bit_cast<std::uint32_t>(player_.yaw));
-    append_u32(std::bit_cast<std::uint32_t>(player_.pitch));
-    append_u32(player_.on_ground ? 1U : 0U);
-    append_u32(static_cast<std::uint32_t>(player_.inventory.size()));
-    for (const auto &stack : player_.inventory) {
-        append_u32(static_cast<std::uint32_t>(stack.item.size()));
-        for (const char character : stack.item) {
-            bytes.push_back(static_cast<std::byte>(character));
+    // Every player record in ascending entity id order. The key is the entity
+    // id, not the insertion order; identity fields are excluded because they
+    // are not simulation state.
+    append_u64(static_cast<std::uint64_t>(players_.size()));
+    for (const auto &[id, player] : players_.records()) {
+        append_u64(id);
+        append_double(player.x);
+        append_double(player.y);
+        append_double(player.z);
+        append_double(player.vx);
+        append_double(player.vy);
+        append_double(player.vz);
+        append_u32(std::bit_cast<std::uint32_t>(player.yaw));
+        append_u32(std::bit_cast<std::uint32_t>(player.pitch));
+        append_u32(player.on_ground ? 1U : 0U);
+        append_u32(player.game_mode);
+        append_u32(std::bit_cast<std::uint32_t>(player.health));
+        append_u32(static_cast<std::uint32_t>(player.inventory.size()));
+        for (const auto &stack : player.inventory) {
+            append_u32(static_cast<std::uint32_t>(stack.item.size()));
+            for (const char character : stack.item) {
+                bytes.push_back(static_cast<std::byte>(character));
+            }
+            append_u32(stack.count);
         }
-        append_u32(stack.count);
     }
     append_u64(static_cast<std::uint64_t>(entities_.size()));
     for (const auto &[id, value] : entities_) {
