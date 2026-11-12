@@ -147,6 +147,16 @@ namespace play_sb = ::refrain::protocol::current::play::serverbound;
     return bytes;
 }
 
+/// Encoded length of a packet-id varint.
+[[nodiscard]] constexpr auto varint_length(std::uint32_t value) -> std::size_t {
+    std::size_t length{1};
+    while (value >= 0x80U) {
+        value >>= 7U;
+        ++length;
+    }
+    return length;
+}
+
 /// Encode one generated packet with its wire id in front. The body is what the
 /// frame encoder consumes; keep this the only place that knows packet bodies
 /// start with a VarInt id.
@@ -282,6 +292,9 @@ struct server::impl {
     void tick();
     void handle(std::uint64_t id, std::span<const std::byte> body);
     void handle_play(std::uint64_t id, std::span<const std::byte> body);
+    void send(std::uint64_t id, std::uint16_t packet_id,
+              std::span<const std::byte> payload);
+    /// Send a body that still carries its VarInt packet id.
     void send(std::uint64_t id, std::span<const std::byte> packet);
     void close(std::uint64_t id);
     void reject(std::uint64_t id, std::string_view reason);
@@ -322,7 +335,11 @@ struct server::impl {
             close(id);
             return;
         }
-        send(id, *body);
+        // The id is already known; skip the varint prefix instead of parsing
+        // it back out of the body that was just encoded.
+        send(id, packet_id,
+             std::span<const std::byte>{*body}.subspan(
+                 varint_length(packet_id)));
     }
 };
 
@@ -2806,19 +2823,24 @@ void server::impl::handle_play(std::uint64_t id,
 }
 
 void server::impl::send(std::uint64_t id, std::span<const std::byte> packet) {
-    const std::lock_guard send_lock{send_mutex};
-    packets_out.fetch_add(1, std::memory_order_relaxed);
-    bytes_out.fetch_add(packet.size(), std::memory_order_relaxed);
-    if (!protocol) {
-        return;
-    }
     reader in{packet};
-    auto packet_id{in.read_varint()};
+    const auto packet_id{in.read_varint()};
     if (!packet_id) {
         return;
     }
-    const auto payload{packet.subspan(in.position())};
-    if (auto sent{protocol->send_packet(id, *packet_id, payload)}; !sent) {
+    send(id, static_cast<std::uint16_t>(*packet_id),
+         packet.subspan(in.position()));
+}
+
+void server::impl::send(std::uint64_t id, std::uint16_t packet_id,
+                        std::span<const std::byte> payload) {
+    const std::lock_guard send_lock{send_mutex};
+    packets_out.fetch_add(1, std::memory_order_relaxed);
+    bytes_out.fetch_add(payload.size(), std::memory_order_relaxed);
+    if (!protocol) {
+        return;
+    }
+    if (auto sent{protocol->send_packet(id, packet_id, payload)}; !sent) {
         return;
     }
     if (socket) {
