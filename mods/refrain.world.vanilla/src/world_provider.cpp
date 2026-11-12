@@ -12,6 +12,7 @@
 #include <refrain/contracts/services/world_abi.h>
 
 #include <refrain/core/error.hpp>
+#include <refrain/host/abi_bridge.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/static_mod.hpp>
 #include <refrain/sim/world.hpp>
@@ -25,27 +26,18 @@
 
 namespace {
 
-[[nodiscard]] auto to_view(refrain_str value) noexcept -> std::string_view {
-    if (value.data == nullptr || value.len == 0) {
-        return {};
-    }
-    return std::string_view{reinterpret_cast<const char *>(value.data),
-                            static_cast<std::size_t>(value.len)};
-}
+namespace abi = refrain::host::abi;
 
-[[nodiscard]] auto to_status(const refrain::error &error) noexcept
-    -> refrain_status {
-    switch (error.code) {
-    case refrain::error_code::not_found:
-        return REFRAIN_SERVICES_WORLD_WORLD_ERROR_CHUNK_NOT_LOADED;
-    case refrain::error_code::invalid_argument:
-        return REFRAIN_SERVICES_WORLD_WORLD_ERROR_OUT_OF_BOUNDS;
-    case refrain::error_code::unsupported:
-        return REFRAIN_SERVICES_WORLD_WORLD_ERROR_NOT_IMPLEMENTED;
-    default:
-        return REFRAIN_SERVICES_WORLD_WORLD_ERROR_INTERNAL;
-    }
-}
+/// Status rows for the codes the `refrain:world` contract distinguishes;
+/// every other error is an internal failure.
+constexpr abi::status_entry world_statuses[]{
+    {refrain::error_code::not_found,
+     REFRAIN_SERVICES_WORLD_WORLD_ERROR_CHUNK_NOT_LOADED},
+    {refrain::error_code::invalid_argument,
+     REFRAIN_SERVICES_WORLD_WORLD_ERROR_OUT_OF_BOUNDS},
+    {refrain::error_code::unsupported,
+     REFRAIN_SERVICES_WORLD_WORLD_ERROR_NOT_IMPLEMENTED},
+};
 
 struct world_provider {
     std::optional<refrain::sim::world> world{};
@@ -62,7 +54,7 @@ struct world_provider {
         if (provider->world.has_value()) {
             return REFRAIN_SERVICES_WORLD_WORLD_ERROR_ALREADY_OPEN;
         }
-        const auto path{to_view(config->world_path)};
+        const auto path{abi::to_view(config->world_path)};
         if (path.empty()) {
             return REFRAIN_SERVICES_WORLD_WORLD_ERROR_OPEN_FAILED;
         }
@@ -83,7 +75,10 @@ struct world_provider {
         auto flushed{provider->world->flush()};
         provider->world.reset();
         provider->sections.clear();
-        return flushed ? REFRAIN_STATUS_OK : to_status(flushed.error());
+        return flushed ? REFRAIN_STATUS_OK
+                       : abi::to_status(
+                             flushed.error(), world_statuses,
+                             REFRAIN_SERVICES_WORLD_WORLD_ERROR_INTERNAL);
     }
 
     static auto chunk_at(void *self, const refrain_core_chunk_pos *pos,
@@ -191,7 +186,8 @@ struct world_provider {
         }
         auto applied{provider->world->set_blocks(batch)};
         if (!applied) {
-            return to_status(applied.error());
+            return abi::to_status(applied.error(), world_statuses,
+                                  REFRAIN_SERVICES_WORLD_WORLD_ERROR_INTERNAL);
         }
         *out_value = static_cast<std::uint32_t>(*applied);
         return REFRAIN_STATUS_OK;

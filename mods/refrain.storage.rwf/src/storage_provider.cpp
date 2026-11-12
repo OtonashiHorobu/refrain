@@ -13,6 +13,7 @@
 #include <refrain/contracts/services/storage_abi.h>
 
 #include <refrain/core/error.hpp>
+#include <refrain/host/abi_bridge.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/static_mod.hpp>
 #include <refrain/world/chunk_codec.hpp>
@@ -29,34 +30,20 @@
 
 namespace {
 
-[[nodiscard]] auto to_view(refrain_str value) noexcept -> std::string_view {
-    if (value.data == nullptr || value.len == 0) {
-        return {};
-    }
-    return std::string_view{reinterpret_cast<const char *>(value.data),
-                            static_cast<std::size_t>(value.len)};
-}
+namespace abi = refrain::host::abi;
 
-[[nodiscard]] auto to_bytes(std::span<const std::uint8_t> value) noexcept
-    -> refrain_bytes {
-    return refrain_bytes{.data = value.data(), .len = value.size()};
-}
-
-[[nodiscard]] auto to_status(const refrain::error &error) noexcept
-    -> refrain_status {
-    switch (error.code) {
-    case refrain::error_code::not_found:
-        return REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_NOT_FOUND;
-    case refrain::error_code::parse_error:
-        return REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_CORRUPT_DATA;
-    case refrain::error_code::version_mismatch:
-        return REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_VERSION_MISMATCH;
-    case refrain::error_code::io_error:
-        return REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_IO_ERROR;
-    default:
-        return REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_OPEN_FAILED;
-    }
-}
+/// Status rows for the codes the `refrain:storage` contract distinguishes;
+/// anything else surfaces as an open failure.
+constexpr abi::status_entry storage_statuses[]{
+    {refrain::error_code::not_found,
+     REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_NOT_FOUND},
+    {refrain::error_code::parse_error,
+     REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_CORRUPT_DATA},
+    {refrain::error_code::version_mismatch,
+     REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_VERSION_MISMATCH},
+    {refrain::error_code::io_error,
+     REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_IO_ERROR},
+};
 
 struct storage_provider {
     struct entry {
@@ -81,14 +68,16 @@ struct storage_provider {
                 REFRAIN_SERVICES_STORAGE_WORLD_OPEN_CONFIG_SIZE) {
             return REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_OPEN_FAILED;
         }
-        const auto path{to_view(cfg->world_path)};
+        const auto path{abi::to_view(cfg->world_path)};
         if (path.empty()) {
             return REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_OPEN_FAILED;
         }
         auto &provider{*static_cast<storage_provider *>(self)};
         auto store{refrain::world::world_store::open(path)};
         if (!store) {
-            return to_status(store.error());
+            return abi::to_status(
+                store.error(), storage_statuses,
+                REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_OPEN_FAILED);
         }
         const auto handle{provider.next_handle++};
         provider.worlds.emplace(
@@ -109,7 +98,9 @@ struct storage_provider {
             return REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_NOT_FOUND;
         }
         if (auto committed{found->second.store.commit()}; !committed) {
-            return to_status(committed.error());
+            return abi::to_status(
+                committed.error(), storage_statuses,
+                REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_OPEN_FAILED);
         }
         provider->worlds.erase(found);
         return REFRAIN_STATUS_OK;
@@ -132,20 +123,24 @@ struct storage_provider {
         auto chunk{world->store.read_chunk(
             refrain::world::chunk_pos{key->pos.x, key->pos.z})};
         if (!chunk) {
-            return to_status(chunk.error());
+            return abi::to_status(
+                chunk.error(), storage_statuses,
+                REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_OPEN_FAILED);
         }
         auto payload{refrain::world::encode_chunk(
             *chunk, nullptr, true,
             refrain::world::chunk_palette_mode::inline_keys)};
         if (!payload) {
-            return to_status(payload.error());
+            return abi::to_status(
+                payload.error(), storage_statuses,
+                REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_OPEN_FAILED);
         }
         world->read_buffer = std::move(*payload);
         buffer->pos = key->pos;
         buffer->generation = 0;
         buffer->word_count =
             static_cast<std::uint32_t>(world->read_buffer.size() / 8U);
-        buffer->data = to_bytes(std::span<const std::uint8_t>{
+        buffer->data = abi::to_bytes(std::span<const std::uint8_t>{
             reinterpret_cast<const std::uint8_t *>(world->read_buffer.data()),
             world->read_buffer.size()});
         out->bytes_read = static_cast<std::uint32_t>(world->read_buffer.size());
@@ -166,15 +161,21 @@ struct storage_provider {
         if (world == nullptr) {
             return REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_NOT_FOUND;
         }
-        const auto bytes{refrain::contracts::as_bytes(payload)};
+        const auto bytes{abi::to_span(payload)};
         auto chunk{refrain::world::decode_chunk(std::span<const std::byte>{
             reinterpret_cast<const std::byte *>(bytes.data()), bytes.size()})};
         if (!chunk) {
-            return to_status(chunk.error());
+            return abi::to_status(
+                chunk.error(), storage_statuses,
+                REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_OPEN_FAILED);
         }
         auto written{world->store.write_chunk(
             refrain::world::chunk_pos{key->pos.x, key->pos.z}, *chunk)};
-        return written ? REFRAIN_STATUS_OK : to_status(written.error());
+        return written
+                   ? REFRAIN_STATUS_OK
+                   : abi::to_status(
+                         written.error(), storage_statuses,
+                         REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_OPEN_FAILED);
     }
 
     static auto sync(void *self, refrain_core_handle_storage_world handle)
@@ -188,7 +189,11 @@ struct storage_provider {
             return REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_NOT_FOUND;
         }
         auto committed{world->store.commit()};
-        return committed ? REFRAIN_STATUS_OK : to_status(committed.error());
+        return committed
+                   ? REFRAIN_STATUS_OK
+                   : abi::to_status(
+                         committed.error(), storage_statuses,
+                         REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_OPEN_FAILED);
     }
 
     static auto is_open(void *self, refrain_core_handle_storage_world handle)

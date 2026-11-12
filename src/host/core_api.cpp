@@ -10,6 +10,7 @@
 
 #include <refrain/contracts/abi.hpp>
 #include <refrain/core/log.hpp>
+#include <refrain/host/abi_bridge.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +20,8 @@
 
 namespace refrain::host {
 namespace {
+
+namespace abi = refrain::host::abi;
 
 thread_local std::string last_error;
 
@@ -84,20 +87,6 @@ void set_error(std::string_view message) noexcept {
     return core::host_error::internal;
 }
 
-[[nodiscard]] auto to_view(const refrain_str &text) noexcept
-    -> std::string_view {
-    if (text.data == nullptr) {
-        return {};
-    }
-    return std::string_view{reinterpret_cast<const char *>(text.data),
-                            static_cast<std::size_t>(text.len)};
-}
-
-[[nodiscard]] auto to_borrowed(std::string_view text) noexcept -> refrain_str {
-    return refrain_str{reinterpret_cast<const std::uint8_t *>(text.data()),
-                       static_cast<std::uint64_t>(text.size())};
-}
-
 [[nodiscard]] auto log_level(std::uint32_t level) noexcept -> log::level {
     if (level <= static_cast<std::uint32_t>(log::level::critical)) {
         return static_cast<log::level>(level);
@@ -127,7 +116,7 @@ void host_log(void *self, std::uint32_t level, refrain_str message) {
     }
     try {
         context_of(self)->log(static_cast<std::uint32_t>(log_level(level)),
-                              to_view(message));
+                              abi::to_view(message));
     } catch (...) {
         // A log sink must never terminate the caller.
     }
@@ -164,7 +153,8 @@ auto host_config_i64(void *self, refrain_str ns, refrain_str key,
     }
     clear_error();
     try {
-        auto value{context_of(self)->config_i64(to_view(ns), to_view(key))};
+        auto value{
+            context_of(self)->config_i64(abi::to_view(ns), abi::to_view(key))};
         if (!value) {
             set_error(value.error());
             return static_cast<refrain_status>(
@@ -187,7 +177,8 @@ auto host_config_bool(void *self, refrain_str ns, refrain_str key,
     }
     clear_error();
     try {
-        auto value{context_of(self)->config_bool(to_view(ns), to_view(key))};
+        auto value{
+            context_of(self)->config_bool(abi::to_view(ns), abi::to_view(key))};
         if (!value) {
             set_error(value.error());
             return static_cast<refrain_status>(
@@ -210,13 +201,14 @@ auto host_config_string(void *self, refrain_str ns, refrain_str key,
     }
     clear_error();
     try {
-        auto value{context_of(self)->config_string(to_view(ns), to_view(key))};
+        auto value{context_of(self)->config_string(abi::to_view(ns),
+                                                   abi::to_view(key))};
         if (!value) {
             set_error(value.error());
             return static_cast<refrain_status>(
                 to_host_error(value.error().code));
         }
-        *out = to_borrowed(*value);
+        *out = abi::to_borrowed(*value);
     } catch (...) {
         set_error("config_get_string: host threw");
         return static_cast<refrain_status>(core::host_error::internal);
@@ -233,8 +225,8 @@ auto host_query_service(void *self, refrain_str service, refrain_str instance,
     }
     clear_error();
     try {
-        auto value{context_of(self)->query_service(to_view(service),
-                                                   to_view(instance))};
+        auto value{context_of(self)->query_service(abi::to_view(service),
+                                                   abi::to_view(instance))};
         if (!value) {
             set_error(value.error());
             return static_cast<refrain_status>(
@@ -266,7 +258,7 @@ auto host_register_provider(void *self, refrain_str service,
     clear_error();
     try {
         auto registered{context_of(self)->register_provider(
-            to_view(service), to_view(instance), *ref)};
+            abi::to_view(service), abi::to_view(instance), *ref)};
         if (!registered) {
             set_error(registered.error());
             return static_cast<refrain_status>(
@@ -322,7 +314,7 @@ auto host_last_error_message(void *self, refrain_str *out) -> refrain_status {
     if (last_error.empty()) {
         return static_cast<refrain_status>(core::host_error::not_found);
     }
-    *out = to_borrowed(last_error);
+    *out = abi::to_borrowed(last_error);
     return REFRAIN_STATUS_OK;
 }
 
