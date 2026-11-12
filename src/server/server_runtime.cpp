@@ -17,8 +17,7 @@
 #include <refrain/net/server.hpp>
 #include <refrain/server/chunk_generation.hpp>
 #include <refrain/server/chunk_packet.hpp>
-#include <refrain/server/chunk_streamer.hpp>
-#include <refrain/server/chunk_view.hpp>
+#include <refrain/server/chunk_service.hpp>
 #include <refrain/server/command_bridge.hpp>
 #include <refrain/server/console_commands.hpp>
 #include <refrain/server/console_service.hpp>
@@ -50,7 +49,6 @@ constexpr refrain::log::logger log_net{"net"};
 constexpr refrain::log::logger log_server{"server"};
 constexpr refrain::log::logger log_sim{"sim"};
 constexpr refrain::log::logger log_world{"world"};
-constexpr refrain::log::logger log_chunk_gen{"chunk-gen"};
 
 } // namespace
 
@@ -173,16 +171,14 @@ auto run_server(const server_run_options &options) -> int {
     }
     // Columns the viewport needs but the store does not hold are generated on
     // a worker, so walking past the spawn area keeps streaming terrain.
-    std::unique_ptr<refrain::server::chunk_generation> generation{};
-    if (auto started{refrain::server::chunk_generation::start(
-            refrain::server::chunk_generation::config{
+    refrain::server::chunk_service chunks{};
+    if (auto started{
+            chunks.start_generation(refrain::server::chunk_generation::config{
                 .data_root = datapack_root,
                 .templates_root = datapack_root + "/../templates",
                 .seed = level_info->seed,
             })};
-        started) {
-        generation = std::move(*started);
-    } else {
+        !started) {
         refrain::log::warn("[world]: generation unavailable: {}",
                            started.error().message);
     }
@@ -456,20 +452,14 @@ auto run_server(const server_run_options &options) -> int {
     }
 
     // Chunk streaming owns its state (per-connection viewports and the shared
-    // encoded chunk cache) and is created once the listener and the tables
+    // encoded chunk cache) and is attached once the listener and the tables
     // exist.
-    std::optional<refrain::server::chunk_streamer> streamer{};
     if (listener && tables && registries) {
-        streamer.emplace(*listener, refrain::server::chunk_packet_source{
-                                        .world = &*store,
-                                        .tables = &*tables,
-                                        .registries = &*registries,
-                                    });
-        streamer->set_chunk_requester(
-            [&generation](std::int32_t x, std::int32_t z) {
-                return generation != nullptr &&
-                       generation->request(refrain::world::chunk_pos{x, z});
-            });
+        chunks.attach(gateway, refrain::server::chunk_packet_source{
+                                   .world = &*store,
+                                   .tables = &*tables,
+                                   .registries = &*registries,
+                               });
     }
 
     refrain::server::inventory_sync inventory{gateway,
@@ -572,22 +562,7 @@ auto run_server(const server_run_options &options) -> int {
             listener->tick();
             broadcaster.tick(players);
         }
-        if (generation) {
-            for (auto &[pos, column] : generation->take_results()) {
-                auto inserted{store->insert_chunk(pos, std::move(column))};
-                if (!inserted) {
-                    log_chunk_gen.debug("insert ({}, {}) failed: {}", pos.x,
-                                        pos.z, inserted.error().message);
-                    continue;
-                }
-                if (streamer) {
-                    streamer->chunk_ready(pos.x, pos.z);
-                }
-            }
-        }
-        if (streamer) {
-            streamer->tick(views);
-        }
+        chunks.tick(*store, views);
         inventory.tick(players);
         store->tick();
         ++ticks_run;
