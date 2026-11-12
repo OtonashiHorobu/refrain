@@ -6,6 +6,8 @@
 
 #include <refrain/worldgen/core/mth.hpp>
 
+#include <hwy/highway.h>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -15,6 +17,8 @@
 namespace refrain::worldgen {
 
 namespace {
+
+namespace hn = hwy::HWY_NAMESPACE;
 
 struct gradient {
     int x;
@@ -54,6 +58,48 @@ auto wrap(double value) -> double {
         return value;
     }
     return value - std::floor(value / wrap_period + 0.5) * wrap_period;
+}
+
+// Highway tags for the vectorised inner loop. The double tag drives wrap and
+// floor (the scalar path also computes them in double); the float rebind has
+// the same lane count, so one demote converts a whole block.
+using simd_d64 = hn::ScalableTag<double>;
+using simd_f32 = hn::Rebind<float, simd_d64>;
+
+/// `wrap()` for a block of coordinates, with the same branch split as the
+/// scalar helper: values inside the half-round-off window pass through.
+[[nodiscard]] auto wrap_vector(hn::Vec<simd_d64> value) -> hn::Vec<simd_d64> {
+    const simd_d64 d;
+    static const double half_round_off = std::nextafter(half_wrap, 0.0);
+    const auto inside = hn::And(hn::Ge(value, hn::Set(d, -half_round_off)),
+                                hn::Lt(value, hn::Set(d, half_round_off)));
+    const auto period = hn::Set(d, wrap_period);
+    const auto reduced = hn::Sub(
+        value,
+        hn::Mul(hn::Floor(hn::Add(hn::Div(value, period), hn::Set(d, 0.5))),
+                period));
+    return hn::IfThenElse(inside, value, reduced);
+}
+
+/// `mth::smoothstep` over a block, same operation order as the scalar helper.
+[[nodiscard]] auto smoothstep_vector(hn::Vec<simd_f32> x) -> hn::Vec<simd_f32> {
+    const simd_f32 d;
+    const auto inner = hn::Add(
+        hn::Mul(hn::Sub(hn::Mul(x, hn::Set(d, 6.0F)), hn::Set(d, 15.0F)), x),
+        hn::Set(d, 10.0F));
+    return hn::Mul(hn::Mul(hn::Mul(x, x), x), inner);
+}
+
+/// `mth::lerp` with a scalar alpha.
+[[nodiscard]] auto lerp_vector(float alpha, hn::Vec<simd_f32> p0,
+                               hn::Vec<simd_f32> p1) -> hn::Vec<simd_f32> {
+    return hn::Add(p0, hn::Mul(hn::Set(simd_f32{}, alpha), hn::Sub(p1, p0)));
+}
+
+/// `mth::lerp` with a per-lane alpha.
+[[nodiscard]] auto lerp_vector(hn::Vec<simd_f32> alpha, hn::Vec<simd_f32> p0,
+                               hn::Vec<simd_f32> p1) -> hn::Vec<simd_f32> {
+    return hn::Add(p0, hn::Mul(alpha, hn::Sub(p1, p0)));
 }
 
 auto permute(const std::array<std::uint8_t, 256> &perms, jint value) -> jint {
@@ -178,97 +224,178 @@ void perlin_noise::add_to_volume(buffer &output, const volume &volume,
             const float alpha_x = mth::smoothstep(relative_x);
             jint last_floor_y = std::numeric_limits<jint>::min();
 
-            for (jint index_y = 0; index_y < volume.size_y(); ++index_y) {
-                const double y =
-                    wrap(volume.block_y(index_y) * y_scale) + offset_y_;
-                const jint floor_y = mth::floor(y);
-                const float relative_y = static_cast<float>(y - floor_y);
-                const float alpha_y = mth::smoothstep(relative_y);
-                if (last_floor_y != floor_y) {
-                    const jint xy00 = permute(perms_, x0 + floor_y);
-                    const jint xy01 = permute(perms_, x0 + floor_y + 1);
-                    const jint xy10 = permute(perms_, x1 + floor_y);
-                    const jint xy11 = permute(perms_, x1 + floor_y + 1);
-
-                    const auto &g000 =
-                        gradients[static_cast<std::size_t>(
-                                      permute(perms_, xy00 + floor_z)) &
-                                  15U];
-                    d000xz = static_cast<float>(g000.x) * relative_x +
-                             static_cast<float>(g000.z) * relative_z;
-                    g000y = static_cast<float>(g000.y);
-
-                    const auto &g100 =
-                        gradients[static_cast<std::size_t>(
-                                      permute(perms_, xy10 + floor_z)) &
-                                  15U];
-                    d100xz = static_cast<float>(g100.x) * (relative_x - 1.0F) +
-                             static_cast<float>(g100.z) * relative_z;
-                    g100y = static_cast<float>(g100.y);
-
-                    const auto &g010 =
-                        gradients[static_cast<std::size_t>(
-                                      permute(perms_, xy01 + floor_z)) &
-                                  15U];
-                    d010xz = static_cast<float>(g010.x) * relative_x +
-                             static_cast<float>(g010.z) * relative_z;
-                    g010y = static_cast<float>(g010.y);
-
-                    const auto &g110 =
-                        gradients[static_cast<std::size_t>(
-                                      permute(perms_, xy11 + floor_z)) &
-                                  15U];
-                    d110xz = static_cast<float>(g110.x) * (relative_x - 1.0F) +
-                             static_cast<float>(g110.z) * relative_z;
-                    g110y = static_cast<float>(g110.y);
-
-                    const auto &g001 =
-                        gradients[static_cast<std::size_t>(
-                                      permute(perms_, xy00 + floor_z + 1)) &
-                                  15U];
-                    d001xz = static_cast<float>(g001.x) * relative_x +
-                             static_cast<float>(g001.z) * (relative_z - 1.0F);
-                    g001y = static_cast<float>(g001.y);
-
-                    const auto &g101 =
-                        gradients[static_cast<std::size_t>(
-                                      permute(perms_, xy10 + floor_z + 1)) &
-                                  15U];
-                    d101xz = static_cast<float>(g101.x) * (relative_x - 1.0F) +
-                             static_cast<float>(g101.z) * (relative_z - 1.0F);
-                    g101y = static_cast<float>(g101.y);
-
-                    const auto &g011 =
-                        gradients[static_cast<std::size_t>(
-                                      permute(perms_, xy01 + floor_z + 1)) &
-                                  15U];
-                    d011xz = static_cast<float>(g011.x) * relative_x +
-                             static_cast<float>(g011.z) * (relative_z - 1.0F);
-                    g011y = static_cast<float>(g011.y);
-
-                    const auto &g111 =
-                        gradients[static_cast<std::size_t>(
-                                      permute(perms_, xy11 + floor_z + 1)) &
-                                  15U];
-                    d111xz = static_cast<float>(g111.x) * (relative_x - 1.0F) +
-                             static_cast<float>(g111.z) * (relative_z - 1.0F);
-                    g111y = static_cast<float>(g111.y);
-                    last_floor_y = floor_y;
+            // Vectorised fast path: a block of consecutive y samples whose
+            // floored coordinate matches the corners already computed can be
+            // interpolated lane-wise. wrap and floor stay in double and the
+            // lerp chain keeps the scalar operation order, so the result is
+            // bit-identical; -ffp-contract=off keeps FMA out.
+            {
+                const simd_d64 d64;
+                const simd_f32 d32;
+                const auto lanes = hn::Lanes(d64);
+                const auto y_step = static_cast<double>(volume.step_block_y());
+                const auto y_base = static_cast<double>(volume.min_block_y());
+                const auto y_scale_v = hn::Set(d64, y_scale);
+                const auto offset_v = hn::Set(d64, offset_y_);
+                jint index_y = 0;
+                while (index_y + static_cast<jint>(lanes) <= volume.size_y()) {
+                    const auto lanes_index =
+                        hn::Iota(d64, static_cast<double>(index_y));
+                    const auto block_y =
+                        hn::Add(hn::Mul(lanes_index, hn::Set(d64, y_step)),
+                                hn::Set(d64, y_base));
+                    const auto y = hn::Add(
+                        wrap_vector(hn::Mul(block_y, y_scale_v)), offset_v);
+                    const auto floored = hn::Floor(y);
+                    if (!hn::AllTrue(
+                            d64,
+                            hn::Eq(floored, hn::Set(d64, static_cast<double>(
+                                                             last_floor_y))))) {
+                        break;
+                    }
+                    const auto relative_y =
+                        hn::DemoteTo(d32, hn::Sub(y, floored));
+                    const auto alpha_y = smoothstep_vector(relative_y);
+                    const auto p000 =
+                        hn::Add(hn::Set(d32, d000xz),
+                                hn::Mul(hn::Set(d32, g000y), relative_y));
+                    const auto p100 =
+                        hn::Add(hn::Set(d32, d100xz),
+                                hn::Mul(hn::Set(d32, g100y), relative_y));
+                    const auto p010 = hn::Add(
+                        hn::Set(d32, d010xz),
+                        hn::Mul(hn::Set(d32, g010y),
+                                hn::Sub(relative_y, hn::Set(d32, 1.0F))));
+                    const auto p110 = hn::Add(
+                        hn::Set(d32, d110xz),
+                        hn::Mul(hn::Set(d32, g110y),
+                                hn::Sub(relative_y, hn::Set(d32, 1.0F))));
+                    const auto p001 =
+                        hn::Add(hn::Set(d32, d001xz),
+                                hn::Mul(hn::Set(d32, g001y), relative_y));
+                    const auto p101 =
+                        hn::Add(hn::Set(d32, d101xz),
+                                hn::Mul(hn::Set(d32, g101y), relative_y));
+                    const auto p011 = hn::Add(
+                        hn::Set(d32, d011xz),
+                        hn::Mul(hn::Set(d32, g011y),
+                                hn::Sub(relative_y, hn::Set(d32, 1.0F))));
+                    const auto p111 = hn::Add(
+                        hn::Set(d32, d111xz),
+                        hn::Mul(hn::Set(d32, g111y),
+                                hn::Sub(relative_y, hn::Set(d32, 1.0F))));
+                    const auto top =
+                        lerp_vector(alpha_y, lerp_vector(alpha_x, p000, p100),
+                                    lerp_vector(alpha_x, p010, p110));
+                    const auto bottom =
+                        lerp_vector(alpha_y, lerp_vector(alpha_x, p001, p101),
+                                    lerp_vector(alpha_x, p011, p111));
+                    const auto value =
+                        hn::Mul(hn::Set(d32, amplitude),
+                                lerp_vector(alpha_z, top, bottom));
+                    auto *slot = output.data() + index;
+                    hn::StoreU(hn::Add(hn::LoadU(d32, slot), value), d32, slot);
+                    index += lanes;
+                    index_y += static_cast<jint>(lanes);
                 }
+                for (; index_y < volume.size_y(); ++index_y) {
+                    const double y =
+                        wrap(volume.block_y(index_y) * y_scale) + offset_y_;
+                    const jint floor_y = mth::floor(y);
+                    const float relative_y = static_cast<float>(y - floor_y);
+                    const float alpha_y = mth::smoothstep(relative_y);
+                    if (last_floor_y != floor_y) {
+                        const jint xy00 = permute(perms_, x0 + floor_y);
+                        const jint xy01 = permute(perms_, x0 + floor_y + 1);
+                        const jint xy10 = permute(perms_, x1 + floor_y);
+                        const jint xy11 = permute(perms_, x1 + floor_y + 1);
 
-                output.add_to(
-                    index,
-                    amplitude *
-                        mth::lerp3(alpha_x, alpha_y, alpha_z,
-                                   d000xz + g000y * relative_y,
-                                   d100xz + g100y * relative_y,
-                                   d010xz + g010y * (relative_y - 1.0F),
-                                   d110xz + g110y * (relative_y - 1.0F),
-                                   d001xz + g001y * relative_y,
-                                   d101xz + g101y * relative_y,
-                                   d011xz + g011y * (relative_y - 1.0F),
-                                   d111xz + g111y * (relative_y - 1.0F)));
-                ++index;
+                        const auto &g000 =
+                            gradients[static_cast<std::size_t>(
+                                          permute(perms_, xy00 + floor_z)) &
+                                      15U];
+                        d000xz = static_cast<float>(g000.x) * relative_x +
+                                 static_cast<float>(g000.z) * relative_z;
+                        g000y = static_cast<float>(g000.y);
+
+                        const auto &g100 =
+                            gradients[static_cast<std::size_t>(
+                                          permute(perms_, xy10 + floor_z)) &
+                                      15U];
+                        d100xz =
+                            static_cast<float>(g100.x) * (relative_x - 1.0F) +
+                            static_cast<float>(g100.z) * relative_z;
+                        g100y = static_cast<float>(g100.y);
+
+                        const auto &g010 =
+                            gradients[static_cast<std::size_t>(
+                                          permute(perms_, xy01 + floor_z)) &
+                                      15U];
+                        d010xz = static_cast<float>(g010.x) * relative_x +
+                                 static_cast<float>(g010.z) * relative_z;
+                        g010y = static_cast<float>(g010.y);
+
+                        const auto &g110 =
+                            gradients[static_cast<std::size_t>(
+                                          permute(perms_, xy11 + floor_z)) &
+                                      15U];
+                        d110xz =
+                            static_cast<float>(g110.x) * (relative_x - 1.0F) +
+                            static_cast<float>(g110.z) * relative_z;
+                        g110y = static_cast<float>(g110.y);
+
+                        const auto &g001 =
+                            gradients[static_cast<std::size_t>(
+                                          permute(perms_, xy00 + floor_z + 1)) &
+                                      15U];
+                        d001xz =
+                            static_cast<float>(g001.x) * relative_x +
+                            static_cast<float>(g001.z) * (relative_z - 1.0F);
+                        g001y = static_cast<float>(g001.y);
+
+                        const auto &g101 =
+                            gradients[static_cast<std::size_t>(
+                                          permute(perms_, xy10 + floor_z + 1)) &
+                                      15U];
+                        d101xz =
+                            static_cast<float>(g101.x) * (relative_x - 1.0F) +
+                            static_cast<float>(g101.z) * (relative_z - 1.0F);
+                        g101y = static_cast<float>(g101.y);
+
+                        const auto &g011 =
+                            gradients[static_cast<std::size_t>(
+                                          permute(perms_, xy01 + floor_z + 1)) &
+                                      15U];
+                        d011xz =
+                            static_cast<float>(g011.x) * relative_x +
+                            static_cast<float>(g011.z) * (relative_z - 1.0F);
+                        g011y = static_cast<float>(g011.y);
+
+                        const auto &g111 =
+                            gradients[static_cast<std::size_t>(
+                                          permute(perms_, xy11 + floor_z + 1)) &
+                                      15U];
+                        d111xz =
+                            static_cast<float>(g111.x) * (relative_x - 1.0F) +
+                            static_cast<float>(g111.z) * (relative_z - 1.0F);
+                        g111y = static_cast<float>(g111.y);
+                        last_floor_y = floor_y;
+                    }
+
+                    output.add_to(
+                        index,
+                        amplitude *
+                            mth::lerp3(alpha_x, alpha_y, alpha_z,
+                                       d000xz + g000y * relative_y,
+                                       d100xz + g100y * relative_y,
+                                       d010xz + g010y * (relative_y - 1.0F),
+                                       d110xz + g110y * (relative_y - 1.0F),
+                                       d001xz + g001y * relative_y,
+                                       d101xz + g101y * relative_y,
+                                       d011xz + g011y * (relative_y - 1.0F),
+                                       d111xz + g111y * (relative_y - 1.0F)));
+                    ++index;
+                }
             }
         }
     }
