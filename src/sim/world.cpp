@@ -255,6 +255,23 @@ auto world::ensure_chunk(const chunk_pos &pos) -> result<chunk *> {
     return &position->second;
 }
 
+auto world::insert_chunk(const chunk_pos &pos, storage_chunk generated)
+    -> result<chunk *> {
+    if (find_chunk(pos) != nullptr) {
+        return std::unexpected{make_error(
+            error_code::already_exists,
+            fmt::format("chunk ({}, {}) is already loaded", pos.x, pos.z))};
+    }
+    auto decoded{decode_chunk(std::move(generated), pos)};
+    if (!decoded) {
+        return std::unexpected{std::move(decoded.error())};
+    }
+    decoded->dirty = true;
+    auto [position, inserted]{chunks_.emplace(pos, std::move(*decoded))};
+    static_cast<void>(inserted);
+    return &position->second;
+}
+
 auto world::find_chunk(const chunk_pos &pos) noexcept -> chunk * {
     const auto found{chunks_.find(pos)};
     return found == chunks_.end() ? nullptr : &found->second;
