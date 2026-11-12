@@ -270,6 +270,15 @@ class world {
     /// needs an insertion path here.
     [[nodiscard]] auto ensure_chunk(const chunk_pos &pos) -> result<chunk *>;
 
+    /// Adopt a generated column into the runtime world.
+    ///
+    /// The column is validated and decoded like a stored chunk, marked dirty so
+    /// the snapshot writer persists it, and returned so the caller can add a
+    /// ticket. Fails with `already_exists` when the chunk is already loaded
+    /// and with `parse_error` when the record is invalid.
+    [[nodiscard]] auto insert_chunk(const chunk_pos &pos,
+                                    storage_chunk generated) -> result<chunk *>;
+
     [[nodiscard]] auto find_chunk(const chunk_pos &pos) noexcept -> chunk *;
     [[nodiscard]] auto find_chunk(const chunk_pos &pos) const noexcept
         -> const chunk *;
