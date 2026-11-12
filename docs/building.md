@@ -165,6 +165,27 @@ cmake --preset conan-release -DREFRAIN_LTO=ON -DREFRAIN_ARCH_LEVEL=x86-64-v3 \
 cmake --build build/bench --target refrain-bench-runtime
 ```
 
+### Benchmarking on a separate host
+
+A benchmark measured while the same machine compiles something else is not
+comparable: another job moves the numbers further than most changes do. Point
+`scripts/dev/bench-remote.sh` at an idle machine and it syncs the working tree
+over SSH, builds there with LTO and the raised architecture level, runs the
+benchmark and prints the result:
+
+```bash
+REFRAIN_BENCH_HOST=user@host scripts/dev/bench-remote.sh \
+    --targets terrain,full --chunks 16 --workers 1,8 --repeat 5
+```
+
+The host comes from the environment and is never committed. When the machine is
+unreachable the script warns and falls back to a local `build/bench`; a number
+from that fallback shares the machine with everything else, so say so when
+reporting it. `REFRAIN_BENCH_REQUIRE=1` turns the fallback into an error.
+
+Changing the benchmark host re-baselines every number: measurements from
+different machines cannot be compared.
+
 ## Dependencies
 
 `conan/locks/vendor.lock` pins every dependency and its revision. Changing a
