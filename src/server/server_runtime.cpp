@@ -24,7 +24,7 @@
 #include <refrain/server/chunk_view.hpp>
 #include <refrain/server/command_bridge.hpp>
 #include <refrain/server/entity_broadcaster.hpp>
-#include <refrain/server/inventory_menu.hpp>
+#include <refrain/server/inventory_sync.hpp>
 #include <refrain/server/play_gateway.hpp>
 #include <refrain/server/world_bootstrap.hpp>
 #include <refrain/sim/replay.hpp>
@@ -1406,221 +1406,8 @@ auto run_server(const server_run_options &options) -> int {
             });
     }
 
-    // Player inventory: map runtime item keys to protocol item ids once, then
-    // mirror the simulation inventory into the player inventory container.
-    std::unordered_map<std::string, std::uint32_t> item_ids{};
-    std::unordered_map<std::uint32_t, std::string> item_names{};
-    if (tables) {
-        if (const auto registry{tables->find_registry("minecraft:item")}) {
-            const auto count{tables->registry_entry_count(*registry)};
-            item_ids.reserve(count);
-            for (std::uint32_t index{0}; index < count; ++index) {
-                const auto entry{tables->registry_entry(*registry, index)};
-                if (entry.protocol_id >= 0) {
-                    const auto id{
-                        static_cast<std::uint32_t>(entry.protocol_id)};
-                    item_ids.emplace(std::string{entry.name}, id);
-                    item_names.emplace(id, std::string{entry.name});
-                }
-            }
-        }
-    }
-    std::set<std::uint64_t> inventory_forced{};
-    std::unordered_map<std::uint64_t, refrain::sim::item_stack> carried_items{};
-    std::unordered_map<std::uint64_t, std::vector<refrain::sim::item_stack>>
-        inventory_snapshots{};
-    std::unordered_map<std::uint64_t, refrain::net::item_stack>
-        carried_snapshots{};
-    // The client echoes the last menu state id it received in every click.
-    // Ids wrap at 15 bits like the client counter; any other echoed value
-    // means the client missed an update and gets the full menu state.
-    std::unordered_map<std::uint64_t, std::int32_t> inventory_states{};
-    // Runtime stack to protocol stack; unknown items and empty stacks encode
-    // as an empty stack.
-    const auto protocol_stack = [&](const refrain::sim::item_stack &stack) {
-        if (stack.count == 0 || stack.item.empty()) {
-            return refrain::net::item_stack{};
-        }
-        const auto item{item_ids.find(stack.item)};
-        if (item == item_ids.end()) {
-            return refrain::net::item_stack{};
-        }
-        return refrain::net::item_stack{
-            .count = stack.count,
-            .item_id = item->second,
-        };
-    };
-    const auto next_state = [&](std::uint64_t id) {
-        auto &state{inventory_states[id]};
-        state = (state + 1) & 32767;
-        return state;
-    };
-    const auto process_container_clicks = [&]() {
-        if (!listener) {
-            return;
-        }
-        for (const auto &slot : listener->take_creative_slots()) {
-            auto *inventory = players.inventory_of(slot.connection);
-            const auto index{static_cast<std::size_t>(slot.slot)};
-            if (inventory == nullptr || slot.slot < 0 ||
-                index >= inventory->size()) {
-                continue;
-            }
-            auto &target{(*inventory)[index]};
-            if (slot.item_id == 0 || slot.count == 0) {
-                target = sim::item_stack{};
-            } else {
-                const auto name{item_names.find(slot.item_id)};
-                if (name == item_names.end()) {
-                    continue;
-                }
-                target = sim::item_stack{
-                    .item = name->second,
-                    .count = slot.count,
-                };
-            }
-            inventory_forced.insert(slot.connection);
-        }
-        for (const auto &close : listener->take_container_closes()) {
-            if (close.container_id != 0) {
-                continue;
-            }
-            if (auto *inventory = players.inventory_of(close.connection)) {
-                const auto carried{carried_items.find(close.connection)};
-                if (carried != carried_items.end()) {
-                    const auto remainder{refrain::server::place_back(
-                        *inventory, carried->second)};
-                    if (remainder.count == 0) {
-                        carried_items.erase(close.connection);
-                    } else {
-                        carried->second = remainder;
-                    }
-                }
-            }
-            inventory_forced.insert(close.connection);
-        }
-        for (const auto &click : listener->take_container_clicks()) {
-            if (click.container_id != 0) {
-                continue;
-            }
-            auto *inventory = players.inventory_of(click.connection);
-            if (inventory == nullptr) {
-                continue;
-            }
-            const auto known{inventory_states.find(click.connection)};
-            const auto stale{known == inventory_states.end() ||
-                             known->second != click.state_id};
-            if (click.mode != 0) {
-                // Shift, drag and number-key clicks are not modeled; resend
-                // the authoritative state so the client prediction reverts.
-                inventory_forced.insert(click.connection);
-                continue;
-            }
-            auto &carried{carried_items[click.connection]};
-            const auto changed{refrain::server::apply_player_click(
-                *inventory, carried, click.slot, click.button)};
-            log_server.debug("click conn={} slot={} button={} mode={} "
-                             "state={} stale={} -> carried='{}' x{} changed={}",
-                             click.connection, click.slot, click.button,
-                             click.mode, click.state_id, stale, carried.item,
-                             carried.count, changed);
-            if (stale) {
-                inventory_forced.insert(click.connection);
-            }
-        }
-    };
-
-    const auto process_inventory = [&]() {
-        if (!listener) {
-            return;
-        }
-        const auto active_ids{listener->active_connections()};
-        const std::set<std::uint64_t> active{active_ids.begin(),
-                                             active_ids.end()};
-        for (auto iterator = inventory_snapshots.begin();
-             iterator != inventory_snapshots.end();) {
-            if (!active.contains(iterator->first)) {
-                iterator = inventory_snapshots.erase(iterator);
-            } else {
-                ++iterator;
-            }
-        }
-        for (auto iterator = carried_snapshots.begin();
-             iterator != carried_snapshots.end();) {
-            if (!active.contains(iterator->first)) {
-                iterator = carried_snapshots.erase(iterator);
-            } else {
-                ++iterator;
-            }
-        }
-        for (auto iterator = inventory_states.begin();
-             iterator != inventory_states.end();) {
-            if (!active.contains(iterator->first)) {
-                iterator = inventory_states.erase(iterator);
-            } else {
-                ++iterator;
-            }
-        }
-        for (const auto id : active_ids) {
-            const auto *record{players.player_of(id)};
-            if (record == nullptr) {
-                continue;
-            }
-            const auto &inventory{record->inventory};
-            const auto previous{inventory_snapshots.find(id)};
-            const auto forced{inventory_forced.contains(id)};
-            if (previous == inventory_snapshots.end() || forced) {
-                std::vector<refrain::net::item_stack> slots(46);
-                for (std::size_t index{0}; index < inventory.size(); ++index) {
-                    const auto slot{refrain::server::menu_slot_of(index)};
-                    if (slot < 0) {
-                        continue;
-                    }
-                    slots[static_cast<std::size_t>(slot)] =
-                        protocol_stack(inventory[index]);
-                }
-                auto carried{refrain::net::item_stack{}};
-                if (const auto stack{carried_items.find(id)};
-                    stack != carried_items.end()) {
-                    carried = protocol_stack(stack->second);
-                }
-                listener->send_container_content(id, 0, next_state(id), slots,
-                                                 carried);
-                carried_snapshots[id] = carried;
-            } else {
-                for (const auto slot : refrain::server::changed_menu_slots(
-                         previous->second, inventory)) {
-                    const auto index{refrain::server::inventory_index_of(slot)};
-                    const auto stack{index < inventory.size()
-                                         ? protocol_stack(inventory[index])
-                                         : refrain::net::item_stack{}};
-                    listener->send_container_set_slot(id, 0, next_state(id),
-                                                      slot, stack);
-                }
-                auto carried{refrain::net::item_stack{}};
-                if (const auto stack{carried_items.find(id)};
-                    stack != carried_items.end()) {
-                    carried = protocol_stack(stack->second);
-                }
-                const auto sent{carried_snapshots.find(id)};
-                if (sent == carried_snapshots.end() ||
-                    sent->second != carried) {
-                    listener->send_cursor_item(id, carried);
-                    carried_snapshots[id] = carried;
-                }
-            }
-            inventory_snapshots[id] = inventory;
-        }
-        inventory_forced.clear();
-        for (auto iterator = carried_items.begin();
-             iterator != carried_items.end();) {
-            if (!active.contains(iterator->first)) {
-                iterator = carried_items.erase(iterator);
-            } else {
-                ++iterator;
-            }
-        }
-    };
+    refrain::server::inventory_sync inventory{gateway,
+                                              tables ? &*tables : nullptr};
 
     snapshot_writer writer{*store};
     // One background deleter, only for an applying GC policy. `--content-gc
@@ -1798,8 +1585,7 @@ auto run_server(const server_run_options &options) -> int {
         if (streamer) {
             streamer->tick(views);
         }
-        process_container_clicks();
-        process_inventory();
+        inventory.tick(players);
         store->tick();
         ++ticks_run;
         scheduler.run(refrain::core::schedule::phase::post_tick, ticks_run);
