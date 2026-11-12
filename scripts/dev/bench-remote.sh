@@ -95,31 +95,51 @@ fi
 check_remote_idle
 
 say "syncing the working tree to $HOST:$REMOTE_DIR"
+# Anchored patterns: an unanchored `world` would also drop src/world.
 rsync -a --delete \
-    --exclude=.git \
-    --exclude='build*' \
-    --exclude=.cache \
-    --exclude=refrain-internal \
-    --exclude=world \
-    --exclude='install*' \
-    --exclude=run \
-    --exclude=AGENTS.local.md \
+    --exclude=/.git \
+    --exclude='/build*' \
+    --exclude=/.cache \
+    --exclude=/refrain-internal \
+    --exclude=/world \
+    --exclude='/install*' \
+    --exclude=/run \
+    --exclude=/AGENTS.local.md \
     ./ "$HOST:$REMOTE_DIR/"
 
 say "building and running on $HOST"
-ssh -o BatchMode=yes "$HOST" bash -lc "
+# The remote login shell is not necessarily bash (fish here), so send the
+# script on stdin instead of as an argument it would have to parse. The Conan
+# layout decides where the build directory lands, so find the toolchain file
+# instead of assuming the path.
+ssh -o BatchMode=yes "$HOST" bash -s <<REMOTE
 set -euo pipefail
-cd \"\$HOME/$REMOTE_DIR\"
-export PATH=\"\$HOME/.venvs/conan/bin:\$PATH\"
-if [ ! -d '$REMOTE_BUILD' ]; then
-    conan install . -pr gcc-release --build=missing --lockfile=conan/locks/vendor.lock >/dev/null
-    cmake --preset conan-release -B '$REMOTE_BUILD' \
+cd "\$HOME/${REMOTE_DIR}"
+export PATH="\$HOME/.venvs/conan/bin:\$PATH"
+# The chunk-generator benchmark needs the generated datapack; without it the
+# binary reports the run as skipped.
+export REFRAIN_VANILLA_WORLDGEN="\${REFRAIN_VANILLA_WORLDGEN:-\$PWD/content/vanilla/26.3/data}"
+output='${REMOTE_BUILD}'
+if [ ! -d "\$output" ]; then
+    conan install . -pr gcc-release --build=missing \
+        --lockfile=conan/locks/vendor.lock -of "\$output" >/dev/null
+fi
+toolchain="\$(find "\$output" -name conan_toolchain.cmake -print -quit)"
+if [ -z "\$toolchain" ]; then
+    echo "no conan_toolchain.cmake under \$output" >&2
+    exit 1
+fi
+build="\$(dirname "\$(dirname "\$toolchain")")"
+if [ ! -f "\$build/build.ninja" ]; then
+    cmake -S . -B "\$build" -G Ninja \
+        -DCMAKE_TOOLCHAIN_FILE="\$toolchain" \
+        -DCMAKE_BUILD_TYPE=Release \
         -DREFRAIN_LTO=ON \
-        -DREFRAIN_ARCH_LEVEL='$ARCH_LEVEL' \
+        -DREFRAIN_ARCH_LEVEL='${ARCH_LEVEL}' \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache >/dev/null
 fi
-cmake --build '$REMOTE_BUILD' --target refrain-bench-runtime -j \"\$(nproc)\" >/dev/null
-'$REMOTE_BUILD'/bin/refrain-bench-runtime ${BENCH_ARGS[*]:-}
-"
+cmake --build "\$build" --target refrain-bench-runtime -j "\$(nproc)" >/dev/null
+"\$build/bin/refrain-bench-runtime" ${BENCH_ARGS[*]:-}
+REMOTE
 
 say "done: numbers above come from $HOST ($REMOTE_BUILD, LTO on, $ARCH_LEVEL)"
