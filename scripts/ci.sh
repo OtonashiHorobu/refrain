@@ -166,14 +166,14 @@ SERVER_LOCK="$EXTRACT_DIR/mods.lock"
     --mods "$ROOT/test/fixtures/instance" --auto-scan \
     --mods-lock "$SERVER_LOCK" --update-lock --check \
     >"$EXTRACT_DIR/auto-scan-1.txt" 2>&1
-grep -q 'mods.lock: written' "$EXTRACT_DIR/auto-scan-1.txt" \
+grep -q '\[mods\]: written' "$EXTRACT_DIR/auto-scan-1.txt" \
     || die "auto_scan: lock was not written"
 grep -q 'refrain.test.extra@1.0.0' "$EXTRACT_DIR/auto-scan-1.txt" \
     || die "auto_scan: fixture user mod missing from the lock"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --mods "$ROOT/test/fixtures/instance" --auto-scan \
     --mods-lock "$SERVER_LOCK" --check >"$EXTRACT_DIR/auto-scan-2.txt" 2>&1
-grep -q 'mods.lock: verified' "$EXTRACT_DIR/auto-scan-2.txt" \
+grep -q '\[mods\]: verified' "$EXTRACT_DIR/auto-scan-2.txt" \
     || die "auto_scan: existing lock was not verified"
 # Manifest version drift: the on-disk manifest changed while the lock still
 # records the old version. Without --update-lock the server must fail with a
@@ -200,7 +200,7 @@ grep -q 'version drift' "$EXTRACT_DIR/auto-scan-drift.txt" \
     --mods "$EXTRACT_DIR/instance-drift" --auto-scan \
     --mods-lock "$SERVER_LOCK" --update-lock --check \
     >"$EXTRACT_DIR/auto-scan-update.txt" 2>&1
-grep -q 'mods.lock: updated' "$EXTRACT_DIR/auto-scan-update.txt" \
+grep -q '\[mods\]: updated' "$EXTRACT_DIR/auto-scan-update.txt" \
     || die "auto_scan: --update-lock did not rewrite the drifted lock"
 "$BIN_DIR/refrain-tools" mods list --mods "$EXTRACT_DIR/instance-drift" \
     --gamepack "$ROOT/gamepack/gamepack.toml" \
@@ -523,7 +523,7 @@ JSON
     --content-composition test-gp --datapack "$RUNTIME_PACK" --check \
     >"$RUNTIME_DIR/server.txt" 2>&1 \
     || die "runtime content: server failed to mount the content layers"
-grep -q 'runtime-content: layers=2 files=5' \
+grep -q '\[content\]: layers=2 files=5' \
     "$RUNTIME_DIR/server.txt" \
     || die "runtime content: content composition + datapack did not merge"
 grep -q 'errors=0 warnings=0' "$RUNTIME_DIR/server.txt" \
@@ -859,10 +859,10 @@ echo "  content: 4 file(s) -> 3 blob(s) (2 in segments), deterministic RFRX, whe
     --dump-gamepack | grep -Eq 'worldgen[[:space:]]*-> refrain.worldgen.flat@1.0.0' \
     || die "server did not resolve the flat-worldgen preset"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --dump-gamepack 2>&1 | grep -q 'builtin image: files=12' \
+    --dump-gamepack 2>&1 | grep -q '\[content\]: files=12' \
     || die "server did not load the embedded built-in image"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" --check \
-    2>&1 | grep -q 'mod host: 11 mod(s) loaded' \
+    2>&1 | grep -q '\[host\]: 11 mod(s) loaded' \
     || die "server did not load the gamepack mods through the mod host"
 # Console diagnostics are stderr; stdout carries only the command's data.
 # CI/scripts grep these streams directly (`dump > out.txt`), so a console log
@@ -984,12 +984,12 @@ for run in 1 2; do
         --world "$WORLD_ROOT/rwf" --script "$RUNTIME_SCRIPT" \
         --hash-every 5 --ticks 20 >"$WORLD_ROOT/runtime-$run.log" 2>&1 \
         || die "runtime smoke run $run failed"
-    grep -q 'replay: tick=5 hash=' "$WORLD_ROOT/runtime-$run.log" \
+    grep -q '\[sim\]: tick=5 hash=' "$WORLD_ROOT/runtime-$run.log" \
         || die "runtime smoke run $run did not emit its replay hash"
 done
-sed -n 's/.*replay: tick=5 hash=//p' "$WORLD_ROOT/runtime-1.log" \
+sed -n 's/.*\[sim\]: tick=5 hash=//p' "$WORLD_ROOT/runtime-1.log" \
     >"$WORLD_ROOT/runtime-hash-1.txt"
-sed -n 's/.*replay: tick=5 hash=//p' "$WORLD_ROOT/runtime-2.log" \
+sed -n 's/.*\[sim\]: tick=5 hash=//p' "$WORLD_ROOT/runtime-2.log" \
     >"$WORLD_ROOT/runtime-hash-2.txt"
 cmp -s "$WORLD_ROOT/runtime-hash-1.txt" "$WORLD_ROOT/runtime-hash-2.txt" \
     || die "runtime replay hash is not deterministic across runs"
@@ -1006,12 +1006,12 @@ EOF
     --autosave-interval-ticks 2 --ticks 10 \
     >"$WORLD_ROOT/schedule.log" 2>&1 \
     || die "scheduler smoke run failed"
-grep -q 'schedule: runtime.autosave phase=post_tick interval=2 .*runs=0' \
+grep -q '\[schedule\]: runtime.autosave phase=post_tick interval=2 .*runs=0' \
     "$WORLD_ROOT/schedule.log" \
     || die "scheduler smoke did not list the autosave task before it ran"
-grep -q 'schedule: runtime.autosave .*runs=1' "$WORLD_ROOT/schedule.log" \
+grep -q '\[schedule\]: runtime.autosave .*runs=1' "$WORLD_ROOT/schedule.log" \
     || die "scheduler smoke did not run autosave on its tick grid"
-grep -q 'schedule: runtime.autosave .*failures=0' "$WORLD_ROOT/schedule.log" \
+grep -q '\[schedule\]: runtime.autosave .*failures=0' "$WORLD_ROOT/schedule.log" \
     || die "scheduler smoke recorded a spurious autosave failure"
 echo "  runtime: scripted edit + deterministic replay hash OK"
 echo "  scheduler: autosave grid + console stats OK"

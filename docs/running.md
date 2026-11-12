@@ -40,7 +40,6 @@ starting the loop, which is what a configuration check or a CI smoke wants.
 | `--config-dir <dir>` | host config directory; each `*.toml` becomes a read-only host runtime namespace (`refrain.toml` is `host`, `mods/*.toml` is `mod/<id>`); empty disables |
 | `--world <dir>` | RWF world directory |
 | `--check` | verify configuration, composition and lock, then exit without starting |
-| `--config-dir <dir>` | per-namespace TOML configuration; missing files keep defaults |
 | `--import-properties <file>` | import Java `server.properties` as a fallback layer (not written) |
 | `--ticks <n>` | stop after n ticks, 0 disables the limit |
 | `--script <file>` | tick-indexed commands, one `<tick> <command>` per line |
