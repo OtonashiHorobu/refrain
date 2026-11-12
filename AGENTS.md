@@ -87,6 +87,33 @@ reporter smoke and the formatting gate.
   defect, not a finished feature. The marker states the gap in one or two
   sentences; it never carries a ticket number, milestone label or date.
 
+## Local workflow
+
+- Configure the local build for fast iteration:
+  `cmake --preset conan-release -DREFRAIN_LTO=OFF -DREFRAIN_ARCH_LEVEL=baseline`.
+  LTO and a raised architecture level belong to release artifacts and to
+  benchmarks, not to the edit/build/test loop; a single-file change must stay
+  incremental.
+- Measure in a separate build directory (for example `build/bench`) configured
+  with `-DREFRAIN_LTO=ON -DREFRAIN_ARCH_LEVEL=x86-64-v3`, and say which
+  directory produced a number.
+- Pull requests run the fast gates: the Linux build, the vendor guard, the
+  formatting check and the DCO check. The sanitizer builds, the Windows
+  toolchains and the CodeQL scan run on the default branch and on a schedule.
+  Do not wait for them before opening or updating a pull request; when one
+  fails on the default branch, fix it there.
+- One topic per pull request, and the branch keeps the build green before it
+  merges.
+
+## Determinism
+
+Anything that feeds the state hash, a replay or a golden capture must iterate
+in a state-derived order: ascending entity id, ascending chunk position, sorted
+keys. Hash-map order and creation order are not evidence of anything and must
+never decide the order in which a system mutates state, consumes randomness or
+emits packets. A subsystem that cannot satisfy this runs on the simulation
+thread and documents the exception next to the code.
+
 ## Logging
 
 Runtime logs record operator-visible facts, not how the code works. Keep

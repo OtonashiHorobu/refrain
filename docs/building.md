@@ -145,6 +145,26 @@ profiling allocator internals:
 cmake --preset conan-release -DREFRAIN_HARDEN=OFF -DREFRAIN_LTO=OFF
 ```
 
+## Local iteration
+
+The default configuration builds with LTO, which makes a one-file change pay a
+full link. For the edit/build/test loop configure without it:
+
+```bash
+cmake --preset conan-release -DREFRAIN_LTO=OFF -DREFRAIN_ARCH_LEVEL=baseline
+```
+
+Benchmarks and release artifacts keep LTO and may raise the architecture level;
+use a separate build directory so the two configurations do not thrash:
+
+```bash
+conan install . -pr gcc-release --build=missing -of build/bench \
+    --lockfile=conan/locks/vendor.lock
+cmake --preset conan-release -DREFRAIN_LTO=ON -DREFRAIN_ARCH_LEVEL=x86-64-v3 \
+    -B build/bench
+cmake --build build/bench --target refrain-bench-runtime
+```
+
 ## Dependencies
 
 `conan/locks/vendor.lock` pins every dependency and its revision. Changing a
