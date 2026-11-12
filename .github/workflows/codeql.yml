@@ -11,8 +11,21 @@ name: codeql
 on:
   push:
     branches: [main]
+  # A documentation or test-only change does not need a database, so the pull
+  # request scan only runs for the paths the analyzer actually covers.
   pull_request:
     branches: [main]
+    paths:
+      - "src/**"
+      - "include/**"
+      - "sdk/**"
+      - "schema/**"
+      - "mods/**"
+      - "conanfile.py"
+      - "conan/**"
+      - "cmake/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/codeql.yml"
   schedule:
     - cron: "0 3 * * 1"
   workflow_dispatch:
@@ -94,8 +107,13 @@ jobs:
       - name: Configure
         run: cmake --preset conan-release
 
+      # The database only needs the first-party translation units that ship in
+      # the server binary. Building the test and benchmark targets would
+      # double the compile time without adding production code to the scan.
       - name: Build
-        run: cmake --build --preset conan-release -j "$(nproc)"
+        run: |
+          cmake --build --preset conan-release -j "$(nproc)" \
+            --target refrain-server refrain-tools
 
       - uses: github/codeql-action/analyze@9418214df1f2c4b8128c770156c409013b07d6b9 # v3
         with:
