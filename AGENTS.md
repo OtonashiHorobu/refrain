@@ -92,6 +92,11 @@ reporter smoke and the formatting gate.
 Runtime logs record operator-visible facts, not how the code works. Keep
 info/warn/error lines short and self-contained:
 
+- Tag every line with its subsystem through a per-module logger
+  (`refrain::log::logger`): `[12:00:00] [main/info] [mod-host]: 11 mod(s)
+  loaded`. Module names are lowercase and hyphen-separated (`mod-host`,
+  `net-transport`); the message body stays prose and does not use a hyphen or
+  an underscore as a word separator.
 - Use `component: fact` and `key=value` for identifiers, counts and paths.
 - Do not add parenthetical asides, rationale or mechanism descriptions; a
   reader should not need the source to understand the line.

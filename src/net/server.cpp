@@ -36,6 +36,12 @@
 
 #include <fmt/format.h>
 
+namespace {
+
+constexpr refrain::log::logger log_net{"net"};
+
+} // namespace
+
 namespace refrain::net {
 namespace {
 
@@ -330,8 +336,8 @@ struct server::impl {
                      const Packet &packet, Encoder encode) {
         auto body{encode_packet(packet_id, packet, encode)};
         if (!body) {
-            log::error("net: packet encode failed connection={} packet={}", id,
-                       packet_id);
+            log_net.error("packet encode failed connection={} packet={}", id,
+                          packet_id);
             close(id);
             return;
         }
@@ -417,7 +423,7 @@ void server::impl::on_open(std::uint64_t id) {
     if (stopped.load(std::memory_order_relaxed)) {
         return;
     }
-    log::debug("net: connection opened id={}", id);
+    log_net.debug("connection opened id={}", id);
     protocol->create_connection(id);
     protocol->notify_state(id, connection_state::handshake);
     const std::lock_guard lock{connections_mutex};
@@ -512,7 +518,7 @@ void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
         return;
     }
     if (rate_limited) {
-        log::warn("net: rate limit exceeded id={}", id);
+        log_net.warn("rate limit exceeded id={}", id);
         if (socket) {
             socket->close(id);
         }
@@ -590,8 +596,8 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             }
             found->second.state = next_state;
         }
-        log::debug("net: handshake id={} protocol={} next={}", id,
-                   intention.protocol, intention.next);
+        log_net.debug("handshake id={} protocol={} next={}", id,
+                      intention.protocol, intention.next);
         if (intention.next == 1) {
             return;
         }
@@ -698,7 +704,7 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 reject(id, "malformed or unexpected packet");
                 return;
             }
-            log::info("net: login started id={} name={}", id, packet.name);
+            log_net.info("login started id={} name={}", id, packet.name);
             const auto session{random_uuid()};
             {
                 const std::lock_guard lock{connections_mutex};
@@ -778,7 +784,7 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 }
                 found->second.state = next_state;
             }
-            log::info("net: login complete id={} name={}", id, name);
+            log_net.info("login complete id={} name={}", id, name);
             send_configuration(id);
             return;
         }
@@ -1286,7 +1292,7 @@ void server::impl::send_play_login(std::uint64_t id) {
         }
         found->second.mode = mode;
     }
-    log::info("net: player joined id={} name={}", id, name);
+    log_net.info("player joined id={} name={}", id, name);
     server_policy policy_snapshot{};
     {
         const std::lock_guard lock{policy_mutex};
@@ -2852,7 +2858,7 @@ void server::impl::send(std::uint64_t id, std::uint16_t packet_id,
 }
 
 void server::impl::reject(std::uint64_t id, std::string_view reason) {
-    log::warn("net: protocol error id={} reason={}", id, reason);
+    log_net.warn("protocol error id={} reason={}", id, reason);
     close(id);
 }
 
@@ -2888,10 +2894,9 @@ void server::impl::close(std::uint64_t id) {
         });
     }
     if (name.empty()) {
-        log::debug("net: connection closed id={} state={}", id,
-                   to_string(state));
+        log_net.debug("connection closed id={} state={}", id, to_string(state));
     } else {
-        log::info("net: player left id={} name={}", id, name);
+        log_net.info("player left id={} name={}", id, name);
     }
     protocol->close_connection(id);
     if (socket) {
@@ -2932,7 +2937,7 @@ void server::impl::keepalive_loop() {
             }
         }
         for (const auto id : expired) {
-            log::warn("net: keepalive timeout id={}", id);
+            log_net.warn("keepalive timeout id={}", id);
             close(id);
         }
         for (const auto id : due) {
@@ -2968,7 +2973,7 @@ void server::impl::tick() {
             }
         }
         for (const auto id : idle) {
-            log::info("net: player idle timeout id={}", id);
+            log_net.info("player idle timeout id={}", id);
             close(id);
         }
     }

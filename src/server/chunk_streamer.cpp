@@ -13,6 +13,12 @@
 #include <cstdlib>
 #include <limits>
 
+namespace {
+
+constexpr refrain::log::logger log_net{"net"};
+
+} // namespace
+
 namespace refrain::server {
 
 chunk_streamer::chunk_streamer(refrain::net::server &listener,
@@ -31,9 +37,6 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
         }
     }
     for (const auto &request : views.take_requests()) {
-        refrain::log::info("DEBUG chunk request conn={} center=({},{}) r={}",
-                           request.connection, request.chunk_x, request.chunk_z,
-                           request.radius);
         auto &stream{streams_[request.connection]};
         const auto center_changed{stream.radius != request.radius ||
                                   stream.center_x != request.chunk_x ||
@@ -183,10 +186,9 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
             stream.center_dirty = false;
         }
         if (stream.pending.empty() && !stream.reported) {
-            refrain::log::info(
-                "network: chunk view ready for connection {} ({} "
-                "chunk(s) streamed)",
-                id, stream.sent);
+            log_net.info("chunk view ready for connection {} ({} chunk(s) "
+                         "streamed)",
+                         id, stream.sent);
             stream.reported = true;
         }
     }

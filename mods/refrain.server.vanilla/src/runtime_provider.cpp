@@ -38,6 +38,13 @@
 
 namespace {
 
+constexpr refrain::log::logger log_net_transport{"net-transport"};
+constexpr refrain::log::logger log_protocol{"protocol"};
+
+} // namespace
+
+namespace {
+
 [[nodiscard]] auto to_view(refrain_str value) noexcept -> std::string_view {
     if (value.data == nullptr || value.len == 0) {
         return {};
@@ -333,8 +340,8 @@ struct runtime_provider {
                 descriptor.requires_stream == 0) {
                 return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
             }
-            refrain::log::info(
-                "protocol: {} {} over {}",
+            log_protocol.info(
+                "{} {} over {}",
                 refrain::contracts::as_string_view(descriptor.family),
                 descriptor.canonical_version,
                 refrain::contracts::as_string_view(
@@ -406,7 +413,7 @@ struct runtime_provider {
             const auto transport{provider->host->services().active_provider(
                 "refrain:transport", transport_instance)};
             if (transport) {
-                refrain::log::info("transport: {}", transport->id);
+                log_net_transport.info("{}", transport->id);
             }
             if (transport && transport->instance != nullptr) {
                 const auto *api{static_cast<const refrain::mod::provider_api *>(
