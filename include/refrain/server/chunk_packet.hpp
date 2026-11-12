@@ -30,12 +30,4 @@ struct chunk_packet_source {
                                      sim::chunk_pos pos)
     -> result<std::vector<std::byte>>;
 
-/// Encode a square of spawn chunks, nearest first. Chunks that the world does
-/// not have are skipped; a failure to encode one chunk is an error because the
-/// caller cannot distinguish a sparse world from a malformed section.
-[[nodiscard]] auto build_spawn_chunks(const chunk_packet_source &source,
-                                      sim::chunk_pos center,
-                                      std::int32_t radius = 3)
-    -> result<std::vector<std::vector<std::byte>>>;
-
 } // namespace refrain::server

@@ -185,9 +185,6 @@ struct chunk_view_request {
     std::int32_t chunk_x{0};
     std::int32_t chunk_z{0};
     std::int32_t radius{0};
-    /// Already-sent square around the center (spawn chunks); the runtime seeds
-    /// its known set with it so those chunks are not resent.
-    std::int32_t seed_radius{0};
 };
 
 using transport_factory = std::function<result<std::unique_ptr<transport>>(

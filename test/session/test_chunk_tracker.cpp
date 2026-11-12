@@ -22,16 +22,13 @@ suite chunk_tracker_tests = [] {
         expect(requests.size() == 1U);
         if (!requests.empty()) {
             expect(requests.front().connection == 1U);
-            expect(requests.front().seed_radius == 3);
+            expect(requests.front().radius == 3);
         }
         expect(!tracker.update(1, 4, 6, 3));
         expect(tracker.take_requests().empty());
         expect(tracker.update(1, 5, 6, 3));
         requests = tracker.take_requests();
         expect(requests.size() == 1U);
-        if (!requests.empty()) {
-            expect(requests.front().seed_radius == 0);
-        }
         expect(tracker.remove(1));
         expect(!tracker.update(0, 0, 0, 3));
     };

@@ -16,7 +16,6 @@ auto chunk_tracker::update(std::uint64_t connection, std::int32_t chunk_x,
     }
     const std::lock_guard lock{mutex_};
     auto &entry{views_[connection]};
-    const auto seed_radius{entry.initialized ? 0 : 3};
     if (entry.initialized && entry.chunk_x == chunk_x &&
         entry.chunk_z == chunk_z && entry.radius == radius) {
         return false;
@@ -28,8 +27,7 @@ auto chunk_tracker::update(std::uint64_t connection, std::int32_t chunk_x,
     pending_.push_back({.connection = connection,
                         .chunk_x = chunk_x,
                         .chunk_z = chunk_z,
-                        .radius = radius,
-                        .seed_radius = seed_radius});
+                        .radius = radius});
     return true;
 }
 
