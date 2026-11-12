@@ -10,6 +10,7 @@ module refrain::services::storage;
 version 1.0.0;
 
 import refrain::core;
+import refrain::host::core;
 
 enum storage_error : u32 {
     open_failed = 1,
@@ -18,12 +19,32 @@ enum storage_error : u32 {
     io_error = 4,
     version_mismatch = 5,
     read_only = 6,
+    already_open = 7,
 }
 
 struct world_open_config {
     string world_path;
     string gamepack_id;
     u32 flags;
+}
+
+/// An opened store, as handed from the runtime to the providers that use it.
+///
+/// The runtime opens one store per level directory and passes this handle to
+/// the world and sim providers, so a fully composed provider set shares a
+/// single open store instead of each provider opening the directory itself.
+struct storage_handle {
+    /// The open store inside the provider named by `owner`.
+    storage_world world;
+    /// Provider table and instance that own `world`. A consumer passes the
+    /// handle and this owner back to every storage call, so it resolves no
+    /// service of its own.
+    provider_ref owner;
+    /// The provider's in-process store object, or null when the provider keeps
+    /// its store private. A consumer that links the runtime storage type reads
+    /// and writes through it directly instead of marshalling every chunk
+    /// through the ABI; the pointer stays valid until the handle is closed.
+    opaque_ptr store;
 }
 
 struct chunk_key {
@@ -45,9 +66,13 @@ service storage : 1.0.0 {
     capabilities = [ "transactions", "compaction", "anvil-import", "anvil-export" ];
 
     /// Open (or create) a world store. The returned handle is owned by the
-    /// caller and released with close_world.
+    /// caller and released with close_world. A level directory is opened at
+    /// most once per process: opening it again while a handle is open fails
+    /// with `already_open` rather than opening a second store over the same
+    /// files.
     #[thread(main)] #[can_fail]
-    fn open_world(in world_open_config config) -> result<storage_world, storage_error>;
+    fn open_world(in world_open_config config)
+        -> result<storage_handle, storage_error>;
 
     #[thread(main)] #[can_fail]
     fn close_world(storage_world world) -> result<void, storage_error>;

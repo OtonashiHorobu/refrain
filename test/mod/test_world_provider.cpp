@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/builtin/image.hpp>
+#include <refrain/contracts/services/storage.hpp>
 #include <refrain/contracts/services/world.hpp>
 #include <refrain/mod/discovery.hpp>
 #include <refrain/mod/gamepack.hpp>
@@ -16,6 +17,7 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <system_error>
@@ -25,6 +27,7 @@ using namespace boost::ut;
 
 namespace mod = refrain::mod;
 
+namespace storage_service = refrain::services::storage;
 namespace world_service = refrain::services::world;
 namespace world = refrain::world;
 
@@ -72,6 +75,54 @@ namespace world = refrain::world;
     return store;
 }
 
+[[nodiscard]] auto open_level(const refrain::mod::host &host,
+                              const std::string &path)
+    -> std::optional<storage_service::storage_handle> {
+    const auto info{host.services().active_provider("refrain:storage")};
+    if (!info || info->instance == nullptr) {
+        return std::nullopt;
+    }
+    const auto *api{
+        static_cast<const refrain::mod::provider_api *>(info->instance)};
+    if (api == nullptr || api->vtable == nullptr) {
+        return std::nullopt;
+    }
+    const storage_service::provider storage{
+        *static_cast<const refrain_services_storage_vtable *>(api->vtable),
+        api->self};
+    auto config{storage_service::make_world_open_config()};
+    config.world_path = refrain_str{
+        .data = reinterpret_cast<const std::uint8_t *>(path.data()),
+        .len = path.size(),
+    };
+    config.gamepack_id = refrain_str{};
+    config.flags = 0;
+    auto opened{storage.open_world(config)};
+    if (!opened) {
+        return std::nullopt;
+    }
+    return *opened;
+}
+
+[[nodiscard]] auto close_level(const refrain::mod::host &host,
+                               refrain_core_handle_storage_world handle)
+    -> bool {
+    const auto info{host.services().active_provider("refrain:storage")};
+    if (!info || info->instance == nullptr) {
+        return false;
+    }
+    const auto *api{
+        static_cast<const refrain::mod::provider_api *>(info->instance)};
+    if (api == nullptr || api->vtable == nullptr) {
+        return false;
+    }
+    const storage_service::provider storage{
+        *static_cast<const refrain_services_storage_vtable *>(api->vtable),
+        api->self};
+    return storage.close_world(refrain::core::storage_world{handle})
+        .has_value();
+}
+
 [[maybe_unused]] const suite tests = [] {
     "world/refrain.world.vanilla serves chunks and block changes"_test = [] {
         auto plan{load_plan()};
@@ -114,12 +165,22 @@ namespace world = refrain::world;
             }
         }
 
-        auto config{world_service::make_world_config()};
         const std::string path{world_path.string()};
-        config.world_path = refrain_str{
-            .data = reinterpret_cast<const std::uint8_t *>(path.data()),
-            .len = path.size(),
-        };
+        auto store{open_level(host, path)};
+        expect(store.has_value());
+        if (!store) {
+            std::filesystem::remove_all(directory, error);
+            return;
+        }
+        // The handle names the store and the provider that owns it, and it
+        // carries the in-process store the world view attaches to.
+        expect(store->store != nullptr);
+        expect(store->owner.vtable != nullptr);
+        expect(store->owner.self != nullptr);
+        expect(store->owner.abi_major == REFRAIN_SERVICES_STORAGE_ABI_MAJOR);
+
+        auto config{world_service::make_world_config()};
+        config.storage = *store;
         config.seed = 7;
         expect(provider.open_world(config).has_value());
 
@@ -156,8 +217,44 @@ namespace world = refrain::world;
         expect(provider.world_tick() == 0);
         expect(provider.close_world().has_value());
         expect(!provider.is_chunk_loaded(pos));
+        expect(close_level(host, store->world));
         std::filesystem::remove_all(directory, error);
     };
+
+    "world/refrain.world.vanilla refuses a store the caller did not open"_test =
+        [] {
+            auto plan{load_plan()};
+            expect(static_cast<bool>(plan));
+            if (!plan) {
+                return;
+            }
+            refrain::mod::host host{};
+            expect(static_cast<bool>(host.load(*plan, builtin_bytes())));
+            const auto info{host.services().active_provider("refrain:world")};
+            expect(info.has_value());
+            if (!info) {
+                return;
+            }
+            const auto *api{static_cast<const refrain::mod::provider_api *>(
+                info->instance)};
+            expect(api != nullptr);
+            if (api == nullptr) {
+                return;
+            }
+            const world_service::provider provider{
+                *static_cast<const refrain_services_world_vtable *>(
+                    api->vtable),
+                api->self};
+            auto config{world_service::make_world_config()};
+            config.storage = storage_service::make_storage_handle();
+            config.seed = 7;
+            const auto opened{provider.open_world(config)};
+            expect(!opened.has_value());
+            if (!opened) {
+                expect(opened.error() ==
+                       world_service::world_error::storage_unavailable);
+            }
+        };
 };
 
 } // namespace

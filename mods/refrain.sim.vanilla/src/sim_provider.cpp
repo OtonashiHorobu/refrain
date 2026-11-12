@@ -10,6 +10,9 @@
 // because a mod must be able to change the world, and every applied mutation is
 // published as a contract event.
 //
+// A sim world is attached to the store the runtime opened once and handed down
+// in `sim_config`; the provider never opens the level directory itself.
+//
 // Publication runs through the host kernel event bus (the stable C ABI a
 // subscriber uses) and through the world's typed bus (the in-process C++ ABI).
 // Both carry the same payload bytes: the generated C++ event is layout-checked
@@ -27,6 +30,7 @@
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/static_mod.hpp>
 #include <refrain/sim/world.hpp>
+#include <refrain/world/store.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -157,19 +161,20 @@ struct sim_provider {
             config->struct_size != REFRAIN_SERVICES_SIM_SIM_CONFIG_SIZE) {
             return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE;
         }
-        const auto path{abi::to_view(config->world_path)};
-        if (path.empty()) {
-            return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE;
+        auto *store{
+            static_cast<refrain::world::world_store *>(config->storage.store)};
+        if (store == nullptr) {
+            // TODO: drive the chunk cache through the `refrain:storage` ABI so
+            // a storage provider that keeps its store private can host this
+            // sim; today the view needs the in-process store and refuses with
+            // the named error instead of opening the directory itself.
+            return REFRAIN_SERVICES_SIM_SIM_ERROR_STORAGE_UNAVAILABLE;
         }
         auto &provider{*static_cast<sim_provider *>(self)};
-        auto world{sim::world::open(path)};
-        if (!world) {
-            return abi::to_status(world.error(), sim_statuses,
-                                  REFRAIN_SERVICES_SIM_SIM_ERROR_INTERNAL);
-        }
-        world->seed(static_cast<std::uint64_t>(config->seed));
+        auto world{sim::world::attach(*store)};
+        world.seed(static_cast<std::uint64_t>(config->seed));
         const auto handle{provider.next_handle++};
-        auto inserted{provider.worlds.emplace(handle, std::move(*world))};
+        auto inserted{provider.worlds.emplace(handle, std::move(world))};
         // Subscribe after the move: the world's event bus is not movable, so a
         // listener registered on the temporary would be lost.
         static_cast<void>(

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 1da626de4b244418
+// Schema hash: 9e471daa6562b9ea
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_WORLD_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_WORLD_HPP
@@ -21,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <refrain/contracts/core.hpp>
+#include <refrain/contracts/services/storage.hpp>
 #include <refrain/core/error.hpp>
 #include <refrain/core/schedule.hpp>
 
@@ -33,6 +34,7 @@ enum class world_error : std::uint32_t { // enum 'world_error'
     internal = 4,
     already_open = 5,
     open_failed = 6,
+    storage_unavailable = 7,
 };
 
 using world_config = ::refrain_services_world_world_config;
@@ -43,11 +45,11 @@ using world_config = ::refrain_services_world_world_config;
     return value;
 }
 
-static_assert(sizeof(world_config) == 32);
+static_assert(sizeof(world_config) == 72);
 static_assert(alignof(world_config) == 8);
 static_assert(offsetof(world_config, struct_size) == 0);
-static_assert(offsetof(world_config, world_path) == 8);
-static_assert(offsetof(world_config, seed) == 24);
+static_assert(offsetof(world_config, storage) == 8);
+static_assert(offsetof(world_config, seed) == 64);
 
 inline constexpr std::string_view service_id = "refrain:world";
 inline constexpr std::uint32_t abi_major = 1;
@@ -57,7 +59,7 @@ inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::si
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::sim;
 inline constexpr ::refrain::contracts::composition_kind composition = ::refrain::contracts::composition_kind::exclusive;
 inline constexpr std::string_view capabilities = "lighting,heightmaps,block_entities";
-inline constexpr std::string_view required_services = "refrain:core>=1.0.0,refrain:data.packs>=1.0.0";
+inline constexpr std::string_view required_services = "refrain:core>=1.0.0,refrain:data.packs>=1.0.0,refrain:storage>=1.0.0";
 inline constexpr std::string_view service_ids[] = {"refrain:world"};
 
 /// Type-safe wrapper around `refrain_services_world_vtable`. The provider (host) owns the table and `self`; this class is a borrowed call surface.
@@ -78,8 +80,8 @@ class provider final {
         return self_;
     }
 
-    /// Open the singleton world. The provider owns it until
-    /// `close_world`; the server hosts exactly one world.
+    /// Open the singleton world over the given store. The provider owns the
+    /// world until `close_world`; the server hosts exactly one world.
     [[nodiscard]] auto open_world(const ::refrain::services::world::world_config &config) const -> std::expected<void, ::refrain::services::world::world_error> {
         const auto abi_config = ::refrain::contracts::with_struct_size(config);
         if (const auto code = table_->open_world(self_, &abi_config); code != REFRAIN_STATUS_OK) {

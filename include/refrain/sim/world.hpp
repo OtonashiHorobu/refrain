@@ -230,6 +230,15 @@ class world {
 
     [[nodiscard]] static auto open(std::string_view path) -> result<world>;
 
+    /// Build a world view over a store the caller already opened.
+    ///
+    /// The store is borrowed: it must outlive the returned world and stays
+    /// open when the world is destroyed, so the caller owns its lifetime.
+    /// `flush()` and the snapshot writer still write through it;
+    /// `rebuild_palette_in_place()` is refused because it replaces the store
+    /// object.
+    [[nodiscard]] static auto attach(store_type &store) -> world;
+
     [[nodiscard]] auto registry() noexcept -> block_registry &;
     [[nodiscard]] auto registry() const noexcept -> const block_registry &;
 
@@ -496,7 +505,14 @@ class world {
         }
     };
 
+    struct borrowed_tag {};
+
     explicit world(store_type store);
+    explicit world(store_type &store, borrowed_tag);
+
+    /// The store this view runs on: the owned one, or the borrowed one.
+    [[nodiscard]] auto store_ref() noexcept -> store_type &;
+    [[nodiscard]] auto store_ref() const noexcept -> const store_type &;
 
     [[nodiscard]] auto decode_chunk(storage_chunk storage, const chunk_pos &pos)
         -> result<chunk>;
@@ -512,6 +528,9 @@ class world {
     void tick_player(player_state &player) noexcept;
 
     store_type store_;
+    /// Non-null when the view borrows a store it does not own; `store_` is
+    /// then default-constructed and unused.
+    store_type *borrowed_{nullptr};
     mutable std::mutex store_mutex_{};
     block_registry registry_{};
     std::map<chunk_pos, chunk, chunk_order> chunks_{};

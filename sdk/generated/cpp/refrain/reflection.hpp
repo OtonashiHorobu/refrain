@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 1da626de4b244418
+// Schema hash: 9e471daa6562b9ea
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2975,7 +2975,7 @@ template <> struct custom_traits<::refrain::services::session_tab::tab_view> {
 template <> struct custom_traits<::refrain::services::sim::sim_config> {
     static constexpr std::string_view type_name = "refrain::services::sim::sim_config";
     static constexpr auto fields = std::make_tuple(
-        refrain::reflect::custom_field{"world_path", &::refrain::services::sim::sim_config::world_path},
+        refrain::reflect::custom_field{"storage", &::refrain::services::sim::sim_config::storage},
         refrain::reflect::custom_field{"seed", &::refrain::services::sim::sim_config::seed});
 };
 
@@ -2986,6 +2986,15 @@ template <> struct custom_traits<::refrain::services::storage::world_open_config
         refrain::reflect::custom_field{"world_path", &::refrain::services::storage::world_open_config::world_path},
         refrain::reflect::custom_field{"gamepack_id", &::refrain::services::storage::world_open_config::gamepack_id},
         refrain::reflect::custom_field{"flags", &::refrain::services::storage::world_open_config::flags});
+};
+
+/// Generated RIDL struct 'refrain::services::storage::storage_handle'.
+template <> struct custom_traits<::refrain::services::storage::storage_handle> {
+    static constexpr std::string_view type_name = "refrain::services::storage::storage_handle";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"world", &::refrain::services::storage::storage_handle::world},
+        refrain::reflect::custom_field{"owner", &::refrain::services::storage::storage_handle::owner},
+        refrain::reflect::custom_field{"store", &::refrain::services::storage::storage_handle::store});
 };
 
 /// Generated RIDL struct 'refrain::services::storage::chunk_key'.
@@ -3040,7 +3049,7 @@ template <> struct custom_traits<::refrain::services::transport::transport_event
 template <> struct custom_traits<::refrain::services::world::world_config> {
     static constexpr std::string_view type_name = "refrain::services::world::world_config";
     static constexpr auto fields = std::make_tuple(
-        refrain::reflect::custom_field{"world_path", &::refrain::services::world::world_config::world_path},
+        refrain::reflect::custom_field{"storage", &::refrain::services::world::world_config::storage},
         refrain::reflect::custom_field{"seed", &::refrain::services::world::world_config::seed});
 };
 

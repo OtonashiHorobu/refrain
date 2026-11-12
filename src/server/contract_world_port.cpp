@@ -32,10 +32,6 @@
 
 namespace {
 
-constexpr std::string_view first_party_world{"refrain.world.vanilla"};
-constexpr std::string_view first_party_sim{"refrain.sim.vanilla"};
-constexpr std::string_view first_party_storage{"refrain.storage.rwf"};
-
 [[nodiscard]] auto contract_error(std::string_view operation,
                                   std::string_view reason) -> refrain::error {
     return refrain::make_error(
@@ -65,10 +61,10 @@ namespace {
 /// The contract path: every operation is an ABI call on the active
 /// `refrain:world`, `refrain:sim` and `refrain:storage` providers.
 ///
-/// The first-party world/sim/storage providers each own an independent store,
-/// so a composition that mixes a replacement with a first-party provider must
-/// not be opened here: three providers would open the same directory three
-/// times. `open()` therefore requires a fully replaced set.
+/// The port opens `refrain:storage` once and hands the resulting handle to the
+/// world and sim providers, so one store serves the whole composition however
+/// it is composed: a provider never opens the level directory itself, and
+/// mixing a replacement with a first-party provider no longer double-opens.
 class contract_world_port final : public world_port {
   public:
     explicit contract_world_port(server_service_handles handles)
@@ -81,56 +77,44 @@ class contract_world_port final : public world_port {
                 error_code::not_found, "the composition has no active world, "
                                        "sim or storage provider")};
         }
-        // Mixing a replacement with a first-party provider would open the same
-        // world directory through independent stores.
-        std::size_t first_party{0};
-        first_party += handles_.world_provider == first_party_world ? 1U : 0U;
-        first_party += handles_.sim_provider == first_party_sim ? 1U : 0U;
-        first_party +=
-            handles_.storage_provider == first_party_storage ? 1U : 0U;
-        if (first_party != 0) {
-            return contract_status(
-                "open",
-                "the first-party providers own independent stores; a mixed "
-                "composition would open the world directory twice");
-        }
         if (opened_) {
             return std::unexpected{
                 make_error(error_code::already_exists,
                            "contract world port already open")};
         }
-        const auto sim_config{make_sim_config(path)};
-        auto sim{sim_provider().open_world(sim_config)};
+        // One store, opened once: the world and sim providers receive the
+        // handle instead of opening the directory themselves.
+        auto storage{storage_provider().open_world(make_storage_config(path))};
+        if (!storage) {
+            return std::unexpected{make_error(
+                error_code::io_error,
+                fmt::format("refrain:storage open_world failed ({})",
+                            static_cast<std::uint32_t>(storage.error())))};
+        }
+        storage_world_ = core::storage_world{storage->world};
+        auto sim{sim_provider().open_world(make_sim_config(*storage))};
         if (!sim) {
+            static_cast<void>(storage_provider().close_world(storage_world_));
+            storage_world_ = {};
             return std::unexpected{make_error(
                 error_code::io_error,
                 fmt::format("refrain:sim open_world failed ({})",
                             static_cast<std::uint32_t>(sim.error())))};
         }
         sim_world_ = *sim;
-        const auto world_config{make_world_config(path)};
-        if (auto opened{world_provider().open_world(world_config)}; !opened) {
+        if (auto opened{
+                world_provider().open_world(make_world_config(*storage))};
+            !opened) {
             static_cast<void>(sim_provider().close_world(sim_world_));
             sim_world_ = {};
+            static_cast<void>(storage_provider().close_world(storage_world_));
+            storage_world_ = {};
             return std::unexpected{make_error(
                 error_code::io_error,
                 fmt::format("refrain:world open_world failed ({})",
                             static_cast<std::uint32_t>(opened.error())))};
         }
         world_open_ = true;
-        const auto storage_config{make_storage_config(path)};
-        auto storage{storage_provider().open_world(storage_config)};
-        if (!storage) {
-            static_cast<void>(world_provider().close_world());
-            world_open_ = false;
-            static_cast<void>(sim_provider().close_world(sim_world_));
-            sim_world_ = {};
-            return std::unexpected{make_error(
-                error_code::io_error,
-                fmt::format("refrain:storage open_world failed ({})",
-                            static_cast<std::uint32_t>(storage.error())))};
-        }
-        storage_world_ = *storage;
         opened_ = true;
         return status_ok();
     }
@@ -140,10 +124,8 @@ class contract_world_port final : public world_port {
             return;
         }
         opened_ = false;
-        if (storage_world_ != core::storage_world{}) {
-            static_cast<void>(storage_provider().close_world(storage_world_));
-            storage_world_ = {};
-        }
+        // The providers hold views over the storage handle, so they close
+        // before the store they were given does.
         if (world_open_) {
             static_cast<void>(world_provider().close_world());
             world_open_ = false;
@@ -151,6 +133,10 @@ class contract_world_port final : public world_port {
         if (sim_world_ != services::sim::sim_world{}) {
             static_cast<void>(sim_provider().close_world(sim_world_));
             sim_world_ = {};
+        }
+        if (storage_world_ != core::storage_world{}) {
+            static_cast<void>(storage_provider().close_world(storage_world_));
+            storage_world_ = {};
         }
     }
 
@@ -482,18 +468,20 @@ class contract_world_port final : public world_port {
         return {*handles_.storage, handles_.storage_self};
     }
 
-    [[nodiscard]] static auto make_sim_config(std::string_view path)
+    [[nodiscard]] static auto
+    make_sim_config(const services::storage::storage_handle &storage)
         -> services::sim::sim_config {
         auto config{services::sim::make_sim_config()};
-        config.world_path = abi::to_borrowed(path);
+        config.storage = storage;
         config.seed = 0;
         return config;
     }
 
-    [[nodiscard]] static auto make_world_config(std::string_view path)
+    [[nodiscard]] static auto
+    make_world_config(const services::storage::storage_handle &storage)
         -> services::world::world_config {
         auto config{services::world::make_world_config()};
-        config.world_path = abi::to_borrowed(path);
+        config.storage = storage;
         config.seed = 0;
         return config;
     }

@@ -6,13 +6,14 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 1da626de4b244418
+// Schema hash: 9e471daa6562b9ea
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_WORLD_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_WORLD_ABI_H
 
 #include <refrain/contracts/abi.h>
 #include <refrain/contracts/core_abi.h>
+#include <refrain/contracts/services/storage_abi.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,15 +28,18 @@ typedef uint32_t refrain_services_world_world_error; // enum 'world_error'
 #define REFRAIN_SERVICES_WORLD_WORLD_ERROR_INTERNAL ((refrain_services_world_world_error)(4))
 #define REFRAIN_SERVICES_WORLD_WORLD_ERROR_ALREADY_OPEN ((refrain_services_world_world_error)(5))
 #define REFRAIN_SERVICES_WORLD_WORLD_ERROR_OPEN_FAILED ((refrain_services_world_world_error)(6))
+#define REFRAIN_SERVICES_WORLD_WORLD_ERROR_STORAGE_UNAVAILABLE ((refrain_services_world_world_error)(7))
 
 struct refrain_services_world_world_config {
     uint32_t struct_size;
     uint8_t reserved_0[4];
-    // RWF world directory.
-    refrain_str world_path;
+    // The store the world persists through. The runtime opened it once from
+    // the level directory and passes the same handle to every provider of the
+    // composition; the provider never opens the directory itself.
+    refrain_services_storage_storage_handle storage;
     // Deterministic seed for the provider's RNG stream.
     int64_t seed;
-}; // refrain_services_world_world_config size = 32
+}; // refrain_services_world_world_config size = 72
 #define REFRAIN_SERVICES_WORLD_WORLD_CONFIG_SIZE ((uint32_t)sizeof(refrain_services_world_world_config))
 
 #define REFRAIN_SERVICES_WORLD_SERVICE_ID "refrain:world"
@@ -46,7 +50,7 @@ struct refrain_services_world_world_config {
 #define REFRAIN_SERVICES_WORLD_THREAD REFRAIN_THREAD_SIM
 #define REFRAIN_SERVICES_WORLD_COMPOSITION REFRAIN_COMPOSITION_EXCLUSIVE
 #define REFRAIN_SERVICES_WORLD_CAPABILITIES "lighting,heightmaps,block_entities"
-#define REFRAIN_SERVICES_WORLD_REQUIRES "refrain:core>=1.0.0,refrain:data.packs>=1.0.0"
+#define REFRAIN_SERVICES_WORLD_REQUIRES "refrain:core>=1.0.0,refrain:data.packs>=1.0.0,refrain:storage>=1.0.0"
 #define REFRAIN_SERVICES_WORLD_SERVICE_IDS "refrain:world"
 
 typedef struct refrain_services_world_vtable {
@@ -54,8 +58,8 @@ typedef struct refrain_services_world_vtable {
     uint32_t abi_major;
     uint32_t abi_minor;
     uint32_t abi_patch;
-    // Open the singleton world. The provider owns it until
-    // `close_world`; the server hosts exactly one world.
+    // Open the singleton world over the given store. The provider owns the
+    // world until `close_world`; the server hosts exactly one world.
     // attributes: #[thread(sim)] #[can_fail]
     refrain_status (*open_world)(void *self, const refrain_services_world_world_config *config);
     // attributes: #[thread(sim)] #[can_fail]

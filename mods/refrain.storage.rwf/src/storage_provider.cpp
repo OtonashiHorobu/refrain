@@ -8,6 +8,11 @@
 // form: RWF's own storage keeps the compact world-palette ids, but a service
 // consumer cannot be expected to share that table. `decode_chunk` accepts both
 // forms, so a payload written here can also be inspected by the CLI.
+//
+// The provider owns every open store. `open_world` returns the handle a
+// consumer passes back with the provider that owns it, plus the in-process
+// store a consumer that links the runtime storage type reads through; a level
+// directory is opened at most once per process.
 
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/storage_abi.h>
@@ -19,7 +24,9 @@
 #include <refrain/world/chunk_codec.hpp>
 #include <refrain/world/store.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <span>
@@ -31,6 +38,8 @@
 namespace {
 
 namespace abi = refrain::host::abi;
+
+auto storage_vtable() -> const refrain_services_storage_vtable &;
 
 /// Status rows for the codes the `refrain:storage` contract distinguishes;
 /// anything else surfaces as an open failure.
@@ -48,10 +57,16 @@ constexpr abi::status_entry storage_statuses[]{
 struct storage_provider {
     struct entry {
         refrain::world::world_store store;
+        /// Normalized level directory, the key this store is registered under.
+        std::string root;
         std::vector<std::byte> read_buffer;
     };
 
     std::map<std::uint64_t, entry> worlds{};
+    /// Level directory -> the handle that owns it. A process opens a level
+    /// directory once: a second open is refused instead of opening a second
+    /// store over the same files.
+    std::map<std::string, std::uint64_t> roots{};
     std::uint64_t next_handle{1};
 
     [[nodiscard]] auto find(std::uint64_t handle) noexcept -> entry * {
@@ -59,10 +74,43 @@ struct storage_provider {
         return found == worlds.end() ? nullptr : &found->second;
     }
 
-    static auto
-    open_world(void *self,
-               const refrain_services_storage_world_open_config *cfg,
-               refrain_core_handle_storage_world *out_value) -> refrain_status {
+    /// Registry key for a level directory: the requested path with `.` and
+    /// `..` resolved lexically and without a trailing separator. Two spellings
+    /// of the same directory name one store; distinct directories stay
+    /// distinct.
+    [[nodiscard]] static auto registry_key(std::string_view path)
+        -> std::string {
+        const auto normalized{std::filesystem::path{path}.lexically_normal()};
+        auto key{normalized.string()};
+        const auto root_size{normalized.root_path().string().size()};
+        while (key.size() > root_size &&
+               (key.back() == '/' || key.back() == '\\')) {
+            key.pop_back();
+        }
+        return key;
+    }
+
+    /// The handle a consumer receives: the store handle, the provider that
+    /// owns it, and the in-process store for a consumer that links the runtime
+    /// storage type.
+    [[nodiscard]] auto make_handle(std::uint64_t handle, entry &world) noexcept
+        -> refrain_services_storage_storage_handle {
+        refrain_services_storage_storage_handle value{};
+        refrain::contracts::init_struct(value);
+        value.world = handle;
+        value.owner.struct_size = REFRAIN_HOST_CORE_PROVIDER_REF_SIZE;
+        value.owner.vtable =
+            const_cast<void *>(static_cast<const void *>(&storage_vtable()));
+        value.owner.self = const_cast<storage_provider *>(this);
+        value.owner.abi_major = REFRAIN_SERVICES_STORAGE_ABI_MAJOR;
+        value.owner.reserved = 0;
+        value.store = &world.store;
+        return value;
+    }
+
+    static auto open_world(
+        void *self, const refrain_services_storage_world_open_config *cfg,
+        refrain_services_storage_storage_handle *out_value) -> refrain_status {
         if (self == nullptr || cfg == nullptr || out_value == nullptr ||
             cfg->struct_size !=
                 REFRAIN_SERVICES_STORAGE_WORLD_OPEN_CONFIG_SIZE) {
@@ -73,16 +121,23 @@ struct storage_provider {
             return REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_OPEN_FAILED;
         }
         auto &provider{*static_cast<storage_provider *>(self)};
-        auto store{refrain::world::world_store::open(path)};
+        const auto root{registry_key(path)};
+        if (provider.roots.contains(root)) {
+            return REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_ALREADY_OPEN;
+        }
+        auto store{refrain::world::world_store::open(root)};
         if (!store) {
             return abi::to_status(
                 store.error(), storage_statuses,
                 REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_OPEN_FAILED);
         }
         const auto handle{provider.next_handle++};
-        provider.worlds.emplace(
-            handle, entry{.store = std::move(*store), .read_buffer = {}});
-        *out_value = handle;
+        auto inserted{
+            provider.worlds.emplace(handle, entry{.store = std::move(*store),
+                                                  .root = root,
+                                                  .read_buffer = {}})};
+        provider.roots.emplace(root, handle);
+        *out_value = provider.make_handle(handle, inserted.first->second);
         return REFRAIN_STATUS_OK;
     }
 
@@ -102,6 +157,7 @@ struct storage_provider {
                 committed.error(), storage_statuses,
                 REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_OPEN_FAILED);
         }
+        provider->roots.erase(found->second.root);
         provider->worlds.erase(found);
         return REFRAIN_STATUS_OK;
     }

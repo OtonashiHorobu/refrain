@@ -17,12 +17,16 @@
 //  * the runtime refuses to boot on a contract composition with the
 //    documented gap instead of ignoring the replacement.
 
+#include <refrain/builtin/image.hpp>
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/sim_abi.h>
 #include <refrain/contracts/services/storage_abi.h>
 #include <refrain/contracts/services/world_abi.h>
 #include <refrain/core/error.hpp>
 #include <refrain/data/checksum.hpp>
+#include <refrain/mod/discovery.hpp>
+#include <refrain/mod/gamepack.hpp>
+#include <refrain/mod/host.hpp>
 #include <refrain/server/server_runtime.hpp>
 #include <refrain/server/world_port.hpp>
 #include <refrain/sim/world.hpp>
@@ -61,6 +65,11 @@ struct recording_provider {
     sim::world *world{nullptr};
     std::uint64_t next_handle{1};
     std::string hash_hex{};
+    /// The handle the runtime handed to each provider, so a test can prove
+    /// that one store serves the whole composition.
+    refrain_services_storage_storage_handle world_storage{};
+    refrain_services_storage_storage_handle sim_storage{};
+    refrain_core_handle_storage_world storage_world{};
 
     int world_opens{0};
     int world_closes{0};
@@ -91,7 +100,9 @@ record_world_open(void *self,
         config->struct_size != REFRAIN_SERVICES_WORLD_WORLD_CONFIG_SIZE) {
         return REFRAIN_SERVICES_WORLD_WORLD_ERROR_OPEN_FAILED;
     }
-    ++static_cast<recording_provider *>(self)->world_opens;
+    auto *provider{static_cast<recording_provider *>(self)};
+    ++provider->world_opens;
+    provider->world_storage = config->storage;
     return REFRAIN_STATUS_OK;
 }
 
@@ -180,6 +191,7 @@ refrain_status record_sim_open(void *self,
     }
     auto *provider{static_cast<recording_provider *>(self)};
     ++provider->sim_opens;
+    provider->sim_storage = config->storage;
     *out = provider->next_handle++;
     return REFRAIN_STATUS_OK;
 }
@@ -269,10 +281,12 @@ std::uint8_t record_sim_remove_entity(void *self,
     return provider != nullptr && provider->world->remove_entity(id) ? 1 : 0;
 }
 
+extern const refrain_services_storage_vtable recording_storage_vtable;
+
 refrain_status
 record_storage_open(void *self,
                     const refrain_services_storage_world_open_config *config,
-                    refrain_core_handle_storage_world *out) {
+                    refrain_services_storage_storage_handle *out) {
     if (self == nullptr || config == nullptr || out == nullptr ||
         config->struct_size !=
             REFRAIN_SERVICES_STORAGE_WORLD_OPEN_CONFIG_SIZE) {
@@ -280,7 +294,20 @@ record_storage_open(void *self,
     }
     auto *provider{static_cast<recording_provider *>(self)};
     ++provider->storage_opens;
-    *out = provider->next_handle++;
+    provider->storage_world = provider->next_handle++;
+    refrain_services_storage_storage_handle value{};
+    abi::init_struct(value);
+    value.world = provider->storage_world;
+    value.owner.struct_size = REFRAIN_HOST_CORE_PROVIDER_REF_SIZE;
+    value.owner.vtable = const_cast<void *>(
+        static_cast<const void *>(&recording_storage_vtable));
+    value.owner.self = provider;
+    value.owner.abi_major = REFRAIN_SERVICES_STORAGE_ABI_MAJOR;
+    // The recorded provider set keeps no `world_store` of its own, so the
+    // in-process reference stays null; the world and sim providers record the
+    // handle they were given.
+    value.store = nullptr;
+    *out = value;
     return REFRAIN_STATUS_OK;
 }
 
@@ -440,6 +467,43 @@ const refrain_services_storage_vtable recording_storage_vtable{
     return handles;
 }
 
+/// The active first-party providers with ids that do not name the first-party
+/// implementation, so the selection rule picks the contract port while the
+/// real providers serve it.
+[[nodiscard]] auto real_contract_handles(const refrain::mod::host &host)
+    -> std::optional<server::server_service_handles> {
+    const auto world{host.services().active_provider("refrain:world")};
+    const auto sim{host.services().active_provider("refrain:sim")};
+    const auto storage{host.services().active_provider("refrain:storage")};
+    if (!world || !sim || !storage || world->instance == nullptr ||
+        sim->instance == nullptr || storage->instance == nullptr) {
+        return std::nullopt;
+    }
+    const auto *world_api{
+        static_cast<const refrain::mod::provider_api *>(world->instance)};
+    const auto *sim_api{
+        static_cast<const refrain::mod::provider_api *>(sim->instance)};
+    const auto *storage_api{
+        static_cast<const refrain::mod::provider_api *>(storage->instance)};
+    if (world_api == nullptr || sim_api == nullptr || storage_api == nullptr) {
+        return std::nullopt;
+    }
+    return server::server_service_handles{
+        .world = static_cast<const refrain_services_world_vtable *>(
+            world_api->vtable),
+        .world_self = world_api->self,
+        .sim =
+            static_cast<const refrain_services_sim_vtable *>(sim_api->vtable),
+        .sim_self = sim_api->self,
+        .storage = static_cast<const refrain_services_storage_vtable *>(
+            storage_api->vtable),
+        .storage_self = storage_api->self,
+        .world_provider = "test.contract.world",
+        .sim_provider = "test.contract.sim",
+        .storage_provider = "test.contract.storage",
+    };
+}
+
 [[maybe_unused]] const suite world_port_tests = [] {
     "world port/direct forwards block, chunk, hash and snapshot operations"_test =
         [] {
@@ -543,9 +607,15 @@ const refrain_services_storage_vtable recording_storage_vtable{
                 return;
             }
             expect(port->open(world_path.string()).has_value());
+            expect(provider.storage_opens == 1);
             expect(provider.world_opens == 1);
             expect(provider.sim_opens == 1);
-            expect(provider.storage_opens == 1);
+            // One store, handed down: both providers received the handle the
+            // runtime opened from the level directory.
+            expect(provider.world_storage.world == provider.storage_world);
+            expect(provider.sim_storage.world == provider.storage_world);
+            expect(provider.world_storage.owner.vtable != nullptr);
+            expect(provider.sim_storage.owner.vtable != nullptr);
 
             const sim::block_pos stone_pos{0, 2, 0};
             expect(port->block_at(stone_pos) != sim::air_block);
@@ -590,6 +660,107 @@ const refrain_services_storage_vtable recording_storage_vtable{
 
             port->close();
             expect(provider.world_closes == 1);
+        };
+
+    "world port/a mixed composition opens through the contract port"_test = [] {
+        test_support::scratch_directory directory{};
+        const auto world_path{directory.path() / "world"};
+        auto opened{open_flat_world(world_path)};
+        expect(opened.has_value());
+        if (!opened) {
+            return;
+        }
+        recording_provider provider{.world = &*opened};
+        auto handles{recording_contract_handles(provider)};
+        // One first-party id used to make the port refuse the composition,
+        // because that provider would have opened its own store.
+        handles.world_provider = "refrain.world.vanilla";
+        auto port{server::make_world_port(handles)};
+        expect(port != nullptr);
+        if (!port) {
+            return;
+        }
+        expect(port->open(world_path.string()).has_value());
+        expect(provider.storage_opens == 1);
+        expect(provider.world_opens == 1);
+        expect(provider.sim_opens == 1);
+        expect(provider.world_storage.world == provider.storage_world);
+        port->close();
+    };
+
+    "world port/a second runtime over one level directory is refused"_test =
+        [] {
+            auto spec{refrain::mod::load_gamepack_spec(
+                std::string{REFRAIN_SOURCE_DIR} + "/gamepack/gamepack.toml",
+                "server")};
+            expect(static_cast<bool>(spec));
+            if (!spec) {
+                return;
+            }
+            auto plan{refrain::mod::preview_composition(*spec)};
+            expect(static_cast<bool>(plan));
+            if (!plan) {
+                return;
+            }
+            refrain::mod::host host{};
+            const std::span<const std::byte> image{
+                refrain::builtin::image_data(), refrain::builtin::image_size()};
+            expect(static_cast<bool>(host.load(*plan, image)));
+            const auto handles{real_contract_handles(host)};
+            expect(handles.has_value());
+            if (!handles) {
+                return;
+            }
+
+            test_support::scratch_directory directory{};
+            const auto world_path{directory.path() / "world"};
+            {
+                auto store{world::world_store::create(world_path.string())};
+                expect(store.has_value());
+                if (!store) {
+                    return;
+                }
+                auto chunk{flat_chunk()};
+                expect(static_cast<bool>(store->write_chunk({0, 0}, chunk)));
+                expect(static_cast<bool>(store->commit()));
+            }
+
+            auto first{server::make_world_port(*handles)};
+            expect(first != nullptr);
+            if (!first) {
+                return;
+            }
+            expect(first->open(world_path.string()).has_value());
+            expect(first->store_valid());
+
+            // A second runtime over the same directory gets no second store:
+            // the storage provider already owns it.
+            auto second{server::make_world_port(*handles)};
+            expect(second != nullptr);
+            if (second) {
+                const auto reopened{second->open(world_path.string())};
+                expect(!reopened.has_value());
+                if (!reopened) {
+                    expect(reopened.error().message.find("refrain:storage") !=
+                           std::string::npos);
+                }
+                second->close();
+            }
+            // The refused open left the running runtime untouched.
+            expect(first->store_valid());
+            expect(first->ticks() == 0);
+
+            first->close();
+            expect(!first->store_valid());
+
+            // The first runtime released the directory, so the next one opens
+            // it.
+            auto third{server::make_world_port(*handles)};
+            expect(third != nullptr);
+            if (third) {
+                expect(third->open(world_path.string()).has_value());
+                third->close();
+            }
         };
 
     "world port/run_server refuses a contract composition without a level "

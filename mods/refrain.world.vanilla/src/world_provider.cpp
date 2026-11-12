@@ -4,9 +4,11 @@
 
 // `refrain:world` provider for `refrain.world.vanilla`.
 //
-// The process hosts one world, so the contract is a singleton: the
-// provider owns an optional `sim::world` opened by `open_world()`. Chunk views
-// are borrowed from `sections_` and valid only for the call that produced them.
+// The process hosts one world, so the contract is a singleton: the provider
+// owns an optional `sim::world` attached by `open_world()` to the store the
+// runtime opened once. A world view never opens the level directory itself, so
+// every provider of a composition shares one store. Chunk views are borrowed
+// from `sections_` and valid only for the call that produced them.
 
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/world_abi.h>
@@ -16,6 +18,7 @@
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/static_mod.hpp>
 #include <refrain/sim/world.hpp>
+#include <refrain/world/store.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -54,16 +57,18 @@ struct world_provider {
         if (provider->world.has_value()) {
             return REFRAIN_SERVICES_WORLD_WORLD_ERROR_ALREADY_OPEN;
         }
-        const auto path{abi::to_view(config->world_path)};
-        if (path.empty()) {
-            return REFRAIN_SERVICES_WORLD_WORLD_ERROR_OPEN_FAILED;
+        auto *store{
+            static_cast<refrain::world::world_store *>(config->storage.store)};
+        if (store == nullptr) {
+            // TODO: adopt chunks through the `refrain:storage` ABI so a
+            // storage provider that keeps its store private can host this
+            // world; today the view needs the in-process store and refuses
+            // with the named error instead of opening the directory itself.
+            return REFRAIN_SERVICES_WORLD_WORLD_ERROR_STORAGE_UNAVAILABLE;
         }
-        auto opened{refrain::sim::world::open(path)};
-        if (!opened) {
-            return REFRAIN_SERVICES_WORLD_WORLD_ERROR_OPEN_FAILED;
-        }
-        opened->seed(static_cast<std::uint64_t>(config->seed));
-        provider->world.emplace(std::move(*opened));
+        auto opened{refrain::sim::world::attach(*store)};
+        opened.seed(static_cast<std::uint64_t>(config->seed));
+        provider->world.emplace(std::move(opened));
         return REFRAIN_STATUS_OK;
     }
 

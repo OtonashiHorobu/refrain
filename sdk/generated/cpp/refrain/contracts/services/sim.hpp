@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 1da626de4b244418
+// Schema hash: 9e471daa6562b9ea
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_SIM_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_SIM_HPP
@@ -21,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <refrain/contracts/core.hpp>
+#include <refrain/contracts/services/storage.hpp>
 #include <refrain/contracts/event.hpp>
 #include <refrain/core/error.hpp>
 #include <refrain/core/schedule.hpp>
@@ -35,6 +36,7 @@ enum class sim_error : std::uint32_t { // enum 'sim_error'
     internal = 5,
     out_of_bounds = 6,
     invalid_argument = 7,
+    storage_unavailable = 8,
 };
 
 namespace detail {
@@ -119,11 +121,11 @@ using sim_config = ::refrain_services_sim_sim_config;
     return value;
 }
 
-static_assert(sizeof(sim_config) == 32);
+static_assert(sizeof(sim_config) == 72);
 static_assert(alignof(sim_config) == 8);
 static_assert(offsetof(sim_config, struct_size) == 0);
-static_assert(offsetof(sim_config, world_path) == 8);
-static_assert(offsetof(sim_config, seed) == 24);
+static_assert(offsetof(sim_config, storage) == 8);
+static_assert(offsetof(sim_config, seed) == 64);
 
 inline constexpr std::string_view service_id = "refrain:sim";
 inline constexpr std::uint32_t abi_major = 1;
@@ -133,7 +135,7 @@ inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::si
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::sim;
 inline constexpr ::refrain::contracts::composition_kind composition = ::refrain::contracts::composition_kind::exclusive;
 inline constexpr std::string_view capabilities = "tick,replay,deterministic-rng,block-events,entity-events";
-inline constexpr std::string_view required_services = "refrain:core>=1.0.0,refrain:world>=1.0.0";
+inline constexpr std::string_view required_services = "refrain:core>=1.0.0,refrain:world>=1.0.0,refrain:storage>=1.0.0";
 inline constexpr std::string_view service_ids[] = {"refrain:sim"};
 
 /// Type-safe wrapper around `refrain_services_sim_vtable`. The provider (host) owns the table and `self`; this class is a borrowed call surface.
@@ -154,6 +156,8 @@ class provider final {
         return self_;
     }
 
+    /// Open a sim world over the given store. The provider never opens the
+    /// level directory itself; the store was opened once by the runtime.
     [[nodiscard]] auto open_world(const ::refrain::services::sim::sim_config &config) const -> std::expected<::refrain::services::sim::sim_world, ::refrain::services::sim::sim_error> {
         const auto abi_config = ::refrain::contracts::with_struct_size(config);
         ::refrain_services_sim_handle_sim_world value{};
