@@ -10,6 +10,8 @@
 #include <refrain/host/core_api.hpp>
 #include <refrain/mod/host.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <filesystem>
@@ -301,10 +303,8 @@ const suite host_core_tests = [] {
         };
 
     "host/core app context reads mounted config namespaces"_test = [] {
-        const auto root{std::filesystem::temp_directory_path() /
-                        "refrain_host_core_config"};
-        std::filesystem::create_directories(root);
-        const auto path{root / "demo.toml"};
+        const refrain::test_support::scratch_directory root;
+        const auto path = root.path() / "demo.toml";
         {
             std::ofstream stream{path, std::ios::binary | std::ios::trunc};
             stream << "answer = 42\nflag = true\nname = \"hello\"\n";

@@ -9,10 +9,11 @@
 #include <refrain/worldgen/density/density_router.hpp>
 #include <refrain/worldgen/noise/noise.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -34,24 +35,7 @@ auto bits(float value) -> std::uint32_t {
     return out;
 }
 
-struct scratch_directory {
-    std::filesystem::path path{};
-
-    scratch_directory() {
-        const auto stamp =
-            std::chrono::steady_clock::now().time_since_epoch().count();
-        path = std::filesystem::temp_directory_path() /
-               ("refrain_router_" + std::to_string(stamp));
-        std::error_code error;
-        std::filesystem::create_directories(path, error);
-    }
-    scratch_directory(const scratch_directory &) = delete;
-    auto operator=(const scratch_directory &) -> scratch_directory & = delete;
-    ~scratch_directory() {
-        std::error_code error;
-        std::filesystem::remove_all(path, error);
-    }
-};
+using scratch_directory = refrain::test_support::scratch_directory;
 
 auto write_text_file(const std::filesystem::path &path, std::string_view text)
     -> bool {
@@ -87,7 +71,7 @@ auto make_settings_json(std::string_view final_density) -> std::string {
 suite<"worldgen/density-router"> density_router_tests = [] {
     "noise settings load and assemble the router"_test = [] {
         const scratch_directory scratch;
-        const auto root = scratch.path / "data";
+        const auto root = scratch.path() / "data";
         expect(write_text_file(
             root / "testns" / "worldgen" / "density_function" /
                 "temperature.json",
@@ -211,7 +195,7 @@ suite<"worldgen/density-router"> density_router_tests = [] {
 
     "a router without final_density is rejected"_test = [] {
         const scratch_directory scratch;
-        const auto root = scratch.path / "data";
+        const auto root = scratch.path() / "data";
         expect(write_text_file(root / "testns" / "worldgen" /
                                    "density_function" / "temperature.json",
                                R"({"type":"minecraft:constant","value":0.0})"));

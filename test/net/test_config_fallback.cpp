@@ -12,6 +12,8 @@
 #include <refrain/net/server.hpp>
 #include <refrain/protocol/current.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <chrono>
@@ -30,18 +32,10 @@ using namespace boost::ut::literals;
 namespace net = refrain::net;
 namespace play = refrain::protocol::current::play::clientbound;
 
-[[nodiscard]] auto make_temp_dir() -> std::filesystem::path {
-    const auto path{std::filesystem::temp_directory_path() /
-                    "refrain-net-config-fallback"};
-    std::error_code error;
-    std::filesystem::remove_all(path, error);
-    std::filesystem::create_directories(path);
-    return path;
-}
-
 suite config_fallback_tests = [] {
     "net/server.properties fills keys missing from network.toml"_test = [] {
-        const auto dir{make_temp_dir()};
+        const refrain::test_support::scratch_directory scratch;
+        const auto dir = scratch.path();
         {
             std::ofstream stream{dir / "network.toml",
                                  std::ios::binary | std::ios::trunc};
@@ -91,8 +85,6 @@ suite config_fallback_tests = [] {
             }
         }
         (*running)->stop();
-        std::error_code error;
-        std::filesystem::remove_all(dir, error);
     };
 };
 

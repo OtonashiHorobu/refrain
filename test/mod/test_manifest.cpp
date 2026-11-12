@@ -8,6 +8,8 @@
 #include <refrain/mod/manifest.hpp>
 #include <refrain/mod/static_mod.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <array>
@@ -431,9 +433,8 @@ host_capabilities = ["log", "log"]
     };
 
     "manifest/mod: load_mod_manifest annotates the path"_test = [] {
-        const auto dir{std::filesystem::temp_directory_path() /
-                       "refrain-test-manifest"};
-        std::filesystem::create_directories(dir);
+        const refrain::test_support::scratch_directory scratch;
+        const auto dir = scratch.path();
         const auto path{dir / "manifest.toml"};
         auto written{io::write_text(path.string(), k_internal_manifest)};
         expect(static_cast<bool>(written));
@@ -447,7 +448,6 @@ host_capabilities = ["log", "log"]
             expect(missing.error().message.find("nope.toml") !=
                    std::string::npos);
         }
-        std::filesystem::remove_all(dir);
     };
 
     "manifest/common: shared meta and identity formatting"_test = [] {

@@ -11,6 +11,8 @@
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <cstddef>
@@ -201,13 +203,8 @@ suite<"worldgen/proto-bridge"> proto_bridge_tests = [] {
         if (!converted) {
             return;
         }
-        const auto root =
-            std::filesystem::temp_directory_path() /
-            ("refrain-proto-bridge-" +
-             std::to_string(
-                 static_cast<unsigned long long>(std::filesystem::hash_value(
-                     std::filesystem::path{"proto-bridge-store"}))));
-        std::filesystem::remove_all(root);
+        const refrain::test_support::scratch_directory scratch;
+        const auto root = scratch.path() / "store";
         auto store = world_store::create(root.string());
         expect(store.has_value());
         if (!store) {
@@ -238,27 +235,20 @@ suite<"worldgen/proto-bridge"> proto_bridge_tests = [] {
             expect(read->sections.size() == 24U);
         }
         expect(store->commit().has_value());
-        const auto export_path =
-            root.parent_path() / (root.filename().string() + "-anvil");
-        std::filesystem::remove_all(export_path);
+        const auto export_path = scratch.path() / "anvil";
         const auto exported_result =
             anvil::export_world(root.string(), export_path.string(), true);
         expect(exported_result.has_value());
         if (!exported_result) {
-            std::filesystem::remove_all(root);
             return;
         }
         {
-            auto imported = anvil::import_world(
-                export_path.string(),
-                (root.parent_path() / (root.filename().string() + "-rwf"))
-                    .string(),
-                true);
+            const auto imported_path = scratch.path() / "rwf";
+            auto imported = anvil::import_world(export_path.string(),
+                                                imported_path.string(), true);
             expect(imported.has_value());
             if (imported) {
-                auto reopened = world_store::open(
-                    (root.parent_path() / (root.filename().string() + "-rwf"))
-                        .string());
+                auto reopened = world_store::open(imported_path.string());
                 expect(reopened.has_value());
                 if (reopened) {
                     const auto back = reopened->read_chunk({.x = 0, .z = 0});
@@ -271,9 +261,5 @@ suite<"worldgen/proto-bridge"> proto_bridge_tests = [] {
                 }
             }
         }
-        std::filesystem::remove_all(export_path);
-        std::filesystem::remove_all(root.parent_path() /
-                                    (root.filename().string() + "-rwf"));
-        std::filesystem::remove_all(root);
     };
 };

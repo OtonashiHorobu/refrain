@@ -10,10 +10,11 @@
 #include <refrain/worldgen/chunk/block_defaults.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <array>
-#include <chrono>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -26,39 +27,24 @@ using namespace boost::ut;
 using namespace refrain;
 using namespace refrain::worldgen;
 
-struct temporary_root {
-    std::filesystem::path path{};
+using scratch_directory = refrain::test_support::scratch_directory;
 
-    temporary_root() {
-        const auto stamp{
-            std::chrono::steady_clock::now().time_since_epoch().count()};
-        path = std::filesystem::temp_directory_path() /
-               ("refrain_block_defaults_test_" + std::to_string(stamp));
-        auto error = std::error_code{};
-        std::filesystem::create_directories(path / "data", error);
-        expect(!error);
-    }
-    temporary_root(const temporary_root &) = delete;
-    auto operator=(const temporary_root &) -> temporary_root & = delete;
-    ~temporary_root() {
-        auto error = std::error_code{};
-        std::filesystem::remove_all(path, error);
-    }
+[[nodiscard]] auto data_root(const scratch_directory &root) -> std::string {
+    auto error = std::error_code{};
+    std::filesystem::create_directories(root.path() / "data", error);
+    expect(!error);
+    return (root.path() / "data").string();
+}
 
-    [[nodiscard]] auto data_root() const -> std::string {
-        return (path / "data").string();
-    }
-
-    void write(std::string_view document) const {
-        const auto directory = path / "reports" / "block_defaults";
-        auto error = std::error_code{};
-        std::filesystem::create_directories(directory, error);
-        expect(!error);
-        const auto written = core::io::write_text(
-            (directory / "defaults.json").string(), document);
-        expect(written.has_value()) << written.error().message;
-    }
-};
+void write_report(const scratch_directory &root, std::string_view document) {
+    const auto directory = root.path() / "reports" / "block_defaults";
+    auto error = std::error_code{};
+    std::filesystem::create_directories(directory, error);
+    expect(!error);
+    const auto written =
+        core::io::write_text((directory / "defaults.json").string(), document);
+    expect(written.has_value()) << written.error().message;
+}
 
 } // namespace
 
@@ -68,14 +54,14 @@ using namespace refrain::worldgen;
 
 suite<"worldgen/block-defaults"> block_defaults_tests = [] {
     "the report loads sorted default properties per block"_test = [] {
-        temporary_root root;
-        root.write(R"({"game_version":"26.3","data_version":5023,
+        const scratch_directory root;
+        write_report(root, R"({"game_version":"26.3","data_version":5023,
             "blocks":{"minecraft:tall_grass":{"half":"lower"},
                       "minecraft:oak_stairs":{"waterlogged":"false",
                                               "facing":"north",
                                               "half":"bottom",
                                               "shape":"straight"}}})");
-        const auto defaults = load_block_defaults(root.data_root());
+        const auto defaults = load_block_defaults(data_root(root));
         expect(defaults.has_value()) << defaults.error().message;
         if (!defaults) {
             return;
@@ -102,8 +88,8 @@ suite<"worldgen/block-defaults"> block_defaults_tests = [] {
     };
 
     "a missing report is reported as not_found"_test = [] {
-        temporary_root root;
-        const auto defaults = load_block_defaults(root.data_root());
+        const scratch_directory root;
+        const auto defaults = load_block_defaults(data_root(root));
         expect(!defaults.has_value());
         if (defaults) {
             return;
@@ -112,9 +98,9 @@ suite<"worldgen/block-defaults"> block_defaults_tests = [] {
     };
 
     "a malformed report is rejected"_test = [] {
-        temporary_root root;
-        root.write(R"({"game_version":"26.3","blocks":[]})");
-        const auto defaults = load_block_defaults(root.data_root());
+        const scratch_directory root;
+        write_report(root, R"({"game_version":"26.3","blocks":[]})");
+        const auto defaults = load_block_defaults(data_root(root));
         expect(!defaults.has_value());
         if (defaults) {
             return;

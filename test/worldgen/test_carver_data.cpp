@@ -6,6 +6,8 @@
 #include <refrain/worldgen/carver/carver_data.hpp>
 #include <refrain/worldgen/carver/carver_stage.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <filesystem>
@@ -37,9 +39,8 @@ auto write(std::filesystem::path path, std::string_view text) {
 
 suite<"worldgen/carver-data"> carver_data_tests = [] {
     "carvers and biome lists load from a data root"_test = [] {
-        const auto root =
-            std::filesystem::temp_directory_path() / "refrain-carver-data-test";
-        std::filesystem::remove_all(root);
+        const refrain::test_support::scratch_directory scratch;
+        const auto root = scratch.path();
         write(root / "minecraft/worldgen/carver/cave.json", cave_document);
         write(root / "minecraft/worldgen/biome/plains.json",
               R"({"carvers":["minecraft:cave"]})");
@@ -49,7 +50,6 @@ suite<"worldgen/carver-data"> carver_data_tests = [] {
         auto loaded = carver::load_carvers(root.string());
         expect(loaded.has_value());
         if (!loaded) {
-            std::filesystem::remove_all(root);
             return;
         }
         expect(loaded->carvers.size() == 1U);
@@ -67,18 +67,15 @@ suite<"worldgen/carver-data"> carver_data_tests = [] {
                 .min_y = -64, .height = 384, .sea_level = 63}};
         const auto mask = generator.generate(chunk_pos{.x = 0, .z = 0});
         expect(!mask.empty());
-        std::filesystem::remove_all(root);
     };
 
     "a missing carver reference is rejected"_test = [] {
-        const auto root =
-            std::filesystem::temp_directory_path() / "refrain-carver-bad-test";
-        std::filesystem::remove_all(root);
+        const refrain::test_support::scratch_directory scratch;
+        const auto root = scratch.path();
         write(root / "minecraft/worldgen/carver/cave.json", cave_document);
         write(root / "minecraft/worldgen/biome/plains.json",
               R"({"carvers":["minecraft:missing"]})");
         const auto loaded = carver::load_carvers(root.string());
         expect(!loaded.has_value());
-        std::filesystem::remove_all(root);
     };
 };

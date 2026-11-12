@@ -9,6 +9,8 @@
 #include <refrain/host/platform_api.hpp>
 #include <refrain/mod/host.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <array>
@@ -30,11 +32,8 @@ namespace mod = refrain::mod;
 
 const suite host_platform_tests = [] {
     "host/platform file and mmap round trip"_test = [] {
-        namespace fs = std::filesystem;
-        const auto path{fs::temp_directory_path() /
-                        "refrain-host-platform-test.bin"};
-        std::error_code error;
-        fs::remove(path, error);
+        const refrain::test_support::scratch_directory scratch;
+        const auto path = scratch.path() / "refrain-host-platform-test.bin";
 
         mod::host owner{};
         app::host_context context{owner};
@@ -46,7 +45,6 @@ const suite host_platform_tests = [] {
         const auto file{api.file_open(path.string(), flags)};
         expect(file.has_value());
         if (!file) {
-            fs::remove(path, error);
             return;
         }
 
@@ -101,8 +99,6 @@ const suite host_platform_tests = [] {
 
         expect(!api.temp_directory().empty());
         api.crash_annotation("test-key", "test-value");
-
-        fs::remove(path, error);
     };
 };
 

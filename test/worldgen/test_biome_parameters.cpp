@@ -11,11 +11,11 @@
 #include <refrain/worldgen/biome/biome_parameters.hpp>
 #include <refrain/worldgen/biome/biome_source.hpp>
 
+#include "support/scratch_directory.hpp"
 #include "support/vanilla_data.hpp"
 
 #include <boost/ut.hpp>
 
-#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -29,39 +29,25 @@ using namespace boost::ut;
 using namespace refrain;
 using namespace refrain::worldgen;
 
-struct temporary_root {
-    std::filesystem::path path{};
+using scratch_directory = refrain::test_support::scratch_directory;
 
-    temporary_root() {
-        const auto stamp{
-            std::chrono::steady_clock::now().time_since_epoch().count()};
-        path = std::filesystem::temp_directory_path() /
-               ("refrain_biome_parameters_test_" + std::to_string(stamp));
-        auto error = std::error_code{};
-        std::filesystem::create_directories(path / "data", error);
-        expect(!error);
-    }
-    temporary_root(const temporary_root &) = delete;
-    auto operator=(const temporary_root &) -> temporary_root & = delete;
-    ~temporary_root() {
-        auto error = std::error_code{};
-        std::filesystem::remove_all(path, error);
-    }
+[[nodiscard]] auto data_root(const scratch_directory &root) -> std::string {
+    auto error = std::error_code{};
+    std::filesystem::create_directories(root.path() / "data", error);
+    expect(!error);
+    return (root.path() / "data").string();
+}
 
-    [[nodiscard]] auto data_root() const -> std::string {
-        return (path / "data").string();
-    }
-
-    void write(std::string_view name, std::string_view document) const {
-        const auto directory = path / "reports" / "biome_parameters";
-        auto error = std::error_code{};
-        std::filesystem::create_directories(directory, error);
-        expect(!error);
-        const auto written =
-            core::io::write_text((directory / name).string(), document);
-        expect(written.has_value()) << written.error().message;
-    }
-};
+void write_report(const scratch_directory &root, std::string_view name,
+                  std::string_view document) {
+    const auto directory = root.path() / "reports" / "biome_parameters";
+    auto error = std::error_code{};
+    std::filesystem::create_directories(directory, error);
+    expect(!error);
+    const auto written =
+        core::io::write_text((directory / name).string(), document);
+    expect(written.has_value()) << written.error().message;
+}
 
 auto report(std::string_view dimension, int entry_count,
             std::string_view entries) -> std::string {
@@ -91,11 +77,11 @@ constexpr std::string_view two_entries = R"([
 
 suite<"worldgen/biome-parameters"> biome_parameters_tests = [] {
     "the loader preserves order and quantized intervals"_test = [] {
-        const temporary_root root;
-        root.write("overworld.json",
-                   report(overworld_dimension, 2, two_entries));
+        const scratch_directory root;
+        write_report(root, "overworld.json",
+                     report(overworld_dimension, 2, two_entries));
         const auto parameters =
-            load_biome_parameters(root.data_root(), dimension_kind::overworld);
+            load_biome_parameters(data_root(root), dimension_kind::overworld);
         expect(parameters.has_value()) << parameters.error().message;
         if (!parameters) {
             return;
@@ -115,11 +101,11 @@ suite<"worldgen/biome-parameters"> biome_parameters_tests = [] {
     };
 
     "a trailing separator still resolves the report"_test = [] {
-        const temporary_root root;
-        root.write("overworld.json",
-                   report(overworld_dimension, 2, two_entries));
+        const scratch_directory root;
+        write_report(root, "overworld.json",
+                     report(overworld_dimension, 2, two_entries));
         const auto parameters = load_biome_parameters(
-            root.data_root() + "/", dimension_kind::overworld);
+            data_root(root) + "/", dimension_kind::overworld);
         expect(parameters.has_value()) << parameters.error().message;
         if (parameters) {
             expect(parameters->size() == 2U);
@@ -127,16 +113,16 @@ suite<"worldgen/biome-parameters"> biome_parameters_tests = [] {
     };
 
     "an unsupported report format is rejected"_test = [] {
-        const temporary_root root;
+        const scratch_directory root;
         auto document = report(overworld_dimension, 1, R"([
     {"biome": "test:cold", "temperature": [0, 0], "humidity": [0, 0], "continentalness": [0, 0], "erosion": [0, 0], "depth": [0, 0], "weirdness": [0, 0], "offset": 0}
 ])");
         document.replace(document.find("\"format\": 1"),
                          std::string_view{"\"format\": 1"}.size(),
                          "\"format\": 2");
-        root.write("overworld.json", document);
+        write_report(root, "overworld.json", document);
         const auto parameters =
-            load_biome_parameters(root.data_root(), dimension_kind::overworld);
+            load_biome_parameters(data_root(root), dimension_kind::overworld);
         expect(!parameters.has_value());
         if (parameters) {
             return;
@@ -147,9 +133,9 @@ suite<"worldgen/biome-parameters"> biome_parameters_tests = [] {
     };
 
     "a missing report names the path it looked for"_test = [] {
-        const temporary_root root;
+        const scratch_directory root;
         const auto parameters =
-            load_biome_parameters(root.data_root(), dimension_kind::overworld);
+            load_biome_parameters(data_root(root), dimension_kind::overworld);
         expect(!parameters.has_value());
         if (parameters) {
             return;
@@ -161,12 +147,12 @@ suite<"worldgen/biome-parameters"> biome_parameters_tests = [] {
     };
 
     "an entry count that disagrees with the metadata is rejected"_test = [] {
-        const temporary_root root;
-        root.write("overworld.json", report(overworld_dimension, 2, R"([
+        const scratch_directory root;
+        write_report(root, "overworld.json", report(overworld_dimension, 2, R"([
     {"biome": "test:cold", "temperature": [-10000, 0], "humidity": [-10000, 10000], "continentalness": [-10000, 10000], "erosion": [-10000, 10000], "depth": [0, 0], "weirdness": [-10000, 10000], "offset": 0}
 ])"));
         const auto parameters =
-            load_biome_parameters(root.data_root(), dimension_kind::overworld);
+            load_biome_parameters(data_root(root), dimension_kind::overworld);
         expect(!parameters.has_value());
         if (parameters) {
             return;
@@ -177,12 +163,12 @@ suite<"worldgen/biome-parameters"> biome_parameters_tests = [] {
     };
 
     "an interval with its minimum above its maximum is rejected"_test = [] {
-        const temporary_root root;
-        root.write("overworld.json", report(overworld_dimension, 1, R"([
+        const scratch_directory root;
+        write_report(root, "overworld.json", report(overworld_dimension, 1, R"([
     {"biome": "test:cold", "temperature": [10, -10], "humidity": [-10000, 10000], "continentalness": [-10000, 10000], "erosion": [-10000, 10000], "depth": [0, 0], "weirdness": [-10000, 10000], "offset": 0}
 ])"));
         const auto parameters =
-            load_biome_parameters(root.data_root(), dimension_kind::overworld);
+            load_biome_parameters(data_root(root), dimension_kind::overworld);
         expect(!parameters.has_value());
         if (parameters) {
             return;
@@ -193,12 +179,12 @@ suite<"worldgen/biome-parameters"> biome_parameters_tests = [] {
     };
 
     "an unknown field is rejected instead of ignored"_test = [] {
-        const temporary_root root;
-        root.write("overworld.json", report(overworld_dimension, 1, R"([
+        const scratch_directory root;
+        write_report(root, "overworld.json", report(overworld_dimension, 1, R"([
     {"biome": "test:cold", "temperature": [0, 0], "humidity": [0, 0], "continentalness": [0, 0], "erosion": [0, 0], "depth": [0, 0], "weirdness": [0, 0], "offset": 0, "comment": "ignored?"}
 ])"));
         const auto parameters =
-            load_biome_parameters(root.data_root(), dimension_kind::overworld);
+            load_biome_parameters(data_root(root), dimension_kind::overworld);
         expect(!parameters.has_value());
         if (parameters) {
             return;
@@ -208,12 +194,13 @@ suite<"worldgen/biome-parameters"> biome_parameters_tests = [] {
     };
 
     "a report for another dimension is rejected"_test = [] {
-        const temporary_root root;
-        root.write("overworld.json", report("minecraft:the_nether", 1, R"([
+        const scratch_directory root;
+        write_report(root, "overworld.json",
+                     report("minecraft:the_nether", 1, R"([
     {"biome": "test:cold", "temperature": [0, 0], "humidity": [0, 0], "continentalness": [0, 0], "erosion": [0, 0], "depth": [0, 0], "weirdness": [0, 0], "offset": 0}
 ])"));
         const auto parameters =
-            load_biome_parameters(root.data_root(), dimension_kind::overworld);
+            load_biome_parameters(data_root(root), dimension_kind::overworld);
         expect(!parameters.has_value());
         if (parameters) {
             return;
