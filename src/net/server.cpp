@@ -428,17 +428,26 @@ void server::impl::insert_connection(std::uint64_t id,
 
 auto server::impl::erase_connection(std::uint64_t id) -> bool {
     auto &shard{connection_table[shard_for(id)]};
+    std::shared_ptr<connection> live{};
     {
         const std::lock_guard lock{shard.mutex};
-        if (shard.entries.erase(id) == 0) {
+        const auto found{shard.entries.find(id)};
+        if (found == shard.entries.end()) {
             return false;
         }
+        live = found->second;
+        shard.entries.erase(found);
     }
     // The entry was in the table, so this call owns the removal and is the only
-    // one that releases the session. The codec runs outside the shard lock.
-    // Closing twice, or a transport callback that arrives after a local close,
-    // finds no entry and is a no-op.
+    // one that releases the session. Closing twice, or a transport callback
+    // that arrives after a local close, finds no entry and is a no-op.
     if (protocol) {
+        // A send on this connection may still be writing bytes the codec owns:
+        // `take_outbound` hands out a span into codec storage. Hold the
+        // connection mutex so the release cannot free a buffer under an
+        // in-flight send, which is the same order as the send path (connection
+        // mutex, then the codec).
+        const std::lock_guard lock{live->mutex};
         protocol->close_connection(id);
     }
     return true;
