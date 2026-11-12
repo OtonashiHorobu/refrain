@@ -6,6 +6,18 @@ console receives `stop`. It listens for protocol 777 clients using the
 
 ## Start
 
+A fresh install starts with no world: the server creates one from a seed,
+generates the spawn area and then listens.
+
+```bash
+build/Release/bin/refrain-server --seed 12345
+```
+
+`--seed` only applies when the world is created; an existing world keeps the
+seed it was created with. The world directory defaults to `world` (override
+with `--world` or `world.path` in the configuration), and an existing world is
+opened as is.
+
 ```bash
 build/Release/bin/refrain-server \
     --gamepack gamepack/gamepack.toml \

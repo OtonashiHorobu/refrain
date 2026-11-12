@@ -23,6 +23,9 @@ namespace refrain::server {
 struct server_run_options {
     /// RWF world directory (`world_store::open`).
     std::string world_path{};
+    /// Datapack `data` directory the bootstrap generator reads when the world
+    /// has no chunks yet.
+    std::string datapack_root{};
     /// Per-namespace configuration views supplied by the host. Empty views
     /// fall back to the built-in defaults.
     core::config::view network{};

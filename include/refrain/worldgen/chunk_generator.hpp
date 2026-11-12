@@ -182,6 +182,12 @@ class chunk_generator {
     [[nodiscard]] auto profile() const noexcept -> const dimension_profile & {
         return dimension_->profile();
     }
+    /// Biome keys indexed by the ids the generated chunks carry. The storage
+    /// bridge maps those ids to names.
+    [[nodiscard]] auto biome_names() const -> const std::vector<std::string> & {
+        return dimension_->biome_source().biomes();
+    }
+
     [[nodiscard]] auto states() noexcept -> block_state_registry & {
         return dimension_->states();
     }
