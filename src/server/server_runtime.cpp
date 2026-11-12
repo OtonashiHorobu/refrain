@@ -1588,22 +1588,6 @@ auto run_server(const server_run_options &options) -> int {
     } else {
         registries = std::move(*loaded_registries);
     }
-    std::vector<std::vector<std::byte>> spawn_chunks{};
-    if (tables && registries) {
-        refrain::server::chunk_packet_source source{
-            .world = &*store,
-            .tables = &*tables,
-            .registries = &*registries,
-        };
-        auto built{refrain::server::build_spawn_chunks(source, spawn_chunk, 3)};
-        if (!built) {
-            refrain::log::error("network: spawn chunks failed: {}",
-                                built.error().message);
-        } else {
-            spawn_chunks = std::move(*built);
-            refrain::log::info("network: spawn_chunks={}", spawn_chunks.size());
-        }
-    }
     auto command_environment{
         std::make_shared<refrain::server::command_environment>()};
     command_environment->world = &store->store();
@@ -1663,13 +1647,15 @@ auto run_server(const server_run_options &options) -> int {
     const auto spawn_chunk_z{static_cast<std::int32_t>(level->spawn_z / 16)};
     network_inputs.player_join =
         [&players, &views, &active_listener, external_join, spawn_chunk_x,
-         spawn_chunk_z](const refrain::net::player_identity &identity) {
+         spawn_chunk_z,
+         view_distance](const refrain::net::player_identity &identity) {
             const auto added{players.add_player(
                 identity.connection, identity.id, std::string{identity.name},
                 std::string{identity.world}, 0.0, 64.0, 0.0, 1)};
             if (added) {
-                static_cast<void>(views.update(
-                    identity.connection, spawn_chunk_x, spawn_chunk_z, 10));
+                static_cast<void>(views.update(identity.connection,
+                                               spawn_chunk_x, spawn_chunk_z,
+                                               view_distance));
             }
             if (added && active_listener != nullptr) {
                 announce_session_join(*active_listener, players,
@@ -1772,9 +1758,6 @@ auto run_server(const server_run_options &options) -> int {
     network_inputs.spawn_z = static_cast<double>(level->spawn_z) + 0.5;
     network_inputs.registry_catalog_path =
         "content/vanilla/26.3/protocol_registry.json";
-    network_inputs.spawn_chunks =
-        std::make_shared<const std::vector<std::vector<std::byte>>>(
-            std::move(spawn_chunks));
     network_inputs.break_block =
         [world = &*store](std::int32_t x, std::int32_t y, std::int32_t z) {
             if (y < std::numeric_limits<std::int16_t>::min() ||
@@ -1823,7 +1806,6 @@ auto run_server(const server_run_options &options) -> int {
         std::int32_t center_z{0};
         std::int32_t radius{0};
         bool center_dirty{false};
-        bool seeded{false};
         bool reported{false};
         std::size_t sent{0};
         std::set<std::pair<std::int32_t, std::int32_t>> known{};
@@ -1869,17 +1851,6 @@ auto run_server(const server_run_options &options) -> int {
             stream.center_x = request.chunk_x;
             stream.center_z = request.chunk_z;
             stream.radius = request.radius;
-            if (request.seed_radius > 0 && !stream.seeded) {
-                for (std::int32_t dz{-request.seed_radius};
-                     dz <= request.seed_radius; ++dz) {
-                    for (std::int32_t dx{-request.seed_radius};
-                         dx <= request.seed_radius; ++dx) {
-                        stream.known.emplace(stream.center_x + dx,
-                                             stream.center_z + dz);
-                    }
-                }
-                stream.seeded = true;
-            }
             if (center_changed) {
                 // Chunks that leave the viewport are dropped from the client
                 // cache, so a walking player keeps a bounded chunk set.
@@ -2018,9 +1989,6 @@ auto run_server(const server_run_options &options) -> int {
                 }
             }
         }
-    }
-    if (auto stone{item_ids.find("minecraft:stone")}; stone != item_ids.end()) {
-        refrain::log::info("inventory: minecraft:stone -> {}", stone->second);
     }
     std::set<std::uint64_t> inventory_forced{};
     std::unordered_map<std::uint64_t, refrain::sim::item_stack> carried_items{};

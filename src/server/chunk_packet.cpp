@@ -596,35 +596,4 @@ auto encode_full_chunk(const chunk_packet_source &source, sim::chunk_pos pos)
     return packet;
 }
 
-auto build_spawn_chunks(const chunk_packet_source &source,
-                        sim::chunk_pos center, std::int32_t radius)
-    -> result<std::vector<std::vector<std::byte>>> {
-    std::vector<std::vector<std::byte>> packets{};
-    packets.reserve(
-        static_cast<std::size_t>((radius * 2 + 1) * (radius * 2 + 1)));
-    for (std::int32_t distance{0}; distance <= radius; ++distance) {
-        for (std::int32_t dx{-distance}; dx <= distance; ++dx) {
-            for (std::int32_t dz{-distance}; dz <= distance; ++dz) {
-                if (distance > 0 &&
-                    std::max(std::abs(dx), std::abs(dz)) != distance) {
-                    continue;
-                }
-                const sim::chunk_pos pos{center.x + dx, center.z + dz};
-                auto packet{encode_full_chunk(source, pos)};
-                if (!packet) {
-                    // A sparse world simply has no chunk at this position.
-                    // Other failures mean a section could not be encoded and
-                    // would send a chunk the client renders incorrectly.
-                    if (packet.error().code == error_code::not_found) {
-                        continue;
-                    }
-                    return std::unexpected{std::move(packet.error())};
-                }
-                packets.push_back(std::move(*packet));
-            }
-        }
-    }
-    return packets;
-}
-
 } // namespace refrain::server
