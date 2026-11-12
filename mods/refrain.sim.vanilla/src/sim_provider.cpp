@@ -14,6 +14,7 @@
 
 #include <refrain/core/error.hpp>
 #include <refrain/data/checksum.hpp>
+#include <refrain/host/abi_bridge.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/static_mod.hpp>
 #include <refrain/sim/world.hpp>
@@ -27,38 +28,19 @@
 
 namespace {
 
+namespace abi = refrain::host::abi;
 namespace sim = refrain::sim;
 
-[[nodiscard]] auto to_str(std::string_view value) noexcept -> refrain_str {
-    return refrain_str{
-        .data = reinterpret_cast<const std::uint8_t *>(value.data()),
-        .len = value.size(),
-    };
-}
-
-[[nodiscard]] auto to_view(refrain_str value) noexcept -> std::string_view {
-    if (value.data == nullptr || value.len == 0) {
-        return {};
-    }
-    return std::string_view{reinterpret_cast<const char *>(value.data),
-                            static_cast<std::size_t>(value.len)};
-}
-
-[[nodiscard]] auto to_status(const refrain::error &error) noexcept
-    -> refrain_status {
-    switch (error.code) {
-    case refrain::error_code::not_found:
-        return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
-    case refrain::error_code::already_exists:
-        return REFRAIN_SERVICES_SIM_SIM_ERROR_ALREADY_OPEN;
-    case refrain::error_code::io_error:
-        return REFRAIN_SERVICES_SIM_SIM_ERROR_IO_ERROR;
-    case refrain::error_code::invalid_argument:
-        return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE;
-    default:
-        return REFRAIN_SERVICES_SIM_SIM_ERROR_INTERNAL;
-    }
-}
+/// Status rows for the codes the `refrain:sim` contract distinguishes; every
+/// other error is an internal failure.
+constexpr abi::status_entry sim_statuses[]{
+    {refrain::error_code::not_found, REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND},
+    {refrain::error_code::already_exists,
+     REFRAIN_SERVICES_SIM_SIM_ERROR_ALREADY_OPEN},
+    {refrain::error_code::io_error, REFRAIN_SERVICES_SIM_SIM_ERROR_IO_ERROR},
+    {refrain::error_code::invalid_argument,
+     REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE},
+};
 
 struct sim_provider {
     std::map<std::uint64_t, sim::world> worlds{};
@@ -78,14 +60,15 @@ struct sim_provider {
             config->struct_size != REFRAIN_SERVICES_SIM_SIM_CONFIG_SIZE) {
             return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE;
         }
-        const auto path{to_view(config->world_path)};
+        const auto path{abi::to_view(config->world_path)};
         if (path.empty()) {
             return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_HANDLE;
         }
         auto &provider{*static_cast<sim_provider *>(self)};
         auto world{sim::world::open(path)};
         if (!world) {
-            return to_status(world.error());
+            return abi::to_status(world.error(), sim_statuses,
+                                  REFRAIN_SERVICES_SIM_SIM_ERROR_INTERNAL);
         }
         world->seed(static_cast<std::uint64_t>(config->seed));
         const auto handle{provider.next_handle++};
@@ -106,7 +89,8 @@ struct sim_provider {
             return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
         }
         if (auto flushed{found->second.flush()}; !flushed) {
-            return to_status(flushed.error());
+            return abi::to_status(flushed.error(), sim_statuses,
+                                  REFRAIN_SERVICES_SIM_SIM_ERROR_INTERNAL);
         }
         provider->worlds.erase(found);
         return REFRAIN_STATUS_OK;
@@ -149,7 +133,7 @@ struct sim_provider {
             return {};
         }
         provider->hash_hex = refrain::data::to_hex(world->state_hash());
-        return to_str(provider->hash_hex);
+        return abi::to_borrowed(provider->hash_hex);
     }
 };
 

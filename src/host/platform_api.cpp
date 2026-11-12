@@ -8,6 +8,7 @@
 #include <refrain/host/platform_api.hpp>
 
 #include <refrain/contracts/abi.hpp>
+#include <refrain/host/abi_bridge.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -17,21 +18,8 @@
 namespace refrain::host {
 namespace {
 
+namespace abi = refrain::host::abi;
 namespace host_platform = refrain::host::platform;
-
-[[nodiscard]] auto to_view(const refrain_str &text) noexcept
-    -> std::string_view {
-    if (text.data == nullptr) {
-        return {};
-    }
-    return std::string_view{reinterpret_cast<const char *>(text.data),
-                            static_cast<std::size_t>(text.len)};
-}
-
-[[nodiscard]] auto to_borrowed(std::string_view text) noexcept -> refrain_str {
-    return refrain_str{reinterpret_cast<const std::uint8_t *>(text.data()),
-                       static_cast<std::uint64_t>(text.size())};
-}
 
 [[nodiscard]] auto to_platform_error(error_code code) noexcept
     -> host_platform::platform_error {
@@ -79,7 +67,8 @@ auto host_file_open(void *self, refrain_str path,
             host_platform::platform_error::invalid_argument);
     }
     auto handle{context_of(self)->file_open(
-        to_view(path), static_cast<host_platform::file_open_flags>(flags))};
+        abi::to_view(path),
+        static_cast<host_platform::file_open_flags>(flags))};
     if (!handle) {
         return static_cast<refrain_status>(
             to_platform_error(handle.error().code));
@@ -166,8 +155,9 @@ auto host_file_sync(void *self, refrain_host_platform_handle_file handle)
 }
 
 auto host_file_exists(void *self, refrain_str path) -> std::uint8_t {
-    return self != nullptr && context_of(self)->file_exists(to_view(path)) ? 1U
-                                                                           : 0U;
+    return self != nullptr && context_of(self)->file_exists(abi::to_view(path))
+               ? 1U
+               : 0U;
 }
 
 auto host_mmap_open(void *self, refrain_str path,
@@ -176,7 +166,7 @@ auto host_mmap_open(void *self, refrain_str path,
         return static_cast<refrain_status>(
             host_platform::platform_error::invalid_argument);
     }
-    auto handle{context_of(self)->mmap_open(to_view(path))};
+    auto handle{context_of(self)->mmap_open(abi::to_view(path))};
     if (!handle) {
         return static_cast<refrain_status>(
             to_platform_error(handle.error().code));
@@ -217,14 +207,14 @@ void host_crash_annotation(void *self, refrain_str key, refrain_str value) {
     if (self == nullptr) {
         return;
     }
-    context_of(self)->crash_annotation(to_view(key), to_view(value));
+    context_of(self)->crash_annotation(abi::to_view(key), abi::to_view(value));
 }
 
 auto host_temp_directory(void *self) -> refrain_str {
     if (self == nullptr) {
         return {};
     }
-    return to_borrowed(context_of(self)->temp_directory());
+    return abi::to_borrowed(context_of(self)->temp_directory());
 }
 
 } // namespace

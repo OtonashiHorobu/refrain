@@ -15,6 +15,7 @@
 #include <refrain/core/io.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/vfs.hpp>
+#include <refrain/host/abi_bridge.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/static_mod.hpp>
 
@@ -29,6 +30,7 @@
 
 namespace {
 
+namespace abi = refrain::host::abi;
 namespace contracts = refrain::contracts;
 namespace data = refrain::data;
 namespace kernel = refrain::kernel;
@@ -42,16 +44,12 @@ constexpr std::uint32_t pack_io_error{
 constexpr std::uint32_t pack_already_mounted{
     REFRAIN_SERVICES_DATA_PACKS_PACK_ERROR_ALREADY_MOUNTED};
 
-[[nodiscard]] auto status_of(const refrain::error &error) -> std::uint32_t {
-    switch (error.code) {
-    case refrain::error_code::not_found:
-        return pack_not_found;
-    case refrain::error_code::io_error:
-        return pack_io_error;
-    default:
-        return pack_invalid_format;
-    }
-}
+/// Status rows for the codes the `refrain:data.packs` contract distinguishes;
+/// anything else is a malformed pack.
+constexpr abi::status_entry pack_statuses[]{
+    {refrain::error_code::not_found, pack_not_found},
+    {refrain::error_code::io_error, pack_io_error},
+};
 
 class provider_impl {
   public:
@@ -122,7 +120,8 @@ class provider_impl {
         }
         auto bytes{found->second.pack->read(contracts::as_string_view(name))};
         if (!bytes) {
-            return status_of(bytes.error());
+            return abi::to_status(bytes.error(), pack_statuses,
+                                  pack_invalid_format);
         }
         // Contract: borrowed bytes stay valid until the next registry mutation.
         // Keeping one cache buffer per mount gives exactly that lifetime.
@@ -176,7 +175,8 @@ class provider_impl {
         if (refrain::core::io::is_directory(path)) {
             auto opened{data::open_dir_pack(path, std::string{path})};
             if (!opened) {
-                return status_of(opened.error());
+                return abi::to_status(opened.error(), pack_statuses,
+                                      pack_invalid_format);
             }
             pack = std::move(*opened);
         } else {
@@ -185,7 +185,8 @@ class provider_impl {
             // invalid_format.
             auto zip{data::open_zip_pack(path, std::string{path})};
             if (!zip) {
-                return status_of(zip.error());
+                return abi::to_status(zip.error(), pack_statuses,
+                                      pack_invalid_format);
             }
             pack = std::move(*zip);
         }

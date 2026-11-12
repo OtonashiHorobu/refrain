@@ -23,6 +23,7 @@
 #include <refrain/contracts/services/transport.hpp>
 #include <refrain/core/config.hpp>
 #include <refrain/core/log.hpp>
+#include <refrain/host/abi_bridge.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/static_mod.hpp>
 #include <refrain/server/provider_protocol.hpp>
@@ -45,17 +46,7 @@ constexpr refrain::log::logger log_protocol{"protocol"};
 
 namespace {
 
-[[nodiscard]] auto to_view(refrain_str value) noexcept -> std::string_view {
-    if (value.data == nullptr || value.len == 0) {
-        return {};
-    }
-    return std::string_view{reinterpret_cast<const char *>(value.data),
-                            static_cast<std::size_t>(value.len)};
-}
-
-[[nodiscard]] auto string_of(refrain_str value) -> std::string {
-    return std::string{to_view(value)};
-}
+namespace abi = refrain::host::abi;
 
 /// ABI config -> app options. Both structs carry the same fields by design;
 /// keep this the only translation point so a new CLI option cannot
@@ -69,15 +60,15 @@ make_options(const refrain_services_runtime_runtime_config &config,
              refrain::core::config::store *config_store)
     -> refrain::server::server_run_options {
     refrain::server::server_run_options options{};
-    options.world_path = string_of(config.world_path);
+    options.world_path = abi::to_string(config.world_path);
     options.network = network;
     options.world = world;
     options.storage = storage;
     options.runtime = runtime;
     options.config = config_store;
     options.ticks = config.ticks;
-    options.command_file = string_of(config.command_file);
-    options.script_file = string_of(config.script_file);
+    options.command_file = abi::to_string(config.command_file);
+    options.script_file = abi::to_string(config.script_file);
     options.hash_every = config.hash_every;
     options.world_zstd_level = config.world_zstd_level;
     options.zstd_near_level = config.zstd_near_level;
@@ -91,7 +82,7 @@ make_options(const refrain_services_runtime_runtime_config &config,
     options.compact_min_bytes = config.compact_min_bytes;
     options.compact_garbage_percent = config.compact_garbage_percent;
     options.store_compact_interval_ticks = config.store_compact_interval_ticks;
-    options.content_store = string_of(config.content_store);
+    options.content_store = abi::to_string(config.content_store);
     options.content_gc_apply = config.content_gc_apply;
     options.content_gc_keep_days = config.content_gc_keep_days;
     options.content_gc_budget_ms = config.content_gc_budget_ms;

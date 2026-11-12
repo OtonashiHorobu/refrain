@@ -7,6 +7,7 @@
 #include <refrain/host/metadata_api.hpp>
 
 #include <refrain/contracts/abi.hpp>
+#include <refrain/host/abi_bridge.hpp>
 #include <refrain/metadata.hpp>
 
 #include <cstddef>
@@ -16,22 +17,9 @@
 namespace refrain::host {
 namespace {
 
+namespace abi = refrain::host::abi;
 namespace meta = refrain::metadata;
 namespace api = refrain::host::metadata;
-
-[[nodiscard]] auto to_view(const refrain_str &text) noexcept
-    -> std::string_view {
-    if (text.data == nullptr) {
-        return {};
-    }
-    return std::string_view{reinterpret_cast<const char *>(text.data),
-                            static_cast<std::size_t>(text.len)};
-}
-
-[[nodiscard]] auto to_borrowed(std::string_view text) noexcept -> refrain_str {
-    return refrain_str{reinterpret_cast<const std::uint8_t *>(text.data()),
-                       static_cast<std::uint64_t>(text.size())};
-}
 
 [[nodiscard]] auto find_type(std::string_view id) -> const meta::type_entry * {
     for (const auto &type : meta::types) {
@@ -44,7 +32,7 @@ namespace api = refrain::host::metadata;
 
 void fill_type(const meta::type_entry &type, api::type_info &out) {
     out.struct_size = static_cast<std::uint32_t>(sizeof(out));
-    out.id = to_borrowed(type.id);
+    out.id = abi::to_borrowed(type.id);
     out.kind = static_cast<refrain_host_metadata_type_kind>(type.kind);
     out.size = type.size;
     out.alignment = type.alignment;
@@ -75,7 +63,7 @@ auto host_type_find(void * /*self*/, refrain_str id, api::type_info *out)
         return static_cast<refrain_status>(
             api::metadata_error::invalid_argument);
     }
-    const auto *type{find_type(to_view(id))};
+    const auto *type{find_type(abi::to_view(id))};
     if (type == nullptr) {
         return static_cast<refrain_status>(api::metadata_error::not_found);
     }
@@ -89,14 +77,14 @@ auto host_field_at(void * /*self*/, refrain_str type_id, std::uint32_t index,
         return static_cast<refrain_status>(
             api::metadata_error::invalid_argument);
     }
-    const auto *type{find_type(to_view(type_id))};
+    const auto *type{find_type(abi::to_view(type_id))};
     if (type == nullptr || index >= type->fields.size()) {
         return static_cast<refrain_status>(api::metadata_error::not_found);
     }
     const auto &field{type->fields[index]};
     out->struct_size = static_cast<std::uint32_t>(sizeof(*out));
-    out->name = to_borrowed(field.name);
-    out->type_id = to_borrowed(field.type_id);
+    out->name = abi::to_borrowed(field.name);
+    out->type_id = abi::to_borrowed(field.type_id);
     out->offset = field.offset;
     out->size = field.size;
     out->flags = field.flags;
@@ -110,13 +98,13 @@ auto host_enum_value_at(void * /*self*/, refrain_str type_id,
         return static_cast<refrain_status>(
             api::metadata_error::invalid_argument);
     }
-    const auto *type{find_type(to_view(type_id))};
+    const auto *type{find_type(abi::to_view(type_id))};
     if (type == nullptr || index >= type->values.size()) {
         return static_cast<refrain_status>(api::metadata_error::not_found);
     }
     const auto &value{type->values[index]};
     out->struct_size = static_cast<std::uint32_t>(sizeof(*out));
-    out->name = to_borrowed(value.name);
+    out->name = abi::to_borrowed(value.name);
     out->value = value.value;
     return REFRAIN_STATUS_OK;
 }
@@ -136,17 +124,17 @@ auto host_contract_at(void * /*self*/, std::uint32_t index,
     }
     const auto &contract{meta::contracts[index]};
     out->struct_size = static_cast<std::uint32_t>(sizeof(*out));
-    out->id = to_borrowed(contract.id);
+    out->id = abi::to_borrowed(contract.id);
     out->abi_major = contract.abi_major;
     out->abi_minor = contract.abi_minor;
     out->abi_patch = contract.abi_patch;
-    out->schema_hash = to_borrowed(contract.schema_hash);
+    out->schema_hash = abi::to_borrowed(contract.schema_hash);
     out->method_count = contract.method_count;
     return REFRAIN_STATUS_OK;
 }
 
 auto host_schema_hash(void * /*self*/) -> refrain_str {
-    return to_borrowed(meta::schema_hash);
+    return abi::to_borrowed(meta::schema_hash);
 }
 
 } // namespace
