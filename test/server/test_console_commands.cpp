@@ -215,4 +215,84 @@ suite console_player_tests = [] {
         std::error_code error;
         fs::remove_all(directory, error);
     };
+
+    "server/a replay drives the synthetic player and hashes deterministically"_test =
+        [] {
+            const auto first_directory{scratch_directory()};
+            const auto second_directory{scratch_directory()};
+            const std::vector<sim::replay_step> steps{
+                {.tick = 0, .command = "walk 2 0"},
+                {.tick = 1, .command = "give minecraft:dirt 5"},
+                {.tick = 2, .command = "jump"},
+                {.tick = 3, .command = "hash"},
+                {.tick = 4, .command = "move 1 0 0"},
+                {.tick = 5, .command = "hash"},
+            };
+            struct replay_result {
+                data::digest32 hash{};
+                double console_x{0.0};
+                std::uint32_t console_items{0};
+                double alice_x{0.0};
+            };
+            const auto run =
+                [&steps](
+                    const fs::path &directory) -> std::optional<replay_result> {
+                auto world{make_world_with_players(directory)};
+                if (!world) {
+                    return std::nullopt;
+                }
+                server::tick_metrics metrics{};
+                server::console_commands commands{
+                    server::console_dependencies{.world = &*world}, metrics};
+                server::console_service console{
+                    [&commands](std::string_view line,
+                                const refrain::core::tick_info &tick) {
+                        commands.execute(line, tick);
+                    }};
+                console.load_replay(steps);
+                std::atomic<bool> stop{false};
+                replay_result result{};
+                for (std::int64_t ticks_run{0}; ticks_run <= 6; ++ticks_run) {
+                    console.tick(refrain::core::tick_info{.index = ticks_run},
+                                 ticks_run, stop);
+                    if (ticks_run == 5) {
+                        result.hash = world->state_hash();
+                    }
+                    world->tick();
+                }
+                const auto *console_player{find_player(*world, "@console")};
+                const auto *alice{find_player(*world, "Alice")};
+                if (console_player == nullptr || alice == nullptr) {
+                    return std::nullopt;
+                }
+                result.console_x = console_player->x;
+                result.console_items =
+                    world->item_count(*console_player, "minecraft:dirt");
+                result.alice_x = alice->x;
+                return result;
+            };
+
+            const auto first{run(first_directory)};
+            const auto second{run(second_directory)};
+            expect(first.has_value());
+            expect(second.has_value());
+            if (!first || !second) {
+                std::error_code error;
+                fs::remove_all(first_directory, error);
+                fs::remove_all(second_directory, error);
+                return;
+            }
+            expect(first->console_x == second->console_x);
+            expect(first->console_items == second->console_items);
+            expect(first->alice_x == second->alice_x);
+            // The script names no player, so it must keep addressing the
+            // synthetic record even with two clients registered.
+            expect(first->console_x == 3.5) << first->console_x;
+            expect(first->console_items == 5U) << first->console_items;
+            expect(first->alice_x == 1.5) << first->alice_x;
+            expect(data::to_hex(first->hash) == data::to_hex(second->hash));
+            std::error_code error;
+            fs::remove_all(first_directory, error);
+            fs::remove_all(second_directory, error);
+        };
 };
