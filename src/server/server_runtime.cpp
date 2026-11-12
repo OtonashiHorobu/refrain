@@ -19,6 +19,7 @@
 #include <refrain/net/registry.hpp>
 #include <refrain/net/server.hpp>
 #include <refrain/server/chunk_packet.hpp>
+#include <refrain/server/chunk_streamer.hpp>
 #include <refrain/server/chunk_view.hpp>
 #include <refrain/server/command_bridge.hpp>
 #include <refrain/server/entity_broadcast.hpp>
@@ -1694,31 +1695,37 @@ auto run_server(const server_run_options &options) -> int {
                 external_leave(identity);
             }
         };
-    network_inputs.movement =
-        [&players, &views](const refrain::net::movement_event &event) {
-            static_cast<void>(players.update_position(event.connection, event.x,
-                                                      event.y, event.z,
-                                                      event.yaw, event.pitch));
-            const auto player{players.player_of(event.connection)};
-            if (player != nullptr) {
-                static_cast<void>(views.update(
-                    event.connection,
-                    static_cast<std::int32_t>(std::floor(player->x / 16.0)),
-                    static_cast<std::int32_t>(std::floor(player->z / 16.0)),
-                    player->view_distance));
-            }
-        };
+    network_inputs.movement = [&players, &views, view_distance](
+                                  const refrain::net::movement_event &event) {
+        static_cast<void>(players.update_position(event.connection, event.x,
+                                                  event.y, event.z, event.yaw,
+                                                  event.pitch));
+        const auto player{players.player_of(event.connection)};
+        if (player != nullptr) {
+            static_cast<void>(views.update(
+                event.connection,
+                static_cast<std::int32_t>(std::floor(player->x / 16.0)),
+                static_cast<std::int32_t>(std::floor(player->z / 16.0)),
+                std::min(player->view_distance, view_distance)));
+        }
+    };
     network_inputs.view_distance =
-        [&players, &views](const refrain::net::view_distance_event &event) {
+        [&players, &views,
+         view_distance](const refrain::net::view_distance_event &event) {
+            // The server owns the viewport: a client asking for more than the
+            // configured distance gets the configured one, and a client asking
+            // for nothing still gets the minimum renderable square.
+            const auto clamped_distance{
+                std::clamp(event.distance, std::int32_t{2}, view_distance)};
             static_cast<void>(
-                players.set_view_distance(event.connection, event.distance));
+                players.set_view_distance(event.connection, clamped_distance));
             const auto player{players.player_of(event.connection)};
             if (player != nullptr) {
                 static_cast<void>(views.update(
                     event.connection,
                     static_cast<std::int32_t>(std::floor(player->x / 16.0)),
                     static_cast<std::int32_t>(std::floor(player->z / 16.0)),
-                    event.distance));
+                    clamped_distance));
             }
         };
     network_inputs.attack =
@@ -1805,199 +1812,17 @@ auto run_server(const server_run_options &options) -> int {
                            listener->local_port());
     }
 
-    // Chunk streaming: the network layer reports viewport changes, the
-    // simulation thread encodes the missing chunks in bounded batches.
-    struct chunk_stream_state {
-        std::int32_t center_x{0};
-        std::int32_t center_z{0};
-        std::int32_t radius{0};
-        bool center_dirty{false};
-        bool reported{false};
-        std::size_t sent{0};
-        std::set<std::pair<std::int32_t, std::int32_t>> known{};
-        std::deque<std::pair<std::int32_t, std::int32_t>> pending{};
-    };
-    std::unordered_map<std::uint64_t, chunk_stream_state> chunk_streams{};
-    // Encoded chunks are shared by every connection and survive a tick, so a
-    // second player with the same viewport does not encode the same chunk
-    // again. Eviction is least-recently-used: a chunk that keeps being served
-    // stays resident while a cold one goes, which a creation-order eviction
-    // cannot express. The bound keeps the resident bytes proportional to the
-    // cache.
-    struct encoded_chunk_entry {
-        std::vector<std::byte> body{};
-        std::uint64_t last_use{0};
-    };
-    std::map<std::pair<std::int32_t, std::int32_t>, encoded_chunk_entry>
-        encoded_chunks{};
-    std::uint64_t chunk_cache_clock{0};
-    constexpr std::size_t max_encoded_chunks{256};
-    refrain::server::chunk_packet_source stream_source{};
-    bool stream_chunks{false};
-    if (tables && registries) {
-        stream_source = refrain::server::chunk_packet_source{
-            .world = &*store,
-            .tables = &*tables,
-            .registries = &*registries,
-        };
-        stream_chunks = true;
+    // Chunk streaming owns its state (per-connection viewports and the shared
+    // encoded chunk cache) and is created once the listener and the tables
+    // exist.
+    std::optional<refrain::server::chunk_streamer> streamer{};
+    if (listener && tables && registries) {
+        streamer.emplace(*listener, refrain::server::chunk_packet_source{
+                                        .world = &*store,
+                                        .tables = &*tables,
+                                        .registries = &*registries,
+                                    });
     }
-    const auto process_chunk_streams = [&]() {
-        if (!listener || !stream_chunks) {
-            return;
-        }
-        const auto active_ids{listener->active_connections()};
-        const std::set<std::uint64_t> active{active_ids.begin(),
-                                             active_ids.end()};
-        for (auto iterator = chunk_streams.begin();
-             iterator != chunk_streams.end();) {
-            if (!active.contains(iterator->first)) {
-                iterator = chunk_streams.erase(iterator);
-            } else {
-                ++iterator;
-            }
-        }
-        for (const auto &request : views.take_requests()) {
-            auto &stream{chunk_streams[request.connection]};
-            const auto center_changed{stream.radius != request.radius ||
-                                      stream.center_x != request.chunk_x ||
-                                      stream.center_z != request.chunk_z};
-            stream.center_x = request.chunk_x;
-            stream.center_z = request.chunk_z;
-            stream.radius = request.radius;
-            if (center_changed) {
-                // Chunks that leave the viewport are dropped from the client
-                // cache, so a walking player keeps a bounded chunk set.
-                std::vector<refrain::server::chunk_coordinate> tracked{};
-                tracked.reserve(stream.known.size());
-                for (const auto &[x, z] : stream.known) {
-                    tracked.push_back({x, z});
-                }
-                for (const auto &position :
-                     refrain::server::chunks_outside_view(
-                         tracked, {stream.center_x, stream.center_z},
-                         stream.radius)) {
-                    listener->send_forget_chunk(request.connection, position.x,
-                                                position.z);
-                    stream.known.erase({position.x, position.z});
-                }
-            }
-            if (center_changed || stream.pending.empty()) {
-                stream.pending.clear();
-                for (std::int32_t distance{0}; distance <= stream.radius;
-                     ++distance) {
-                    for (std::int32_t dz{-distance}; dz <= distance; ++dz) {
-                        for (std::int32_t dx{-distance}; dx <= distance; ++dx) {
-                            if (std::max(std::abs(dx), std::abs(dz)) !=
-                                distance) {
-                                continue;
-                            }
-                            const auto x{stream.center_x + dx};
-                            const auto z{stream.center_z + dz};
-                            if (!stream.known.contains({x, z})) {
-                                stream.pending.emplace_back(x, z);
-                            }
-                        }
-                    }
-                }
-            }
-            stream.center_dirty = stream.center_dirty || center_changed;
-            stream.reported = false;
-        }
-        // Bound the bytes queued for clients that cannot drain them. A slow
-        // client keeps its pending list and resumes once the socket catches
-        // up; the whole stream pauses when the aggregate backlog is large.
-        constexpr std::size_t max_connection_backlog{1U * 1024U * 1024U};
-        constexpr std::size_t max_total_backlog{64U * 1024U * 1024U};
-        std::size_t total_backlog{0};
-        for (const auto id : active_ids) {
-            total_backlog += listener->backlog(id);
-        }
-        if (total_backlog > max_total_backlog) {
-            return;
-        }
-        std::size_t encode_budget{1};
-        for (const auto id : active_ids) {
-            auto match{chunk_streams.find(id)};
-            if (match == chunk_streams.end()) {
-                continue;
-            }
-            if (listener->backlog(id) > max_connection_backlog) {
-                continue;
-            }
-            auto &stream{match->second};
-            std::vector<std::vector<std::byte>> packets;
-            constexpr std::size_t batch_budget{8};
-            packets.reserve(batch_budget);
-            while (!stream.pending.empty() && packets.size() < batch_budget) {
-                const auto [x, z]{stream.pending.front()};
-                if (stream.known.contains({x, z})) {
-                    stream.pending.pop_front();
-                    continue;
-                }
-                const auto cache_key{std::pair{x, z}};
-                auto cached{encoded_chunks.find(cache_key)};
-                if (cached == encoded_chunks.end()) {
-                    if (encode_budget == 0) {
-                        // Leave the coordinate pending: the next tick picks it
-                        // up again instead of dropping it from the viewport.
-                        break;
-                    }
-                    --encode_budget;
-                    auto encoded{refrain::server::encode_full_chunk(
-                        stream_source, refrain::sim::chunk_pos{x, z})};
-                    if (!encoded) {
-                        // The world may not have this chunk generated;
-                        // remember it so the same coordinate is not retried
-                        // every tick.
-                        refrain::log::debug(
-                            "network: chunk ({}, {}) encode failed: {}", x, z,
-                            encoded.error().message);
-                        stream.known.emplace(x, z);
-                        stream.pending.pop_front();
-                        continue;
-                    }
-                    cached = encoded_chunks
-                                 .emplace(cache_key,
-                                          encoded_chunk_entry{
-                                              .body = std::move(*encoded),
-                                              .last_use = 0,
-                                          })
-                                 .first;
-                    if (encoded_chunks.size() > max_encoded_chunks) {
-                        // Evict the least recently used entry.
-                        auto victim{encoded_chunks.begin()};
-                        for (auto candidate{encoded_chunks.begin()};
-                             candidate != encoded_chunks.end(); ++candidate) {
-                            if (candidate->second.last_use <
-                                victim->second.last_use) {
-                                victim = candidate;
-                            }
-                        }
-                        encoded_chunks.erase(victim);
-                    }
-                }
-                cached->second.last_use = ++chunk_cache_clock;
-                stream.pending.pop_front();
-                packets.push_back(cached->second.body);
-                stream.known.emplace(x, z);
-                ++stream.sent;
-            }
-            const auto update_center{stream.center_dirty};
-            if (update_center || !packets.empty()) {
-                listener->send_chunk_batch(id, stream.center_x, stream.center_z,
-                                           packets, update_center);
-                stream.center_dirty = false;
-            }
-            if (stream.pending.empty() && !stream.reported) {
-                refrain::log::info(
-                    "network: chunk view ready for connection {} ({} "
-                    "chunk(s) streamed)",
-                    id, stream.sent);
-                stream.reported = true;
-            }
-        }
-    };
 
     // Player inventory: map runtime item keys to protocol item ids once, then
     // mirror the simulation inventory into the player inventory container.
@@ -2377,7 +2202,9 @@ auto run_server(const server_run_options &options) -> int {
             sync_player_visibility(*listener, players, last_moves,
                                    visible_players, tracking_chunks);
         }
-        process_chunk_streams();
+        if (streamer) {
+            streamer->tick(views);
+        }
         process_container_clicks();
         process_inventory();
         store->tick();
