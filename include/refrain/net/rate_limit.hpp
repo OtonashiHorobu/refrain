@@ -10,7 +10,13 @@ namespace refrain::net {
 
 /// Per-connection packet rate limiter. Disabled when the configured rate is
 /// zero or negative; enabled limiters allow a one-second burst and refill
-/// linearly.
+/// linearly at the configured packets per second.
+///
+/// Policy: the network server closes a play connection when it asks for a
+/// token the bucket does not have, rather than dropping the packet and keeping
+/// the socket open. The limit is per connection, applies from the moment the
+/// connection enters play, and a closed connection is released through the
+/// same step as any other local close.
 class token_bucket {
   public:
     token_bucket() = default;
