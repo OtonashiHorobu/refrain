@@ -4,6 +4,9 @@
 
 #include <refrain/mod/host.hpp>
 
+#include <algorithm>
+#include <cstdlib>
+
 #include <refrain/contracts/host/core.hpp>
 #include <refrain/contracts/host/kernel.hpp>
 #include <refrain/contracts/host/metadata.hpp>
@@ -40,6 +43,34 @@ constexpr refrain::log::logger log_mod{"mod"};
 } // namespace
 
 namespace refrain::mod {
+
+namespace {
+
+void *host_alloc(void *, std::uint64_t size, std::uint64_t alignment) noexcept {
+    // A non-power-of-two request is refused before it is raised to the natural
+    // alignment, otherwise every value would look valid.
+    if (alignment != 0 && (alignment & (alignment - 1)) != 0) {
+        return nullptr;
+    }
+    const auto requested{
+        std::max<std::uint64_t>(alignment, alignof(std::max_align_t))};
+    // aligned_alloc requires the size to be a multiple of the alignment, and
+    // its result is released with free(), which needs no alignment argument.
+    const auto rounded{(size + requested - 1) / requested * requested};
+    return std::aligned_alloc(requested, rounded);
+}
+
+void host_free(void *, void *ptr) noexcept { std::free(ptr); }
+
+} // namespace
+
+auto host_allocator() noexcept -> refrain_allocator {
+    return refrain_allocator{
+        .self = nullptr,
+        .alloc = &host_alloc,
+        .free = &host_free,
+    };
+}
 
 namespace {
 
@@ -626,6 +657,7 @@ auto host::load_external_mod(const mod_manifest &manifest,
     init.mod_version = to_refrain_str(manifest.common.version);
     init.host_core = static_cast<const refrain_host_core_vtable *>(api->vtable);
     init.host_core_self = api->self;
+    init.allocator = host_allocator();
 
     const refrain_mod_desc *desc{nullptr};
     try {
