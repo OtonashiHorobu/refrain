@@ -47,6 +47,10 @@ if(MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
+# Microarchitecture level for code generation, mapped per target architecture.
+include(cmake/refrain_arch.cmake)
+refrain_apply_arch_level("${REFRAIN_ARCH_LEVEL}")
+
 # Sanitizer instrumentation for every first-party target (the CI matrix uses
 # dedicated ASan/UBSan and TSan builds; Release timings stay unaffected).
 if(REFRAIN_SANITIZE)
@@ -102,6 +106,9 @@ find_package(CLI11 CONFIG REQUIRED)
 find_package(glaze CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 find_package(simdjson CONFIG REQUIRED)
+# Highway is the portable SIMD layer for world generation kernels: one source
+# for SSE/AVX2/AVX-512 and NEON/SVE, with the scalar fallback on every target.
+find_package(highway CONFIG REQUIRED)
 find_package(libzip CONFIG REQUIRED)
 # Content block compression (zstd) and content hashing (BLAKE3), Ed25519
 # signatures for signed `.rfmod` manifests (libsodium) and zlib for NBT
@@ -365,7 +372,7 @@ add_library(Refrain::World ALIAS refrain-world)
 file(GLOB_RECURSE REFRAIN_WORLDGEN_SOURCES CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/worldgen/*.cpp")
 refrain_add_library(refrain-worldgen ${REFRAIN_WORLDGEN_SOURCES})
-target_link_libraries(refrain-worldgen PUBLIC refrain-kernel)
+target_link_libraries(refrain-worldgen PUBLIC refrain-kernel highway::highway)
 add_library(Refrain::WorldGen ALIAS refrain-worldgen)
 
 # --- command dispatch: flat graph, parsers, immutable snapshots ------------

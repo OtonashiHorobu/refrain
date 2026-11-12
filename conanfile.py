@@ -100,6 +100,12 @@ class RefrainConan(ConanFile):
         # serialization. TOML uses glaze's generic map-root DOM (see above).
         # In-repo recipe: upstream v5.1.0 (ConanCenter lags).
         self.requires("simdjson/5.1.0")
+        # Google Highway (Apache-2.0) is the portable SIMD layer: one source
+        # for SSE/AVX2/AVX-512, NEON/SVE and the scalar fallback, with runtime
+        # dispatch. Kernels that are already bit-exact per lane stay bit-exact
+        # because the build uses -ffp-contract=off; the library's fused
+        # multiply-add helpers are not used for world generation.
+        self.requires("highway/1.4.0")
         # zlib: the in-repo recipe is a zlib-ng 2.3.3 drop-in replacement
         # packaged as zlib/1.3.1. Declaring it directly pins the in-repo
         # revision even when the transitive ranges (libzip/libcurl/crashpad)

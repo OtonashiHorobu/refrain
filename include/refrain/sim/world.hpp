@@ -109,9 +109,10 @@ struct item_stack {
     std::uint32_t count{0};
 };
 
-/// Maximum stack size for the current item model. Per-item stack sizes arrive
-/// with the item registry; a single constant keeps the
-/// inventory deterministic until then.
+/// Maximum stack size for the current item model.
+///
+/// TODO: every item shares this ceiling and stacks carry no components or
+/// durability; per-item stack sizes and damage come from the item registry.
 inline constexpr std::uint32_t max_stack_size = 64;
 
 /// Process-local runtime entity id. Ids are assigned in spawn order and are
@@ -263,6 +264,10 @@ class world {
 
     /// Load the chunk if needed. Fails with `not_found` when the imported
     /// world has no such chunk.
+    ///
+    /// TODO: a chunk that is absent from the store is never generated, so the
+    /// server cannot serve a world it did not import; the runtime generator
+    /// needs an insertion path here.
     [[nodiscard]] auto ensure_chunk(const chunk_pos &pos) -> result<chunk *>;
 
     [[nodiscard]] auto find_chunk(const chunk_pos &pos) noexcept -> chunk *;
