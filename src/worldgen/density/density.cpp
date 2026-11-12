@@ -172,6 +172,7 @@ class constant_sampler final : public sampler {
     [[nodiscard]] auto constant_value() const -> const float * override {
         return &value_;
     }
+    [[nodiscard]] auto y_only() const -> bool override { return true; }
 
   private:
     float value_;
@@ -579,6 +580,9 @@ class unary_sampler final : public sampler {
         }
     }
     [[nodiscard]] auto range() const -> interval override { return range_; }
+    [[nodiscard]] auto y_only() const -> bool override {
+        return input_->y_only();
+    }
 
   private:
     sampler_ptr input_;
@@ -604,6 +608,9 @@ class clamp_sampler final : public sampler {
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::clamp(input_->range(), min_, max_);
+    }
+    [[nodiscard]] auto y_only() const -> bool override {
+        return input_->y_only();
     }
 
   private:
@@ -642,6 +649,7 @@ class gradient_sampler final : public sampler {
     [[nodiscard]] auto range() const -> interval override {
         return interval::encapsulating(from_value_, to_value_);
     }
+    [[nodiscard]] auto y_only() const -> bool override { return true; }
 
   private:
     [[nodiscard]] auto compute(jint coordinate) const -> float {
@@ -1091,9 +1099,12 @@ class range_choice_sampler final : public sampler {
     }
     void sample_volume(const sampler_context &context, buffer &output,
                        const volume &vol) const override {
-        when_in_range_->sample_volume(context, output, vol);
         auto input_buffer = context.acquire(vol.size());
         input_->sample_volume(context, input_buffer, vol);
+        if (sample_selected_runs(context, output, vol, input_buffer)) {
+            return;
+        }
+        when_in_range_->sample_volume(context, output, vol);
         auto out_buffer = context.acquire(vol.size());
         when_out_of_range_->sample_volume(context, out_buffer, vol);
         for (std::size_t i = 0; i < output.size(); ++i) {
@@ -1109,6 +1120,99 @@ class range_choice_sampler final : public sampler {
     }
 
   private:
+    /// A selector that depends on the block Y coordinate alone selects one
+    /// branch per layer of a volume, so a run of layers that select the same
+    /// branch can be sampled over that run only. The ore-vein densities gate
+    /// on a Y band, and the whole-volume path evaluates the in-range branch
+    /// (the vein mask and its noise) for the full column even where the band
+    /// is empty. Returns false when the selector is not Y-only, when a volume
+    /// crosses the range too often, or when a run split would land on the
+    /// interpolation lattice instead of the block lattice.
+    static constexpr std::size_t max_selected_runs = 4;
+
+    struct selected_run {
+        jint begin{0};
+        jint end{0};
+        bool in_range{false};
+    };
+
+    [[nodiscard]] auto in_range(float value) const -> bool {
+        return value >= min_inclusive_ && value < max_exclusive_;
+    }
+
+    [[nodiscard]] auto sample_selected_runs(const sampler_context &context,
+                                            buffer &output, const volume &vol,
+                                            const buffer &input_buffer) const
+        -> bool {
+        if (!input_->y_only()) {
+            return false;
+        }
+        const jint size_y = vol.size_y();
+        std::array<selected_run, max_selected_runs> runs{};
+        std::size_t run_count = 0;
+        for (jint y = 0; y < size_y; ++y) {
+            const bool selected =
+                in_range(input_buffer.get(static_cast<std::size_t>(y)));
+            if (run_count == 0 || runs[run_count - 1].in_range != selected) {
+                if (run_count == runs.size()) {
+                    return false;
+                }
+                runs[run_count++] = selected_run{y, y + 1, selected};
+            } else {
+                runs[run_count - 1].end = y + 1;
+            }
+        }
+        if (run_count == 1) {
+            // One branch covers the whole volume, so the other one is never
+            // read at any position.
+            (runs[0].in_range ? when_in_range_ : when_out_of_range_)
+                ->sample_volume(context, output, vol);
+            return true;
+        }
+        // An interpolated volume samples its input on a cell lattice shared
+        // with every block in the cell. Separating runs there gives each run
+        // its own lattice, and the cells on a shared boundary are sampled
+        // twice, which costs more than the skipped rows save.
+        if (vol.step_block_x() != 1 || vol.step_block_z() != 1) {
+            return false;
+        }
+        const jint size_x = vol.size_x();
+        const jint size_z = vol.size_z();
+        for (const auto &run : runs) {
+            if (run.begin == run.end) {
+                break;
+            }
+            const jint length = run.end - run.begin;
+            const volume run_volume{size_x,
+                                    length,
+                                    size_z,
+                                    vol.min_block_x(),
+                                    vol.min_block_y() +
+                                        run.begin * vol.step_block_y(),
+                                    vol.min_block_z(),
+                                    vol.step_block_x(),
+                                    vol.step_block_y(),
+                                    vol.step_block_z()};
+            auto values = context.acquire(run_volume.size());
+            (run.in_range ? when_in_range_ : when_out_of_range_)
+                ->sample_volume(context, values, run_volume);
+            for (jint z = 0; z < size_z; ++z) {
+                for (jint x = 0; x < size_x; ++x) {
+                    const auto column = static_cast<std::size_t>(x) +
+                                        static_cast<std::size_t>(z) *
+                                            static_cast<std::size_t>(size_x);
+                    std::copy_n(values.data() +
+                                    column * static_cast<std::size_t>(length),
+                                static_cast<std::size_t>(length),
+                                output.data() +
+                                    column * static_cast<std::size_t>(size_y) +
+                                    static_cast<std::size_t>(run.begin));
+                }
+            }
+        }
+        return true;
+    }
+
     sampler_ptr input_;
     float min_inclusive_;
     float max_exclusive_;
@@ -1530,6 +1634,7 @@ class slice_y_sampler final : public sampler {
     [[nodiscard]] auto range() const -> interval override {
         return input_->range();
     }
+    [[nodiscard]] auto y_only() const -> bool override { return true; }
 
   private:
     sampler_ptr input_;
@@ -1864,6 +1969,9 @@ class cache_sampler final : public sampler {
     }
     [[nodiscard]] auto range() const -> interval override {
         return input_->range();
+    }
+    [[nodiscard]] auto y_only() const -> bool override {
+        return input_->y_only();
     }
 
   private:

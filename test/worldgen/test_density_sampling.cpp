@@ -210,6 +210,77 @@ auto load_settings(std::string_view id) -> refrain::result<noise_settings> {
                                algorithm::xoroshiro, 12345);
 }
 
+/// A branch sampler with a coordinate-derived value that records how many
+/// positions its volume path evaluated and which block Y values they covered.
+class counting_sampler final : public sampler {
+  public:
+    // `boost::ut` declares a type named `override`, so the test double cannot
+    // spell the virt-specifier.
+    [[nodiscard]] auto sample_value(const sampler_context &, jint block_x,
+                                    jint block_y, jint block_z) const -> float {
+        return value_at(block_x, block_y, block_z);
+    }
+    void sample_volume(const sampler_context &, buffer &output,
+                       const volume &vol) const {
+        for (jint z = 0; z < vol.size_z(); ++z) {
+            for (jint x = 0; x < vol.size_x(); ++x) {
+                for (jint y = 0; y < vol.size_y(); ++y) {
+                    record(vol.block_y(y));
+                    output.set(vol.index_unchecked(x, y, z),
+                               value_at(vol.block_x(x), vol.block_y(y),
+                                        vol.block_z(z)));
+                }
+            }
+        }
+    }
+    [[nodiscard]] auto range() const -> interval {
+        return interval::infinite();
+    }
+
+    mutable std::size_t positions{0};
+    mutable bool any{false};
+    mutable jint min_y{0};
+    mutable jint max_y{0};
+
+  private:
+    void record(jint block_y) const {
+        ++positions;
+        if (!any) {
+            any = true;
+            min_y = block_y;
+            max_y = block_y;
+            return;
+        }
+        min_y = std::min(min_y, block_y);
+        max_y = std::max(max_y, block_y);
+    }
+
+    [[nodiscard]] auto value_at(jint block_x, jint block_y, jint block_z) const
+        -> float {
+        return static_cast<float>(block_x) * 0.5F +
+               static_cast<float>(block_y) +
+               static_cast<float>(block_z) * 0.25F;
+    }
+};
+
+/// Samples `choice` over `vol` and checks every value against the scalar path.
+void check_range_choice_volume(const sampler &choice, const volume &vol) {
+    const sampler_context context;
+    buffer values{vol.size()};
+    choice.sample_volume(context, values, vol);
+    for (jint z = 0; z < vol.size_z(); ++z) {
+        for (jint x = 0; x < vol.size_x(); ++x) {
+            for (jint y = 0; y < vol.size_y(); ++y) {
+                expect(
+                    bits(values.get(vol.index_unchecked(x, y, z))) ==
+                    bits(choice.sample_value(context, vol.block_x(x),
+                                             vol.block_y(y), vol.block_z(z))))
+                    << "range choice differs at block y=" << vol.block_y(y);
+            }
+        }
+    }
+}
+
 /// Compares `sampler`'s cell output with the independent reference on one
 /// volume. Both sample the same input graph, so the comparison is exact.
 void check_cell_volume(const sampler &cell, const sampler &input,
@@ -244,6 +315,60 @@ auto make_synthetic_input() -> sampler_ptr {
 } // namespace
 
 suite<"worldgen/density-sampling"> density_sampling_tests = [] {
+    "a Y selector samples the branches on their own Y runs"_test = [] {
+        auto in_range = std::make_shared<counting_sampler>();
+        auto out_of_range = std::make_shared<counting_sampler>();
+        auto choice = range_choice(gradient_y(-64, 320, 0.0F, 1.0F), 0.25F,
+                                   0.75F, in_range, out_of_range);
+        // The gradient maps y to [0, 1) over [-64, 320), so the band is
+        // y in [32, 224). The volume stops at 64.
+        const volume vol{2, 129, 2, 0, -64, 0};
+        check_range_choice_volume(*choice, vol);
+        expect(in_range->positions == 33U * 4U);
+        expect(in_range->min_y == 32);
+        expect(in_range->max_y == 64);
+        expect(out_of_range->positions == 96U * 4U);
+        expect(out_of_range->min_y == -64);
+        expect(out_of_range->max_y == 31);
+    };
+
+    "a Y selector with two bands samples only the selected run of each"_test =
+        [] {
+            auto in_range = std::make_shared<counting_sampler>();
+            auto out_of_range = std::make_shared<counting_sampler>();
+            auto choice = range_choice(gradient_y(-64, 320, 0.0F, 1.0F), 0.25F,
+                                       0.75F, in_range, out_of_range);
+            const volume vol{2, 320, 2, 0, -64, 0};
+            check_range_choice_volume(*choice, vol);
+            expect(in_range->positions == 192U * 4U);
+            expect(out_of_range->positions == 128U * 4U);
+            expect(out_of_range->min_y == -64);
+            expect(out_of_range->max_y == 255);
+        };
+
+    "a Y selector inside one range samples a single branch"_test = [] {
+        auto in_range = std::make_shared<counting_sampler>();
+        auto out_of_range = std::make_shared<counting_sampler>();
+        auto choice = range_choice(gradient_y(-64, 320, 0.0F, 1.0F), 0.0F, 1.0F,
+                                   in_range, out_of_range);
+        const volume vol{2, 129, 2, 0, -64, 0};
+        check_range_choice_volume(*choice, vol);
+        expect(in_range->positions == vol.size());
+        expect(out_of_range->positions == 0U);
+    };
+
+    "a selector that is not Y-only samples both branches over the volume"_test =
+        [] {
+            auto in_range = std::make_shared<counting_sampler>();
+            auto out_of_range = std::make_shared<counting_sampler>();
+            auto choice = range_choice(make_synthetic_input(), 0.0F, 1.0F,
+                                       in_range, out_of_range);
+            const volume vol{2, 129, 2, 0, -64, 0};
+            check_range_choice_volume(*choice, vol);
+            expect(in_range->positions == vol.size());
+            expect(out_of_range->positions == vol.size());
+        };
+
     "the cell lattice matches the reference on every volume shape"_test = [] {
         const std::array<volume, 5> volumes{{
             // Aligned: the reference samples the input over the volume itself.
