@@ -25,6 +25,7 @@
 #include <refrain/server/entity_broadcast.hpp>
 #include <refrain/server/inventory_menu.hpp>
 #include <refrain/server/player_visibility.hpp>
+#include <refrain/server/world_bootstrap.hpp>
 #include <refrain/sim/replay.hpp>
 #include <refrain/sim/world.hpp>
 #include <refrain/world/store.hpp>
@@ -1514,6 +1515,32 @@ auto run_server(const server_run_options &options) -> int {
     auto store{refrain::sim::world::open(options.world_path)};
     if (!store) {
         return report_error(store.error());
+    }
+    const std::string datapack_root{options.datapack_root.empty()
+                                        ? "content/vanilla/26.3/data"
+                                        : options.datapack_root};
+    if (store->loaded_chunks() == 0) {
+        // A world created from a seed starts empty; fill the spawn area
+        // before the listener accepts joins.
+        auto level_info{store->store().level()};
+        if (!level_info) {
+            return report_error(level_info.error());
+        }
+        const auto seed{level_info->seed};
+        const auto spawn{refrain::world::chunk_pos{0, 0}};
+        auto generated{refrain::server::generate_spawn_area(
+            store->store(),
+            refrain::server::world_bootstrap_config{
+                .data_root = datapack_root,
+                .templates_root = datapack_root + "/../templates",
+                .seed = seed,
+                .radius = 3,
+            },
+            spawn)};
+        if (!generated) {
+            return report_error(generated.error());
+        }
+        refrain::log::info("[world]: generated {} spawn chunk(s)", *generated);
     }
     if (auto configured{store->store().set_zstd_level(zstd_level)};
         !configured) {

@@ -37,6 +37,7 @@
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/startup_content.hpp>
 #include <refrain/server/server_properties.hpp>
+#include <refrain/world/create.hpp>
 
 #include <CLI/CLI.hpp>
 #include <fmt/format.h>
@@ -45,6 +46,7 @@
 #include <cstddef>
 #include <iostream>
 #include <optional>
+#include <random>
 #include <span>
 #include <string>
 #include <string_view>
@@ -59,6 +61,7 @@ constexpr refrain::log::logger log_content{"content"};
 constexpr refrain::log::logger log_crash_reporter{"crash-reporter"};
 constexpr refrain::log::logger log_discovery{"discovery"};
 constexpr refrain::log::logger log_host{"host"};
+constexpr refrain::log::logger log_world{"world"};
 constexpr refrain::log::logger log_mods{"mods"};
 
 } // namespace
@@ -193,6 +196,11 @@ int main(int argc, char **argv) {
     bool dump_gamepack{false};
     app.add_flag("--dump-gamepack", dump_gamepack,
                  "Print the resolved gamepack/provider graph and exit");
+    std::int64_t seed_value{0};
+    bool seed_given{false};
+    auto *seed_option = app.add_option("--seed", seed_value,
+                                       "World seed for a newly created world");
+    seed_option->take_last();
     std::string world_path;
     app.add_option("--world", world_path,
                    "RWF world directory (overrides world.path; enables the "
@@ -833,9 +841,25 @@ int main(int argc, char **argv) {
                         config_dir);
     }
 
-    const std::string resolved_world_path{world_path.empty() ? config_world_path
-                                                             : world_path};
+    std::string resolved_world_path{world_path.empty() ? config_world_path
+                                                       : world_path};
+    if (resolved_world_path.empty()) {
+        resolved_world_path = "world";
+    }
     log_config.info("world.path='{}'", resolved_world_path);
+    if (!refrain::core::io::exists(resolved_world_path + "/meta.rfw")) {
+        seed_given = seed_option->count() > 0;
+        if (!seed_given) {
+            seed_value =
+                static_cast<std::int64_t>(std::random_device{}() & 0x7FFFFFFFU);
+        }
+        auto created{refrain::world::create_world(resolved_world_path,
+                                                  seed_value, "world")};
+        if (!created) {
+            return report_fatal(created.error());
+        }
+        log_world.info("created '{}' seed={}", resolved_world_path, seed_value);
+    }
 
     refrain::mod::host mods{};
     mods.set_config(config_store);

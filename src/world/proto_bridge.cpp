@@ -127,13 +127,17 @@ auto from_proto_chunk(const worldgen::proto_chunk &source,
             record.data = pack_indices(indices, record.bits_per_entry);
         }
 
+        // The storage model stores one biome per 4x4x4 cell, so a section has
+        // 64 entries; sampling every block would pack 4096 indices into a
+        // section the reader expects to hold 64.
         std::map<std::uint16_t, std::uint32_t> biome_index;
         std::vector<std::uint16_t> biome_palette;
-        std::vector<std::uint32_t> biome_indices(section_blocks, 0);
-        for (std::size_t i = 0; i < section_blocks; ++i) {
-            const auto y = base_y + static_cast<jint>(i / 256U);
-            const auto z = static_cast<jint>((i % 256U) / 16U);
-            const auto x = static_cast<jint>(i % 16U);
+        std::vector<std::uint32_t> biome_indices(::refrain::world::biome_volume,
+                                                 0);
+        for (std::size_t i = 0; i < ::refrain::world::biome_volume; ++i) {
+            const auto y = base_y + static_cast<jint>((i / 16U) * 4U);
+            const auto z = static_cast<jint>(((i % 16U) / 4U) * 4U);
+            const auto x = static_cast<jint>((i % 4U) * 4U);
             const auto biome = source.biome_at(x, y, z);
             const auto found = biome_index.find(biome);
             if (found != biome_index.end()) {
