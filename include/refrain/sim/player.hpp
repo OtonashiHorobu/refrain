@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <string>
 #include <string_view>
@@ -18,7 +19,9 @@ namespace refrain::sim {
 
 /// Process-local runtime entity id. Ids are assigned in spawn order and are
 /// never persisted (the storage entity format is not implemented yet); the sim
-/// needs a deterministic, replay-stable identifier for the entity table.
+/// needs a deterministic, replay-stable identifier for the entity table. Ids
+/// stay within the signed 32-bit range because they are written to the wire as
+/// a VarInt entity id.
 using entity_id = std::uint64_t;
 
 /// Connection id reserved for the synthetic player that the console and replay
@@ -146,7 +149,8 @@ class player_table {
     }
 
     /// Allocate the next process-local entity id. `world::spawn_entity()` draws
-    /// from the same sequence as player registration.
+    /// from the same sequence as player registration. Fails when the signed
+    /// 32-bit wire range is exhausted.
     [[nodiscard]] auto allocate_entity_id() -> result<entity_id>;
 
   private:

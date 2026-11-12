@@ -8,19 +8,38 @@
 
 namespace refrain::session {
 
+play_session::play_session() : players_{&own_players_} {}
+
 play_session::play_session(sim::player_table &players) : players_{&players} {}
+
+play_session::play_session(play_session &&other) noexcept
+    : own_players_{std::move(other.own_players_)},
+      players_{other.players_ == &other.own_players_ ? &own_players_
+                                                     : other.players_},
+      views_{std::move(other.views_)} {}
+
+auto play_session::operator=(play_session &&other) noexcept -> play_session & {
+    if (this == &other) {
+        return *this;
+    }
+    own_players_ = std::move(other.own_players_);
+    players_ =
+        other.players_ == &other.own_players_ ? &own_players_ : other.players_;
+    views_ = std::move(other.views_);
+    return *this;
+}
 
 auto play_session::add_player(std::uint64_t connection, net::uuid id,
                               std::string name, std::string world, double x,
                               double y, double z, std::uint32_t game_mode)
-    -> result<sim::entity_id> {
+    -> result<std::uint32_t> {
     if (connection == sim::synthetic_connection) {
         return std::unexpected{make_error(
             error_code::invalid_argument,
             "a network player needs a connection; use the world table for the "
             "synthetic player")};
     }
-    return players_->add(sim::player_table::registration{
+    auto added{players_->add(sim::player_table::registration{
         .connection = connection,
         .profile_id = id.bytes,
         .name = std::move(name),
@@ -30,7 +49,12 @@ auto play_session::add_player(std::uint64_t connection, net::uuid id,
         .z = z,
         .game_mode = game_mode,
         .inventory_slots = 36,
-    });
+    })};
+    if (!added) {
+        return std::unexpected{std::move(added.error())};
+    }
+    // The table caps ids at the signed 32-bit wire range.
+    return static_cast<std::uint32_t>(*added);
 }
 
 auto play_session::remove_player(std::uint64_t connection) -> bool {
@@ -52,7 +76,7 @@ auto play_session::player_of(std::uint64_t connection) const
     return &views_.at(record->id);
 }
 
-auto play_session::player_by_entity(sim::entity_id entity_id) const
+auto play_session::player_by_entity(std::uint32_t entity_id) const
     -> const session::player * {
     const auto *record{players_->find(entity_id)};
     if (record == nullptr || record->connection == sim::synthetic_connection) {
@@ -143,7 +167,7 @@ auto play_session::visible_to(std::uint64_t observer, double radius) const
         const auto dz{value.z - source->z};
         if (dx * dx + dy * dy + dz * dz <= squared_radius) {
             out.push_back({.connection = value.connection,
-                           .entity_id = value.id,
+                           .entity_id = static_cast<std::uint32_t>(value.id),
                            .x = value.x,
                            .y = value.y,
                            .z = value.z,
@@ -191,7 +215,7 @@ auto play_session::project(const sim::player_state &record) -> player {
         .id = net::uuid{.bytes = record.profile_id},
         .name = record.name,
         .world = record.world,
-        .entity_id = record.id,
+        .entity_id = static_cast<std::uint32_t>(record.id),
         .x = record.x,
         .y = record.y,
         .z = record.z,

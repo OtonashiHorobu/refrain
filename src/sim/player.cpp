@@ -115,7 +115,10 @@ auto player_table::first() const noexcept -> const player_state * {
 }
 
 auto player_table::allocate_entity_id() -> result<entity_id> {
-    if (next_entity_id_ == std::numeric_limits<entity_id>::max()) {
+    // Entity ids travel as VarInts, so the representable ceiling is the signed
+    // 32-bit maximum rather than the width of entity_id.
+    if (next_entity_id_ >
+        static_cast<entity_id>(std::numeric_limits<std::int32_t>::max())) {
         return std::unexpected{make_error(error_code::invalid_argument,
                                           "entity id space exhausted")};
     }
