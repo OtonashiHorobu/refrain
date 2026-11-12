@@ -1105,6 +1105,8 @@ void send_remove_entity(refrain::net::server &listener,
 void announce_session_join(refrain::net::server &listener,
                            const refrain::session::play_session &players,
                            std::uint64_t connection) {
+    // Pointers into the session table: the simulation thread is the only
+    // writer, and copying every player record per tick is pure overhead.
     const auto snapshot{players.all()};
     send_player_info(listener, connection, player_info_add, snapshot);
     send_player_info(listener, connection,
@@ -1262,7 +1264,13 @@ void sync_player_visibility(
         return static_cast<std::int8_t>(
             std::lround(static_cast<double>(degrees) * (256.0 / 360.0)));
     };
-    const auto snapshot{players.all()};
+    // Pointers into the session table: the simulation thread is the only
+    // writer, and copying every player record per tick is pure overhead.
+    std::vector<const refrain::session::player *> snapshot{};
+    snapshot.reserve(players.size());
+    players.for_each([&snapshot](const refrain::session::player &value) {
+        snapshot.push_back(&value);
+    });
     // One buffer per target per tick: the transport then copies and posts once
     // per target instead of once per entity update.
     std::unordered_map<std::uint64_t, std::vector<std::byte>> outbox;
@@ -1274,48 +1282,48 @@ void sync_player_visibility(
 
     // Visibility transitions first: a viewer that has just come into range
     // needs the spawn packet, one that left needs the removal.
-    for (const auto &viewer : snapshot) {
-        auto &seen{visible[viewer.connection]};
-        for (const auto &other : snapshot) {
-            if (other.connection == viewer.connection) {
+    for (const auto *viewer : snapshot) {
+        auto &seen{visible[viewer->connection]};
+        for (const auto *other : snapshot) {
+            if (other->connection == viewer->connection) {
                 continue;
             }
             const refrain::server::visibility_query query{
-                .world = viewer.world,
-                .x = viewer.x,
-                .z = viewer.z,
-                .view_distance = viewer.view_distance,
+                .world = viewer->world,
+                .x = viewer->x,
+                .z = viewer->z,
+                .view_distance = viewer->view_distance,
             };
             const bool now{refrain::server::player_visible(
-                query, other.world, other.x, other.z, tracking_chunks)};
-            const bool was{seen.contains(other.connection)};
+                query, other->world, other->x, other->z, tracking_chunks)};
+            const bool was{seen.contains(other->connection)};
             if (now && !was) {
-                if (auto body{encode_add_entity_body(other)}; !body.empty()) {
-                    append(viewer.connection, body);
+                if (auto body{encode_add_entity_body(*other)}; !body.empty()) {
+                    append(viewer->connection, body);
                 }
-                seen.insert(other.connection);
+                seen.insert(other->connection);
             } else if (!now && was) {
-                if (auto body{encode_remove_entity_body(other.entity_id)};
+                if (auto body{encode_remove_entity_body(other->entity_id)};
                     !body.empty()) {
-                    append(viewer.connection, body);
+                    append(viewer->connection, body);
                 }
-                seen.erase(other.connection);
+                seen.erase(other->connection);
             }
         }
     }
 
     // Movement reaches only viewers that already track the mover.
-    for (const auto &mover : snapshot) {
+    for (const auto *mover : snapshot) {
         const refrain::net::movement_event current{
-            .connection = mover.connection,
-            .x = mover.x,
-            .y = mover.y,
-            .z = mover.z,
-            .yaw = mover.yaw,
-            .pitch = mover.pitch,
-            .on_ground = mover.on_ground,
+            .connection = mover->connection,
+            .x = mover->x,
+            .y = mover->y,
+            .z = mover->z,
+            .yaw = mover->yaw,
+            .pitch = mover->pitch,
+            .on_ground = mover->on_ground,
         };
-        const auto previous{last.find(mover.connection)};
+        const auto previous{last.find(mover->connection)};
         if (previous != last.end() && previous->second.x == current.x &&
             previous->second.y == current.y &&
             previous->second.z == current.z &&
@@ -1327,13 +1335,14 @@ void sync_player_visibility(
         if (previous == last.end()) {
             refrain::protocol::current::play::clientbound::teleport_entity
                 packet{};
-            packet.id = static_cast<std::int32_t>(mover.entity_id);
-            packet.change.position = {.x = mover.x, .y = mover.y, .z = mover.z};
+            packet.id = static_cast<std::int32_t>(mover->entity_id);
+            packet.change.position = {
+                .x = mover->x, .y = mover->y, .z = mover->z};
             packet.change.delta_movement = {};
-            packet.change.y_rot = mover.yaw;
-            packet.change.x_rot = mover.pitch;
+            packet.change.y_rot = mover->yaw;
+            packet.change.x_rot = mover->pitch;
             packet.relatives = 0;
-            packet.on_ground = mover.on_ground;
+            packet.on_ground = mover->on_ground;
             body = encode_play_body(refrain::protocol::current::play::
                                         clientbound::teleport_entity::packet_id,
                                     packet,
@@ -1346,14 +1355,14 @@ void sync_player_visibility(
             case refrain::server::entity_move_kind::teleport: {
                 refrain::protocol::current::play::clientbound::teleport_entity
                     packet{};
-                packet.id = static_cast<std::int32_t>(mover.entity_id);
+                packet.id = static_cast<std::int32_t>(mover->entity_id);
                 packet.change.position = {
-                    .x = mover.x, .y = mover.y, .z = mover.z};
+                    .x = mover->x, .y = mover->y, .z = mover->z};
                 packet.change.delta_movement = {};
-                packet.change.y_rot = mover.yaw;
-                packet.change.x_rot = mover.pitch;
+                packet.change.y_rot = mover->yaw;
+                packet.change.x_rot = mover->pitch;
                 packet.relatives = 0;
-                packet.on_ground = mover.on_ground;
+                packet.on_ground = mover->on_ground;
                 body = encode_play_body(
                     refrain::protocol::current::play::clientbound::
                         teleport_entity::packet_id,
@@ -1365,7 +1374,7 @@ void sync_player_visibility(
             case refrain::server::entity_move_kind::position: {
                 refrain::protocol::current::play::clientbound::move_entity_pos
                     packet{};
-                packet.entity_id = static_cast<std::uint32_t>(mover.entity_id);
+                packet.entity_id = static_cast<std::uint32_t>(mover->entity_id);
                 packet.delta = {.on_ground = current.on_ground,
                                 .x = move.dx,
                                 .y = move.dy,
@@ -1382,7 +1391,7 @@ void sync_player_visibility(
             case refrain::server::entity_move_kind::position_rotation: {
                 refrain::protocol::current::play::clientbound::
                     move_entity_pos_rot packet{};
-                packet.entity_id = static_cast<std::uint32_t>(mover.entity_id);
+                packet.entity_id = static_cast<std::uint32_t>(mover->entity_id);
                 packet.delta = {.on_ground = current.on_ground,
                                 .x = move.dx,
                                 .y = move.dy,
@@ -1401,7 +1410,7 @@ void sync_player_visibility(
             case refrain::server::entity_move_kind::rotation: {
                 refrain::protocol::current::play::clientbound::move_entity_rot
                     packet{};
-                packet.entity_id = static_cast<std::uint32_t>(mover.entity_id);
+                packet.entity_id = static_cast<std::uint32_t>(mover->entity_id);
                 packet.on_ground = current.on_ground;
                 packet.y_rot = angle(current.yaw);
                 packet.x_rot = angle(current.pitch);
@@ -1417,20 +1426,20 @@ void sync_player_visibility(
                 break;
             }
         }
-        last[mover.connection] = current;
+        last[mover->connection] = current;
         if (body.empty()) {
             continue;
         }
-        for (const auto &target : snapshot) {
-            if (target.connection == mover.connection) {
+        for (const auto *target : snapshot) {
+            if (target->connection == mover->connection) {
                 continue;
             }
-            const auto found{visible.find(target.connection)};
+            const auto found{visible.find(target->connection)};
             if (found == visible.end() ||
-                !found->second.contains(mover.connection)) {
+                !found->second.contains(mover->connection)) {
                 continue;
             }
-            append(target.connection, body);
+            append(target->connection, body);
         }
     }
 

@@ -92,6 +92,15 @@ class play_session {
 
     [[nodiscard]] auto all() const -> std::vector<player>;
 
+    /// Visit every player without copying the records. The simulation thread
+    /// is the only writer, so this is the cheap path for per-tick iteration.
+    template <typename F> void for_each(F &&visit) const {
+        for (const auto &[connection, value] : players_) {
+            static_cast<void>(connection);
+            visit(value);
+        }
+    }
+
     [[nodiscard]] auto size() const -> std::size_t;
 
   private:
