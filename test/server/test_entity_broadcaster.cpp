@@ -23,6 +23,7 @@ namespace {
 
 namespace net = refrain::net;
 namespace session = refrain::session;
+namespace sim = refrain::sim;
 namespace support = refrain::test_support;
 
 /// Reads the leading packet-id varint of an encoded body.
@@ -51,7 +52,8 @@ void join(session::play_session &players, std::uint64_t connection, double x,
 suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
     "players in range spawn each other and send one initial position"_test =
         [] {
-            session::play_session players{};
+            sim::player_table table{};
+            session::play_session players{table};
             join(players, 1, 0.0, 0.0);
             join(players, 2, 32.0, 0.0);
             support::fake_play_gateway gateway{};
@@ -69,7 +71,8 @@ suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
         };
 
     "a second tick with no movement sends nothing"_test = [] {
-        session::play_session players{};
+        sim::player_table table{};
+        session::play_session players{table};
         join(players, 1, 0.0, 0.0);
         join(players, 2, 32.0, 0.0);
         support::fake_play_gateway gateway{};
@@ -83,7 +86,8 @@ suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
     };
 
     "players outside the tracking range never see each other"_test = [] {
-        session::play_session players{};
+        sim::player_table table{};
+        session::play_session players{table};
         join(players, 1, 0.0, 0.0);
         join(players, 2, 1000.0, 0.0);
         support::fake_play_gateway gateway{};
@@ -95,7 +99,8 @@ suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
     };
 
     "a movement step reaches only the viewers tracking the mover"_test = [] {
-        session::play_session players{};
+        sim::player_table table{};
+        session::play_session players{table};
         join(players, 1, 0.0, 0.0);
         join(players, 2, 32.0, 0.0);
         support::fake_play_gateway gateway{};
@@ -116,7 +121,8 @@ suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
     };
 
     "leaving removes the entity before the tab entry"_test = [] {
-        session::play_session players{};
+        sim::player_table table{};
+        session::play_session players{table};
         join(players, 1, 0.0, 0.0);
         join(players, 2, 32.0, 0.0);
         support::fake_play_gateway gateway{};
@@ -140,7 +146,8 @@ suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
     };
 
     "an attack sends health, hurt and one animation to the target"_test = [] {
-        session::play_session players{};
+        sim::player_table table{};
+        session::play_session players{table};
         join(players, 1, 0.0, 0.0);
         join(players, 2, 32.0, 0.0);
         support::fake_play_gateway gateway{};
@@ -165,7 +172,8 @@ suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
     };
 
     "play ready sends health then experience"_test = [] {
-        session::play_session players{};
+        sim::player_table table{};
+        session::play_session players{table};
         join(players, 1, 0.0, 0.0);
         support::fake_play_gateway gateway{};
         entity_broadcaster broadcaster{gateway, 16};

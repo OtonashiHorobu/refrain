@@ -201,10 +201,27 @@ auto run_server(const server_run_options &options) -> int {
     }
     log_world.info("{} dataversion={} seed={}", options.world_path,
                    level->data_version, level->seed);
+    const auto initial_mode{
+        level->game_mode >= 0 && level->game_mode <= 3
+            ? static_cast<refrain::net::game_mode>(level->game_mode)
+            : refrain::net::game_mode::creative};
     store->seed(static_cast<std::uint64_t>(level->seed));
-    store->set_player_position(static_cast<double>(level->spawn_x) + 0.5,
-                               static_cast<double>(level->spawn_y),
-                               static_cast<double>(level->spawn_z) + 0.5);
+    // The console and replay scripts drive one synthetic player; it is created
+    // before the listener starts, so it is always the first player by entity id
+    // and commands that omit a name keep addressing it.
+    auto console_player{
+        store->add_player(refrain::sim::player_table::registration{
+            .connection = refrain::sim::synthetic_connection,
+            .name = std::string{"@console"},
+            .world = std::string{level_name},
+            .x = static_cast<double>(level->spawn_x) + 0.5,
+            .y = static_cast<double>(level->spawn_y),
+            .z = static_cast<double>(level->spawn_z) + 0.5,
+            .game_mode = static_cast<std::uint32_t>(initial_mode),
+        })};
+    if (!console_player) {
+        return report_error(console_player.error());
+    }
 
     // Ticket seeding: the spawn column plus its 3x3 neighbourhood. The
     // tick loop keeps them loaded; a missing chunk in a sparse imported world
@@ -254,12 +271,8 @@ auto run_server(const server_run_options &options) -> int {
     auto command_environment{
         std::make_shared<refrain::server::command_environment>()};
     command_environment->world = &store->store();
-    const auto initial_mode{
-        level->game_mode >= 0 && level->game_mode <= 3
-            ? static_cast<refrain::net::game_mode>(level->game_mode)
-            : refrain::net::game_mode::creative};
     command_environment->default_mode = initial_mode;
-    refrain::session::play_session players{};
+    refrain::session::play_session players{store->players()};
     refrain::session::chunk_tracker views{};
     const auto tracking_chunks{static_cast<std::int32_t>(std::max<std::int64_t>(
         1, options.network.get_int64("entity_tracking_range", 512) / 16))};

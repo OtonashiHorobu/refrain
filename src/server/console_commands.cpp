@@ -326,19 +326,28 @@ void console_commands::execute(std::string_view line,
         return;
     }
     if (line == "inv") {
-        if (store.player().inventory.empty()) {
+        const auto *player{store.players().first()};
+        if (player == nullptr) {
+            log_server.warn("no player");
+            return;
+        }
+        if (player->inventory.empty()) {
             log_server.info("empty");
         } else {
-            for (const auto &stack : store.player().inventory) {
+            for (const auto &stack : player->inventory) {
                 log_server.info("{} x{}", stack.item, stack.count);
             }
         }
         return;
     }
     if (line == "pos") {
-        const auto &player{store.player()};
-        log_server.info("x={:.1f} y={:.1f} z={:.1f}", player.x, player.y,
-                        player.z);
+        const auto *player{store.players().first()};
+        if (player == nullptr) {
+            log_server.warn("no player");
+            return;
+        }
+        log_server.info("x={:.1f} y={:.1f} z={:.1f}", player->x, player->y,
+                        player->z);
         return;
     }
     if (line == "entities") {
@@ -358,17 +367,27 @@ void console_commands::execute(std::string_view line,
         return;
     }
     if (line == "jump") {
-        store.jump();
-        log_server.info("on_ground={}", store.player().on_ground);
+        auto *player{store.players().first()};
+        if (player == nullptr) {
+            log_server.warn("no player");
+            return;
+        }
+        store.jump(*player);
+        log_server.info("on_ground={}", player->on_ground);
         return;
     }
     if (tokens.size() == 3 && tokens[0] == "give") {
+        auto *player{store.players().first()};
+        if (player == nullptr) {
+            log_server.warn("no player");
+            return;
+        }
         std::uint32_t count{0};
         if (!parse_number(tokens[2], count) || count == 0) {
             log_server.warn("give expects a positive count");
             return;
         }
-        auto added{store.add_item(tokens[1], count)};
+        auto added{store.add_item(*player, tokens[1], count)};
         if (!added) {
             log_server.warn("give failed: {}", added.error().message);
             return;
@@ -407,19 +426,28 @@ void console_commands::execute(std::string_view line,
         return;
     }
     if (tokens.size() == 3 && tokens[0] == "walk") {
+        auto *player{store.players().first()};
+        if (player == nullptr) {
+            log_server.warn("no player");
+            return;
+        }
         double dx{0.0};
         double dz{0.0};
         if (!parse_number(tokens[1], dx) || !parse_number(tokens[2], dz)) {
             log_server.warn("walk expects two numbers");
             return;
         }
-        const auto moved{store.move_player(dx, 0.0, dz)};
-        log_server.info("{:.1f},{:.1f},{:.1f} {}", store.player().x,
-                        store.player().y, store.player().z,
-                        moved ? "moved" : "blocked");
+        const auto moved{store.move_player(*player, dx, 0.0, dz)};
+        log_server.info("{:.1f},{:.1f},{:.1f} {}", player->x, player->y,
+                        player->z, moved ? "moved" : "blocked");
         return;
     }
     if (tokens.size() == 4 && tokens[0] == "move") {
+        auto *player{store.players().first()};
+        if (player == nullptr) {
+            log_server.warn("no player");
+            return;
+        }
         double dx{0.0};
         double dy{0.0};
         double dz{0.0};
@@ -428,9 +456,10 @@ void console_commands::execute(std::string_view line,
             log_server.warn("move expects three numbers");
             return;
         }
-        auto &player{store.player()};
-        store.set_player_position(player.x + dx, player.y + dy, player.z + dz);
-        log_server.info("{:.1f},{:.1f},{:.1f}", player.x, player.y, player.z);
+        store.set_player_position(*player, player->x + dx, player->y + dy,
+                                  player->z + dz);
+        log_server.info("{:.1f},{:.1f},{:.1f}", player->x, player->y,
+                        player->z);
         return;
     }
     if ((tokens.size() == 4 && tokens[0] == "dig") ||
@@ -467,13 +496,14 @@ void console_commands::execute(std::string_view line,
                             applied.error().message);
             return;
         }
-        if (gained) {
-            (void)store.add_item(*gained, 1);
+        auto *player{store.players().first()};
+        if (gained && player != nullptr) {
+            (void)store.add_item(*player, *gained, 1);
         }
-        if (tokens[0] == "place") {
+        if (tokens[0] == "place" && player != nullptr) {
             // The server remains creative-permissive: consume when available,
             // but do not reject a scripted placement without a prior `give`.
-            (void)store.remove_item(tokens[4], 1);
+            (void)store.remove_item(*player, tokens[4], 1);
         }
         log_server.info("{}: {},{},{} -> {}", tokens[0], x, y, z,
                         tokens[0] == "place" ? tokens[4] : "air");
