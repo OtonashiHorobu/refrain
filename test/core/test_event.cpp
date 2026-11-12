@@ -176,6 +176,27 @@ boost::ut::suite event_suite = [] {
         expect(bus.pending() == std::size_t{0});
     };
 
+    "event/a throwing listener does not skip the ones behind it"_test = [] {
+        ev::bus bus{};
+        auto before{std::size_t{}};
+        auto after{std::size_t{}};
+        (void)bus.subscribe<ping>([&before](const ping &) { ++before; });
+        (void)bus.subscribe<ping>([](const ping &) { throw 7; });
+        (void)bus.subscribe<ping>([&after](const ping &) { ++after; });
+
+        bool caught{false};
+        try {
+            bus.publish(ping{.value = 1});
+        } catch (const int &) {
+            caught = true;
+        }
+        // The exception still reaches the caller, and every listener ran.
+        expect(caught);
+        expect(before == std::size_t{1});
+        expect(after == std::size_t{1});
+        bus.clear();
+    };
+
     "event/removals are purged after a throwing listener"_test = [] {
         ev::bus bus{};
         auto removed_calls{std::size_t{}};
