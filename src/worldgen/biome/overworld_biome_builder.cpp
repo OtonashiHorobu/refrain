@@ -598,6 +598,9 @@ void add_inland(state &out) {
 
 } // namespace
 
+// TODO: this builder duplicates the overworld climate table that already ships
+// in content/vanilla/26.3/reports/biome_parameters/overworld.json and is kept
+// alive only by a test; the data-driven loader must become the only source.
 auto overworld_parameters() -> std::vector<biome_parameter> {
     state out;
     out.parameters.reserve(8192);

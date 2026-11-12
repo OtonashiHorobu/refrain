@@ -1385,6 +1385,8 @@ void server::impl::send_play_login(std::uint64_t id) {
                     play_cb::encode_initialize_border);
     };
     const auto send_time = [&] {
+        // TODO: the world clock never advances; set_time is sent once with a
+        // fixed time and no periodic update follows.
         play_cb::set_time time{.game_time = 0, .clock_updates = {}};
         send_packet(id, play_cb::set_time::packet_id, time,
                     play_cb::encode_set_time);
@@ -2478,6 +2480,8 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
+        // TODO: clicks for every menu except the player inventory are
+        // dropped; block-entity containers need a menu registry first.
         if (packet.payload.container_id != 0) {
             return;
         }
