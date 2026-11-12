@@ -18,6 +18,7 @@
 #include <refrain/mod/rfmod.hpp>
 #include <refrain/net/registry.hpp>
 #include <refrain/net/server.hpp>
+#include <refrain/server/chunk_generation.hpp>
 #include <refrain/server/chunk_packet.hpp>
 #include <refrain/server/chunk_streamer.hpp>
 #include <refrain/server/chunk_view.hpp>
@@ -66,6 +67,7 @@ constexpr refrain::log::logger log_server{"server"};
 constexpr refrain::log::logger log_sim{"sim"};
 constexpr refrain::log::logger log_storage{"storage"};
 constexpr refrain::log::logger log_world{"world"};
+constexpr refrain::log::logger log_chunk_gen{"chunk-gen"};
 
 } // namespace
 
@@ -1519,13 +1521,13 @@ auto run_server(const server_run_options &options) -> int {
     const std::string datapack_root{options.datapack_root.empty()
                                         ? "content/vanilla/26.3/data"
                                         : options.datapack_root};
+    auto level_info{store->store().level()};
+    if (!level_info) {
+        return report_error(level_info.error());
+    }
     if (store->loaded_chunks() == 0) {
         // A world created from a seed starts empty; fill the spawn area
         // before the listener accepts joins.
-        auto level_info{store->store().level()};
-        if (!level_info) {
-            return report_error(level_info.error());
-        }
         const auto seed{level_info->seed};
         const auto spawn{refrain::world::chunk_pos{0, 0}};
         auto generated{refrain::server::generate_spawn_area(
@@ -1541,6 +1543,21 @@ auto run_server(const server_run_options &options) -> int {
             return report_error(generated.error());
         }
         refrain::log::info("[world]: generated {} spawn chunk(s)", *generated);
+    }
+    // Columns the viewport needs but the store does not hold are generated on
+    // a worker, so walking past the spawn area keeps streaming terrain.
+    std::unique_ptr<refrain::server::chunk_generation> generation{};
+    if (auto started{refrain::server::chunk_generation::start(
+            refrain::server::chunk_generation::config{
+                .data_root = datapack_root,
+                .templates_root = datapack_root + "/../templates",
+                .seed = level_info->seed,
+            })};
+        started) {
+        generation = std::move(*started);
+    } else {
+        refrain::log::warn("[world]: generation unavailable: {}",
+                           started.error().message);
     }
     if (auto configured{store->store().set_zstd_level(zstd_level)};
         !configured) {
@@ -1841,6 +1858,11 @@ auto run_server(const server_run_options &options) -> int {
                                         .tables = &*tables,
                                         .registries = &*registries,
                                     });
+        streamer->set_chunk_requester(
+            [&generation](std::int32_t x, std::int32_t z) {
+                return generation != nullptr &&
+                       generation->request(refrain::world::chunk_pos{x, z});
+            });
     }
 
     // Player inventory: map runtime item keys to protocol item ids once, then
@@ -2219,6 +2241,19 @@ auto run_server(const server_run_options &options) -> int {
             listener->tick();
             sync_player_visibility(*listener, players, last_moves,
                                    visible_players, tracking_chunks);
+        }
+        if (generation) {
+            for (auto &[pos, column] : generation->take_results()) {
+                auto inserted{store->insert_chunk(pos, std::move(column))};
+                if (!inserted) {
+                    log_chunk_gen.debug("insert ({}, {}) failed: {}", pos.x,
+                                        pos.z, inserted.error().message);
+                    continue;
+                }
+                if (streamer) {
+                    streamer->chunk_ready(pos.x, pos.z);
+                }
+            }
         }
         if (streamer) {
             streamer->tick(views);

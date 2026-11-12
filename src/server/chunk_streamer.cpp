@@ -25,6 +25,26 @@ chunk_streamer::chunk_streamer(refrain::net::server &listener,
                                chunk_packet_source source)
     : listener_(listener), source_(source) {}
 
+void chunk_streamer::set_chunk_requester(chunk_requester requester) {
+    requester_ = std::move(requester);
+}
+
+void chunk_streamer::chunk_ready(std::int32_t x, std::int32_t z) {
+    for (auto &[id, stream] : streams_) {
+        static_cast<void>(id);
+        const auto dx{x - stream.center_x};
+        const auto dz{z - stream.center_z};
+        if (std::max(std::abs(dx), std::abs(dz)) > stream.radius) {
+            continue;
+        }
+        stream.requested.erase({x, z});
+        stream.known.erase({x, z});
+        if (stream.queued.insert({x, z}).second) {
+            stream.pending.emplace_back(x, z);
+        }
+    }
+}
+
 void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
 
     const auto active_ids{listener_.active_connections()};
@@ -143,13 +163,18 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
                 auto encoded{refrain::server::encode_full_chunk(
                     source_, refrain::sim::chunk_pos{x, z})};
                 if (!encoded) {
-                    // The world may not have this chunk generated;
-                    // remember it so the same coordinate is not retried
-                    // every tick.
-                    refrain::log::debug(
-                        "network: chunk ({}, {}) encode failed: {}", x, z,
-                        encoded.error().message);
-                    stream.known.emplace(x, z);
+                    // The world does not hold this column yet. Ask the
+                    // generator once; `chunk_ready` re-queues it when the
+                    // column arrives.
+                    if (encoded.error().code == error_code::not_found &&
+                        requester_ && stream.requested.insert({x, z}).second) {
+                        if (!requester_(x, z)) {
+                            stream.requested.erase({x, z});
+                        }
+                    }
+                    log_net.debug("chunk ({}, {}) encode failed: {}", x, z,
+                                  encoded.error().message);
+                    stream.queued.erase({x, z});
                     stream.pending.pop_front();
                     continue;
                 }
