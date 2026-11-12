@@ -9,9 +9,13 @@
 #include <boost/ut.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <future>
+#include <semaphore>
 #include <span>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -157,6 +161,72 @@ suite java777_codec_tests = [] {
             expect(!codec.feed(99, data));
             expect(!codec.set_compression(99, 0));
         };
+
+    // Two connections encode at the same time. The first connection's encode is
+    // parked inside the codec until the second connection's encode has
+    // returned, so the assertion does not depend on wall-clock speed: a codec
+    // that serialises every connection on one lock never returns the second
+    // encode. The wait is bounded, so such a regression fails instead of
+    // hanging.
+    "protocol/777 codec encodes two connections concurrently"_test = [] {
+        constexpr std::uint64_t first{0x11};
+        constexpr std::uint64_t second{0x12};
+        std::binary_semaphore parked{0};
+        std::binary_semaphore release{0};
+        protocol::java777_codec codec{[&](std::uint64_t connection) {
+            if (connection != first) {
+                return;
+            }
+            parked.release();
+            release.acquire();
+        }};
+        codec.create_connection(first);
+        codec.create_connection(second);
+        const std::array payload{std::byte{0x5A}};
+
+        bool first_sent{false};
+        std::thread first_encode{[&] {
+            first_sent =
+                static_cast<bool>(codec.send_packet(first, 1U, payload));
+        }};
+        const bool first_parked{
+            parked.try_acquire_for(std::chrono::seconds{5})};
+        std::promise<bool> second_status{};
+        auto second_done{second_status.get_future()};
+        std::thread second_encode{[&] {
+            second_status.set_value(
+                static_cast<bool>(codec.send_packet(second, 2U, payload)));
+        }};
+        const bool second_completed{second_done.wait_for(std::chrono::seconds{
+                                        5}) == std::future_status::ready};
+        release.release();
+        first_encode.join();
+        second_encode.join();
+
+        expect(first_parked);
+        expect(first_sent);
+        expect(second_completed);
+        expect(second_done.get());
+        const auto outbound_id{[&codec](std::uint64_t connection) {
+            std::span<const std::byte> framed{};
+            if (!codec.take_outbound(connection, framed)) {
+                return std::uint32_t{0};
+            }
+            net::frame_decoder decoder{-1};
+            if (!decoder.push(framed)) {
+                return std::uint32_t{0};
+            }
+            std::vector<std::byte> body;
+            if (!decoder.next(body) || body.empty()) {
+                return std::uint32_t{0};
+            }
+            net::reader reader{body};
+            const auto packet_id{reader.read_varint()};
+            return packet_id ? *packet_id : std::uint32_t{0};
+        }};
+        expect(outbound_id(first) == 1U);
+        expect(outbound_id(second) == 2U);
+    };
 };
 
 } // namespace
