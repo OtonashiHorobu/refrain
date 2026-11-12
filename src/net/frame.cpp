@@ -4,8 +4,11 @@
 
 #include <refrain/net/frame.hpp>
 
+#include <refrain/net/primitives.hpp>
+
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <utility>
@@ -19,18 +22,10 @@ namespace {
     return make_error(error_code::parse_error, message);
 }
 
-[[nodiscard]] auto varint_size(std::uint32_t value) noexcept -> std::size_t {
-    std::size_t size{1};
-    while ((value & ~0x7FU) != 0) {
-        value >>= 7U;
-        ++size;
-    }
-    return size;
-}
-
-/// Parse the three-byte VarInt21 prefix from `data`. Returns the number of
-/// prefix bytes and the decoded length. `need_more` is set when the data ends
-/// in the middle of the prefix.
+/// Parse the three-byte VarInt21 prefix from `data`. Decoding is delegated to
+/// `reader::read_varint` over a window capped at three bytes; this function
+/// only maps that outcome onto the incremental reader's states. `need_more` is
+/// set when the data ends in the middle of the prefix.
 struct prefix_result {
     std::size_t bytes{0};
     std::uint32_t value{0};
@@ -41,25 +36,24 @@ struct prefix_result {
 
 [[nodiscard]] auto parse_prefix(std::span<const std::byte> data)
     -> prefix_result {
-    std::uint32_t value{0};
-    for (std::size_t index{0}; index < 3; ++index) {
-        if (index >= data.size()) {
-            return prefix_result{.bytes = index, .need_more = true};
+    constexpr std::size_t prefix_limit{3};
+    const auto window{std::min(data.size(), prefix_limit)};
+    reader in{data.first(window)};
+    auto decoded{in.read_varint()};
+    if (!decoded) {
+        if (data.size() < prefix_limit) {
+            return prefix_result{.bytes = data.size(), .need_more = true};
         }
-        const auto byte{static_cast<std::uint8_t>(data[index])};
-        value |= static_cast<std::uint32_t>(byte & 0x7FU) << (7U * index);
-        if ((byte & 0x80U) == 0) {
-            if (value == 0) {
-                return prefix_result{.bytes = index + 1,
-                                     .invalid = true,
-                                     .message = "frame length is zero"};
-            }
-            return prefix_result{.bytes = index + 1, .value = value};
-        }
+        return prefix_result{.bytes = prefix_limit,
+                             .invalid = true,
+                             .message = "frame length wider than 21 bits"};
     }
-    return prefix_result{.bytes = 3,
-                         .invalid = true,
-                         .message = "frame length wider than 21 bits"};
+    if (*decoded == 0) {
+        return prefix_result{.bytes = in.position(),
+                             .invalid = true,
+                             .message = "frame length is zero"};
+    }
+    return prefix_result{.bytes = in.position(), .value = *decoded};
 }
 
 } // namespace
