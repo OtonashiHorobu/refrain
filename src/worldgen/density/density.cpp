@@ -855,9 +855,17 @@ class interpolated_sampler final : public sampler {
         if (x_in_cell == 0 && y_in_cell == 0 && z_in_cell == 0) {
             return input_->sample_value(context, block_x, block_y, block_z);
         }
-        const volume vol{2,
-                         2,
-                         2,
+        // A block on a cell boundary along one axis interpolates with a zero
+        // fraction there, so both corners of that axis carry the same value
+        // and sampling the far one cannot change the result. Sampling the
+        // exact corner set keeps the value bit-identical for finite input
+        // while skipping up to half of the corners on a boundary.
+        const jint size_x = x_in_cell == 0 ? 1 : 2;
+        const jint size_y = y_in_cell == 0 ? 1 : 2;
+        const jint size_z = z_in_cell == 0 ? 1 : 2;
+        const volume vol{size_x,
+                         size_y,
+                         size_z,
                          block_x - x_in_cell,
                          block_y - y_in_cell,
                          block_z - z_in_cell,
@@ -866,18 +874,21 @@ class interpolated_sampler final : public sampler {
                          cell_size_xz_};
         auto input_buffer = context.acquire(vol.size());
         input_->sample_volume(context, input_buffer, vol);
+        const jint far_x = size_x - 1;
+        const jint far_y = size_y - 1;
+        const jint far_z = size_z - 1;
         return mth::lerp3(
             static_cast<float>(x_in_cell) / static_cast<float>(cell_size_xz_),
             static_cast<float>(y_in_cell) / static_cast<float>(cell_size_y_),
             static_cast<float>(z_in_cell) / static_cast<float>(cell_size_xz_),
             input_buffer.get(vol.index_unchecked(0, 0, 0)),
-            input_buffer.get(vol.index_unchecked(1, 0, 0)),
-            input_buffer.get(vol.index_unchecked(0, 1, 0)),
-            input_buffer.get(vol.index_unchecked(1, 1, 0)),
-            input_buffer.get(vol.index_unchecked(0, 0, 1)),
-            input_buffer.get(vol.index_unchecked(1, 0, 1)),
-            input_buffer.get(vol.index_unchecked(0, 1, 1)),
-            input_buffer.get(vol.index_unchecked(1, 1, 1)));
+            input_buffer.get(vol.index_unchecked(far_x, 0, 0)),
+            input_buffer.get(vol.index_unchecked(0, far_y, 0)),
+            input_buffer.get(vol.index_unchecked(far_x, far_y, 0)),
+            input_buffer.get(vol.index_unchecked(0, 0, far_z)),
+            input_buffer.get(vol.index_unchecked(far_x, 0, far_z)),
+            input_buffer.get(vol.index_unchecked(0, far_y, far_z)),
+            input_buffer.get(vol.index_unchecked(far_x, far_y, far_z)));
     }
 
     void sample_volume(const sampler_context &context, buffer &output,
