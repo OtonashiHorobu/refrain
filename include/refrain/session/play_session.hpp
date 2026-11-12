@@ -115,8 +115,9 @@ class play_session {
     [[nodiscard]] auto all() const -> std::vector<player>;
 
     /// Visit every connected player in ascending entity id order without
-    /// copying the projection. The simulation thread is the only writer, so
-    /// this is the cheap path for per-tick iteration.
+    /// copying the projection. The pointers stay valid until the next call and
+    /// observe mutations made through this object (the cached projection is
+    /// refreshed in place).
     template <typename F> void for_each(F &&visit) const {
         refresh_all();
         for (const auto &[id, value] : views_) {
@@ -133,6 +134,7 @@ class play_session {
     [[nodiscard]] static auto project(const sim::player_state &record)
         -> player;
     void refresh(const sim::player_state &record) const;
+    void refresh_if_cached(const sim::player_state &record) const;
     void refresh_all() const;
 
     /// Table owned by the standalone constructor; unused when the server

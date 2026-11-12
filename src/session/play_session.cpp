@@ -106,6 +106,7 @@ auto play_session::update_position(std::uint64_t connection, double x, double y,
     record->z = z;
     record->yaw = yaw;
     record->pitch = pitch;
+    refresh_if_cached(*record);
     return true;
 }
 
@@ -115,6 +116,7 @@ auto play_session::set_on_ground(std::uint64_t connection, bool value) -> bool {
         return false;
     }
     record->on_ground = value;
+    refresh_if_cached(*record);
     return true;
 }
 
@@ -126,6 +128,7 @@ auto play_session::set_view_distance(std::uint64_t connection,
         return false;
     }
     record->view_distance = distance;
+    refresh_if_cached(*record);
     return true;
 }
 
@@ -135,6 +138,7 @@ auto play_session::set_health(std::uint64_t connection, float health) -> bool {
         return false;
     }
     record->health = health;
+    refresh_if_cached(*record);
     return true;
 }
 
@@ -145,6 +149,7 @@ auto play_session::set_game_mode(std::uint64_t connection, std::uint32_t mode)
         return false;
     }
     record->game_mode = mode;
+    refresh_if_cached(*record);
     return true;
 }
 
@@ -227,6 +232,13 @@ auto play_session::project(const sim::player_state &record) -> player {
         .view_distance = record.view_distance,
         .inventory = record.inventory,
     };
+}
+
+void play_session::refresh_if_cached(const sim::player_state &record) const {
+    const auto found{views_.find(record.id)};
+    if (found != views_.end()) {
+        found->second = project(record);
+    }
 }
 
 void play_session::refresh(const sim::player_state &record) const {
