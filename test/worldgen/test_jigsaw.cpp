@@ -24,6 +24,7 @@
 #include <refrain/worldgen/terrain/aquifer.hpp>
 #include <refrain/worldgen/terrain/terrain.hpp>
 
+#include "support/scratch_directory.hpp"
 #include "worldgen/jigsaw_support.hpp"
 
 #include <boost/ut.hpp>
@@ -526,8 +527,8 @@ void check_jigsaw_start_reference(std::string_view prefix,
                                  ? std::string::npos
                                  : comma - directory_start);
         if (!directory.empty()) {
-            test_support::prime_template_states(states, templates_root,
-                                                directory);
+            refrain::worldgen::test_support::prime_template_states(
+                states, templates_root, directory);
         }
         if (comma == std::string::npos) {
             break;
@@ -760,10 +761,8 @@ suite<"worldgen/jigsaw"> jigsaw_tests = [] {
         };
 
     "a jigsaw start expands connectors deterministically"_test = [] {
-        const auto directory =
-            std::filesystem::path{core::io::temp_directory()} /
-            "refrain-jigsaw-start";
-        std::filesystem::remove_all(directory);
+        const refrain::test_support::scratch_directory scratch;
+        const auto directory = scratch.path();
         expect(write_connector_template(directory.string(), "source", 3,
                                         "up_north", "test:source",
                                         "test:connector", "test:children"));
@@ -902,10 +901,8 @@ suite<"worldgen/jigsaw"> jigsaw_tests = [] {
     };
 
     "a child of an inside piece expands against the parent free box"_test = [] {
-        const auto directory =
-            std::filesystem::path{core::io::temp_directory()} /
-            "refrain-jigsaw-inherited-free";
-        std::filesystem::remove_all(directory);
+        const refrain::test_support::scratch_directory scratch;
+        const auto directory = scratch.path();
         expect(write_multi_jigsaw_template(
             directory.string(), "parent", 7, 7, 7,
             {jigsaw_spec{.x = 3,

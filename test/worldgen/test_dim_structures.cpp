@@ -18,6 +18,8 @@
 #include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/template.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <algorithm>
@@ -338,10 +340,8 @@ suite<"worldgen/dim-structures"> dim_structure_tests = [] {
         };
 
     "the end city start repeats the fixed floor and its rotations"_test = [] {
-        const auto directory =
-            std::filesystem::path{core::io::temp_directory()} /
-            "refrain-end-city-synthetic";
-        std::filesystem::remove_all(directory);
+        const refrain::test_support::scratch_directory scratch;
+        const auto directory = scratch.path();
         expect(make_end_city_templates(directory));
         block_state_registry states;
         const auto manager = make_end_city_manager(directory, states);
@@ -379,14 +379,11 @@ suite<"worldgen/dim-structures"> dim_structure_tests = [] {
             expect(turned->pieces[0].template_rotation ==
                    static_cast<jint>(template_rotation::clockwise_90));
         }
-        std::filesystem::remove_all(directory);
     };
 
     "structure sets dispatch to the fortress and the end city"_test = [] {
-        const auto directory =
-            std::filesystem::path{core::io::temp_directory()} /
-            "refrain-end-city-dispatch";
-        std::filesystem::remove_all(directory);
+        const refrain::test_support::scratch_directory scratch;
+        const auto directory = scratch.path();
         expect(make_end_city_templates(directory));
         block_state_registry states;
         const auto manager = make_end_city_manager(directory, states);
@@ -454,14 +451,11 @@ suite<"worldgen/dim-structures"> dim_structure_tests = [] {
             expect(end_starts.front().step == "surface_structures");
             expect(end_starts.front().pieces.front().template_origin.y == 60);
         }
-        std::filesystem::remove_all(directory);
     };
 
     "an end city chest marker seeds the chest below it"_test = [] {
-        const auto directory =
-            std::filesystem::path{core::io::temp_directory()} /
-            "refrain-end-city-marker";
-        std::filesystem::remove_all(directory);
+        const refrain::test_support::scratch_directory scratch;
+        const auto directory = scratch.path();
         block_state_registry states;
         (void)states.intern("minecraft:air", {.air = true});
         auto chest = states.intern(
@@ -548,7 +542,6 @@ suite<"worldgen/dim-structures"> dim_structure_tests = [] {
             }
             expect(entity->find("LootTableSeed") != entity->end());
         }
-        std::filesystem::remove_all(directory);
     };
 };
 

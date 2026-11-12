@@ -14,6 +14,8 @@
 #include <refrain/mod/manifest.hpp>
 #include <refrain/mod/static_mod.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <cstddef>
@@ -472,11 +474,9 @@ const suite mod_host_tests = [] {
 
     "mod_host/loads an external native mod"_test = [] {
         namespace fs = std::filesystem;
-        const auto root{fs::temp_directory_path() /
-                        "refrain-host-external-test"};
+        const refrain::test_support::scratch_directory scratch;
+        const auto root = scratch.path();
         std::error_code error;
-        fs::remove_all(root, error);
-        expect(fs::create_directories(root, error));
 
         const auto module_path{root / "libexternal.so"};
         fs::copy_file(fs::path{REFRAIN_TEST_EXTERNAL_MOD}, module_path,
@@ -557,7 +557,6 @@ native = "libexternal.so"
         if (active) {
             expect(active->id == "refrain.test.external");
         }
-        fs::remove_all(root, error);
     };
 
     "mod_host/rejects an incompatible host_api"_test = [] {

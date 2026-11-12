@@ -13,6 +13,8 @@
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/structure/generator.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <cstdlib>
@@ -192,9 +194,8 @@ suite<"worldgen/structure-generator"> structure_generator_tests = [] {
         if (!storage) {
             return;
         }
-        const auto root =
-            std::filesystem::temp_directory_path() / "refrain-generated-anvil";
-        std::filesystem::remove_all(root);
+        const refrain::test_support::scratch_directory scratch;
+        const auto root = scratch.path() / "anvil";
         auto store = world::world_store::create(root.string());
         expect(store.has_value());
         if (!store) {
@@ -214,19 +215,14 @@ suite<"worldgen/structure-generator"> structure_generator_tests = [] {
         expect(store->write_meta(*meta_bytes).has_value());
         expect(store->write_chunk({.x = 9, .z = 2}, *storage).has_value());
         expect(store->commit().has_value());
-        const auto exported =
-            root.parent_path() / (root.filename().string() + "-export");
-        std::filesystem::remove_all(exported);
+        const auto exported = scratch.path() / "export";
         const auto export_result =
             world::anvil::export_world(root.string(), exported.string(), true);
         expect(export_result.has_value());
         if (!export_result) {
-            std::filesystem::remove_all(root);
             return;
         }
-        const auto imported =
-            root.parent_path() / (root.filename().string() + "-import");
-        std::filesystem::remove_all(imported);
+        const auto imported = scratch.path() / "import";
         const auto import_result = world::anvil::import_world(
             exported.string(), imported.string(), true);
         expect(import_result.has_value());
@@ -280,8 +276,5 @@ suite<"worldgen/structure-generator"> structure_generator_tests = [] {
                 }
             }
         }
-        std::filesystem::remove_all(root);
-        std::filesystem::remove_all(exported);
-        std::filesystem::remove_all(imported);
     };
 };

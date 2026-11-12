@@ -9,6 +9,8 @@
 #include <refrain/worldgen/structure/placement_stage.hpp>
 #include <refrain/worldgen/structure/template.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <array>
@@ -544,10 +546,8 @@ suite<"worldgen/template"> template_tests = [] {
         if (!stone) {
             return;
         }
-        const auto directory =
-            std::filesystem::path{core::io::temp_directory()} /
-            "refrain-igloo-starts";
-        std::filesystem::remove_all(directory);
+        const refrain::test_support::scratch_directory scratch;
+        const auto directory = scratch.path();
         std::filesystem::create_directories(directory / "minecraft" /
                                             "structure" / "igloo");
         const auto write_template = [&](std::string_view name, jint size_x,
@@ -613,7 +613,6 @@ suite<"worldgen/template"> template_tests = [] {
         }
         expect(saw_plain);
         expect(saw_basement);
-        std::filesystem::remove_all(directory);
     };
 
     "the lowercase palette keys of the current format resolve"_test = [] {
@@ -1093,10 +1092,8 @@ suite<"worldgen/template"> template_tests = [] {
             if (!stone) {
                 return;
             }
-            const auto directory =
-                std::filesystem::path{core::io::temp_directory()} /
-                "refrain-template-manager";
-            std::filesystem::remove_all(directory);
+            const refrain::test_support::scratch_directory scratch;
+            const auto directory = scratch.path();
             std::filesystem::create_directories(directory / "test" /
                                                 "structure");
 
@@ -1126,7 +1123,6 @@ suite<"worldgen/template"> template_tests = [] {
             expect(missing.size_x == 0);
             expect(missing.palettes.empty());
             expect(&manager.get_or_create("test:demo") == &loaded);
-            std::filesystem::remove_all(directory);
         };
 
     "wall sides ignore hanging lanterns"_test = [] {
@@ -1292,9 +1288,8 @@ suite<"worldgen/template"> template_tests = [] {
         if (!stone || !stairs || !water) {
             return;
         }
-        const auto directory =
-            std::filesystem::temp_directory_path() / "refrain-ocean-ruin-test";
-        std::filesystem::remove_all(directory);
+        const refrain::test_support::scratch_directory scratch;
+        const auto directory = scratch.path();
         std::filesystem::create_directories(directory / "test" / "structure");
         data::nbt::compound root;
         root["size"] = ints({2, 1, 1});
@@ -1358,7 +1353,6 @@ suite<"worldgen/template"> template_tests = [] {
             worldgen_random{std::make_unique<legacy_random_source>(1)};
         place_structure_piece(context, piece, rot_random);
         expect(chunk.state_at(4, 10, 0) != *stone);
-        std::filesystem::remove_all(directory);
     };
 
     "the capped rule processor replaces a limited set of blocks"_test = [] {

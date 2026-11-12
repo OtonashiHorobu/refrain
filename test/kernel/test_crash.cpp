@@ -7,6 +7,8 @@
 #include <refrain/kernel/crash.hpp>
 #include <refrain/platform/file.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <filesystem>
@@ -28,27 +30,7 @@ void ensure_silent_log() {
     }
 }
 
-/// Fresh scratch directory for the crash database; removed by the caller.
-auto make_scratch_directory() -> std::filesystem::path {
-    std::error_code error{};
-    auto path = std::filesystem::temp_directory_path(error);
-    if (error) {
-        return {};
-    }
-    path /= "refrain-crash-tests";
-    std::filesystem::remove_all(path, error); // leftovers from a crashed run
-    error.clear();
-    std::filesystem::create_directories(path, error);
-    return path;
-}
-
-void remove_scratch_directory(const std::filesystem::path &path) {
-    if (path.empty()) {
-        return;
-    }
-    std::error_code error{};
-    std::filesystem::remove_all(path, error);
-}
+using scratch_directory = refrain::test_support::scratch_directory;
 
 /// Tests share a process-wide singleton: every test starts from a clean facade.
 void reset_reporter() { refrain::kernel::crash_reporter::shutdown(); }
@@ -83,11 +65,7 @@ using namespace boost::ut;
         [] {
             ensure_silent_log();
             reset_reporter();
-            const auto directory = make_scratch_directory();
-            expect(!directory.empty());
-            if (directory.empty()) {
-                return;
-            }
+            const scratch_directory directory;
 
             refrain::kernel::crash_config config{};
             config.database_path = directory.string();
@@ -98,7 +76,6 @@ using namespace boost::ut;
 
             expect(static_cast<bool>(result));
             if (!result) {
-                remove_scratch_directory(directory);
                 return;
             }
             expect(refrain::kernel::crash_reporter::initialized());
@@ -118,7 +95,6 @@ using namespace boost::ut;
             // copy) for diagnostics.
             expect(refrain::kernel::crash_reporter::database_path() ==
                    expected_path);
-            remove_scratch_directory(directory);
         };
 
     // The crash database directory is owner-private (0700); the default
@@ -127,11 +103,7 @@ using namespace boost::ut;
     "crash/database directory is created owner-private"_test = [] {
         ensure_silent_log();
         reset_reporter();
-        const auto directory = make_scratch_directory();
-        expect(!directory.empty());
-        if (directory.empty()) {
-            return;
-        }
+        const scratch_directory directory;
 
         refrain::kernel::crash_config config{};
         config.database_path = directory.string();
@@ -146,7 +118,6 @@ using namespace boost::ut;
             directory.string()));
 
         reset_reporter();
-        remove_scratch_directory(directory);
     };
 
     // database_path() returns an owned copy: a stored string_view would point
@@ -155,13 +126,9 @@ using namespace boost::ut;
     "crash/database_path returns an owned copy"_test = [] {
         ensure_silent_log();
         reset_reporter();
-        const auto base = make_scratch_directory();
-        expect(!base.empty());
-        if (base.empty()) {
-            return;
-        }
-        const auto first_path = (base / "first").string();
-        const auto second_path = (base / "second").string();
+        const scratch_directory base;
+        const auto first_path = (base.path() / "first").string();
+        const auto second_path = (base.path() / "second").string();
 
         refrain::kernel::crash_config first{};
         first.database_path = first_path;
@@ -187,7 +154,6 @@ using namespace boost::ut;
 
         reset_reporter();
         expect(refrain::kernel::crash_reporter::database_path() == second_path);
-        remove_scratch_directory(base);
     };
 
     // An over-long crash database path must fail with a specific diagnostic
@@ -197,15 +163,11 @@ using namespace boost::ut;
     "crash/oversized crash database path reports a specific error"_test = [] {
         ensure_silent_log();
         reset_reporter();
-        const auto base = make_scratch_directory();
-        expect(!base.empty());
-        if (base.empty()) {
-            return;
-        }
+        const scratch_directory base;
 
         // Build a creatable path longer than the marker buffer: every component
         // is < 255 bytes, the total is still below PATH_MAX.
-        std::filesystem::path deep = base;
+        std::filesystem::path deep = base.path();
         const std::string component(200, 'x');
         while (deep.string().size() <= 1100) {
             deep /= component;
@@ -236,7 +198,6 @@ using namespace boost::ut;
         }
         expect(!refrain::kernel::crash_reporter::initialized());
         reset_reporter();
-        remove_scratch_directory(base);
     };
 
     // Annotations may be recorded before initialize() (they are attached by
@@ -245,11 +206,7 @@ using namespace boost::ut;
     "crash/annotations are collected before and after initialize"_test = [] {
         ensure_silent_log();
         reset_reporter();
-        const auto directory = make_scratch_directory();
-        expect(!directory.empty());
-        if (directory.empty()) {
-            return;
-        }
+        const scratch_directory directory;
 
         // Before initialize(): collected for the handler that may start later.
         refrain::kernel::crash_reporter::set_annotation("refrain.commit",
@@ -270,18 +227,13 @@ using namespace boost::ut;
         // Cleared by shutdown: a post-shutdown call is accepted again.
         refrain::kernel::crash_reporter::set_annotation("refrain.branch",
                                                         "main");
-        remove_scratch_directory(directory);
     };
 
     "crash/initialize fails when Crashpad and the fallback are unavailable"_test =
         [] {
             ensure_silent_log();
             reset_reporter();
-            const auto directory = make_scratch_directory();
-            expect(!directory.empty());
-            if (directory.empty()) {
-                return;
-            }
+            const scratch_directory directory;
 
             refrain::kernel::crash_config config{};
             config.database_path = directory.string();
@@ -295,17 +247,12 @@ using namespace boost::ut;
                 expect(result.error().code == refrain::error_code::mod_error);
             }
             expect(!refrain::kernel::crash_reporter::initialized());
-            remove_scratch_directory(directory);
         };
 
     "crash/start_handler=false is a test stub"_test = [] {
         ensure_silent_log();
         reset_reporter();
-        const auto directory = make_scratch_directory();
-        expect(!directory.empty());
-        if (directory.empty()) {
-            return;
-        }
+        const scratch_directory directory;
 
         refrain::kernel::crash_config config{};
         config.database_path = directory.string();
@@ -321,17 +268,12 @@ using namespace boost::ut;
         expect(refrain::kernel::crash_reporter::database_path() ==
                expected_path);
         reset_reporter();
-        remove_scratch_directory(directory);
     };
 
     "crash/double initialize is rejected"_test = [] {
         ensure_silent_log();
         reset_reporter();
-        const auto directory = make_scratch_directory();
-        expect(!directory.empty());
-        if (directory.empty()) {
-            return;
-        }
+        const scratch_directory directory;
 
         refrain::kernel::crash_config config{};
         config.database_path = directory.string();
@@ -347,7 +289,6 @@ using namespace boost::ut;
 
         reset_reporter();
         expect(!refrain::kernel::crash_reporter::initialized());
-        remove_scratch_directory(directory);
     };
 
     "crash/shutdown is idempotent and trigger is inert when unarmed"_test = [] {

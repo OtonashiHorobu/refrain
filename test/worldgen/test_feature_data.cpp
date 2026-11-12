@@ -5,6 +5,8 @@
 #include <refrain/core/io.hpp>
 #include <refrain/worldgen/feature/feature_data.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <filesystem>
@@ -24,9 +26,8 @@ auto write(std::filesystem::path path, std::string_view text) {
 
 suite<"worldgen/feature-data"> feature_data_tests = [] {
     "feature documents, placements and biome lists load"_test = [] {
-        const auto root = std::filesystem::temp_directory_path() /
-                          "refrain-feature-data-test";
-        std::filesystem::remove_all(root);
+        const refrain::test_support::scratch_directory scratch;
+        const auto root = scratch.path();
         write(
             root / "minecraft/worldgen/feature/simple_block.json",
             R"({"type":"minecraft:simple_block","to_place":{"type":"minecraft:simple_state_provider","state":{"Name":"minecraft:stone"}}})");
@@ -41,7 +42,6 @@ suite<"worldgen/feature-data"> feature_data_tests = [] {
         auto data = load_feature_data(root.string());
         expect(data.has_value());
         if (!data) {
-            std::filesystem::remove_all(root);
             return;
         }
         expect(data->features.size() == 2U);
@@ -61,16 +61,13 @@ suite<"worldgen/feature-data"> feature_data_tests = [] {
             expect(data->biomes[0].steps[1].size() == 1U);
             expect(data->biomes[0].steps[1][0] == "minecraft:stone");
         }
-        std::filesystem::remove_all(root);
     };
 
     "a placed feature without placement is rejected"_test = [] {
-        const auto root =
-            std::filesystem::temp_directory_path() / "refrain-feature-bad-test";
-        std::filesystem::remove_all(root);
+        const refrain::test_support::scratch_directory scratch;
+        const auto root = scratch.path();
         write(root / "minecraft/worldgen/placed_feature/bad.json",
               R"({"feature":"minecraft:simple_block"})");
         expect(!load_feature_data(root.string()).has_value());
-        std::filesystem::remove_all(root);
     };
 };

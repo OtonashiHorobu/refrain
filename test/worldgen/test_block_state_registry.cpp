@@ -7,6 +7,8 @@
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/terrain/surface.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <array>
@@ -169,9 +171,8 @@ suite<"worldgen/block-state-registry"> block_state_registry_tests = [] {
     };
 
     "block tags load from a data root"_test = [] {
-        const auto root =
-            std::filesystem::temp_directory_path() / "refrain-block-tags-test";
-        std::filesystem::remove_all(root);
+        const refrain::test_support::scratch_directory scratch;
+        const auto root = scratch.path();
         std::filesystem::create_directories(root / "minecraft/tags/block");
         expect(refrain::core::io::write_text(
                    (root / "minecraft/tags/block/base.json").string(),
@@ -191,7 +192,6 @@ suite<"worldgen/block-state-registry"> block_state_registry_tests = [] {
                 expect(resolved->size() == 2);
             }
         }
-        std::filesystem::remove_all(root);
     };
 
     "uninterned state traits follow the heightmap tags"_test = [] {

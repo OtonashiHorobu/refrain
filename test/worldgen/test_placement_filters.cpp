@@ -18,6 +18,8 @@
 #include <refrain/worldgen/noise/noise.hpp>
 #include <refrain/worldgen/structure/template.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <algorithm>
@@ -804,10 +806,9 @@ auto write_wide_template(const std::filesystem::path &root) -> status {
         data::nbt::compression::gzip);
 }
 
-auto make_template_root() -> std::filesystem::path {
-    const auto root = std::filesystem::path{core::io::temp_directory()} /
-                      "refrain-feature-templates";
-    std::filesystem::remove_all(root);
+auto make_template_root(const refrain::test_support::scratch_directory &scratch)
+    -> std::filesystem::path {
+    const auto root = scratch.path();
     expect(write_template(root).has_value());
     return root;
 }
@@ -825,7 +826,8 @@ suite<"worldgen/feature-template"> feature_template_tests = [] {
         if (!stone) {
             return;
         }
-        const auto root = make_template_root();
+        const refrain::test_support::scratch_directory scratch;
+        const auto root = make_template_root(scratch);
         expect(write_wide_template(root).has_value());
         structure_template_manager manager{root.string(), registry};
         feature_data_set data;
@@ -885,7 +887,8 @@ suite<"worldgen/feature-template"> feature_template_tests = [] {
         if (!stone) {
             return;
         }
-        const auto root = make_template_root();
+        const refrain::test_support::scratch_directory scratch;
+        const auto root = make_template_root(scratch);
         structure_template_manager manager{root.string(), registry};
         feature_data_set data;
         data.features.emplace(
@@ -942,7 +945,8 @@ suite<"worldgen/feature-template"> feature_template_tests = [] {
         if (!stone) {
             return;
         }
-        const auto root = make_template_root();
+        const refrain::test_support::scratch_directory scratch;
+        const auto root = make_template_root(scratch);
         structure_template_manager manager{root.string(), registry};
         feature_data_set data;
         data.features.emplace(

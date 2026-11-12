@@ -5,12 +5,13 @@
 #include <refrain/platform/file.hpp>
 #include <refrain/platform/process.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <boost/ut.hpp>
 
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <system_error>
 
 #if !defined(_WIN32)
 // White-box POSIX test of the platform layer itself (see the allow-list entry
@@ -25,15 +26,6 @@ namespace {
 using namespace boost::ut;
 
 namespace fs = std::filesystem;
-
-auto scratch_directory() -> fs::path {
-    std::error_code error;
-    auto path = fs::path{refrain::platform::file::temp_directory()};
-    path /= "refrain-platform-process-tests";
-    fs::remove_all(path, error);
-    fs::create_directories(path, error);
-    return path;
-}
 
 auto read_text(const fs::path &path) -> std::string {
     std::ifstream in{path, std::ios::binary};
@@ -88,7 +80,8 @@ suite<"platform/process"> process_tests = [] {
             return;
         }
 
-        const fs::path directory = scratch_directory();
+        const refrain::test_support::scratch_directory scratch;
+        const fs::path directory = scratch.path();
         const fs::path marker = directory / "crash_marker.txt";
         for (const auto kind : {refrain::platform::fault_kind::segmentation,
                                 refrain::platform::fault_kind::abort}) {
@@ -105,9 +98,6 @@ suite<"platform/process"> process_tests = [] {
         const std::string text = read_text(marker);
         expect(!text.empty());
         expect(text.find("refrain crash pid=") != std::string::npos);
-
-        std::error_code error;
-        fs::remove_all(directory, error);
     };
 
 #if !defined(_WIN32) && !defined(REFRAIN_SANITIZE_BUILD)

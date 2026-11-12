@@ -16,6 +16,8 @@
 #include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/structure_set.hpp>
 
+#include "support/scratch_directory.hpp"
+
 #include <array>
 #include <filesystem>
 #include <map>
@@ -604,10 +606,8 @@ suite<"worldgen/igloo-piece"> igloo_piece_tests = [] {
             if (!stone || !chest || !marker) {
                 return;
             }
-            const auto directory =
-                std::filesystem::path{core::io::temp_directory()} /
-                "refrain-igloo-piece";
-            std::filesystem::remove_all(directory);
+            const refrain::test_support::scratch_directory scratch;
+            const auto directory = scratch.path();
             std::filesystem::create_directories(directory / "minecraft" /
                                                 "structure" / "igloo");
 
@@ -765,7 +765,6 @@ suite<"worldgen/igloo-piece"> igloo_piece_tests = [] {
                 }
                 expect(entity->contains("LootTableSeed"));
             }
-            std::filesystem::remove_all(directory);
         };
 };
 

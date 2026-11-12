@@ -22,6 +22,7 @@
 #include <refrain/worldgen/structure/structure_data.hpp>
 #include <refrain/worldgen/structure/template.hpp>
 
+#include "support/scratch_directory.hpp"
 #include "worldgen/jigsaw_support.hpp"
 
 #include <boost/ut.hpp>
@@ -316,8 +317,8 @@ suite<"worldgen/nether-structures"> nether_structure_tests = [] {
         }
         block_state_registry states;
         expect(make_states(states));
-        test_support::prime_template_states(states, templates_root,
-                                            "minecraft/structure/bastion");
+        refrain::worldgen::test_support::prime_template_states(
+            states, templates_root, "minecraft/structure/bastion");
         structure_template_manager manager{templates_root, states};
         const structure_start_context context{
             .seed = *seed,
@@ -421,10 +422,8 @@ suite<"worldgen/nether-structures"> nether_structure_tests = [] {
     };
 
     "a fossil start scans for air above a supported block"_test = [] {
-        const auto directory =
-            std::filesystem::path{core::io::temp_directory()} /
-            "refrain-nether-fossil-start";
-        std::filesystem::remove_all(directory);
+        const refrain::test_support::scratch_directory scratch;
+        const auto directory = scratch.path();
         expect(make_fossil_templates(directory));
         block_state_registry states;
         expect(make_states(states));
@@ -482,10 +481,8 @@ suite<"worldgen/nether-structures"> nether_structure_tests = [] {
 
     "a fossil start rejects columns without support or below sea level"_test =
         [] {
-            const auto directory =
-                std::filesystem::path{core::io::temp_directory()} /
-                "refrain-nether-fossil-reject";
-            std::filesystem::remove_all(directory);
+            const refrain::test_support::scratch_directory scratch;
+            const auto directory = scratch.path();
             expect(make_fossil_templates(directory));
             block_state_registry states;
             expect(make_states(states));
@@ -539,10 +536,8 @@ suite<"worldgen/nether-structures"> nether_structure_tests = [] {
         };
 
     "a fossil piece ignores air and structure blocks"_test = [] {
-        const auto directory =
-            std::filesystem::path{core::io::temp_directory()} /
-            "refrain-nether-fossil-piece";
-        std::filesystem::remove_all(directory);
+        const refrain::test_support::scratch_directory scratch;
+        const auto directory = scratch.path();
         expect(write_template(directory, "fossil_1", {3, 1, 1},
                               {"minecraft:bone_block", "minecraft:air",
                                "minecraft:structure_block"},
@@ -600,10 +595,8 @@ suite<"worldgen/nether-structures"> nether_structure_tests = [] {
     };
 
     "a fossil piece adds a rotated dried ghast above air"_test = [] {
-        const auto directory =
-            std::filesystem::path{core::io::temp_directory()} /
-            "refrain-nether-fossil-ghast";
-        std::filesystem::remove_all(directory);
+        const refrain::test_support::scratch_directory scratch;
+        const auto directory = scratch.path();
         expect(write_template(directory, "fossil_1", {3, 1, 1},
                               {"minecraft:air"},
                               {palette_block({0, 0, 0}, 0)}));
