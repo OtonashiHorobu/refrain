@@ -275,6 +275,9 @@ class vanilla_tables {
 
     [[nodiscard]] auto string_at(std::uint32_t index) const -> std::string_view;
 
+    /// The encoded container, borrowed. The caller owns the bytes and must
+    /// keep them alive for as long as this view is used: every accessor reads
+    /// through this span.
     std::span<const std::byte> bytes_{};
     section strings_{};
     section blocks_{};

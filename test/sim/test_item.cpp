@@ -7,6 +7,9 @@
 
 #include <boost/ut.hpp>
 
+#include <optional>
+#include <vector>
+
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -37,7 +40,16 @@ using refrain::sim::stack_enchantments;
 using refrain::sim::stack_max_damage;
 
 /// A container with the two item records the model tests need.
-auto item_tables() -> refrain::result<refrain::data::vanilla_tables> {
+///
+/// `vanilla_tables` is a view over the encoded bytes, so the owner has to stay
+/// alive for as long as the view does. Moving the bytes keeps the buffer where
+/// it is, which is why the holder is returned by value.
+struct owned_tables {
+    std::vector<std::byte> bytes{};
+    std::optional<refrain::data::vanilla_tables> tables{};
+};
+
+auto item_tables() -> owned_tables {
     refrain::data::vanilla_spec spec;
     spec.data_version = 5023;
     spec.items = {
@@ -46,11 +58,17 @@ auto item_tables() -> refrain::result<refrain::data::vanilla_tables> {
         refrain::data::item_spec{
             .name = "test:sword", .max_stack_size = 1, .max_damage = 3},
     };
+    owned_tables owned{};
     auto bytes{refrain::data::build_vanilla_tables(spec)};
     if (!bytes) {
-        return std::unexpected{std::move(bytes.error())};
+        return owned;
     }
-    return refrain::data::vanilla_tables::open(*bytes);
+    owned.bytes = std::move(*bytes);
+    auto opened{refrain::data::vanilla_tables::open(owned.bytes)};
+    if (opened) {
+        owned.tables = std::move(*opened);
+    }
+    return owned;
 }
 
 auto test_items() -> item_table {
@@ -63,12 +81,12 @@ auto test_items() -> item_table {
 suite item_model_tests = [] {
     "sim/item table copies stack size and max damage from the registry"_test =
         [] {
-            auto tables{item_tables()};
-            expect(tables.has_value());
-            if (!tables) {
+            auto owned{item_tables()};
+            expect(owned.tables.has_value());
+            if (!owned.tables) {
                 return;
             }
-            const auto items{item_table::from_tables(*tables)};
+            const auto items{item_table::from_tables(*owned.tables)};
             expect(items.size() == 2U);
             expect(items.stack_limit("test:block") == 64U);
             expect(items.stack_limit("test:sword") == 1U);
