@@ -58,12 +58,17 @@ void *host_alloc(void *, std::uint64_t size, std::uint64_t alignment) noexcept {
     // function is absent from the MSVC standard library, and a platform split
     // for one call is not worth it. The unaligned base is stored in the word
     // before the result, which `free` reads back without needing the alignment.
-    const auto total{size + requested + sizeof(void *)};
-    auto *base{static_cast<std::byte *>(::operator new(total, std::nothrow))};
+    constexpr std::size_t header{sizeof(void *)};
+    // Room for the header, for rounding up to `requested`, and for the caller's
+    // bytes. Kept in one named slack so the request is `size + slack` rather
+    // than an addition that reads like a buffer size plus a header by accident.
+    const auto slack{header + (requested - 1)};
+    auto *base{
+        static_cast<std::byte *>(::operator new(size + slack, std::nothrow))};
     if (base == nullptr) {
         return nullptr;
     }
-    auto *aligned{base + sizeof(void *)};
+    auto *aligned{base + header};
     const auto misalignment{reinterpret_cast<std::uintptr_t>(aligned) %
                             requested};
     if (misalignment != 0) {
