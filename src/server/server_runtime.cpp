@@ -171,15 +171,21 @@ auto run_server(const server_run_options &options) -> int {
         refrain::log::info("[world]: generated {} spawn chunk(s)", *generated);
     }
     // Columns the viewport needs but the store does not hold are generated on
-    // a worker, so walking past the spawn area keeps streaming terrain.
+    // a fixed worker pool, so walking past the spawn area keeps streaming
+    // terrain. The credit level adapts until an operator pins it.
     refrain::server::chunk_service chunks{};
-    if (auto started{
-            chunks.start_generation(refrain::server::chunk_generation::config{
-                .data_root = datapack_root,
-                .templates_root = datapack_root + "/../templates",
-                .seed = level_info->seed,
-            })};
-        !started) {
+    refrain::server::chunk_generation::config generation_config{
+        .data_root = datapack_root,
+        .templates_root = datapack_root + "/../templates",
+        .seed = level_info->seed,
+    };
+    generation_config.admission.min_credits =
+        static_cast<std::size_t>(std::max<std::int64_t>(
+            options.runtime.get_int64("generation_min_credits", 1), 1));
+    generation_config.admission.max_credits =
+        static_cast<std::size_t>(std::max<std::int64_t>(
+            options.runtime.get_int64("generation_max_credits", 8), 1));
+    if (auto started{chunks.start_generation(generation_config)}; !started) {
         refrain::log::warn("[world]: generation unavailable: {}",
                            started.error().message);
     }
@@ -576,13 +582,15 @@ auto run_server(const server_run_options &options) -> int {
             listener->tick();
             broadcaster.tick(players);
         }
-        chunks.tick(*store, views);
+        chunks.tick(*store, views, tick_start_ns);
         inventory.tick(players);
         store->tick();
         ++ticks_run;
         maintenance.post_tick(ticks_run);
-        metrics.record(static_cast<std::uint64_t>(refrain::core::now_ns() -
-                                                  tick_start_ns));
+        const auto work_ns{static_cast<std::uint64_t>(refrain::core::now_ns() -
+                                                      tick_start_ns)};
+        metrics.record(work_ns);
+        chunks.observe_tick(work_ns);
         if (options.on_tick) {
             options.on_tick(static_cast<std::uint64_t>(ticks_run));
         }
