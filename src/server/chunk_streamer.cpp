@@ -4,18 +4,33 @@
 
 #include <refrain/server/chunk_streamer.hpp>
 
-#include <refrain/server/chunk_view.hpp>
-
 #include <refrain/core/log.hpp>
+#include <refrain/core/time.hpp>
+#include <refrain/server/chunk_view.hpp>
 #include <refrain/sim/world.hpp>
 
 #include <algorithm>
 #include <cstdlib>
-#include <limits>
+#include <span>
 
 namespace {
 
 constexpr refrain::log::logger log_net{"net"};
+
+/// Chunk packets one wire batch may carry. This bounds one batch, not the
+/// tick's work: the drain keeps batching until the time budget expires.
+constexpr std::size_t max_batch_packets{8};
+
+/// Bytes one connection may have queued before the streamer leaves it alone
+/// for a tick. The transport itself keeps queueing other packets until its
+/// own cap; this one only starves the chunk stream, so a client that resumes
+/// reading catches up instead of growing the queue further.
+constexpr std::size_t max_connection_backlog{1U * 1024U * 1024U};
+
+/// Aggregate backlog above which the whole stream pauses: generation and
+/// encoding are wasted work while every client is behind. Must match the
+/// generator's pause threshold.
+constexpr std::size_t max_total_backlog{64U * 1024U * 1024U};
 
 } // namespace
 
@@ -27,6 +42,35 @@ chunk_streamer::chunk_streamer(play_gateway &gateway,
 
 void chunk_streamer::set_chunk_requester(chunk_requester requester) {
     requester_ = std::move(requester);
+}
+
+void chunk_streamer::set_encoder(chunk_encoder encoder) {
+    encoder_ = std::move(encoder);
+}
+
+auto chunk_streamer::encode(refrain::sim::chunk_pos pos)
+    -> result<std::vector<std::byte>> {
+    if (encoder_) {
+        return encoder_(source_, pos);
+    }
+    return refrain::server::encode_full_chunk(source_, pos);
+}
+
+auto chunk_streamer::cache_capacity(std::int32_t radius) -> std::size_t {
+    const auto clamped{std::clamp(radius, std::int32_t{0}, max_view_radius)};
+    const auto side{static_cast<std::size_t>(2 * clamped + 1)};
+    return side * side;
+}
+
+void chunk_streamer::evict_least_recently_used() {
+    auto victim{cache_.begin()};
+    for (auto candidate{cache_.begin()}; candidate != cache_.end();
+         ++candidate) {
+        if (candidate->second.last_use < victim->second.last_use) {
+            victim = candidate;
+        }
+    }
+    cache_.erase(victim);
 }
 
 void chunk_streamer::chunk_ready(std::int32_t x, std::int32_t z) {
@@ -43,6 +87,76 @@ void chunk_streamer::chunk_ready(std::int32_t x, std::int32_t z) {
             stream.pending.emplace_back(x, z);
         }
     }
+}
+
+auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
+                           std::int64_t deadline_ns) -> bool {
+    bool expired{false};
+    std::vector<std::vector<std::byte>> packets;
+    packets.reserve(max_batch_packets);
+    while (packets.size() < max_batch_packets) {
+        // Entries the world delivered on its own cost nothing to skip.
+        while (!stream.pending.empty() &&
+               stream.known.contains(stream.pending.front())) {
+            stream.pending.pop_front();
+        }
+        if (stream.pending.empty()) {
+            break;
+        }
+        if (refrain::core::now_ns() >= deadline_ns) {
+            // Leave the coordinate pending: the next tick picks it up again
+            // instead of dropping it from the viewport.
+            expired = true;
+            break;
+        }
+        const auto [x, z]{stream.pending.front()};
+        const auto cache_key{std::pair{x, z}};
+        auto cached{cache_.find(cache_key)};
+        if (cached == cache_.end()) {
+            ++cache_misses_;
+            auto encoded{encode(refrain::sim::chunk_pos{x, z})};
+            if (!encoded) {
+                // The world does not hold this column yet. Ask the generator
+                // once; `chunk_ready` re-queues it when the column arrives.
+                if (encoded.error().code == error_code::not_found &&
+                    requester_ && stream.requested.insert({x, z}).second) {
+                    if (!requester_(x, z)) {
+                        stream.requested.erase({x, z});
+                    }
+                }
+                log_net.debug("chunk ({}, {}) encode failed: {}", x, z,
+                              encoded.error().message);
+                stream.queued.erase({x, z});
+                stream.pending.pop_front();
+                continue;
+            }
+            // Evict before inserting so the new entry is never its own
+            // victim, and so `cached` stays valid while the batch is built.
+            while (cache_.size() >= cache_capacity_) {
+                evict_least_recently_used();
+            }
+            cached = cache_
+                         .emplace(cache_key,
+                                  cache_entry{
+                                      .body = std::move(*encoded),
+                                      .last_use = ++clock_,
+                                  })
+                         .first;
+        } else {
+            ++cache_hits_;
+            cached->second.last_use = ++clock_;
+        }
+        stream.pending.pop_front();
+        packets.push_back(cached->second.body);
+        stream.known.emplace(x, z);
+        ++stream.sent;
+    }
+    if (stream.center_dirty || !packets.empty()) {
+        gateway_.send_chunk_batch(connection, stream.center_x, stream.center_z,
+                                  packets, stream.center_dirty);
+        stream.center_dirty = false;
+    }
+    return expired;
 }
 
 void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
@@ -120,11 +234,19 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
         stream.center_dirty = stream.center_dirty || center_changed;
         stream.reported = false;
     }
+    if (!streams_.empty()) {
+        // The reusable bodies are the ones the largest viewport holds, so the
+        // cache follows the view distance rather than a fixed entry count.
+        std::int32_t largest_radius{0};
+        for (const auto &[id, stream] : streams_) {
+            static_cast<void>(id);
+            largest_radius = std::max(largest_radius, stream.radius);
+        }
+        cache_capacity_ = cache_capacity(largest_radius);
+    }
     // Bound the bytes queued for clients that cannot drain them. A slow
     // client keeps its pending list and resumes once the socket catches
     // up; the whole stream pauses when the aggregate backlog is large.
-    constexpr std::size_t max_connection_backlog{1U * 1024U * 1024U};
-    constexpr std::size_t max_total_backlog{64U * 1024U * 1024U};
     std::size_t total_backlog{0};
     for (const auto id : active_ids) {
         total_backlog += gateway_.backlog(id);
@@ -132,82 +254,53 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
     if (total_backlog > max_total_backlog) {
         return;
     }
-    std::size_t encode_budget{1};
+    std::vector<std::uint64_t> drainable{};
+    drainable.reserve(active_ids.size());
     for (const auto id : active_ids) {
-        auto match{streams_.find(id)};
-        if (match == streams_.end()) {
+        if (!streams_.contains(id)) {
             continue;
         }
         if (gateway_.backlog(id) > max_connection_backlog) {
             continue;
         }
-        auto &stream{match->second};
-        std::vector<std::vector<std::byte>> packets;
-        constexpr std::size_t batch_budget{8};
-        packets.reserve(batch_budget);
-        while (!stream.pending.empty() && packets.size() < batch_budget) {
-            const auto [x, z]{stream.pending.front()};
-            if (stream.known.contains({x, z})) {
-                stream.pending.pop_front();
+        drainable.push_back(id);
+    }
+    const auto deadline_ns{refrain::core::now_ns() +
+                           static_cast<std::int64_t>(tick_budget_ns)};
+    // Round-robin: one batch per connection per pass, so a connection with a
+    // long queue cannot spend the whole budget before the others run.
+    bool expired{false};
+    bool progressed{true};
+    while (progressed && !expired) {
+        progressed = false;
+        for (const auto id : drainable) {
+            auto match{streams_.find(id)};
+            if (match == streams_.end()) {
                 continue;
             }
-            const auto cache_key{std::pair{x, z}};
-            auto cached{cache_.find(cache_key)};
-            if (cached == cache_.end()) {
-                if (encode_budget == 0) {
-                    // Leave the coordinate pending: the next tick picks it
-                    // up again instead of dropping it from the viewport.
-                    break;
-                }
-                --encode_budget;
-                auto encoded{refrain::server::encode_full_chunk(
-                    source_, refrain::sim::chunk_pos{x, z})};
-                if (!encoded) {
-                    // The world does not hold this column yet. Ask the
-                    // generator once; `chunk_ready` re-queues it when the
-                    // column arrives.
-                    if (encoded.error().code == error_code::not_found &&
-                        requester_ && stream.requested.insert({x, z}).second) {
-                        if (!requester_(x, z)) {
-                            stream.requested.erase({x, z});
-                        }
-                    }
-                    log_net.debug("chunk ({}, {}) encode failed: {}", x, z,
-                                  encoded.error().message);
-                    stream.queued.erase({x, z});
-                    stream.pending.pop_front();
-                    continue;
-                }
-                cached = cache_
-                             .emplace(cache_key,
-                                      cache_entry{
-                                          .body = std::move(*encoded),
-                                          .last_use = 0,
-                                      })
-                             .first;
-                if (cache_.size() > max_cached_chunks) {
-                    // Evict the least recently used entry.
-                    auto victim{cache_.begin()};
-                    for (auto candidate{cache_.begin()};
-                         candidate != cache_.end(); ++candidate) {
-                        if (candidate->second.last_use <
-                            victim->second.last_use) {
-                            victim = candidate;
-                        }
-                    }
-                    cache_.erase(victim);
-                }
+            auto &stream{match->second};
+            while (!stream.pending.empty() &&
+                   stream.known.contains(stream.pending.front())) {
+                stream.pending.pop_front();
             }
-            cached->second.last_use = ++clock_;
-            stream.pending.pop_front();
-            packets.push_back(cached->second.body);
-            stream.known.emplace(x, z);
-            ++stream.sent;
+            if (stream.pending.empty()) {
+                continue;
+            }
+            progressed = true;
+            expired = drain(id, stream, deadline_ns);
+            if (expired) {
+                break;
+            }
         }
-        const auto update_center{stream.center_dirty};
-        if (update_center || !packets.empty()) {
+    }
+    for (const auto id : drainable) {
+        auto &stream{streams_[id]};
+        if (stream.center_dirty) {
+            // A connection that never got a turn this tick still learns that
+            // its cache centre moved.
             gateway_.send_chunk_batch(id, stream.center_x, stream.center_z,
-                                      packets, update_center);
+                                      std::span<const std::vector<std::byte>>{},
+                                      true);
             stream.center_dirty = false;
         }
         if (stream.pending.empty() && !stream.reported) {
