@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -34,6 +35,15 @@ class chunk_streamer {
     /// backlog is large.
     void tick(refrain::session::chunk_tracker &views);
 
+    /// Ask an outside generator for a column the world does not hold yet.
+    /// Returns false when the request cannot be queued.
+    using chunk_requester = std::function<bool(std::int32_t x, std::int32_t z)>;
+    void set_chunk_requester(chunk_requester requester);
+
+    /// A requested column is now in the world: enqueue it for every viewer
+    /// whose viewport contains it.
+    void chunk_ready(std::int32_t x, std::int32_t z);
+
   private:
     struct stream_state {
         std::int32_t center_x{0};
@@ -44,6 +54,9 @@ class chunk_streamer {
         std::size_t sent{0};
         std::set<std::pair<std::int32_t, std::int32_t>> known{};
         std::set<std::pair<std::int32_t, std::int32_t>> queued{};
+        /// Columns already handed to the generator; they stay out of the
+        /// queue until `chunk_ready` reports them.
+        std::set<std::pair<std::int32_t, std::int32_t>> requested{};
         std::deque<std::pair<std::int32_t, std::int32_t>> pending{};
     };
 
@@ -62,6 +75,7 @@ class chunk_streamer {
     std::unordered_map<std::uint64_t, stream_state> streams_{};
     std::map<std::pair<std::int32_t, std::int32_t>, cache_entry> cache_{};
     std::uint64_t clock_{0};
+    chunk_requester requester_{};
 };
 
 } // namespace refrain::server
