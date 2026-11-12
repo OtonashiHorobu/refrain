@@ -104,6 +104,11 @@ reporter smoke and the formatting gate.
   fails on the default branch, fix it there.
 - One topic per pull request, and the branch keeps the build green before it
   merges.
+- Every commit that changes behavior is the moment to look at the tracker:
+  update the issue it belongs to (comment with what landed, tick the
+  checklists, close what is finished, reopen what the commit only half does)
+  and check the milestone totals. A merged change with no issue update leaves
+  the tracker wrong for the next reader.
 
 ## Determinism
 
