@@ -111,6 +111,12 @@ class sampler {
     [[nodiscard]] virtual auto constant_value() const -> const float * {
         return nullptr;
     }
+
+    /// Whether the value is a function of the block Y coordinate alone. A range
+    /// choice then selects one branch per layer of a sampling volume and can
+    /// skip the branch a run of layers does not read. A node that cannot prove
+    /// the property keeps the whole-volume path.
+    [[nodiscard]] virtual auto y_only() const -> bool { return false; }
 };
 
 /// Samplers are shared: a referenced document compiles once, and a `cache`
