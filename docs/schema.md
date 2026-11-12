@@ -82,6 +82,14 @@ Events are declared at module scope. Their fields are limited to scalars,
 exactly one `slice<scalar>` field. The generator emits a deterministic layout,
 a stable string id and a trait specialization used for compile-time checks.
 
+The module C header also carries the payload struct a subscriber casts to, its
+`_SIZE`, and a stable `_TYPE` that the host kernel's `event_subscribe` accepts;
+the existing `_ID` stays for the C++ side. A payload is a borrowed notification
+value: it is valid for the duration of the callback and carries no
+`struct_size` of its own, because it is never filled in by the caller. A
+publisher converts field by field, since a C++ `string_view` is not laid out
+like the C `refrain_str` it becomes.
+
 ## Extensions
 
 An `extension` declares an optional capability that providers may attach to a
