@@ -11,63 +11,44 @@
 #include <refrain/app/services.hpp>
 #include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
-#include <refrain/core/schedule.hpp>
 #include <refrain/core/time.hpp>
-#include <refrain/data/content_maintenance.hpp>
 #include <refrain/data/vanilla.hpp>
-#include <refrain/mod/rfmod.hpp>
 #include <refrain/net/registry.hpp>
 #include <refrain/net/server.hpp>
 #include <refrain/server/chunk_generation.hpp>
 #include <refrain/server/chunk_packet.hpp>
-#include <refrain/server/chunk_streamer.hpp>
-#include <refrain/server/chunk_view.hpp>
+#include <refrain/server/chunk_service.hpp>
 #include <refrain/server/command_bridge.hpp>
-#include <refrain/server/entity_broadcast.hpp>
-#include <refrain/server/inventory_menu.hpp>
-#include <refrain/server/player_visibility.hpp>
+#include <refrain/server/console_commands.hpp>
+#include <refrain/server/console_service.hpp>
+#include <refrain/server/entity_broadcaster.hpp>
+#include <refrain/server/inventory_sync.hpp>
+#include <refrain/server/maintenance_service.hpp>
+#include <refrain/server/play_gateway.hpp>
 #include <refrain/server/world_bootstrap.hpp>
 #include <refrain/sim/replay.hpp>
 #include <refrain/sim/world.hpp>
 #include <refrain/world/store.hpp>
 
-#include <fmt/format.h>
-
-#include <array>
 #include <atomic>
-#include <charconv>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
-#include <deque>
-#include <iostream>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <optional>
-#include <set>
-#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
-#include <type_traits>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace {
 
 constexpr refrain::log::logger log_config{"config"};
-constexpr refrain::log::logger log_content{"content"};
 constexpr refrain::log::logger log_net{"net"};
-constexpr refrain::log::logger log_schedule{"schedule"};
 constexpr refrain::log::logger log_server{"server"};
 constexpr refrain::log::logger log_sim{"sim"};
-constexpr refrain::log::logger log_storage{"storage"};
 constexpr refrain::log::logger log_world{"world"};
-constexpr refrain::log::logger log_chunk_gen{"chunk-gen"};
 
 } // namespace
 
@@ -75,1380 +56,15 @@ namespace refrain::server {
 
 using app::report_error;
 namespace {
-
-constexpr std::size_t max_console_commands = 1024;
 constexpr std::uint64_t max_console_file_bytes = 1ULL * 1024ULL * 1024ULL;
 
-/// Background writer for autosave snapshots. The sim thread only deep-copies
-/// dirty chunks (`snapshot_pending()`); TLV encoding, store writes and group
-/// commit run here through `sim::world::write_pending()`.
-class snapshot_writer {
-  public:
-    explicit snapshot_writer(refrain::sim::world &world)
-        : world_{world}, thread_{[this] { run(); }} {}
-
-    snapshot_writer(const snapshot_writer &) = delete;
-    auto operator=(const snapshot_writer &) -> snapshot_writer & = delete;
-
-    ~snapshot_writer() { stop(); }
-
-    [[nodiscard]] auto drain_completed()
-        -> std::vector<std::vector<refrain::sim::snapshot_entry>> {
-        const std::lock_guard lock{completed_mutex_};
-        std::vector<std::vector<refrain::sim::snapshot_entry>> completed{};
-        completed.swap(completed_);
-        return completed;
-    }
-
-    [[nodiscard]] auto submit(std::vector<refrain::sim::pending_snapshot> batch)
-        -> bool {
-        {
-            const std::lock_guard lock{mutex_};
-            if (pending_.size() >= 2) {
-                return false;
-            }
-            pending_.push_back(std::move(batch));
-        }
-        condition_.notify_one();
-        return true;
-    }
-
-    /// Wait until every submitted batch has been written and marked complete.
-    /// The console `save` path calls this before a synchronous `flush()`, so a
-    /// stale in-flight snapshot cannot overwrite the newer flushed state.
-    void drain() {
-        std::unique_lock lock{mutex_};
-        idle_condition_.wait(lock,
-                             [this] { return pending_.empty() && !writing_; });
-    }
-
-    void stop() noexcept {
-        {
-            const std::lock_guard lock{mutex_};
-            if (stopping_) {
-                return;
-            }
-            stopping_ = true;
-        }
-        condition_.notify_all();
-        if (thread_.joinable()) {
-            thread_.join();
-        }
-    }
-
-  private:
-    void run() {
-        refrain::log::set_thread_name("io-writer");
-        for (;;) {
-            std::vector<refrain::sim::pending_snapshot> batch{};
-            {
-                std::unique_lock lock{mutex_};
-                condition_.wait(
-                    lock, [this] { return stopping_ || !pending_.empty(); });
-                if (pending_.empty()) {
-                    if (stopping_) {
-                        return;
-                    }
-                    continue;
-                }
-                batch = std::move(pending_.front());
-                pending_.pop_front();
-                writing_ = true;
-            }
-            if (auto written{world_.write_pending(batch)}; !written) {
-                log_storage.error("{}", written.error().message);
-            } else {
-                const std::lock_guard lock{completed_mutex_};
-                completed_.push_back(std::move(*written));
-            }
-            {
-                const std::lock_guard lock{mutex_};
-                writing_ = false;
-            }
-            idle_condition_.notify_all();
-        }
-    }
-
-    refrain::sim::world &world_;
-    std::mutex mutex_{};
-    std::condition_variable condition_{};
-    std::condition_variable idle_condition_{};
-    std::deque<std::vector<refrain::sim::pending_snapshot>> pending_{};
-    std::mutex completed_mutex_{};
-    std::vector<std::vector<refrain::sim::snapshot_entry>> completed_{};
-    bool stopping_{false};
-    bool writing_{false};
-    std::thread thread_;
-};
-
+/// Process-wide lifecycle flags shared with the console and watchdog threads.
 struct runtime_state {
-    mutable std::mutex commands_mutex{};
-    std::vector<std::string> commands{};
-    std::atomic<bool> stop{false};
+    /// The stdin thread outlives the runtime, so the flag is shared.
+    std::shared_ptr<std::atomic<bool>> stop{
+        std::make_shared<std::atomic<bool>>(false)};
     std::atomic<std::int64_t> heartbeat_ns{0};
-    refrain::core::config::store *config{nullptr};
-    static constexpr std::size_t tick_samples{2048};
-    std::array<std::uint32_t, tick_samples> tick_us{};
-    std::size_t tick_count{0};
-    std::uint64_t tick_total_us{0};
-    std::uint64_t tick_max_us{0};
 };
-
-void record_tick_work(runtime_state &state, std::uint64_t work_ns) {
-    const auto us{static_cast<std::uint32_t>(work_ns / 1'000ULL)};
-    state.tick_us[state.tick_count % runtime_state::tick_samples] = us;
-    ++state.tick_count;
-    state.tick_total_us += us;
-    state.tick_max_us =
-        std::max(state.tick_max_us, static_cast<std::uint64_t>(us));
-}
-
-void push_command(const std::shared_ptr<runtime_state> &state,
-                  std::string line) {
-    if (line.empty()) {
-        return;
-    }
-    const std::lock_guard lock{state->commands_mutex};
-    if (state->commands.size() < max_console_commands) {
-        state->commands.push_back(std::move(line));
-    }
-}
-
-[[nodiscard]] auto drain_commands(const std::shared_ptr<runtime_state> &state)
-    -> std::vector<std::string> {
-    std::vector<std::string> drained{};
-    const std::lock_guard lock{state->commands_mutex};
-    drained.swap(state->commands);
-    return drained;
-}
-
-void push_text_commands(const std::shared_ptr<runtime_state> &state,
-                        std::string_view text) {
-    std::size_t start{0};
-    while (start <= text.size()) {
-        const auto newline{text.find('\n', start)};
-        const auto end{newline == std::string_view::npos ? text.size()
-                                                         : newline};
-        auto line{std::string{text.substr(start, end - start)}};
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        push_command(state, std::move(line));
-        if (newline == std::string_view::npos) {
-            break;
-        }
-        start = newline + 1;
-    }
-}
-
-void start_console_thread(const std::shared_ptr<runtime_state> &state) {
-    std::thread console{[state] {
-        refrain::log::set_thread_name("console");
-        std::string line{};
-        try {
-            while (!state->stop.load(std::memory_order_acquire) &&
-                   std::getline(std::cin, line)) {
-                push_command(state, line);
-            }
-        } catch (...) {
-            // The console is diagnostics: a failed read must not terminate the
-            // server; the tick loop can still be stopped by `--ticks`/signal.
-        }
-    }};
-    // A blocking stdin read cannot be woken portably. The console thread only
-    // touches the shared state, so it is safe to detach at shutdown and let
-    // process exit reclaim it.
-    console.detach();
-}
-
-/// Delay between two bounded drain passes when the queue still holds
-/// retryable entries (failures below the retry limit or budget deferrals).
-/// Stuck entries (retry limit reached) are not retried until a new enqueue
-/// notifies the worker, so a permanently broken store does not spin.
-constexpr auto gc_delete_retry_delay{std::chrono::seconds{30}};
-
-/// Background owner of every content-GC unlink.
-///
-/// The tick thread only plans and enqueues; this worker drains
-/// `<store>/content/gc/pending.json` with a bounded per-pass budget. The two
-/// share `queue_mutex()`: the tick path uses `try_lock` and skips its interval
-/// when a pass is in flight, so a slow `remove` can never stall a tick. One
-/// `unlink` may still block (no per-unlink timeout by decision), which is why
-/// it is confined to this thread.
-class gc_delete_worker {
-  public:
-    gc_delete_worker(std::string store_root, std::uint64_t budget_ms)
-        : store_root_{std::move(store_root)}, budget_ms_{budget_ms},
-          thread_{[this] { run(); }} {}
-
-    gc_delete_worker(const gc_delete_worker &) = delete;
-    auto operator=(const gc_delete_worker &) -> gc_delete_worker & = delete;
-
-    ~gc_delete_worker() { stop(); }
-
-    [[nodiscard]] auto queue_mutex() -> std::mutex & { return mutex_; }
-
-    /// Wake the worker after an enqueue. Takes no lock, so it is safe while
-    /// the caller holds `queue_mutex()`.
-    void notify() noexcept {
-        wake_requested_.store(true, std::memory_order_release);
-        condition_.notify_one();
-    }
-
-    void stop() noexcept {
-        if (stopping_.exchange(true, std::memory_order_acq_rel)) {
-            return;
-        }
-        condition_.notify_all();
-        if (thread_.joinable()) {
-            thread_.join();
-        }
-    }
-
-  private:
-    void run() {
-        refrain::log::set_thread_name("gc-delete");
-        std::unique_lock lock{mutex_};
-        for (;;) {
-            if (stopping_.load(std::memory_order_acquire)) {
-                return;
-            }
-            if (!wake_requested_.load(std::memory_order_acquire)) {
-                condition_.wait(lock, [this] {
-                    return stopping_.load(std::memory_order_acquire) ||
-                           wake_requested_.load(std::memory_order_acquire);
-                });
-            }
-            if (stopping_.load(std::memory_order_acquire)) {
-                return;
-            }
-            wake_requested_.store(false, std::memory_order_release);
-
-            // Hold `mutex_` for the whole pass: the planner's try_lock then
-            // fails instead of waiting for a blocking unlink.
-            auto report{refrain::data::drain_pending_deletes(
-                store_root_, budget_ms_, [](std::string_view line) {
-                    if (line.starts_with("warning:")) {
-                        log_server.warn("gc-delete: {}", line);
-                    } else {
-                        log_server.info("gc-delete: {}", line);
-                    }
-                })};
-            if (!report) {
-                log_server.error("gc-delete: {}", report.error().message);
-            } else if (report->deleted != 0U || report->deferred != 0U ||
-                       report->failed != 0U || report->failed_stuck != 0U ||
-                       report->skipped_referenced != 0U) {
-                log_server.info(
-                    "gc-delete: deleted={} blobs={} segments={} deferred={} "
-                    "failed={} stuck={} remaining={}",
-                    report->deleted, report->deleted_blobs,
-                    report->deleted_segments, report->deferred, report->failed,
-                    report->failed_stuck, report->remaining);
-            }
-
-            // A pass can end early on the budget or on a retryable failure.
-            // Other stuck entries are left for manual repair; only a new
-            // enqueue wakes the worker again.
-            const bool retryable{!report ||
-                                 report->remaining > report->failed_stuck};
-            if (retryable &&
-                condition_.wait_for(lock, gc_delete_retry_delay, [this] {
-                    return stopping_.load(std::memory_order_acquire) ||
-                           wake_requested_.load(std::memory_order_acquire);
-                })) {
-                // Woken by notify()/stop(); the loop re-checks both.
-            }
-        }
-    }
-
-    std::string store_root_;
-    std::uint64_t budget_ms_{0};
-    /// Serialises the tick planner (enqueue) and the worker (drain). Held for
-    /// the whole worker pass by design.
-    std::mutex mutex_;
-    std::condition_variable condition_;
-    std::atomic<bool> wake_requested_{true};
-    std::atomic<bool> stopping_{false};
-    std::thread thread_;
-};
-
-auto run_content_gc(const server_run_options &options, gc_delete_worker *worker)
-    -> refrain::status {
-    // The pending-delete queue has exactly one writer at a time. Apply mode
-    // owns a worker: if it is in a drain pass, skip this interval instead of
-    // blocking the tick thread on a possibly blocking unlink. Dry-run has no
-    // worker and never touches the queue.
-    std::optional<std::unique_lock<std::mutex>> queue_lock{};
-    if (worker != nullptr) {
-        queue_lock.emplace(worker->queue_mutex(), std::try_to_lock);
-        if (!queue_lock->owns_lock()) {
-            log_content.debug("busy");
-            return refrain::status_ok();
-        }
-    }
-    const auto index{
-        fmt::format("{}/content/blobs.idx", options.content_store)};
-    if (!refrain::core::io::exists(index)) {
-        log_content.debug("no index");
-        return refrain::status_ok();
-    }
-    auto receipts{refrain::mod::list_receipt_paths(options.content_store)};
-    if (!receipts) {
-        log_content.error("receipt scan failed: {}", receipts.error().message);
-        return std::unexpected{refrain::make_error(
-            refrain::error_code::io_error,
-            fmt::format("content-gc: receipt scan failed: {}",
-                        receipts.error().message))};
-    }
-    refrain::data::gc_options gc{};
-    gc.apply = options.content_gc_apply;
-    gc.compact = false;
-    gc.keep_days = options.content_gc_keep_days;
-    gc.budget_ms = options.content_gc_budget_ms;
-    // apply: the planner only persists the plan and the `gc-delete` worker
-    // drains it; the tick thread never unlinks. dry-run: apply stays false, so
-    // nothing is enqueued or deleted (defer_deletes is irrelevant).
-    gc.defer_deletes = options.content_gc_apply;
-    for (const auto &path : *receipts) {
-        auto receipt{refrain::mod::read_receipt(path)};
-        if (!receipt) {
-            log_content.error("{}: {}", path, receipt.error().message);
-            continue;
-        }
-        for (const auto &file : receipt->files) {
-            gc.extra_roots.push_back(file.blake3);
-        }
-    }
-    auto report{refrain::data::collect_garbage(
-        options.content_store, gc,
-        [](std::string_view line) { log_content.info("{}", line); })};
-    if (!report) {
-        log_content.error("{}", report.error().message);
-        return std::unexpected{refrain::make_error(
-            report.error().code,
-            fmt::format("content-gc: {}", report.error().message))};
-    }
-    if (worker != nullptr) {
-        // The enqueue is complete; let the worker pick it up even when this
-        // run planned nothing new (an earlier queue may still be pending).
-        worker->notify();
-        log_content.info("queued {} blobs {} segments", report->queued_blobs,
-                         report->queued_segments);
-    } else {
-        log_content.info("dry run");
-    }
-    return refrain::status_ok();
-}
-
-// --- periodic maintenance through the scheduler ----------------------------
-//
-// Each maintenance action is a schedule task instead of an inline
-// `ticks_run % interval` block, so ordering, coalescing and failure accounting
-// live in one place (`core::schedule`). The log lines are part of the CLI/log
-// contract.
-struct maintenance_context {
-    refrain::sim::world *world{nullptr};
-    snapshot_writer *writer{nullptr};
-    const server_run_options *options{nullptr};
-    std::optional<gc_delete_worker> *gc_worker{nullptr};
-};
-
-[[nodiscard]] auto maintenance_exception(std::string_view task,
-                                         const char *what) noexcept
-    -> refrain::status {
-    return std::unexpected{refrain::make_error(
-        refrain::error_code::unknown,
-        fmt::format("{}: unexpected exception ({})", task, what))};
-}
-
-auto maintenance_autosave(void *self, const void *, std::int64_t) noexcept
-    -> refrain::status {
-    auto &context{*static_cast<maintenance_context *>(self)};
-    try {
-        auto snapshot{context.world->snapshot_pending()};
-        if (snapshot.empty()) {
-            return refrain::status_ok();
-        }
-        const auto batch_size{snapshot.size()};
-        if (context.writer->submit(std::move(snapshot))) {
-            log_storage.debug("{} chunks tick={}", batch_size,
-                              context.world->ticks());
-        } else {
-            log_storage.warn("writer busy");
-            return std::unexpected{
-                refrain::make_error(refrain::error_code::io_error,
-                                    "autosave: writer busy, snapshot skipped")};
-        }
-        return refrain::status_ok();
-    } catch (...) {
-        return maintenance_exception("autosave", "snapshot/submit");
-    }
-}
-
-auto maintenance_content_gc(void *self, const void *, std::int64_t) noexcept
-    -> refrain::status {
-    auto &context{*static_cast<maintenance_context *>(self)};
-    try {
-        const auto worker{context.gc_worker != nullptr &&
-                                  context.gc_worker->has_value()
-                              ? &**context.gc_worker
-                              : nullptr};
-        return run_content_gc(*context.options, worker);
-    } catch (...) {
-        return maintenance_exception("content-gc", "collect_garbage");
-    }
-}
-
-auto maintenance_store_compact(void *self, const void *, std::int64_t) noexcept
-    -> refrain::status {
-    auto &context{*static_cast<maintenance_context *>(self)};
-    try {
-        auto compacted{context.world->compact_stores()};
-        if (!compacted) {
-            log_server.error("store compaction failed: {}",
-                             compacted.error().message);
-            return std::unexpected{compacted.error()};
-        }
-        log_storage.info("objects={} blobs={}", compacted->objects.segments,
-                         compacted->blobs.segments);
-        return refrain::status_ok();
-    } catch (...) {
-        return maintenance_exception("store-compact", "compact_stores");
-    }
-}
-
-auto maintenance_region_compact(void *self, const void *, std::int64_t) noexcept
-    -> refrain::status {
-    auto &context{*static_cast<maintenance_context *>(self)};
-    try {
-        auto compacted{context.world->compact_regions(
-            context.options->compact_min_bytes,
-            context.options->compact_garbage_percent)};
-        if (!compacted) {
-            log_server.error("runtime compaction failed: {}",
-                             compacted.error().message);
-            return std::unexpected{compacted.error()};
-        }
-        if (*compacted != 0) {
-            log_storage.info("{} regions", *compacted);
-        }
-        return refrain::status_ok();
-    } catch (...) {
-        return maintenance_exception("region-compact", "compact_regions");
-    }
-}
-
-void print_console_help() {
-    log_server.info(
-        "commands: stop, save, tps, hash, pos, move <dx> <dy> <dz>, "
-        "walk <dx> <dz>, jump, dig <x> <y> <z>, place <x> <y> <z> <block>, "
-        "give <item> <count>, inv, spawn <type> <x> <y> <z>, entities, "
-        "kill <entity-id>, palette-gc, schedules, config <namespace> "
-        "get|set <key> [value], config save|reload [namespace], "
-        "config names");
-}
-
-[[nodiscard]] auto split_console_line(std::string_view line)
-    -> std::vector<std::string_view> {
-    std::vector<std::string_view> tokens{};
-    std::size_t position{0};
-    while (position < line.size()) {
-        while (position < line.size() && line[position] == ' ') {
-            ++position;
-        }
-        if (position == line.size()) {
-            break;
-        }
-        const auto start{position};
-        while (position < line.size() && line[position] != ' ') {
-            ++position;
-        }
-        tokens.push_back(line.substr(start, position - start));
-    }
-    return tokens;
-}
-
-template <typename T>
-[[nodiscard]] auto parse_number(std::string_view text, T &out) -> bool {
-    const auto parsed{
-        std::from_chars(text.data(), text.data() + text.size(), out)};
-    return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
-}
-
-[[nodiscard]] auto parse_config_value(std::string_view text)
-    -> std::variant<bool, std::int64_t, double, std::string> {
-    if (text == "true") {
-        return true;
-    }
-    if (text == "false") {
-        return false;
-    }
-    std::int64_t integer{0};
-    const auto int_parsed{
-        std::from_chars(text.data(), text.data() + text.size(), integer)};
-    if (int_parsed.ec == std::errc{} &&
-        int_parsed.ptr == text.data() + text.size()) {
-        return integer;
-    }
-    double real{0.0};
-    const auto real_parsed{
-        std::from_chars(text.data(), text.data() + text.size(), real)};
-    if (real_parsed.ec == std::errc{} &&
-        real_parsed.ptr == text.data() + text.size()) {
-        return real;
-    }
-    return std::string{text};
-}
-
-void execute_config_command(std::span<const std::string_view> tokens,
-                            refrain::core::config::store *config) {
-    namespace cfg = refrain::core::config;
-    if (config == nullptr) {
-        log_config.warn("no host configuration store");
-        return;
-    }
-    if (tokens.size() >= 2 && tokens[1] == "names") {
-        const auto names{config->names()};
-        std::string joined{};
-        for (const auto &name : names) {
-            if (!joined.empty()) {
-                joined += ' ';
-            }
-            joined += name;
-        }
-        log_config.info("namespaces={} list={}", names.size(), joined);
-        return;
-    }
-    if (tokens.size() >= 2 && tokens[1] == "save") {
-        if (tokens.size() == 2) {
-            if (auto saved{config->save_all()}; !saved) {
-                log_config.error("save failed: {}", saved.error().message);
-            } else {
-                log_config.info("saved dirty namespaces");
-            }
-        } else if (auto saved{config->save(tokens[2])}; !saved) {
-            log_config.error("save '{}' failed: {}", tokens[2],
-                             saved.error().message);
-        } else {
-            log_config.info("saved '{}'", tokens[2]);
-        }
-        return;
-    }
-    if (tokens.size() >= 2 && tokens[1] == "reload") {
-        if (tokens.size() == 2) {
-            if (auto loaded{config->reload_all()}; !loaded) {
-                log_config.error("reload failed: {}", loaded.error().message);
-            } else {
-                log_config.info("reloaded; running subsystems keep their "
-                                "startup snapshot until restart");
-            }
-        } else if (auto loaded{config->reload(tokens[2])}; !loaded) {
-            log_config.error("reload '{}' failed: {}", tokens[2],
-                             loaded.error().message);
-        } else {
-            log_config.info("reloaded '{}'; restart required to apply",
-                            tokens[2]);
-        }
-        return;
-    }
-    if (tokens.size() < 4) {
-        log_config.warn(
-            "usage: config <namespace> get <key> | set <key> <value> "
-            "| save [namespace] | reload [namespace] | names");
-        return;
-    }
-    const auto name_space{tokens[1]};
-    const auto action{tokens[2]};
-    const auto key{tokens[3]};
-    auto module{config->module(name_space)};
-    if (!module) {
-        log_config.warn("unknown namespace '{}'", name_space);
-        return;
-    }
-    if (action == "get") {
-        const auto kind{module->kind(key)};
-        if (kind == cfg::value_kind::missing) {
-            log_config.warn("{}.{} is not set", name_space, key);
-        } else if (kind == cfg::value_kind::boolean) {
-            log_config.info("{}.{} = {}", name_space, key,
-                            module->get_bool(key, false));
-        } else if (kind == cfg::value_kind::integer) {
-            log_config.info("{}.{} = {}", name_space, key,
-                            module->get_int64(key, 0));
-        } else if (kind == cfg::value_kind::floating) {
-            log_config.info("{}.{} = {}", name_space, key,
-                            module->get_double(key, 0.0));
-        } else if (kind == cfg::value_kind::string) {
-            log_config.info("{}.{} = '{}'", name_space, key,
-                            module->get_string(key, ""));
-        } else if (kind == cfg::value_kind::array) {
-            const auto values{module->get_strings(key)};
-            log_config.info("{}.{} = {} strings", name_space, key,
-                            values.size());
-        } else {
-            log_config.info("{}.{} = <table>", name_space, key);
-        }
-        return;
-    }
-    if (action == "set") {
-        if (tokens.size() < 5) {
-            log_config.warn("set expects a value");
-            return;
-        }
-        const auto value{parse_config_value(tokens[4])};
-        const auto result{std::visit(
-            [&](const auto &typed) -> status {
-                using T = std::decay_t<decltype(typed)>;
-                if constexpr (std::is_same_v<T, bool>) {
-                    return config->set_bool(name_space, key, typed);
-                } else if constexpr (std::is_same_v<T, std::int64_t>) {
-                    return config->set_int64(name_space, key, typed);
-                } else if constexpr (std::is_same_v<T, double>) {
-                    return config->set_double(name_space, key, typed);
-                } else {
-                    return config->set_string(name_space, key, typed);
-                }
-            },
-            value)};
-        if (!result) {
-            log_config.error("set failed: {}", result.error().message);
-        } else {
-            log_config.info(
-                "{}.{} updated in memory; 'config save' persists it "
-                "and subsystems pick it up after restart",
-                name_space, key);
-        }
-        return;
-    }
-    log_config.warn("unknown action '{}'", action);
-}
-
-void execute_console_command(const std::string &line,
-                             const std::shared_ptr<runtime_state> &state,
-                             refrain::sim::world &store,
-                             snapshot_writer &writer,
-                             const refrain::core::tick_info &tick,
-                             refrain::core::schedule::scheduler *scheduler,
-                             refrain::net::server *listener) {
-    if (line == "stop") {
-        log_server.info("stop");
-        state->stop.store(true, std::memory_order_release);
-        return;
-    }
-    if (line == "palette-gc") {
-        // Quiesced maintenance: this runs on the sim thread, so no tick or
-        // console command overlaps it. Drain the writer first; the rebuild
-        // closes/reopens the store and reloads the previously loaded chunks.
-        writer.drain();
-        auto rebuilt{
-            store.rebuild_palette_in_place(1, store.store().zstd_level())};
-        if (!rebuilt) {
-            log_server.error("palette-gc failed: {}", rebuilt.error().message);
-            // A failed reopen leaves the store invalid; continuing to tick
-            // would operate on a closed world.
-            if (!store.store().valid()) {
-                state->stop.store(true, std::memory_order_release);
-            }
-            return;
-        }
-        log_server.info("palette-gc: entries {}->{} bytes {}->{}",
-                        rebuilt->entries_before, rebuilt->entries_after,
-                        rebuilt->bytes_before, rebuilt->bytes_after);
-        return;
-    }
-    if (line == "save") {
-        // Drain the background writer first: a snapshot taken before this
-        // command could otherwise be written after flush() and resurrect an
-        // older chunk revision.
-        writer.drain();
-        auto committed{store.flush()};
-        if (!committed) {
-            log_storage.error("{}", committed.error().message);
-        } else {
-            log_storage.info("ok");
-        }
-        return;
-    }
-    if (line == "net") {
-        if (listener == nullptr) {
-            log_server.warn("net is unavailable");
-            return;
-        }
-        const auto stats{listener->stats()};
-        log_net.info("players={} in={} out={} bytes_in={} bytes_out={}",
-                     stats.connections, stats.packets_in, stats.packets_out,
-                     stats.bytes_in, stats.bytes_out);
-        return;
-    }
-    if (line == "tps") {
-        const auto samples{
-            std::min(state->tick_count, runtime_state::tick_samples)};
-        std::vector<std::uint32_t> sorted(state->tick_us.begin(),
-                                          state->tick_us.begin() + samples);
-        std::sort(sorted.begin(), sorted.end());
-        const auto percentile = [&](double fraction) {
-            if (sorted.empty()) {
-                return std::uint64_t{0};
-            }
-            const auto index{static_cast<std::size_t>(
-                static_cast<double>(sorted.size() - 1) * fraction)};
-            return static_cast<std::uint64_t>(sorted[index]);
-        };
-        const auto average{state->tick_count == 0
-                               ? 0.0
-                               : static_cast<double>(state->tick_total_us) /
-                                     static_cast<double>(state->tick_count) /
-                                     1000.0};
-        log_server.info(
-            "{} interval={}ms missed={} work_avg={:.2f}ms "
-            "work_p99={:.2f}ms work_max={:.2f}ms samples={}",
-            tick.index,
-            std::chrono::duration_cast<std::chrono::milliseconds>(tick.actual)
-                .count(),
-            tick.missed, average,
-            static_cast<double>(percentile(0.99)) / 1000.0,
-            static_cast<double>(state->tick_max_us) / 1000.0, samples);
-        return;
-    }
-    if (line == "hash") {
-        log_sim.info("{}", refrain::data::to_hex(store.state_hash()));
-        return;
-    }
-    if (line == "inv") {
-        if (store.player().inventory.empty()) {
-            log_server.info("empty");
-        } else {
-            for (const auto &stack : store.player().inventory) {
-                log_server.info("{} x{}", stack.item, stack.count);
-            }
-        }
-        return;
-    }
-    if (line == "pos") {
-        const auto &player{store.player()};
-        log_server.info("x={:.1f} y={:.1f} z={:.1f}", player.x, player.y,
-                        player.z);
-        return;
-    }
-    if (line == "entities") {
-        if (store.entities().empty()) {
-            log_server.info("none");
-        } else {
-            for (const auto &[id, value] : store.entities()) {
-                log_server.info("entity {} {} x={:.1f} y={:.1f} z={:.1f}", id,
-                                value.type, value.x, value.y, value.z);
-            }
-        }
-        return;
-    }
-    const auto tokens{split_console_line(line)};
-    if (!tokens.empty() && tokens[0] == "config") {
-        execute_config_command(tokens, state->config);
-        return;
-    }
-    if (line == "jump") {
-        store.jump();
-        log_server.info("on_ground={}", store.player().on_ground);
-        return;
-    }
-    if (tokens.size() == 3 && tokens[0] == "give") {
-        std::uint32_t count{0};
-        if (!parse_number(tokens[2], count) || count == 0) {
-            log_server.warn("give expects a positive count");
-            return;
-        }
-        auto added{store.add_item(tokens[1], count)};
-        if (!added) {
-            log_server.warn("give failed: {}", added.error().message);
-            return;
-        }
-        log_server.info("{} x{}", tokens[1], count);
-        return;
-    }
-    if (tokens.size() == 5 && tokens[0] == "spawn") {
-        double x{0.0};
-        double y{0.0};
-        double z{0.0};
-        if (!parse_number(tokens[2], x) || !parse_number(tokens[3], y) ||
-            !parse_number(tokens[4], z)) {
-            log_server.warn("spawn expects numeric coordinates");
-            return;
-        }
-        auto spawned{store.spawn_entity(tokens[1], x, y, z)};
-        if (!spawned) {
-            log_server.warn("spawn failed: {}", spawned.error().message);
-            return;
-        }
-        log_server.info("{} #{}", tokens[1], *spawned);
-        return;
-    }
-    if (tokens.size() == 2 && tokens[0] == "kill") {
-        refrain::sim::entity_id id{0};
-        if (!parse_number(tokens[1], id)) {
-            log_server.warn("kill expects an entity id");
-            return;
-        }
-        if (!store.remove_entity(id)) {
-            log_server.warn("no entity {}", id);
-            return;
-        }
-        log_server.info("#{}", id);
-        return;
-    }
-    if (tokens.size() == 3 && tokens[0] == "walk") {
-        double dx{0.0};
-        double dz{0.0};
-        if (!parse_number(tokens[1], dx) || !parse_number(tokens[2], dz)) {
-            log_server.warn("walk expects two numbers");
-            return;
-        }
-        const auto moved{store.move_player(dx, 0.0, dz)};
-        log_server.info("{:.1f},{:.1f},{:.1f} {}", store.player().x,
-                        store.player().y, store.player().z,
-                        moved ? "moved" : "blocked");
-        return;
-    }
-    if (tokens.size() == 4 && tokens[0] == "move") {
-        double dx{0.0};
-        double dy{0.0};
-        double dz{0.0};
-        if (!parse_number(tokens[1], dx) || !parse_number(tokens[2], dy) ||
-            !parse_number(tokens[3], dz)) {
-            log_server.warn("move expects three numbers");
-            return;
-        }
-        auto &player{store.player()};
-        store.set_player_position(player.x + dx, player.y + dy, player.z + dz);
-        log_server.info("{:.1f},{:.1f},{:.1f}", player.x, player.y, player.z);
-        return;
-    }
-    if ((tokens.size() == 4 && tokens[0] == "dig") ||
-        (tokens.size() == 5 && tokens[0] == "place")) {
-        std::int32_t x{0};
-        std::int32_t y{0};
-        std::int32_t z{0};
-        if (!parse_number(tokens[1], x) || !parse_number(tokens[2], y) ||
-            !parse_number(tokens[3], z)) {
-            log_server.warn("{} expects integer coordinates", tokens[0]);
-            return;
-        }
-        if (y < std::numeric_limits<std::int16_t>::min() ||
-            y > std::numeric_limits<std::int16_t>::max()) {
-            log_server.warn("block y={} is out of range", y);
-            return;
-        }
-        auto value{refrain::sim::air_block};
-        std::optional<std::string> gained{};
-        if (tokens[0] == "dig") {
-            const auto existing{store.block_at(
-                refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z})};
-            if (existing != refrain::sim::air_block) {
-                gained = std::string{store.registry().key(existing)};
-            }
-        } else if (tokens[0] == "place") {
-            value = store.registry().intern(std::string{tokens[4]});
-        }
-        auto applied{store.set_block(
-            refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z},
-            value)};
-        if (!applied) {
-            log_server.warn("{} failed: {}", tokens[0],
-                            applied.error().message);
-            return;
-        }
-        if (gained) {
-            (void)store.add_item(*gained, 1);
-        }
-        if (tokens[0] == "place") {
-            // The server remains creative-permissive: consume when available,
-            // but do not reject a scripted placement without a prior `give`.
-            (void)store.remove_item(tokens[4], 1);
-        }
-        log_server.info("{}: {},{},{} -> {}", tokens[0], x, y, z,
-                        tokens[0] == "place" ? tokens[4] : "air");
-        return;
-    }
-    if (line == "help") {
-        print_console_help();
-        return;
-    }
-    if (line == "schedules") {
-        if (scheduler == nullptr) {
-            log_schedule.info("unavailable");
-            return;
-        }
-        const auto tasks{scheduler->tasks()};
-        if (tasks.empty()) {
-            log_schedule.info("none");
-            return;
-        }
-        for (const auto &task : tasks) {
-            log_schedule.info(
-                "{}.{} phase={} interval={} enabled={} runs={} "
-                "failures={} coalesced={} last_tick={}",
-                task.service, task.method,
-                refrain::core::schedule::phase_name(task.phase_of),
-                task.interval_ticks, task.enabled ? "yes" : "no",
-                task.stats.runs, task.stats.failures, task.stats.coalesced,
-                task.stats.last_tick);
-            if (!task.stats.last_error.empty()) {
-                log_schedule.info("{}.{} last_error={}", task.service,
-                                  task.method, task.stats.last_error);
-            }
-        }
-        return;
-    }
-    log_server.warn("unknown '{}'", line);
-}
-
-} // namespace
-
-namespace {
-
-constexpr std::uint8_t player_info_add{1U};
-constexpr std::uint8_t player_info_game_mode{4U};
-constexpr std::uint8_t player_info_listed{8U};
-constexpr std::uint8_t player_info_latency{16U};
-// TODO: the protocol entity type id is hard-coded for the player; non-player
-// entities need a table built from the entity_type registry.
-constexpr std::uint32_t player_entity_type{159U};
-
-template <typename Packet, typename Encoder>
-[[nodiscard]] auto encode_play_body(std::uint16_t packet_id,
-                                    const Packet &packet, Encoder encode)
-    -> std::vector<std::byte> {
-    std::vector<std::byte> body;
-    refrain::net::writer writer{body};
-    writer.write_varint(packet_id);
-    if (auto encoded{encode(writer, packet)}; !encoded) {
-        body.clear();
-    }
-    return body;
-}
-
-[[nodiscard]] auto session_entry(const refrain::session::player &value)
-    -> refrain::net::player_info_entry {
-    return refrain::net::player_info_entry{
-        .id = value.id,
-        .name = value.name,
-        .game_mode = value.game_mode,
-        .listed = true,
-        .latency = 0U,
-    };
-}
-
-void send_player_info(refrain::net::server &listener, std::uint64_t connection,
-                      std::uint8_t actions,
-                      const std::vector<refrain::session::player> &players) {
-    refrain::net::player_info_update payload{};
-    payload.actions = actions;
-    payload.entries.reserve(players.size());
-    for (const auto &player : players) {
-        payload.entries.push_back(session_entry(player));
-    }
-    refrain::protocol::current::play::clientbound::player_info_update packet{};
-    packet.payload = std::move(payload);
-    auto body{encode_play_body(refrain::protocol::current::play::clientbound::
-                                   player_info_update::packet_id,
-                               packet,
-                               refrain::protocol::current::play::clientbound::
-                                   encode_player_info_update)};
-    if (!body.empty()) {
-        listener.send_raw(connection, body);
-    }
-}
-
-[[nodiscard]] auto encode_add_entity_body(const refrain::session::player &value)
-    -> std::vector<std::byte> {
-    refrain::protocol::current::play::clientbound::add_entity packet{
-        .id = static_cast<std::int32_t>(value.entity_id),
-        .uuid = value.id,
-        .type_ = player_entity_type,
-        .x = value.x,
-        .y = value.y,
-        .z = value.z,
-        .movement = {},
-        .x_rot = 0,
-        .y_rot = 0,
-        .y_head_rot = 0,
-        .data = 0,
-    };
-    return encode_play_body(
-        refrain::protocol::current::play::clientbound::add_entity::packet_id,
-        packet,
-        refrain::protocol::current::play::clientbound::encode_add_entity);
-}
-
-void send_remove_entity(refrain::net::server &listener,
-                        std::uint64_t connection, std::uint64_t entity_id);
-
-[[nodiscard]] auto encode_remove_entity_body(std::uint64_t entity_id)
-    -> std::vector<std::byte> {
-    refrain::protocol::current::play::clientbound::remove_entities packet{};
-    packet.entity_ids.push_back(static_cast<std::uint32_t>(entity_id));
-    return encode_play_body(
-        refrain::protocol::current::play::clientbound::remove_entities::
-            packet_id,
-        packet,
-        refrain::protocol::current::play::clientbound::encode_remove_entities);
-}
-
-void send_remove_entity(refrain::net::server &listener,
-                        std::uint64_t connection, std::uint64_t entity_id) {
-    auto body{encode_remove_entity_body(entity_id)};
-    if (!body.empty()) {
-        listener.send_raw(connection, body);
-    }
-}
-
-void announce_session_join(refrain::net::server &listener,
-                           const refrain::session::play_session &players,
-                           std::uint64_t connection) {
-    // Pointers into the session table: the simulation thread is the only
-    // writer, and copying every player record per tick is pure overhead.
-    const auto snapshot{players.all()};
-    send_player_info(listener, connection, player_info_add, snapshot);
-    send_player_info(listener, connection,
-                     static_cast<std::uint8_t>(player_info_game_mode |
-                                               player_info_listed |
-                                               player_info_latency),
-                     snapshot);
-    for (const auto &other : snapshot) {
-        if (other.connection == connection) {
-            continue;
-        }
-        std::vector<refrain::session::player> joining{};
-        for (const auto &candidate : snapshot) {
-            if (candidate.connection == connection) {
-                joining.push_back(candidate);
-                break;
-            }
-        }
-        send_player_info(
-            listener, other.connection,
-            static_cast<std::uint8_t>(player_info_add | player_info_game_mode |
-                                      player_info_listed | player_info_latency),
-            joining);
-    }
-}
-
-void announce_session_leave(refrain::net::server &listener,
-                            const refrain::session::player &left,
-                            const refrain::session::play_session &players) {
-    std::vector<std::uint64_t> targets;
-    for (const auto &player : players.all()) {
-        targets.push_back(player.connection);
-    }
-    refrain::protocol::current::play::clientbound::player_info_remove remove{};
-    remove.profile_ids.push_back(left.id);
-    auto info_body{
-        encode_play_body(refrain::protocol::current::play::clientbound::
-                             player_info_remove::packet_id,
-                         remove,
-                         refrain::protocol::current::play::clientbound::
-                             encode_player_info_remove)};
-    for (const auto target : targets) {
-        if (!info_body.empty()) {
-            listener.send_raw(target, info_body);
-        }
-    }
-}
-
-void send_session_health(refrain::net::server &listener,
-                         std::uint64_t connection, float health) {
-    refrain::protocol::current::play::clientbound::set_health packet{
-        .health = health, .food = 20, .saturation = 5.0F};
-    auto body{encode_play_body(
-        refrain::protocol::current::play::clientbound::set_health::packet_id,
-        packet,
-        refrain::protocol::current::play::clientbound::encode_set_health)};
-    if (!body.empty()) {
-        listener.send_raw(connection, body);
-    }
-}
-
-void send_session_experience(refrain::net::server &listener,
-                             std::uint64_t connection) {
-    refrain::protocol::current::play::clientbound::set_experience packet{
-        .experience_progress = 0.0F,
-        .experience_level = 0,
-        .total_experience = 0,
-    };
-    auto body{encode_play_body(
-        refrain::protocol::current::play::clientbound::set_experience::
-            packet_id,
-        packet,
-        refrain::protocol::current::play::clientbound::encode_set_experience)};
-    if (!body.empty()) {
-        listener.send_raw(connection, body);
-    }
-}
-
-void send_session_animation(refrain::net::server &listener,
-                            const refrain::session::play_session &players,
-                            std::uint64_t source, std::uint64_t target,
-                            std::int8_t action) {
-    const auto mover{players.player_of(source)};
-    if (mover == nullptr) {
-        return;
-    }
-    refrain::protocol::current::play::clientbound::animate packet{
-        .id = static_cast<std::int32_t>(mover->entity_id),
-        .action = action,
-    };
-    auto body{encode_play_body(
-        refrain::protocol::current::play::clientbound::animate::packet_id,
-        packet, refrain::protocol::current::play::clientbound::encode_animate)};
-    if (!body.empty()) {
-        listener.send_raw(target, body);
-    }
-}
-
-void send_session_hurt(refrain::net::server &listener,
-                       const refrain::session::player &target) {
-    refrain::protocol::current::play::clientbound::hurt_animation packet{
-        .id = static_cast<std::int32_t>(target.entity_id),
-        .yaw = 0.0F,
-    };
-    auto body{encode_play_body(
-        refrain::protocol::current::play::clientbound::hurt_animation::
-            packet_id,
-        packet,
-        refrain::protocol::current::play::clientbound::encode_hurt_animation)};
-    if (!body.empty()) {
-        listener.send_raw(target.connection, body);
-    }
-}
-
-void handle_session_attack(refrain::net::server &listener,
-                           refrain::session::play_session &players,
-                           const refrain::net::attack_event &event) {
-    const auto target{players.player_by_entity(
-        static_cast<std::uint32_t>(event.target_entity))};
-    if (target == nullptr || target->connection == event.connection) {
-        return;
-    }
-    const auto player_id{target->connection};
-    const auto health{std::max(0.0F, target->health - 1.0F)};
-    static_cast<void>(players.set_health(player_id, health));
-    send_session_health(listener, player_id, health);
-    send_session_hurt(listener, *target);
-    for (const auto &other : players.all()) {
-        if (other.connection != event.connection) {
-            send_session_animation(listener, players, event.connection,
-                                   other.connection, 0);
-        }
-    }
-}
-
-void broadcast_session_animation(refrain::net::server &listener,
-                                 const refrain::session::play_session &players,
-                                 std::uint64_t source, std::int8_t action) {
-    for (const auto &other : players.all()) {
-        if (other.connection != source) {
-            send_session_animation(listener, players, source, other.connection,
-                                   action);
-        }
-    }
-}
-
-void sync_player_visibility(
-    refrain::net::server &listener,
-    const refrain::session::play_session &players,
-    std::unordered_map<std::uint64_t, refrain::net::movement_event> &last,
-    std::unordered_map<std::uint64_t, std::unordered_set<std::uint64_t>>
-        &visible,
-    std::int32_t tracking_chunks) {
-    const auto angle = [](float degrees) {
-        return static_cast<std::int8_t>(
-            std::lround(static_cast<double>(degrees) * (256.0 / 360.0)));
-    };
-    // Pointers into the session table: the simulation thread is the only
-    // writer, and copying every player record per tick is pure overhead.
-    std::vector<const refrain::session::player *> snapshot{};
-    snapshot.reserve(players.size());
-    players.for_each([&snapshot](const refrain::session::player &value) {
-        snapshot.push_back(&value);
-    });
-    // One buffer per target per tick: the transport then copies and posts once
-    // per target instead of once per entity update.
-    std::unordered_map<std::uint64_t, std::vector<std::byte>> outbox;
-    const auto append = [&outbox](std::uint64_t target,
-                                  const std::vector<std::byte> &body) {
-        auto &buffer{outbox[target]};
-        buffer.insert(buffer.end(), body.begin(), body.end());
-    };
-
-    // Visibility transitions first: a viewer that has just come into range
-    // needs the spawn packet, one that left needs the removal.
-    for (const auto *viewer : snapshot) {
-        auto &seen{visible[viewer->connection]};
-        for (const auto *other : snapshot) {
-            if (other->connection == viewer->connection) {
-                continue;
-            }
-            const refrain::server::visibility_query query{
-                .world = viewer->world,
-                .x = viewer->x,
-                .z = viewer->z,
-                .view_distance = viewer->view_distance,
-            };
-            const bool now{refrain::server::player_visible(
-                query, other->world, other->x, other->z, tracking_chunks)};
-            const bool was{seen.contains(other->connection)};
-            if (now && !was) {
-                if (auto body{encode_add_entity_body(*other)}; !body.empty()) {
-                    append(viewer->connection, body);
-                }
-                seen.insert(other->connection);
-            } else if (!now && was) {
-                if (auto body{encode_remove_entity_body(other->entity_id)};
-                    !body.empty()) {
-                    append(viewer->connection, body);
-                }
-                seen.erase(other->connection);
-            }
-        }
-    }
-
-    // Movement reaches only viewers that already track the mover.
-    for (const auto *mover : snapshot) {
-        const refrain::net::movement_event current{
-            .connection = mover->connection,
-            .x = mover->x,
-            .y = mover->y,
-            .z = mover->z,
-            .yaw = mover->yaw,
-            .pitch = mover->pitch,
-            .on_ground = mover->on_ground,
-        };
-        const auto previous{last.find(mover->connection)};
-        if (previous != last.end() && previous->second.x == current.x &&
-            previous->second.y == current.y &&
-            previous->second.z == current.z &&
-            previous->second.yaw == current.yaw &&
-            previous->second.pitch == current.pitch) {
-            continue;
-        }
-        std::vector<std::byte> body;
-        if (previous == last.end()) {
-            refrain::protocol::current::play::clientbound::teleport_entity
-                packet{};
-            packet.id = static_cast<std::int32_t>(mover->entity_id);
-            packet.change.position = {
-                .x = mover->x, .y = mover->y, .z = mover->z};
-            packet.change.delta_movement = {};
-            packet.change.y_rot = mover->yaw;
-            packet.change.x_rot = mover->pitch;
-            packet.relatives = 0;
-            packet.on_ground = mover->on_ground;
-            body = encode_play_body(refrain::protocol::current::play::
-                                        clientbound::teleport_entity::packet_id,
-                                    packet,
-                                    refrain::protocol::current::play::
-                                        clientbound::encode_teleport_entity);
-        } else {
-            const auto move{
-                refrain::server::choose_entity_move(previous->second, current)};
-            switch (move.kind) {
-            case refrain::server::entity_move_kind::teleport: {
-                refrain::protocol::current::play::clientbound::teleport_entity
-                    packet{};
-                packet.id = static_cast<std::int32_t>(mover->entity_id);
-                packet.change.position = {
-                    .x = mover->x, .y = mover->y, .z = mover->z};
-                packet.change.delta_movement = {};
-                packet.change.y_rot = mover->yaw;
-                packet.change.x_rot = mover->pitch;
-                packet.relatives = 0;
-                packet.on_ground = mover->on_ground;
-                body = encode_play_body(
-                    refrain::protocol::current::play::clientbound::
-                        teleport_entity::packet_id,
-                    packet,
-                    refrain::protocol::current::play::clientbound::
-                        encode_teleport_entity);
-                break;
-            }
-            case refrain::server::entity_move_kind::position: {
-                refrain::protocol::current::play::clientbound::move_entity_pos
-                    packet{};
-                packet.entity_id = static_cast<std::uint32_t>(mover->entity_id);
-                packet.delta = {.on_ground = current.on_ground,
-                                .x = move.dx,
-                                .y = move.dy,
-                                .z = move.dz,
-                                .steps = {}};
-                body = encode_play_body(
-                    refrain::protocol::current::play::clientbound::
-                        move_entity_pos::packet_id,
-                    packet,
-                    refrain::protocol::current::play::clientbound::
-                        encode_move_entity_pos);
-                break;
-            }
-            case refrain::server::entity_move_kind::position_rotation: {
-                refrain::protocol::current::play::clientbound::
-                    move_entity_pos_rot packet{};
-                packet.entity_id = static_cast<std::uint32_t>(mover->entity_id);
-                packet.delta = {.on_ground = current.on_ground,
-                                .x = move.dx,
-                                .y = move.dy,
-                                .z = move.dz,
-                                .steps = {}};
-                packet.y_rot = angle(current.yaw);
-                packet.x_rot = angle(current.pitch);
-                body = encode_play_body(
-                    refrain::protocol::current::play::clientbound::
-                        move_entity_pos_rot::packet_id,
-                    packet,
-                    refrain::protocol::current::play::clientbound::
-                        encode_move_entity_pos_rot);
-                break;
-            }
-            case refrain::server::entity_move_kind::rotation: {
-                refrain::protocol::current::play::clientbound::move_entity_rot
-                    packet{};
-                packet.entity_id = static_cast<std::uint32_t>(mover->entity_id);
-                packet.on_ground = current.on_ground;
-                packet.y_rot = angle(current.yaw);
-                packet.x_rot = angle(current.pitch);
-                body = encode_play_body(
-                    refrain::protocol::current::play::clientbound::
-                        move_entity_rot::packet_id,
-                    packet,
-                    refrain::protocol::current::play::clientbound::
-                        encode_move_entity_rot);
-                break;
-            }
-            case refrain::server::entity_move_kind::none:
-                break;
-            }
-        }
-        last[mover->connection] = current;
-        if (body.empty()) {
-            continue;
-        }
-        for (const auto *target : snapshot) {
-            if (target->connection == mover->connection) {
-                continue;
-            }
-            const auto found{visible.find(target->connection)};
-            if (found == visible.end() ||
-                !found->second.contains(mover->connection)) {
-                continue;
-            }
-            append(target->connection, body);
-        }
-    }
-
-    for (const auto &[target, buffer] : outbox) {
-        if (!buffer.empty()) {
-            listener.send_raw(target, buffer);
-        }
-    }
-}
 
 } // namespace
 
@@ -1555,16 +171,14 @@ auto run_server(const server_run_options &options) -> int {
     }
     // Columns the viewport needs but the store does not hold are generated on
     // a worker, so walking past the spawn area keeps streaming terrain.
-    std::unique_ptr<refrain::server::chunk_generation> generation{};
-    if (auto started{refrain::server::chunk_generation::start(
-            refrain::server::chunk_generation::config{
+    refrain::server::chunk_service chunks{};
+    if (auto started{
+            chunks.start_generation(refrain::server::chunk_generation::config{
                 .data_root = datapack_root,
                 .templates_root = datapack_root + "/../templates",
                 .seed = level_info->seed,
             })};
-        started) {
-        generation = std::move(*started);
-    } else {
+        !started) {
         refrain::log::warn("[world]: generation unavailable: {}",
                            started.error().message);
     }
@@ -1647,12 +261,10 @@ auto run_server(const server_run_options &options) -> int {
     command_environment->default_mode = initial_mode;
     refrain::session::play_session players{};
     refrain::session::chunk_tracker views{};
-    std::unordered_map<std::uint64_t, refrain::net::movement_event>
-        last_moves{};
-    std::unordered_map<std::uint64_t, std::unordered_set<std::uint64_t>>
-        visible_players{};
     const auto tracking_chunks{static_cast<std::int32_t>(std::max<std::int64_t>(
         1, options.network.get_int64("entity_tracking_range", 512) / 16))};
+    refrain::server::server_gateway gateway{};
+    refrain::server::entity_broadcaster broadcaster{gateway, tracking_chunks};
     refrain::net::server *active_listener{nullptr};
     const auto external_join{options.player_join};
     const auto external_leave{options.player_leave};
@@ -1695,8 +307,8 @@ auto run_server(const server_run_options &options) -> int {
     const auto spawn_chunk_x{static_cast<std::int32_t>(level->spawn_x / 16)};
     const auto spawn_chunk_z{static_cast<std::int32_t>(level->spawn_z / 16)};
     network_inputs.player_join =
-        [&players, &views, &active_listener, external_join, spawn_chunk_x,
-         spawn_chunk_z,
+        [&players, &views, &broadcaster, &active_listener, external_join,
+         spawn_chunk_x, spawn_chunk_z,
          view_distance](const refrain::net::player_identity &identity) {
             const auto added{players.add_player(
                 identity.connection, identity.id, std::string{identity.name},
@@ -1707,15 +319,14 @@ auto run_server(const server_run_options &options) -> int {
                                                view_distance));
             }
             if (added && active_listener != nullptr) {
-                announce_session_join(*active_listener, players,
-                                      identity.connection);
+                broadcaster.joined(players, identity.connection);
             }
             if (external_join) {
                 external_join(identity);
             }
         };
     network_inputs.player_leave =
-        [&players, &views, &last_moves, &visible_players, &active_listener,
+        [&players, &views, &broadcaster,
          external_leave](const refrain::net::player_identity &identity) {
             const auto leaving{players.player_of(identity.connection)};
             const auto copy{
@@ -1724,18 +335,8 @@ auto run_server(const server_run_options &options) -> int {
                     : std::optional<refrain::session::player>{*leaving}};
             static_cast<void>(players.remove_player(identity.connection));
             static_cast<void>(views.remove(identity.connection));
-            last_moves.erase(identity.connection);
-            visible_players.erase(identity.connection);
-            if (copy && active_listener != nullptr) {
-                for (auto &[viewer, seen] : visible_players) {
-                    if (seen.erase(identity.connection) > 0) {
-                        send_remove_entity(*active_listener, viewer,
-                                           copy->entity_id);
-                    }
-                }
-            }
-            if (copy && active_listener != nullptr) {
-                announce_session_leave(*active_listener, *copy, players);
+            if (copy) {
+                broadcaster.left(players, *copy);
             }
             if (external_leave) {
                 external_leave(identity);
@@ -1774,37 +375,29 @@ auto run_server(const server_run_options &options) -> int {
                     clamped_distance));
             }
         };
-    network_inputs.attack =
-        [&players, &active_listener](const refrain::net::attack_event &event) {
-            if (active_listener != nullptr) {
-                handle_session_attack(*active_listener, players, event);
-            }
-        };
-    network_inputs.animation = [&players,
+    network_inputs.attack = [&players, &broadcaster, &active_listener](
+                                const refrain::net::attack_event &event) {
+        if (active_listener != nullptr) {
+            broadcaster.attack(players, event);
+        }
+    };
+    network_inputs.animation = [&players, &broadcaster,
                                 &active_listener](std::uint64_t connection,
                                                   std::int8_t action) {
         if (active_listener != nullptr) {
-            broadcast_session_animation(*active_listener, players, connection,
-                                        action);
+            broadcaster.animation(players, connection, action);
         }
     };
     network_inputs.play_ready =
-        [&players,
+        [&players, &broadcaster,
          &active_listener](const refrain::net::player_identity &identity) {
-            if (active_listener == nullptr) {
-                return;
+            if (active_listener != nullptr) {
+                broadcaster.play_ready(players, identity.connection);
             }
-            const auto value{players.player_of(identity.connection)};
-            send_session_health(*active_listener, identity.connection,
-                                value == nullptr ? 20.0F : value->health);
-            send_session_experience(*active_listener, identity.connection);
         };
     network_inputs.respawn = [&players,
-                              &active_listener](std::uint64_t connection) {
-        static_cast<void>(players.set_health(connection, 20.0F));
-        if (active_listener != nullptr) {
-            send_session_health(*active_listener, connection, 20.0F);
-        }
+                              &broadcaster](std::uint64_t connection) {
+        broadcaster.respawn(players, connection);
     };
     network_inputs.verify_session = options.verify_session;
     network_inputs.seed = level->seed;
@@ -1851,6 +444,7 @@ auto run_server(const server_run_options &options) -> int {
     } else {
         listener = std::move(*network);
         active_listener = listener.get();
+        gateway.reset(active_listener);
         command_environment->listener = listener.get();
         log_net.info("listening on {}:{}",
                      options.network.get_string("bind_host", "0.0.0.0"),
@@ -1858,313 +452,45 @@ auto run_server(const server_run_options &options) -> int {
     }
 
     // Chunk streaming owns its state (per-connection viewports and the shared
-    // encoded chunk cache) and is created once the listener and the tables
+    // encoded chunk cache) and is attached once the listener and the tables
     // exist.
-    std::optional<refrain::server::chunk_streamer> streamer{};
     if (listener && tables && registries) {
-        streamer.emplace(*listener, refrain::server::chunk_packet_source{
-                                        .world = &*store,
-                                        .tables = &*tables,
-                                        .registries = &*registries,
-                                    });
-        streamer->set_chunk_requester(
-            [&generation](std::int32_t x, std::int32_t z) {
-                return generation != nullptr &&
-                       generation->request(refrain::world::chunk_pos{x, z});
-            });
+        chunks.attach(gateway, refrain::server::chunk_packet_source{
+                                   .world = &*store,
+                                   .tables = &*tables,
+                                   .registries = &*registries,
+                               });
     }
 
-    // Player inventory: map runtime item keys to protocol item ids once, then
-    // mirror the simulation inventory into the player inventory container.
-    std::unordered_map<std::string, std::uint32_t> item_ids{};
-    std::unordered_map<std::uint32_t, std::string> item_names{};
-    if (tables) {
-        if (const auto registry{tables->find_registry("minecraft:item")}) {
-            const auto count{tables->registry_entry_count(*registry)};
-            item_ids.reserve(count);
-            for (std::uint32_t index{0}; index < count; ++index) {
-                const auto entry{tables->registry_entry(*registry, index)};
-                if (entry.protocol_id >= 0) {
-                    const auto id{
-                        static_cast<std::uint32_t>(entry.protocol_id)};
-                    item_ids.emplace(std::string{entry.name}, id);
-                    item_names.emplace(id, std::string{entry.name});
-                }
-            }
-        }
-    }
-    std::set<std::uint64_t> inventory_forced{};
-    std::unordered_map<std::uint64_t, refrain::sim::item_stack> carried_items{};
-    std::unordered_map<std::uint64_t, std::vector<refrain::sim::item_stack>>
-        inventory_snapshots{};
-    std::unordered_map<std::uint64_t, refrain::net::item_stack>
-        carried_snapshots{};
-    // The client echoes the last menu state id it received in every click.
-    // Ids wrap at 15 bits like the client counter; any other echoed value
-    // means the client missed an update and gets the full menu state.
-    std::unordered_map<std::uint64_t, std::int32_t> inventory_states{};
-    // Runtime stack to protocol stack; unknown items and empty stacks encode
-    // as an empty stack.
-    const auto protocol_stack = [&](const refrain::sim::item_stack &stack) {
-        if (stack.count == 0 || stack.item.empty()) {
-            return refrain::net::item_stack{};
-        }
-        const auto item{item_ids.find(stack.item)};
-        if (item == item_ids.end()) {
-            return refrain::net::item_stack{};
-        }
-        return refrain::net::item_stack{
-            .count = stack.count,
-            .item_id = item->second,
-        };
-    };
-    const auto next_state = [&](std::uint64_t id) {
-        auto &state{inventory_states[id]};
-        state = (state + 1) & 32767;
-        return state;
-    };
-    const auto process_container_clicks = [&]() {
-        if (!listener) {
-            return;
-        }
-        for (const auto &slot : listener->take_creative_slots()) {
-            auto *inventory = players.inventory_of(slot.connection);
-            const auto index{static_cast<std::size_t>(slot.slot)};
-            if (inventory == nullptr || slot.slot < 0 ||
-                index >= inventory->size()) {
-                continue;
-            }
-            auto &target{(*inventory)[index]};
-            if (slot.item_id == 0 || slot.count == 0) {
-                target = sim::item_stack{};
-            } else {
-                const auto name{item_names.find(slot.item_id)};
-                if (name == item_names.end()) {
-                    continue;
-                }
-                target = sim::item_stack{
-                    .item = name->second,
-                    .count = slot.count,
-                };
-            }
-            inventory_forced.insert(slot.connection);
-        }
-        for (const auto &close : listener->take_container_closes()) {
-            if (close.container_id != 0) {
-                continue;
-            }
-            if (auto *inventory = players.inventory_of(close.connection)) {
-                const auto carried{carried_items.find(close.connection)};
-                if (carried != carried_items.end()) {
-                    const auto remainder{refrain::server::place_back(
-                        *inventory, carried->second)};
-                    if (remainder.count == 0) {
-                        carried_items.erase(close.connection);
-                    } else {
-                        carried->second = remainder;
-                    }
-                }
-            }
-            inventory_forced.insert(close.connection);
-        }
-        for (const auto &click : listener->take_container_clicks()) {
-            if (click.container_id != 0) {
-                continue;
-            }
-            auto *inventory = players.inventory_of(click.connection);
-            if (inventory == nullptr) {
-                continue;
-            }
-            const auto known{inventory_states.find(click.connection)};
-            const auto stale{known == inventory_states.end() ||
-                             known->second != click.state_id};
-            if (click.mode != 0) {
-                // Shift, drag and number-key clicks are not modeled; resend
-                // the authoritative state so the client prediction reverts.
-                inventory_forced.insert(click.connection);
-                continue;
-            }
-            auto &carried{carried_items[click.connection]};
-            const auto changed{refrain::server::apply_player_click(
-                *inventory, carried, click.slot, click.button)};
-            log_server.debug("click conn={} slot={} button={} mode={} "
-                             "state={} stale={} -> carried='{}' x{} changed={}",
-                             click.connection, click.slot, click.button,
-                             click.mode, click.state_id, stale, carried.item,
-                             carried.count, changed);
-            if (stale) {
-                inventory_forced.insert(click.connection);
-            }
-        }
-    };
+    refrain::server::inventory_sync inventory{gateway,
+                                              tables ? &*tables : nullptr};
 
-    const auto process_inventory = [&]() {
-        if (!listener) {
-            return;
-        }
-        const auto active_ids{listener->active_connections()};
-        const std::set<std::uint64_t> active{active_ids.begin(),
-                                             active_ids.end()};
-        for (auto iterator = inventory_snapshots.begin();
-             iterator != inventory_snapshots.end();) {
-            if (!active.contains(iterator->first)) {
-                iterator = inventory_snapshots.erase(iterator);
-            } else {
-                ++iterator;
-            }
-        }
-        for (auto iterator = carried_snapshots.begin();
-             iterator != carried_snapshots.end();) {
-            if (!active.contains(iterator->first)) {
-                iterator = carried_snapshots.erase(iterator);
-            } else {
-                ++iterator;
-            }
-        }
-        for (auto iterator = inventory_states.begin();
-             iterator != inventory_states.end();) {
-            if (!active.contains(iterator->first)) {
-                iterator = inventory_states.erase(iterator);
-            } else {
-                ++iterator;
-            }
-        }
-        for (const auto id : active_ids) {
-            const auto *record{players.player_of(id)};
-            if (record == nullptr) {
-                continue;
-            }
-            const auto &inventory{record->inventory};
-            const auto previous{inventory_snapshots.find(id)};
-            const auto forced{inventory_forced.contains(id)};
-            if (previous == inventory_snapshots.end() || forced) {
-                std::vector<refrain::net::item_stack> slots(46);
-                for (std::size_t index{0}; index < inventory.size(); ++index) {
-                    const auto slot{refrain::server::menu_slot_of(index)};
-                    if (slot < 0) {
-                        continue;
-                    }
-                    slots[static_cast<std::size_t>(slot)] =
-                        protocol_stack(inventory[index]);
-                }
-                auto carried{refrain::net::item_stack{}};
-                if (const auto stack{carried_items.find(id)};
-                    stack != carried_items.end()) {
-                    carried = protocol_stack(stack->second);
-                }
-                listener->send_container_content(id, 0, next_state(id), slots,
-                                                 carried);
-                carried_snapshots[id] = carried;
-            } else {
-                for (const auto slot : refrain::server::changed_menu_slots(
-                         previous->second, inventory)) {
-                    const auto index{refrain::server::inventory_index_of(slot)};
-                    const auto stack{index < inventory.size()
-                                         ? protocol_stack(inventory[index])
-                                         : refrain::net::item_stack{}};
-                    listener->send_container_set_slot(id, 0, next_state(id),
-                                                      slot, stack);
-                }
-                auto carried{refrain::net::item_stack{}};
-                if (const auto stack{carried_items.find(id)};
-                    stack != carried_items.end()) {
-                    carried = protocol_stack(stack->second);
-                }
-                const auto sent{carried_snapshots.find(id)};
-                if (sent == carried_snapshots.end() ||
-                    sent->second != carried) {
-                    listener->send_cursor_item(id, carried);
-                    carried_snapshots[id] = carried;
-                }
-            }
-            inventory_snapshots[id] = inventory;
-        }
-        inventory_forced.clear();
-        for (auto iterator = carried_items.begin();
-             iterator != carried_items.end();) {
-            if (!active.contains(iterator->first)) {
-                iterator = carried_items.erase(iterator);
-            } else {
-                ++iterator;
-            }
-        }
-    };
-
-    snapshot_writer writer{*store};
-    // One background deleter, only for an applying GC policy. `--content-gc
-    // off|dry-run` must never delete: no worker is started and a queue left by
-    // an earlier apply run is left untouched (clearing it requires an explicit
-    // maintenance action, not an implicit startup sweep).
-    std::optional<gc_delete_worker> gc_worker{};
-    if (!options.content_store.empty() && options.content_gc_apply) {
-        gc_worker.emplace(options.content_store, options.content_gc_budget_ms);
+    maintenance_service maintenance{};
+    if (auto started{maintenance.start(*store, effective)}; !started) {
+        return report_error(started.error());
     }
+
     const auto state{std::make_shared<runtime_state>()};
-    state->config = options.config;
     state->heartbeat_ns.store(refrain::core::now_ns(),
                               std::memory_order_relaxed);
 
-    // Periodic maintenance is scheduler-driven: the host owns the
-    // tasks, the tick loop only calls `run()` at the two tick boundaries.
-    // Registration order is fixed: autosave, content-gc, store-compact,
-    // region-compact.
-    refrain::core::schedule::scheduler scheduler{};
-    maintenance_context maintenance{.world = &*store,
-                                    .writer = &writer,
-                                    .options = &effective,
-                                    .gc_worker = &gc_worker};
-    std::array<refrain::core::schedule::task_descriptor, 4> tasks{};
-    std::size_t task_count{0};
-    const auto clamp_interval = [](std::uint64_t value) {
-        const auto limit{static_cast<std::uint64_t>(
-            refrain::core::schedule::max_interval_ticks)};
-        return value > limit ? limit : value;
-    };
-    const auto add_task = [&](std::string_view method, std::uint64_t interval,
-                              refrain::core::schedule::invoker invoke) {
-        const auto clamped{clamp_interval(interval)};
-        if (clamped != interval) {
-            log_schedule.warn("{} interval {}->{}", method, interval, clamped);
-        }
-        tasks[task_count++] = refrain::core::schedule::task_descriptor{
-            .service = "runtime",
-            .method = method,
-            .interval_ticks = static_cast<std::int64_t>(clamped),
-            .phase_of = refrain::core::schedule::phase::post_tick,
-            .invoke = invoke,
-        };
-    };
-    if (autosave_interval > 0) {
-        add_task("autosave", autosave_interval, &maintenance_autosave);
-    }
-    if (options.content_gc_interval_ticks > 0 &&
-        !options.content_store.empty()) {
-        add_task("content-gc", options.content_gc_interval_ticks,
-                 &maintenance_content_gc);
-    }
-    if (store_compact_interval > 0) {
-        add_task("store-compact", store_compact_interval,
-                 &maintenance_store_compact);
-    }
-    if (compact_interval > 0) {
-        add_task("region-compact", compact_interval,
-                 &maintenance_region_compact);
-    }
-    if (task_count > 0) {
-        if (auto added{scheduler.add(std::span{tasks.data(), task_count},
-                                     &maintenance, nullptr)};
-            !added) {
-            return report_error(added.error());
-        }
-    }
+    tick_metrics metrics{};
+    console_commands commands{console_dependencies{.world = &*store,
+                                                   .maintenance = &maintenance,
+                                                   .listener = listener.get(),
+                                                   .config = options.config,
+                                                   .stop = state->stop.get()},
+                              metrics};
+    console_service console{[&commands](std::string_view line,
+                                        const refrain::core::tick_info &tick) {
+        commands.execute(line, tick);
+    }};
 
     if (!options.command_file.empty() && !options.script_file.empty()) {
         return report_error(refrain::make_error(
             refrain::error_code::invalid_argument,
             "refrain-server: --cmd-file and --script are mutually exclusive"));
     }
-    std::vector<refrain::sim::replay_step> replay{};
-    std::size_t replay_index{0};
     if (!options.script_file.empty()) {
         auto text{refrain::core::io::read_text(
             options.script_file,
@@ -2176,7 +502,7 @@ auto run_server(const server_run_options &options) -> int {
         if (!parsed) {
             return report_error(parsed.error());
         }
-        replay = std::move(*parsed);
+        console.load_replay(std::move(*parsed));
     }
     if (!options.command_file.empty()) {
         auto text{refrain::core::io::read_text(
@@ -2185,9 +511,9 @@ auto run_server(const server_run_options &options) -> int {
         if (!text) {
             return report_error(text.error());
         }
-        push_text_commands(state, *text);
+        console.push_text(*text);
     } else if (options.script_file.empty()) {
-        start_console_thread(state);
+        console.start_stdin(state->stop);
     }
 
     std::thread watchdog{};
@@ -2197,7 +523,7 @@ auto run_server(const server_run_options &options) -> int {
             const auto timeout_ns{static_cast<std::int64_t>(timeout) *
                                   1'000'000LL};
             bool warned{false};
-            while (!state->stop.load(std::memory_order_acquire)) {
+            while (!state->stop->load(std::memory_order_acquire)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds{250});
                 const auto heartbeat{
                     state->heartbeat_ns.load(std::memory_order_relaxed)};
@@ -2220,7 +546,7 @@ auto run_server(const server_run_options &options) -> int {
     std::int64_t ticks_run{0};
     log_server.info("{} tps", refrain::core::ticks_per_second);
 
-    while (!state->stop.load(std::memory_order_acquire)) {
+    while (!state->stop->load(std::memory_order_acquire)) {
         auto tick{clock.wait_next()};
         if (!tick) {
             log_server.error("{}", tick.error().message);
@@ -2229,51 +555,20 @@ auto run_server(const server_run_options &options) -> int {
         const auto tick_start_ns{refrain::core::now_ns()};
         state->heartbeat_ns.store(refrain::core::now_ns(),
                                   std::memory_order_relaxed);
-        for (const auto &batch : writer.drain_completed()) {
-            store->mark_clean(batch);
-        }
-        for (const auto &line : drain_commands(state)) {
-            execute_console_command(line, state, *store, writer, *tick,
-                                    &scheduler, listener.get());
-        }
-        while (replay_index < replay.size() &&
-               replay[replay_index].tick == ticks_run) {
-            execute_console_command(replay[replay_index].command, state, *store,
-                                    writer, *tick, &scheduler, listener.get());
-            if (state->stop.load(std::memory_order_acquire)) {
-                break;
-            }
-            ++replay_index;
-        }
-        scheduler.run(refrain::core::schedule::phase::pre_tick, ticks_run);
+        maintenance.collect_completed();
+        console.tick(*tick, ticks_run, *state->stop);
+        maintenance.pre_tick(ticks_run);
         if (listener) {
             listener->tick();
-            sync_player_visibility(*listener, players, last_moves,
-                                   visible_players, tracking_chunks);
+            broadcaster.tick(players);
         }
-        if (generation) {
-            for (auto &[pos, column] : generation->take_results()) {
-                auto inserted{store->insert_chunk(pos, std::move(column))};
-                if (!inserted) {
-                    log_chunk_gen.debug("insert ({}, {}) failed: {}", pos.x,
-                                        pos.z, inserted.error().message);
-                    continue;
-                }
-                if (streamer) {
-                    streamer->chunk_ready(pos.x, pos.z);
-                }
-            }
-        }
-        if (streamer) {
-            streamer->tick(views);
-        }
-        process_container_clicks();
-        process_inventory();
+        chunks.tick(*store, views);
+        inventory.tick(players);
         store->tick();
         ++ticks_run;
-        scheduler.run(refrain::core::schedule::phase::post_tick, ticks_run);
-        record_tick_work(*state, static_cast<std::uint64_t>(
-                                     refrain::core::now_ns() - tick_start_ns));
+        maintenance.post_tick(ticks_run);
+        metrics.record(static_cast<std::uint64_t>(refrain::core::now_ns() -
+                                                  tick_start_ns));
         if (options.on_tick) {
             options.on_tick(static_cast<std::uint64_t>(ticks_run));
         }
@@ -2284,7 +579,7 @@ auto run_server(const server_run_options &options) -> int {
         }
         if (options.ticks > 0 && ticks_run >= options.ticks) {
             log_server.info("{}", ticks_run);
-            state->stop.store(true, std::memory_order_release);
+            state->stop->store(true, std::memory_order_release);
             break;
         }
         if ((ticks_run % 20) == 0) {
@@ -2297,7 +592,7 @@ auto run_server(const server_run_options &options) -> int {
         }
     }
 
-    state->stop.store(true, std::memory_order_release);
+    state->stop->store(true, std::memory_order_release);
     if (watchdog.joinable()) {
         watchdog.join();
     }
@@ -2307,17 +602,9 @@ auto run_server(const server_run_options &options) -> int {
         listener->stop();
         listener.reset();
     }
-    // Tasks borrow the store/writer/GC worker; drop them before teardown.
-    scheduler.clear();
-    writer.stop();
-    for (const auto &batch : writer.drain_completed()) {
-        store->mark_clean(batch);
-    }
     // Shutdown order: the world writer first, then the content queue worker
     // (so no unlink overlaps store teardown), and only then the final flush.
-    if (gc_worker) {
-        gc_worker->stop();
-    }
+    maintenance.stop();
     log_sim.info("final tick={} hash={}", store->ticks(),
                  refrain::data::to_hex(store->state_hash()));
     auto committed{store->flush()};

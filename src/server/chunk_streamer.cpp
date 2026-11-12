@@ -21,9 +21,9 @@ constexpr refrain::log::logger log_net{"net"};
 
 namespace refrain::server {
 
-chunk_streamer::chunk_streamer(refrain::net::server &listener,
+chunk_streamer::chunk_streamer(play_gateway &gateway,
                                chunk_packet_source source)
-    : listener_(listener), source_(source) {}
+    : gateway_(gateway), source_(source) {}
 
 void chunk_streamer::set_chunk_requester(chunk_requester requester) {
     requester_ = std::move(requester);
@@ -47,7 +47,7 @@ void chunk_streamer::chunk_ready(std::int32_t x, std::int32_t z) {
 
 void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
 
-    const auto active_ids{listener_.active_connections()};
+    const auto active_ids{gateway_.active_connections()};
     const std::set<std::uint64_t> active{active_ids.begin(), active_ids.end()};
     for (auto iterator = streams_.begin(); iterator != streams_.end();) {
         if (!active.contains(iterator->first)) {
@@ -75,8 +75,8 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
             for (const auto &position : refrain::server::chunks_outside_view(
                      tracked, {stream.center_x, stream.center_z},
                      stream.radius)) {
-                listener_.send_forget_chunk(request.connection, position.x,
-                                            position.z);
+                gateway_.send_forget_chunk(request.connection, position.x,
+                                           position.z);
                 stream.known.erase({position.x, position.z});
             }
         }
@@ -127,7 +127,7 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
     constexpr std::size_t max_total_backlog{64U * 1024U * 1024U};
     std::size_t total_backlog{0};
     for (const auto id : active_ids) {
-        total_backlog += listener_.backlog(id);
+        total_backlog += gateway_.backlog(id);
     }
     if (total_backlog > max_total_backlog) {
         return;
@@ -138,7 +138,7 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
         if (match == streams_.end()) {
             continue;
         }
-        if (listener_.backlog(id) > max_connection_backlog) {
+        if (gateway_.backlog(id) > max_connection_backlog) {
             continue;
         }
         auto &stream{match->second};
@@ -206,8 +206,8 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
         }
         const auto update_center{stream.center_dirty};
         if (update_center || !packets.empty()) {
-            listener_.send_chunk_batch(id, stream.center_x, stream.center_z,
-                                       packets, update_center);
+            gateway_.send_chunk_batch(id, stream.center_x, stream.center_z,
+                                      packets, update_center);
             stream.center_dirty = false;
         }
         if (stream.pending.empty() && !stream.reported) {

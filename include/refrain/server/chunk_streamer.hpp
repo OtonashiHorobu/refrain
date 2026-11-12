@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <refrain/net/server.hpp>
 #include <refrain/server/chunk_packet.hpp>
+#include <refrain/server/play_gateway.hpp>
 #include <refrain/session/chunk_tracker.hpp>
 
 #include <cstddef>
@@ -27,7 +27,7 @@ namespace refrain::server {
 /// are shared by every connection.
 class chunk_streamer {
   public:
-    chunk_streamer(refrain::net::server &listener, chunk_packet_source source);
+    chunk_streamer(play_gateway &gateway, chunk_packet_source source);
 
     /// Drain the tracker's viewport requests and send one bounded batch per
     /// connection. A connection that cannot drain its socket keeps its pending
@@ -70,7 +70,7 @@ class chunk_streamer {
 
     static constexpr std::size_t max_cached_chunks{256};
 
-    refrain::net::server &listener_;
+    play_gateway &gateway_;
     chunk_packet_source source_{};
     std::unordered_map<std::uint64_t, stream_state> streams_{};
     std::map<std::pair<std::int32_t, std::int32_t>, cache_entry> cache_{};
