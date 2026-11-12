@@ -231,7 +231,9 @@ struct server::impl {
     /// while a connection mutex is acquired. The close path publishes `closed`
     /// with an atomic exchange, then takes `mutex` only to snapshot the leave
     /// identity; a sender that already owns `mutex` completes at most one
-    /// packet, and no path holds `mutex` while waiting for close.
+    /// packet, and no path holds `mutex` while waiting for close. Removing the
+    /// table entry releases the protocol session, and that removal never holds
+    /// the shard lock or a connection mutex.
     struct connection {
         mutable std::mutex mutex{};
         std::atomic<bool> closed{false};
@@ -247,6 +249,12 @@ struct server::impl {
     /// the connections that hash to the same shard. Membership changes are
     /// rare compared with sends and lookups; the shard lock covers the map
     /// only, never a connection's state or a call into the codec.
+    ///
+    /// A table entry owns the protocol session for its id. Removing the entry
+    /// is the one step that releases the session, and only the caller that
+    /// removed it does: an abrupt drop, a server-initiated close, a decode
+    /// failure, a timeout and shutdown all leave the table through
+    /// `erase_connection`. The release runs after the shard lock is released.
     static constexpr std::size_t connection_shard_count{64};
     struct connection_shard {
         mutable std::mutex mutex{};
@@ -262,7 +270,11 @@ struct server::impl {
     [[nodiscard]] auto find_connection(std::uint64_t id) const
         -> std::shared_ptr<connection>;
     void insert_connection(std::uint64_t id, std::shared_ptr<connection> live);
-    void erase_connection(std::uint64_t id);
+    /// Remove one connection from the table. Returns true for the single
+    /// caller that removed it; that caller releases the protocol session after
+    /// the shard lock is dropped. Every other remover finds no entry and
+    /// releases nothing.
+    [[nodiscard]] auto erase_connection(std::uint64_t id) -> bool;
     /// Copy every table entry. The shard locks are released before the caller
     /// inspects a connection, and a caller that keeps a `shared_ptr` stays
     /// valid after the connection leaves the table.
@@ -414,10 +426,22 @@ void server::impl::insert_connection(std::uint64_t id,
     shard.entries.insert_or_assign(id, std::move(live));
 }
 
-void server::impl::erase_connection(std::uint64_t id) {
+auto server::impl::erase_connection(std::uint64_t id) -> bool {
     auto &shard{connection_table[shard_for(id)]};
-    const std::lock_guard lock{shard.mutex};
-    shard.entries.erase(id);
+    {
+        const std::lock_guard lock{shard.mutex};
+        if (shard.entries.erase(id) == 0) {
+            return false;
+        }
+    }
+    // The entry was in the table, so this call owns the removal and is the only
+    // one that releases the session. The codec runs outside the shard lock.
+    // Closing twice, or a transport callback that arrives after a local close,
+    // finds no entry and is a no-op.
+    if (protocol) {
+        protocol->close_connection(id);
+    }
+    return true;
 }
 
 auto server::impl::connection_snapshot() const -> std::vector<live_connection> {
@@ -526,9 +550,11 @@ void server::impl::stop() {
         socket->stop();
         socket.reset();
     }
-    for (auto &shard : connection_table) {
-        const std::lock_guard lock{shard.mutex};
-        shard.entries.clear();
+    // A transport that stops before it reports a close leaves its entries in
+    // the table. Removing them here releases those sessions through the same
+    // step an abrupt drop uses.
+    for (const auto &entry : connection_snapshot()) {
+        static_cast<void>(erase_connection(entry.id));
     }
 }
 
@@ -565,8 +591,13 @@ void server::impl::on_close(std::uint64_t id, std::string_view /*reason*/) {
                 data.leave_reported = true;
             }
         }
-        erase_connection(id);
     }
+    // The transport reports an abrupt drop here without a disconnect packet.
+    // This removal releases the session exactly as a local close does.
+    static_cast<void>(erase_connection(id));
+    // `leave_reported` is the exactly-once guard for the leave event, so the
+    // path that claimed it reports it even when another path removed the entry
+    // first.
     if (left_id != 0) {
         if (report_leave && player_leave_hook) {
             player_leave_hook(player_identity{
@@ -2924,7 +2955,10 @@ void server::impl::close(std::uint64_t id) {
     } else {
         log_net.info("player left id={} name={}", id, name);
     }
-    protocol->close_connection(id);
+    // A local close leaves through the same removal step as an abrupt drop, so
+    // the session is released once. The transport callback that follows finds
+    // no entry and does nothing.
+    static_cast<void>(erase_connection(id));
     if (socket) {
         socket->close(id);
     }
