@@ -8,6 +8,7 @@
 #include <refrain/net/crypto.hpp>
 #include <refrain/net/frame.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -22,7 +23,13 @@ namespace refrain::protocol {
 
 namespace {
 
+/// Framing, cipher and queues of one connection. `mutex` guards every member
+/// and is the only lock on the encode path, so two connections never wait for
+/// each other. A lookup copies the owning `shared_ptr` under its shard lock and
+/// releases that lock before this one is taken, so a connection closed in
+/// between stays alive for the call in flight.
 struct connection_codec {
+    std::mutex mutex{};
     refrain::net::frame_decoder decoder{-1};
     refrain::net::frame_encoder encoder{-1};
     std::unique_ptr<refrain::net::aes128_cfb8> cipher{};
@@ -38,36 +45,81 @@ struct connection_codec {
 } // namespace
 
 struct java777_codec::impl {
-    std::mutex mutex{};
-    std::unordered_map<std::uint64_t, std::unique_ptr<connection_codec>>
-        connections{};
-    std::unordered_map<std::uint64_t, net::connection_state> states{};
+    /// The id-to-session table is sharded the way the network server shards its
+    /// connection table: a lookup contends only with the connections hashing to
+    /// the same shard, and membership changes are rare compared with sends.
+    ///
+    /// A connection's codec and its protocol state share a shard and its lock,
+    /// so the pair is never observed half-updated and one connection cannot be
+    /// encoded while another connection's state changes underneath it.
+    ///
+    /// Lock order (strict): a caller holds at most one shard mutex, and never
+    /// takes a session mutex while holding it. `find` copies the `shared_ptr`
+    /// under the shard lock, releases the shard lock, and only then the caller
+    /// takes the session mutex. No path holds two shard mutexes, and no path
+    /// takes a shard mutex while holding a session mutex.
+    static constexpr std::size_t shard_count{64};
+    struct shard {
+        mutable std::mutex mutex{};
+        std::unordered_map<std::uint64_t, std::shared_ptr<connection_codec>>
+            connections{};
+        std::unordered_map<std::uint64_t, net::connection_state> states{};
+    };
+    std::array<shard, shard_count> shards{};
+    encode_probe probe{};
+
+    [[nodiscard]] static constexpr auto
+    shard_for(std::uint64_t connection) noexcept -> std::size_t {
+        return static_cast<std::size_t>(connection) % shard_count;
+    }
+    [[nodiscard]] auto bucket(std::uint64_t connection) -> shard & {
+        return shards[shard_for(connection)];
+    }
+    /// Find one session and release the shard lock before returning it.
+    [[nodiscard]] auto find(std::uint64_t connection)
+        -> std::shared_ptr<connection_codec> {
+        auto &owner{bucket(connection)};
+        const std::lock_guard lock{owner.mutex};
+        const auto found{owner.connections.find(connection)};
+        if (found == owner.connections.end()) {
+            return {};
+        }
+        return found->second;
+    }
 };
 
-java777_codec::java777_codec() : impl_{std::make_unique<impl>()} {}
+java777_codec::java777_codec() : java777_codec(encode_probe{}) {}
+
+java777_codec::java777_codec(encode_probe probe)
+    : impl_{std::make_unique<impl>()} {
+    impl_->probe = std::move(probe);
+}
+
 java777_codec::~java777_codec() = default;
 
 void java777_codec::create_connection(std::uint64_t connection) {
-    const std::lock_guard lock{impl_->mutex};
-    impl_->connections[connection] = std::make_unique<connection_codec>();
-    impl_->states[connection] = net::connection_state::handshake;
+    auto &owner{impl_->bucket(connection)};
+    const std::lock_guard lock{owner.mutex};
+    owner.connections[connection] = std::make_shared<connection_codec>();
+    owner.states[connection] = net::connection_state::handshake;
 }
 
 void java777_codec::close_connection(std::uint64_t connection) {
-    const std::lock_guard lock{impl_->mutex};
-    impl_->connections.erase(connection);
-    impl_->states.erase(connection);
+    auto &owner{impl_->bucket(connection)};
+    const std::lock_guard lock{owner.mutex};
+    owner.connections.erase(connection);
+    owner.states.erase(connection);
 }
 
 auto java777_codec::set_compression(std::uint64_t connection,
                                     std::int32_t threshold) -> status {
-    const std::lock_guard lock{impl_->mutex};
-    const auto found{impl_->connections.find(connection)};
-    if (found == impl_->connections.end()) {
+    const auto codec{impl_->find(connection)};
+    if (!codec) {
         return codec_failure("unknown protocol connection");
     }
-    found->second->decoder.set_threshold(threshold);
-    found->second->encoder.set_threshold(threshold);
+    const std::lock_guard lock{codec->mutex};
+    codec->decoder.set_threshold(threshold);
+    codec->encoder.set_threshold(threshold);
     return status_ok();
 }
 
@@ -82,27 +134,25 @@ auto java777_codec::set_cipher(std::uint64_t connection,
     if (!cipher) {
         return std::unexpected{std::move(cipher.error())};
     }
-    const std::lock_guard lock{impl_->mutex};
-    const auto found{impl_->connections.find(connection)};
-    if (found == impl_->connections.end()) {
+    const auto codec{impl_->find(connection)};
+    if (!codec) {
         return codec_failure("unknown protocol connection");
     }
-    found->second->cipher =
-        std::make_unique<net::aes128_cfb8>(std::move(*cipher));
+    const std::lock_guard lock{codec->mutex};
+    codec->cipher = std::make_unique<net::aes128_cfb8>(std::move(*cipher));
     return status_ok();
 }
 
 auto java777_codec::feed(std::uint64_t connection,
                          std::span<const std::byte> data) -> status {
-    std::vector<std::byte> plain{};
-    const std::lock_guard lock{impl_->mutex};
-    const auto found{impl_->connections.find(connection)};
-    if (found == impl_->connections.end()) {
+    const auto codec{impl_->find(connection)};
+    if (!codec) {
         return codec_failure("unknown protocol connection");
     }
-    auto &codec{*found->second};
-    if (codec.cipher) {
-        auto decrypted{codec.cipher->decrypt(data)};
+    const std::lock_guard lock{codec->mutex};
+    std::vector<std::byte> plain{};
+    if (codec->cipher) {
+        auto decrypted{codec->cipher->decrypt(data)};
         if (!decrypted) {
             return std::unexpected{std::move(decrypted.error())};
         }
@@ -110,31 +160,27 @@ auto java777_codec::feed(std::uint64_t connection,
     } else {
         plain.assign(data.begin(), data.end());
     }
-    if (auto pushed{codec.decoder.push(plain)}; !pushed) {
-        return pushed;
-    }
-    return status_ok();
+    return codec->decoder.push(plain);
 }
 
 auto java777_codec::next_packet(std::uint64_t connection,
                                 std::uint32_t &packet_id,
                                 std::span<const std::byte> &payload)
     -> result<bool> {
-    const std::lock_guard lock{impl_->mutex};
-    const auto found{impl_->connections.find(connection)};
-    if (found == impl_->connections.end()) {
+    const auto codec{impl_->find(connection)};
+    if (!codec) {
         return std::unexpected{
             make_error(error_code::not_found, "unknown protocol connection")};
     }
-    auto &codec{*found->second};
-    auto decoded{codec.decoder.next(codec.current_body)};
+    const std::lock_guard lock{codec->mutex};
+    auto decoded{codec->decoder.next(codec->current_body)};
     if (!decoded) {
         return std::unexpected{std::move(decoded.error())};
     }
     if (!*decoded) {
         return false;
     }
-    net::reader reader{codec.current_body};
+    net::reader reader{codec->current_body};
     auto id{reader.read_varint()};
     if (!id) {
         return std::unexpected{
@@ -142,49 +188,53 @@ auto java777_codec::next_packet(std::uint64_t connection,
     }
     packet_id = *id;
     payload = std::span<const std::byte>{
-        codec.current_body.data() + reader.position(), reader.remaining()};
+        codec->current_body.data() + reader.position(), reader.remaining()};
     return true;
 }
 
 auto java777_codec::send_packet(std::uint64_t connection,
                                 std::uint32_t packet_id,
                                 std::span<const std::byte> payload) -> status {
-    const std::lock_guard lock{impl_->mutex};
-    const auto found{impl_->connections.find(connection)};
-    if (found == impl_->connections.end()) {
+    const auto codec{impl_->find(connection)};
+    if (!codec) {
         return codec_failure("unknown protocol connection");
     }
-    auto &codec{*found->second};
+    const std::lock_guard lock{codec->mutex};
+    if (impl_->probe) {
+        impl_->probe(connection);
+    }
     std::vector<std::byte> body{};
     net::writer writer{body};
     writer.write_varint(packet_id);
     writer.write_bytes(payload);
     std::vector<std::byte> frame{};
-    if (auto encoded{codec.encoder.encode(body, frame)}; !encoded) {
+    if (auto encoded{codec->encoder.encode(body, frame)}; !encoded) {
         return encoded;
     }
-    if (codec.cipher) {
-        auto encrypted{codec.cipher->encrypt(frame)};
+    if (codec->cipher) {
+        auto encrypted{codec->cipher->encrypt(frame)};
         if (!encrypted) {
             return std::unexpected{std::move(encrypted.error())};
         }
         frame = std::move(*encrypted);
     }
-    codec.outbound.push_back(std::move(frame));
+    codec->outbound.push_back(std::move(frame));
     return status_ok();
 }
 
 void java777_codec::notify_state(std::uint64_t connection,
                                  net::connection_state state) {
-    const std::lock_guard lock{impl_->mutex};
-    impl_->states[connection] = state;
+    auto &owner{impl_->bucket(connection)};
+    const std::lock_guard lock{owner.mutex};
+    owner.states[connection] = state;
 }
 
 auto java777_codec::transition(std::uint64_t connection,
                                net::protocol_event event)
     -> net::connection_state {
-    const std::lock_guard lock{impl_->mutex};
-    auto &current{impl_->states[connection]};
+    auto &owner{impl_->bucket(connection)};
+    const std::lock_guard lock{owner.mutex};
+    auto &current{owner.states[connection]};
     switch (event) {
     case net::protocol_event::status_request:
         if (current == net::connection_state::handshake) {
@@ -212,15 +262,17 @@ auto java777_codec::transition(std::uint64_t connection,
 
 auto java777_codec::take_outbound(std::uint64_t connection,
                                   std::span<const std::byte> &data) -> bool {
-    const std::lock_guard lock{impl_->mutex};
-    const auto found{impl_->connections.find(connection)};
-    if (found == impl_->connections.end() || found->second->outbound.empty()) {
+    const auto codec{impl_->find(connection)};
+    if (!codec) {
         return false;
     }
-    auto &codec{*found->second};
-    codec.current_outbound = std::move(codec.outbound.front());
-    codec.outbound.pop_front();
-    data = codec.current_outbound;
+    const std::lock_guard lock{codec->mutex};
+    if (codec->outbound.empty()) {
+        return false;
+    }
+    codec->current_outbound = std::move(codec->outbound.front());
+    codec->outbound.pop_front();
+    data = codec->current_outbound;
     return true;
 }
 
