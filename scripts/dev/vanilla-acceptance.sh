@@ -94,9 +94,14 @@ simulation_distance = 6
 status.max_players = 20
 EOF
 
+# The server reads commands from stdin; a FIFO keeps it attached while the
+# launcher asserts through the command layer.
+mkfifo "$WORK/stdin"
 "$BIN/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --world "$WORLD" --config-dir "$WORK/config" >"$WORK/server.log" 2>&1 &
+    --world "$WORLD" --config-dir "$WORK/config" \
+    <"$WORK/stdin" >"$WORK/server.log" 2>&1 &
 SERVER_PID=$!
+exec 9>"$WORK/stdin"
 for _ in $(seq 1 600); do
     grep -q "network: listening" "$WORK/server.log" && break
     kill -0 "$SERVER_PID" 2>/dev/null || break
@@ -111,14 +116,19 @@ fi
 REPORT="$WORK/report.json"
 rm -f "$REPORT" "$REPORT.release"
 echo "acceptance: joining 127.0.0.1:$PORT"
-set +e
 MC_CLIENT_HOME="$CLIENT_HOME" MC_RUN_DIR="$RUN_DIR" \
     MC_SERVER="127.0.0.1:$PORT" \
     MC_JAVA_ARGS="-javaagent:$WORK/agent.jar=log=$RUN_DIR/logs/latest.log,report=$REPORT,server=127.0.0.1:$PORT,timeout=$TIMEOUT,settle=$SETTLE${KEYS:+,keys=$KEYS}" \
-    timeout $((TIMEOUT + 120)) "$ROOT/scripts/dev/vanilla-client.sh" \
-    >"$WORK/client.out" 2>&1
-CLIENT_RC=$?
-set -e
+    "$ROOT/scripts/dev/vanilla-client.sh" >"$WORK/client.out" 2>&1 &
+CLIENT_PID=$!
+
+# The agent writes the report once it decided; the launcher asserts while the
+# client is still connected, then releases it.
+for _ in $(seq 1 $(((TIMEOUT + 60) * 10))); do
+    [[ -f "$REPORT" ]] && break
+    kill -0 "$CLIENT_PID" 2>/dev/null || break
+    sleep 0.1
+done
 
 STATUS="missing"
 if [[ -f "$REPORT" ]]; then
@@ -130,17 +140,34 @@ if [[ "$STATUS" == "joined" ]]; then
         mkdir -p "$(dirname "$SHOT")"
         grim "$SHOT" 2>/dev/null || true
     fi
-    touch "$REPORT.release"
-    for _ in $(seq 1 100); do
-        kill -0 "$(pgrep -f 'java.*client-26.3' | head -1)" 2>/dev/null || break
-        sleep 0.1
-    done
     echo "acceptance: joined"
     [[ -s "$SHOT" ]] && echo "acceptance: screenshot $SHOT"
     echo "acceptance: $(grep -c 'player joined' "$WORK/server.log") join(s) on the server"
+
+    # The connection counters are the server's own view of the session: ask
+    # for them while the client is still connected, not after it left.
+    printf 'net\n' >&9
+    for _ in $(seq 1 100); do
+        grep -q "net: players=1 " "$WORK/server.log" && break
+        sleep 0.05
+    done
+    if grep -q "net: players=1 " "$WORK/server.log"; then
+        echo "acceptance: the server counts one player in play"
+    else
+        echo "acceptance: FAILED (the server does not count the client)" >&2
+        tail -5 "$WORK/server.log" >&2
+        touch "$REPORT.release"
+        exit 1
+    fi
+    touch "$REPORT.release"
+    wait "$CLIENT_PID" 2>/dev/null || true
     exit 0
 fi
 
+touch "$REPORT.release" 2>/dev/null || true
+kill "$CLIENT_PID" 2>/dev/null || true
+wait "$CLIENT_PID" 2>/dev/null || true
+CLIENT_RC=1
 echo "acceptance: FAILED (status=$STATUS client_rc=$CLIENT_RC)" >&2
 [[ -f "$REPORT" ]] && cat "$REPORT" >&2
 echo "--- server log ---" >&2
