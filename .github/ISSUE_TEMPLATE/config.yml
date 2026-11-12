@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security problem
+    url: https://github.com/OtonashiHorobu/refrain/security/advisories/new
+    about: Report a vulnerability privately. Do not open a public issue.
+  - name: Question or design discussion
+    url: https://github.com/OtonashiHorobu/refrain/discussions
+    about: Ask about the architecture, the target behavior or how to contribute.

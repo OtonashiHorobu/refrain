@@ -1,0 +1,67 @@
+name: Feature request
+description: A behavior or capability the server does not implement yet.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Refrain reproduces Minecraft Java Edition 26.3. A request that names the
+        behavior of that version is actionable; a request that names a feature
+        of another server is a design discussion, so say which one and why.
+
+  - type: textarea
+    id: behavior
+    attributes:
+      label: The behavior
+      description: What should the server do, stated as observable behavior rather than as an implementation.
+      placeholder: |
+        Breaking a block with a tool that has the wrong tier drops nothing and
+        plays the break sound, instead of dropping the block item.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reference
+    attributes:
+      label: Where the target version defines it
+      description: The class, method or data table of 26.3 that decides this, and the call chain you read. Do not paste the code.
+      placeholder: |
+        Player.destroyBlock -> Block.getDrops -> ItemStack, gated on
+        Tool.hasCorrectToolForDrops. The tier table is in ItemTags.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it matters
+      description: What becomes possible, or what breaks today without it.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - world generation
+        - chunk lifecycle and streaming
+        - protocol and networking
+        - simulation and entities
+        - blocks, items and containers
+        - commands and permissions
+        - storage and persistence
+        - modding, contracts and tooling
+        - build, CI and documentation
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: This is not a request to import code or assets from another server or from the game.
+          required: true
+        - label: I searched the open issues and milestones for this request.
+          required: true
