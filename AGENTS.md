@@ -80,6 +80,12 @@ reporter smoke and the formatting gate.
   configure time.
 - Run `clang-format` on changed C++ files. Generated headers under
   `sdk/generated/` are never reformatted or edited by hand.
+- An incomplete or placeholder implementation must be marked at the exact
+  site with a `TODO:` or `FIXME:` comment that says what is missing and what
+  the correct behavior is. A stub that silently returns a default, ignores an
+  input or hard-codes one value instead of implementing the general case is a
+  defect, not a finished feature. The marker states the gap in one or two
+  sentences; it never carries a ticket number, milestone label or date.
 
 ## Logging
 
