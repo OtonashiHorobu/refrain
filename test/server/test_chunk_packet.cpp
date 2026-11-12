@@ -318,8 +318,9 @@ suite chunk_packet_tests = [] {
             if (!tables || !runtime) {
                 return;
             }
+            auto port{refrain::server::make_borrowed_world_port(*runtime)};
             refrain::server::chunk_packet_source source{
-                .world = &*runtime,
+                .world = port.get(),
                 .tables = &*tables,
                 .registries = nullptr,
             };
@@ -393,8 +394,9 @@ suite chunk_packet_tests = [] {
             if (!tables || !runtime) {
                 return;
             }
+            auto port{refrain::server::make_borrowed_world_port(*runtime)};
             refrain::server::chunk_packet_source source{
-                .world = &*runtime,
+                .world = port.get(),
                 .tables = &*tables,
                 .registries = nullptr,
             };

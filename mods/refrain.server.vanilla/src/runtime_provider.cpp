@@ -3,15 +3,18 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 // `refrain:runtime` provider for the internal `refrain.server.vanilla` mod.
-// This adapter converts the generated `runtime_config` ABI struct into
-// `server::server_run_options` and calls the in-process `server::run_server`.
-// The tick loop still uses the C++ app API directly; routing its internals
-// through `refrain:world`/`refrain:sim`/`refrain:storage` is not implemented
-// here.
 //
-// TODO: the runtime bypasses the service contracts, so a mod that replaces the
-// world or storage provider changes nothing; the tick loop must call the
-// contract ABI instead of the concrete types.
+// This adapter converts the generated `runtime_config` ABI struct into
+// `server::server_run_options`, collects the active `refrain:world`,
+// `refrain:sim` and `refrain:storage` providers, and runs the tick loop
+// through the selected world port.
+//
+// The port selection rule lives in `server/world_port.hpp`: a first-party
+// provider set keeps the runtime on the in-process world, while any other
+// composition is reached through the contract ABI. A contract composition
+// cannot boot yet because the v1 contracts expose no level projection, player
+// table or chunk payloads; `run_server` fails closed with that gap instead of
+// silently ignoring the replacement.
 
 #include <refrain/contracts/abi.hpp>
 #include <refrain/contracts/services/net_protocol.hpp>
@@ -41,6 +44,7 @@ namespace {
 
 constexpr refrain::log::logger log_net_transport{"net-transport"};
 constexpr refrain::log::logger log_protocol{"protocol"};
+constexpr refrain::log::logger log_runtime{"runtime"};
 
 } // namespace
 
@@ -88,6 +92,37 @@ make_options(const refrain_services_runtime_runtime_config &config,
     options.content_gc_budget_ms = config.content_gc_budget_ms;
     options.content_gc_interval_ticks = config.content_gc_interval_ticks;
     return options;
+}
+
+/// Active provider of one contract, or null handles when it is inactive.
+template <typename Vtable>
+void collect_service(const refrain::mod::host &host, std::string_view service,
+                     const Vtable *&vtable, void *&self,
+                     std::string &provider_id) {
+    const auto info{host.services().active_provider(service)};
+    if (!info || info->instance == nullptr) {
+        return;
+    }
+    const auto *api{
+        static_cast<const refrain::mod::provider_api *>(info->instance)};
+    if (api->vtable == nullptr) {
+        return;
+    }
+    vtable = static_cast<const Vtable *>(api->vtable);
+    self = api->self;
+    provider_id = info->id;
+}
+
+[[nodiscard]] auto collect_services(const refrain::mod::host &host)
+    -> refrain::server::server_service_handles {
+    refrain::server::server_service_handles services{};
+    collect_service(host, "refrain:world", services.world, services.world_self,
+                    services.world_provider);
+    collect_service(host, "refrain:sim", services.sim, services.sim_self,
+                    services.sim_provider);
+    collect_service(host, "refrain:storage", services.storage,
+                    services.storage_self, services.storage_provider);
+    return services;
 }
 
 struct runtime_provider {
@@ -445,11 +480,27 @@ struct runtime_provider {
         if (options.world_path.empty()) {
             return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
         }
+        if (provider->host == nullptr) {
+            return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
+        }
+        const auto services{collect_services(*provider->host)};
+        const auto choice{refrain::server::select_world_port(services)};
+        auto world{refrain::server::make_world_port(services)};
+        if (!world) {
+            return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INTERNAL;
+        }
+        log_runtime.debug("port={} world={} sim={} storage={}",
+                          choice == refrain::server::world_port_choice::direct
+                              ? "direct"
+                              : "contract",
+                          services.world_provider, services.sim_provider,
+                          services.storage_provider);
         // `run_server` reports startup/shutdown failures through the log and
         // returns the process exit code; the contract forwards that code
         // unchanged (0 = clean stop), so the host never reinterprets it.
-        *out_value =
-            static_cast<std::int32_t>(refrain::server::run_server(options));
+        *out_value = static_cast<std::int32_t>(
+            refrain::server::run_server(options, services, *world));
+        world->close();
         return REFRAIN_STATUS_OK;
     }
 };

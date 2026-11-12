@@ -142,6 +142,7 @@ suite console_player_tests = [] {
             fs::remove_all(directory, error);
             return;
         }
+        auto port{server::make_borrowed_world_port(*world)};
         auto *console_player{find_player(*world, "@console")};
         auto *alice{find_player(*world, "Alice")};
         auto *bob{find_player(*world, "Bob")};
@@ -154,7 +155,7 @@ suite console_player_tests = [] {
 
         server::tick_metrics metrics{};
         server::console_commands commands{
-            server::console_dependencies{.world = &*world}, metrics};
+            server::console_dependencies{.world = port.get()}, metrics};
         const refrain::core::tick_info tick{};
 
         // Capture the report through the logger's file sink: the command still
@@ -194,6 +195,7 @@ suite console_player_tests = [] {
             fs::remove_all(directory, error);
             return;
         }
+        auto port{server::make_borrowed_world_port(*world)};
         sim::item_table items;
         items.insert("minecraft:diamond_sword",
                      {.max_stack_size = 1, .max_damage = 2});
@@ -203,7 +205,7 @@ suite console_player_tests = [] {
             << (inserted ? "" : inserted.error().message);
         server::tick_metrics metrics{};
         server::console_commands commands{
-            server::console_dependencies{.world = &*world}, metrics};
+            server::console_dependencies{.world = port.get()}, metrics};
         const refrain::core::tick_info tick{};
         auto *player{find_player(*world, "@console")};
         expect(player != nullptr);
@@ -232,9 +234,10 @@ suite console_player_tests = [] {
             fs::remove_all(directory, error);
             return;
         }
+        auto port{server::make_borrowed_world_port(*world)};
         server::tick_metrics metrics{};
         server::console_commands commands{
-            server::console_dependencies{.world = &*world}, metrics};
+            server::console_dependencies{.world = port.get()}, metrics};
         const refrain::core::tick_info tick{};
         auto *console_player{find_player(*world, "@console")};
         auto *alice{find_player(*world, "Alice")};
@@ -305,9 +308,10 @@ suite console_player_tests = [] {
                 if (!world) {
                     return std::nullopt;
                 }
+                auto port{server::make_borrowed_world_port(*world)};
                 server::tick_metrics metrics{};
                 server::console_commands commands{
-                    server::console_dependencies{.world = &*world}, metrics};
+                    server::console_dependencies{.world = port.get()}, metrics};
                 server::console_service console{
                     [&commands](std::string_view line,
                                 const refrain::core::tick_info &tick) {

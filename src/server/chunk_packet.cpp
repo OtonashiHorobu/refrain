@@ -190,14 +190,15 @@ struct light_data {
     return 0;
 }
 
-[[nodiscard]] auto encode_section(const sim::world &world,
+[[nodiscard]] auto encode_section(const sim::block_registry *registry,
                                   const data::vanilla_tables *tables,
                                   const net::registry_catalog *catalog,
                                   const sim::section &section)
     -> result<encoded_section> {
     encoded_section encoded{};
     if (section.uniform) {
-        const auto key{world.registry().key(section.value)};
+        const auto key{registry == nullptr ? std::string_view{}
+                                           : registry->key(section.value)};
         const auto vanilla_id{vanilla_state_id(tables, key)};
         encoded.non_empty = vanilla_id == 0 ? 0 : 4096;
         encoded.fluids = is_fluid(key) ? 4096 : 0;
@@ -208,7 +209,8 @@ struct light_data {
         vanilla.reserve(section_entries);
         for (std::size_t index{0}; index < section_entries; ++index) {
             const auto state{block_state(section, index)};
-            const auto key{world.registry().key(state)};
+            const auto key{registry == nullptr ? std::string_view{}
+                                               : registry->key(state)};
             const auto vanilla_id{vanilla_state_id(tables, key)};
             vanilla.push_back(vanilla_id);
             if (vanilla_id != 0) {
@@ -314,14 +316,20 @@ struct light_data {
     return encoded;
 }
 
-[[nodiscard]] auto computed_heightmap(const sim::world &world,
-                                      const sim::chunk &chunk)
+/// Computed from the column's own sections, so the encoder never reads the
+/// world per block: an absent section is air, exactly like `block_at` on an
+/// unloaded section.
+[[nodiscard]] auto computed_heightmap(const sim::chunk &chunk)
     -> std::vector<std::uint64_t> {
     constexpr std::uint8_t bits{9};
     constexpr std::size_t per_word{7};
     constexpr std::size_t columns{256};
     constexpr std::int32_t chunk_height{24 * 16};
     std::vector<std::uint64_t> words(packed_words(columns, bits), 0);
+    std::map<std::int32_t, const sim::section *> sections{};
+    for (const auto &section : chunk.sections) {
+        sections.emplace(section.y, &section);
+    }
     const auto base_x{chunk.pos.x * 16};
     const auto base_z{chunk.pos.z * 16};
     const auto min_y{chunk.y_pos * 16};
@@ -329,9 +337,16 @@ struct light_data {
         for (std::int32_t x{0}; x < 16; ++x) {
             std::uint64_t top{0};
             for (std::int32_t y{min_y + chunk_height - 1}; y >= min_y; --y) {
-                if (world.block_at(
-                        sim::block_pos{base_x + x, static_cast<std::int16_t>(y),
-                                       base_z + z}) != sim::air_block) {
+                const auto section_y{y >= 0 ? y / 16 : (y - 15) / 16};
+                const auto found{sections.find(section_y)};
+                if (found == sections.end()) {
+                    continue;
+                }
+                const auto local_y{y - section_y * 16};
+                const auto index{static_cast<std::size_t>(
+                    (local_y * 16 + ((base_z + z) & 15)) * 16 +
+                    ((base_x + x) & 15))};
+                if (block_state(*found->second, index) != sim::air_block) {
                     // Heightmap raw values are relative to the chunk's
                     // minimum Y; the client adds it back when reading.
                     top = static_cast<std::uint64_t>(y + 1 - min_y);
@@ -345,8 +360,7 @@ struct light_data {
     return words;
 }
 
-[[nodiscard]] auto encode_block_entity(const sim::world & /*world*/,
-                                       const net::registry_catalog *catalog,
+[[nodiscard]] auto encode_block_entity(const net::registry_catalog *catalog,
                                        std::span<const std::byte> raw,
                                        std::vector<std::byte> &out) -> bool {
     auto parsed{data::nbt::read(raw)};
@@ -387,11 +401,12 @@ auto encode_full_chunk(const chunk_packet_source &source, sim::chunk_pos pos)
         return std::unexpected{make_error(error_code::invalid_argument,
                                           "chunk source has no world")};
     }
-    auto loaded{source.world->ensure_chunk(pos)};
+    auto loaded{source.world->chunk_load(pos)};
     if (!loaded) {
         return std::unexpected{std::move(loaded.error())};
     }
     const auto &chunk{**loaded};
+    const auto *registry{source.world->registry()};
 
     std::map<std::int32_t, const sim::section *> sections{};
     for (const auto &section : chunk.sections) {
@@ -427,7 +442,7 @@ auto encode_full_chunk(const chunk_packet_source &source, sim::chunk_pos pos)
         }
         if (words.empty()) {
             if (!computed) {
-                computed = computed_heightmap(*source.world, chunk);
+                computed = computed_heightmap(chunk);
             }
             words = *computed;
         }
@@ -443,7 +458,7 @@ auto encode_full_chunk(const chunk_packet_source &source, sim::chunk_pos pos)
         encoded_section encoded{};
         const auto found{sections.find(y)};
         if (found != sections.end()) {
-            auto result{encode_section(*source.world, source.tables,
+            auto result{encode_section(registry, source.tables,
                                        source.registries, *found->second)};
             if (!result) {
                 return std::unexpected{std::move(result.error())};
@@ -502,8 +517,7 @@ auto encode_full_chunk(const chunk_packet_source &source, sim::chunk_pos pos)
     std::vector<std::byte> entity_entries;
     std::uint32_t entity_count{0};
     for (const auto &raw : chunk.storage.block_entities) {
-        if (encode_block_entity(*source.world, source.registries, raw,
-                                entity_entries)) {
+        if (encode_block_entity(source.registries, raw, entity_entries)) {
             ++entity_count;
         }
     }

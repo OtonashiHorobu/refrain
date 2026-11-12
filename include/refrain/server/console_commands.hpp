@@ -10,6 +10,7 @@
 
 #include <refrain/core/config.hpp>
 #include <refrain/core/time.hpp>
+#include <refrain/server/world_port.hpp>
 
 #include <array>
 #include <atomic>
@@ -20,10 +21,6 @@
 namespace refrain::net {
 class server;
 } // namespace refrain::net
-
-namespace refrain::sim {
-class world;
-} // namespace refrain::sim
 
 namespace refrain::server {
 
@@ -46,7 +43,7 @@ struct tick_metrics {
 /// when the corresponding subsystem is unavailable; each command checks the
 /// one it needs.
 struct console_dependencies {
-    refrain::sim::world *world{nullptr};
+    world_port *world{nullptr};
     maintenance_service *maintenance{nullptr};
     refrain::net::server *listener{nullptr};
     refrain::core::config::store *config{nullptr};

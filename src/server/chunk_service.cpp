@@ -98,12 +98,12 @@ void chunk_service::attach(play_gateway &gateway, chunk_packet_source source) {
     });
 }
 
-void chunk_service::tick(refrain::sim::world &world,
+void chunk_service::tick(world_port &world,
                          refrain::session::chunk_tracker &views,
                          std::uint64_t tick_start_ns) {
     if (generation_) {
         for (auto &[pos, column] : generation_->take_results()) {
-            auto inserted{world.insert_chunk(pos, std::move(column))};
+            auto inserted{world.chunk_insert(pos, std::move(column))};
             if (!inserted) {
                 log_chunk_gen.debug("insert ({}, {}) failed: {}", pos.x, pos.z,
                                     inserted.error().message);
@@ -123,12 +123,13 @@ void chunk_service::tick(refrain::sim::world &world,
     // Distance priority: the nearest player column wins the credits, so a
     // walking player's viewport fills before terrain nobody is looking at.
     std::vector<refrain::world::chunk_pos> centres{};
-    centres.reserve(world.players().size());
-    world.players().for_each(
-        [&centres](const refrain::sim::player_state &player) {
+    if (auto *players = world.players(); players != nullptr) {
+        centres.reserve(players->size());
+        players->for_each([&centres](const refrain::sim::player_state &player) {
             centres.push_back(refrain::world::chunk_pos{chunk_of(player.x),
                                                         chunk_of(player.z)});
         });
+    }
     generation_->set_priority_centres(centres);
     // Hard pause: a client backlog above the bound means the stream cannot
     // drain what is already queued, so generating more would only grow it.

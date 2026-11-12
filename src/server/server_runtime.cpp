@@ -71,7 +71,11 @@ struct runtime_state {
 
 } // namespace
 
-auto run_server(const server_run_options &options) -> int {
+auto run_server(const server_run_options &options,
+                const server_service_handles &services, world_port &world)
+    -> int {
+    log_server.debug("world port={}",
+                     is_first_party_world(services) ? "direct" : "contract");
     if (options.world_path.empty()) {
         return report_error(refrain::make_error(
             refrain::error_code::invalid_argument,
@@ -142,24 +146,23 @@ auto run_server(const server_run_options &options) -> int {
     effective.compact_min_bytes = compact_min_bytes;
     effective.compact_garbage_percent = compact_garbage_percent;
 
-    auto store{refrain::sim::world::open(options.world_path)};
-    if (!store) {
-        return report_error(store.error());
+    if (auto opened{world.open(options.world_path)}; !opened) {
+        return report_error(opened.error());
     }
     const std::string datapack_root{options.datapack_root.empty()
                                         ? "content/vanilla/26.3/data"
                                         : options.datapack_root};
-    auto level_info{store->store().level()};
+    auto level_info{world.level()};
     if (!level_info) {
         return report_error(level_info.error());
     }
-    if (store->loaded_chunks() == 0) {
+    if (world.loaded_chunks() == 0) {
         // A world created from a seed starts empty; fill the spawn area
         // before the listener accepts joins.
         const auto seed{level_info->seed};
         const auto spawn{refrain::world::chunk_pos{0, 0}};
         auto generated{refrain::server::generate_spawn_area(
-            store->store(),
+            world,
             refrain::server::world_bootstrap_config{
                 .data_root = datapack_root,
                 .templates_root = datapack_root + "/../templates",
@@ -191,11 +194,10 @@ auto run_server(const server_run_options &options) -> int {
         refrain::log::warn("[world]: generation unavailable: {}",
                            started.error().message);
     }
-    if (auto configured{store->store().set_zstd_level(zstd_level)};
-        !configured) {
+    if (auto configured{world.set_zstd_level(zstd_level)}; !configured) {
         return report_error(configured.error());
     }
-    if (auto configured{store->set_zstd_policy(
+    if (auto configured{world.set_zstd_policy(
             refrain::sim::zstd_policy{.near_level = zstd_near_level,
                                       .mid_level = zstd_mid_level,
                                       .far_level = zstd_far_level,
@@ -204,7 +206,7 @@ auto run_server(const server_run_options &options) -> int {
         !configured) {
         return report_error(configured.error());
     }
-    auto level{store->store().level()};
+    auto level{world.level()};
     if (!level) {
         return report_error(level.error());
     }
@@ -214,12 +216,12 @@ auto run_server(const server_run_options &options) -> int {
         level->game_mode >= 0 && level->game_mode <= 3
             ? static_cast<refrain::net::game_mode>(level->game_mode)
             : refrain::net::game_mode::creative};
-    store->seed(static_cast<std::uint64_t>(level->seed));
+    world.seed(static_cast<std::uint64_t>(level->seed));
     // The console and replay scripts drive one synthetic player; it is created
     // before the listener starts, so it is always the first player by entity id
     // and commands that omit a name keep addressing it.
     auto console_player{
-        store->add_player(refrain::sim::player_table::registration{
+        world.add_player(refrain::sim::player_table::registration{
             .connection = refrain::sim::synthetic_connection,
             .name = std::string{"@console"},
             .world = std::string{level_name},
@@ -244,15 +246,15 @@ auto run_server(const server_run_options &options) -> int {
             const refrain::sim::chunk_pos pos{spawn_chunk.x + dx,
                                               spawn_chunk.z + dz};
             auto ticketed{
-                store->add_ticket(pos, refrain::sim::ticket_kind::spawn)};
+                world.add_ticket(pos, refrain::sim::ticket_kind::spawn)};
             if (!ticketed) {
                 log_server.warn("{},{}: {}", pos.x, pos.z,
                                 ticketed.error().message);
             }
         }
     }
-    log_server.info("{} chunks {} tickets", store->loaded_chunks(),
-                    store->ticket_count(spawn_chunk));
+    log_server.info("{} chunks {} tickets", world.loaded_chunks(),
+                    world.ticket_count(spawn_chunk));
 
     std::optional<refrain::data::vanilla_tables> tables{};
     auto table_bytes{
@@ -269,7 +271,7 @@ auto run_server(const server_run_options &options) -> int {
         }
     }
     if (tables) {
-        store->set_item_table(refrain::sim::item_table::from_tables(*tables));
+        world.set_item_table(refrain::sim::item_table::from_tables(*tables));
     }
     std::optional<refrain::net::registry_catalog> registries{};
     auto loaded_registries{refrain::net::registry_catalog::load(
@@ -282,9 +284,15 @@ auto run_server(const server_run_options &options) -> int {
     }
     auto command_environment{
         std::make_shared<refrain::server::command_environment>()};
-    command_environment->world = &store->store();
+    command_environment->world = &world;
     command_environment->default_mode = initial_mode;
-    refrain::session::play_session players{store->players()};
+    auto *player_table{world.players()};
+    if (player_table == nullptr) {
+        return report_error(refrain::make_error(
+            refrain::error_code::unsupported,
+            "the active world provider exposes no player table"));
+    }
+    refrain::session::play_session players{*player_table};
     refrain::session::chunk_tracker views{};
     const auto tracking_chunks{static_cast<std::int32_t>(std::max<std::int64_t>(
         1, options.network.get_int64("entity_tracking_range", 512) / 16))};
@@ -434,26 +442,14 @@ auto run_server(const server_run_options &options) -> int {
     // Apply one block mutation and publish it on the contract's event type.
     // The world records the previous state; forwarding the same triple keeps a
     // listener's view identical to the state the world committed.
-    const auto apply_block = [world =
-                                  &*store](const refrain::sim::block_pos &pos,
-                                           refrain::sim::block_state_id value) {
-        const auto before{world->block_at(pos)};
+    const auto apply_block = [&world](const refrain::sim::block_pos &pos,
+                                      refrain::sim::block_state_id value) {
+        const auto before{world.block_at(pos)};
         const auto applied{
-            world->set_blocks(std::array<refrain::sim::block_change, 1>{
+            world.set_blocks(std::array<refrain::sim::block_change, 1>{
                 refrain::sim::block_change{
                     .pos = pos, .old_state = before, .new_state = value}})};
-        if (!applied) {
-            return false;
-        }
-        if (before != value) {
-            world->events().publish(refrain::services::sim::block_changed{
-                .x = pos.x,
-                .y = static_cast<std::int32_t>(pos.y),
-                .z = pos.z,
-                .old_state = before,
-                .new_state = value});
-        }
-        return true;
+        return applied.has_value();
     };
     // TODO: breaking ignores block hardness, the held tool, drops and
     // neighbour updates; every block becomes air immediately.
@@ -469,15 +465,14 @@ auto run_server(const server_run_options &options) -> int {
     };
     // TODO: placing ignores the held item, placement rules and orientation;
     // every placement writes minecraft:stone.
-    network_inputs.place_block = [world = &*store,
-                                  apply_block](std::int32_t x, std::int32_t y,
-                                               std::int32_t z) {
+    network_inputs.place_block = [&world, apply_block](std::int32_t x,
+                                                       std::int32_t y,
+                                                       std::int32_t z) {
         if (y < std::numeric_limits<std::int16_t>::min() ||
             y > std::numeric_limits<std::int16_t>::max()) {
             return false;
         }
-        const auto stone{
-            world->registry().intern(std::string{"minecraft:stone"})};
+        const auto stone{world.intern_block(std::string{"minecraft:stone"})};
         return apply_block(
             refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z}, stone);
     };
@@ -501,7 +496,7 @@ auto run_server(const server_run_options &options) -> int {
     // exist.
     if (listener && tables && registries) {
         chunks.attach(gateway, refrain::server::chunk_packet_source{
-                                   .world = &*store,
+                                   .world = &world,
                                    .tables = &*tables,
                                    .registries = &*registries,
                                });
@@ -512,7 +507,7 @@ auto run_server(const server_run_options &options) -> int {
         registries ? &*registries : nullptr};
 
     maintenance_service maintenance{};
-    if (auto started{maintenance.start(*store, effective)}; !started) {
+    if (auto started{maintenance.start(world, effective)}; !started) {
         return report_error(started.error());
     }
 
@@ -521,7 +516,7 @@ auto run_server(const server_run_options &options) -> int {
                               std::memory_order_relaxed);
 
     tick_metrics metrics{};
-    console_commands commands{console_dependencies{.world = &*store,
+    console_commands commands{console_dependencies{.world = &world,
                                                    .maintenance = &maintenance,
                                                    .listener = listener.get(),
                                                    .config = options.config,
@@ -608,9 +603,9 @@ auto run_server(const server_run_options &options) -> int {
             listener->tick();
             broadcaster.tick(players);
         }
-        chunks.tick(*store, views, tick_start_ns);
+        chunks.tick(world, views, tick_start_ns);
         inventory.tick(players);
-        store->tick();
+        world.tick();
         ++ticks_run;
         maintenance.post_tick(ticks_run);
         const auto work_ns{static_cast<std::uint64_t>(refrain::core::now_ns() -
@@ -623,7 +618,7 @@ auto run_server(const server_run_options &options) -> int {
         if (options.hash_every > 0 &&
             (ticks_run % static_cast<std::int64_t>(options.hash_every)) == 0) {
             log_sim.info("tick={} hash={}", ticks_run,
-                         refrain::data::to_hex(store->state_hash()));
+                         refrain::data::to_hex(world.state_hash()));
         }
         if (options.ticks > 0 && ticks_run >= options.ticks) {
             log_server.info("{}", ticks_run);
@@ -653,9 +648,9 @@ auto run_server(const server_run_options &options) -> int {
     // Shutdown order: the world writer first, then the content queue worker
     // (so no unlink overlaps store teardown), and only then the final flush.
     maintenance.stop();
-    log_sim.info("final tick={} hash={}", store->ticks(),
-                 refrain::data::to_hex(store->state_hash()));
-    auto committed{store->flush()};
+    log_sim.info("final tick={} hash={}", world.ticks(),
+                 refrain::data::to_hex(world.state_hash()));
+    auto committed{world.flush()};
     if (!committed) {
         log_server.error("commit failed: {}", committed.error().message);
         return 1;

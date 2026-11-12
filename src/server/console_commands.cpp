@@ -229,13 +229,16 @@ void execute_config_command(std::span<const std::string_view> tokens,
 /// first player by entity id (the console's default); the server registers the
 /// synthetic replay player before any client can connect, so a replay never
 /// changes target when clients join.
-[[nodiscard]] auto select_player(refrain::sim::world &world,
-                                 std::string_view name)
+[[nodiscard]] auto select_player(world_port &world, std::string_view name)
     -> refrain::sim::player_state * {
-    if (name.empty()) {
-        return world.players().first();
+    auto *players = world.players();
+    if (players == nullptr) {
+        return nullptr;
     }
-    return world.players().find_by_name(name);
+    if (name.empty()) {
+        return players->first();
+    }
+    return players->find_by_name(name);
 }
 
 } // namespace
@@ -254,7 +257,7 @@ console_commands::console_commands(console_dependencies dependencies,
 
 void console_commands::execute(std::string_view line,
                                const refrain::core::tick_info &tick) {
-    auto &store{*dependencies_.world};
+    auto &world{*dependencies_.world};
     if (line == "stop") {
         log_server.info("stop");
         dependencies_.stop->store(true, std::memory_order_release);
@@ -265,13 +268,12 @@ void console_commands::execute(std::string_view line,
         // console command overlaps it. Drain the writer first; the rebuild
         // closes/reopens the store and reloads the previously loaded chunks.
         dependencies_.maintenance->drain();
-        auto rebuilt{
-            store.rebuild_palette_in_place(1, store.store().zstd_level())};
+        auto rebuilt{world.rebuild_palette(1)};
         if (!rebuilt) {
             log_server.error("palette-gc failed: {}", rebuilt.error().message);
             // A failed reopen leaves the store invalid; continuing to tick
             // would operate on a closed world.
-            if (!store.store().valid()) {
+            if (!world.store_valid()) {
                 dependencies_.stop->store(true, std::memory_order_release);
             }
             return;
@@ -286,7 +288,7 @@ void console_commands::execute(std::string_view line,
         // command could otherwise be written after flush() and resurrect an
         // older chunk revision.
         dependencies_.maintenance->drain();
-        auto committed{store.flush()};
+        auto committed{world.flush()};
         if (!committed) {
             log_storage.error("{}", committed.error().message);
         } else {
@@ -336,13 +338,13 @@ void console_commands::execute(std::string_view line,
         return;
     }
     if (line == "hash") {
-        log_sim.info("{}", refrain::data::to_hex(store.state_hash()));
+        log_sim.info("{}", refrain::data::to_hex(world.state_hash()));
         return;
     }
     const auto tokens{split_console_line(line)};
     if ((tokens.size() == 1 || tokens.size() == 2) && tokens[0] == "inv") {
         const auto *player{
-            select_player(store, tokens.size() == 2 ? tokens[1] : "")};
+            select_player(world, tokens.size() == 2 ? tokens[1] : "")};
         if (player == nullptr) {
             log_server.warn("no player");
             return;
@@ -359,7 +361,7 @@ void console_commands::execute(std::string_view line,
     }
     if ((tokens.size() == 1 || tokens.size() == 2) && tokens[0] == "pos") {
         const auto *player{
-            select_player(store, tokens.size() == 2 ? tokens[1] : "")};
+            select_player(world, tokens.size() == 2 ? tokens[1] : "")};
         if (player == nullptr) {
             log_server.warn("no player");
             return;
@@ -369,10 +371,11 @@ void console_commands::execute(std::string_view line,
         return;
     }
     if (line == "entities") {
-        if (store.entities().empty()) {
+        const auto *entities{world.entities()};
+        if (entities == nullptr || entities->empty()) {
             log_server.info("none");
         } else {
-            for (const auto &[id, value] : store.entities()) {
+            for (const auto &[id, value] : *entities) {
                 log_server.info("entity {} {} x={:.1f} y={:.1f} z={:.1f}", id,
                                 value.type, value.x, value.y, value.z);
             }
@@ -384,18 +387,18 @@ void console_commands::execute(std::string_view line,
         return;
     }
     if ((tokens.size() == 1 || tokens.size() == 2) && tokens[0] == "jump") {
-        auto *player{select_player(store, tokens.size() == 2 ? tokens[1] : "")};
+        auto *player{select_player(world, tokens.size() == 2 ? tokens[1] : "")};
         if (player == nullptr) {
             log_server.warn("no player");
             return;
         }
-        store.jump(*player);
+        world.jump(*player);
         log_server.info("{} on_ground={}", player->name, player->on_ground);
         return;
     }
     if ((tokens.size() == 3 || tokens.size() == 4) && tokens[0] == "give") {
         const bool named{tokens.size() == 4};
-        auto *player{select_player(store, named ? tokens[1] : "")};
+        auto *player{select_player(world, named ? tokens[1] : "")};
         if (player == nullptr) {
             log_server.warn("no player");
             return;
@@ -406,7 +409,7 @@ void console_commands::execute(std::string_view line,
             return;
         }
         const auto item{tokens[named ? 2 : 1]};
-        auto added{store.add_item(*player, item, count)};
+        auto added{world.add_item(*player, item, count)};
         if (!added) {
             log_server.warn("give failed: {}", added.error().message);
             return;
@@ -423,7 +426,7 @@ void console_commands::execute(std::string_view line,
             log_server.warn("spawn expects numeric coordinates");
             return;
         }
-        auto spawned{store.spawn_entity(tokens[1], x, y, z)};
+        auto spawned{world.spawn_entity(tokens[1], x, y, z)};
         if (!spawned) {
             log_server.warn("spawn failed: {}", spawned.error().message);
             return;
@@ -437,7 +440,7 @@ void console_commands::execute(std::string_view line,
             log_server.warn("kill expects an entity id");
             return;
         }
-        if (!store.remove_entity(id)) {
+        if (!world.remove_entity(id)) {
             log_server.warn("no entity {}", id);
             return;
         }
@@ -446,7 +449,7 @@ void console_commands::execute(std::string_view line,
     }
     if ((tokens.size() == 3 || tokens.size() == 4) && tokens[0] == "walk") {
         const bool named{tokens.size() == 4};
-        auto *player{select_player(store, named ? tokens[1] : "")};
+        auto *player{select_player(world, named ? tokens[1] : "")};
         if (player == nullptr) {
             log_server.warn("no player");
             return;
@@ -458,14 +461,14 @@ void console_commands::execute(std::string_view line,
             log_server.warn("walk expects two numbers");
             return;
         }
-        const auto moved{store.move_player(*player, dx, 0.0, dz)};
+        const auto moved{world.move_player(*player, dx, 0.0, dz)};
         log_server.info("{} {:.1f},{:.1f},{:.1f} {}", player->name, player->x,
                         player->y, player->z, moved ? "moved" : "blocked");
         return;
     }
     if ((tokens.size() == 4 || tokens.size() == 5) && tokens[0] == "move") {
         const bool named{tokens.size() == 5};
-        auto *player{select_player(store, named ? tokens[1] : "")};
+        auto *player{select_player(world, named ? tokens[1] : "")};
         if (player == nullptr) {
             log_server.warn("no player");
             return;
@@ -479,7 +482,7 @@ void console_commands::execute(std::string_view line,
             log_server.warn("move expects three numbers");
             return;
         }
-        store.set_player_position(*player, player->x + dx, player->y + dy,
+        world.set_player_position(*player, player->x + dx, player->y + dy,
                                   player->z + dz);
         log_server.info("{} {:.1f},{:.1f},{:.1f}", player->name, player->x,
                         player->y, player->z);
@@ -503,15 +506,15 @@ void console_commands::execute(std::string_view line,
         auto value{refrain::sim::air_block};
         std::optional<std::string> gained{};
         if (tokens[0] == "dig") {
-            const auto existing{store.block_at(
+            const auto existing{world.block_at(
                 refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z})};
             if (existing != refrain::sim::air_block) {
-                gained = std::string{store.registry().key(existing)};
+                gained = std::string{world.block_key(existing)};
             }
         } else if (tokens[0] == "place") {
-            value = store.registry().intern(std::string{tokens[4]});
+            value = world.intern_block(std::string{tokens[4]});
         }
-        auto applied{store.set_block(
+        auto applied{world.set_block(
             refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z},
             value)};
         if (!applied) {
@@ -519,9 +522,9 @@ void console_commands::execute(std::string_view line,
                             applied.error().message);
             return;
         }
-        auto *player{store.players().first()};
+        auto *player{select_player(world, "")};
         if (gained && player != nullptr) {
-            (void)store.add_item(*player, *gained, 1);
+            (void)world.add_item(*player, *gained, 1);
         }
         if (tokens[0] == "dig" && player != nullptr) {
             // Mining is the console player's use of its tool. There is no
@@ -531,19 +534,22 @@ void console_commands::execute(std::string_view line,
             // TODO: damage the main-hand item only when it is the correct tool
             // for the broken block, and wire the same rule into the network
             // block-break path, which does not pass the acting connection.
-            for (std::size_t index{0}; index < player->inventory.size();
-                 ++index) {
-                if (refrain::sim::stack_max_damage(player->inventory[index],
-                                                   store.items()) != 0) {
-                    (void)store.damage_item(*player, index);
-                    break;
+            const auto *items{world.items()};
+            if (items != nullptr) {
+                for (std::size_t index{0}; index < player->inventory.size();
+                     ++index) {
+                    if (refrain::sim::stack_max_damage(player->inventory[index],
+                                                       *items) != 0) {
+                        (void)world.damage_item(*player, index);
+                        break;
+                    }
                 }
             }
         }
         if (tokens[0] == "place" && player != nullptr) {
             // The server remains creative-permissive: consume when available,
             // but do not reject a scripted placement without a prior `give`.
-            (void)store.remove_item(*player, tokens[4], 1);
+            (void)world.remove_item(*player, tokens[4], 1);
         }
         log_server.info("{}: {},{},{} -> {}", tokens[0], x, y, z,
                         tokens[0] == "place" ? tokens[4] : "air");

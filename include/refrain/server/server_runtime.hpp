@@ -8,6 +8,7 @@
 #include <refrain/net/protocol_codec.hpp>
 #include <refrain/net/server.hpp>
 #include <refrain/net/transport.hpp>
+#include <refrain/server/world_port.hpp>
 
 #include <cstdint>
 #include <functional>
@@ -21,7 +22,7 @@ namespace refrain::server {
 // lifecycle and the console never runs game logic on its own thread.
 
 struct server_run_options {
-    /// RWF world directory (`world_store::open`).
+    /// RWF world directory the world port opens.
     std::string world_path{};
     /// Datapack `data` directory the bootstrap generator reads when the world
     /// has no chunks yet.
@@ -90,8 +91,14 @@ struct server_run_options {
 
 /// Run the server until a console `stop`, the tick limit, or EOF.
 ///
+/// `services` are the active `refrain:world`, `refrain:sim` and
+/// `refrain:storage` providers; `world` is the port built from them. The port
+/// owns the world it opens, so it must outlive this call.
+///
 /// Returns a process exit code (0 on a clean stop). Logging must already be
 /// initialized; the function names the tick/console/watchdog threads.
-[[nodiscard]] auto run_server(const server_run_options &options) -> int;
+[[nodiscard]] auto run_server(const server_run_options &options,
+                              const server_service_handles &services,
+                              world_port &world) -> int;
 
 } // namespace refrain::server

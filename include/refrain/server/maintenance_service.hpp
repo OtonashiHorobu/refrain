@@ -12,7 +12,7 @@
 #include <refrain/core/error.hpp>
 #include <refrain/core/schedule.hpp>
 #include <refrain/server/server_runtime.hpp>
-#include <refrain/sim/world.hpp>
+#include <refrain/server/world_port.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -36,7 +36,7 @@ class maintenance_service {
 
     /// Start the workers and register the enabled tasks. On failure the
     /// service still owns started workers and stops them at teardown.
-    [[nodiscard]] auto start(refrain::sim::world &world,
+    [[nodiscard]] auto start(world_port &world,
                              const server_run_options &options) -> status;
 
     /// Hand the autosave batches the writer finished since the previous call
