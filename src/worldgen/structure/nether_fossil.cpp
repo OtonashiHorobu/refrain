@@ -16,6 +16,9 @@ namespace refrain::worldgen::structure {
 
 namespace {
 
+// TODO: read the nether fossil template ids from a datapack
+// `worldgen/template_pool/nether_fossil` document; the reference structure
+// hard-codes the list, so the pack has no document for it yet.
 constexpr std::array<std::string_view, 14> fossil_templates{{
     "minecraft:nether_fossils/fossil_1",
     "minecraft:nether_fossils/fossil_2",

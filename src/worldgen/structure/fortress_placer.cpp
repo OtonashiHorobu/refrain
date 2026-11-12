@@ -235,6 +235,9 @@ struct fortress_writer {
         }
     }
 
+    // TODO: read the nether bridge loot table from the structure document
+    // instead of naming it here; the reference structure hard-codes the id, so
+    // the structure document has no field for it yet.
     void chest(jint x, jint y, jint z, worldgen_random &random) const {
         if (!inside(x, y, z)) {
             return;

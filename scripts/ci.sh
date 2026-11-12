@@ -54,6 +54,10 @@ python3 tools/check_protocol_boundary.py
 python3 tools/check_contract_versions.py
 test -s NOTICE.md || { echo "NOTICE.md is missing or empty" >&2; exit 1; }
 
+say "[1b/12] datapack literal-table guard (tools/check_literal_tables.py)"
+python3 tools/check_literal_tables.py
+python3 tools/check_literal_tables.py --self-test
+
 say "[2/12] platform abstraction guard (tools/platform_check.py)"
 python3 tools/platform_check.py
 

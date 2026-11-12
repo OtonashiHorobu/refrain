@@ -70,6 +70,9 @@ auto igloo_start(const chunk_pos &chunk, jlong seed,
             .template_pivot = pivot,
         });
     };
+    // TODO: read the igloo template ids from a datapack
+    // `worldgen/template_pool/igloo` document; the reference structure
+    // hard-codes them, so the pack has no document for them yet.
     if (random.next_double() < 0.5) {
         const jint depth = random.next_int(8) + 4;
         add_piece("minecraft:igloo/bottom",
@@ -141,6 +144,9 @@ auto shipwreck_start(
     bool beached,
     const std::function<jint(jint, jint, heightmap_kind)> &height_at)
     -> structure_start {
+    // TODO: read the shipwreck template ids from a datapack
+    // `worldgen/template_pool/shipwreck` document; the reference structure
+    // hard-codes the list, so the pack has no document for it yet.
     static constexpr std::array<const char *, 11> beached_ids{
         "minecraft:shipwreck/with_mast",
         "minecraft:shipwreck/sideways_full",
@@ -298,6 +304,9 @@ auto ocean_ruin_start(const chunk_pos &chunk, jlong seed,
                       structure_template_manager &templates, bool warm,
                       float large_probability, float cluster_probability)
     -> structure_start {
+    // TODO: read the ocean ruin template ids from a datapack
+    // `worldgen/template_pool/ocean_ruin` document; the reference structure
+    // hard-codes the lists, so the pack has no document for them yet.
     static constexpr std::array<const char *, 8> warm_small{
         "minecraft:underwater_ruin/warm_1", "minecraft:underwater_ruin/warm_2",
         "minecraft:underwater_ruin/warm_3", "minecraft:underwater_ruin/warm_4",
@@ -643,6 +652,9 @@ auto ruined_portal_start(
             : (chosen->air_pocket_probability == 1.0F ||
                random.next_float() < chosen->air_pocket_probability);
 
+    // TODO: read the ruined portal template ids from a datapack
+    // `worldgen/template_pool/ruined_portal` document; the reference structure
+    // hard-codes the lists, so the pack has no document for them yet.
     static constexpr std::array<const char *, 10> portals{
         "ruined_portal/portal_1", "ruined_portal/portal_2",
         "ruined_portal/portal_3", "ruined_portal/portal_4",

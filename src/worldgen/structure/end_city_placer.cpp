@@ -44,6 +44,9 @@ auto inside_chunk(const proto_chunk &chunk, const block_pos &pos) -> bool {
 void place_end_city_piece(const structure_place_context &context,
                           const structure_piece_record &piece,
                           worldgen_random &random) {
+    // TODO: read the end city loot table from the structure document instead
+    // of naming it here; the reference structure hard-codes the id, so the
+    // structure document has no field for it yet.
     if (context.templates == nullptr || context.registry == nullptr ||
         context.chunk == nullptr || context.region == nullptr) {
         return;

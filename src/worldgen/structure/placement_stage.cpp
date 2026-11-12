@@ -107,6 +107,9 @@ auto chest_facing(const structure_place_context &context, jint x, jint y,
 
 auto create_chest(const structure_place_context &context, jint x, jint y,
                   jint z, worldgen_random &random) -> bool {
+    // TODO: read the buried treasure loot table from the structure document
+    // instead of naming it here; the reference structure hard-codes the id, so
+    // the structure document has no field for it yet.
     return place_loot_chest(context, x, y, z, random,
                             "minecraft:chests/buried_treasure");
 }
@@ -284,6 +287,9 @@ void place_swamp_hut(const structure_place_context &context,
 void place_igloo_piece(const structure_place_context &context,
                        const structure_piece_record &piece,
                        worldgen_random &random) {
+    // TODO: read the igloo loot table from the structure document instead of
+    // naming it here; the reference structure hard-codes the id, so the copied
+    // structure document has no field for it yet.
     if (context.templates == nullptr || context.registry == nullptr) {
         return;
     }
@@ -463,6 +469,9 @@ void place_buried_treasure(const structure_place_context &context,
 void place_jungle_temple(const structure_place_context &context,
                          const structure_piece_record &piece,
                          worldgen_random &random) {
+    // TODO: read the jungle temple loot tables from the structure document
+    // instead of naming them here; the reference temple hard-codes the ids, so
+    // the structure document has no field for them yet.
     if (context.region == nullptr || context.states == nullptr) {
         return;
     }
@@ -857,6 +866,9 @@ void place_jungle_temple(const structure_place_context &context,
 void place_ocean_ruin_piece(const structure_place_context &context,
                             const structure_piece_record &piece,
                             worldgen_random &random) {
+    // TODO: read the ocean ruin loot table from the structure document instead
+    // of naming it here; the reference structure hard-codes the id, so the
+    // copied structure document has no field for it yet.
     if (context.templates == nullptr || context.region == nullptr) {
         return;
     }
@@ -991,6 +1003,9 @@ void place_ocean_ruin_piece(const structure_place_context &context,
 void place_shipwreck_piece(const structure_place_context &context,
                            const structure_piece_record &piece,
                            worldgen_random &random) {
+    // TODO: read the shipwreck marker loot tables from the structure document
+    // instead of naming them here; the reference structure hard-codes the ids,
+    // so the structure document has no fields for them yet.
     if (context.templates == nullptr) {
         return;
     }
@@ -1212,6 +1227,9 @@ auto place_pyramid_chest(const structure_place_context &context, jint x, jint y,
 void place_desert_pyramid(const structure_place_context &context,
                           const structure_piece_record &piece,
                           worldgen_random &random) {
+    // TODO: read the desert pyramid loot table from the structure document
+    // instead of naming it here; the reference structure hard-codes the id, so
+    // the structure document has no field for it yet.
     auto &region = *context.region;
     const auto resolve = [&](std::string_view key) {
         return context.state ? context.state(key) : no_block_state;

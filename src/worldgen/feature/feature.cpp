@@ -2112,6 +2112,9 @@ auto chorus_plant_feature::place(feature_context &context,
 auto bonus_chest_feature::place(feature_context &context,
                                 worldgen_random &random,
                                 const block_pos &origin) const -> bool {
+    // TODO: read the bonus chest loot table from the feature document instead
+    // of naming it here; the reference feature hard-codes the id, so the copied
+    // feature document has no field for it yet.
     auto &region = *context.placement.region;
     const jint chunk_x = origin.x >> 4;
     const jint chunk_z = origin.z >> 4;
@@ -2780,6 +2783,9 @@ auto speleothem_cluster_feature::place(feature_context &context,
 auto monster_room_feature::place(feature_context &context,
                                  worldgen_random &random,
                                  const block_pos &origin) const -> bool {
+    // TODO: read the dungeon loot table and the spawner mob list from the
+    // feature document instead of naming them here; the reference feature
+    // hard-codes both, so the feature document has no fields for them.
     auto &region = *context.placement.region;
     const auto &states = *context.placement.states;
     const auto is_solid = [&](const block_pos &pos) {
