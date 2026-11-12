@@ -4,17 +4,27 @@
 //
 // Optional authentication/session service. Offline mode does not require a
 // provider; online mode resolves the Mojang `hasJoined` profile through it.
+//
+// The service also owns the container-menu model the server exposes to mods:
+// which menu a connection has open, the slot contents, and the result of a
+// click. The four mutations (open, close, slot change, click) each publish an
+// event, so a subscriber can mirror the menu without polling.
 
 module refrain::services::net_session;
 version 1.0.0;
 
 import refrain::core;
 
+handle<session_menu>;
+
 enum session_error : u32 {
     invalid_argument = 1,
     not_joined = 2,
     unavailable = 3,
     malformed_profile = 4,
+    not_found = 5,
+    already_open = 6,
+    unsupported = 7,
 }
 
 struct session_profile {
@@ -25,13 +35,70 @@ struct session_profile {
     bytes properties;
 }
 
+/// Outcome of one mouse click on an open menu.
+///
+/// The model owns the carried stack, like the client does: a click either
+/// picks a stack up, puts it down, merges it or swaps it. `accepted` is false
+/// when the click changed nothing, in which case the reported slot and carried
+/// contents are the unchanged state.
+struct menu_click_result {
+    /// Menu slot the click addressed; negative means outside the window.
+    i32 slot;
+    /// 0 = left click, 1 = right click.
+    i32 button;
+    bool accepted;
+    /// Slot contents after the click. `count` 0 means the slot is empty.
+    u32 slot_count;
+    /// Namespaced item key, for example `minecraft:stone`; empty when the
+    /// slot is empty.
+    string slot_item;
+    /// Carried stack after the click.
+    u32 carried_count;
+    string carried_item;
+}
+
+/// A connection opened a menu.
+event menu_opened {
+    /// Raw `session_menu` handle.
+    u64 menu;
+    u64 connection;
+    /// Container id; 0 is the player inventory.
+    u32 container;
+}
+
+/// A menu closed.
+event menu_closed {
+    u64 menu;
+    u64 connection;
+}
+
+/// One slot of an open menu changed.
+event menu_slot_changed {
+    u64 menu;
+    i32 slot;
+    u32 count;
+    string item;
+}
+
+/// A mouse click was applied to an open menu.
+event menu_clicked {
+    u64 menu;
+    i32 slot;
+    i32 button;
+    bool accepted;
+    u32 slot_count;
+    string slot_item;
+    u32 carried_count;
+    string carried_item;
+}
+
 service net_session : 1.0.0 {
     side = server;
     thread = any;
     composition = exclusive;
     provides = [ "refrain:net.session" ];
     requires = [ "refrain:core>=1.0.0" ];
-    capabilities = [ "offline-profile", "online-profile" ];
+    capabilities = [ "offline-profile", "online-profile", "container-menus" ];
 
     #[thread(any)] #[can_fail]
     fn offline_profile(string name, out session_profile profile)
@@ -40,5 +107,29 @@ service net_session : 1.0.0 {
     #[thread(worker)] #[can_fail]
     fn joined_profile(string name, string server_hash, string remote_ip,
                       out session_profile profile)
+        -> result<void, session_error>;
+
+    /// Open a container menu for a connection and publish `menu_opened`.
+    /// Fails with `already_open` when the connection already has a menu and
+    /// with `unsupported` for a container the model does not implement.
+    #[thread(sim)] #[can_fail]
+    fn menu_open(u64 connection, u32 container)
+        -> result<session_menu, session_error>;
+
+    /// Close a menu and publish `menu_closed`. Slots are discarded.
+    #[thread(sim)] #[can_fail]
+    fn menu_close(session_menu menu) -> result<void, session_error>;
+
+    /// Replace one slot and publish `menu_slot_changed` when the item or the
+    /// count differs. An empty `item` or a zero `count` clears the slot.
+    #[thread(sim)] #[can_fail]
+    fn menu_set_slot(session_menu menu, i32 slot, string item, u32 count)
+        -> result<bool, session_error>;
+
+    /// Apply one mouse click, publish `menu_clicked` and fill `result` with
+    /// the transmitted slot and carried state.
+    #[thread(sim)] #[can_fail]
+    fn menu_click(session_menu menu, i32 slot, i32 button,
+                  out menu_click_result result)
         -> result<void, session_error>;
 }

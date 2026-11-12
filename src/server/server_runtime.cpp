@@ -2,6 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/contracts/services/sim.hpp>
 #include <refrain/protocol/current.hpp>
 #include <refrain/server/server_runtime.hpp>
 
@@ -31,6 +32,7 @@
 #include <refrain/world/store.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -426,36 +428,56 @@ auto run_server(const server_run_options &options) -> int {
     network_inputs.spawn_z = static_cast<double>(level->spawn_z) + 0.5;
     network_inputs.registry_catalog_path =
         "content/vanilla/26.3/protocol_registry.json";
+    // Apply one block mutation and publish it on the contract's event type.
+    // The world records the previous state; forwarding the same triple keeps a
+    // listener's view identical to the state the world committed.
+    const auto apply_block = [world =
+                                  &*store](const refrain::sim::block_pos &pos,
+                                           refrain::sim::block_state_id value) {
+        const auto before{world->block_at(pos)};
+        const auto applied{
+            world->set_blocks(std::array<refrain::sim::block_change, 1>{
+                refrain::sim::block_change{
+                    .pos = pos, .old_state = before, .new_state = value}})};
+        if (!applied) {
+            return false;
+        }
+        if (before != value) {
+            world->events().publish(refrain::services::sim::block_changed{
+                .x = pos.x,
+                .y = static_cast<std::int32_t>(pos.y),
+                .z = pos.z,
+                .old_state = before,
+                .new_state = value});
+        }
+        return true;
+    };
     // TODO: breaking ignores block hardness, the held tool, drops and
     // neighbour updates; every block becomes air immediately.
-    network_inputs.break_block =
-        [world = &*store](std::int32_t x, std::int32_t y, std::int32_t z) {
-            if (y < std::numeric_limits<std::int16_t>::min() ||
-                y > std::numeric_limits<std::int16_t>::max()) {
-                return false;
-            }
-            return world
-                ->set_block(
-                    refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z},
-                    refrain::sim::air_block)
-                .has_value();
-        };
+    network_inputs.break_block = [apply_block](std::int32_t x, std::int32_t y,
+                                               std::int32_t z) {
+        if (y < std::numeric_limits<std::int16_t>::min() ||
+            y > std::numeric_limits<std::int16_t>::max()) {
+            return false;
+        }
+        return apply_block(
+            refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z},
+            refrain::sim::air_block);
+    };
     // TODO: placing ignores the held item, placement rules and orientation;
     // every placement writes minecraft:stone.
-    network_inputs.place_block =
-        [world = &*store](std::int32_t x, std::int32_t y, std::int32_t z) {
-            if (y < std::numeric_limits<std::int16_t>::min() ||
-                y > std::numeric_limits<std::int16_t>::max()) {
-                return false;
-            }
-            const auto stone{
-                world->registry().intern(std::string{"minecraft:stone"})};
-            return world
-                ->set_block(
-                    refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z},
-                    stone)
-                .has_value();
-        };
+    network_inputs.place_block = [world = &*store,
+                                  apply_block](std::int32_t x, std::int32_t y,
+                                               std::int32_t z) {
+        if (y < std::numeric_limits<std::int16_t>::min() ||
+            y > std::numeric_limits<std::int16_t>::max()) {
+            return false;
+        }
+        const auto stone{
+            world->registry().intern(std::string{"minecraft:stone"})};
+        return apply_block(
+            refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z}, stone);
+    };
     auto network{refrain::net::server::start(std::move(network_inputs),
                                              options.network)};
     std::unique_ptr<refrain::net::server> listener{};

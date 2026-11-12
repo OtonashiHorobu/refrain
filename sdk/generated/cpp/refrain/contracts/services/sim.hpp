@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 04d13b3ba7228746
+// Schema hash: 1da626de4b244418
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_SIM_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_SIM_HPP
@@ -20,6 +20,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <refrain/contracts/core.hpp>
 #include <refrain/contracts/event.hpp>
 #include <refrain/core/error.hpp>
 #include <refrain/core/schedule.hpp>
@@ -32,6 +33,8 @@ enum class sim_error : std::uint32_t { // enum 'sim_error'
     not_found = 3,
     io_error = 4,
     internal = 5,
+    out_of_bounds = 6,
+    invalid_argument = 7,
 };
 
 namespace detail {
@@ -48,9 +51,65 @@ struct tick_event {
 static_assert(sizeof(tick_event) == 8);
 static_assert(alignof(tick_event) == 8);
 static_assert(offsetof(tick_event, tick) == 0);
-
 inline constexpr std::string_view tick_event_id =
     "refrain:event/refrain/services/sim/tick_event";
+inline constexpr std::uint64_t tick_event_type = REFRAIN_SERVICES_SIM_EVENT_TICK_EVENT_TYPE;
+
+/// One block mutation that changed the world, published once per applied
+/// position in ascending position order.
+struct block_changed {
+    std::int32_t x;
+    std::int32_t y;
+    std::int32_t z;
+    std::uint32_t old_state;
+    std::uint32_t new_state;
+};
+
+static_assert(sizeof(block_changed) == 20);
+static_assert(alignof(block_changed) == 4);
+static_assert(offsetof(block_changed, x) == 0);
+static_assert(offsetof(block_changed, y) == 4);
+static_assert(offsetof(block_changed, z) == 8);
+static_assert(offsetof(block_changed, old_state) == 12);
+static_assert(offsetof(block_changed, new_state) == 16);
+inline constexpr std::string_view block_changed_id =
+    "refrain:event/refrain/services/sim/block_changed";
+inline constexpr std::uint64_t block_changed_type = REFRAIN_SERVICES_SIM_EVENT_BLOCK_CHANGED_TYPE;
+
+/// An entity was added to the world.
+struct entity_spawned {
+    /// Process-local entity id.
+    std::uint64_t id;
+    /// Namespaced entity type key, for example `minecraft:pig`.
+    std::string_view type;
+    double x;
+    double y;
+    double z;
+};
+
+static_assert(sizeof(entity_spawned) == 48);
+static_assert(alignof(entity_spawned) == 8);
+static_assert(offsetof(entity_spawned, id) == 0);
+static_assert(offsetof(entity_spawned, type) == 8);
+static_assert(offsetof(entity_spawned, x) == 24);
+static_assert(offsetof(entity_spawned, y) == 32);
+static_assert(offsetof(entity_spawned, z) == 40);
+inline constexpr std::string_view entity_spawned_id =
+    "refrain:event/refrain/services/sim/entity_spawned";
+inline constexpr std::uint64_t entity_spawned_type = REFRAIN_SERVICES_SIM_EVENT_ENTITY_SPAWNED_TYPE;
+
+/// An entity was removed from the world.
+struct entity_removed {
+    /// Process-local entity id.
+    std::uint64_t id;
+};
+
+static_assert(sizeof(entity_removed) == 8);
+static_assert(alignof(entity_removed) == 8);
+static_assert(offsetof(entity_removed, id) == 0);
+inline constexpr std::string_view entity_removed_id =
+    "refrain:event/refrain/services/sim/entity_removed";
+inline constexpr std::uint64_t entity_removed_type = REFRAIN_SERVICES_SIM_EVENT_ENTITY_REMOVED_TYPE;
 
 using sim_config = ::refrain_services_sim_sim_config;
 /// Zero-initialized `sim_config` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
@@ -73,7 +132,7 @@ inline constexpr std::uint32_t abi_patch = 0;
 inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::side_kind::server;
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::sim;
 inline constexpr ::refrain::contracts::composition_kind composition = ::refrain::contracts::composition_kind::exclusive;
-inline constexpr std::string_view capabilities = "tick,replay,deterministic-rng";
+inline constexpr std::string_view capabilities = "tick,replay,deterministic-rng,block-events,entity-events";
 inline constexpr std::string_view required_services = "refrain:core>=1.0.0,refrain:world>=1.0.0";
 inline constexpr std::string_view service_ids[] = {"refrain:sim"};
 
@@ -128,6 +187,33 @@ class provider final {
         return ::refrain::contracts::as_string_view(table_->state_hash(self_, world.raw()));
     }
 
+    /// Apply a batch of block mutations and publish one `block_changed` event
+    /// per applied change. Returns the number of changes that modified the
+    /// world; a change that writes the current state is skipped.
+    [[nodiscard]] auto set_blocks(::refrain::services::sim::sim_world world, std::span<const ::refrain::core::block_change> changes) const -> std::expected<std::uint32_t, ::refrain::services::sim::sim_error> {
+        ::uint32_t value{};
+        if (const auto code = table_->set_blocks(self_, world.raw(), refrain_core_slice_block_change{changes.data(), static_cast<std::uint64_t>(changes.size())}, &value); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::sim::sim_error>(code));
+        }
+        return static_cast<std::uint32_t>(value);
+    }
+
+    /// Spawn an entity at the given feet position and publish
+    /// `entity_spawned`. The id is allocated in ascending order.
+    [[nodiscard]] auto spawn_entity(::refrain::services::sim::sim_world world, std::string_view type, double x, double y, double z) const -> std::expected<std::uint64_t, ::refrain::services::sim::sim_error> {
+        ::uint64_t value{};
+        if (const auto code = table_->spawn_entity(self_, world.raw(), ::refrain::contracts::to_borrowed(type), x, y, z, &value); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::sim::sim_error>(code));
+        }
+        return static_cast<std::uint64_t>(value);
+    }
+
+    /// Remove one entity and publish `entity_removed`. Returns false when the
+    /// id is unknown.
+    [[nodiscard]] auto remove_entity(::refrain::services::sim::sim_world world, std::uint64_t id) const -> bool {
+        return (table_->remove_entity(self_, world.raw(), id) != 0);
+    }
+
   private:
     const ::refrain_services_sim_vtable *table_;
     void *self_;
@@ -144,6 +230,30 @@ template <> struct event_traits<::refrain::services::sim::tick_event> {
     static constexpr bool is_event = true;
     static constexpr std::string_view id =
         ::refrain::services::sim::tick_event_id;
+    static constexpr bool batch = false;
+    static constexpr bool cancellable = false;
+};
+
+template <> struct event_traits<::refrain::services::sim::block_changed> {
+    static constexpr bool is_event = true;
+    static constexpr std::string_view id =
+        ::refrain::services::sim::block_changed_id;
+    static constexpr bool batch = false;
+    static constexpr bool cancellable = false;
+};
+
+template <> struct event_traits<::refrain::services::sim::entity_spawned> {
+    static constexpr bool is_event = true;
+    static constexpr std::string_view id =
+        ::refrain::services::sim::entity_spawned_id;
+    static constexpr bool batch = false;
+    static constexpr bool cancellable = false;
+};
+
+template <> struct event_traits<::refrain::services::sim::entity_removed> {
+    static constexpr bool is_event = true;
+    static constexpr std::string_view id =
+        ::refrain::services::sim::entity_removed_id;
     static constexpr bool batch = false;
     static constexpr bool cancellable = false;
 };

@@ -7,8 +7,11 @@
 // The simulation is a single thread per process, so the contract is a
 // singleton:
 // one provider owns a table of open worlds addressed by opaque handles. Tick
-// order and RNG are provider-internal; the contract exposes only the lifecycle,
-// the monotonic tick counter and a deterministic state hash for replay checks.
+// order and RNG are provider-internal; the contract exposes the lifecycle, the
+// monotonic tick counter, a deterministic state hash for replay checks and the
+// block/entity mutations a mod may perform. Every applied mutation is also
+// published as an event, so a subscriber observes the same state the provider
+// committed.
 
 module refrain::services::sim;
 version 1.0.0;
@@ -23,6 +26,8 @@ enum sim_error : u32 {
     not_found = 3,
     io_error = 4,
     internal = 5,
+    out_of_bounds = 6,
+    invalid_argument = 7,
 }
 
 struct sim_config {
@@ -37,12 +42,40 @@ event tick_event {
     i64 tick;
 }
 
+/// One block mutation that changed the world, published once per applied
+/// position in ascending position order.
+event block_changed {
+    i32 x;
+    i32 y;
+    i32 z;
+    u32 old_state;
+    u32 new_state;
+}
+
+/// An entity was added to the world.
+event entity_spawned {
+    /// Process-local entity id.
+    u64 id;
+    /// Namespaced entity type key, for example `minecraft:pig`.
+    string type;
+    f64 x;
+    f64 y;
+    f64 z;
+}
+
+/// An entity was removed from the world.
+event entity_removed {
+    /// Process-local entity id.
+    u64 id;
+}
+
 service sim : 1.0.0 {
     side = server;
     thread = sim;
     provides = [ "refrain:sim" ];
     requires = [ "refrain:core>=1.0.0", "refrain:world>=1.0.0" ];
-    capabilities = [ "tick", "replay", "deterministic-rng" ];
+    capabilities = [ "tick", "replay", "deterministic-rng", "block-events",
+                     "entity-events" ];
 
     #[thread(sim)] #[can_fail]
     fn open_world(in sim_config config) -> result<sim_world, sim_error>;
@@ -60,4 +93,22 @@ service sim : 1.0.0 {
     /// Lowercase hex BLAKE3 of the deterministic replay state.
     #[thread(sim)]
     fn state_hash(sim_world world) -> string;
+
+    /// Apply a batch of block mutations and publish one `block_changed` event
+    /// per applied change. Returns the number of changes that modified the
+    /// world; a change that writes the current state is skipped.
+    #[thread(sim)] #[can_fail]
+    fn set_blocks(sim_world world, in slice<block_change> changes)
+        -> result<u32, sim_error>;
+
+    /// Spawn an entity at the given feet position and publish
+    /// `entity_spawned`. The id is allocated in ascending order.
+    #[thread(sim)] #[can_fail]
+    fn spawn_entity(sim_world world, string type, f64 x, f64 y, f64 z)
+        -> result<u64, sim_error>;
+
+    /// Remove one entity and publish `entity_removed`. Returns false when the
+    /// id is unknown.
+    #[thread(sim)]
+    fn remove_entity(sim_world world, u64 id) -> bool;
 }
