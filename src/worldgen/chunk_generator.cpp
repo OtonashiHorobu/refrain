@@ -43,6 +43,49 @@ auto fail(error_code code, std::string_view message) -> error {
     return make_error(code, message);
 }
 
+auto same_box(const bounding_box &left, const bounding_box &right) -> bool {
+    return left.min_x == right.min_x && left.min_y == right.min_y &&
+           left.min_z == right.min_z && left.max_x == right.max_x &&
+           left.max_y == right.max_y && left.max_z == right.max_z;
+}
+
+/// Exact comparison of two beardifier inputs. The fill samples the density
+/// with the beardifier added, so two fills are interchangeable exactly when
+/// these inputs are equal.
+auto same_beard(const structure::structure_beard &left,
+                const structure::structure_beard &right) -> bool {
+    if (left.pieces.size() != right.pieces.size() ||
+        left.junctions.size() != right.junctions.size()) {
+        return false;
+    }
+    if (left.affected_box.has_value() != right.affected_box.has_value()) {
+        return false;
+    }
+    if (left.affected_box.has_value() &&
+        !same_box(*left.affected_box, *right.affected_box)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.pieces.size(); ++index) {
+        const auto &first = left.pieces[index];
+        const auto &second = right.pieces[index];
+        if (first.adjustment != second.adjustment ||
+            first.ground_level_delta != second.ground_level_delta ||
+            !same_box(first.box, second.box)) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < left.junctions.size(); ++index) {
+        const auto &first = left.junctions[index];
+        const auto &second = right.junctions[index];
+        if (first.source_x != second.source_x ||
+            first.source_ground_y != second.source_ground_y ||
+            first.source_z != second.source_z) {
+            return false;
+        }
+    }
+    return true;
+}
+
 auto dimension_config_for(const chunk_generator_config &config)
     -> dimension_generator_config {
     return dimension_generator_config{
@@ -350,15 +393,33 @@ auto chunk_generator::store_block_column(block_column_key key,
                 .first->second;
 }
 
-auto chunk_generator::cached_terrain(const chunk_pos &pos) const
+auto chunk_generator::cached_terrain(
+    const chunk_pos &pos, const structure::structure_beard *beard) const
     -> const proto_chunk * {
     const auto found = terrain_cache_.find(pos);
-    return found == terrain_cache_.end() ? nullptr : found->second.get();
+    if (found == terrain_cache_.end()) {
+        return nullptr;
+    }
+    const auto &entry = found->second;
+    if (beard == nullptr) {
+        return entry.bearded ? nullptr : entry.chunk.get();
+    }
+    return entry.bearded && same_beard(entry.beard, *beard) ? entry.chunk.get()
+                                                            : nullptr;
 }
 
 void chunk_generator::store_terrain(const chunk_pos &pos,
+                                    const structure::structure_beard *beard,
                                     std::unique_ptr<proto_chunk> chunk) {
-    if (terrain_cache_.contains(pos)) {
+    if (const auto found = terrain_cache_.find(pos);
+        found != terrain_cache_.end()) {
+        // A different beardifier input replaces the old fill; the position
+        // stays at its place in the eviction order.
+        found->second = cached_terrain_entry{
+            .bearded = beard != nullptr,
+            .beard = beard != nullptr ? *beard : structure::structure_beard{},
+            .chunk = std::move(chunk),
+        };
         return;
     }
     while (terrain_cache_order_.size() >= terrain_cache_capacity) {
@@ -366,7 +427,13 @@ void chunk_generator::store_terrain(const chunk_pos &pos,
         terrain_cache_order_.pop_front();
     }
     terrain_cache_order_.push_back(pos);
-    terrain_cache_.emplace(pos, std::move(chunk));
+    terrain_cache_.emplace(
+        pos,
+        cached_terrain_entry{
+            .bearded = beard != nullptr,
+            .beard = beard != nullptr ? *beard : structure::structure_beard{},
+            .chunk = std::move(chunk),
+        });
 }
 
 auto chunk_generator::start_height_at(const chunk_pos &column)
@@ -588,29 +655,32 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         const chunk_pos target = region_positions[index];
         density::sampler_context fill_context;
         std::optional<beardifier> beard;
-        bool bearded = false;
+        std::optional<structure::structure_beard> collected_beard;
         if (area.has_value()) {
             const stage_timer timer{profile_, "structure.beard"};
-            const auto collected = structure::collect_beard(
+            auto collected = structure::collect_beard(
                 area->starts, shared_->structure_data, target);
             if (!collected.pieces.empty() || !collected.junctions.empty() ||
                 collected.affected_box.has_value()) {
-                beard.emplace(collected.pieces, collected.junctions,
-                              collected.affected_box);
+                collected_beard = std::move(collected);
+                beard.emplace(collected_beard->pieces,
+                              collected_beard->junctions,
+                              collected_beard->affected_box);
                 fill_context.set_field(density::context_key::beardifier,
                                        &*beard);
-                bearded = true;
             }
         }
-        // Terrain is a pure function of the seed, the data and the position
-        // once the biome search starts from a fresh candidate, so the eight
-        // neighbour fills repeat neither across the batch nor within a
-        // target. A cached chunk is cloned because the structure and feature
-        // stages write into the generation region, and a bearded fill is
-        // never reused or stored: its result depends on the structure pieces
-        // around the target, not on the position alone.
-        if (needs_neighbours && !bearded) {
-            if (const auto *cached = cached_terrain(target);
+        // Terrain is a pure function of the seed, the data, the position and
+        // the beardifier input, so a fill repeats neither across the batch nor
+        // within a target. A cached chunk is cloned because the structure and
+        // feature stages write into the generation region. Two fills of one
+        // position are interchangeable exactly when their beardifier inputs
+        // match, which is why the cache compares the collected beard rather
+        // than keying on the position alone.
+        if (needs_neighbours) {
+            if (const auto *cached = cached_terrain(
+                    target,
+                    collected_beard.has_value() ? &*collected_beard : nullptr);
                 cached != nullptr) {
                 const stage_timer timer{profile_, "terrain.cached_clone"};
                 chunks[index] = cached->clone();
@@ -627,11 +697,12 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
             .surface = reference_terrain,
             .profile = profile_,
         };
-        // A bearded fill is regenerated whenever a target needs it, so its row
-        // overlaps the terrain rows and only reports how much of the fill work
-        // the beardifier costs.
+        // A beardifier changes the density the fill samples, so a bearded fill
+        // only runs when the exact beard is not cached. Its row overlaps the
+        // terrain rows and reports how much of the fill work the beardifier
+        // costs.
         std::optional<stage_timer> bearded_fill;
-        if (bearded) {
+        if (collected_beard.has_value()) {
             bearded_fill.emplace(profile_, "terrain.bearded_fill");
         }
         dimension_->reset_biome_search();
@@ -639,9 +710,12 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         if (!generated) {
             return std::unexpected{generated.error()};
         }
-        if (needs_neighbours && !bearded) {
+        if (needs_neighbours) {
             const stage_timer timer{profile_, "terrain.cache_store"};
-            store_terrain(target, (*generated)->clone());
+            store_terrain(target,
+                          collected_beard.has_value() ? &*collected_beard
+                                                      : nullptr,
+                          (*generated)->clone());
         }
         chunks[index] = std::move(*generated);
     }

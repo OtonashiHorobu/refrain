@@ -16,6 +16,7 @@
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/dimension_generator.hpp>
 #include <refrain/worldgen/feature/feature_registry.hpp>
+#include <refrain/worldgen/structure/stage.hpp>
 #include <refrain/worldgen/structure/template.hpp>
 
 #include <array>
@@ -294,20 +295,30 @@ class chunk_generator {
 
     /// Pristine terrain of one neighbour, or null when it is not cached. The
     /// returned chunk is shared and must be cloned before a stage writes to
-    /// it.
-    [[nodiscard]] auto cached_terrain(const chunk_pos &pos) const
+    /// it. `beard` is the beardifier input the caller is about to fill with;
+    /// null means no beardifier. A cached chunk only matches the exact beard
+    /// it was generated with, because the beardifier changes the density the
+    /// fill samples.
+    [[nodiscard]] auto
+    cached_terrain(const chunk_pos &pos,
+                   const structure::structure_beard *beard) const
         -> const proto_chunk *;
     /// Keeps a pristine terrain chunk for the neighbour fills of later
-    /// targets. Chunks that carry a beardifier are never stored, because their
-    /// fill depends on the structure pieces around the target rather than on
-    /// the position alone.
+    /// targets. `beard` is the beardifier input the chunk was filled with.
     void store_terrain(const chunk_pos &pos,
+                       const structure::structure_beard *beard,
                        std::unique_ptr<proto_chunk> chunk);
+    /// One cached pristine chunk and the beardifier input it was filled with.
+    struct cached_terrain_entry {
+        bool bearded{false};
+        structure::structure_beard beard{};
+        std::unique_ptr<proto_chunk> chunk{};
+    };
     /// Number of pristine chunks a worker keeps. A target fills its eight
     /// neighbours, so the sliding window of a batch is at most three columns
     /// of chunks; the bound covers that window without growing with the batch.
     static constexpr std::size_t terrain_cache_capacity = 64;
-    std::unordered_map<chunk_pos, std::unique_ptr<proto_chunk>, chunk_pos_hash>
+    std::unordered_map<chunk_pos, cached_terrain_entry, chunk_pos_hash>
         terrain_cache_{};
     std::deque<chunk_pos> terrain_cache_order_{};
 
