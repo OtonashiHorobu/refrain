@@ -164,14 +164,15 @@ grep -q 'refrain.test.data@1.0.0 (abi 1, data-only' \
 SERVER_LOCK="$EXTRACT_DIR/mods.lock"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --mods "$ROOT/test/fixtures/instance" --auto-scan \
-    --mods-lock "$SERVER_LOCK" --update-lock >"$EXTRACT_DIR/auto-scan-1.txt" 2>&1
+    --mods-lock "$SERVER_LOCK" --update-lock --check \
+    >"$EXTRACT_DIR/auto-scan-1.txt" 2>&1
 grep -q 'mods.lock: written' "$EXTRACT_DIR/auto-scan-1.txt" \
     || die "auto_scan: lock was not written"
 grep -q 'refrain.test.extra@1.0.0' "$EXTRACT_DIR/auto-scan-1.txt" \
     || die "auto_scan: fixture user mod missing from the lock"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --mods "$ROOT/test/fixtures/instance" --auto-scan \
-    --mods-lock "$SERVER_LOCK" >"$EXTRACT_DIR/auto-scan-2.txt" 2>&1
+    --mods-lock "$SERVER_LOCK" --check >"$EXTRACT_DIR/auto-scan-2.txt" 2>&1
 grep -q 'mods.lock: verified' "$EXTRACT_DIR/auto-scan-2.txt" \
     || die "auto_scan: existing lock was not verified"
 # Manifest version drift: the on-disk manifest changed while the lock still
@@ -190,14 +191,14 @@ open(path, "w", encoding="utf-8").write(
 PY
 if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --mods "$EXTRACT_DIR/instance-drift" --auto-scan \
-    --mods-lock "$SERVER_LOCK" >"$EXTRACT_DIR/auto-scan-drift.txt" 2>&1; then
+    --mods-lock "$SERVER_LOCK" --check >"$EXTRACT_DIR/auto-scan-drift.txt" 2>&1; then
     die "auto_scan: drifted manifest version was accepted without --update-lock"
 fi
 grep -q 'version drift' "$EXTRACT_DIR/auto-scan-drift.txt" \
     || die "auto_scan: manifest drift failure does not mention version drift"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --mods "$EXTRACT_DIR/instance-drift" --auto-scan \
-    --mods-lock "$SERVER_LOCK" --update-lock \
+    --mods-lock "$SERVER_LOCK" --update-lock --check \
     >"$EXTRACT_DIR/auto-scan-update.txt" 2>&1
 grep -q 'mods.lock: updated' "$EXTRACT_DIR/auto-scan-update.txt" \
     || die "auto_scan: --update-lock did not rewrite the drifted lock"
@@ -252,7 +253,7 @@ grep -q 'require auto_scan' "$EXTRACT_DIR/auto-scan-off.txt" \
 mkdir -p "$EXTRACT_DIR/root-without-mods"
 if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --mods "$EXTRACT_DIR/root-without-mods" --auto-scan \
-    --mods-lock "$EXTRACT_DIR/no-mods.lock" \
+    --mods-lock "$EXTRACT_DIR/no-mods.lock" --check \
     >"$EXTRACT_DIR/no-mods-root.txt" 2>&1; then
     die "server accepted a --mods root without a mods/ directory"
 fi
@@ -269,7 +270,7 @@ open(p, "w", encoding="utf-8").write(text.replace('version = "1.0.0"', 'version 
 PY
 if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --mods "$ROOT/test/fixtures/instance" --auto-scan \
-    --mods-lock "$SERVER_LOCK" >/dev/null 2>&1; then
+    --mods-lock "$SERVER_LOCK" --check >/dev/null 2>&1; then
     die "auto_scan: drifted mods.lock was accepted without --update-lock"
 fi
 # Signed .rfmod: deterministic pack, signature verification,
@@ -519,7 +520,7 @@ cat >"$RUNTIME_PACK/data/refrain_test/recipe/ci_runtime.json" <<'JSON'
 JSON
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --content-store "$STARTUP_STORE" --content-inbox "$RUNTIME_INBOX" \
-    --content-composition test-gp --datapack "$RUNTIME_PACK" \
+    --content-composition test-gp --datapack "$RUNTIME_PACK" --check \
     >"$RUNTIME_DIR/server.txt" 2>&1 \
     || die "runtime content: server failed to mount the content layers"
 grep -q 'runtime-content: layers=2 files=5' \
@@ -534,7 +535,7 @@ mkdir -p "$RUNTIME_BAD_PACK/data/refrain_test/recipe"
 printf '{"type":"minecraft:crafting_shaped"' \
     >"$RUNTIME_BAD_PACK/data/refrain_test/recipe/bad.json"
 if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --datapack "$RUNTIME_BAD_PACK" >"$RUNTIME_DIR/server-bad.txt" 2>&1; then
+    --datapack "$RUNTIME_BAD_PACK" --check >"$RUNTIME_DIR/server-bad.txt" 2>&1; then
     die "runtime content: malformed datapack JSON was accepted"
 fi
 grep -q 'data/refrain_test/recipe/bad.json' "$RUNTIME_DIR/server-bad.txt" \
@@ -860,7 +861,7 @@ echo "  content: 4 file(s) -> 3 blob(s) (2 in segments), deterministic RFRX, whe
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --dump-gamepack 2>&1 | grep -q 'builtin image: files=12' \
     || die "server did not load the embedded built-in image"
-"$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
+"$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" --check \
     2>&1 | grep -q 'mod host: 11 mod(s) loaded' \
     || die "server did not load the gamepack mods through the mod host"
 # Console diagnostics are stderr; stdout carries only the command's data.

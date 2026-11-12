@@ -196,6 +196,11 @@ int main(int argc, char **argv) {
     bool dump_gamepack{false};
     app.add_flag("--dump-gamepack", dump_gamepack,
                  "Print the resolved gamepack/provider graph and exit");
+    bool check_only{false};
+    app.add_flag("--check", check_only,
+                 "Verify the configuration, the mod composition and the lock, "
+                 "then exit without creating a world or starting the tick "
+                 "loop");
     std::int64_t seed_value{0};
     bool seed_given{false};
     auto *seed_option = app.add_option("--seed", seed_value,
@@ -847,19 +852,6 @@ int main(int argc, char **argv) {
         resolved_world_path = "world";
     }
     log_config.info("world.path='{}'", resolved_world_path);
-    if (!refrain::core::io::exists(resolved_world_path + "/meta.rfw")) {
-        seed_given = seed_option->count() > 0;
-        if (!seed_given) {
-            seed_value =
-                static_cast<std::int64_t>(std::random_device{}() & 0x7FFFFFFFU);
-        }
-        auto created{refrain::world::create_world(resolved_world_path,
-                                                  seed_value, "world")};
-        if (!created) {
-            return report_fatal(created.error());
-        }
-        log_world.info("created '{}' seed={}", resolved_world_path, seed_value);
-    }
 
     refrain::mod::host mods{};
     mods.set_config(config_store);
@@ -1103,12 +1095,26 @@ int main(int argc, char **argv) {
         log_cli.info("{}", refrain::mod::format_mod_lock(lock));
     }
 
-    // Host/runtime split: the host owns bootstrap only. An
-    // explicit `--world` asks the active `refrain:runtime` provider to run the
-    // tick loop; without it the process keeps the startup-check
-    // behaviour (`--dump-gamepack` and CI composition smokes).
-    if (resolved_world_path.empty()) {
+    // A composition-only run stops here. `--check` and `--dump-gamepack` ask
+    // what would start, not to start it, so they leave the filesystem alone.
+    if (check_only) {
         return 0;
+    }
+
+    // From here on the process owns a world: create it when the directory does
+    // not hold one yet, then hand it to the runtime provider.
+    if (!refrain::core::io::exists(resolved_world_path + "/meta.rfw")) {
+        seed_given = seed_option->count() > 0;
+        if (!seed_given) {
+            seed_value =
+                static_cast<std::int64_t>(std::random_device{}() & 0x7FFFFFFFU);
+        }
+        auto created{refrain::world::create_world(resolved_world_path,
+                                                  seed_value, "world")};
+        if (!created) {
+            return report_fatal(created.error());
+        }
+        log_world.info("created '{}' seed={}", resolved_world_path, seed_value);
     }
 
     const auto runtime_provider{
