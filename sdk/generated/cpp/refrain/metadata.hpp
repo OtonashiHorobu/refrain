@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 1da626de4b244418
+// Schema hash: 9e471daa6562b9ea
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_METADATA_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_METADATA_HPP
@@ -391,7 +391,7 @@ inline constexpr std::array<field_entry, 2> refrain_services_session_tab_tab_vie
     field_entry{"header" , "string", 8, 16, 0},
     field_entry{"footer" , "string", 24, 16, 0},
 };
-inline constexpr std::array<enum_value_entry, 7> refrain_services_sim_sim_error_values{
+inline constexpr std::array<enum_value_entry, 8> refrain_services_sim_sim_error_values{
     enum_value_entry{"invalid_handle" , 1},
     enum_value_entry{"already_open" , 2},
     enum_value_entry{"not_found" , 3},
@@ -399,23 +399,30 @@ inline constexpr std::array<enum_value_entry, 7> refrain_services_sim_sim_error_
     enum_value_entry{"internal" , 5},
     enum_value_entry{"out_of_bounds" , 6},
     enum_value_entry{"invalid_argument" , 7},
+    enum_value_entry{"storage_unavailable" , 8},
 };
 inline constexpr std::array<field_entry, 2> refrain_services_sim_sim_config_fields{
-    field_entry{"world_path" , "string", 8, 16, 0},
-    field_entry{"seed" , "i64", 24, 8, 0},
+    field_entry{"storage" , "refrain::services::storage::storage_handle", 8, 56, 0},
+    field_entry{"seed" , "i64", 64, 8, 0},
 };
-inline constexpr std::array<enum_value_entry, 6> refrain_services_storage_storage_error_values{
+inline constexpr std::array<enum_value_entry, 7> refrain_services_storage_storage_error_values{
     enum_value_entry{"open_failed" , 1},
     enum_value_entry{"not_found" , 2},
     enum_value_entry{"corrupt_data" , 3},
     enum_value_entry{"io_error" , 4},
     enum_value_entry{"version_mismatch" , 5},
     enum_value_entry{"read_only" , 6},
+    enum_value_entry{"already_open" , 7},
 };
 inline constexpr std::array<field_entry, 3> refrain_services_storage_world_open_config_fields{
     field_entry{"world_path" , "string", 8, 16, 0},
     field_entry{"gamepack_id" , "string", 24, 16, 0},
     field_entry{"flags" , "u32", 40, 4, 0},
+};
+inline constexpr std::array<field_entry, 3> refrain_services_storage_storage_handle_fields{
+    field_entry{"world" , "handle:storage_world", 8, 8, 0},
+    field_entry{"owner" , "refrain::host::core::provider_ref", 16, 32, 0},
+    field_entry{"store" , "opaque_ptr", 48, 8, 0},
 };
 inline constexpr std::array<field_entry, 2> refrain_services_storage_chunk_key_fields{
     field_entry{"pos" , "refrain::core::chunk_pos", 4, 12, 0},
@@ -470,17 +477,18 @@ inline constexpr std::array<field_entry, 4> refrain_services_transport_transport
     field_entry{"data" , "bytes", 16, 16, 0},
     field_entry{"error" , "string", 32, 16, 0},
 };
-inline constexpr std::array<enum_value_entry, 6> refrain_services_world_world_error_values{
+inline constexpr std::array<enum_value_entry, 7> refrain_services_world_world_error_values{
     enum_value_entry{"chunk_not_loaded" , 1},
     enum_value_entry{"out_of_bounds" , 2},
     enum_value_entry{"not_implemented" , 3},
     enum_value_entry{"internal" , 4},
     enum_value_entry{"already_open" , 5},
     enum_value_entry{"open_failed" , 6},
+    enum_value_entry{"storage_unavailable" , 7},
 };
 inline constexpr std::array<field_entry, 2> refrain_services_world_world_config_fields{
-    field_entry{"world_path" , "string", 8, 16, 0},
-    field_entry{"seed" , "i64", 24, 8, 0},
+    field_entry{"storage" , "refrain::services::storage::storage_handle", 8, 56, 0},
+    field_entry{"seed" , "i64", 64, 8, 0},
 };
 inline constexpr std::array<enum_value_entry, 4> refrain_services_worldgen_worldgen_error_values{
     enum_value_entry{"invalid_config" , 1},
@@ -509,7 +517,7 @@ inline constexpr std::array<field_entry, 3> refrain_services_worldgen_generate_o
 };
 } // namespace detail
 
-inline constexpr std::array<type_entry, 68> types{
+inline constexpr std::array<type_entry, 69> types{
     type_entry{"refrain::core::core_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_core_core_error_values}},
     type_entry{"refrain::core::chunk_status", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_core_chunk_status_values}},
     type_entry{"refrain::core::block_face", 1, 1, 1, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_core_block_face_values}},
@@ -561,9 +569,10 @@ inline constexpr std::array<type_entry, 68> types{
     type_entry{"refrain::services::session_tab::tab_request", 0, 32, 8, std::span<const field_entry>{detail::refrain_services_session_tab_tab_request_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::session_tab::tab_view", 0, 40, 8, std::span<const field_entry>{detail::refrain_services_session_tab_tab_view_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::sim::sim_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_sim_sim_error_values}},
-    type_entry{"refrain::services::sim::sim_config", 0, 32, 8, std::span<const field_entry>{detail::refrain_services_sim_sim_config_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::sim::sim_config", 0, 72, 8, std::span<const field_entry>{detail::refrain_services_sim_sim_config_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::storage::storage_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_storage_storage_error_values}},
     type_entry{"refrain::services::storage::world_open_config", 0, 48, 8, std::span<const field_entry>{detail::refrain_services_storage_world_open_config_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::storage::storage_handle", 0, 56, 8, std::span<const field_entry>{detail::refrain_services_storage_storage_handle_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::storage::chunk_key", 0, 20, 4, std::span<const field_entry>{detail::refrain_services_storage_chunk_key_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::storage::chunk_read_result", 0, 24, 8, std::span<const field_entry>{detail::refrain_services_storage_chunk_read_result_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::transport::transport_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_transport_transport_error_values}},
@@ -573,7 +582,7 @@ inline constexpr std::array<type_entry, 68> types{
     type_entry{"refrain::services::transport::transport_descriptor", 0, 40, 8, std::span<const field_entry>{detail::refrain_services_transport_transport_descriptor_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::transport::transport_event", 0, 48, 8, std::span<const field_entry>{detail::refrain_services_transport_transport_event_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::world::world_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_world_world_error_values}},
-    type_entry{"refrain::services::world::world_config", 0, 32, 8, std::span<const field_entry>{detail::refrain_services_world_world_config_fields}, std::span<const enum_value_entry>{}},
+    type_entry{"refrain::services::world::world_config", 0, 72, 8, std::span<const field_entry>{detail::refrain_services_world_world_config_fields}, std::span<const enum_value_entry>{}},
     type_entry{"refrain::services::worldgen::worldgen_error", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_worldgen_worldgen_error_values}},
     type_entry{"refrain::services::worldgen::gen_stage", 1, 4, 4, std::span<const field_entry>{}, std::span<const enum_value_entry>{detail::refrain_services_worldgen_gen_stage_values}},
     type_entry{"refrain::services::worldgen::worldgen_config", 0, 40, 8, std::span<const field_entry>{detail::refrain_services_worldgen_worldgen_config_fields}, std::span<const enum_value_entry>{}},
@@ -581,26 +590,26 @@ inline constexpr std::array<type_entry, 68> types{
 };
 
 inline constexpr std::array<contract_entry, 17> contracts{
-    contract_entry{"refrain:host.core", 1, 0, 0, "1da626de4b244418", 12},
-    contract_entry{"refrain:host.kernel", 1, 0, 0, "1da626de4b244418", 6},
-    contract_entry{"refrain:host.metadata", 1, 0, 0, "1da626de4b244418", 8},
-    contract_entry{"refrain:host.platform", 1, 0, 0, "1da626de4b244418", 12},
-    contract_entry{"refrain:data.packs", 1, 0, 0, "1da626de4b244418", 4},
-    contract_entry{"refrain:net.protocol", 2, 0, 0, "1da626de4b244418", 14},
-    contract_entry{"refrain:net.session", 1, 0, 0, "1da626de4b244418", 6},
-    contract_entry{"refrain:net.translator", 1, 0, 0, "1da626de4b244418", 2},
-    contract_entry{"refrain:runtime", 2, 0, 0, "1da626de4b244418", 1},
-    contract_entry{"refrain:session.lifecycle", 1, 0, 0, "1da626de4b244418", 3},
-    contract_entry{"refrain:session.status", 1, 0, 0, "1da626de4b244418", 1},
-    contract_entry{"refrain:session.tab", 1, 0, 0, "1da626de4b244418", 1},
-    contract_entry{"refrain:sim", 1, 0, 0, "1da626de4b244418", 8},
-    contract_entry{"refrain:storage", 1, 0, 0, "1da626de4b244418", 6},
-    contract_entry{"refrain:transport", 1, 0, 0, "1da626de4b244418", 9},
-    contract_entry{"refrain:world", 1, 0, 0, "1da626de4b244418", 8},
-    contract_entry{"refrain:worldgen", 1, 0, 0, "1da626de4b244418", 4},
+    contract_entry{"refrain:host.core", 1, 0, 0, "9e471daa6562b9ea", 12},
+    contract_entry{"refrain:host.kernel", 1, 0, 0, "9e471daa6562b9ea", 6},
+    contract_entry{"refrain:host.metadata", 1, 0, 0, "9e471daa6562b9ea", 8},
+    contract_entry{"refrain:host.platform", 1, 0, 0, "9e471daa6562b9ea", 12},
+    contract_entry{"refrain:data.packs", 1, 0, 0, "9e471daa6562b9ea", 4},
+    contract_entry{"refrain:net.protocol", 2, 0, 0, "9e471daa6562b9ea", 14},
+    contract_entry{"refrain:net.session", 1, 0, 0, "9e471daa6562b9ea", 6},
+    contract_entry{"refrain:net.translator", 1, 0, 0, "9e471daa6562b9ea", 2},
+    contract_entry{"refrain:runtime", 2, 0, 0, "9e471daa6562b9ea", 1},
+    contract_entry{"refrain:session.lifecycle", 1, 0, 0, "9e471daa6562b9ea", 3},
+    contract_entry{"refrain:session.status", 1, 0, 0, "9e471daa6562b9ea", 1},
+    contract_entry{"refrain:session.tab", 1, 0, 0, "9e471daa6562b9ea", 1},
+    contract_entry{"refrain:sim", 1, 0, 0, "9e471daa6562b9ea", 8},
+    contract_entry{"refrain:storage", 1, 0, 0, "9e471daa6562b9ea", 6},
+    contract_entry{"refrain:transport", 1, 0, 0, "9e471daa6562b9ea", 9},
+    contract_entry{"refrain:world", 1, 0, 0, "9e471daa6562b9ea", 8},
+    contract_entry{"refrain:worldgen", 1, 0, 0, "9e471daa6562b9ea", 4},
 };
 
-inline constexpr std::string_view schema_hash = "1da626de4b244418";
+inline constexpr std::string_view schema_hash = "9e471daa6562b9ea";
 
 } // namespace refrain::metadata
 

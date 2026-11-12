@@ -126,16 +126,22 @@ auto block_registry::size() const -> std::size_t {
 
 world::world(store_type store) : store_{std::move(store)} {}
 
+world::world(store_type &store, borrowed_tag) : store_{}, borrowed_{&store} {}
+
 world::world(world &&other) noexcept
-    : store_{std::move(other.store_)}, registry_{std::move(other.registry_)},
-      chunks_{std::move(other.chunks_)}, tickets_{std::move(other.tickets_)},
-      players_{std::move(other.players_)},
+    : store_{std::move(other.store_)}, borrowed_{other.borrowed_},
+      registry_{std::move(other.registry_)}, chunks_{std::move(other.chunks_)},
+      tickets_{std::move(other.tickets_)}, players_{std::move(other.players_)},
       entities_{std::move(other.entities_)}, rng_{other.rng_},
-      tick_{other.tick_} {}
+      tick_{other.tick_} {
+    other.borrowed_ = nullptr;
+}
 
 auto world::operator=(world &&other) noexcept -> world & {
     if (this != &other) {
         store_ = std::move(other.store_);
+        borrowed_ = other.borrowed_;
+        other.borrowed_ = nullptr;
         registry_ = std::move(other.registry_);
         chunks_ = std::move(other.chunks_);
         tickets_ = std::move(other.tickets_);
@@ -155,6 +161,18 @@ auto world::open(std::string_view path) -> result<world> {
         return std::unexpected{std::move(store.error())};
     }
     return world{std::move(*store)};
+}
+
+auto world::attach(store_type &store) -> world {
+    return world{store, borrowed_tag{}};
+}
+
+auto world::store_ref() noexcept -> store_type & {
+    return borrowed_ != nullptr ? *borrowed_ : store_;
+}
+
+auto world::store_ref() const noexcept -> const store_type & {
+    return borrowed_ != nullptr ? *borrowed_ : store_;
 }
 
 auto world::registry() noexcept -> block_registry & { return registry_; }
@@ -242,7 +260,7 @@ auto world::ensure_chunk(const chunk_pos &pos) -> result<chunk *> {
     }
     auto loaded{[this, &pos] {
         const std::lock_guard lock{store_mutex_};
-        return store_.read_chunk(pos);
+        return store_ref().read_chunk(pos);
     }()};
     if (!loaded) {
         return std::unexpected{std::move(loaded.error())};
@@ -653,30 +671,37 @@ auto world::write_pending(std::span<const pending_snapshot> pending)
 auto world::write_snapshot(std::span<const snapshot_entry> snapshot) -> status {
     const std::lock_guard lock{store_mutex_};
     if (snapshot.empty()) {
-        return store_.commit();
+        return store_ref().commit();
     }
     for (const auto &entry : snapshot) {
-        auto written{store_.write_chunk(entry.pos, entry.chunk, entry.level)};
+        auto written{
+            store_ref().write_chunk(entry.pos, entry.chunk, entry.level)};
         if (!written) {
             return written;
         }
     }
-    return store_.commit();
+    return store_ref().commit();
 }
 
 auto world::compact_stores() -> result<::refrain::world::world_compact> {
     const std::lock_guard lock{store_mutex_};
-    return store_.compact();
+    return store_ref().compact();
 }
 
 auto world::compact_regions(std::uint64_t min_bytes, unsigned min_percent)
     -> result<std::size_t> {
     const std::lock_guard lock{store_mutex_};
-    return store_.compact_regions(min_bytes, min_percent);
+    return store_ref().compact_regions(min_bytes, min_percent);
 }
 
 auto world::rebuild_palette_in_place(unsigned threads, int zstd_level)
     -> result<::refrain::world::palette_maintenance_report> {
+    if (borrowed_ != nullptr) {
+        return std::unexpected{make_error(
+            error_code::unsupported,
+            "palette maintenance replaces the store object, which a world "
+            "built on a borrowed store does not own")};
+    }
     if (zstd_level < ::refrain::world::rwf::min_zstd_level ||
         zstd_level > ::refrain::world::rwf::max_zstd_level) {
         return std::unexpected{make_error(
@@ -689,12 +714,12 @@ auto world::rebuild_palette_in_place(unsigned threads, int zstd_level)
     if (!flushed) {
         return std::unexpected{std::move(flushed.error())};
     }
-    const std::string root{store_.root()};
+    const std::string root{store_ref().root()};
     if (root.empty()) {
         return std::unexpected{
             make_error(error_code::not_initialized, "world store is closed")};
     }
-    const int store_level{store_.zstd_level()};
+    const int store_level{store_ref().zstd_level()};
 
     // The rebuilt world has a fresh palette table, so every runtime chunk must
     // be decoded again (its `section.base` would otherwise carry stale palette
@@ -747,7 +772,7 @@ auto world::rebuild_palette_in_place(unsigned threads, int zstd_level)
                         root, reopened.error().message))};
     }
     store_ = std::move(*reopened);
-    if (auto level{store_.set_zstd_level(store_level)}; !level) {
+    if (auto level{store_ref().set_zstd_level(store_level)}; !level) {
         return std::unexpected{std::move(level.error())};
     }
     for (const auto &pos : positions) {
@@ -776,7 +801,7 @@ auto world::flush() -> status {
     }
     if (snapshot->empty()) {
         const std::lock_guard lock{store_mutex_};
-        return store_.commit();
+        return store_ref().commit();
     }
     auto written{write_snapshot(*snapshot)};
     if (!written) {
@@ -1326,8 +1351,8 @@ auto world::state_hash() const -> data::digest32 {
 
 void world::unload_all() noexcept { chunks_.clear(); }
 
-auto world::store() noexcept -> store_type & { return store_; }
+auto world::store() noexcept -> store_type & { return store_ref(); }
 
-auto world::store() const noexcept -> const store_type & { return store_; }
+auto world::store() const noexcept -> const store_type & { return store_ref(); }
 
 } // namespace refrain::sim

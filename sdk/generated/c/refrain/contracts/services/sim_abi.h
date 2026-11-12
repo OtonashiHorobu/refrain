@@ -6,13 +6,14 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 1da626de4b244418
+// Schema hash: 9e471daa6562b9ea
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_SIM_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_SIM_ABI_H
 
 #include <refrain/contracts/abi.h>
 #include <refrain/contracts/core_abi.h>
+#include <refrain/contracts/services/storage_abi.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +29,7 @@ typedef uint32_t refrain_services_sim_sim_error; // enum 'sim_error'
 #define REFRAIN_SERVICES_SIM_SIM_ERROR_INTERNAL ((refrain_services_sim_sim_error)(5))
 #define REFRAIN_SERVICES_SIM_SIM_ERROR_OUT_OF_BOUNDS ((refrain_services_sim_sim_error)(6))
 #define REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT ((refrain_services_sim_sim_error)(7))
+#define REFRAIN_SERVICES_SIM_SIM_ERROR_STORAGE_UNAVAILABLE ((refrain_services_sim_sim_error)(8))
 
 typedef uint64_t refrain_services_sim_handle_sim_world;
 #define REFRAIN_SERVICES_SIM_HANDLE_SIM_WORLD_INVALID ((refrain_services_sim_handle_sim_world)(REFRAIN_HANDLE_INVALID))
@@ -79,11 +81,13 @@ typedef struct refrain_services_sim_entity_removed {
 struct refrain_services_sim_sim_config {
     uint32_t struct_size;
     uint8_t reserved_0[4];
-    // RWF world directory.
-    refrain_str world_path;
+    // The store the sim persists through. The runtime opened it once from the
+    // level directory and passes the same handle to every provider of the
+    // composition; the provider never opens the directory itself.
+    refrain_services_storage_storage_handle storage;
     // World seed; providers use it for their deterministic RNG stream.
     int64_t seed;
-}; // refrain_services_sim_sim_config size = 32
+}; // refrain_services_sim_sim_config size = 72
 #define REFRAIN_SERVICES_SIM_SIM_CONFIG_SIZE ((uint32_t)sizeof(refrain_services_sim_sim_config))
 
 #define REFRAIN_SERVICES_SIM_SERVICE_ID "refrain:sim"
@@ -94,7 +98,7 @@ struct refrain_services_sim_sim_config {
 #define REFRAIN_SERVICES_SIM_THREAD REFRAIN_THREAD_SIM
 #define REFRAIN_SERVICES_SIM_COMPOSITION REFRAIN_COMPOSITION_EXCLUSIVE
 #define REFRAIN_SERVICES_SIM_CAPABILITIES "tick,replay,deterministic-rng,block-events,entity-events"
-#define REFRAIN_SERVICES_SIM_REQUIRES "refrain:core>=1.0.0,refrain:world>=1.0.0"
+#define REFRAIN_SERVICES_SIM_REQUIRES "refrain:core>=1.0.0,refrain:world>=1.0.0,refrain:storage>=1.0.0"
 #define REFRAIN_SERVICES_SIM_SERVICE_IDS "refrain:sim"
 
 typedef struct refrain_services_sim_vtable {
@@ -102,6 +106,8 @@ typedef struct refrain_services_sim_vtable {
     uint32_t abi_major;
     uint32_t abi_minor;
     uint32_t abi_patch;
+    // Open a sim world over the given store. The provider never opens the
+    // level directory itself; the store was opened once by the runtime.
     // attributes: #[thread(sim)] #[can_fail]
     refrain_status (*open_world)(void *self, const refrain_services_sim_sim_config *config, refrain_services_sim_handle_sim_world *out_value);
     // attributes: #[thread(sim)] #[can_fail]

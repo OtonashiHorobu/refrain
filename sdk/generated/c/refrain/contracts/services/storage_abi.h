@@ -6,19 +6,21 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 1da626de4b244418
+// Schema hash: 9e471daa6562b9ea
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_STORAGE_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_STORAGE_ABI_H
 
 #include <refrain/contracts/abi.h>
 #include <refrain/contracts/core_abi.h>
+#include <refrain/contracts/host/core_abi.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct refrain_services_storage_world_open_config refrain_services_storage_world_open_config;
+typedef struct refrain_services_storage_storage_handle refrain_services_storage_storage_handle;
 typedef struct refrain_services_storage_chunk_key refrain_services_storage_chunk_key;
 typedef struct refrain_services_storage_chunk_read_result refrain_services_storage_chunk_read_result;
 
@@ -29,6 +31,7 @@ typedef uint32_t refrain_services_storage_storage_error; // enum 'storage_error'
 #define REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_IO_ERROR ((refrain_services_storage_storage_error)(4))
 #define REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_VERSION_MISMATCH ((refrain_services_storage_storage_error)(5))
 #define REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_READ_ONLY ((refrain_services_storage_storage_error)(6))
+#define REFRAIN_SERVICES_STORAGE_STORAGE_ERROR_ALREADY_OPEN ((refrain_services_storage_storage_error)(7))
 
 struct refrain_services_storage_world_open_config {
     uint32_t struct_size;
@@ -39,6 +42,28 @@ struct refrain_services_storage_world_open_config {
     uint8_t reserved_1[4];
 }; // refrain_services_storage_world_open_config size = 48
 #define REFRAIN_SERVICES_STORAGE_WORLD_OPEN_CONFIG_SIZE ((uint32_t)sizeof(refrain_services_storage_world_open_config))
+
+// An opened store, as handed from the runtime to the providers that use it.
+// 
+// The runtime opens one store per level directory and passes this handle to
+// the world and sim providers, so a fully composed provider set shares a
+// single open store instead of each provider opening the directory itself.
+struct refrain_services_storage_storage_handle {
+    uint32_t struct_size;
+    uint8_t reserved_0[4];
+    // The open store inside the provider named by `owner`.
+    refrain_core_handle_storage_world world;
+    // Provider table and instance that own `world`. A consumer passes the
+    // handle and this owner back to every storage call, so it resolves no
+    // service of its own.
+    refrain_host_core_provider_ref owner;
+    // The provider's in-process store object, or null when the provider keeps
+    // its store private. A consumer that links the runtime storage type reads
+    // and writes through it directly instead of marshalling every chunk
+    // through the ABI; the pointer stays valid until the handle is closed.
+    void * store;
+}; // refrain_services_storage_storage_handle size = 56
+#define REFRAIN_SERVICES_STORAGE_STORAGE_HANDLE_SIZE ((uint32_t)sizeof(refrain_services_storage_storage_handle))
 
 struct refrain_services_storage_chunk_key {
     uint32_t struct_size;
@@ -73,9 +98,12 @@ typedef struct refrain_services_storage_vtable {
     uint32_t abi_minor;
     uint32_t abi_patch;
     // Open (or create) a world store. The returned handle is owned by the
-    // caller and released with close_world.
+    // caller and released with close_world. A level directory is opened at
+    // most once per process: opening it again while a handle is open fails
+    // with `already_open` rather than opening a second store over the same
+    // files.
     // attributes: #[thread(main)] #[can_fail]
-    refrain_status (*open_world)(void *self, const refrain_services_storage_world_open_config *config, refrain_core_handle_storage_world *out_value);
+    refrain_status (*open_world)(void *self, const refrain_services_storage_world_open_config *config, refrain_services_storage_storage_handle *out_value);
     // attributes: #[thread(main)] #[can_fail]
     refrain_status (*close_world)(void *self, refrain_core_handle_storage_world world);
     // Read one chunk record into a caller provided buffer. The buffer's

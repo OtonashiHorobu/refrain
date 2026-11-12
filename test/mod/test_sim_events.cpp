@@ -14,6 +14,7 @@
 #include <refrain/app/host_context.hpp>
 #include <refrain/contracts/abi.h>
 #include <refrain/contracts/services/sim.hpp>
+#include <refrain/contracts/services/storage.hpp>
 #include <refrain/core/config.hpp>
 #include <refrain/host/kernel_api.hpp>
 #include <refrain/mod/discovery.hpp>
@@ -299,9 +300,19 @@ sim = "refrain.sim.vanilla@^1.0.0"
             const sim_service::provider sim{
                 *static_cast<const refrain_services_sim_vtable *>(api->vtable),
                 api->self};
-            const auto world_path{directory.string()};
+            // The handle names the store the runtime opened; this composition
+            // has no storage provider, so the test opens the store it hands
+            // over.
+            auto store{refrain::world::world_store::open(directory.string())};
+            expect(store.has_value())
+                << (store ? std::string{} : store.error().message);
+            if (!store) {
+                return;
+            }
             auto sim_config{sim_service::make_sim_config()};
-            sim_config.world_path = refrain::contracts::to_borrowed(world_path);
+            sim_config.storage =
+                refrain::services::storage::make_storage_handle();
+            sim_config.storage.store = &*store;
             sim_config.seed = 7;
             auto handle{sim.open_world(sim_config)};
             expect(handle.has_value());

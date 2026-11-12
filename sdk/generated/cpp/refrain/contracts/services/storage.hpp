@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 1da626de4b244418
+// Schema hash: 9e471daa6562b9ea
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_STORAGE_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_STORAGE_HPP
@@ -21,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <refrain/contracts/core.hpp>
+#include <refrain/contracts/host/core.hpp>
 #include <refrain/core/error.hpp>
 #include <refrain/core/schedule.hpp>
 
@@ -33,12 +34,25 @@ enum class storage_error : std::uint32_t { // enum 'storage_error'
     io_error = 4,
     version_mismatch = 5,
     read_only = 6,
+    already_open = 7,
 };
 
 using world_open_config = ::refrain_services_storage_world_open_config;
 /// Zero-initialized `world_open_config` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
 [[nodiscard]] inline auto make_world_open_config() noexcept -> world_open_config {
     world_open_config value{};
+    ::refrain::contracts::init_struct(value);
+    return value;
+}
+/// An opened store, as handed from the runtime to the providers that use it.
+/// 
+/// The runtime opens one store per level directory and passes this handle to
+/// the world and sim providers, so a fully composed provider set shares a
+/// single open store instead of each provider opening the directory itself.
+using storage_handle = ::refrain_services_storage_storage_handle;
+/// Zero-initialized `storage_handle` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
+[[nodiscard]] inline auto make_storage_handle() noexcept -> storage_handle {
+    storage_handle value{};
     ::refrain::contracts::init_struct(value);
     return value;
 }
@@ -63,6 +77,12 @@ static_assert(offsetof(world_open_config, struct_size) == 0);
 static_assert(offsetof(world_open_config, world_path) == 8);
 static_assert(offsetof(world_open_config, gamepack_id) == 24);
 static_assert(offsetof(world_open_config, flags) == 40);
+static_assert(sizeof(storage_handle) == 56);
+static_assert(alignof(storage_handle) == 8);
+static_assert(offsetof(storage_handle, struct_size) == 0);
+static_assert(offsetof(storage_handle, world) == 8);
+static_assert(offsetof(storage_handle, owner) == 16);
+static_assert(offsetof(storage_handle, store) == 48);
 static_assert(sizeof(chunk_key) == 20);
 static_assert(alignof(chunk_key) == 4);
 static_assert(offsetof(chunk_key, struct_size) == 0);
@@ -105,14 +125,18 @@ class provider final {
     }
 
     /// Open (or create) a world store. The returned handle is owned by the
-    /// caller and released with close_world.
-    [[nodiscard]] auto open_world(const ::refrain::services::storage::world_open_config &config) const -> std::expected<::refrain::core::storage_world, ::refrain::services::storage::storage_error> {
+    /// caller and released with close_world. A level directory is opened at
+    /// most once per process: opening it again while a handle is open fails
+    /// with `already_open` rather than opening a second store over the same
+    /// files.
+    [[nodiscard]] auto open_world(const ::refrain::services::storage::world_open_config &config) const -> std::expected<::refrain::services::storage::storage_handle, ::refrain::services::storage::storage_error> {
         const auto abi_config = ::refrain::contracts::with_struct_size(config);
-        ::refrain_core_handle_storage_world value{};
+        ::refrain_services_storage_storage_handle value{};
+        ::refrain::contracts::init_struct(value);
         if (const auto code = table_->open_world(self_, &abi_config, &value); code != REFRAIN_STATUS_OK) {
             return std::unexpected(static_cast<::refrain::services::storage::storage_error>(code));
         }
-        return ::refrain::core::storage_world{value};
+        return value;
     }
 
     [[nodiscard]] auto close_world(::refrain::core::storage_world world) const -> std::expected<void, ::refrain::services::storage::storage_error> {

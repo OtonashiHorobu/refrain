@@ -17,6 +17,7 @@ module refrain::services::sim;
 version 1.0.0;
 
 import refrain::core;
+import refrain::services::storage;
 
 handle<sim_world>;
 
@@ -28,11 +29,14 @@ enum sim_error : u32 {
     internal = 5,
     out_of_bounds = 6,
     invalid_argument = 7,
+    storage_unavailable = 8,
 }
 
 struct sim_config {
-    /// RWF world directory.
-    string world_path;
+    /// The store the sim persists through. The runtime opened it once from the
+    /// level directory and passes the same handle to every provider of the
+    /// composition; the provider never opens the directory itself.
+    storage_handle storage;
     /// World seed; providers use it for their deterministic RNG stream.
     i64 seed;
 }
@@ -73,10 +77,13 @@ service sim : 1.0.0 {
     side = server;
     thread = sim;
     provides = [ "refrain:sim" ];
-    requires = [ "refrain:core>=1.0.0", "refrain:world>=1.0.0" ];
+    requires = [ "refrain:core>=1.0.0", "refrain:world>=1.0.0",
+                 "refrain:storage>=1.0.0" ];
     capabilities = [ "tick", "replay", "deterministic-rng", "block-events",
                      "entity-events" ];
 
+    /// Open a sim world over the given store. The provider never opens the
+    /// level directory itself; the store was opened once by the runtime.
     #[thread(sim)] #[can_fail]
     fn open_world(in sim_config config) -> result<sim_world, sim_error>;
 

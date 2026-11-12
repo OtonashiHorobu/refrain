@@ -10,6 +10,7 @@ module refrain::services::world;
 version 1.0.0;
 
 import refrain::core;
+import refrain::services::storage;
 
 enum world_error : u32 {
     chunk_not_loaded = 1,
@@ -18,11 +19,14 @@ enum world_error : u32 {
     internal = 4,
     already_open = 5,
     open_failed = 6,
+    storage_unavailable = 7,
 }
 
 struct world_config {
-    /// RWF world directory.
-    string world_path;
+    /// The store the world persists through. The runtime opened it once from
+    /// the level directory and passes the same handle to every provider of the
+    /// composition; the provider never opens the directory itself.
+    storage_handle storage;
     /// Deterministic seed for the provider's RNG stream.
     i64 seed;
 }
@@ -31,11 +35,12 @@ service world : 1.0.0 {
     side = server;
     thread = sim;
     provides = [ "refrain:world" ];
-    requires = [ "refrain:core>=1.0.0", "refrain:data.packs>=1.0.0" ];
+    requires = [ "refrain:core>=1.0.0", "refrain:data.packs>=1.0.0",
+                 "refrain:storage>=1.0.0" ];
     capabilities = [ "lighting", "heightmaps", "block_entities" ];
 
-    /// Open the singleton world. The provider owns it until
-    /// `close_world`; the server hosts exactly one world.
+    /// Open the singleton world over the given store. The provider owns the
+    /// world until `close_world`; the server hosts exactly one world.
     #[thread(sim)] #[can_fail]
     fn open_world(in world_config config) -> result<void, world_error>;
 
