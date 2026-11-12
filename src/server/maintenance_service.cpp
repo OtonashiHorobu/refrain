@@ -42,10 +42,10 @@ namespace {
 
 /// Background writer for autosave snapshots. The sim thread only deep-copies
 /// dirty chunks (`snapshot_pending()`); TLV encoding, store writes and group
-/// commit run here through `sim::world::write_pending()`.
+/// commit run here through `world_port::write_pending()`.
 class snapshot_writer {
   public:
-    explicit snapshot_writer(refrain::sim::world &world)
+    explicit snapshot_writer(world_port &world)
         : world_{world}, thread_{[this] { run(); }} {}
 
     snapshot_writer(const snapshot_writer &) = delete;
@@ -130,7 +130,7 @@ class snapshot_writer {
         }
     }
 
-    refrain::sim::world &world_;
+    world_port &world_;
     std::mutex mutex_{};
     std::condition_variable condition_{};
     std::condition_variable idle_condition_{};
@@ -329,7 +329,7 @@ auto run_content_gc(const server_run_options &options, gc_delete_worker *worker)
 // live in one place (`core::schedule`). The log lines are part of the CLI/log
 // contract.
 struct maintenance_context {
-    refrain::sim::world *world{nullptr};
+    world_port *world{nullptr};
     snapshot_writer *writer{nullptr};
     const server_run_options *options{nullptr};
     std::optional<gc_delete_worker> *gc_worker{nullptr};
@@ -423,7 +423,7 @@ auto maintenance_region_compact(void *self, const void *, std::int64_t) noexcept
 } // namespace
 
 struct maintenance_service::impl {
-    refrain::sim::world *world{nullptr};
+    world_port *world{nullptr};
     server_run_options options{};
     std::optional<snapshot_writer> writer{};
     std::optional<gc_delete_worker> gc_worker{};
@@ -436,7 +436,7 @@ maintenance_service::maintenance_service() : impl_{std::make_unique<impl>()} {}
 
 maintenance_service::~maintenance_service() { stop(); }
 
-auto maintenance_service::start(refrain::sim::world &world,
+auto maintenance_service::start(world_port &world,
                                 const server_run_options &options) -> status {
     auto &state{*impl_};
     state.world = &world;

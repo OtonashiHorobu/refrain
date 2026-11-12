@@ -15,7 +15,7 @@
 
 namespace refrain::server {
 
-auto generate_spawn_area(refrain::world::world_store &store,
+auto generate_spawn_area(world_port &world,
                          const world_bootstrap_config &config,
                          refrain::world::chunk_pos center)
     -> result<std::size_t> {
@@ -62,12 +62,12 @@ auto generate_spawn_area(refrain::world::world_store &store,
         if (!storage) {
             return std::unexpected{storage.error()};
         }
-        if (auto stored{store.write_chunk(pos, *storage)}; !stored) {
+        if (auto stored{world.write_chunk(pos, *storage)}; !stored) {
             return std::unexpected{stored.error()};
         }
         ++written;
     }
-    if (auto committed{store.commit()}; !committed) {
+    if (auto committed{world.commit()}; !committed) {
         return std::unexpected{committed.error()};
     }
     return written;

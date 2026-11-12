@@ -6,7 +6,7 @@
 
 #include <refrain/command/dispatcher.hpp>
 #include <refrain/net/server.hpp>
-#include <refrain/world/store.hpp>
+#include <refrain/server/world_port.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -21,7 +21,7 @@ namespace refrain::server {
 struct command_environment {
     refrain::command::dispatcher dispatcher{};
     refrain::net::server *listener{nullptr};
-    refrain::world::world_store *world{nullptr};
+    world_port *world{nullptr};
     std::shared_ptr<const refrain::net::command_tree> tree_cache{};
 
     /// Development default until a permission service exists. It allows the
