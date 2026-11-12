@@ -219,7 +219,6 @@ struct server::impl {
         bool login_finished{false};
         bool status_requested{false};
         bool leave_reported{false};
-        bool closed{false};
         std::int64_t keepalive_sent_ms{0};
         std::int64_t keepalive_challenge{0};
         bool keepalive_pending{false};
@@ -239,6 +238,81 @@ struct server::impl {
         token_bucket limiter{};
         std::int64_t last_packet_ns{0};
     };
+
+    /// One live client connection and its write lock.
+    ///
+    /// `mutex` guards `data` and is the only lock a connection ever needs;
+    /// `closed` is atomic so a sender can reject a closed connection without
+    /// waiting for the state lock. Two packets for one connection are appended
+    /// to the protocol codec in the order the callers acquired `mutex`, so a
+    /// caller that sends sequentially keeps its wire order.
+    ///
+    /// Lock order (strict): `mutex` may be held while calling the protocol
+    /// codec, which takes the codec's own internal mutex. Nothing takes a
+    /// connection mutex while holding the codec mutex, no path holds two
+    /// connection mutexes at once, and the table's shard mutex is never held
+    /// while a connection mutex is acquired. The close path publishes `closed`
+    /// with an atomic exchange, then takes `mutex` only to snapshot the leave
+    /// identity; a sender that already owns `mutex` completes at most one
+    /// packet, and no path holds `mutex` while waiting for close.
+    struct connection {
+        mutable std::mutex mutex{};
+        std::atomic<bool> closed{false};
+        connection_state_data data{};
+    };
+
+    struct live_connection {
+        std::uint64_t id{0};
+        std::shared_ptr<connection> handle{};
+    };
+
+    /// The id-to-connection table is sharded so a lookup contends only with
+    /// the connections that hash to the same shard. Membership changes are
+    /// rare compared with sends and lookups; the shard lock covers the map
+    /// only, never a connection's state or a call into the codec.
+    static constexpr std::size_t connection_shard_count{64};
+    struct connection_shard {
+        mutable std::mutex mutex{};
+        std::unordered_map<std::uint64_t, std::shared_ptr<connection>>
+            entries{};
+    };
+    std::array<connection_shard, connection_shard_count> connection_table{};
+
+    [[nodiscard]] static constexpr auto shard_for(std::uint64_t id) noexcept
+        -> std::size_t {
+        return static_cast<std::size_t>(id) % connection_shard_count;
+    }
+    [[nodiscard]] auto find_connection(std::uint64_t id) const
+        -> std::shared_ptr<connection>;
+    void insert_connection(std::uint64_t id, std::shared_ptr<connection> live);
+    void erase_connection(std::uint64_t id);
+    /// Copy every table entry. The shard locks are released before the caller
+    /// inspects a connection, and a caller that keeps a `shared_ptr` stays
+    /// valid after the connection leaves the table.
+    [[nodiscard]] auto connection_snapshot() const
+        -> std::vector<live_connection>;
+    /// Ids of connections in play, in table order.
+    [[nodiscard]] auto playing_connections() const
+        -> std::vector<std::uint64_t>;
+    [[nodiscard]] auto playing_count() const -> std::int32_t;
+
+    /// Run `read` against one connection's state while holding its mutex.
+    /// Returns false when the connection is gone or closed. `read` must not
+    /// send, close, take a hook or look up another connection: those acquire
+    /// the same lock or wait for another one.
+    template <typename Reader>
+    [[nodiscard]] auto with_connection(std::uint64_t id, Reader read) -> bool {
+        const auto live{find_connection(id)};
+        if (!live || live->closed.load(std::memory_order_acquire)) {
+            return false;
+        }
+        const std::lock_guard lock{live->mutex};
+        if (live->closed.load(std::memory_order_relaxed)) {
+            return false;
+        }
+        read(live->data);
+        return true;
+    }
 
     server_settings config{};
     server_policy policy{};
@@ -263,7 +337,6 @@ struct server::impl {
     std::shared_ptr<const std::vector<std::byte>> cached_commands{};
     session_verifier verify_session{};
     std::unique_ptr<transport> socket{};
-    std::unordered_map<std::uint64_t, connection_state_data> connections{};
     std::optional<rsa_keypair> server_key{};
     std::unique_ptr<http_transport> http{};
     std::unique_ptr<auth_service> auth{};
@@ -276,8 +349,6 @@ struct server::impl {
         std::uint64_t connection{0};
         std::vector<std::byte> body{};
     };
-    std::mutex connections_mutex{};
-    std::mutex send_mutex{};
     std::mutex inbound_mutex{};
     std::deque<queued_packet> inbound{};
     std::mutex click_mutex{};
@@ -349,6 +420,70 @@ struct server::impl {
     }
 };
 
+auto server::impl::find_connection(std::uint64_t id) const
+    -> std::shared_ptr<connection> {
+    const auto &shard{connection_table[shard_for(id)]};
+    const std::lock_guard lock{shard.mutex};
+    const auto found{shard.entries.find(id)};
+    if (found == shard.entries.end()) {
+        return {};
+    }
+    return found->second;
+}
+
+void server::impl::insert_connection(std::uint64_t id,
+                                     std::shared_ptr<connection> live) {
+    auto &shard{connection_table[shard_for(id)]};
+    const std::lock_guard lock{shard.mutex};
+    shard.entries.insert_or_assign(id, std::move(live));
+}
+
+void server::impl::erase_connection(std::uint64_t id) {
+    auto &shard{connection_table[shard_for(id)]};
+    const std::lock_guard lock{shard.mutex};
+    shard.entries.erase(id);
+}
+
+auto server::impl::connection_snapshot() const -> std::vector<live_connection> {
+    std::vector<live_connection> snapshot;
+    for (const auto &shard : connection_table) {
+        const std::lock_guard lock{shard.mutex};
+        snapshot.reserve(snapshot.size() + shard.entries.size());
+        for (const auto &[id, live] : shard.entries) {
+            snapshot.push_back(live_connection{.id = id, .handle = live});
+        }
+    }
+    return snapshot;
+}
+
+auto server::impl::playing_connections() const -> std::vector<std::uint64_t> {
+    std::vector<std::uint64_t> ids;
+    for (const auto &entry : connection_snapshot()) {
+        if (entry.handle->closed.load(std::memory_order_acquire)) {
+            continue;
+        }
+        const std::lock_guard lock{entry.handle->mutex};
+        if (entry.handle->data.state == connection_state::play) {
+            ids.push_back(entry.id);
+        }
+    }
+    return ids;
+}
+
+auto server::impl::playing_count() const -> std::int32_t {
+    std::int32_t online{0};
+    for (const auto &entry : connection_snapshot()) {
+        if (entry.handle->closed.load(std::memory_order_acquire)) {
+            continue;
+        }
+        const std::lock_guard lock{entry.handle->mutex};
+        if (entry.handle->data.state == connection_state::play) {
+            ++online;
+        }
+    }
+    return online;
+}
+
 auto server::impl::start() -> status {
     if (config.online_mode) {
         auto key{rsa_keypair::generate()};
@@ -415,8 +550,10 @@ void server::impl::stop() {
         socket->stop();
         socket.reset();
     }
-    const std::lock_guard lock{connections_mutex};
-    connections.clear();
+    for (auto &shard : connection_table) {
+        const std::lock_guard lock{shard.mutex};
+        shard.entries.clear();
+    }
 }
 
 void server::impl::on_open(std::uint64_t id) {
@@ -426,13 +563,13 @@ void server::impl::on_open(std::uint64_t id) {
     log_net.debug("connection opened id={}", id);
     protocol->create_connection(id);
     protocol->notify_state(id, connection_state::handshake);
-    const std::lock_guard lock{connections_mutex};
-    auto &connection{connections[id]};
-    connection.limiter.configure(config.rate_limit);
-    connection.last_packet_ns =
+    auto live{std::make_shared<connection>()};
+    live->data.limiter.configure(config.rate_limit);
+    live->data.last_packet_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count();
+    insert_connection(id, std::move(live));
 }
 
 void server::impl::on_close(std::uint64_t id, std::string_view /*reason*/) {
@@ -440,19 +577,19 @@ void server::impl::on_close(std::uint64_t id, std::string_view /*reason*/) {
     uuid left_profile{};
     std::string left_name{};
     bool report_leave{false};
-    {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found != connections.end() &&
-            found->second.state == connection_state::play &&
-            !found->second.name.empty()) {
-            left_id = id;
-            left_profile = found->second.profile;
-            left_name = found->second.name;
-            report_leave = !found->second.leave_reported;
-            found->second.leave_reported = true;
+    if (const auto live{find_connection(id)}) {
+        {
+            const std::lock_guard lock{live->mutex};
+            auto &data{live->data};
+            if (data.state == connection_state::play && !data.name.empty()) {
+                left_id = id;
+                left_profile = data.profile;
+                left_name = data.name;
+                report_leave = !data.leave_reported;
+                data.leave_reported = true;
+            }
         }
-        connections.erase(id);
+        erase_connection(id);
     }
     if (left_id != 0) {
         if (report_leave && player_leave_hook) {
@@ -468,23 +605,22 @@ void server::impl::on_close(std::uint64_t id, std::string_view /*reason*/) {
 
 void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
     bytes_in.fetch_add(bytes.size(), std::memory_order_relaxed);
+    const auto live{find_connection(id)};
+    if (!live || live->closed.load(std::memory_order_acquire)) {
+        return;
+    }
     std::vector<std::vector<std::byte>> bodies;
     bool failed{false};
     bool rate_limited{false};
     {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        auto &connection{found->second};
+        const std::lock_guard lock{live->mutex};
+        auto &connection_data{live->data};
         const auto now_ns = [] {
             return std::chrono::duration_cast<std::chrono::nanoseconds>(
                        std::chrono::steady_clock::now().time_since_epoch())
                 .count();
         };
         if (auto fed{protocol->feed(id, bytes)}; !fed) {
-            connection.closed = true;
             failed = true;
         } else {
             for (;;) {
@@ -492,19 +628,18 @@ void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
                 std::span<const std::byte> payload{};
                 auto next{protocol->next_packet(id, packet_id, payload)};
                 if (!next) {
-                    connection.closed = true;
                     failed = true;
                     break;
                 }
                 if (!*next) {
                     break;
                 }
-                if (connection.state == connection_state::play &&
-                    !connection.limiter.allow(now_ns())) {
+                if (connection_data.state == connection_state::play &&
+                    !connection_data.limiter.allow(now_ns())) {
                     rate_limited = true;
                     break;
                 }
-                connection.last_packet_ns = now_ns();
+                connection_data.last_packet_ns = now_ns();
                 std::vector<std::byte> body;
                 writer out{body};
                 out.write_varint(packet_id);
@@ -525,12 +660,8 @@ void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
         return;
     }
     for (const auto &body : bodies) {
-        {
-            const std::lock_guard lock{connections_mutex};
-            const auto found{connections.find(id)};
-            if (found == connections.end() || found->second.closed) {
-                return;
-            }
+        if (live->closed.load(std::memory_order_acquire)) {
+            return;
         }
         packets_in.fetch_add(1, std::memory_order_relaxed);
         handle(id, body);
@@ -539,13 +670,13 @@ void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
 
 void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
     connection_state state{connection_state::handshake};
+    const auto live{find_connection(id)};
+    if (!live || live->closed.load(std::memory_order_acquire)) {
+        return;
+    }
     {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        state = found->second.state;
+        const std::lock_guard lock{live->mutex};
+        state = live->data.state;
     }
     reader in{body};
     auto packet_id{in.read_varint()};
@@ -568,16 +699,12 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             reject(id, "malformed or unexpected packet");
             return;
         }
-        {
-            const std::lock_guard lock{connections_mutex};
-            const auto found{connections.find(id)};
-            if (found == connections.end() || found->second.closed) {
-                return;
-            }
-            auto &live{found->second};
-            live.protocol = static_cast<std::int32_t>(intention.protocol);
-            live.handshake_host = intention.host;
-            live.handshake_port = intention.port;
+        if (!with_connection(id, [&](connection_state_data &data) {
+                data.protocol = static_cast<std::int32_t>(intention.protocol);
+                data.handshake_host = intention.host;
+                data.handshake_port = intention.port;
+            })) {
+            return;
         }
         const auto event{intention.next == 1 ? protocol_event::status_request
                                              : protocol_event::login_request};
@@ -588,13 +715,10 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             reject(id, "malformed or unexpected packet");
             return;
         }
-        {
-            const std::lock_guard lock{connections_mutex};
-            const auto found{connections.find(id)};
-            if (found == connections.end() || found->second.closed) {
-                return;
-            }
-            found->second.state = next_state;
+        if (!with_connection(id, [next_state](connection_state_data &data) {
+                data.state = next_state;
+            })) {
+            return;
         }
         log_net.debug("handshake id={} protocol={} next={}", id,
                       intention.protocol, intention.next);
@@ -617,40 +741,25 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
         if (*packet_id == ::refrain::protocol::current::status::serverbound::
                               status_request::packet_id) {
             bool duplicate{false};
-            {
-                const std::lock_guard lock{connections_mutex};
-                const auto found{connections.find(id)};
-                if (found == connections.end() || found->second.closed) {
-                    return;
-                }
-                auto &live{found->second};
-                duplicate = live.status_requested;
-                live.status_requested = true;
+            if (!with_connection(id, [&duplicate](connection_state_data &data) {
+                    duplicate = data.status_requested;
+                    data.status_requested = true;
+                })) {
+                return;
             }
             if (duplicate) {
                 reject(id, "malformed or unexpected packet");
                 return;
             }
             status_request_context context{};
-            {
-                const std::lock_guard lock{connections_mutex};
-                const auto found{connections.find(id)};
-                if (found == connections.end() || found->second.closed) {
-                    return;
-                }
-                context.protocol = found->second.protocol;
-                context.host = found->second.handshake_host;
-                context.port = found->second.handshake_port;
-                std::int32_t online{0};
-                for (const auto &[other, connection] : connections) {
-                    static_cast<void>(other);
-                    if (!connection.closed &&
-                        connection.state == connection_state::play) {
-                        ++online;
-                    }
-                }
-                context.online_players = online;
+            if (!with_connection(id, [&context](connection_state_data &data) {
+                    context.protocol = data.protocol;
+                    context.host = data.handshake_host;
+                    context.port = data.handshake_port;
+                })) {
+                return;
             }
+            context.online_players = playing_count();
             auto info{status_hook ? status_hook(context) : config.status};
             auto response{encode_status_response(build_status_json(info))};
             if (!response) {
@@ -679,15 +788,11 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
     if (state == connection_state::login) {
         if (*packet_id == login_sb::hello::packet_id) {
             bool started{false};
-            {
-                const std::lock_guard lock{connections_mutex};
-                const auto found{connections.find(id)};
-                if (found == connections.end() || found->second.closed) {
-                    return;
-                }
-                auto &live{found->second};
-                started = live.login_started;
-                live.login_started = true;
+            if (!with_connection(id, [&started](connection_state_data &data) {
+                    started = data.login_started;
+                    data.login_started = true;
+                })) {
+                return;
             }
             if (started) {
                 reject(id, "malformed or unexpected packet");
@@ -706,22 +811,18 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             }
             log_net.info("login started id={} name={}", id, packet.name);
             const auto session{random_uuid()};
-            {
-                const std::lock_guard lock{connections_mutex};
-                const auto found{connections.find(id)};
-                if (found == connections.end() || found->second.closed) {
-                    return;
-                }
-                auto &live{found->second};
-                live.name = std::move(packet.name);
-                auto profile{
-                    uuid_from_halves(packet.profile_high, packet.profile_low)};
-                const bool zero_profile{
-                    std::ranges::all_of(profile.bytes, [](std::uint8_t byte) {
-                        return byte == 0U;
-                    })};
-                live.profile = zero_profile ? random_uuid() : profile;
-                live.session = session;
+            if (!with_connection(
+                    id, [&packet, session](connection_state_data &data) {
+                        data.name = std::move(packet.name);
+                        auto profile{uuid_from_halves(packet.profile_high,
+                                                      packet.profile_low)};
+                        const bool zero_profile{std::ranges::all_of(
+                            profile.bytes,
+                            [](std::uint8_t byte) { return byte == 0U; })};
+                        data.profile = zero_profile ? random_uuid() : profile;
+                        data.session = session;
+                    })) {
+                return;
             }
             if (config.online_mode) {
                 std::random_device device{};
@@ -729,13 +830,10 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 for (auto &byte : token) {
                     byte = static_cast<std::byte>(device() & 0xFFU);
                 }
-                {
-                    const std::lock_guard lock{connections_mutex};
-                    const auto found{connections.find(id)};
-                    if (found == connections.end() || found->second.closed) {
-                        return;
-                    }
-                    found->second.verify_token = std::move(token);
+                if (!with_connection(id, [&token](connection_state_data &data) {
+                        data.verify_token = std::move(token);
+                    })) {
+                    return;
                 }
                 send_login_hello(id);
                 return;
@@ -750,13 +848,12 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
         if (*packet_id == login_sb::login_acknowledged::packet_id) {
             std::string name;
             bool finished{false};
-            {
-                const std::lock_guard lock{connections_mutex};
-                const auto found{connections.find(id)};
-                if (found != connections.end() && !found->second.closed) {
-                    name = found->second.name;
-                    finished = found->second.login_finished;
-                }
+            if (!with_connection(
+                    id, [&name, &finished](connection_state_data &data) {
+                        name = data.name;
+                        finished = data.login_finished;
+                    })) {
+                return;
             }
             // Login is acknowledged only after the server finished it; without
             // this guard a client could skip hello and encryption entirely.
@@ -776,13 +873,10 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 reject(id, "malformed or unexpected packet");
                 return;
             }
-            {
-                const std::lock_guard lock{connections_mutex};
-                const auto found{connections.find(id)};
-                if (found == connections.end() || found->second.closed) {
-                    return;
-                }
-                found->second.state = next_state;
+            if (!with_connection(id, [next_state](connection_state_data &data) {
+                    data.state = next_state;
+                })) {
+                return;
             }
             log_net.info("login complete id={} name={}", id, name);
             send_configuration(id);
@@ -801,11 +895,6 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 reject(id, "malformed or unexpected packet");
                 return;
             }
-            const std::lock_guard lock{connections_mutex};
-            const auto found{connections.find(id)};
-            if (found == connections.end() || found->second.closed) {
-                return;
-            }
             return;
         }
         case config_sb::finish_configuration::packet_id: {
@@ -822,13 +911,10 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 reject(id, "malformed or unexpected packet");
                 return;
             }
-            {
-                const std::lock_guard lock{connections_mutex};
-                const auto found{connections.find(id)};
-                if (found == connections.end() || found->second.closed) {
-                    return;
-                }
-                found->second.state = next_state;
+            if (!with_connection(id, [next_state](connection_state_data &data) {
+                    data.state = next_state;
+                })) {
+                return;
             }
             send_play_login(id);
             return;
@@ -861,18 +947,15 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                            pack.id == "core";
                 })};
             bool send_registries{false};
-            {
-                const std::lock_guard lock{connections_mutex};
-                const auto found{connections.find(id)};
-                if (found == connections.end() || found->second.closed) {
-                    return;
-                }
-                auto &live{found->second};
-                if (!live.registries_sent) {
-                    live.knows_core_pack = knows_core;
-                    live.registries_sent = true;
-                    send_registries = true;
-                }
+            if (!with_connection(id, [knows_core, &send_registries](
+                                         connection_state_data &data) {
+                    if (!data.registries_sent) {
+                        data.knows_core_pack = knows_core;
+                        data.registries_sent = true;
+                        send_registries = true;
+                    }
+                })) {
+                return;
             }
             if (send_registries) {
                 send_configuration_registries(id);
@@ -927,13 +1010,10 @@ void server::impl::send_login_disconnect(std::uint64_t id,
 
 void server::impl::send_login_hello(std::uint64_t id) {
     std::vector<std::byte> token;
-    {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        token = found->second.verify_token;
+    if (!with_connection(id, [&token](connection_state_data &data) {
+            token = data.verify_token;
+        })) {
+        return;
     }
     auto public_key{server_key->public_key_der()};
     if (!public_key) {
@@ -957,9 +1037,8 @@ void server::impl::complete_login(std::uint64_t id) {
                 static_cast<std::uint32_t>(config.compression_threshold)};
         send_packet(id, login_cb::login_compression::packet_id, packet,
                     login_cb::encode_login_compression);
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
+        const auto live{find_connection(id)};
+        if (!live || live->closed.load(std::memory_order_acquire)) {
             return;
         }
         if (protocol) {
@@ -978,13 +1057,10 @@ void server::impl::handle_login_key(std::uint64_t id, reader &in) {
         return;
     }
     std::vector<std::byte> expected_token;
-    {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        expected_token = found->second.verify_token;
+    if (!with_connection(id, [&expected_token](connection_state_data &data) {
+            expected_token = data.verify_token;
+        })) {
+        return;
     }
     auto secret{server_key->decrypt_pkcs1_v1_5(packet.keybytes)};
     auto token{server_key->decrypt_pkcs1_v1_5(packet.encrypted_challenge)};
@@ -1023,19 +1099,18 @@ void server::impl::handle_login_key(std::uint64_t id, reader &in) {
         return;
     }
     std::string name;
+    const auto live{find_connection(id)};
+    if (!live || live->closed.load(std::memory_order_acquire)) {
+        return;
+    }
     {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        auto &live{found->second};
-        if (protocol) {
-            static_cast<void>(protocol->set_cipher(
-                id, std::span<const std::byte>{secret->data(), secret->size()},
-                std::span<const std::byte>{secret->data(), secret->size()}));
-        }
-        name = live.name;
+        const std::lock_guard lock{live->mutex};
+        name = live->data.name;
+    }
+    if (protocol) {
+        static_cast<void>(protocol->set_cipher(
+            id, std::span<const std::byte>{secret->data(), secret->size()},
+            std::span<const std::byte>{secret->data(), secret->size()}));
     }
     session_profile profile{};
     if (verify_session) {
@@ -1060,15 +1135,11 @@ void server::impl::handle_login_key(std::uint64_t id, reader &in) {
         reject(id, "malformed or unexpected packet");
         return;
     }
-    {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        auto &live{found->second};
-        live.profile = profile.id;
-        live.name = std::move(profile.name);
+    if (!with_connection(id, [&profile](connection_state_data &data) {
+            data.profile = profile.id;
+            data.name = std::move(profile.name);
+        })) {
+        return;
     }
     complete_login(id);
 }
@@ -1077,16 +1148,14 @@ void server::impl::send_login_finished(std::uint64_t id) {
     uuid profile{};
     uuid session{};
     std::string name;
-    {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        profile = found->second.profile;
-        session = found->second.session;
-        name = found->second.name;
-        found->second.login_finished = true;
+    if (!with_connection(
+            id, [&profile, &session, &name](connection_state_data &data) {
+                profile = data.profile;
+                session = data.session;
+                name = data.name;
+                data.login_finished = true;
+            })) {
+        return;
     }
     const auto [profile_high, profile_low] = uuid_halves(profile);
     const auto [session_high, session_low] = uuid_halves(session);
@@ -1260,19 +1329,16 @@ namespace {
 void server::impl::send_play_login(std::uint64_t id) {
     std::string name;
     uuid profile{};
-    {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        auto &live{found->second};
-        live.x = config.spawn_x;
-        live.y = config.spawn_y;
-        live.z = config.spawn_z;
-        live.awaiting_teleport = true;
-        name = live.name;
-        profile = live.profile;
+    if (!with_connection(id,
+                         [this, &name, &profile](connection_state_data &data) {
+                             data.x = config.spawn_x;
+                             data.y = config.spawn_y;
+                             data.z = config.spawn_z;
+                             data.awaiting_teleport = true;
+                             name = data.name;
+                             profile = data.profile;
+                         })) {
+        return;
     }
     game_mode mode{game_mode::creative};
     if (join_state) {
@@ -1284,13 +1350,9 @@ void server::impl::send_play_login(std::uint64_t id) {
                           })
                    .mode;
     }
-    {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        found->second.mode = mode;
+    if (!with_connection(
+            id, [mode](connection_state_data &data) { data.mode = mode; })) {
+        return;
     }
     log_net.info("player joined id={} name={}", id, name);
     server_policy policy_snapshot{};
@@ -1520,14 +1582,11 @@ void server::impl::send_commands(std::uint64_t id) {
     }
     std::string name;
     uuid profile{};
-    {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        name = found->second.name;
-        profile = found->second.profile;
+    if (!with_connection(id, [&name, &profile](connection_state_data &data) {
+            name = data.name;
+            profile = data.profile;
+        })) {
+        return;
     }
     const player_identity identity{
         .connection = id,
@@ -1569,14 +1628,11 @@ void server::impl::send_tab_list(std::uint64_t id) {
     }
     std::string name;
     uuid profile{};
-    {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        name = found->second.name;
-        profile = found->second.profile;
+    if (!with_connection(id, [&name, &profile](connection_state_data &data) {
+            name = data.name;
+            profile = data.profile;
+        })) {
+        return;
     }
     const player_identity identity{
         .connection = id,
@@ -1608,14 +1664,11 @@ void server::impl::execute_chat_command(std::uint64_t id,
     }
     std::string name;
     uuid profile{};
-    {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        name = found->second.name;
-        profile = found->second.profile;
+    if (!with_connection(id, [&name, &profile](connection_state_data &data) {
+            name = data.name;
+            profile = data.profile;
+        })) {
+        return;
     }
     const player_identity identity{
         .connection = id,
@@ -1641,16 +1694,7 @@ void server::impl::broadcast_system_chat(std::string_view text) {
     play_cb::system_chat packet{};
     packet.content.text = std::string{text};
     packet.overlay = false;
-    std::vector<std::uint64_t> targets;
-    {
-        const std::lock_guard lock{connections_mutex};
-        targets.reserve(connections.size());
-        for (const auto &[id, state] : connections) {
-            if (!state.closed && state.state == connection_state::play) {
-                targets.push_back(id);
-            }
-        }
-    }
+    std::vector<std::uint64_t> targets{playing_connections()};
     for (const auto target : targets) {
         send_packet(target, play_cb::system_chat::packet_id, packet,
                     play_cb::encode_system_chat);
@@ -1719,13 +1763,13 @@ auto server::stats() const -> server_stats {
         return {};
     }
     server_stats out{};
-    {
-        const std::lock_guard lock{impl_->connections_mutex};
-        for (const auto &[id, state] : impl_->connections) {
-            static_cast<void>(id);
-            if (!state.closed && state.state == connection_state::play) {
-                ++out.connections;
-            }
+    for (const auto &entry : impl_->connection_snapshot()) {
+        if (entry.handle->closed.load(std::memory_order_acquire)) {
+            continue;
+        }
+        const std::lock_guard lock{entry.handle->mutex};
+        if (entry.handle->data.state == connection_state::play) {
+            ++out.connections;
         }
     }
     out.packets_in = impl_->packets_in.load(std::memory_order_relaxed);
@@ -1827,15 +1871,9 @@ void server::broadcast_raw(std::span<const std::byte> body,
     if (!impl_) {
         return;
     }
-    std::vector<std::uint64_t> targets;
-    {
-        const std::lock_guard lock{impl_->connections_mutex};
-        for (const auto &[connection, state] : impl_->connections) {
-            if (connection != except && !state.closed &&
-                state.state == connection_state::play) {
-                targets.push_back(connection);
-            }
-        }
+    auto targets{impl_->playing_connections()};
+    if (except != 0) {
+        std::erase(targets, except);
     }
     for (const auto target : targets) {
         impl_->send(target, body);
@@ -1938,11 +1976,14 @@ auto server::player_names() const -> std::vector<player_name> {
         return {};
     }
     std::vector<player_name> players;
-    const std::lock_guard lock{impl_->connections_mutex};
-    players.reserve(impl_->connections.size());
-    for (const auto &[connection, state] : impl_->connections) {
-        if (!state.closed && state.state == connection_state::play) {
-            players.push_back({.connection = connection, .name = state.name});
+    for (const auto &entry : impl_->connection_snapshot()) {
+        if (entry.handle->closed.load(std::memory_order_acquire)) {
+            continue;
+        }
+        const std::lock_guard lock{entry.handle->mutex};
+        if (entry.handle->data.state == connection_state::play) {
+            players.push_back(
+                {.connection = entry.id, .name = entry.handle->data.name});
         }
     }
     return players;
@@ -1952,15 +1993,7 @@ auto server::active_connections() const -> std::vector<std::uint64_t> {
     if (!impl_) {
         return {};
     }
-    std::vector<std::uint64_t> ids;
-    const std::lock_guard lock{impl_->connections_mutex};
-    ids.reserve(impl_->connections.size());
-    for (const auto &[id, state] : impl_->connections) {
-        if (!state.closed && state.state == connection_state::play) {
-            ids.push_back(id);
-        }
-    }
-    return ids;
+    return impl_->playing_connections();
 }
 
 namespace {
@@ -1974,28 +2007,26 @@ constexpr std::uint32_t player_entity_type{159U};
 } // namespace
 
 void server::impl::set_game_mode(std::uint64_t id, game_mode mode) {
+    const auto live{find_connection(id)};
+    if (!live) {
+        return;
+    }
     player_info_entry entry{};
-    std::vector<std::uint64_t> targets;
     {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed ||
-            found->second.state != connection_state::play) {
+        const std::lock_guard lock{live->mutex};
+        auto &data{live->data};
+        if (live->closed.load(std::memory_order_relaxed) ||
+            data.state != connection_state::play) {
             return;
         }
-        auto &live{found->second};
-        live.mode = mode;
-        entry.id = live.profile;
-        entry.name = live.name;
+        data.mode = mode;
+        entry.id = data.profile;
+        entry.name = data.name;
         entry.game_mode = protocol_game_mode(mode);
         entry.listed = true;
         entry.latency = 0U;
-        for (const auto &[other, state] : connections) {
-            if (!state.closed && state.state == connection_state::play) {
-                targets.push_back(other);
-            }
-        }
     }
+    const auto targets{playing_connections()};
     {
         play_cb::player_abilities abilities{
             .flags = ability_flags(mode),
@@ -2036,15 +2067,12 @@ void server::impl::send_keepalive(std::uint64_t id) {
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count()};
-    {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        found->second.keepalive_sent_ms = challenge;
-        found->second.keepalive_challenge = challenge;
-        found->second.keepalive_pending = true;
+    if (!with_connection(id, [challenge](connection_state_data &data) {
+            data.keepalive_sent_ms = challenge;
+            data.keepalive_challenge = challenge;
+            data.keepalive_pending = true;
+        })) {
+        return;
     }
     play_cb::keep_alive packet{.id = challenge};
     send_packet(id, play_cb::keep_alive::packet_id, packet,
@@ -2070,19 +2098,25 @@ void server::impl::handle_play(std::uint64_t id,
         if (packet.id != 1) {
             return;
         }
-        std::unique_lock lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
+        bool on_ground{false};
+        {
+            const auto live{find_connection(id)};
+            if (!live) {
+                return;
+            }
+            const std::lock_guard lock{live->mutex};
+            auto &data{live->data};
+            if (live->closed.load(std::memory_order_relaxed)) {
+                return;
+            }
+            on_ground = data.on_ground;
+            data.awaiting_teleport = false;
+            data.x = packet.x;
+            data.y = packet.y;
+            data.z = packet.z;
+            data.yaw = packet.y_rot;
+            data.pitch = packet.x_rot;
         }
-        auto &live{found->second};
-        live.awaiting_teleport = false;
-        live.x = packet.x;
-        live.y = packet.y;
-        live.z = packet.z;
-        live.yaw = packet.y_rot;
-        live.pitch = packet.x_rot;
-        lock.unlock();
         if (movement_hook) {
             movement_hook(movement_event{.connection = id,
                                          .x = packet.x,
@@ -2090,7 +2124,7 @@ void server::impl::handle_play(std::uint64_t id,
                                          .z = packet.z,
                                          .yaw = packet.y_rot,
                                          .pitch = packet.x_rot,
-                                         .on_ground = live.on_ground});
+                                         .on_ground = on_ground});
         }
         return;
     }
@@ -2100,14 +2134,13 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
+        if (!with_connection(id, [&packet](connection_state_data &data) {
+                if (data.keepalive_pending &&
+                    data.keepalive_challenge == packet.id) {
+                    data.keepalive_pending = false;
+                }
+            })) {
             return;
-        }
-        auto &live{found->second};
-        if (live.keepalive_pending && live.keepalive_challenge == packet.id) {
-            live.keepalive_pending = false;
         }
         return;
     }
@@ -2118,19 +2151,25 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        std::unique_lock lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
+        float yaw{0.0F};
+        float pitch{0.0F};
+        {
+            const auto live{find_connection(id)};
+            if (!live) {
+                return;
+            }
+            const std::lock_guard lock{live->mutex};
+            auto &data{live->data};
+            if (live->closed.load(std::memory_order_relaxed)) {
+                return;
+            }
+            data.x = packet.x;
+            data.y = packet.y;
+            data.z = packet.z;
+            data.on_ground = (packet.flags & 1U) != 0;
+            yaw = data.yaw;
+            pitch = data.pitch;
         }
-        auto &live{found->second};
-        live.x = packet.x;
-        live.y = packet.y;
-        live.z = packet.z;
-        live.on_ground = (packet.flags & 1U) != 0;
-        const auto yaw{live.yaw};
-        const auto pitch{live.pitch};
-        lock.unlock();
         if (movement_hook) {
             movement_hook(
                 movement_event{.connection = id,
@@ -2150,19 +2189,16 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        std::unique_lock lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
+        if (!with_connection(id, [&packet](connection_state_data &data) {
+                data.x = packet.x;
+                data.y = packet.y;
+                data.z = packet.z;
+                data.yaw = packet.y_rot;
+                data.pitch = packet.x_rot;
+                data.on_ground = (packet.flags & 1U) != 0;
+            })) {
             return;
         }
-        auto &live{found->second};
-        live.x = packet.x;
-        live.y = packet.y;
-        live.z = packet.z;
-        live.yaw = packet.y_rot;
-        live.pitch = packet.x_rot;
-        live.on_ground = (packet.flags & 1U) != 0;
-        lock.unlock();
         if (movement_hook) {
             movement_hook(
                 movement_event{.connection = id,
@@ -2182,23 +2218,28 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        std::unique_lock lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
+        movement_event event{};
+        {
+            const auto live{find_connection(id)};
+            if (!live) {
+                return;
+            }
+            const std::lock_guard lock{live->mutex};
+            auto &data{live->data};
+            if (live->closed.load(std::memory_order_relaxed)) {
+                return;
+            }
+            data.yaw = packet.y_rot;
+            data.pitch = packet.x_rot;
+            data.on_ground = (packet.flags & 1U) != 0;
+            event = movement_event{.connection = id,
+                                   .x = data.x,
+                                   .y = data.y,
+                                   .z = data.z,
+                                   .yaw = data.yaw,
+                                   .pitch = data.pitch,
+                                   .on_ground = data.on_ground};
         }
-        auto &live{found->second};
-        live.yaw = packet.y_rot;
-        live.pitch = packet.x_rot;
-        live.on_ground = (packet.flags & 1U) != 0;
-        const movement_event event{.connection = id,
-                                   .x = live.x,
-                                   .y = live.y,
-                                   .z = live.z,
-                                   .yaw = live.yaw,
-                                   .pitch = live.pitch,
-                                   .on_ground = live.on_ground};
-        lock.unlock();
         if (movement_hook) {
             movement_hook(event);
         }
@@ -2211,20 +2252,26 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        std::unique_lock lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
+        movement_event event{};
+        {
+            const auto live{find_connection(id)};
+            if (!live) {
+                return;
+            }
+            const std::lock_guard lock{live->mutex};
+            auto &data{live->data};
+            if (live->closed.load(std::memory_order_relaxed)) {
+                return;
+            }
+            data.on_ground = (packet.flags & 1U) != 0;
+            event = movement_event{.connection = id,
+                                   .x = data.x,
+                                   .y = data.y,
+                                   .z = data.z,
+                                   .yaw = data.yaw,
+                                   .pitch = data.pitch,
+                                   .on_ground = data.on_ground};
         }
-        found->second.on_ground = (packet.flags & 1U) != 0;
-        const movement_event event{.connection = id,
-                                   .x = found->second.x,
-                                   .y = found->second.y,
-                                   .z = found->second.z,
-                                   .yaw = found->second.yaw,
-                                   .pitch = found->second.pitch,
-                                   .on_ground = found->second.on_ground};
-        lock.unlock();
         if (movement_hook) {
             movement_hook(event);
         }
@@ -2304,13 +2351,10 @@ void server::impl::handle_play(std::uint64_t id,
             return;
         }
         std::string name;
-        {
-            const std::lock_guard lock{connections_mutex};
-            const auto found{connections.find(id)};
-            if (found == connections.end() || found->second.closed) {
-                return;
-            }
-            name = found->second.name;
+        if (!with_connection(id, [&name](connection_state_data &data) {
+                name = data.name;
+            })) {
+            return;
         }
         broadcast_system_chat(fmt::format("<{}> {}", name, packet.message));
         return;
@@ -2346,14 +2390,12 @@ void server::impl::handle_play(std::uint64_t id,
         }
         std::string name;
         uuid profile{};
-        {
-            const std::lock_guard lock{connections_mutex};
-            const auto found{connections.find(id)};
-            if (found == connections.end() || found->second.closed) {
-                return;
-            }
-            name = found->second.name;
-            profile = found->second.profile;
+        if (!with_connection(id,
+                             [&name, &profile](connection_state_data &data) {
+                                 name = data.name;
+                                 profile = data.profile;
+                             })) {
+            return;
         }
         const player_identity identity{
             .connection = id,
@@ -2391,12 +2433,11 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
+        if (!with_connection(id, [](connection_state_data &data) {
+                data.client_loaded = true;
+            })) {
             return;
         }
-        found->second.client_loaded = true;
         return;
     }
     case play_sb::chunk_batch_received::packet_id: {
@@ -2437,16 +2478,19 @@ void server::impl::handle_play(std::uint64_t id,
         }
         game_mode mode{game_mode::creative};
         {
-            const std::lock_guard lock{connections_mutex};
-            const auto found{connections.find(id)};
-            if (found == connections.end() || found->second.closed) {
+            const auto live{find_connection(id)};
+            if (!live) {
                 return;
             }
-            auto &live{found->second};
-            live.x = config.spawn_x;
-            live.y = config.spawn_y;
-            live.z = config.spawn_z;
-            mode = live.mode;
+            const std::lock_guard lock{live->mutex};
+            auto &data{live->data};
+            if (live->closed.load(std::memory_order_relaxed)) {
+                return;
+            }
+            data.x = config.spawn_x;
+            data.y = config.spawn_y;
+            data.z = config.spawn_z;
+            mode = data.mode;
         }
         play_cb::respawn respawn{};
         respawn.common_player_spawn_info.dimension_type = 0;
@@ -2526,12 +2570,11 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
+        if (!with_connection(id, [&packet](connection_state_data &data) {
+                data.held_slot = static_cast<std::uint32_t>(packet.slot);
+            })) {
             return;
         }
-        found->second.held_slot = static_cast<std::uint32_t>(packet.slot);
         return;
     }
     case play_sb::client_information::packet_id: {
@@ -2541,18 +2584,15 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        std::unique_lock lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
+        const auto live{find_connection(id)};
+        if (!live || live->closed.load(std::memory_order_acquire)) {
             return;
         }
         const auto distance =
             static_cast<std::int32_t>(packet.information.view_distance);
-        const auto connection = id;
-        lock.unlock();
         if (view_distance_hook) {
-            view_distance_hook(view_distance_event{.connection = connection,
-                                                   .distance = distance});
+            view_distance_hook(
+                view_distance_event{.connection = id, .distance = distance});
         }
         return;
     }
@@ -2840,7 +2880,17 @@ void server::impl::send(std::uint64_t id, std::span<const std::byte> packet) {
 
 void server::impl::send(std::uint64_t id, std::uint16_t packet_id,
                         std::span<const std::byte> payload) {
-    const std::lock_guard send_lock{send_mutex};
+    const auto live{find_connection(id)};
+    if (!live || live->closed.load(std::memory_order_acquire)) {
+        return;
+    }
+    // Serialising this connection's codec calls keeps the frame order the
+    // callers produced. Sends to other connections use other mutexes, and the
+    // table shard lock is not held here.
+    const std::lock_guard lock{live->mutex};
+    if (live->closed.load(std::memory_order_relaxed)) {
+        return;
+    }
     packets_out.fetch_add(1, std::memory_order_relaxed);
     bytes_out.fetch_add(payload.size(), std::memory_order_relaxed);
     if (!protocol) {
@@ -2863,25 +2913,25 @@ void server::impl::reject(std::uint64_t id, std::string_view reason) {
 }
 
 void server::impl::close(std::uint64_t id) {
+    const auto live{find_connection(id)};
+    if (!live || live->closed.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
     std::string name;
     connection_state state{connection_state::handshake};
     std::uint64_t leave_id{0};
     uuid leave_profile{};
     bool notify_leave{false};
     {
-        const std::lock_guard lock{connections_mutex};
-        const auto found{connections.find(id)};
-        if (found == connections.end() || found->second.closed) {
-            return;
-        }
-        found->second.closed = true;
-        name = found->second.name;
-        state = found->second.state;
+        const std::lock_guard lock{live->mutex};
+        auto &data{live->data};
+        name = data.name;
+        state = data.state;
         if (state == connection_state::play && !name.empty() &&
-            !found->second.leave_reported) {
-            found->second.leave_reported = true;
+            !data.leave_reported) {
+            data.leave_reported = true;
             leave_id = id;
-            leave_profile = found->second.profile;
+            leave_profile = data.profile;
             notify_leave = true;
         }
     }
@@ -2920,19 +2970,20 @@ void server::impl::keepalive_loop() {
                            std::chrono::steady_clock::now().time_since_epoch())
                            .count()};
         {
-            const std::lock_guard lock{connections_mutex};
-            for (const auto &[id, connection] : connections) {
-                if (connection.closed ||
-                    connection.state != connection_state::play) {
+            for (const auto &entry : connection_snapshot()) {
+                const std::lock_guard lock{entry.handle->mutex};
+                auto &data{entry.handle->data};
+                if (entry.handle->closed.load(std::memory_order_relaxed) ||
+                    data.state != connection_state::play) {
                     continue;
                 }
-                if (now - connection.keepalive_sent_ms < interval_ms) {
+                if (now - data.keepalive_sent_ms < interval_ms) {
                     continue;
                 }
-                if (connection.keepalive_pending) {
-                    expired.push_back(id);
+                if (data.keepalive_pending) {
+                    expired.push_back(entry.id);
                 } else {
-                    due.push_back(id);
+                    due.push_back(entry.id);
                 }
             }
         }
@@ -2960,16 +3011,18 @@ void server::impl::tick() {
                            std::chrono::steady_clock::now().time_since_epoch())
                            .count()};
         std::vector<std::uint64_t> idle;
-        {
-            const std::lock_guard lock{connections_mutex};
-            for (const auto &[id, state] : connections) {
-                if (!state.closed && state.state == connection_state::play &&
-                    idle_timed_out(
-                        state.last_packet_ns, now,
-                        static_cast<std::int64_t>(config.idle_timeout_seconds) *
-                            1'000'000'000LL)) {
-                    idle.push_back(id);
-                }
+        for (const auto &entry : connection_snapshot()) {
+            const std::lock_guard lock{entry.handle->mutex};
+            const auto &data{entry.handle->data};
+            if (entry.handle->closed.load(std::memory_order_relaxed) ||
+                data.state != connection_state::play) {
+                continue;
+            }
+            if (idle_timed_out(
+                    data.last_packet_ns, now,
+                    static_cast<std::int64_t>(config.idle_timeout_seconds) *
+                        1'000'000'000LL)) {
+                idle.push_back(entry.id);
             }
         }
         for (const auto id : idle) {
