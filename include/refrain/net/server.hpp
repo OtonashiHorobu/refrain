@@ -249,6 +249,12 @@ struct server_inputs {
     /// create the HTTP session client, which makes online login testable
     /// without the Mojang service.
     session_verifier verify_session{};
+    /// Monotonic time source in nanoseconds used for packet timestamps,
+    /// keepalive scheduling and the idle timeout. Empty uses the steady clock.
+    /// The callable is invoked from the I/O thread and the simulation thread,
+    /// so an injected clock must be thread-safe; a test advances it to make a
+    /// timeout pass without sleeping.
+    std::function<std::int64_t()> now_ns{};
 };
 
 /// Minimal protocol server. It currently answers the status/list ping and

@@ -5,6 +5,7 @@
 #include <refrain/net/server.hpp>
 
 #include <refrain/core/log.hpp>
+#include <refrain/core/time.hpp>
 #include <refrain/data/nbt.hpp>
 #include <refrain/data/resource_location.hpp>
 #include <refrain/net/auth.hpp>
@@ -24,6 +25,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <deque>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -304,6 +306,14 @@ struct server::impl {
     }
 
     server_settings config{};
+    /// Monotonic nanoseconds for packet timestamps, keepalive scheduling and
+    /// the idle check. `server::start` installs the configured source before
+    /// the transport can open a connection, so every timing path measures the
+    /// same clock; a test replaces it to advance time without sleeping.
+    std::function<std::int64_t()> now_source{};
+
+    [[nodiscard]] auto now_ns() const -> std::int64_t { return now_source(); }
+
     server_policy policy{};
     mutable std::mutex policy_mutex{};
     join_state_provider join_state{};
@@ -576,10 +586,7 @@ void server::impl::on_open(std::uint64_t id) {
     protocol->notify_state(id, connection_state::handshake);
     auto live{std::make_shared<connection>()};
     live->data.limiter.configure(config.rate_limit);
-    live->data.last_packet_ns =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count();
+    live->data.last_packet_ns = now_ns();
     insert_connection(id, std::move(live));
 }
 
@@ -631,11 +638,6 @@ void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
     {
         const std::lock_guard lock{live->mutex};
         auto &connection_data{live->data};
-        const auto now_ns = [] {
-            return std::chrono::duration_cast<std::chrono::nanoseconds>(
-                       std::chrono::steady_clock::now().time_since_epoch())
-                .count();
-        };
         if (auto fed{protocol->feed(id, bytes)}; !fed) {
             failed = true;
         } else {
@@ -2079,10 +2081,7 @@ void server::impl::send_initial_chunks(std::uint64_t id) {
 }
 
 void server::impl::send_keepalive(std::uint64_t id) {
-    const auto challenge{
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count()};
+    const auto challenge{now_ns() / 1'000'000};
     if (!with_connection(id, [challenge](connection_state_data &data) {
             data.keepalive_sent_ms = challenge;
             data.keepalive_challenge = challenge;
@@ -2985,9 +2984,7 @@ void server::impl::keepalive_loop() {
         }
         std::vector<std::uint64_t> expired;
         std::vector<std::uint64_t> due;
-        const auto now{std::chrono::duration_cast<std::chrono::milliseconds>(
-                           std::chrono::steady_clock::now().time_since_epoch())
-                           .count()};
+        const auto now{now_ns() / 1'000'000};
         {
             for (const auto &entry : connection_snapshot()) {
                 const std::lock_guard lock{entry.handle->mutex};
@@ -3026,9 +3023,7 @@ void server::impl::tick() {
         handle_play(packet.connection, packet.body);
     }
     if (config.idle_timeout_seconds > 0) {
-        const auto now{std::chrono::duration_cast<std::chrono::nanoseconds>(
-                           std::chrono::steady_clock::now().time_since_epoch())
-                           .count()};
+        const auto now{now_ns()};
         std::vector<std::uint64_t> idle;
         for (const auto &entry : connection_snapshot()) {
             const std::lock_guard lock{entry.handle->mutex};
@@ -3101,6 +3096,18 @@ auto server::start(server_inputs inputs, core::config::view view)
         view.get_string("session_server", "https://sessionserver.mojang.com");
     config.auth_timeout_ms =
         static_cast<std::int32_t>(view.get_int64("auth_timeout_ms", 5000));
+    // `player_idle_timeout` is documented in minutes, matching the Java
+    // `server.properties` key it is imported from. The keepalive path compares
+    // packets against a timeout in seconds, so the unit conversion belongs
+    // here, where the value is read.
+    const auto idle_minutes{int_or("player_idle_timeout", 0)};
+    if (idle_minutes < 0 ||
+        idle_minutes > std::numeric_limits<std::int32_t>::max() / 60) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "network.player_idle_timeout is out of range")};
+    }
+    config.idle_timeout_seconds = static_cast<std::int32_t>(idle_minutes * 60);
     config.spawn_x = inputs.spawn_x;
     config.spawn_y = inputs.spawn_y;
     config.spawn_z = inputs.spawn_z;
@@ -3116,6 +3123,11 @@ auto server::start(server_inputs inputs, core::config::view view)
                        "network server requires a protocol codec")};
     }
     auto state{std::make_unique<impl>()};
+    if (inputs.now_ns) {
+        state->now_source = std::move(inputs.now_ns);
+    } else {
+        state->now_source = [] { return refrain::core::now_ns(); };
+    }
     state->policy = std::move(inputs.policy);
     state->join_state = std::move(inputs.join_state);
     state->commands = std::move(inputs.commands);
