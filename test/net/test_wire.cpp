@@ -1115,11 +1115,105 @@ const suite tests = [] {
         expect(same);
         expect(in.empty());
 
+        net::set_item_component_ids(net::item_component_ids{
+            .damage = 3, .custom_name = 6, .enchantments = 13});
         const std::array encoded{std::byte{1}, std::byte{5}, std::byte{1},
-                                 std::byte{0}};
+                                 std::byte{0}, std::byte{99}};
         net::reader patch_in{encoded};
         net::item_stack patched{};
         const auto status{net::decode_item_stack(patch_in, patched)};
+        expect(!status);
+        expect(status.error().code == refrain::error_code::unsupported);
+    };
+
+    "a damaged tool round trips through the wire"_test = [] {
+        net::set_item_component_ids(net::item_component_ids{
+            .damage = 3, .custom_name = 6, .enchantments = 13});
+        const net::item_stack value{
+            .count = 1U,
+            .item_id = 5U,
+            .components = {{3, net::item_component_damage{.amount = 42}}},
+        };
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_item_stack(out, value)));
+        // count, item id, one added component, its type, its value, no
+        // removals: the patch grows only for a non-empty component set.
+        expect(bytes.size() == 6U);
+        if (bytes.size() == 6U) {
+            expect(bytes[0] == std::byte{1});
+            expect(bytes[1] == std::byte{5});
+            expect(bytes[2] == std::byte{1});
+            expect(bytes[3] == std::byte{0});
+            expect(bytes[4] == std::byte{3});
+            expect(bytes[5] == std::byte{42});
+        }
+        net::reader in{bytes};
+        net::item_stack decoded{};
+        expect(static_cast<bool>(net::decode_item_stack(in, decoded)));
+        const bool same{decoded == value};
+        expect(same);
+        expect(in.empty());
+    };
+
+    "an enchanted named item round trips through the wire"_test = [] {
+        net::set_item_component_ids(net::item_component_ids{
+            .damage = 3, .custom_name = 6, .enchantments = 13});
+        const net::item_stack value{
+            .count = 1U,
+            .item_id = 701U,
+            .components =
+                {
+                    {6,
+                     net::item_component_custom_name{
+                         .name = net::text_component{.text = "Excalibur"}}},
+                    {13,
+                     net::item_component_enchantments{
+                         .entries = {net::item_enchantment{.enchantment_id = 4,
+                                                           .level = 2},
+                                     net::item_enchantment{.enchantment_id = 9,
+                                                           .level = 1}}}},
+                },
+        };
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_item_stack(out, value)));
+        net::reader in{bytes};
+        net::item_stack decoded{};
+        expect(static_cast<bool>(net::decode_item_stack(in, decoded)));
+        const bool same{decoded == value};
+        expect(same);
+        expect(in.empty());
+    };
+
+    "a component patch with a removal round trips"_test = [] {
+        net::set_item_component_ids(net::item_component_ids{
+            .damage = 3, .custom_name = 6, .enchantments = 13});
+        const net::item_stack value{
+            .count = 2U,
+            .item_id = 702U,
+            .removed_components = {3, 11},
+        };
+        std::vector<std::byte> bytes;
+        net::writer out{bytes};
+        expect(static_cast<bool>(net::encode_item_stack(out, value)));
+        net::reader in{bytes};
+        net::item_stack decoded{};
+        expect(static_cast<bool>(net::decode_item_stack(in, decoded)));
+        const bool same{decoded == value};
+        expect(same);
+        expect(in.empty());
+    };
+
+    "an unrelated component type is rejected"_test = [] {
+        net::set_item_component_ids(net::item_component_ids{
+            .damage = 3, .custom_name = 6, .enchantments = 13});
+        // Count 1, item 5, one added component of type 11 with no payload.
+        const std::array bytes{std::byte{1}, std::byte{5}, std::byte{1},
+                               std::byte{0}, std::byte{11}};
+        net::reader in{bytes};
+        net::item_stack decoded{};
+        const auto status{net::decode_item_stack(in, decoded)};
         expect(!status);
         expect(status.error().code == refrain::error_code::unsupported);
     };

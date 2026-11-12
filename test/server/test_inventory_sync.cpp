@@ -6,6 +6,9 @@
 
 #include <refrain/core/io.hpp>
 #include <refrain/data/vanilla.hpp>
+#include <refrain/net/registry.hpp>
+#include <refrain/net/wire.hpp>
+#include <refrain/sim/item.hpp>
 
 #include <boost/ut.hpp>
 
@@ -14,6 +17,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "support/fake_play_gateway.hpp"
@@ -43,6 +47,33 @@ namespace support = refrain::test_support;
         }
     }
     return 0;
+}
+
+[[nodiscard]] auto component_protocol_id(const data::vanilla_tables &tables,
+                                         std::string_view name)
+    -> std::uint32_t {
+    const auto registry{tables.find_registry("minecraft:data_component_type")};
+    if (!registry) {
+        return 0;
+    }
+    const auto count{tables.registry_entry_count(*registry)};
+    for (std::uint32_t index{0}; index < count; ++index) {
+        const auto entry{tables.registry_entry(*registry, index)};
+        if (entry.name == name && entry.protocol_id >= 0) {
+            return static_cast<std::uint32_t>(entry.protocol_id);
+        }
+    }
+    return 0;
+}
+
+[[nodiscard]] auto round_trip(const net::item_stack &value) -> net::item_stack {
+    std::vector<std::byte> bytes;
+    net::writer out{bytes};
+    expect(static_cast<bool>(net::encode_item_stack(out, value)));
+    net::reader in{bytes};
+    net::item_stack decoded{};
+    expect(static_cast<bool>(net::decode_item_stack(in, decoded)));
+    return decoded;
 }
 
 void join(session::play_session &players) {
@@ -219,6 +250,128 @@ suite<"server/inventory-sync"> inventory_sync_tests = [] {
         expect(players.inventory_of(1)->at(0).count == 7U);
         expect(gateway.container_content.size() == 1U);
         expect(gateway.container_content[0].items[36].count == 7U);
+    };
+
+    "a damaged enchanted tool survives a menu click and the wire"_test = [] {
+        auto bytes{
+            refrain::core::io::read_file(std::string{REFRAIN_SOURCE_DIR} +
+                                         "/content/vanilla/26.3/tables.rvtb")};
+        if (!bytes) {
+            expect(false) << "tables.rvtb is missing";
+            return;
+        }
+        auto opened{data::vanilla_tables::open(*bytes)};
+        if (!opened) {
+            expect(false) << "tables.rvtb is invalid";
+            return;
+        }
+        auto catalog{net::registry_catalog::load(
+            std::string{REFRAIN_SOURCE_DIR} +
+            "/content/vanilla/26.3/protocol_registry.json")};
+        if (!catalog) {
+            expect(false) << "protocol_registry.json is invalid";
+            return;
+        }
+        const auto sword{item_protocol_id(*opened, "minecraft:diamond_sword")};
+        const auto damage_id{
+            component_protocol_id(*opened, "minecraft:damage")};
+        const auto enchantments_id{
+            component_protocol_id(*opened, "minecraft:enchantments")};
+        expect(sword != 0U);
+        expect(damage_id != 0U);
+        expect(enchantments_id != 0U);
+
+        sim::player_table table{};
+        session::play_session players{table};
+        join(players);
+        auto *inventory{players.inventory_of(1)};
+        sim::item_stack tool{.item = "minecraft:diamond_sword", .count = 1};
+        sim::set_stack_damage(tool, 42);
+        expect(sim::set_stack_enchantments(
+                   tool,
+                   {sim::item_enchantment{.enchantment = "minecraft:sharpness",
+                                          .level = 5},
+                    sim::item_enchantment{.enchantment = "minecraft:unbreaking",
+                                          .level = 3}})
+                   .has_value());
+        inventory->at(0) = tool;
+
+        support::fake_play_gateway gateway{};
+        gateway.active = {1};
+        inventory_sync sync{gateway, &*opened, &*catalog};
+        sync.tick(players);
+
+        expect(gateway.container_content.size() == 1U);
+        if (gateway.container_content.size() != 1U) {
+            return;
+        }
+        const auto published{gateway.container_content[0].items[36]};
+        expect(published.item_id == sword);
+        expect(published.count == 1U);
+        expect(published.components.contains(damage_id));
+        expect(published.components.contains(enchantments_id));
+        const auto *damage{std::get_if<net::item_component_damage>(
+            &published.components.at(damage_id))};
+        expect(damage != nullptr && damage->amount == 42U);
+        const auto *enchantments{std::get_if<net::item_component_enchantments>(
+            &published.components.at(enchantments_id))};
+        expect(enchantments != nullptr && enchantments->entries.size() == 2U);
+        const auto decoded{round_trip(published)};
+        const bool wire_same{decoded == published};
+        expect(wire_same);
+
+        // Pick the tool up, then put it into the next hotbar slot: the menu
+        // click must carry the components through to the new stack and to the
+        // slot update the client receives.
+        gateway.container_content.clear();
+        gateway.container_slots.clear();
+        gateway.cursor_items.clear();
+        gateway.container_clicks.push_back(net::container_click_event{
+            .connection = 1,
+            .container_id = 0,
+            .state_id = 1,
+            .slot = 36,
+            .button = 0,
+            .mode = 0,
+        });
+        sync.tick(players);
+        expect(inventory->at(0).count == 0U);
+        expect(gateway.cursor_items.size() == 1U);
+        if (gateway.cursor_items.size() != 1U) {
+            return;
+        }
+        expect(gateway.cursor_items[0].item == published);
+
+        const auto cursor_state{gateway.container_slots.empty()
+                                    ? 2
+                                    : gateway.container_slots[0].state_id};
+        gateway.container_slots.clear();
+        gateway.cursor_items.clear();
+        gateway.container_clicks.push_back(net::container_click_event{
+            .connection = 1,
+            .container_id = 0,
+            .state_id = cursor_state,
+            .slot = 37,
+            .button = 0,
+            .mode = 0,
+        });
+        sync.tick(players);
+
+        expect(inventory->at(1).item == "minecraft:diamond_sword");
+        expect(sim::stack_damage(inventory->at(1)) == 42U);
+        const auto *placed{sim::stack_enchantments(inventory->at(1))};
+        expect(placed != nullptr && placed->size() == 2U);
+        expect(gateway.container_slots.size() == 1U);
+        if (gateway.container_slots.size() != 1U) {
+            return;
+        }
+        expect(gateway.container_slots[0].slot == 37);
+        const auto placed_wire{round_trip(gateway.container_slots[0].item)};
+        expect(placed_wire.components.contains(damage_id));
+        expect(placed_wire.components.contains(enchantments_id));
+        const auto *placed_damage{std::get_if<net::item_component_damage>(
+            &placed_wire.components.at(damage_id))};
+        expect(placed_damage != nullptr && placed_damage->amount == 42U);
     };
 
     "an unavailable gateway sends nothing and keeps no state"_test = [] {

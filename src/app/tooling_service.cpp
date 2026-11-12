@@ -103,8 +103,8 @@ auto run_vanilla_import(const vanilla_import_options &options) -> int {
     }
     std::cout << "vanilla: " << result->blocks << " block(s), "
               << result->states << " state(s), " << result->presets
-              << " biome preset(s), " << result->registries
-              << " registr(ies) -> " << result->tables_path << " ("
+              << " biome preset(s), " << result->registries << " registr(ies), "
+              << result->items << " item(s) -> " << result->tables_path << " ("
               << result->tables_bytes << " bytes, blake3 "
               << result->tables_digest << ")\n";
     std::cout << "  manifest: " << result->manifest_path << '\n';
@@ -552,6 +552,7 @@ auto run_vanilla_info(const vanilla_info_options &options) -> int {
     std::cout << "  properties: " << info.properties << '\n';
     std::cout << "  biome presets: " << info.presets << '\n';
     std::cout << "  registries: " << info.registries << '\n';
+    std::cout << "  items: " << info.items << '\n';
     return 0;
 }
 

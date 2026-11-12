@@ -1,7 +1,7 @@
 # Game-derived data
 
 This directory holds data derived from Minecraft Java Edition 26.3: compiled
-block-state, biome and registry tables, climate and default-state reports, the
+block-state, biome, registry and item tables, climate and default-state reports, the
 packet catalog and the protocol registry. The material is Copyright (c) Mojang
 Studios / Microsoft Corporation, is not covered by the MIT license of the
 repository and is included solely for interoperability with a locally owned
@@ -11,7 +11,7 @@ The repository tracks only the derived data:
 
 ```text
 content/vanilla/<version>/
-  tables.rvtb               compiled block-state, biome-preset and registry tables
+  tables.rvtb               compiled block-state, biome-preset, registry and item tables
   packets.json              packet catalog for protocol 777
   protocol_registry.json    registry entries, ids and client order
   reports/biome_parameters/ overworld and nether climate parameter points

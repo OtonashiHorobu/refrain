@@ -420,10 +420,18 @@ class world {
     void jump(player_state &player) noexcept;
     [[nodiscard]] auto block_solid(block_state_id id) const noexcept -> bool;
 
-    /// Basic inventory mutation. Stacks are capped at `max_stack_size`; adding
-    /// more fills existing partial stacks first and then appends full stacks
-    /// (deterministic order). `item_count` sums every stack, `remove_item`
-    /// consumes across stacks in order.
+    /// Install the per-item stack sizes and max damage read from the item
+    /// registry data. The table is copied; without one the inventory falls
+    /// back to the default stack limit and no item is damageable.
+    void set_item_table(item_table items);
+    [[nodiscard]] auto items() const noexcept -> const item_table & {
+        return items_;
+    }
+
+    /// Basic inventory mutation. Stacks are capped at the item's own stack
+    /// limit; adding more fills existing partial stacks first and then appends
+    /// full stacks (deterministic order). `item_count` sums every stack,
+    /// `remove_item` consumes across stacks in order.
     [[nodiscard]] auto add_item(player_state &player, std::string_view item,
                                 std::uint32_t count = 1) -> status;
     [[nodiscard]] auto remove_item(player_state &player, std::string_view item,
@@ -431,6 +439,12 @@ class world {
     [[nodiscard]] auto item_count(const player_state &player,
                                   std::string_view item) const noexcept
         -> std::uint32_t;
+
+    /// Apply one use to the stack in `player.inventory[index]`. A destroyed
+    /// stack leaves an empty slot rather than removing the slot, so inventory
+    /// indices stay stable for the menu that is open on it.
+    [[nodiscard]] auto damage_item(player_state &player, std::size_t index,
+                                   std::uint32_t amount = 1) -> damage_result;
 
     /// Spawn an entity of `type` at `(x, y, z)` (feet position). The id is
     /// process-local and deterministic for the same spawn order; it shares the
@@ -503,6 +517,7 @@ class world {
     std::map<chunk_pos, chunk, chunk_order> chunks_{};
     std::map<chunk_pos, std::uint32_t, chunk_order> tickets_{};
     player_table players_{};
+    item_table items_{};
     zstd_policy zstd_policy_{};
     std::map<entity_id, entity_state> entities_{};
     struct scheduled_task {

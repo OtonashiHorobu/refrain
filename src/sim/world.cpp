@@ -18,7 +18,9 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace refrain::sim {
@@ -913,27 +915,39 @@ auto world::add_item(player_state &player, std::string_view item,
         return std::unexpected{make_error(error_code::invalid_argument,
                                           "inventory item count overflows")};
     }
+    const auto limit{items_.stack_limit(item)};
     auto remaining{count};
     for (auto &stack : player.inventory) {
         if (remaining == 0) {
             break;
         }
-        if (stack.item != item || stack.count >= max_stack_size) {
+        if (stack.item != item || !stack.components.empty() ||
+            stack.count >= limit) {
             continue;
         }
-        const auto space{max_stack_size - stack.count};
+        const auto space{limit - stack.count};
         const auto added{std::min(space, remaining)};
         stack.count += added;
         remaining -= added;
     }
     while (remaining != 0) {
-        const auto added{std::min(max_stack_size, remaining)};
+        const auto added{std::min(limit, remaining)};
         player.inventory.push_back(
             item_stack{.item = std::string{item}, .count = added});
         remaining -= added;
     }
     return status_ok();
 }
+
+auto world::damage_item(player_state &player, std::size_t index,
+                        std::uint32_t amount) -> damage_result {
+    if (index >= player.inventory.size()) {
+        return damage_result::unchanged;
+    }
+    return damage_stack(player.inventory[index], items_, amount);
+}
+
+void world::set_item_table(item_table items) { items_ = std::move(items); }
 
 auto world::remove_item(player_state &player, std::string_view item,
                         std::uint32_t count) -> bool {
@@ -1239,6 +1253,38 @@ auto world::state_hash() const -> data::digest32 {
                 bytes.push_back(static_cast<std::byte>(character));
             }
             append_u32(stack.count);
+            append_u32(static_cast<std::uint32_t>(stack.components.size()));
+            for (const auto &[kind, value] : stack.components) {
+                append_u32(static_cast<std::uint32_t>(kind));
+                std::visit(
+                    [&bytes, &append_u32](const auto &component) {
+                        using type = std::decay_t<decltype(component)>;
+                        if constexpr (std::is_same_v<type, component_damage>) {
+                            append_u32(component.amount);
+                        } else if constexpr (std::is_same_v<
+                                                 type, component_custom_name>) {
+                            append_u32(static_cast<std::uint32_t>(
+                                component.text.size()));
+                            for (const char character : component.text) {
+                                bytes.push_back(
+                                    static_cast<std::byte>(character));
+                            }
+                        } else {
+                            append_u32(static_cast<std::uint32_t>(
+                                component.entries.size()));
+                            for (const auto &entry : component.entries) {
+                                append_u32(static_cast<std::uint32_t>(
+                                    entry.enchantment.size()));
+                                for (const char character : entry.enchantment) {
+                                    bytes.push_back(
+                                        static_cast<std::byte>(character));
+                                }
+                                append_u32(entry.level);
+                            }
+                        }
+                    },
+                    value);
+            }
         }
     }
     append_u64(static_cast<std::uint64_t>(entities_.size()));

@@ -386,6 +386,54 @@ auto parse_registries(std::string_view json, std::vector<registry_spec> &out)
     return status_ok();
 }
 
+auto parse_item_defaults(std::string_view json, item_spec &out) -> status {
+    simdjson::dom::parser parser;
+    simdjson::dom::element document;
+    if (const auto error = parser.parse(json).get(document);
+        error != simdjson::SUCCESS) {
+        return std::unexpected{
+            parse_fail("item components", simdjson::error_message(error))};
+    }
+    simdjson::dom::object root;
+    if (document.get_object().get(root) != simdjson::SUCCESS) {
+        return std::unexpected{
+            parse_fail("item components", "root is not an object")};
+    }
+    simdjson::dom::element components_element;
+    if (!member(root, "components", components_element)) {
+        return status_ok();
+    }
+    simdjson::dom::object components;
+    if (components_element.get_object().get(components) != simdjson::SUCCESS) {
+        return std::unexpected{
+            parse_fail("item components", "components is not an object")};
+    }
+    simdjson::dom::element value;
+    if (member(components, "minecraft:max_stack_size", value)) {
+        std::int64_t stack_size = 0;
+        if (value.get_int64().get(stack_size) != simdjson::SUCCESS) {
+            return std::unexpected{parse_fail(
+                "item components", "max_stack_size is not an integer")};
+        }
+        if (stack_size < 1 || stack_size > 99) {
+            return std::unexpected{parse_fail(
+                "item components", "max_stack_size is out of range")};
+        }
+        out.max_stack_size = static_cast<std::uint16_t>(stack_size);
+    }
+    if (member(components, "minecraft:max_damage", value)) {
+        std::int64_t max_damage = 0;
+        if (value.get_int64().get(max_damage) != simdjson::SUCCESS ||
+            max_damage < 0) {
+            return std::unexpected{parse_fail(
+                "item components", "max_damage is not a non-negative integer")};
+        }
+        out.max_damage = static_cast<std::uint32_t>(max_damage);
+    }
+    return status_ok();
+}
+
+/// Hash of one report document; the importer records every input it read.
 auto hash_text(std::string_view text) -> std::string {
     return to_hex(
         blake3(std::as_bytes(std::span<const char>{text.data(), text.size()})));
@@ -445,6 +493,15 @@ auto build_vanilla_from_reports(const vanilla_reports &reports,
             parse_registries(reports.registries_json, spec.registries);
         !parsed) {
         return std::unexpected{parsed.error()};
+    }
+    spec.items.reserve(reports.item_components.size());
+    for (const auto &[name, json] : reports.item_components) {
+        item_spec item;
+        item.name = name;
+        if (auto parsed = parse_item_defaults(json, item); !parsed) {
+            return std::unexpected{parsed.error()};
+        }
+        spec.items.push_back(std::move(item));
     }
     return build_vanilla_tables(spec);
 }
@@ -516,6 +573,35 @@ auto import_vanilla_reports(const vanilla_import_options &options)
         return std::unexpected{fail("no biome parameter presets found")};
     }
 
+    // Per-item default components live under <reports>/<namespace>/components/
+    // item/<item>.json; the file name is the item path inside minecraft:item.
+    const auto item_root = options.reports + "/minecraft/components/item";
+    if (!io::is_directory(item_root)) {
+        return std::unexpected{
+            fail("missing item component directory: " + item_root)};
+    }
+    auto item_files = io::list_directory(item_root);
+    if (!item_files) {
+        return std::unexpected{item_files.error()};
+    }
+    for (const auto &file : *item_files) {
+        if (!file.ends_with(".json")) {
+            continue;
+        }
+        const auto path = item_root + "/" + file;
+        auto text = io::read_text(path);
+        if (!text) {
+            return std::unexpected{text.error()};
+        }
+        reports.item_components.emplace_back(
+            "minecraft:" + file.substr(0, file.size() - 5), std::move(*text));
+        inputs.emplace_back("minecraft/components/item/" + file,
+                            hash_text(reports.item_components.back().second));
+    }
+    if (reports.item_components.empty()) {
+        return std::unexpected{fail("no item component reports found")};
+    }
+
     auto bytes = build_vanilla_from_reports(reports, options.data_version);
     if (!bytes) {
         return std::unexpected{bytes.error()};
@@ -534,6 +620,7 @@ auto import_vanilla_reports(const vanilla_import_options &options)
     result.states = tables->state_count();
     result.presets = tables->preset_count();
     result.registries = tables->registry_count();
+    result.items = tables->item_count();
     result.tables_path = options.out + "/tables.rvtb";
     result.manifest_path = options.out + "/MANIFEST.json";
     result.tables_bytes = bytes->size();

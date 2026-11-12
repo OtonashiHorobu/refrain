@@ -509,7 +509,7 @@ namespace world = refrain::world;
                 expect(player->inventory.size() == 2U);
                 if (player->inventory.size() == 2U) {
                     expect(player->inventory[0].count ==
-                           refrain::sim::max_stack_size);
+                           refrain::sim::default_stack_size);
                     expect(player->inventory[1].count == 36U);
                 }
                 expect(runtime->add_item(*player, "minecraft:dirt", 30)
@@ -518,7 +518,7 @@ namespace world = refrain::world;
                 expect(player->inventory.size() == 3U);
                 if (player->inventory.size() == 3U) {
                     expect(player->inventory[1].count ==
-                           refrain::sim::max_stack_size);
+                           refrain::sim::default_stack_size);
                     expect(player->inventory[2].count == 2U);
                 }
                 expect(runtime->remove_item(*player, "minecraft:dirt", 70));
@@ -537,6 +537,58 @@ namespace world = refrain::world;
             std::error_code error;
             fs::remove_all(directory, error);
         };
+
+    "sim/inventory uses the item stack limits and damages tools"_test = [] {
+        const auto directory{scratch_directory()};
+        {
+            auto store{make_store(directory)};
+            expect(store.has_value());
+            if (!store) {
+                return;
+            }
+            auto runtime{refrain::sim::world::open(directory.string())};
+            expect(runtime.has_value());
+            if (!runtime) {
+                return;
+            }
+            refrain::sim::item_table items;
+            items.insert("minecraft:diamond_sword",
+                         {.max_stack_size = 1, .max_damage = 3});
+            runtime->set_item_table(std::move(items));
+            const auto player_id{make_console_player(*runtime)};
+            auto *player{runtime->player(player_id)};
+            expect(player != nullptr);
+            if (player == nullptr) {
+                return;
+            }
+            expect(runtime->add_item(*player, "minecraft:diamond_sword", 2)
+                       .has_value());
+            // A tool stacks to one, so the two swords occupy two slots.
+            expect(player->inventory.size() == 2U);
+            if (player->inventory.size() == 2U) {
+                expect(player->inventory[0].count == 1U);
+                expect(player->inventory[1].count == 1U);
+            }
+            expect(refrain::sim::damage_stack(player->inventory[0],
+                                              runtime->items(), 2) ==
+                   refrain::sim::damage_result::damaged);
+            expect(refrain::sim::stack_damage(player->inventory[0]) == 2U);
+            expect(runtime->damage_item(*player, 0) ==
+                   refrain::sim::damage_result::broken);
+            expect(player->inventory[0].count == 0U);
+            expect(player->inventory[0].components.empty());
+            // A stack of an item without max damage never breaks.
+            expect(
+                runtime->add_item(*player, "minecraft:stone", 1).has_value());
+            const auto stone_slot{player->inventory.size() - 1};
+            expect(refrain::sim::damage_stack(player->inventory[stone_slot],
+                                              runtime->items(), 5) ==
+                   refrain::sim::damage_result::unchanged);
+            expect(player->inventory[stone_slot].count == 1U);
+        }
+        std::error_code error;
+        fs::remove_all(directory, error);
+    };
 
     "sim/player gravity lands on the stone floor"_test = [] {
         const auto directory{scratch_directory()};

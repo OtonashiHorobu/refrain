@@ -155,7 +155,7 @@ The server announces a small command tree after joining:
 | `move <dx> <dy> <dz>` | move the player by a delta |
 | `walk <dx> <dz>` | move the player on the horizontal plane |
 | `jump` | apply a jump impulse |
-| `dig <x> <y> <z>` | remove a block |
+| `dig <x> <y> <z>` | remove a block and wear the first damageable inventory stack |
 | `place <x> <y> <z> <block>` | place a block state |
 | `give <item> <count>` | add items to the inventory |
 | `inv` | print the inventory |

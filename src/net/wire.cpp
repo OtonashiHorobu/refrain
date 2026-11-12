@@ -5,11 +5,14 @@
 #include <refrain/net/wire.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string_view>
+#include <type_traits>
 
 #include <fmt/format.h>
 
@@ -31,6 +34,11 @@ namespace {
     return std::unexpected{
         make_error(error_code::parse_error, std::string{detail})};
 }
+
+/// Decode mapping for data component type ids. The server installs it once
+/// while it starts, before any connection is accepted; the atomic snapshot
+/// lets a reader on a connection thread keep the mapping it started with.
+std::atomic<std::shared_ptr<const item_component_ids>> g_item_component_ids{};
 
 } // namespace
 
@@ -4043,15 +4051,127 @@ auto decode_filter_mask(reader &in, filter_mask &value) -> status {
     return status_ok();
 }
 
+namespace {
+
+[[nodiscard]] auto encode_item_component(writer &out,
+                                         const item_component &component)
+    -> status {
+    return std::visit(
+        [&out](const auto &value) -> status {
+            using type = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<type, item_component_damage>) {
+                out.write_varint(value.amount);
+                return status_ok();
+            } else if constexpr (std::is_same_v<type,
+                                                item_component_custom_name>) {
+                return encode_text_component(out, value.name);
+            } else {
+                out.write_varint(
+                    static_cast<std::uint32_t>(value.entries.size()));
+                for (const auto &entry : value.entries) {
+                    if (entry.level < 1U || entry.level > 255U) {
+                        return std::unexpected{make_error(
+                            error_code::invalid_argument,
+                            "item_stack: enchantment level out of range")};
+                    }
+                    out.write_varint(entry.enchantment_id);
+                    out.write_varint(entry.level);
+                }
+                return status_ok();
+            }
+        },
+        component);
+}
+
+[[nodiscard]] auto decode_item_component(reader &in, std::uint32_t type,
+                                         const item_component_ids &ids,
+                                         item_component &out) -> status {
+    if (type == ids.damage) {
+        auto amount{in.read_varint()};
+        if (!amount) {
+            return std::unexpected{std::move(amount.error())};
+        }
+        out = item_component_damage{.amount = *amount};
+        return status_ok();
+    }
+    if (type == ids.custom_name) {
+        item_component_custom_name name{};
+        if (auto status{decode_text_component(in, name.name)}; !status) {
+            return status;
+        }
+        out = std::move(name);
+        return status_ok();
+    }
+    if (type == ids.enchantments) {
+        auto count{in.read_varint()};
+        if (!count) {
+            return std::unexpected{std::move(count.error())};
+        }
+        // Each entry needs at least two bytes, so a count larger than the
+        // remaining payload cannot be honest.
+        if (*count > in.remaining()) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                "item_stack: enchantment count exceeds the payload")};
+        }
+        item_component_enchantments enchantments{};
+        enchantments.entries.reserve(*count);
+        for (std::uint32_t index{0}; index < *count; ++index) {
+            auto enchantment{in.read_varint()};
+            auto level{in.read_varint()};
+            if (!enchantment || !level) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "item_stack: truncated enchantment entry")};
+            }
+            if (*level < 1U || *level > 255U) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "item_stack: enchantment level out of range")};
+            }
+            enchantments.entries.push_back(item_enchantment{
+                .enchantment_id = *enchantment, .level = *level});
+        }
+        out = std::move(enchantments);
+        return status_ok();
+    }
+    return std::unexpected{make_error(
+        error_code::unsupported,
+        fmt::format("item_stack: component type {} is not modelled", type))};
+}
+
+} // namespace
+
+void set_item_component_ids(item_component_ids ids) {
+    auto snapshot{std::make_shared<const item_component_ids>(ids)};
+    g_item_component_ids.store(std::move(snapshot));
+}
+
+auto item_component_ids_current() noexcept
+    -> std::shared_ptr<const item_component_ids> {
+    return g_item_component_ids.load();
+}
+
 auto encode_item_stack(writer &out, const item_stack &value) -> status {
     out.write_varint(value.count);
     if (value.count == 0U) {
         return status_ok();
     }
     out.write_varint(value.item_id);
-    // DataComponentPatch: added and removed counts, both zero.
-    out.write_varint(0);
-    out.write_varint(0);
+    // DataComponentPatch: both counts first, then the added entries, then the
+    // removed type ids.
+    out.write_varint(static_cast<std::uint32_t>(value.components.size()));
+    out.write_varint(
+        static_cast<std::uint32_t>(value.removed_components.size()));
+    for (const auto &[type, component] : value.components) {
+        out.write_varint(type);
+        if (auto status{encode_item_component(out, component)}; !status) {
+            return status;
+        }
+    }
+    for (const auto type : value.removed_components) {
+        out.write_varint(type);
+    }
     return status_ok();
 }
 
@@ -4060,8 +4180,7 @@ auto decode_item_stack(reader &in, item_stack &value) -> status {
     if (!count) {
         return std::unexpected{std::move(count.error())};
     }
-    value.count = *count;
-    value.item_id = 0;
+    value = item_stack{.count = *count};
     if (*count == 0U) {
         return status_ok();
     }
@@ -4069,18 +4188,45 @@ auto decode_item_stack(reader &in, item_stack &value) -> status {
     if (!item) {
         return std::unexpected{std::move(item.error())};
     }
+    value.item_id = *item;
     auto positive{in.read_varint()};
     auto negative{in.read_varint()};
     if (!positive || !negative) {
         return std::unexpected{make_error(
             error_code::parse_error, "item_stack: truncated component patch")};
     }
-    if (*positive != 0U || *negative != 0U) {
-        return std::unexpected{make_error(
-            error_code::unsupported,
-            "item_stack: non-empty component patches are not implemented")};
+    if (*positive > in.remaining() || *negative > in.remaining()) {
+        return std::unexpected{
+            make_error(error_code::parse_error,
+                       "item_stack: component counts exceed the payload")};
     }
-    value.item_id = *item;
+    if (*positive != 0U) {
+        const auto ids{item_component_ids_current()};
+        if (ids == nullptr) {
+            return std::unexpected{
+                make_error(error_code::unsupported,
+                           "item_stack: component ids are not installed")};
+        }
+        for (std::uint32_t index{0}; index < *positive; ++index) {
+            auto type{in.read_varint()};
+            if (!type) {
+                return std::unexpected{std::move(type.error())};
+            }
+            item_component component{};
+            if (auto status{decode_item_component(in, *type, *ids, component)};
+                !status) {
+                return status;
+            }
+            value.components.insert_or_assign(*type, std::move(component));
+        }
+    }
+    for (std::uint32_t index{0}; index < *negative; ++index) {
+        auto type{in.read_varint()};
+        if (!type) {
+            return std::unexpected{std::move(type.error())};
+        }
+        value.removed_components.insert(*type);
+    }
     return status_ok();
 }
 
