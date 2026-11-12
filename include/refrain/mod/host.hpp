@@ -30,6 +30,16 @@ class builtin_image;
 
 namespace refrain::mod {
 
+/// The host allocation table handed to every mod in `refrain_mod_init`.
+///
+/// Memory that crosses the mod boundary must come from here: the host frees
+/// only what this table allocated, so a mod that allocates with its own
+/// allocator and returns the buffer would otherwise be freed by a different
+/// one. `alignment` must be a power of two and is raised to
+/// `alignof(std::max_align_t)` when smaller; a non-power-of-two request
+/// returns nullptr.
+[[nodiscard]] auto host_allocator() noexcept -> refrain_allocator;
+
 namespace kernel = refrain::kernel;
 
 // Mod host: loads a resolved `mod::composition` against the

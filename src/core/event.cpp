@@ -23,12 +23,21 @@
 
 #include <refrain/core/event.hpp>
 
+#include <refrain/core/log.hpp>
+
 #include <algorithm>
 #include <cstddef>
+#include <exception>
 #include <functional>
 #include <utility>
 
 namespace refrain::core::events {
+
+namespace {
+
+constexpr refrain::log::logger log_event{"event"};
+
+} // namespace
 
 auto bus::subscribe(event_type type, listener fn, event_priority priority)
     -> subscription_id {
@@ -160,25 +169,36 @@ void bus::publish_raw(event_type type, const void *event) {
     // std::function that is currently executing.
     const auto count{listeners_.size()};
     ++publish_depth_;
-    try {
-        for (std::size_t index{}; index < count && index < listeners_.size();
-             ++index) {
-            const auto &current{listeners_[index]};
-            if (!current.alive || current.type != type) {
-                continue;
-            }
-            const auto callback{current.callback};
-            if (!callback) {
-                continue; // an empty listener would throw
-                          // std::bad_function_call
-            }
-            callback(event);
+    std::exception_ptr failure{};
+    for (std::size_t index{}; index < count && index < listeners_.size();
+         ++index) {
+        const auto &current{listeners_[index]};
+        if (!current.alive || current.type != type) {
+            continue;
         }
-    } catch (...) {
-        finish_publish();
-        throw;
+        const auto callback{current.callback};
+        if (!callback) {
+            continue; // an empty listener would throw std::bad_function_call
+        }
+        // A listener that throws must not take the event away from the ones
+        // behind it. The first failure is recorded and the chain keeps
+        // running; the exception is rethrown once every listener has seen the
+        // event, so the caller still observes it. `id` is copied because the
+        // callback may mutate the listener table before it throws.
+        const auto id{current.id};
+        try {
+            callback(event);
+        } catch (...) {
+            if (!failure) {
+                failure = std::current_exception();
+                log_event.error("listener={} type={} threw", id, type);
+            }
+        }
     }
     finish_publish();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
 }
 
 void bus::finish_publish() noexcept {

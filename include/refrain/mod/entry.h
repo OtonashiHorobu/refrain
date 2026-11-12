@@ -35,7 +35,10 @@ typedef struct refrain_mod_init {
     /// the process lifetime.
     const refrain_host_core_vtable *host_core;
     void *host_core_self;
-    /// Optional host allocator; all-zero when unused.
+    /// Host allocator. Memory that outlives a call and crosses the boundary
+    /// in either direction comes from here: the host frees only what this
+    /// table allocated, so a buffer from any other allocator is not valid
+    /// input to `free`.
     refrain_allocator allocator;
 } refrain_mod_init;
 
