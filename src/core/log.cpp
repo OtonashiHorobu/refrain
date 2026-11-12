@@ -37,10 +37,10 @@ namespace {
 // Vanilla-shaped console line (`[13:10:52] [worker-0/info]: message`). The
 // level is lowercase because spdlog's `%l` is lowercase; `%N` is the project
 // thread-name flag (falls back to `t<tid>` for unnamed threads).
-constexpr auto console_pattern = "[%H:%M:%S] [%N/%l]: %v";
+constexpr auto console_pattern = "[%H:%M:%S] [%N/%l] %v";
 // Files keep the same fields but add an ISO-8601 date and UTC offset so logs
 // from different days/hosts remain sortable and unambiguous.
-constexpr auto file_pattern = "[%Y-%m-%dT%H:%M:%S.%e%z] [%N/%l]: %v";
+constexpr auto file_pattern = "[%Y-%m-%dT%H:%M:%S.%e%z] [%N/%l] %v";
 constexpr std::size_t async_queue_size = 8192;
 constexpr std::size_t file_size_limit = 16U * 1024U * 1024U;
 constexpr std::size_t file_count = 4;
@@ -420,6 +420,26 @@ void set_thread_name(std::string_view name) noexcept {
         }
     } catch (...) {
         // Naming must never propagate (it runs on thread startup paths).
+    }
+}
+
+void write(level lvl, std::string_view module,
+           std::string_view message) noexcept {
+    if (module.empty()) {
+        write(lvl, message);
+        return;
+    }
+    if (lvl == level::off || !g_initialized.load(std::memory_order_acquire)) {
+        return;
+    }
+    try {
+        const auto logger{g_logger.load(std::memory_order_acquire)};
+        if (logger == nullptr) {
+            return;
+        }
+        logger->log(to_spdlog(lvl), "[{}]: {}", module, message);
+    } catch (...) {
+        // logging failures must never propagate
     }
 }
 

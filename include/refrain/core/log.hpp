@@ -101,6 +101,72 @@ void set_thread_name(std::string_view name) noexcept;
 /// racing with it may be dropped or still be flushed, but never crashes.
 void write(level lvl, std::string_view message) noexcept;
 
+/// Write one message tagged with `module`.
+///
+/// The tag is rendered between the level and the message
+/// (`[12:00:00] [main/info] [mod-host]: 11 mod(s) loaded`) and is empty for
+/// untagged calls, which keep the plain format. Module names are lowercase and
+/// hyphen-separated (`mod-host`, `net-transport`, `world-store`); the message
+/// body itself stays prose and never uses a hyphen or an underscore as a word
+/// separator.
+void write(level lvl, std::string_view module,
+           std::string_view message) noexcept;
+
+// ---------------------------------------------------------------------------
+// Per-module logger. One instance per subsystem (file-scope or namespace
+// scope) tags every line with the module name, which keeps the origin visible
+// without repeating it in the message.
+// ---------------------------------------------------------------------------
+
+class logger {
+  public:
+    explicit constexpr logger(std::string_view module) noexcept
+        : module_(module) {}
+
+    [[nodiscard]] constexpr auto module() const noexcept -> std::string_view {
+        return module_;
+    }
+
+    template <typename... Args>
+    void log(level lvl, fmt::format_string<Args...> format_str,
+             Args &&...args) const {
+        if (!enabled(lvl)) {
+            return;
+        }
+        write(lvl, module_,
+              fmt::format(format_str, std::forward<Args>(args)...));
+    }
+
+    template <typename... Args>
+    void trace(fmt::format_string<Args...> format_str, Args &&...args) const {
+        log(level::trace, format_str, std::forward<Args>(args)...);
+    }
+    template <typename... Args>
+    void debug(fmt::format_string<Args...> format_str, Args &&...args) const {
+        log(level::debug, format_str, std::forward<Args>(args)...);
+    }
+    template <typename... Args>
+    void info(fmt::format_string<Args...> format_str, Args &&...args) const {
+        log(level::info, format_str, std::forward<Args>(args)...);
+    }
+    template <typename... Args>
+    void warn(fmt::format_string<Args...> format_str, Args &&...args) const {
+        log(level::warn, format_str, std::forward<Args>(args)...);
+    }
+    template <typename... Args>
+    void error(fmt::format_string<Args...> format_str, Args &&...args) const {
+        log(level::error, format_str, std::forward<Args>(args)...);
+    }
+    template <typename... Args>
+    void critical(fmt::format_string<Args...> format_str,
+                  Args &&...args) const {
+        log(level::critical, format_str, std::forward<Args>(args)...);
+    }
+
+  private:
+    std::string_view module_;
+};
+
 // ---------------------------------------------------------------------------
 // Formatting wrappers. Logging is cold path; formatting happens only when the
 // level is enabled to keep call sites cheap.

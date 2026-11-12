@@ -59,6 +59,12 @@
 #include <utility>
 #include <vector>
 
+namespace {
+
+constexpr refrain::log::logger log_mods{"mods"};
+
+} // namespace
+
 namespace refrain::app {
 
 namespace archive = refrain::archive;
@@ -165,10 +171,9 @@ auto run_mods_check(const mods_check_options &options) -> int {
     }
     if (missing != 0 || mismatched != 0) {
         if (options.strict) {
-            log::error(
-                "mods check: {} missing manifest(s), {} version mismatch(es) "
-                "(--strict)",
-                missing, mismatched);
+            log_mods.error("{} missing manifest(s), {} version mismatch(es) "
+                           "(--strict)",
+                           missing, mismatched);
             return 1;
         }
         std::cout << "  note: " << missing << " manifest(s) missing and "
