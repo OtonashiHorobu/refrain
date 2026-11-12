@@ -47,6 +47,10 @@ if(MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
+# Microarchitecture level for code generation, mapped per target architecture.
+include(cmake/refrain_arch.cmake)
+refrain_apply_arch_level("${REFRAIN_ARCH_LEVEL}")
+
 # Sanitizer instrumentation for every first-party target (the CI matrix uses
 # dedicated ASan/UBSan and TSan builds; Release timings stay unaffected).
 if(REFRAIN_SANITIZE)
