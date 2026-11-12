@@ -30,6 +30,7 @@
 #include <refrain/sim/world.hpp>
 #include <refrain/world/store.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
