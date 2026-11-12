@@ -13,7 +13,11 @@ name: mingw-build
 on:
   push:
     branches: [main, master]
-  pull_request:
+  # Windows toolchain coverage runs on the default branch and on demand. A
+  # pull request pays for the Linux build only; a Windows-only regression is
+  # caught by the push run before it can reach a release.
+  schedule:
+    - cron: "0 4 * * *"
   workflow_dispatch:
 
 permissions:

@@ -376,6 +376,9 @@ jobs:
   # ---------------------------------------------------------------------------
   asan-ubsan:
     name: asan+ubsan
+    # Sanitizer coverage runs on the default branch and on demand; a pull
+    # request pays for the Linux build, the policy gates and the ABI checks.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     container:
       image: gcc:16
@@ -483,6 +486,9 @@ jobs:
   # ---------------------------------------------------------------------------
   tsan:
     name: tsan
+    # Sanitizer coverage runs on the default branch and on demand; a pull
+    # request pays for the Linux build, the policy gates and the ABI checks.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     container:
       image: gcc:16
