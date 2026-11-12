@@ -2693,7 +2693,8 @@ void refresh_chunk_shapes(proto_chunk &chunk, const chunk_region &region,
                 if (state >= states.size()) {
                     continue;
                 }
-                const std::string name{state_block_name(states.name(state))};
+                const std::string_view name{
+                    state_block_name(states.name(state))};
                 const bool edge = x == 0 || x == 15 || z == 0 || z == 15;
                 if (name.ends_with("_wall") || name.ends_with("_stairs") ||
                     (name.ends_with("_fence") && edge)) {
