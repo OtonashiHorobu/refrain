@@ -31,3 +31,6 @@ __pycache__/
 # scripts/fetch-content.sh and is never committed; see content/vanilla/NOTICE.md.
 content/vanilla/*/data/
 content/vanilla/*/MANIFEST.json
+
+# Machine-local agent guidance; names absolute paths and is never published.
+/AGENTS.local.md

@@ -1,0 +1,83 @@
+name: Bug report
+description: Something behaves differently from the target Minecraft version, or fails outright.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report a security problem here. Use the private channel in
+        [SECURITY.md](../blob/main/SECURITY.md) instead.
+
+        Do not attach game assets, a datapack or decompiled game code. Describe
+        the behavior and, if it helps, the class and method of the target
+        version you compared against.
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened
+      description: The behavior you saw, in one or two sentences.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What the target version does instead, and how you checked it.
+      placeholder: |
+        Vanilla 26.3 sends the chunk with the light data attached, so the client
+        does not render a black column. Checked against ChunkHolder in 26.3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The exact commands, seed and player position. A reproduction that starts from an empty directory is worth ten that start from your world.
+      placeholder: |
+        build/Release/bin/refrain-server --seed 12345 --ticks 200
+        Walk east from spawn until the viewport is 6 chunks wide.
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Output of `git rev-parse --short HEAD`.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: build
+    attributes:
+      label: Build
+      options:
+        - Linux x86_64, local
+        - Linux x86_64, CI artifact
+        - Windows, MSVC
+        - Windows, MinGW
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The relevant log lines. Keep the timestamp and the module tag; they identify which subsystem emitted them.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: This is not a security problem, and no game assets or decompiled code are attached.
+          required: true
+        - label: I searched the open issues for the same behavior.
+          required: true
