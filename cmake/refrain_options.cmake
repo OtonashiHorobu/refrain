@@ -64,6 +64,19 @@ option(REFRAIN_HARDEN_MAX
 # for the MSVC toolchain (LTCG build time is not worth the CI budget).
 option(REFRAIN_LTO "Enable link-time optimization for optimized builds" ON)
 
+# Microarchitecture level for code generation, mapped per target architecture
+# by cmake/refrain_arch.cmake. A binary built for a higher level does not run
+# on older CPUs, so release artifacts stay at `baseline` and the level is a
+# local tuning knob.
+set(REFRAIN_ARCH_LEVEL
+    "baseline"
+    CACHE STRING
+          "Architecture level: baseline, native, x86-64-v2/v3/v4, armv8-a, armv8.2-a, armv9-a"
+)
+set_property(CACHE REFRAIN_ARCH_LEVEL
+             PROPERTY STRINGS baseline native x86-64-v2 x86-64-v3 x86-64-v4
+                      armv8-a armv8.2-a armv9-a)
+
 if(NOT REFRAIN_WITH_MIMALLOC)
     set(REFRAIN_MIMALLOC_OVERRIDE_NEW OFF)
 endif()
