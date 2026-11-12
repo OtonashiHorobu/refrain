@@ -1820,9 +1820,17 @@ auto run_server(const server_run_options &options) -> int {
     std::unordered_map<std::uint64_t, chunk_stream_state> chunk_streams{};
     // Encoded chunks are shared by every connection and survive a tick, so a
     // second player with the same viewport does not encode the same chunk
-    // again. The bound keeps the resident bytes proportional to the cache.
-    std::map<std::pair<std::int32_t, std::int32_t>, std::vector<std::byte>>
+    // again. Eviction is least-recently-used: a chunk that keeps being served
+    // stays resident while a cold one goes, which a creation-order eviction
+    // cannot express. The bound keeps the resident bytes proportional to the
+    // cache.
+    struct encoded_chunk_entry {
+        std::vector<std::byte> body{};
+        std::uint64_t last_use{0};
+    };
+    std::map<std::pair<std::int32_t, std::int32_t>, encoded_chunk_entry>
         encoded_chunks{};
+    std::uint64_t chunk_cache_clock{0};
     constexpr std::size_t max_encoded_chunks{256};
     refrain::server::chunk_packet_source stream_source{};
     bool stream_chunks{false};
@@ -1949,15 +1957,29 @@ auto run_server(const server_run_options &options) -> int {
                         stream.pending.pop_front();
                         continue;
                     }
-                    cached =
-                        encoded_chunks.emplace(cache_key, std::move(*encoded))
-                            .first;
+                    cached = encoded_chunks
+                                 .emplace(cache_key,
+                                          encoded_chunk_entry{
+                                              .body = std::move(*encoded),
+                                              .last_use = 0,
+                                          })
+                                 .first;
                     if (encoded_chunks.size() > max_encoded_chunks) {
-                        encoded_chunks.erase(encoded_chunks.begin());
+                        // Evict the least recently used entry.
+                        auto victim{encoded_chunks.begin()};
+                        for (auto candidate{encoded_chunks.begin()};
+                             candidate != encoded_chunks.end(); ++candidate) {
+                            if (candidate->second.last_use <
+                                victim->second.last_use) {
+                                victim = candidate;
+                            }
+                        }
+                        encoded_chunks.erase(victim);
                     }
                 }
+                cached->second.last_use = ++chunk_cache_clock;
                 stream.pending.pop_front();
-                packets.push_back(cached->second);
+                packets.push_back(cached->second.body);
                 stream.known.emplace(x, z);
                 ++stream.sent;
             }
