@@ -36,6 +36,8 @@ namespace carver {
 struct carver_biomes;
 } // namespace carver
 
+class stage_profile;
+
 /// The terrain stages after biome selection. `fill_context` carries the
 /// structure beardifier the fill samples; surface and carvers run over the
 /// filled chunk. `carvers` names the table to run and null skips the stage;
@@ -46,6 +48,9 @@ struct terrain_stages {
     const density::sampler_context *fill_context{nullptr};
     const carver::carver_biomes *carvers{nullptr};
     bool surface{true};
+    /// Records the wall-clock time of each terrain stage when non-null. The
+    /// profile never affects the generated chunk.
+    stage_profile *profile{nullptr};
 };
 
 struct dimension_generator_config {

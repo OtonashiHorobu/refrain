@@ -13,6 +13,7 @@
 #include <refrain/worldgen/feature/feature_plan.hpp>
 #include <refrain/worldgen/feature/feature_stage.hpp>
 #include <refrain/worldgen/provider.hpp>
+#include <refrain/worldgen/stage_profile.hpp>
 #include <refrain/worldgen/structure/feature_placement.hpp>
 #include <refrain/worldgen/structure/placement_stage.hpp>
 #include <refrain/worldgen/structure/stage.hpp>
@@ -503,6 +504,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         start_context.block_at = block_at;
         start_context.states = &states;
         start_context.templates = templates_.get();
+        start_context.profile = profile_;
         if (!config_.structure_sets.empty()) {
             const auto &allowed = config_.structure_sets;
             start_context.set_filter = [&allowed](std::string_view id) {
@@ -588,6 +590,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         std::optional<beardifier> beard;
         bool bearded = false;
         if (area.has_value()) {
+            const stage_timer timer{profile_, "structure.beard"};
             const auto collected = structure::collect_beard(
                 area->starts, shared_->structure_data, target);
             if (!collected.pieces.empty() || !collected.junctions.empty() ||
@@ -609,6 +612,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         if (needs_neighbours && !bearded) {
             if (const auto *cached = cached_terrain(target);
                 cached != nullptr) {
+                const stage_timer timer{profile_, "terrain.cached_clone"};
                 chunks[index] = cached->clone();
                 continue;
             }
@@ -621,13 +625,22 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
             .fill_context = area.has_value() ? &fill_context : nullptr,
             .carvers = reference_terrain ? dimension_->carvers() : nullptr,
             .surface = reference_terrain,
+            .profile = profile_,
         };
+        // A bearded fill is regenerated whenever a target needs it, so its row
+        // overlaps the terrain rows and only reports how much of the fill work
+        // the beardifier costs.
+        std::optional<stage_timer> bearded_fill;
+        if (bearded) {
+            bearded_fill.emplace(profile_, "terrain.bearded_fill");
+        }
         dimension_->reset_biome_search();
         auto generated = dimension_->generate_terrain(target, stages);
         if (!generated) {
             return std::unexpected{generated.error()};
         }
         if (needs_neighbours && !bearded) {
+            const stage_timer timer{profile_, "terrain.cache_store"};
             store_terrain(target, (*generated)->clone());
         }
         chunks[index] = std::move(*generated);
@@ -719,27 +732,32 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         .place_feature = {},
     };
 
-    std::vector<std::string> feature_ids;
-    for (const auto *start : active) {
-        for (const auto &piece : start->pieces) {
-            structure::collect_feature_ids(structure::to_piece_record(piece),
-                                           feature_ids);
-        }
-    }
     std::optional<structure::structure_feature_placer> structure_features;
-    if (!feature_ids.empty()) {
-        structure_features.emplace(place_context, shared_->feature_data);
-        if (const auto loaded = structure_features->load(feature_ids);
-            !loaded) {
-            return std::unexpected{loaded.error()};
+    {
+        const stage_timer timer{profile_, "structure.features"};
+        std::vector<std::string> feature_ids;
+        for (const auto *start : active) {
+            for (const auto &piece : start->pieces) {
+                structure::collect_feature_ids(
+                    structure::to_piece_record(piece), feature_ids);
+            }
         }
-        place_context.place_feature =
-            [&structure_features](std::string_view id, worldgen_random &random,
-                                  const block_pos &position) {
-                return structure_features->place(id, random, position);
-            };
+        if (!feature_ids.empty()) {
+            structure_features.emplace(place_context, shared_->feature_data);
+            if (const auto loaded = structure_features->load(feature_ids);
+                !loaded) {
+                return std::unexpected{loaded.error()};
+            }
+            place_context.place_feature =
+                [&structure_features](std::string_view id,
+                                      worldgen_random &random,
+                                      const block_pos &position) {
+                    return structure_features->place(id, random, position);
+                };
+        }
     }
 
+    stage_timer pieces{profile_, "structure.pieces"};
     worldgen_random decoration{
         std::make_unique<xoroshiro_random_source>(config_.seed)};
     const jlong decoration_seed =
@@ -810,13 +828,18 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
             }
         }
     }
-    structure::refresh_chunk_shapes(*center, region, states);
+    pieces.stop();
+    {
+        const stage_timer timer{profile_, "structure.shapes"};
+        structure::refresh_chunk_shapes(*center, region, states);
+    }
 
     if (has_features_) {
         // Feature placement reads biomes through the chunks of the region and
         // falls back to the noise source only outside it. Starting that
         // fallback from a fresh candidate keeps the decoration independent of
         // how many fills the target needed.
+        stage_timer prepare{profile_, "feature.prepare"};
         dimension_->reset_biome_search();
         dimension_biome_resolver uncached{dimension_->biome_source(),
                                           dimension_->sampler()};
@@ -862,6 +885,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
             .templates = templates_.get(),
             .registry = &states,
             .processor_list = {},
+            .profile = profile_,
         };
         feature_context.placement.height = [&region](heightmap_kind kind,
                                                      jint x, jint z) {
@@ -953,12 +977,14 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
             }
             candidate_biomes.assign(names.begin(), names.end());
         }
+        prepare.stop();
         const auto decorate_chunk = [&](proto_chunk &target) {
             feature_context.placement.chunk = &target;
             feature_context.placement.generation.min_y =
                 dimension_->generation_min_y();
             feature_context.placement.generation.height =
                 dimension_->generation_height();
+            const stage_timer timer{profile_, "feature.decorate"};
             feature::decorate(feature_context, shared_->feature_plan,
                               features_->placed(), candidate_biomes,
                               shared_->feature_data.biomes, config_.seed);

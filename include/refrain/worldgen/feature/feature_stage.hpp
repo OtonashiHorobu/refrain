@@ -19,6 +19,9 @@ namespace refrain::worldgen::feature {
 
 struct placed_feature_runtime {
     std::string id{};
+    /// Configured feature type (`minecraft:tree`), used to group the stage
+    /// profile by implementation type. Empty when the document names no type.
+    std::string type{};
     const feature *configured{nullptr};
     std::vector<std::unique_ptr<placement_modifier>> placement{};
 };

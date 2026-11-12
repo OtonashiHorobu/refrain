@@ -31,6 +31,8 @@
 
 namespace refrain::worldgen {
 
+class stage_profile;
+
 /// How far a generated chunk advances along the generation chain.
 enum class generation_target : std::uint8_t {
     /// Biomes, fill, surface and carvers. The chunk holds no structures and
@@ -195,6 +197,14 @@ class chunk_generator {
         return config_.target;
     }
 
+    /// Records the wall-clock time of every stage of the chunks generated
+    /// afterwards into `profile`. Null disables recording. The profile never
+    /// changes the generated chunk. A profile is not thread-safe, so each
+    /// worker needs its own instance.
+    void set_stage_profile(stage_profile *profile) noexcept {
+        profile_ = profile;
+    }
+
   private:
     /// Loaded data every worker of one configuration shares. It is immutable
     /// after `create`, so workers reference it instead of parsing the datapack
@@ -319,6 +329,8 @@ class chunk_generator {
                        block_column_hash>
         block_columns_{};
     std::deque<block_column_key> block_column_order_{};
+    /// Optional per-stage accounting owned by the caller. Null in production.
+    stage_profile *profile_{nullptr};
     bool has_structures_{false};
     bool has_features_{false};
 };

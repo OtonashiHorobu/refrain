@@ -19,6 +19,7 @@
 //       --chunks 16,32,64 --workers 1,2,4,8 --repeat 3
 
 #include <refrain/worldgen/chunk_generator.hpp>
+#include <refrain/worldgen/stage_profile.hpp>
 
 #include <fmt/format.h>
 
@@ -62,6 +63,7 @@ struct options {
     jint repeat{3};
     std::string output{};
     bool chunk_hash{false};
+    bool stages{false};
 };
 
 auto hash_bytes(std::uint64_t hash, std::string_view text) -> std::uint64_t {
@@ -362,6 +364,82 @@ auto run_scenario(const options &config, generation_target target, jint chunks,
     return result;
 }
 
+/// Runs one batch per repeat and prints the wall-clock time of each stage the
+/// generator reports. The rows are a decomposition of one batch: a row that
+/// encloses another stage (`feature.decorate` around `feature.placement` and
+/// the feature types) is not a sibling of it.
+auto run_stage_scenario(const options &config, generation_target target,
+                        jint chunks, std::ostream *stream) -> bool {
+    const auto [width, depth] = rectangle_for(chunks);
+    auto created = chunk_generator::create(chunk_generator_config{
+        .data_root = config.data_root,
+        .templates_root = config.templates_root,
+        .seed = config.seed,
+        .kind = config.kind,
+        .fixed_biome = config.biome,
+        .target = target,
+        .structure_sets = {},
+        .reference_world = false,
+    });
+    if (!created) {
+        fmt::print(stderr, "bench-chunk-generator: create failed: {}\n",
+                   created.error().message);
+        return false;
+    }
+    auto generator = std::move(*created);
+    stage_profile profile;
+    generator->set_stage_profile(&profile);
+    std::atomic<block_state_id> sink{0};
+    const auto positions =
+        make_positions(config.origin_x, config.origin_z, width, depth);
+    const auto emit = [stream](const std::string &line) {
+        fmt::print("{}\n", line);
+        if (stream != nullptr) {
+            *stream << line << '\n';
+        }
+    };
+    const auto chunk_count = static_cast<double>(positions.size());
+    for (jint repeat = 0; repeat < config.repeat; ++repeat) {
+        profile.clear();
+        const auto begin = clock_type::now();
+        for (const auto &position : positions) {
+            auto generated = generator->generate(position);
+            if (!generated) {
+                fmt::print(stderr,
+                           "bench-chunk-generator: generate failed: {}\n",
+                           generated.error().message);
+                return false;
+            }
+            sink.store(generated->get()->state_at(8, 0, 8),
+                       std::memory_order_relaxed);
+        }
+        const auto elapsed = milliseconds(clock_type::now() - begin);
+        emit(fmt::format("STAGE_BATCH target={} batch={} chunks={} workers=1 "
+                         "measured_ms={:.3f} per_chunk_ms={:.3f}",
+                         target_name(target), repeat, chunks, elapsed,
+                         elapsed / chunk_count));
+        for (const auto &entry : profile.stages()) {
+            emit(fmt::format("STAGE target={} batch={} name={} total_ms={:.3f} "
+                             "per_chunk_ms={:.3f} samples={}",
+                             target_name(target), repeat, entry.name,
+                             static_cast<double>(entry.nanoseconds) / 1.0e6,
+                             static_cast<double>(entry.nanoseconds) / 1.0e6 /
+                                 chunk_count,
+                             entry.samples));
+        }
+        for (const auto &[type, entry] : profile.features()) {
+            emit(fmt::format(
+                "FEATURE_STAGE target={} batch={} type={} total_ms={:.3f} "
+                "per_chunk_ms={:.3f} samples={}",
+                target_name(target), repeat, type,
+                static_cast<double>(entry.nanoseconds) / 1.0e6,
+                static_cast<double>(entry.nanoseconds) / 1.0e6 / chunk_count,
+                entry.samples));
+        }
+    }
+    return true;
+}
+
 auto chunk_digest(const proto_chunk &chunk) -> std::uint64_t {
     const auto &table = chunk.table();
     auto hash = std::uint64_t{0xcbf29ce484222325ULL};
@@ -504,7 +582,9 @@ auto parse_options(int argc, char **argv) -> std::optional<options> {
                 "  --output <path>          append the result lines here\n"
                 "  --chunk-hash             hash the generated chunk set "
                 "instead "
-                "of timing it\n");
+                "of timing it\n"
+                "  --stages                 print the wall-clock time of each "
+                "generation stage per batch\n");
             return std::nullopt;
         }
         if (argument == "--data-root") {
@@ -601,6 +681,8 @@ auto parse_options(int argc, char **argv) -> std::optional<options> {
             }
         } else if (argument == "--chunk-hash") {
             config.chunk_hash = true;
+        } else if (argument == "--stages") {
+            config.stages = true;
         } else if (argument == "--output") {
             const auto value = next(argument);
             if (!value) {
@@ -654,6 +736,17 @@ auto main(int argc, char **argv) -> int {
         for (const auto target : config.targets) {
             if (!run_chunk_hash(config, target, stream)) {
                 return 1;
+            }
+        }
+        return 0;
+    }
+
+    if (config.stages) {
+        for (const auto target : config.targets) {
+            for (const auto chunks : config.chunk_counts) {
+                if (!run_stage_scenario(config, target, chunks, stream)) {
+                    return 1;
+                }
             }
         }
         return 0;

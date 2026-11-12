@@ -5,6 +5,7 @@
 #include <refrain/worldgen/structure/stage.hpp>
 
 #include <refrain/worldgen/core/rng.hpp>
+#include <refrain/worldgen/stage_profile.hpp>
 #include <refrain/worldgen/structure/generation.hpp>
 
 #include <algorithm>
@@ -528,16 +529,22 @@ auto generate_structure_area(const chunk_pos &target,
                              const structure_start_context &context,
                              jint radius) -> structure_area {
     structure_area area;
-    for (jint dx = -radius; dx <= radius; ++dx) {
-        for (jint dz = -radius; dz <= radius; ++dz) {
-            const chunk_pos chunk{.x = target.x + dx, .z = target.z + dz};
-            auto starts = generate_structure_starts(chunk, context);
-            area.starts.insert(area.starts.end(),
-                               std::make_move_iterator(starts.begin()),
-                               std::make_move_iterator(starts.end()));
+    {
+        const stage_timer timer{context.profile, "structure.starts"};
+        for (jint dx = -radius; dx <= radius; ++dx) {
+            for (jint dz = -radius; dz <= radius; ++dz) {
+                const chunk_pos chunk{.x = target.x + dx, .z = target.z + dz};
+                auto starts = generate_structure_starts(chunk, context);
+                area.starts.insert(area.starts.end(),
+                                   std::make_move_iterator(starts.begin()),
+                                   std::make_move_iterator(starts.end()));
+            }
         }
     }
-    area.references = collect_references(area.starts, target, radius);
+    {
+        const stage_timer timer{context.profile, "structure.references"};
+        area.references = collect_references(area.starts, target, radius);
+    }
     return area;
 }
 

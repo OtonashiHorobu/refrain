@@ -3273,6 +3273,17 @@ auto feature_registry::load(const feature_data_set &data) -> status {
     }
 
     pending_documents_ = nullptr;
+    // The stage profile groups generation by configured feature type, so the
+    // type is read once while the placed table is built.
+    const auto configured_type =
+        [&data](std::string_view feature_id) -> std::string {
+        const auto document = data.features.find(std::string{feature_id});
+        if (document == data.features.end()) {
+            return {};
+        }
+        const auto type = type_of(document->second.document);
+        return type.has_value() ? std::string{*type} : std::string{};
+    };
     for (const auto &[id, document] : data.placed) {
         const auto configured = features_.find(document.feature);
         if (configured == features_.end()) {
@@ -3282,6 +3293,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
         }
         placed_feature_runtime runtime;
         runtime.id = id;
+        runtime.type = configured_type(document.feature);
         runtime.configured = configured->second.get();
         for (const auto &entry : *document.placement.as_array()) {
             auto modifier = decode_placement(entry, *states_);
@@ -3301,6 +3313,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
         }
         placed_feature_runtime runtime;
         runtime.id = nested.id;
+        runtime.type = configured_type(nested.feature);
         runtime.configured = configured->second.get();
         for (const auto &entry : *nested.placement.as_array()) {
             auto modifier = decode_placement(entry, *states_);
