@@ -671,10 +671,13 @@ void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
         return;
     }
     if (rate_limited) {
-        log_net.warn("rate limit exceeded id={}", id);
-        if (socket) {
-            socket->close(id);
-        }
+        // Policy: a play connection that spends a token it does not have is
+        // closed through the same local-close step as a protocol error, so a
+        // flooding client cannot keep the socket open. The limiter is per
+        // connection and only play traffic is counted.
+        log_net.warn("rate limit exceeded id={} limit={}", id,
+                     config.rate_limit);
+        close(id);
         return;
     }
     for (const auto &body : bodies) {
@@ -3096,6 +3099,19 @@ auto server::start(server_inputs inputs, core::config::view view)
         view.get_string("session_server", "https://sessionserver.mojang.com");
     config.auth_timeout_ms =
         static_cast<std::int32_t>(view.get_int64("auth_timeout_ms", 5000));
+    // `rate_limit` is documented in packets per second for a play connection,
+    // which is the unit the token bucket refills in, so the key needs no unit
+    // conversion. Narrow the integer here, where the value is read, and reject
+    // a value the field cannot represent instead of truncating it into a
+    // different rate.
+    const auto rate_limit{int_or("rate_limit", 0)};
+    if (rate_limit < 0 ||
+        rate_limit > std::numeric_limits<std::int32_t>::max()) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "network.rate_limit is out of range")};
+    }
+    config.rate_limit = static_cast<std::int32_t>(rate_limit);
     // `player_idle_timeout` is documented in minutes, matching the Java
     // `server.properties` key it is imported from. The keepalive path compares
     // packets against a timeout in seconds, so the unit conversion belongs
