@@ -5,7 +5,7 @@
 #include <refrain/mod/host.hpp>
 
 #include <algorithm>
-#include <cstdlib>
+#include <new>
 
 #include <refrain/contracts/host/core.hpp>
 #include <refrain/contracts/host/kernel.hpp>
@@ -54,13 +54,32 @@ void *host_alloc(void *, std::uint64_t size, std::uint64_t alignment) noexcept {
     }
     const auto requested{
         std::max<std::uint64_t>(alignment, alignof(std::max_align_t))};
-    // aligned_alloc requires the size to be a multiple of the alignment, and
-    // its result is released with free(), which needs no alignment argument.
-    const auto rounded{(size + requested - 1) / requested * requested};
-    return std::aligned_alloc(requested, rounded);
+    // Over-allocate and align by hand instead of calling aligned_alloc: that
+    // function is absent from the MSVC standard library, and a platform split
+    // for one call is not worth it. The unaligned base is stored in the word
+    // before the result, which `free` reads back without needing the alignment.
+    const auto total{size + requested + sizeof(void *)};
+    auto *base{static_cast<std::byte *>(::operator new(total, std::nothrow))};
+    if (base == nullptr) {
+        return nullptr;
+    }
+    auto *aligned{base + sizeof(void *)};
+    const auto misalignment{reinterpret_cast<std::uintptr_t>(aligned) %
+                            requested};
+    if (misalignment != 0) {
+        aligned += requested - misalignment;
+    }
+    reinterpret_cast<void **>(aligned)[-1] = base;
+    return aligned;
 }
 
-void host_free(void *, void *ptr) noexcept { std::free(ptr); }
+void host_free(void *, void *ptr) noexcept {
+    if (ptr == nullptr) {
+        return;
+    }
+    auto *aligned{static_cast<std::byte *>(ptr)};
+    ::operator delete(reinterpret_cast<void **>(aligned)[-1]);
+}
 
 } // namespace
 

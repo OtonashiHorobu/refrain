@@ -45,7 +45,8 @@ ut::suite<"mod/host-allocator"> host_allocator_suite = [] {
     "the requested alignment is honoured"_test = [] {
         const auto table{mod::host_allocator()};
         constexpr std::size_t alignment{64};
-        auto *buffer{static_cast<std::byte *>(table.alloc(table.self, 256, alignment))};
+        auto *buffer{
+            static_cast<std::byte *>(table.alloc(table.self, 256, alignment))};
         expect(buffer != nullptr);
         if (buffer == nullptr) {
             return;
