@@ -65,6 +65,14 @@
 #include <utility>
 #include <vector>
 
+namespace {
+
+constexpr refrain::log::logger log_crash_reporter{"crash-reporter"};
+constexpr refrain::log::logger log_schema{"schema"};
+constexpr refrain::log::logger log_wasm{"wasm"};
+
+} // namespace
+
 namespace refrain::app {
 
 namespace archive = refrain::archive;
@@ -682,8 +690,8 @@ auto run_schema_gen(const std::string &output_root,
         for (const auto &path : report->stale) {
             std::cout << "  stale:   " << path << '\n';
         }
-        log::error("schema: generated files are out of date; run "
-                   "'refrain-tools schema gen' and commit the result");
+        log_schema.error("generated files are out of date; run "
+                         "'refrain-tools schema gen' and commit the result");
         // Same stderr fallback as report_error().
         if (!log::enabled(log::level::error)) {
             std::cerr << "error: schema: generated files are out of date; run "
@@ -718,8 +726,8 @@ auto run_crash_smoke(const std::string &database_path,
         return report_error(initialized.error());
     }
     if (!kernel::crash_reporter::enabled()) {
-        refrain::log::error(
-            "crash: Crashpad client is not attached (is '{}' a real "
+        log_crash_reporter.error(
+            "Crashpad client is not attached (is '{}' a real "
             "crashpad_handler?)",
             handler_path);
         return 1;
@@ -728,11 +736,11 @@ auto run_crash_smoke(const std::string &database_path,
               << "; crashing on purpose to produce a minidump\n"
               << std::flush;
     kernel::crash_reporter::trigger_for_testing();
-    refrain::log::error("crash: the fault did not terminate the process");
+    log_crash_reporter.error("the fault did not terminate the process");
     return 1;
 #else
-    refrain::log::error(
-        "crash: this build does not enable REFRAIN_WITH_CRASHPAD");
+    log_crash_reporter.error(
+        "this build does not enable REFRAIN_WITH_CRASHPAD");
     static_cast<void>(database_path);
     static_cast<void>(handler_path);
     return 1;
@@ -762,13 +770,13 @@ auto run_wasm_smoke() -> int {
         return report_error(result.error());
     }
     if (*result != 5) {
-        log::error("wasm smoke: expected 5, got {}", *result);
+        log_wasm.error("expected 5, got {}", *result);
         return 1;
     }
     std::cout << "wasm: OK (wasmtime module add(2,3) = " << *result << ")\n";
     return 0;
 #else
-    log::error("wasm: this build does not enable REFRAIN_WITH_WASM");
+    log_wasm.error("this build does not enable REFRAIN_WITH_WASM");
     return 1;
 #endif
 }

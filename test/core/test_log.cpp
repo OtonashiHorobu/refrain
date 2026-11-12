@@ -380,12 +380,16 @@ class fd_redirect {
         expect(static_cast<bool>(refrain::log::init(cfg)));
 
         refrain::log::set_thread_name("worker-0");
-        refrain::log::info("thread name probe {}", 7);
+        constexpr refrain::log::logger probe{"log-test"};
+        probe.info("thread name probe {}", 7);
+        refrain::log::info("untagged probe");
         refrain::log::shutdown();
 
         const auto text = read_text(log_path);
-        expect(text.find("[worker-0/info]: thread name probe 7") !=
+        expect(text.find("[worker-0/info] [log-test]: thread name probe 7") !=
                std::string::npos)
+            << text;
+        expect(text.find("[worker-0/info] untagged probe") != std::string::npos)
             << text;
         std::error_code error;
         fs::remove_all(directory, error);
@@ -412,7 +416,7 @@ class fd_redirect {
         refrain::log::shutdown();
 
         const auto text = read_text(log_path);
-        expect(text.find("[worker-7/info]: async thread name probe") !=
+        expect(text.find("[worker-7/info] async thread name probe") !=
                std::string::npos)
             << text;
         std::error_code error;
@@ -438,7 +442,7 @@ class fd_redirect {
 
         const auto text = read_text(log_path);
         expect(text.find("[t") != std::string::npos) << text;
-        expect(text.find("/info]: unnamed thread probe") != std::string::npos)
+        expect(text.find("/info] unnamed thread probe") != std::string::npos)
             << text;
         std::error_code error;
         fs::remove_all(directory, error);

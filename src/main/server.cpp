@@ -53,6 +53,18 @@
 
 namespace {
 
+constexpr refrain::log::logger log_cli{"cli"};
+constexpr refrain::log::logger log_config{"config"};
+constexpr refrain::log::logger log_content{"content"};
+constexpr refrain::log::logger log_crash_reporter{"crash-reporter"};
+constexpr refrain::log::logger log_discovery{"discovery"};
+constexpr refrain::log::logger log_host{"host"};
+constexpr refrain::log::logger log_mods{"mods"};
+
+} // namespace
+
+namespace {
+
 using refrain::app::report_error;
 
 /// Report a startup error and return the process exit code. Logging/crash
@@ -458,7 +470,7 @@ int main(int argc, char **argv) {
         }
     } shutdown_guard_instance{};
 
-    refrain::log::info("{}", refrain::version::string());
+    log_cli.info("{}", refrain::version::string());
 
     // Crash reporting is opt-in. Without --crash-dir no crash
     // database is created (CI smoke runs and the working tree stay clean).
@@ -476,18 +488,18 @@ int main(int argc, char **argv) {
         auto crash_initialized{
             refrain::kernel::crash_reporter::initialize(crash)};
         if (!crash_initialized) {
-            refrain::log::warn("crash reporter disabled: {}",
-                               crash_initialized.error().message);
+            log_cli.warn("crash reporter disabled: {}",
+                         crash_initialized.error().message);
         } else {
-            refrain::log::info(
-                "crash reporter: {} db={}",
+            log_crash_reporter.info(
+                "{} db={}",
                 refrain::kernel::crash_reporter::enabled() ? "crashpad"
                                                            : "fallback",
                 refrain::kernel::crash_reporter::database_path());
         }
     }
 
-    refrain::log::info("gamepack: {}", gamepack);
+    log_host.info("{}", gamepack);
 
     std::vector<std::string_view> services{};
     services.reserve(required_services.size());
@@ -523,9 +535,9 @@ int main(int argc, char **argv) {
         return report_error(image.error());
     }
 
-    refrain::log::info("builtin image: files={} bytes={} digest={}",
-                       image->file_count(), image_bytes.size(),
-                       refrain::data::to_hex(image->digest()));
+    log_content.info("files={} bytes={} digest={}", image->file_count(),
+                     image_bytes.size(),
+                     refrain::data::to_hex(image->digest()));
 
     // Composition name shared by the startup publish and the runtime
     // mount: explicit `--content-composition`, else the sanitized
@@ -580,12 +592,12 @@ int main(int argc, char **argv) {
                         })};
                     if (found != baseline->mods.end() &&
                         found->version != pin.version) {
-                        refrain::log::info("startup-content: pin {} {}->{}",
-                                           pin.id, found->version, pin.version);
+                        log_content.info("pin {} {}->{}", pin.id,
+                                         found->version, pin.version);
                     }
                 }
             } else {
-                refrain::log::info("startup-content: pin: no lock");
+                log_content.info("pin: no lock");
             }
         }
         content.pinned_versions = refrain::mod::merge_pinned_versions(
@@ -599,15 +611,13 @@ int main(int argc, char **argv) {
         content.gc_keep_days = gc_keep_days;
         content.gc_budget_ms = gc_budget_ms;
         content.lock_timeout_ms = lock_timeout_ms;
-        content.log = [](std::string_view line) {
-            refrain::log::info("{}", line);
-        };
+        content.log = [](std::string_view line) { log_cli.info("{}", line); };
         auto content_report{refrain::mod::run_startup_content(content)};
         if (!content_report) {
             return report_fatal(content_report.error());
         }
-        refrain::log::info(
-            "startup-content: scan={} install={} skip={} fail={} receipts={} "
+        log_content.info(
+            "scan={} install={} skip={} fail={} receipts={} "
             "entries={} index={} gc={}/{} deferred={}/{}",
             content_report->scanned, content_report->installed,
             content_report->skipped, content_report->failed,
@@ -650,10 +660,12 @@ int main(int argc, char **argv) {
     if (!plan) {
         return report_error(plan.error());
     }
-    refrain::log::info("gamepack {}@{}: mods={} providers={} abi={}",
-                       plan->spec.id, plan->spec.version,
-                       plan->load_order.size(), plan->providers.size(),
-                       plan->spec.abi);
+    log_host.info("{}@{} abi={} mods={} providers={}", plan->spec.id,
+                  plan->spec.version, plan->spec.abi, plan->load_order.size(),
+                  plan->providers.size());
+    for (const auto &mod : plan->load_order) {
+        log_host.info("resolve {}@{}", mod.id, mod.version);
+    }
 
     // Load the resolved gamepack's internal mods through the mod host
     // (manifest gates -> static factories -> service providers). Composition is
@@ -723,11 +735,10 @@ int main(int argc, char **argv) {
                 return report_error(imported.error());
             }
             for (const auto &key : imported->unknown_keys) {
-                refrain::log::warn("config: unknown server.properties key '{}'",
-                                   key);
+                log_config.warn("unknown server.properties key '{}'", key);
             }
-            refrain::log::info("config: imported properties={} source={}",
-                               imported->applied, import_properties_path);
+            log_config.info("imported properties={} source={}",
+                            imported->applied, import_properties_path);
         }
         if (auto view{config_store.module("world")}) {
             config_world_path = view->get_string("path", "");
@@ -818,13 +829,13 @@ int main(int argc, char **argv) {
             !status) {
             return report_error(status.error());
         }
-        refrain::log::info("config: namespaces={} source={}",
-                           config_store.names().size(), config_dir);
+        log_config.info("namespaces={} source={}", config_store.names().size(),
+                        config_dir);
     }
 
     const std::string resolved_world_path{world_path.empty() ? config_world_path
                                                              : world_path};
-    refrain::log::info("config: world.path='{}'", resolved_world_path);
+    log_config.info("world.path='{}'", resolved_world_path);
 
     refrain::mod::host mods{};
     mods.set_config(config_store);
@@ -872,17 +883,22 @@ int main(int argc, char **argv) {
         !registered) {
         return report_fatal(registered.error());
     }
-    refrain::log::info("host-runtime: sealed=refrain:host.core,"
-                       "refrain:host.platform,refrain:host.kernel,"
-                       "refrain:host.metadata");
+    log_host.info("sealed=refrain:host.core,"
+                  "refrain:host.platform,refrain:host.kernel,"
+                  "refrain:host.metadata");
     auto mods_loaded{
         refrain::app::activate_server_mods(mods, *plan, image_bytes)};
     if (!mods_loaded) {
         return report_error(mods_loaded.error());
     }
-    refrain::log::info("mod host: {} mod(s) loaded", mods.mods().size());
-    refrain::log::debug("{}", mods.format());
-    refrain::log::info("runtime: no --world");
+    log_host.info("{} mod(s) loaded", mods.mods().size());
+    for (const auto &mod : mods.mods()) {
+        log_host.info("mod {}@{} abi={} {}{}", mod.id, mod.version, mod.abi,
+                      mod.has_code ? "code" : "data only",
+                      mod.provides_summary.empty()
+                          ? std::string{}
+                          : ", provides " + mod.provides_summary);
+    }
 
     // --- runtime content mount ---------------------------------------------
     // Mount the composition published by the startup bootstrap as the
@@ -898,8 +914,8 @@ int main(int argc, char **argv) {
                                                      content_composition_name)};
         if (!opened) {
             if (opened.error().code == refrain::error_code::not_found) {
-                refrain::log::warn("runtime-content: no composition {} in {}",
-                                   content_composition_name, content_store);
+                log_content.warn("no composition {} in {}",
+                                 content_composition_name, content_store);
             } else {
                 return report_fatal(opened.error());
             }
@@ -925,7 +941,7 @@ int main(int argc, char **argv) {
     }
 
     if (runtime_vfs.pack_count() == 0) {
-        refrain::log::info("runtime-content: none");
+        log_content.info("none");
     } else {
         runtime_vfs.freeze();
         auto loaded{refrain::data::datapack_set::load(
@@ -941,8 +957,7 @@ int main(int argc, char **argv) {
             const auto shown_errors{
                 std::min(validation.errors.size(), max_reported_diagnostics)};
             for (std::size_t index{0}; index < shown_errors; ++index) {
-                refrain::log::error("runtime-content: error: {}",
-                                    validation.errors[index]);
+                log_content.error("error: {}", validation.errors[index]);
             }
             return report_fatal(refrain::make_error(
                 refrain::error_code::parse_error,
@@ -952,25 +967,23 @@ int main(int argc, char **argv) {
         const auto shown_warnings{
             std::min(validation.warnings.size(), max_reported_diagnostics)};
         for (std::size_t index{0}; index < shown_warnings; ++index) {
-            refrain::log::warn("runtime-content: warning: {}",
-                               validation.warnings[index]);
+            log_content.warn("warning: {}", validation.warnings[index]);
         }
         if (validation.warnings.size() > shown_warnings) {
-            refrain::log::warn("runtime-content: {} more warnings",
-                               validation.warnings.size() - shown_warnings);
+            log_content.warn("{} more warnings",
+                             validation.warnings.size() - shown_warnings);
         }
-        refrain::log::info("runtime-content: layers={} files={} errors={} "
-                           "warnings={}",
-                           runtime_vfs.pack_count(), runtime_vfs.file_count(),
-                           validation.errors.size(),
-                           validation.warnings.size());
+        log_content.info("layers={} files={} errors={} "
+                         "warnings={}",
+                         runtime_vfs.pack_count(), runtime_vfs.file_count(),
+                         validation.errors.size(), validation.warnings.size());
     }
 
     // Runtime content and the mod host are live; auto_scan/mods.lock is the
     // last optional stage, so a gamepack with auto_scan disabled returns before
     // it (the lock is only meaningful for a scanned catalog).
     if (!effective_auto_scan) {
-        refrain::log::info("auto_scan: off");
+        log_discovery.info("off");
     } else {
         // --- mods.lock wiring ----------------------------------------------
         // The composition above already merged the builtin image candidates
@@ -994,8 +1007,8 @@ int main(int argc, char **argv) {
                 runtime_hash && *runtime_hash == selected.manifest_hash) {
                 continue;
             }
-            refrain::log::warn("mod {}: {} copy shadows builtin", selected.id,
-                               refrain::mod::to_string(selected.origin));
+            log_cli.warn("mod {}: {} copy shadows builtin", selected.id,
+                         refrain::mod::to_string(selected.origin));
         }
 
         const auto lock_path{
@@ -1005,7 +1018,7 @@ int main(int argc, char **argv) {
             if (!written) {
                 return report_fatal(written.error());
             }
-            refrain::log::info("mods.lock: written {}", lock_path);
+            log_mods.info("written {}", lock_path);
         } else {
             auto stored{refrain::mod::read_mod_lock(lock_path)};
             if (!stored) {
@@ -1016,21 +1029,20 @@ int main(int argc, char **argv) {
             const bool drifted{!verified ||
                                stored->fingerprint() != lock.fingerprint()};
             if (!drifted) {
-                refrain::log::info("mods.lock: verified {}", lock_path);
+                log_mods.info("verified {}", lock_path);
             } else if (update_lock) {
                 if (!verified) {
-                    refrain::log::warn("mods.lock: {} drifted: {}", lock_path,
-                                       verified.error().message);
+                    log_mods.warn("{} drifted: {}", lock_path,
+                                  verified.error().message);
                 } else {
-                    refrain::log::warn("mods.lock: {} drift {}->{}", lock_path,
-                                       stored->fingerprint(),
-                                       lock.fingerprint());
+                    log_mods.warn("{} drift {}->{}", lock_path,
+                                  stored->fingerprint(), lock.fingerprint());
                 }
                 auto rewritten{refrain::mod::write_mod_lock(lock_path, lock)};
                 if (!rewritten) {
                     return report_fatal(rewritten.error());
                 }
-                refrain::log::info("mods.lock: updated {}", lock_path);
+                log_mods.info("updated {}", lock_path);
             } else {
                 const auto detail{
                     verified
@@ -1062,10 +1074,9 @@ int main(int argc, char **argv) {
                 break;
             }
         }
-        refrain::log::info("mods: {} builtin={} first_party={} user={}",
-                           lock.mods.size(), builtin_count, first_party_count,
-                           user_count);
-        refrain::log::info("{}", refrain::mod::format_mod_lock(lock));
+        log_mods.info("{} builtin={} first_party={} user={}", lock.mods.size(),
+                      builtin_count, first_party_count, user_count);
+        log_cli.info("{}", refrain::mod::format_mod_lock(lock));
     }
 
     // Host/runtime split: the host owns bootstrap only. An
