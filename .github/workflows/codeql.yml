@@ -11,8 +11,8 @@ name: codeql
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  # The database is built on the default branch and weekly. A pull request
+  # runs the Linux build; the scan follows the merge.
   schedule:
     - cron: "0 3 * * 1"
   workflow_dispatch:
