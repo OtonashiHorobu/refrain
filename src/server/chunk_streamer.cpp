@@ -15,14 +15,6 @@
 
 namespace refrain::server {
 
-namespace {
-
-constexpr std::size_t max_connection_backlog{1U * 1024U * 1024U};
-constexpr std::size_t max_total_backlog{64U * 1024U * 1024U};
-constexpr std::size_t batch_budget{8};
-
-} // namespace
-
 chunk_streamer::chunk_streamer(refrain::net::server &listener,
                                chunk_packet_source source)
     : listener_(listener), source_(source) {}
