@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 04d13b3ba7228746
+// Schema hash: 1da626de4b244418
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2855,6 +2855,19 @@ template <> struct custom_traits<::refrain::services::net_session::session_profi
         refrain::reflect::custom_field{"id", &::refrain::services::net_session::session_profile::id},
         refrain::reflect::custom_field{"name", &::refrain::services::net_session::session_profile::name},
         refrain::reflect::custom_field{"properties", &::refrain::services::net_session::session_profile::properties});
+};
+
+/// Generated RIDL struct 'refrain::services::net_session::menu_click_result'.
+template <> struct custom_traits<::refrain::services::net_session::menu_click_result> {
+    static constexpr std::string_view type_name = "refrain::services::net_session::menu_click_result";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"slot", &::refrain::services::net_session::menu_click_result::slot},
+        refrain::reflect::custom_field{"button", &::refrain::services::net_session::menu_click_result::button},
+        refrain::reflect::custom_field{"accepted", &::refrain::services::net_session::menu_click_result::accepted},
+        refrain::reflect::custom_field{"slot_count", &::refrain::services::net_session::menu_click_result::slot_count},
+        refrain::reflect::custom_field{"slot_item", &::refrain::services::net_session::menu_click_result::slot_item},
+        refrain::reflect::custom_field{"carried_count", &::refrain::services::net_session::menu_click_result::carried_count},
+        refrain::reflect::custom_field{"carried_item", &::refrain::services::net_session::menu_click_result::carried_item});
 };
 
 /// Generated RIDL struct 'refrain::services::net_translator::translator_descriptor'.

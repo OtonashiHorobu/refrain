@@ -239,6 +239,124 @@ struct ridl_context {
     std::unreachable();
 }
 
+/// Stable 64-bit dispatch tag for one event: FNV-1a of its stable id.
+///
+/// The tag is what a C consumer passes to `refrain:host.kernel`'s
+/// `event_subscribe()`; hashing the id here (instead of in the consumer) keeps
+/// the value identical in every generated header and every build. The
+/// algorithm is spelled out rather than borrowed from `std::hash`, whose value
+/// is implementation-defined.
+[[nodiscard]] constexpr auto event_type_of(std::string_view id) noexcept
+    -> std::uint64_t {
+    std::uint64_t hash{14695981039346656037ULL};
+    for (const char character : id) {
+        hash ^= static_cast<std::uint64_t>(
+            static_cast<unsigned char>(character)); // NOLINT
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+/// C typedef that carries one `slice<scalar>` event field. Events do not reuse
+/// the contract-struct slice helpers because their elements are bare scalars
+/// with no named declaration to spell.
+[[nodiscard]] auto event_slice_c_name(const model &program,
+                                      std::uint32_t module_index,
+                                      const decl_model &decl,
+                                      const field_model &field) -> std::string {
+    return c_decl_name(program, module_index, decl) + "_" + field.name +
+           "_slice";
+}
+
+/// C spelling of an event field type. Sema restricts events to primitives,
+/// `string`, `bytes` and `slice<scalar>`; the slice spelling is the per-field
+/// `{ data, len }` typedef emitted next to the payload struct.
+[[nodiscard]] auto event_c_type(const model &program,
+                                std::uint32_t module_index,
+                                const decl_model &decl,
+                                const field_model &field) -> std::string {
+    switch (field.type.kind) {
+    case resolved_type::category::primitive:
+        return std::string{emit::c_primitive_name(field.type.primitive)};
+    case resolved_type::category::slice:
+        return event_slice_c_name(program, module_index, decl, field);
+    case resolved_type::category::named:
+    case resolved_type::category::handle:
+    case resolved_type::category::array:
+    case resolved_type::category::optional:
+    case resolved_type::category::repeated:
+    case resolved_type::category::map:
+    case resolved_type::category::either:
+    case resolved_type::category::holder:
+        std::unreachable(); // sema rejects these event field types
+    }
+    std::unreachable();
+}
+
+/// Event payload in the module's C header.
+///
+/// Events are transient in-process notifications, not ABI structs: the payload
+/// is borrowed for the duration of the publish and carries no `struct_size`
+/// word. The C spelling is what a subscriber casts the opaque `event_publish`
+/// payload to; a publisher converts the typed event field by field (the C++
+/// spelling of `string` is `std::string_view`, whose layout is not the
+/// `{ data, len }` pair the C ABI uses). `_TYPE` is the stable dispatch tag
+/// (see `event_type_of()`); `_ID` stays the human-readable identity used in
+/// logs and diagnostics.
+[[nodiscard]] auto emit_event_c_abi(const model &program,
+                                    std::uint32_t module_index,
+                                    const decl_model &decl) -> std::string {
+    code_writer writer;
+    const auto c_name{c_decl_name(program, module_index, decl)};
+    const auto upper{
+        emit::upper(emit::abi_prefix(module_name(program, module_index))) +
+        "_EVENT_" + emit::upper(decl.name)};
+    for (const auto &field : decl.fields) {
+        if (field.type.kind != resolved_type::category::slice) {
+            continue;
+        }
+        const auto &element{field.type.arguments.front()};
+        writer.line("typedef struct {} {{",
+                    event_slice_c_name(program, module_index, decl, field));
+        writer.line("    const {} *data;",
+                    emit::c_primitive_name(element.primitive));
+        writer.line("    uint64_t len;");
+        writer.line("}} {};",
+                    event_slice_c_name(program, module_index, decl, field));
+        writer.blank();
+    }
+    writer.raw(emit::doc_block(decl.documentation, "// "));
+    writer.line("typedef struct {} {{", c_name);
+    std::uint32_t cursor{0};
+    std::size_t padding_index{0};
+    for (const auto &field : decl.fields) {
+        if (field.abi_offset > cursor) {
+            writer.line("    uint8_t reserved_{}[{}];", padding_index,
+                        field.abi_offset - cursor);
+            ++padding_index;
+            cursor = field.abi_offset;
+        }
+        writer.raw(emit::doc_block(field.documentation, "    // "));
+        writer.line("    {} {};",
+                    event_c_type(program, module_index, decl, field),
+                    field.name);
+        cursor = field.abi_offset + field.abi_size;
+    }
+    if (decl.abi_size > cursor) {
+        writer.line("    uint8_t reserved_{}[{}];", padding_index,
+                    decl.abi_size - cursor);
+    }
+    writer.line("}} {}; // event {} size = {}", c_name, decl.name,
+                decl.abi_size);
+    writer.line("#define {}_SIZE ((uint32_t)sizeof({}))", upper, c_name);
+    writer.line("#define {}_ID \"{}\"", upper,
+                emit::escape_text(event_id_text(program, module_index, decl)));
+    writer.line("#define {}_TYPE ((uint64_t)0x{:016x}ULL)", upper,
+                event_type_of(event_id_text(program, module_index, decl)));
+    writer.blank();
+    return writer.take();
+}
+
 /// Event struct in the module header: deterministic field order, explicit
 /// `reserved_N` padding (the contract-struct algorithm without the leading
 /// `struct_size` word) and size/align/offset assertions, followed by the
@@ -275,10 +393,14 @@ struct ridl_context {
         writer.line("static_assert(offsetof({}, {}) == {});", decl.name,
                     field.name, field.abi_offset);
     }
-    writer.blank();
     writer.line("inline constexpr std::string_view {}_id =", decl.name);
     writer.line("    \"{}\";",
                 emit::escape_text(event_id_text(program, module_index, decl)));
+    const auto event_macro{
+        emit::upper(emit::abi_prefix(module_name(program, module_index))) +
+        "_EVENT_" + emit::upper(decl.name)};
+    writer.line("inline constexpr std::uint64_t {}_type = {}_TYPE;", decl.name,
+                event_macro);
     writer.blank();
     return writer.take();
 }
@@ -1356,14 +1478,7 @@ void emit_service_query_slot(code_writer &writer, const decl_model &decl) {
         if (decl.kind != declaration_kind::event) {
             continue;
         }
-        // Events are not part of the C ABI: only the stable id is exported, for
-        // logging/diagnostics.
-        writer.raw(emit::doc_block(decl.documentation, "// "));
-        writer.line(
-            "#define {}_EVENT_{}_ID \"{}\"",
-            emit::upper(emit::abi_prefix(module.name)), emit::upper(decl.name),
-            emit::escape_text(event_id_text(program, module_index, decl)));
-        writer.blank();
+        writer.raw(emit_event_c_abi(program, module_index, decl));
     }
     for (const auto &[key, slice_name] : context.slices) {
         if (key.first != module_index) {

@@ -669,7 +669,9 @@ service schedprobe : 1.0.0 {
                              "&schedule_detail::invoke_1,") !=
                    std::string::npos);
 
-            // C header: only the event id macro, never an event payload struct.
+            // C header: the event id, the stable dispatch tag and the payload
+            // struct a C subscriber reads from the opaque `event_publish`
+            // payload.
             expect(abi->find("#define "
                              "REFRAIN_SERVICES_SCHEDPROBE_EVENT_TICK_EVENT_ID "
                              "\"refrain:event/refrain/services/schedprobe/"
@@ -677,10 +679,17 @@ service schedprobe : 1.0.0 {
             expect(abi->find("#define "
                              "REFRAIN_SERVICES_SCHEDPROBE_EVENT_BLOCK_CHANGED_"
                              "ID") != std::string::npos);
+            expect(abi->find("#define "
+                             "REFRAIN_SERVICES_SCHEDPROBE_EVENT_TICK_EVENT_"
+                             "TYPE ((uint64_t)0x") != std::string::npos);
             expect(abi->find("typedef struct refrain_services_schedprobe_tick_"
-                             "event") == std::string::npos);
-            expect(abi->find("refrain_services_schedprobe_tick_event") ==
+                             "event {\n    int64_t tick;\n}") !=
                    std::string::npos);
+            // A batch event spells its slice field as a `{ data, len }` pair.
+            expect(abi->find("typedef struct "
+                             "refrain_services_schedprobe_block_changed_states_"
+                             "slice {\n    const uint32_t *data;\n    uint64_t "
+                             "len;\n}") != std::string::npos);
             // Contract structs still get their C ABI definition.
             expect(abi->find("typedef struct refrain_services_schedprobe_"
                              "payload") != std::string::npos);
