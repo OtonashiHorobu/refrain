@@ -832,6 +832,10 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
     }
 
     stage_timer pieces{profile_, "structure.pieces"};
+    // Terrain never contains a shape-sensitive block, so the shape refresh
+    // only has work when a piece reached the target chunk. The flag is set on
+    // the same intersection test that gates the piece placement.
+    bool center_shapes{false};
     worldgen_random decoration{
         std::make_unique<xoroshiro_random_source>(config_.seed)};
     const jlong decoration_seed =
@@ -852,6 +856,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
                 piece.bounds.min_z > pos.z * 16 + 15) {
                 continue;
             }
+            center_shapes = true;
             structure::place_structure_piece(
                 place_context, structure::to_piece_record(piece), random);
         }
@@ -903,7 +908,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         }
     }
     pieces.stop();
-    {
+    if (center_shapes) {
         const stage_timer timer{profile_, "structure.shapes"};
         structure::refresh_chunk_shapes(*center, region, states);
     }
