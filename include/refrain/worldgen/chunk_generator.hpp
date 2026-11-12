@@ -266,6 +266,10 @@ class chunk_generator {
     /// Returns the cached column, generating it on the first request. The
     /// cache is per generator instance, so its size covers the sliding start
     /// window of a contiguous batch without growing with the batch length.
+    /// Worker instances for a batch: this generator plus the extra ones the
+    /// previous batches created, created up to `worker_count` if needed.
+    [[nodiscard]] auto worker_instances(std::size_t worker_count)
+        -> result<std::vector<chunk_generator *>>;
     [[nodiscard]] auto start_height_at(const chunk_pos &column)
         -> result<const start_height_column *>;
     /// Unbearded block state of one position. Reads a cached vertical column
@@ -277,6 +281,25 @@ class chunk_generator {
     auto store_block_column(block_column_key key,
                             std::vector<block_state_id> states)
         -> const std::vector<block_state_id> *;
+
+    /// Pristine terrain of one neighbour, or null when it is not cached. The
+    /// returned chunk is shared and must be cloned before a stage writes to
+    /// it.
+    [[nodiscard]] auto cached_terrain(const chunk_pos &pos) const
+        -> const proto_chunk *;
+    /// Keeps a pristine terrain chunk for the neighbour fills of later
+    /// targets. Chunks that carry a beardifier are never stored, because their
+    /// fill depends on the structure pieces around the target rather than on
+    /// the position alone.
+    void store_terrain(const chunk_pos &pos,
+                       std::unique_ptr<proto_chunk> chunk);
+    /// Number of pristine chunks a worker keeps. A target fills its eight
+    /// neighbours, so the sliding window of a batch is at most three columns
+    /// of chunks; the bound covers that window without growing with the batch.
+    static constexpr std::size_t terrain_cache_capacity = 64;
+    std::unordered_map<chunk_pos, std::unique_ptr<proto_chunk>, chunk_pos_hash>
+        terrain_cache_{};
+    std::deque<chunk_pos> terrain_cache_order_{};
 
     chunk_generator_config config_{};
     std::shared_ptr<const shared_generator_data> shared_{};

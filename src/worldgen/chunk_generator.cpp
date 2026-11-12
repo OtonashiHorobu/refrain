@@ -349,6 +349,25 @@ auto chunk_generator::store_block_column(block_column_key key,
                 .first->second;
 }
 
+auto chunk_generator::cached_terrain(const chunk_pos &pos) const
+    -> const proto_chunk * {
+    const auto found = terrain_cache_.find(pos);
+    return found == terrain_cache_.end() ? nullptr : found->second.get();
+}
+
+void chunk_generator::store_terrain(const chunk_pos &pos,
+                                    std::unique_ptr<proto_chunk> chunk) {
+    if (terrain_cache_.contains(pos)) {
+        return;
+    }
+    while (terrain_cache_order_.size() >= terrain_cache_capacity) {
+        terrain_cache_.erase(terrain_cache_order_.front());
+        terrain_cache_order_.pop_front();
+    }
+    terrain_cache_order_.push_back(pos);
+    terrain_cache_.emplace(pos, std::move(chunk));
+}
+
 auto chunk_generator::start_height_at(const chunk_pos &column)
     -> result<const start_height_column *> {
     if (const auto found = height_columns_.find(column);
@@ -567,6 +586,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         const chunk_pos target = region_positions[index];
         density::sampler_context fill_context;
         std::optional<beardifier> beard;
+        bool bearded = false;
         if (area.has_value()) {
             const auto collected = structure::collect_beard(
                 area->starts, shared_->structure_data, target);
@@ -576,6 +596,21 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
                               collected.affected_box);
                 fill_context.set_field(density::context_key::beardifier,
                                        &*beard);
+                bearded = true;
+            }
+        }
+        // Terrain is a pure function of the seed, the data and the position
+        // once the biome search starts from a fresh candidate, so the eight
+        // neighbour fills repeat neither across the batch nor within a
+        // target. A cached chunk is cloned because the structure and feature
+        // stages write into the generation region, and a bearded fill is
+        // never reused or stored: its result depends on the structure pieces
+        // around the target, not on the position alone.
+        if (needs_neighbours && !bearded) {
+            if (const auto *cached = cached_terrain(target);
+                cached != nullptr) {
+                chunks[index] = cached->clone();
+                continue;
             }
         }
         // A reference world strips the surface pass and carvers unless the
@@ -587,9 +622,13 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
             .carvers = reference_terrain ? dimension_->carvers() : nullptr,
             .surface = reference_terrain,
         };
+        dimension_->reset_biome_search();
         auto generated = dimension_->generate_terrain(target, stages);
         if (!generated) {
             return std::unexpected{generated.error()};
+        }
+        if (needs_neighbours && !bearded) {
+            store_terrain(target, (*generated)->clone());
         }
         chunks[index] = std::move(*generated);
     }
@@ -774,6 +813,11 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
     structure::refresh_chunk_shapes(*center, region, states);
 
     if (has_features_) {
+        // Feature placement reads biomes through the chunks of the region and
+        // falls back to the noise source only outside it. Starting that
+        // fallback from a fresh candidate keeps the decoration independent of
+        // how many fills the target needed.
+        dimension_->reset_biome_search();
         dimension_biome_resolver uncached{dimension_->biome_source(),
                                           dimension_->sampler()};
         chunk_biome_resolver biome_view{
@@ -969,6 +1013,24 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
     return std::move(chunks[0]);
 }
 
+auto chunk_generator::worker_instances(std::size_t worker_count)
+    -> result<std::vector<chunk_generator *>> {
+    while (workers_.size() + 1 < worker_count) {
+        auto created = create_with_shared(config_, shared_);
+        if (!created) {
+            return std::unexpected{created.error()};
+        }
+        workers_.push_back(std::move(*created));
+    }
+    std::vector<chunk_generator *> instances;
+    instances.reserve(worker_count);
+    instances.push_back(this);
+    for (std::size_t index = 1; index < worker_count; ++index) {
+        instances.push_back(workers_[index - 1].get());
+    }
+    return instances;
+}
+
 auto chunk_generator::generate_batch(std::span<const chunk_pos> positions,
                                      std::size_t workers)
     -> result<std::vector<std::unique_ptr<proto_chunk>>> {
@@ -995,19 +1057,11 @@ auto chunk_generator::generate_batch(std::span<const chunk_pos> positions,
         return chunks;
     }
 
-    while (workers_.size() + 1 < worker_count) {
-        auto created = create_with_shared(config_, shared_);
-        if (!created) {
-            return std::unexpected{created.error()};
-        }
-        workers_.push_back(std::move(*created));
+    auto instances = worker_instances(worker_count);
+    if (!instances) {
+        return std::unexpected{instances.error()};
     }
-    std::vector<chunk_generator *> worker_instances;
-    worker_instances.reserve(worker_count);
-    worker_instances.push_back(this);
-    for (std::size_t index = 1; index < worker_count; ++index) {
-        worker_instances.push_back(workers_[index - 1].get());
-    }
+    auto &instances_by_worker = *instances;
 
     const std::size_t claim_size = std::clamp<std::size_t>(
         (positions.size() + worker_count * 2U - 1) / (worker_count * 2U), 1U,
@@ -1018,7 +1072,7 @@ auto chunk_generator::generate_batch(std::span<const chunk_pos> positions,
     threads.reserve(worker_count);
     for (std::size_t worker = 0; worker < worker_count; ++worker) {
         threads.emplace_back([&, worker] {
-            auto *generator = worker_instances[worker];
+            auto *generator = instances_by_worker[worker];
             for (;;) {
                 const std::size_t begin = next.fetch_add(claim_size);
                 if (begin >= positions.size()) {
@@ -1074,7 +1128,63 @@ auto chunk_generator::generate_area(chunk_pos origin, jint width, jint depth,
                 chunk_pos{.x = origin.x + x, .z = origin.z + z});
         }
     }
-    return generate_batch(positions, workers);
+    std::size_t worker_count = workers;
+    if (worker_count == 0) {
+        worker_count = std::thread::hardware_concurrency();
+        if (worker_count == 0) {
+            worker_count = 1;
+        }
+    }
+    worker_count = std::min(worker_count, positions.size());
+    if (worker_count <= 1) {
+        return generate_batch(positions, 1);
+    }
+    auto instances = worker_instances(worker_count);
+    if (!instances) {
+        return std::unexpected{instances.error()};
+    }
+    // A worker takes one contiguous run of the rectangle. Consecutive chunks
+    // share most of their neighbour fills, so a run keeps each worker's
+    // terrain cache hot; work stealing would hand every worker a scattered
+    // set and repeat those fills once per worker.
+    std::vector<std::unique_ptr<proto_chunk>> chunks(positions.size());
+    std::vector<std::optional<error>> errors(positions.size());
+    const std::size_t base = positions.size() / worker_count;
+    const std::size_t extra = positions.size() % worker_count;
+    std::vector<std::jthread> threads;
+    threads.reserve(worker_count);
+    std::size_t begin = 0;
+    for (std::size_t worker = 0; worker < worker_count; ++worker) {
+        const std::size_t end = begin + base + (worker < extra ? 1U : 0U);
+        auto *generator = (*instances)[worker];
+        threads.emplace_back([&, generator, begin, end] {
+            for (std::size_t index = begin; index < end; ++index) {
+                try {
+                    auto generated = generator->generate_impl(positions[index]);
+                    if (!generated) {
+                        errors[index] = generated.error();
+                    } else {
+                        chunks[index] = std::move(*generated);
+                    }
+                } catch (const std::exception &exception) {
+                    errors[index] = fail(error_code::unknown, exception.what());
+                } catch (...) {
+                    errors[index] =
+                        fail(error_code::unknown, "chunk generation failed");
+                }
+            }
+        });
+        begin = end;
+    }
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    for (const auto &error : errors) {
+        if (error.has_value()) {
+            return std::unexpected{*error};
+        }
+    }
+    return chunks;
 }
 
 } // namespace refrain::worldgen

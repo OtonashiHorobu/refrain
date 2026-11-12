@@ -61,7 +61,26 @@ struct options {
     jint origin_z{0};
     jint repeat{3};
     std::string output{};
+    bool chunk_hash{false};
 };
+
+auto hash_bytes(std::uint64_t hash, std::string_view text) -> std::uint64_t {
+    constexpr std::uint64_t prime = 1099511628211ULL;
+    for (const char character : text) {
+        hash ^= static_cast<unsigned char>(character);
+        hash *= prime;
+    }
+    return hash;
+}
+
+auto hash_integer(std::uint64_t hash, std::uint64_t value) -> std::uint64_t {
+    constexpr std::uint64_t prime = 1099511628211ULL;
+    for (unsigned shift = 0; shift < 64; shift += 8) {
+        hash ^= (value >> shift) & 0xFFU;
+        hash *= prime;
+    }
+    return hash;
+}
 
 auto skip_message() -> int {
     fmt::print("bench-chunk-generator: skipped, REFRAIN_VANILLA_WORLDGEN is "
@@ -184,16 +203,15 @@ auto rectangle_for(jint chunks) -> std::pair<jint, jint> {
     return {width, depth};
 }
 
-auto make_positions(const options &config, jint chunks)
+auto make_positions(jint origin_x, jint origin_z, jint width, jint depth)
     -> std::vector<chunk_pos> {
-    const auto [width, depth] = rectangle_for(chunks);
     std::vector<chunk_pos> positions;
     positions.reserve(static_cast<std::size_t>(width) *
                       static_cast<std::size_t>(depth));
     for (jint x = 0; x < width; ++x) {
         for (jint z = 0; z < depth; ++z) {
             positions.push_back(
-                chunk_pos{.x = config.origin_x + x, .z = config.origin_z + z});
+                chunk_pos{.x = origin_x + x, .z = origin_z + z});
         }
     }
     return positions;
@@ -217,10 +235,7 @@ struct scenario_result {
 auto run_scenario(const options &config, generation_target target, jint chunks,
                   std::size_t workers, std::ostream *stream)
     -> std::optional<scenario_result> {
-    const auto positions = make_positions(config, chunks);
     const auto [width, depth] = rectangle_for(chunks);
-    (void)width;
-    (void)depth;
     const auto create_begin = clock_type::now();
     auto created = chunk_generator::create(chunk_generator_config{
         .data_root = config.data_root,
@@ -252,6 +267,8 @@ auto run_scenario(const options &config, generation_target target, jint chunks,
     per_chunk_ms.reserve(static_cast<std::size_t>(chunks));
     double cold_batch_ms = 0.0;
 
+    const auto positions =
+        make_positions(config.origin_x, config.origin_z, width, depth);
     for (jint repeat = 0; repeat < config.repeat; ++repeat) {
         const auto begin = clock_type::now();
         if (workers == 1) {
@@ -345,6 +362,106 @@ auto run_scenario(const options &config, generation_target target, jint chunks,
     return result;
 }
 
+auto chunk_digest(const proto_chunk &chunk) -> std::uint64_t {
+    const auto &table = chunk.table();
+    auto hash = std::uint64_t{0xcbf29ce484222325ULL};
+    hash = hash_integer(hash, static_cast<std::uint64_t>(chunk.chunk_x()));
+    hash = hash_integer(hash, static_cast<std::uint64_t>(chunk.chunk_z()));
+    hash = hash_integer(hash, static_cast<std::uint64_t>(chunk.status()));
+    for (jint y = chunk.min_y(); y < chunk.min_y() + chunk.height(); ++y) {
+        for (jint z = 0; z < 16; ++z) {
+            for (jint x = 0; x < 16; ++x) {
+                hash = hash_bytes(hash, table.name(chunk.state_at(x, y, z)));
+            }
+        }
+    }
+    for (jint y = chunk.min_y(); y < chunk.min_y() + chunk.height(); y += 4) {
+        for (jint z = 0; z < 16; z += 4) {
+            for (jint x = 0; x < 16; x += 4) {
+                hash = hash_integer(hash, chunk.biome_at(x, y, z));
+            }
+        }
+    }
+    for (const auto &start : chunk.structure_starts()) {
+        hash = hash_bytes(hash, start.structure);
+        hash = hash_bytes(hash, start.step);
+        hash = hash_integer(hash, static_cast<std::uint64_t>(start.chunk_x));
+        hash = hash_integer(hash, static_cast<std::uint64_t>(start.chunk_z));
+        hash = hash_integer(hash, static_cast<std::uint64_t>(start.min_x));
+        hash = hash_integer(hash, static_cast<std::uint64_t>(start.min_y));
+        hash = hash_integer(hash, static_cast<std::uint64_t>(start.min_z));
+        hash = hash_integer(hash, static_cast<std::uint64_t>(start.max_x));
+        hash = hash_integer(hash, static_cast<std::uint64_t>(start.max_y));
+        hash = hash_integer(hash, static_cast<std::uint64_t>(start.max_z));
+        for (const auto &piece : start.pieces) {
+            hash = hash_bytes(hash, piece.type);
+        }
+    }
+    hash = hash_integer(
+        hash, static_cast<std::uint64_t>(chunk.block_entities().size()));
+    for (const auto &[pos, entity] : chunk.block_entities()) {
+        (void)entity;
+        hash = hash_integer(hash, static_cast<std::uint64_t>(pos.x));
+        hash = hash_integer(hash, static_cast<std::uint64_t>(pos.y));
+        hash = hash_integer(hash, static_cast<std::uint64_t>(pos.z));
+    }
+    for (const auto &section : chunk.post_processing()) {
+        for (const auto packed : section) {
+            hash = hash_integer(hash, packed);
+        }
+    }
+    return hash;
+}
+
+auto run_chunk_hash(const options &config, generation_target target,
+                    std::ostream *stream) -> bool {
+    auto created = chunk_generator::create(chunk_generator_config{
+        .data_root = config.data_root,
+        .templates_root = config.templates_root,
+        .seed = config.seed,
+        .kind = config.kind,
+        .fixed_biome = config.biome,
+        .target = target,
+        .structure_sets = {},
+        .reference_world = false,
+    });
+    if (!created) {
+        fmt::print(stderr, "bench-chunk-generator: create failed: {}\n",
+                   created.error().message);
+        return false;
+    }
+    auto generator = std::move(*created);
+    const auto [width, depth] = rectangle_for(config.chunk_counts.front());
+    const auto positions =
+        make_positions(config.origin_x, config.origin_z, width, depth);
+    auto total = std::uint64_t{0xcbf29ce484222325ULL};
+    for (const auto &position : positions) {
+        auto generated = generator->generate(position);
+        if (!generated) {
+            fmt::print(stderr, "bench-chunk-generator: generate failed: {}\n",
+                       generated.error().message);
+            return false;
+        }
+        const auto digest = chunk_digest(**generated);
+        total = hash_integer(total, digest);
+        const auto line = fmt::format(
+            "CHUNK_HASH target={} seed={} pos={},{} digest={:016x}",
+            target_name(target), config.seed, position.x, position.z, digest);
+        fmt::print("{}\n", line);
+        if (stream != nullptr) {
+            *stream << line << '\n';
+        }
+    }
+    const auto line = fmt::format(
+        "CHUNK_HASH_TOTAL target={} seed={} chunks={} digest={:016x}",
+        target_name(target), config.seed, positions.size(), total);
+    fmt::print("{}\n", line);
+    if (stream != nullptr) {
+        *stream << line << '\n';
+    }
+    return true;
+}
+
 auto parse_options(int argc, char **argv) -> std::optional<options> {
     options config;
     if (const char *root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
@@ -384,7 +501,10 @@ auto parse_options(int argc, char **argv) -> std::optional<options> {
                 "1,2,4,8)\n"
                 "  --repeat <n>             batches per scenario (default 3)\n"
                 "  --origin-x/--origin-z   area origin (default 0)\n"
-                "  --output <path>          append the result lines here\n");
+                "  --output <path>          append the result lines here\n"
+                "  --chunk-hash             hash the generated chunk set "
+                "instead "
+                "of timing it\n");
             return std::nullopt;
         }
         if (argument == "--data-root") {
@@ -479,6 +599,8 @@ auto parse_options(int argc, char **argv) -> std::optional<options> {
                 config.worker_counts.push_back(
                     static_cast<std::size_t>(parsed));
             }
+        } else if (argument == "--chunk-hash") {
+            config.chunk_hash = true;
         } else if (argument == "--output") {
             const auto value = next(argument);
             if (!value) {
@@ -526,6 +648,15 @@ auto main(int argc, char **argv) -> int {
             return 1;
         }
         stream = &output;
+    }
+
+    if (config.chunk_hash) {
+        for (const auto target : config.targets) {
+            if (!run_chunk_hash(config, target, stream)) {
+                return 1;
+            }
+        }
+        return 0;
     }
 
     for (const auto target : config.targets) {
