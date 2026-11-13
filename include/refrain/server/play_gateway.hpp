@@ -35,6 +35,16 @@ class play_gateway {
     virtual void send_raw(std::uint64_t connection,
                           std::span<const std::byte> body) = 0;
 
+    /// Send one already encoded body to several connections. The default
+    /// sends it once per connection; a live gateway shares the encoded frame
+    /// so a cohort announcement is compressed once.
+    virtual void send_raw_many(std::span<const std::uint64_t> connections,
+                               std::span<const std::byte> body) {
+        for (const auto connection : connections) {
+            send_raw(connection, body);
+        }
+    }
+
     /// Connections currently in play (closed connections excluded).
     [[nodiscard]] virtual auto active_connections() const
         -> std::vector<std::uint64_t> = 0;
@@ -92,6 +102,8 @@ class server_gateway final : public play_gateway {
 
     void send_raw(std::uint64_t connection,
                   std::span<const std::byte> body) override;
+    void send_raw_many(std::span<const std::uint64_t> connections,
+                       std::span<const std::byte> body) override;
 
     [[nodiscard]] auto active_connections() const
         -> std::vector<std::uint64_t> override;

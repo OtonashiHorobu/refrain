@@ -16,14 +16,11 @@ auto player_table::add(registration record) -> result<entity_id> {
         return std::unexpected{make_error(error_code::invalid_argument,
                                           "player name must not be empty")};
     }
-    for (const auto &[id, existing] : players_) {
-        static_cast<void>(id);
-        if (existing.connection == record.connection) {
-            return std::unexpected{
-                make_error(error_code::invalid_argument,
-                           fmt::format("connection {} already owns a player",
-                                       record.connection))};
-        }
+    const auto connection{record.connection};
+    if (by_connection_.contains(connection)) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument,
+            fmt::format("connection {} already owns a player", connection))};
     }
     auto id{allocate_entity_id()};
     if (!id) {
@@ -41,15 +38,18 @@ auto player_table::add(registration record) -> result<entity_id> {
     value.game_mode = record.game_mode;
     value.inventory.resize(record.inventory_slots);
     players_.emplace(*id, std::move(value));
+    by_connection_.emplace(connection, *id);
     return *id;
 }
 
 auto player_table::remove(std::uint64_t connection) -> bool {
-    const auto found{find_by_connection(connection)};
-    if (found == nullptr) {
+    const auto found{by_connection_.find(connection)};
+    if (found == by_connection_.end()) {
         return false;
     }
-    return players_.erase(found->id) != 0U;
+    players_.erase(found->second);
+    by_connection_.erase(found);
+    return true;
 }
 
 auto player_table::find(entity_id id) noexcept -> player_state * {
@@ -64,24 +64,20 @@ auto player_table::find(entity_id id) const noexcept -> const player_state * {
 
 auto player_table::find_by_connection(std::uint64_t connection) noexcept
     -> player_state * {
-    for (auto &[id, value] : players_) {
-        static_cast<void>(id);
-        if (value.connection == connection) {
-            return &value;
-        }
+    const auto found{by_connection_.find(connection)};
+    if (found == by_connection_.end()) {
+        return nullptr;
     }
-    return nullptr;
+    return find(found->second);
 }
 
 auto player_table::find_by_connection(std::uint64_t connection) const noexcept
     -> const player_state * {
-    for (const auto &[id, value] : players_) {
-        static_cast<void>(id);
-        if (value.connection == connection) {
-            return &value;
-        }
+    const auto found{by_connection_.find(connection)};
+    if (found == by_connection_.end()) {
+        return nullptr;
     }
-    return nullptr;
+    return find(found->second);
 }
 
 auto player_table::find_by_name(std::string_view name) noexcept

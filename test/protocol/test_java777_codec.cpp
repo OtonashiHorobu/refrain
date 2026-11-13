@@ -227,6 +227,100 @@ suite java777_codec_tests = [] {
         expect(outbound_id(first) == 1U);
         expect(outbound_id(second) == 2U);
     };
+
+    "protocol/777 codec shares one compressed frame across a cohort"_test = [] {
+        protocol::java777_codec codec{};
+        const std::array<std::uint64_t, 3> cohort{10, 11, 12};
+        for (const auto connection : cohort) {
+            codec.create_connection(connection);
+            expect(static_cast<bool>(codec.set_compression(connection, 0)));
+        }
+        std::vector<std::byte> payload(512, std::byte{0x5A});
+        expect(static_cast<bool>(
+            codec.send_shared_packet(cohort, 0x40U, payload)));
+
+        std::vector<std::vector<std::byte>> frames{};
+        for (const auto connection : cohort) {
+            std::span<const std::byte> framed{};
+            expect(codec.take_outbound(connection, framed));
+            frames.emplace_back(framed.begin(), framed.end());
+            // Each connection can decode the shared frame on its own.
+            net::frame_decoder decoder{0};
+            expect(static_cast<bool>(decoder.push(frames.back())));
+            std::vector<std::byte> body;
+            auto next{decoder.next(body)};
+            expect(next.has_value() && *next);
+            net::reader reader{body};
+            auto packet_id{reader.read_varint()};
+            expect(packet_id.has_value() && *packet_id == 0x40U);
+            const auto decoded{reader.read_bytes(reader.remaining())};
+            expect(decoded.has_value() && decoded->size() == payload.size());
+        }
+        // Without a cipher the encoded frame is the same bytes for everyone.
+        expect(frames[0] == frames[1]);
+        expect(frames[1] == frames[2]);
+
+        // An unknown connection does not abort the rest of the cohort.
+        const std::array<std::uint64_t, 2> mixed{10, 99};
+        expect(
+            static_cast<bool>(codec.send_shared_packet(mixed, 0x41U, payload)));
+        std::span<const std::byte> framed{};
+        expect(codec.take_outbound(10, framed));
+        expect(!codec.take_outbound(99, framed));
+    };
+
+    "protocol/777 codec encrypts a shared send per connection"_test = [] {
+        std::array<std::byte, net::aes128_key_bytes> key{};
+        for (std::size_t index{0}; index < key.size(); ++index) {
+            key[index] = static_cast<std::byte>(index + 1U);
+        }
+        auto second_iv{key};
+        second_iv[0] ^= std::byte{0xFF};
+        const std::array<std::array<std::byte, net::aes128_key_bytes>, 2> ivs{
+            key, second_iv};
+        protocol::java777_codec codec{};
+        const std::array<std::uint64_t, 2> cohort{20, 21};
+        for (std::size_t index{0}; index < cohort.size(); ++index) {
+            const auto connection{cohort[index]};
+            codec.create_connection(connection);
+            expect(static_cast<bool>(codec.set_compression(connection, 0)));
+            expect(static_cast<bool>(
+                codec.set_cipher(connection, key, ivs[index])));
+        }
+        const std::array payload{std::byte{1}, std::byte{2}, std::byte{3}};
+        expect(static_cast<bool>(
+            codec.send_shared_packet(cohort, 0x42U, payload)));
+
+        std::vector<std::vector<std::byte>> frames{};
+        for (const auto connection : cohort) {
+            std::span<const std::byte> framed{};
+            expect(codec.take_outbound(connection, framed));
+            frames.emplace_back(framed.begin(), framed.end());
+        }
+        // A stream cipher advances per connection, so the frames differ even
+        // though the shared plaintext frame is the same.
+        expect(frames[0] != frames[1]);
+        for (std::size_t index{0}; index < cohort.size(); ++index) {
+            auto client{net::aes128_cfb8::create(key, ivs[index])};
+            expect(client.has_value());
+            if (!client) {
+                continue;
+            }
+            auto plain{client->decrypt(frames[index])};
+            expect(plain.has_value());
+            if (!plain) {
+                continue;
+            }
+            net::frame_decoder decoder{0};
+            expect(static_cast<bool>(decoder.push(*plain)));
+            std::vector<std::byte> body;
+            auto next{decoder.next(body)};
+            expect(next.has_value() && *next);
+            net::reader reader{body};
+            auto packet_id{reader.read_varint()};
+            expect(packet_id.has_value() && *packet_id == 0x42U);
+        }
+    };
 };
 
 } // namespace

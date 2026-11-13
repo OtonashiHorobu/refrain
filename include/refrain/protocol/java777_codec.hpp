@@ -55,6 +55,10 @@ class java777_codec final : public net::protocol_codec {
                                    std::uint32_t packet_id,
                                    std::span<const std::byte> payload)
         -> status override;
+    [[nodiscard]] auto
+    send_shared_packet(std::span<const std::uint64_t> connections,
+                       std::uint32_t packet_id,
+                       std::span<const std::byte> payload) -> status override;
     [[nodiscard]] auto take_outbound(std::uint64_t connection,
                                      std::span<const std::byte> &data)
         -> bool override;

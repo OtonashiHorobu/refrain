@@ -52,6 +52,23 @@ class protocol_codec {
     virtual auto send_packet(std::uint64_t connection, std::uint32_t packet_id,
                              std::span<const std::byte> payload) -> status = 0;
 
+    /// Encode one packet for several connections. The default encodes it once
+    /// per connection; a codec whose framing does not depend on the
+    /// connection may compress once and share the frame, which matters when
+    /// the same body goes to every player in play.
+    ///
+    /// A broadcast is best-effort: a connection that has already gone away is
+    /// skipped and the rest of the cohort still receives the packet.
+    virtual auto send_shared_packet(std::span<const std::uint64_t> connections,
+                                    std::uint32_t packet_id,
+                                    std::span<const std::byte> payload)
+        -> status {
+        for (const auto connection : connections) {
+            static_cast<void>(send_packet(connection, packet_id, payload));
+        }
+        return status_ok();
+    }
+
     /// Pop one framed/encrypted chunk. `data` borrows from the codec and is
     /// valid until the next call on this connection.
     virtual auto take_outbound(std::uint64_t connection,
