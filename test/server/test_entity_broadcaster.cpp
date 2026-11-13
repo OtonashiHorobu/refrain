@@ -692,4 +692,124 @@ suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
             expect(gateway.move_packets == player_count * (player_count - 1));
             expect(gateway.malformed == 0U);
         };
+
+    "a configured player-list byte budget spreads a fan-out over ticks"_test =
+        [] {
+            session::play_session players{};
+            constexpr std::uint64_t player_count{4};
+            for (std::uint64_t connection{1}; connection <= player_count;
+                 ++connection) {
+                join(players, connection,
+                     static_cast<double>(connection) * 40.0, 0.0);
+            }
+            counting_play_gateway gateway{};
+            entity_broadcaster broadcaster{
+                gateway, 16,
+                entity_broadcaster::budgets{.max_info_bytes_per_tick = 1U}};
+            for (std::uint64_t connection{1}; connection <= player_count;
+                 ++connection) {
+                broadcaster.joined(connection);
+            }
+
+            std::size_t delivered{0};
+            for (std::uint64_t tick{0}; tick < player_count; ++tick) {
+                gateway.reset();
+                broadcaster.tick(players);
+                // A body is larger than the whole budget, so the drain hands
+                // it to one recipient per tick instead of overrunning.
+                expect(gateway.info_packets == 1U) << "one recipient per tick";
+                expect(gateway.malformed == 0U);
+                delivered += gateway.info_packets;
+            }
+            expect(delivered == player_count);
+            gateway.reset();
+            broadcaster.tick(players);
+            expect(gateway.info_packets == 0U)
+                << "the queued fan-out must finish";
+        };
+
+    "a configured spawn budget spreads a dense fill over ticks"_test = [] {
+        constexpr std::uint64_t player_count{6};
+        constexpr std::int32_t tracking_chunks{32};
+        session::play_session players{};
+        for (std::uint64_t connection{1}; connection <= player_count;
+             ++connection) {
+            join(players, connection, 0.0, 0.0);
+        }
+        counting_play_gateway gateway{};
+        entity_broadcaster broadcaster{
+            gateway, tracking_chunks,
+            entity_broadcaster::budgets{.max_spawns_per_tick = 1U}};
+
+        constexpr std::size_t pairs{player_count * (player_count - 1)};
+        std::size_t spawns{0};
+        std::size_t first_tick_spawns{0};
+        std::size_t ticks{0};
+        do {
+            gateway.reset();
+            broadcaster.tick(players);
+            // The budget is checked between viewers, so a tick may overrun it
+            // by the fan-out of the viewer it was already processing.
+            expect(gateway.spawn_packets <= player_count - 1)
+                << "at most one viewer's fan-out per tick";
+            if (ticks == 0) {
+                first_tick_spawns = gateway.spawn_packets;
+            }
+            spawns += gateway.spawn_packets;
+            expect(gateway.malformed == 0U);
+            ++ticks;
+            expect(ticks < 32U) << "the fill must complete";
+        } while (gateway.spawn_packets > 0);
+        expect(spawns == pairs);
+        expect(first_tick_spawns > 0U);
+        expect(first_tick_spawns < spawns)
+            << "a tiny budget must defer part of the fill";
+        expect(ticks > 1U);
+    };
+
+    "broadcast budgets below one are raised to one"_test = [] {
+        const auto clamped{entity_broadcaster::budgets{
+            .max_info_bytes_per_tick = 0U,
+            .max_queued_info_bytes = 0U,
+            .max_visibility_pairs_per_tick = 0U,
+            .max_spawns_per_tick = 0U,
+        }
+                               .clamped()};
+        expect(clamped.max_info_bytes_per_tick == 1U);
+        expect(clamped.max_queued_info_bytes == 1U);
+        expect(clamped.max_visibility_pairs_per_tick == 1U);
+        expect(clamped.max_spawns_per_tick == 1U);
+
+        // Configured counts are signed: a negative length is not a budget.
+        const auto configured{
+            entity_broadcaster::budgets::from_config(-1, 0, -100, 3)};
+        expect(configured.max_info_bytes_per_tick == 1U);
+        expect(configured.max_queued_info_bytes == 1U);
+        expect(configured.max_visibility_pairs_per_tick == 1U);
+        expect(configured.max_spawns_per_tick == 3U);
+
+        const auto custom{
+            entity_broadcaster::budgets::from_config(1024, 2048, 300, 7)};
+        expect(custom.max_info_bytes_per_tick == 1024U);
+        expect(custom.max_queued_info_bytes == 2048U);
+        expect(custom.max_visibility_pairs_per_tick == 300U);
+        expect(custom.max_spawns_per_tick == 7U);
+    };
+
+    "a zero budget cannot stall the broadcaster"_test = [] {
+        session::play_session players{};
+        join(players, 1, 0.0, 0.0);
+        join(players, 2, 32.0, 0.0);
+        support::fake_play_gateway gateway{};
+        entity_broadcaster broadcaster{gateway, 16,
+                                       entity_broadcaster::budgets{
+                                           .max_info_bytes_per_tick = 0U,
+                                           .max_queued_info_bytes = 0U,
+                                           .max_visibility_pairs_per_tick = 0U,
+                                           .max_spawns_per_tick = 0U,
+                                       }};
+        broadcaster.tick(players);
+        expect(!gateway.sent.empty())
+            << "the constructor must normalize the budgets";
+    };
 };

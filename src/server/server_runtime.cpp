@@ -296,8 +296,34 @@ auto run_server(const server_run_options &options,
     refrain::session::chunk_tracker views{};
     const auto tracking_chunks{static_cast<std::int32_t>(std::max<std::int64_t>(
         1, options.network.get_int64("entity_tracking_range", 512) / 16))};
+    using broadcast_budgets = refrain::server::entity_broadcaster::budgets;
+    constexpr broadcast_budgets default_broadcast_budgets{};
+    const auto broadcast_limits{broadcast_budgets::from_config(
+        options.network.get_int64(
+            "broadcast.info_bytes_per_tick",
+            static_cast<std::int64_t>(
+                default_broadcast_budgets.max_info_bytes_per_tick)),
+        options.network.get_int64(
+            "broadcast.queued_info_bytes",
+            static_cast<std::int64_t>(
+                default_broadcast_budgets.max_queued_info_bytes)),
+        options.network.get_int64(
+            "broadcast.visibility_pairs_per_tick",
+            static_cast<std::int64_t>(
+                default_broadcast_budgets.max_visibility_pairs_per_tick)),
+        options.network.get_int64(
+            "broadcast.spawns_per_tick",
+            static_cast<std::int64_t>(
+                default_broadcast_budgets.max_spawns_per_tick)))};
+    log_config.info("broadcast info_bytes_per_tick={} queued_info_bytes={} "
+                    "visibility_pairs_per_tick={} spawns_per_tick={}",
+                    broadcast_limits.max_info_bytes_per_tick,
+                    broadcast_limits.max_queued_info_bytes,
+                    broadcast_limits.max_visibility_pairs_per_tick,
+                    broadcast_limits.max_spawns_per_tick);
     refrain::server::server_gateway gateway{};
-    refrain::server::entity_broadcaster broadcaster{gateway, tracking_chunks};
+    refrain::server::entity_broadcaster broadcaster{gateway, tracking_chunks,
+                                                    broadcast_limits};
     refrain::net::server *active_listener{nullptr};
     const auto external_join{options.player_join};
     const auto external_leave{options.player_leave};

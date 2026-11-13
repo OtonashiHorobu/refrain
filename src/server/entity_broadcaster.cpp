@@ -225,9 +225,10 @@ void broadcast_session_animation(play_gateway &gateway,
 } // namespace
 
 entity_broadcaster::entity_broadcaster(play_gateway &gateway,
-                                       std::int32_t tracking_chunks)
+                                       std::int32_t tracking_chunks,
+                                       budgets limits)
     : gateway_(gateway), tracking_chunks_(tracking_chunks),
-      index_(tracking_chunks) {}
+      limits_(limits.clamped()), index_(tracking_chunks) {}
 
 void entity_broadcaster::tick(const refrain::session::play_session &players) {
     // The lifecycle updates go out before the visibility pass: a client that
@@ -752,8 +753,8 @@ void entity_broadcaster::drain_info_sends() {
     // One budget for the whole tick. Compression dominates the cost of a
     // player-list send and scales with the body, so bytes handed to the
     // transport are the work unit.
-    std::size_t budget{max_info_bytes_per_tick};
-    if (pending_info_bytes_ > max_queued_info_bytes) {
+    std::size_t budget{limits_.max_info_bytes_per_tick};
+    if (pending_info_bytes_ > limits_.max_queued_info_bytes) {
         budget = std::numeric_limits<std::size_t>::max();
     }
     while (!pending_info_sends_.empty() && budget > 0) {
