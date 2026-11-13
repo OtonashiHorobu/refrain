@@ -597,10 +597,9 @@ auto capture_name(const climate::measurement::tie_capture &capture)
 /// captured tie print a line, apart from the final total. The counters are
 /// process-wide, so one scenario per invocation keeps the total exact.
 ///
-/// TODO: the captured target and its two leaves are reported but not asserted;
-/// add a regression test that replays the target through the real parameter
-/// table and pins both the warmed and the fresh selection, so a change to the
-/// tie order fails the suite.
+/// The biome tie regression tests pin two captured targets and assert both the
+/// selection the warmed search stores in the chunk and the selection a
+/// root-start search returns, without this option enabled.
 auto run_climate_ties(const options &config, std::ostream *stream) -> bool {
     if (!config.biome.empty()) {
         fmt::print(stderr,
