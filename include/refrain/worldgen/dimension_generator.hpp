@@ -181,6 +181,13 @@ class dimension_generator {
     block_state_id lava_state_{0};
     std::unordered_map<std::string, std::unique_ptr<positional_random_factory>>
         factories_{};
+    /// The compiled material rule and the context it captures by address.
+    /// The rule depends only on the seed and the loaded documents, so it is
+    /// compiled once; the context is rebound per chunk at this stable address
+    /// and keeps its update counters increasing, which stops a cached rule
+    /// closure from reusing a result of the previous chunk.
+    std::optional<surface::material_context> rule_context_{};
+    std::optional<surface::rule_evaluator> compiled_rule_{};
 };
 
 } // namespace refrain::worldgen

@@ -97,8 +97,36 @@ auto contains_biome(const std::vector<std::string> &keys, std::string_view key)
 
 } // namespace
 
-auto material_context::density_cache::value_at(jint x, jint y, jint z) const
+void material_context::density_cache::refill() {
+    const auto &bounds = context->bounds();
+    size_x = 16;
+    size_z = 16;
+    size_y = static_cast<std::size_t>(bounds.max_block_y - bounds.min_y + 1);
+    min_x = bounds.chunk_min_x;
+    min_y = bounds.min_y;
+    min_z = bounds.chunk_min_z;
+    const volume vol{static_cast<jint>(size_x),
+                     static_cast<jint>(size_y),
+                     static_cast<jint>(size_z),
+                     min_x,
+                     min_y,
+                     min_z};
+    values.resize(vol.size());
+    buffer sampled{vol.size()};
+    sampler->sample_volume(*sampler_context, sampled, vol);
+    std::copy(sampled.data(), sampled.data() + sampled.size(), values.begin());
+}
+
+auto material_context::density_cache::value_at(jint x, jint y, jint z)
     -> float {
+    if (context != nullptr) {
+        const auto &bounds = context->bounds();
+        if (min_x != bounds.chunk_min_x || min_z != bounds.chunk_min_z ||
+            size_y != static_cast<std::size_t>(bounds.max_block_y -
+                                               bounds.min_y + 1)) {
+            refill();
+        }
+    }
     const jint max_x = min_x + static_cast<jint>(size_x) - 1;
     const jint max_y = min_y + static_cast<jint>(size_y) - 1;
     const jint max_z = min_z + static_cast<jint>(size_z) - 1;
@@ -202,6 +230,18 @@ material_context::material_context(
     const density::sampler_context &density_context)
     : states_{&states}, bounds_{bounds}, providers_{std::move(providers)},
       density_context_{&density_context} {}
+
+void material_context::rebind(block_states &states, generation_bounds bounds,
+                              material_providers providers,
+                              const density::sampler_context &density_context) {
+    states_ = &states;
+    bounds_ = bounds;
+    providers_ = std::move(providers);
+    density_context_ = &density_context;
+    biome_.reset();
+    noise_samplers_.clear();
+    density_samplers_.clear();
+}
 
 void material_context::update_xz(jint block_x, jint block_z,
                                  jint surface_gradient_x,
@@ -344,25 +384,9 @@ auto material_context::densities_in_chunk(std::string_view id, bool prefill)
     cache->sampler = std::move(*sampler);
     cache->prefill = prefill;
     cache->sampler_context = density_context_;
+    cache->context = this;
     if (prefill) {
-        cache->size_x = 16;
-        cache->size_z = 16;
-        cache->size_y =
-            static_cast<std::size_t>(bounds_.max_block_y - bounds_.min_y + 1);
-        cache->min_x = bounds_.chunk_min_x;
-        cache->min_y = bounds_.min_y;
-        cache->min_z = bounds_.chunk_min_z;
-        const volume vol{static_cast<jint>(cache->size_x),
-                         static_cast<jint>(cache->size_y),
-                         static_cast<jint>(cache->size_z),
-                         cache->min_x,
-                         cache->min_y,
-                         cache->min_z};
-        cache->values.resize(vol.size());
-        buffer values{vol.size()};
-        cache->sampler->sample_volume(*density_context_, values, vol);
-        std::copy(values.data(), values.data() + values.size(),
-                  cache->values.begin());
+        cache->refill();
     }
     density_samplers_.emplace(std::move(key), cache);
     return std::function<float(jint, jint, jint)>(

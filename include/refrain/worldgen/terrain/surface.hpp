@@ -120,6 +120,15 @@ class material_context {
     void update_y(jint stone_depth_above, jint stone_depth_below,
                   jint water_height, jint block_y);
 
+    /// Points this context at another chunk. The compiled material rule holds
+    /// the context by address, so a caller that reuses one rule across chunks
+    /// rebinds the same object instead of building a new one. The update
+    /// counters keep increasing across a rebind so a rule closure that caches
+    /// a result per update never serves it for the next chunk.
+    void rebind(block_states &states, generation_bounds bounds,
+                material_providers providers,
+                const density::sampler_context &density_context);
+
     [[nodiscard]] auto last_update_xz() const noexcept -> jlong {
         return last_update_xz_;
     }
@@ -195,6 +204,11 @@ class material_context {
     struct density_cache {
         density::sampler_ptr sampler{};
         const density::sampler_context *sampler_context{nullptr};
+        /// The context that owns this cache. A prefill is sampled over one
+        /// chunk origin and one maximum block height, and the rule that holds
+        /// the cache can outlive a chunk, so a lookup refills when the
+        /// context moved.
+        material_context *context{nullptr};
         bool prefill{false};
         std::vector<float> values{};
         std::size_t size_x{0};
@@ -204,7 +218,9 @@ class material_context {
         jint min_y{0};
         jint min_z{0};
 
-        [[nodiscard]] auto value_at(jint x, jint y, jint z) const -> float;
+        /// Samples the volume of the context's current chunk.
+        void refill();
+        [[nodiscard]] auto value_at(jint x, jint y, jint z) -> float;
     };
 
     block_states *states_{nullptr};

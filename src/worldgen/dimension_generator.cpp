@@ -512,18 +512,28 @@ auto dimension_generator::generate_terrain(const chunk_pos &pos,
     };
     providers.possible_biomes = &shared_->possible_biomes;
 
-    surface::material_context rule_context{rule_states_, bounds, providers,
-                                           sampler_context_};
-    surface::rule_compiler compiler{shared_->documents, rule_context};
-    auto compiled = compiler.compile(shared_->material_rule);
-    if (!compiled) {
-        return std::unexpected{compiled.error()};
+    if (rule_context_.has_value()) {
+        rule_context_->rebind(rule_states_, bounds, providers,
+                              sampler_context_);
+    } else {
+        rule_context_.emplace(rule_states_, bounds, providers,
+                              sampler_context_);
     }
+    if (!compiled_rule_.has_value()) {
+        surface::rule_compiler compiler{shared_->documents, *rule_context_};
+        auto compiled = compiler.compile(shared_->material_rule);
+        if (!compiled) {
+            return std::unexpected{compiled.error()};
+        }
+        compiled_rule_ = std::move(*compiled);
+    }
+    auto &rule_context = *rule_context_;
+    const auto &rule = *compiled_rule_;
     prepare.stop();
     if (stages.surface) {
         const stage_timer timer{stages.profile, "terrain.surface"};
         if (const auto built = system.build_surface(
-                *chunk, rule_context, *compiled, shared_->climates,
+                *chunk, rule_context, rule, shared_->climates,
                 shared_->temperatures, providers.biome);
             !built) {
             return std::unexpected{built.error()};
@@ -548,12 +558,12 @@ auto dimension_generator::generate_terrain(const chunk_pos &pos,
         };
         if (stages.surface) {
             apply.top_material =
-                [&system, &rule_context, &compiled,
+                [&system, &rule_context, &rule,
                  &chunk](jint block_x, jint block_y, jint block_z,
                          bool under_fluid) -> std::optional<surface::state_id> {
                 return system.top_material(
-                    rule_context, *compiled, block_x, block_y, block_z,
-                    under_fluid, [&chunk](jint x, jint z) {
+                    rule_context, rule, block_x, block_y, block_z, under_fluid,
+                    [&chunk](jint x, jint z) {
                         return chunk->first_available(
                                    heightmap_kind::world_surface_wg, x, z) -
                                1;
