@@ -520,6 +520,134 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
             expect(requested.empty());
         };
 
+    "server/chunk stream retries a failed column a bounded number of times"_test =
+        [] {
+            recording_gateway gateway;
+            gateway.active = {5};
+            auto log{std::make_shared<encode_log>()};
+            bool serve{false};
+            server::chunk_streamer streamer{gateway,
+                                            server::chunk_packet_source{}};
+            streamer.set_encoder(
+                [log, &serve](const server::chunk_packet_source &,
+                              sim::chunk_pos pos)
+                    -> refrain::result<std::vector<std::byte>> {
+                    ++log->calls;
+                    if (!serve) {
+                        return std::unexpected{
+                            refrain::make_error(refrain::error_code::not_found,
+                                                "column is not resident")};
+                    }
+                    const coordinate value{pos.x, pos.z};
+                    std::vector<std::byte> body(sizeof(value));
+                    std::memcpy(body.data(), &value, sizeof(value));
+                    return body;
+                });
+            std::vector<coordinate> requested{};
+            streamer.set_chunk_requester(
+                [&requested](std::int32_t x, std::int32_t z) {
+                    requested.push_back({x, z});
+                    return true;
+                });
+            session::chunk_tracker views;
+            static_cast<void>(views.update(5, 0, 0, 0));
+            streamer.tick(views);
+            expect(requested.size() == 1U);
+
+            // Each reported failure clears the in-flight marker and makes the
+            // streamer ask again, up to the attempt bound.
+            for (std::uint32_t attempt{1};
+                 attempt < server::chunk_streamer::max_chunk_attempts;
+                 ++attempt) {
+                streamer.chunk_failed(0, 0);
+                streamer.tick(views);
+                expect(requested.size() == attempt + 1);
+            }
+            streamer.chunk_failed(0, 0);
+            for (int tick{0}; tick < 5; ++tick) {
+                streamer.tick(views);
+            }
+            // The bound stops the retry loop: a permanently failing column is
+            // not requested once per tick.
+            expect(requested.size() ==
+                   server::chunk_streamer::max_chunk_attempts);
+
+            // The column arriving later is still streamed, so the client is
+            // not left with a hole because of the earlier failures.
+            serve = true;
+            streamer.chunk_ready(0, 0);
+            streamer.tick(views);
+            expect(streamed(gateway, 5) == std::vector<coordinate>{{0, 0}});
+        };
+
+    "server/chunk service reports a failed generation and stops waiting"_test =
+        [] {
+            test_support::scratch_directory scratch;
+            const auto path{(scratch.path() / "world").string()};
+            expect(static_cast<bool>(world::create_world(path, 7, "probe")));
+            auto opened{sim::world::open(path)};
+            expect(static_cast<bool>(opened));
+            if (!opened) {
+                return;
+            }
+            const auto port{server::make_borrowed_world_port(*opened)};
+            recording_gateway gateway;
+            gateway.active = {11};
+            server::chunk_service service;
+            server::chunk_generation::config settings{};
+            // A data root that does not exist: the workers cannot create a
+            // generator, which is the failure mode that used to leave every
+            // requested column in flight for the session.
+            settings.data_root = "/refrain/no-such-datapack";
+            settings.worker_count = 1;
+            settings.tile_size = 1;
+            settings.max_pending = 64;
+            expect(service.start_generation(settings).has_value());
+            service.attach(gateway,
+                           server::chunk_packet_source{.world = port.get()});
+            auto *streamer{service.streamer()};
+            auto *generation{service.generation()};
+            expect(streamer != nullptr);
+            expect(generation != nullptr);
+            if (streamer == nullptr || generation == nullptr) {
+                return;
+            }
+            streamer->set_encoder(
+                [](const server::chunk_packet_source &,
+                   sim::chunk_pos) -> refrain::result<std::vector<std::byte>> {
+                    return std::unexpected{
+                        refrain::make_error(refrain::error_code::not_found,
+                                            "column is not resident")};
+                });
+            std::uint64_t requests{0};
+            streamer->set_chunk_requester(
+                [generation, &requests](std::int32_t x, std::int32_t z) {
+                    ++requests;
+                    return generation->request({x, z});
+                });
+            session::chunk_tracker views;
+            static_cast<void>(views.update(11, 0, 0, 0));
+            const auto tick_start{refrain::core::now_ns()};
+            const auto run_ticks{[&](int count) {
+                for (int tick{0}; tick < count; ++tick) {
+                    service.tick(*port, views, tick_start);
+                    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+                }
+            }};
+            for (int tick{0};
+                 tick < 400 &&
+                 requests < server::chunk_streamer::max_chunk_attempts;
+                 ++tick) {
+                run_ticks(1);
+            }
+            expect(requests == server::chunk_streamer::max_chunk_attempts);
+            // The failure is reported and bounded: the streamer stops asking
+            // after the allowance instead of looping for the session.
+            const auto settled{requests};
+            run_ticks(20);
+            expect(requests == settled);
+        };
+
     "server/chunk store reload returns the same content"_test = [] {
         test_support::scratch_directory scratch;
         const auto path{(scratch.path() / "world").string()};

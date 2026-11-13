@@ -156,6 +156,16 @@ order. `state_hash()` covers the loaded columns, so a replay has to unload the
 same set at the same ticks; an order taken from a hash map or from task
 completion would make the hash depend on thread timing.
 
+### Generation failures
+
+A generation task that fails reports the columns of its tile. The pipeline
+forgets them so the streamer requests them again, and a column gets a fixed
+number of attempts before it is left unserved for that viewport visit. That
+keeps a permanently failing position from being requested once per tick, and it
+means a client is never left waiting on an answer that will not arrive. A worker
+whose generator cannot be created fails its tasks the same way instead of
+exiting, so the queue drains and every affected column is reported.
+
 ### Tick budget
 
 The simulation thread bounds the work a tick can take from state that arrives

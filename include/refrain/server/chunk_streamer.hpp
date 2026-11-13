@@ -25,6 +25,12 @@ namespace refrain::server {
 /// The simulation thread owns the streamer: viewport requests come from the
 /// session chunk tracker, chunks are encoded on demand and the encoded bodies
 /// are shared by every connection.
+///
+/// A column the world does not hold is requested from the generator once and
+/// stays out of the encoded queue until the generator answers. When a task
+/// fails, `chunk_failed()` puts the column back in a re-requestable state up to
+/// a fixed number of attempts; after that the streamer stops asking for it
+/// rather than re-requesting once per tick.
 class chunk_streamer {
   public:
     /// One connection's viewport, in the form the residency policy consumes:
@@ -39,6 +45,12 @@ class chunk_streamer {
         friend auto operator==(const viewport &, const viewport &)
             -> bool = default;
     };
+
+    /// Attempts one column is given before the streamer stops requesting it.
+    /// A generator that keeps failing cannot make the streamer loop: the column
+    /// is left unserved for this viewport visit, and a later viewport change
+    /// gives it a fresh allowance.
+    static constexpr std::uint32_t max_chunk_attempts{3};
 
     /// Wall-clock time one stream pass may spend draining client queues.
     ///
@@ -140,6 +152,13 @@ class chunk_streamer {
     /// keeps resident.
     [[nodiscard]] auto viewports() const -> std::vector<viewport>;
 
+
+    /// A generation task for `(x, z)` failed. Clears the in-flight marker of
+    /// every connection that asked for the column and queues it again while the
+    /// attempt allowance lasts; a column that keeps failing is abandoned for
+    /// this viewport visit instead of being requested once per tick.
+    void chunk_failed(std::int32_t x, std::int32_t z);
+
     /// Bodies served from the encoded cache and lookups that had to encode,
     /// since construction. The ratio is the cache hit rate; it approaches one
     /// when another connection joins a viewport that is already resident.
@@ -163,6 +182,13 @@ class chunk_streamer {
         /// Columns already handed to the generator; they stay out of the
         /// queue until `chunk_ready` reports them.
         std::set<std::pair<std::int32_t, std::int32_t>> requested{};
+        /// Failed requests per column since the viewport last changed. A column
+        /// that reaches `max_chunk_attempts` moves to `abandoned`.
+        std::map<std::pair<std::int32_t, std::int32_t>, std::uint32_t>
+            attempts{};
+        /// Columns dropped from the queue after their attempt allowance: the
+        /// viewport rebuild skips them until they arrive from elsewhere.
+        std::set<std::pair<std::int32_t, std::int32_t>> abandoned{};
         std::deque<std::pair<std::int32_t, std::int32_t>> pending{};
     };
 

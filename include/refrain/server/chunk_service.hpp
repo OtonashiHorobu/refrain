@@ -30,13 +30,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <map>
 #include <memory>
 #include <optional>
-#include <set>
 #include <string>
 #include <vector>
+#include <set>
+#include <functional>
 
 namespace refrain::server {
 
@@ -78,6 +77,17 @@ class chunk_service {
     /// controller with the tick p99, the wanted depth and the resident memory.
     void observe_tick(std::uint64_t work_ns);
 
+    /// The background generator, null when generation did not start.
+    [[nodiscard]] auto generation() noexcept -> chunk_generation * {
+        return generation_.get();
+    }
+
+    /// The attached streamer, null before `attach()`. A host may replace its
+    /// encoder or read its counters.
+    [[nodiscard]] auto streamer() noexcept -> chunk_streamer * {
+        return streamer_ ? &*streamer_ : nullptr;
+    }
+
     /// Counters the runtime reports at boot and shutdown.
     struct residency_stats {
         /// Resident columns after the last residency pass.
@@ -90,12 +100,6 @@ class chunk_service {
 
     [[nodiscard]] auto residency() const noexcept -> const residency_stats & {
         return residency_;
-    }
-
-    /// The attached streamer, null before `attach()`. A host may replace its
-    /// encoder or read its counters.
-    [[nodiscard]] auto streamer() noexcept -> chunk_streamer * {
-        return streamer_ ? &*streamer_ : nullptr;
     }
 
     /// Resident set of this process in bytes, or zero when the host cannot
@@ -111,6 +115,10 @@ class chunk_service {
     }
 
   private:
+    /// Tell the streamer about every tile whose task failed, so the columns are
+    /// requested again instead of staying in flight forever.
+    void apply_generation_failures();
+
     /// Pin the columns of every current viewport, release the pins of columns
     /// that left every viewport, then unload every resident column without a
     /// ticket. The pass walks the resident columns in ascending position order
@@ -122,6 +130,7 @@ class chunk_service {
     chunk_streamer::backlog_limits backlog_{};
     /// Controller update period and the tick work window its p99 covers.
     static constexpr std::size_t controller_window_ticks{20};
+
 
     struct chunk_order {
         [[nodiscard]] auto
@@ -148,6 +157,9 @@ class chunk_service {
     /// backlog drains instead of growing.
     static constexpr std::size_t max_dirty_unloads_per_tick{4};
     residency_stats residency_{};
+    /// The last failure message that reached the operator log; repeated
+    /// messages stay at debug so a broken generator cannot flood the log.
+    std::string logged_failure_message_{};
     std::function<void()> unload_barrier_{};
     std::array<std::uint64_t, controller_window_ticks> tick_samples_{};
     std::size_t tick_sample_next_{0};
