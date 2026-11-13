@@ -350,6 +350,20 @@ struct server::impl {
     };
     std::mutex inbound_mutex{};
     std::deque<queued_packet> inbound{};
+    /// Connection lifecycle observed on an I/O thread, delivered by `tick()`.
+    /// The identity strings are owned because the caller's copy dies before
+    /// delivery. Lock order: a connection mutex may be held while pushing an
+    /// event, and the queue mutex is never held while a callback runs.
+    enum class lifecycle_kind : std::uint8_t { join, leave, ready };
+    struct queued_lifecycle {
+        lifecycle_kind kind{lifecycle_kind::join};
+        std::uint64_t connection{0};
+        uuid id{};
+        std::string name{};
+        std::string world{};
+    };
+    std::mutex lifecycle_mutex{};
+    std::deque<queued_lifecycle> lifecycle_events{};
     std::mutex click_mutex{};
     std::vector<container_click_event> container_clicks{};
     std::vector<container_close_event> container_closes{};
@@ -366,6 +380,11 @@ struct server::impl {
     void on_data(std::uint64_t id, std::span<const std::byte> bytes);
     void on_close(std::uint64_t id, std::string_view reason);
     void tick();
+    void enqueue_lifecycle(lifecycle_kind kind, std::uint64_t connection_id,
+                           uuid id, std::string_view name,
+                           std::string_view world);
+    void deliver_lifecycle(const queued_lifecycle &event);
+    void drain_lifecycle();
     void handle(std::uint64_t id, std::span<const std::byte> body);
     void handle_play(std::uint64_t id, std::span<const std::byte> body);
     void send(std::uint64_t id, std::uint16_t packet_id,
@@ -559,22 +578,26 @@ auto server::impl::start() -> status {
 }
 
 void server::impl::stop() {
-    if (stopped.exchange(true)) {
-        return;
+    if (!stopped.exchange(true)) {
+        if (keepalive_thread.joinable()) {
+            keepalive_thread.join();
+        }
+        if (socket) {
+            socket->stop();
+            socket.reset();
+        }
+        // A transport that stops before it reports a close leaves its entries
+        // in the table. Removing them here releases those sessions through the
+        // same step an abrupt drop uses.
+        for (const auto &entry : connection_snapshot()) {
+            static_cast<void>(erase_connection(entry.id));
+        }
     }
-    if (keepalive_thread.joinable()) {
-        keepalive_thread.join();
-    }
-    if (socket) {
-        socket->stop();
-        socket.reset();
-    }
-    // A transport that stops before it reports a close leaves its entries in
-    // the table. Removing them here releases those sessions through the same
-    // step an abrupt drop uses.
-    for (const auto &entry : connection_snapshot()) {
-        static_cast<void>(erase_connection(entry.id));
-    }
+    // The transport threads are joined by now, so nothing can enqueue another
+    // event. Deliver what is left so a disconnect observed just before
+    // shutdown still releases its session; `tick()` no longer runs when this
+    // is called.
+    drain_lifecycle();
 }
 
 void server::impl::on_open(std::uint64_t id) {
@@ -613,16 +636,12 @@ void server::impl::on_close(std::uint64_t id, std::string_view /*reason*/) {
     static_cast<void>(erase_connection(id));
     // `leave_reported` is the exactly-once guard for the leave event, so the
     // path that claimed it reports it even when another path removed the entry
-    // first.
-    if (left_id != 0) {
-        if (report_leave && player_leave_hook) {
-            player_leave_hook(player_identity{
-                .connection = left_id,
-                .id = left_profile,
-                .name = left_name,
-                .world = {},
-            });
-        }
+    // first. The identity strings are copied into the queue: this runs on a
+    // transport thread, and the session is released by `tick()` or by the
+    // drain in `stop()`.
+    if (left_id != 0 && report_leave) {
+        enqueue_lifecycle(lifecycle_kind::leave, left_id, left_profile,
+                          left_name, {});
     }
 }
 
@@ -932,9 +951,16 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 reject(id, "malformed or unexpected packet");
                 return;
             }
-            if (!with_connection(id, [next_state](connection_state_data &data) {
-                    data.state = next_state;
-                })) {
+            // Queue the join in the same critical section that publishes the
+            // play state. A close that observes the play state therefore
+            // always queues its leave after this join, and one that observes
+            // an earlier state queues no leave at all.
+            if (!with_connection(
+                    id, [this, id, next_state](connection_state_data &data) {
+                        data.state = next_state;
+                        enqueue_lifecycle(lifecycle_kind::join, id,
+                                          data.profile, data.name, {});
+                    })) {
                 return;
             }
             send_play_login(id);
@@ -1570,14 +1596,6 @@ void server::impl::send_play_login(std::uint64_t id) {
     send_recipe_book();
     send_position();
     send_server_data();
-    if (player_join_hook) {
-        player_join_hook(player_identity{
-            .connection = id,
-            .id = profile,
-            .name = name,
-            .world = {},
-        });
-    }
     send_border();
     send_time();
     send_spawn();
@@ -1587,14 +1605,9 @@ void server::impl::send_play_login(std::uint64_t id) {
     send_initial_chunks(id);
     send_entity_state();
     send_tab_list(id);
-    if (play_ready_hook) {
-        play_ready_hook(player_identity{
-            .connection = id,
-            .id = profile,
-            .name = name,
-            .world = {},
-        });
-    }
+    // The join was queued when the connection entered play. Queue the ready
+    // signal here, after the login burst, for delivery by the same tick.
+    enqueue_lifecycle(lifecycle_kind::ready, id, profile, name, {});
 }
 
 void server::impl::send_commands(std::uint64_t id) {
@@ -2953,13 +2966,9 @@ void server::impl::close(std::uint64_t id) {
             notify_leave = true;
         }
     }
-    if (notify_leave && player_leave_hook) {
-        player_leave_hook(player_identity{
-            .connection = leave_id,
-            .id = leave_profile,
-            .name = name,
-            .world = {},
-        });
+    if (notify_leave) {
+        enqueue_lifecycle(lifecycle_kind::leave, leave_id, leave_profile, name,
+                          {});
     }
     if (name.empty()) {
         log_net.debug("connection closed id={} state={}", id, to_string(state));
@@ -3016,7 +3025,63 @@ void server::impl::keepalive_loop() {
     }
 }
 
+void server::impl::enqueue_lifecycle(lifecycle_kind kind,
+                                     std::uint64_t connection_id, uuid id,
+                                     std::string_view name,
+                                     std::string_view world) {
+    const std::lock_guard lock{lifecycle_mutex};
+    lifecycle_events.push_back(queued_lifecycle{
+        .kind = kind,
+        .connection = connection_id,
+        .id = id,
+        .name = std::string{name},
+        .world = std::string{world},
+    });
+}
+
+void server::impl::deliver_lifecycle(const queued_lifecycle &event) {
+    const player_identity identity{
+        .connection = event.connection,
+        .id = event.id,
+        .name = event.name,
+        .world = event.world,
+    };
+    switch (event.kind) {
+    case lifecycle_kind::join:
+        if (player_join_hook) {
+            player_join_hook(identity);
+        }
+        break;
+    case lifecycle_kind::leave:
+        if (player_leave_hook) {
+            player_leave_hook(identity);
+        }
+        break;
+    case lifecycle_kind::ready:
+        if (play_ready_hook) {
+            play_ready_hook(identity);
+        }
+        break;
+    }
+}
+
+void server::impl::drain_lifecycle() {
+    std::deque<queued_lifecycle> local{};
+    {
+        const std::lock_guard lock{lifecycle_mutex};
+        local.swap(lifecycle_events);
+    }
+    for (const auto &event : local) {
+        deliver_lifecycle(event);
+    }
+}
+
 void server::impl::tick() {
+    // Lifecycle events are queued by the I/O threads that observe the
+    // connection state change. Delivering them here, before the inbound
+    // packets, keeps every gameplay callback on the simulation thread and
+    // makes a joining player exist before its first play packet is applied.
+    drain_lifecycle();
     std::deque<queued_packet> local{};
     {
         const std::lock_guard lock{inbound_mutex};
