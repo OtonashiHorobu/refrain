@@ -40,6 +40,13 @@ chunk_streamer::chunk_streamer(play_gateway &gateway,
                                chunk_packet_source source)
     : gateway_(gateway), source_(source) {}
 
+chunk_streamer::~chunk_streamer() {
+    if (cache_hits_ == 0 && cache_misses_ == 0) {
+        return;
+    }
+    log_net.info("chunk cache hits={} misses={}", cache_hits_, cache_misses_);
+}
+
 void chunk_streamer::set_chunk_requester(chunk_requester requester) {
     requester_ = std::move(requester);
 }

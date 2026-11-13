@@ -46,6 +46,11 @@ class chunk_streamer {
 
     chunk_streamer(play_gateway &gateway, chunk_packet_source source);
 
+    /// Log the encoded-cache hit and miss totals at shutdown. The ratio is the
+    /// cache hit rate; `cache_hits()` and `cache_misses()` expose the same
+    /// counters to a caller that reports them earlier.
+    ~chunk_streamer();
+
     /// Drain the tracker's viewport requests and send the pending chunks of
     /// every connection until the tick budget expires. A connection that
     /// cannot drain its socket keeps its pending list and resumes where it
