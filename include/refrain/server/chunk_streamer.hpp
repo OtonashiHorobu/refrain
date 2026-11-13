@@ -152,7 +152,6 @@ class chunk_streamer {
     /// keeps resident.
     [[nodiscard]] auto viewports() const -> std::vector<viewport>;
 
-
     /// A generation task for `(x, z)` failed. Clears the in-flight marker of
     /// every connection that asked for the column and queues it again while the
     /// attempt allowance lasts; a column that keeps failing is abandoned for

@@ -30,12 +30,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
-#include <set>
-#include <functional>
 
 namespace refrain::server {
 
@@ -130,7 +130,6 @@ class chunk_service {
     chunk_streamer::backlog_limits backlog_{};
     /// Controller update period and the tick work window its p99 covers.
     static constexpr std::size_t controller_window_ticks{20};
-
 
     struct chunk_order {
         [[nodiscard]] auto
