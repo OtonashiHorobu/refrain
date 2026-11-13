@@ -142,8 +142,10 @@ their writes come before or after the target's own features, and
 `neighbours_in_generation_order` follows the order a force-load uses: every
 chunk that precedes the target in ascending x and z decorates first, then the
 target, then the rest. A mixed order matters for any feature that writes across
-a border, such as an ore vein or a vegetation patch. A fixed biome is required
-because every decorated chunk uses the target's biome plan.
+a border, such as an ore vein or a vegetation patch. Every decorated chunk
+builds its own candidate-biome plan from the palettes of its three-by-three, so
+the mode works with the dimension's biome source as well as with a fixed
+biome.
 
 `neighbour_radius` widens the decorated neighbourhood: zero decorates only the
 target, one the eight surrounding chunks (the default), and each further step
@@ -167,6 +169,30 @@ attaches one more terrain ring for the chunks every decoration reads.
 `force_load_decoration_order` returns that sequence. A basalt delta, blob or
 column reads and writes the chunks those dependency rings generated, so the
 chunk that a saved reference world contains depends on this order.
+
+### Tile generation
+
+The production path generates a tile at a time instead of a chunk at a time.
+`chunk_generator::generate_tile` produces the `tile_size` by `tile_size`
+square whose minimum corner is the given origin and returns only that square;
+`generate_area_tiled` covers an arbitrary chunk rectangle with whole
+aligned tiles and returns the requested chunks. The tile and one ring around it
+are decorated in force-load order, each chunk with its own position and its own
+candidate-biome plan, and the writes land in the ring. The terrain fill adds one
+further ring, because a features step reads its own three-by-three. A served
+chunk therefore contains exactly the feature writes its eight neighbours make
+across its border, which is what a saved reference world contains and what a
+vanilla client expects to see.
+
+The extra work per served chunk is `(N+2)^2 / N^2` for decoration and
+`(N+4)^2 / N^2` for terrain, rather than the nine-times decoration cost of
+staging every neighbour through a separate single-chunk generation; a larger
+tile amortises the rings better but delays the first chunk of the tile, so the
+edge is a trade-off between throughput and latency. The tile is also the unit
+the runtime's distance-priority queue and admission credits count: a worker
+generates one tile, the nearest chunks of a requested column are served as
+part of their tile, and a chunk is never generated without its neighbours'
+decoration.
 
 One object owns the block state registry and its tags, the dimension profile,
 the biome source, the surface rule state, the loaded carvers' runtime objects,
@@ -297,6 +323,10 @@ The reference-backed suites currently cover:
   plains village, a woodland mansion, a stronghold, a pillager outpost, a
   taiga village, an ancient city and trial chambers, plus batch equality and
   the terrain/features/full status ladder;
+- the production tile path against the single-chunk reference mode: the probe
+  chunk of the border-decoration regression, every chunk of a three-by-three
+  tile with a fixed biome, the same tile with the dimension's biome source and
+  a per-chunk plan, and the chunk rectangle `generate_area_tiled` serves;
 - the configured feature, placement modifier, block predicate, state provider
   and tree placer families the standard biomes name, through synthetic unit
   tests and a content-driven test that creates one generator and generates one
