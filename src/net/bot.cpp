@@ -93,6 +93,9 @@ class bot_session {
                  },
              .on_data =
                  [this](std::uint64_t, std::span<const std::byte> bytes) {
+                     if (options_.read_delay.count() > 0) {
+                         std::this_thread::sleep_for(options_.read_delay);
+                     }
                      on_data(bytes);
                  },
              .on_close =

@@ -47,6 +47,12 @@ struct bot_options {
     /// spread its bots over the world instead of stacking them.
     double walk_origin_x{0.0};
     double walk_origin_z{0.0};
+    /// Stall the read loop by this long before each received batch. A client
+    /// that stops draining its socket is what makes the server's per-connection
+    /// write queue grow, and this bot reproduces that by refusing to consume:
+    /// the kernel receive buffer fills, then the server's socket stops
+    /// accepting, and the tick sees the backlog a slow client produces.
+    std::chrono::milliseconds read_delay{0};
     /// Record decoded packet bodies for capture tooling.
     bool capture{false};
 };
