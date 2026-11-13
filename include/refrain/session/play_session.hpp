@@ -57,6 +57,12 @@ struct visibility_entry {
 /// the projection cache only holds the last encoded view of each record. The
 /// synthetic player that the console and replay scripts drive has no network
 /// connection, so it is excluded from the connection-scoped views.
+///
+/// Thread ownership: the simulation thread is the only caller. The network
+/// shell observes connection lifecycle on its I/O threads, so it queues join,
+/// leave and ready events and the runtime delivers them from the tick loop
+/// instead of calling this object from the transport. Every member, including
+/// the projection cache, is unsynchronised and relies on that single caller.
 class play_session {
   public:
     /// Standalone session with its own player table, for callers that are not
@@ -142,7 +148,9 @@ class play_session {
     sim::player_table own_players_{};
     sim::player_table *players_{nullptr};
     /// Projection cache keyed by entity id so pointers stay valid while the
-    /// network shell holds them for one tick.
+    /// network shell holds them for one tick. Only the simulation thread reads
+    /// or writes it; the class comment states where the other threads hand
+    /// their events over instead of touching this map.
     mutable std::map<sim::entity_id, player> views_{};
 };
 

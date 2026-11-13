@@ -108,7 +108,9 @@ using status_provider =
     std::function<status_info(const status_request_context &)>;
 using tab_provider = std::function<tab_view(const player_identity &)>;
 /// Optional lifecycle observer. The network layer reports the event but never
-/// interprets it.
+/// interprets it. The I/O threads only enqueue the event; `tick()` invokes the
+/// observer on the simulation thread, in the order the connection state
+/// changed, so a callback may touch simulation-owned state without a lock.
 using player_event = std::function<void(const player_identity &)>;
 using movement_handler = std::function<void(const movement_event &)>;
 
@@ -217,6 +219,8 @@ struct server_inputs {
     movement_handler movement{};
     attack_handler attack{};
     animation_handler animation{};
+    /// Delivered on the simulation thread by the same `tick()` that delivers
+    /// `player_join`, after the join of the same connection.
     player_event play_ready{};
     respawn_handler respawn{};
     std::function<void(const view_distance_event &)> view_distance{};
@@ -273,10 +277,14 @@ class server {
     server(const server &) = delete;
     auto operator=(const server &) -> server & = delete;
 
+    /// Stop the transport, release the connection table and deliver the
+    /// lifecycle events that were still queued. Call it after `tick()` is no
+    /// longer running.
     void stop() noexcept;
-    /// Drain packets that arrived since the previous call. Must be called on
-    /// the simulation thread; login/configuration handling stays on the I/O
-    /// thread, play packets are applied here.
+    /// Deliver the lifecycle events and the play packets that arrived since
+    /// the previous call. Must be called on the simulation thread:
+    /// login/configuration handling stays on the I/O thread, and play packets
+    /// and lifecycle callbacks are applied here.
     void tick();
     [[nodiscard]] auto local_port() const -> std::uint16_t;
 

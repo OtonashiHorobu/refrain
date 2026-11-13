@@ -339,6 +339,8 @@ auto run_server(const server_run_options &options,
     network_inputs.encode_tab = options.encode_tab;
     const auto spawn_chunk_x{static_cast<std::int32_t>(level->spawn_x / 16)};
     const auto spawn_chunk_z{static_cast<std::int32_t>(level->spawn_z / 16)};
+    // The network shell queues this event from its I/O thread and delivers it
+    // from `listener->tick()`, so the session table stays simulation-owned.
     network_inputs.player_join =
         [&players, &views, &broadcaster, &active_listener, external_join,
          spawn_chunk_x, spawn_chunk_z,

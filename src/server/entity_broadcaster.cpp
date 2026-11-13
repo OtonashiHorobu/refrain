@@ -114,8 +114,10 @@ void send_remove_entity(play_gateway &gateway, std::uint64_t connection,
 void announce_session_join(play_gateway &gateway,
                            const refrain::session::play_session &players,
                            std::uint64_t connection) {
-    // Pointers into the session table: the simulation thread is the only
-    // writer, and copying every player record per tick is pure overhead.
+    // The simulation thread owns the session table: the network shell queues
+    // join and leave events and `server::tick()` delivers them, so this read
+    // cannot overlap a refresh. Copying every record per tick just to avoid
+    // that read would be pure overhead.
     const auto snapshot{players.all()};
     send_player_info(gateway, connection, player_info_add, snapshot);
     send_player_info(gateway, connection,
