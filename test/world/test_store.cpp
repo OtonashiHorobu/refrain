@@ -123,6 +123,50 @@ void set(value &parent, std::string key, value child) {
 } // namespace
 
 suite world_store_gameplay = [] {
+    "a missing regions directory is recreated by the next write"_test = [] {
+        const temp_directory directory;
+        const auto root{directory.sub("world-regions")};
+        auto store{world::world_store::create(root)};
+        expect(static_cast<bool>(store));
+        if (!store) {
+            return;
+        }
+        const auto regions{root + "/dimensions/minecraft/overworld/regions"};
+        expect(fs::is_directory(regions));
+        // A world copied without its empty directories, or a directory that
+        // went away under a running server, has no regions directory but is
+        // still writable.
+        std::error_code error;
+        expect(fs::remove_all(regions, error) > 0);
+        expect(!fs::is_directory(regions));
+
+        world::chunk value{};
+        value.format_version = world::chunk_format_version;
+        value.status = world::chunk_status::full;
+        value.y_pos = 0;
+        world::section_record section{};
+        section.y = 0;
+        section.kind = world::section_kind::single_value;
+        section.bits_per_entry = 0;
+        section.block_count = static_cast<std::uint16_t>(world::section_volume);
+        section.biome_kind = world::section_kind::single_value;
+        section.biome_bits_per_entry = 0;
+        section.biome_palette.push_back("minecraft:plains");
+        section.palette.push_back(world::palette_entry{
+            .key = "minecraft:stone",
+            .count = static_cast<std::uint16_t>(world::section_volume),
+            .state = 0,
+        });
+        value.sections.push_back(std::move(section));
+
+        const auto written{store->write_chunk(world::chunk_pos{64, 64}, value)};
+        expect(static_cast<bool>(written))
+            << (written ? std::string{} : written.error().message);
+        expect(fs::is_directory(regions));
+        expect(fs::is_regular_file(regions + "/2.2.rfw"));
+        expect(store->contains(world::chunk_pos{64, 64}));
+    };
+
     "missing_gameplay_tags_use_defaults"_test = [] {
         const temp_directory directory;
         auto store{world::world_store::create(directory.sub("world-defaults"))};

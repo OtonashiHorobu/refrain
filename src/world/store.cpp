@@ -450,6 +450,18 @@ struct world_store::impl {
                 error_code::not_found,
                 fmt::format("region ({}, {}) does not exist", x, z))};
         }
+        if (create) {
+            // The regions directory is created with the world, but a world
+            // that was moved, copied without its empty directories or
+            // restored from a partial backup can lack it. Recreating it here
+            // keeps that from turning every save into an io-writer error
+            // while the process keeps pretending its world is writable.
+            if (auto created{core::io::create_directories(
+                    join_path(overworld_root, "regions"))};
+                !created) {
+                return std::unexpected{created.error()};
+            }
+        }
         auto opened{rwf::region_file::load_or_create(
             path,
             {.x = x,
