@@ -510,7 +510,8 @@ void entity_broadcaster::left(const refrain::session::player &value) {
                 static_cast<std::uint32_t>(value.entity_id));
         }
     }
-    pending_leave_ids_.push_back(value.id);
+    pending_leaves_.push_back(
+        pending_leave{.connection = value.connection, .id = value.id});
 }
 
 void entity_broadcaster::queue_info_send(
@@ -572,18 +573,24 @@ void entity_broadcaster::flush_lifecycle(
     }
     pending_removals_.clear();
 
-    if (!pending_leave_ids_.empty()) {
+    if (!pending_leaves_.empty()) {
         refrain::protocol::current::play::clientbound::player_info_remove
             remove{};
-        remove.profile_ids = std::move(pending_leave_ids_);
-        pending_leave_ids_.clear();
-        auto body{
-            encode_play_body(refrain::protocol::current::play::clientbound::
-                                 player_info_remove::packet_id,
-                             remove,
-                             refrain::protocol::current::play::clientbound::
-                                 encode_player_info_remove)};
-        if (!body.empty()) {
+        for (const auto &leave : pending_leaves_) {
+            // A connection that left before its join was announced has no
+            // entry in any player list yet.
+            if (!joining.contains(leave.connection)) {
+                remove.profile_ids.push_back(leave.id);
+            }
+        }
+        pending_leaves_.clear();
+        if (!remove.profile_ids.empty()) {
+            auto body{
+                encode_play_body(refrain::protocol::current::play::clientbound::
+                                     player_info_remove::packet_id,
+                                 remove,
+                                 refrain::protocol::current::play::clientbound::
+                                     encode_player_info_remove)};
             std::vector<std::uint64_t> recipients{};
             recipients.reserve(players.size());
             players.for_each_listing(

@@ -136,11 +136,10 @@ suite<"server/join_storm"> join_storm_tests = [] {
         broadcaster.left(leaving);
         broadcaster.flush_lifecycle(players);
 
-        // The cohort is empty, so the departure only produces the tab-list
-        // removal for the player that is still connected.
+        // The join was never announced, so the departure is silent: neither
+        // the cohort nor the removal reaches the player that stayed.
         expect(gateway.info_packets == 0U);
-        expect(gateway.info_remove_packets == 1U);
-        expect(gateway.last_connection == 1U);
+        expect(gateway.info_remove_packets == 0U);
         expect(gateway.malformed == 0U);
     };
 };

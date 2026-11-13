@@ -111,8 +111,13 @@ class entity_broadcaster {
         visible_{};
     /// Connections that joined since the previous tick, in delivery order.
     std::vector<std::uint64_t> pending_joins_{};
-    /// Profile ids of the connections that left since the previous tick.
-    std::vector<refrain::net::uuid> pending_leave_ids_{};
+    /// Connections that left since the previous tick and the profile id to
+    /// remove from the player list.
+    struct pending_leave {
+        std::uint64_t connection{0};
+        refrain::net::uuid id{};
+    };
+    std::vector<pending_leave> pending_leaves_{};
     /// Entity ids a tick's leaves remove from each viewer, one packet each.
     std::unordered_map<std::uint64_t, std::vector<std::uint32_t>>
         pending_removals_{};
