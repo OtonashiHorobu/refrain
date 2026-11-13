@@ -22,6 +22,13 @@ void server_gateway::send_raw(std::uint64_t connection,
     }
 }
 
+void server_gateway::send_raw_many(std::span<const std::uint64_t> connections,
+                                   std::span<const std::byte> body) {
+    if (listener_ != nullptr) {
+        listener_->send_raw_many(connections, body);
+    }
+}
+
 auto server_gateway::active_connections() const -> std::vector<std::uint64_t> {
     if (listener_ == nullptr) {
         return {};

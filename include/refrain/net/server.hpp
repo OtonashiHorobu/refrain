@@ -281,12 +281,27 @@ class server {
     /// lifecycle events that were still queued. Call it after `tick()` is no
     /// longer running.
     void stop() noexcept;
+    /// Upper bound on the join events one `tick()` applies. A join storm
+    /// queues far more than this; applying all of them would make the tick's
+    /// work grow with the number of connections logging in at once, so the
+    /// remaining events keep their order and are delivered by later ticks.
+    /// Sixty-four joins drain a thousand-connection storm in at most sixteen
+    /// ticks while keeping the per-tick announcement bounded.
+    static constexpr std::size_t max_joins_per_tick{64};
+
     /// Deliver the lifecycle events and the play packets that arrived since
     /// the previous call. Must be called on the simulation thread:
     /// login/configuration handling stays on the I/O thread, and play packets
     /// and lifecycle callbacks are applied here.
     void tick();
     [[nodiscard]] auto local_port() const -> std::uint16_t;
+
+    /// Send one already encoded body (packet id included) to several
+    /// connections. The body is encoded once and the frame is shared, so one
+    /// announcement for a whole cohort costs one compression instead of one
+    /// per recipient. Unknown or closed connections are skipped.
+    void send_raw_many(std::span<const std::uint64_t> connections,
+                       std::span<const std::byte> body);
 
     /// Drain viewport changes observed since the previous call.
     [[nodiscard]] auto take_chunk_view_requests()

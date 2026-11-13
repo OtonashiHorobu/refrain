@@ -16,6 +16,7 @@
 
 #include <boost/ut.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -359,6 +360,45 @@ suite<"net/lifecycle"> server_lifecycle_tests = [] {
             test.running->tick();
             expect(test.events.empty());
         };
+
+    "net/server applies a bounded number of joins per tick"_test = [] {
+        fixture test{};
+        expect(static_cast<bool>(test.running));
+        if (!test.running) {
+            return;
+        }
+        // More joins than one tick may apply, so the bound has to carry the
+        // remainder instead of dropping it.
+        constexpr std::uint64_t first_connection{10};
+        constexpr std::uint64_t total{2 * net::server::max_joins_per_tick + 7};
+        for (std::uint64_t connection{first_connection};
+             connection < first_connection + total; ++connection) {
+            test.open(connection);
+            test.join_play(connection);
+        }
+        expect(test.events.empty());
+
+        const auto joins{[&test] {
+            return static_cast<std::size_t>(
+                std::count(test.events.begin(), test.events.end(), "join"));
+        }};
+
+        test.running->tick();
+        expect(joins() == net::server::max_joins_per_tick);
+        expect(test.events.size() == 2U * net::server::max_joins_per_tick);
+
+        test.running->tick();
+        expect(joins() == 2U * net::server::max_joins_per_tick);
+
+        test.running->tick();
+        expect(joins() == total);
+        expect(test.events.size() == 2U * total);
+        // The queue keeps its order across the ticks that carry it.
+        for (std::size_t index{0}; index < test.events.size(); index += 2) {
+            expect(test.events[index] == "join");
+            expect(test.events[index + 1] == "ready");
+        }
+    };
 
     "net/server delivers the events queued before shutdown from stop"_test =
         [] {

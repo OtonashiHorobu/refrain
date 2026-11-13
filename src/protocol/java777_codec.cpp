@@ -8,6 +8,7 @@
 #include <refrain/net/crypto.hpp>
 #include <refrain/net/frame.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -219,6 +220,57 @@ auto java777_codec::send_packet(std::uint64_t connection,
         frame = std::move(*encrypted);
     }
     codec->outbound.push_back(std::move(frame));
+    return status_ok();
+}
+
+auto java777_codec::send_shared_packet(
+    std::span<const std::uint64_t> connections, std::uint32_t packet_id,
+    std::span<const std::byte> payload) -> status {
+    if (connections.empty()) {
+        return status_ok();
+    }
+    std::vector<std::byte> body{};
+    net::writer writer{body};
+    writer.write_varint(packet_id);
+    writer.write_bytes(payload);
+
+    // The frame depends only on the connection's compression threshold, so it
+    // is encoded once per distinct threshold. A connection with an active
+    // cipher still needs its own ciphertext.
+    std::vector<std::pair<int, std::vector<std::byte>>> frames{};
+    for (const auto connection : connections) {
+        const auto codec{impl_->find(connection)};
+        if (!codec) {
+            continue;
+        }
+        if (impl_->probe) {
+            impl_->probe(connection);
+        }
+        const std::lock_guard lock{codec->mutex};
+        const auto threshold{codec->encoder.threshold()};
+        auto frame{std::find_if(frames.begin(), frames.end(),
+                                [threshold](const auto &entry) {
+                                    return entry.first == threshold;
+                                })};
+        if (frame == frames.end()) {
+            std::vector<std::byte> encoded{};
+            if (auto encoded_status{codec->encoder.encode(body, encoded)};
+                !encoded_status) {
+                return encoded_status;
+            }
+            frames.emplace_back(threshold, std::move(encoded));
+            frame = std::prev(frames.end());
+        }
+        if (codec->cipher) {
+            auto encrypted{codec->cipher->encrypt(frame->second)};
+            if (!encrypted) {
+                return std::unexpected{std::move(encrypted.error())};
+            }
+            codec->outbound.push_back(std::move(*encrypted));
+        } else {
+            codec->outbound.push_back(frame->second);
+        }
+    }
     return status_ok();
 }
 

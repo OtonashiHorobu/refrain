@@ -384,13 +384,19 @@ struct server::impl {
                            uuid id, std::string_view name,
                            std::string_view world);
     void deliver_lifecycle(const queued_lifecycle &event);
-    void drain_lifecycle();
+    /// Move at most `join_limit` join events and the leave/ready events that
+    /// precede them to the simulation thread and deliver them.
+    void drain_lifecycle(std::size_t join_limit);
     void handle(std::uint64_t id, std::span<const std::byte> body);
     void handle_play(std::uint64_t id, std::span<const std::byte> body);
     void send(std::uint64_t id, std::uint16_t packet_id,
               std::span<const std::byte> payload);
     /// Send a body that still carries its VarInt packet id.
     void send(std::uint64_t id, std::span<const std::byte> packet);
+    /// Send a body that still carries its VarInt packet id to many
+    /// connections, encoding the frame once.
+    void send_many(std::span<const std::uint64_t> ids,
+                   std::span<const std::byte> packet);
     void close(std::uint64_t id);
     void reject(std::uint64_t id, std::string_view reason);
     void send_login_disconnect(std::uint64_t id, std::string_view text);
@@ -594,10 +600,10 @@ void server::impl::stop() {
         }
     }
     // The transport threads are joined by now, so nothing can enqueue another
-    // event. Deliver what is left so a disconnect observed just before
-    // shutdown still releases its session; `tick()` no longer runs when this
-    // is called.
-    drain_lifecycle();
+    // event. Deliver every remaining event so a disconnect observed just
+    // before shutdown still releases its session; `tick()` no longer runs when
+    // this is called, so the per-tick join bound does not apply.
+    drain_lifecycle(std::numeric_limits<std::size_t>::max());
 }
 
 void server::impl::on_open(std::uint64_t id) {
@@ -1900,6 +1906,13 @@ void server::send_raw(std::uint64_t connection,
     }
 }
 
+void server::send_raw_many(std::span<const std::uint64_t> connections,
+                           std::span<const std::byte> body) {
+    if (impl_) {
+        impl_->send_many(connections, body);
+    }
+}
+
 void server::broadcast_raw(std::span<const std::byte> body,
                            std::uint64_t except) {
     if (!impl_) {
@@ -2909,6 +2922,20 @@ void server::impl::send(std::uint64_t id, std::span<const std::byte> packet) {
          packet.subspan(in.position()));
 }
 
+void server::impl::send_many(std::span<const std::uint64_t> ids,
+                             std::span<const std::byte> packet) {
+    if (!protocol || ids.empty()) {
+        return;
+    }
+    reader in{packet};
+    const auto packet_id{in.read_varint()};
+    if (!packet_id) {
+        return;
+    }
+    static_cast<void>(protocol->send_shared_packet(
+        ids, *packet_id, packet.subspan(in.position())));
+}
+
 void server::impl::send(std::uint64_t id, std::uint16_t packet_id,
                         std::span<const std::byte> payload) {
     const auto live{find_connection(id)};
@@ -3065,11 +3092,26 @@ void server::impl::deliver_lifecycle(const queued_lifecycle &event) {
     }
 }
 
-void server::impl::drain_lifecycle() {
+void server::impl::drain_lifecycle(std::size_t join_limit) {
     std::deque<queued_lifecycle> local{};
     {
         const std::lock_guard lock{lifecycle_mutex};
-        local.swap(lifecycle_events);
+        // Take a bounded prefix of the queue, preserving its order. The
+        // remaining events stay queued for the next tick, so a burst of
+        // logins cannot make one tick apply every join that accumulated
+        // while the previous ticks were busy.
+        std::size_t joins{0};
+        while (!lifecycle_events.empty()) {
+            const auto &next{lifecycle_events.front()};
+            if (next.kind == lifecycle_kind::join) {
+                if (joins == join_limit) {
+                    break;
+                }
+                ++joins;
+            }
+            local.push_back(std::move(lifecycle_events.front()));
+            lifecycle_events.pop_front();
+        }
     }
     for (const auto &event : local) {
         deliver_lifecycle(event);
@@ -3081,7 +3123,9 @@ void server::impl::tick() {
     // connection state change. Delivering them here, before the inbound
     // packets, keeps every gameplay callback on the simulation thread and
     // makes a joining player exist before its first play packet is applied.
-    drain_lifecycle();
+    // The join count is bounded per tick so a login storm cannot make this
+    // tick apply the whole backlog.
+    drain_lifecycle(server::max_joins_per_tick);
     std::deque<queued_packet> local{};
     {
         const std::lock_guard lock{inbound_mutex};
