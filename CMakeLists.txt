@@ -373,6 +373,13 @@ file(GLOB_RECURSE REFRAIN_WORLDGEN_SOURCES CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/worldgen/*.cpp")
 refrain_add_library(refrain-worldgen ${REFRAIN_WORLDGEN_SOURCES})
 target_link_libraries(refrain-worldgen PUBLIC refrain-kernel highway::highway)
+if(REFRAIN_CLIMATE_TIE_STATS)
+    # PUBLIC so the benchmark that reports the counters is compiled against the
+    # same instrumentation. The macro is off by default and the counters do not
+    # exist in any other build.
+    target_compile_definitions(refrain-worldgen PUBLIC
+                               REFRAIN_CLIMATE_TIE_STATS=1)
+endif()
 add_library(Refrain::WorldGen ALIAS refrain-worldgen)
 
 # --- command dispatch: flat graph, parsers, immutable snapshots ------------

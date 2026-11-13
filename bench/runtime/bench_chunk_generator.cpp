@@ -18,6 +18,7 @@
 //   ./build/Release/bin/refrain-bench-runtime --targets terrain,full
 //       --chunks 16,32,64 --workers 1,2,4,8 --repeat 3
 
+#include <refrain/worldgen/biome/climate.hpp>
 #include <refrain/worldgen/chunk_generator.hpp>
 #include <refrain/worldgen/stage_profile.hpp>
 
@@ -64,6 +65,7 @@ struct options {
     std::string output{};
     bool chunk_hash{false};
     bool stages{false};
+    bool climate_ties{false};
 };
 
 auto hash_bytes(std::uint64_t hash, std::string_view text) -> std::uint64_t {
@@ -513,14 +515,9 @@ auto run_chunk_hash(const options &config, generation_target target,
     const auto positions =
         make_positions(config.origin_x, config.origin_z, width, depth);
     auto total = std::uint64_t{0xcbf29ce484222325ULL};
-    for (const auto &position : positions) {
-        auto generated = generator->generate(position);
-        if (!generated) {
-            fmt::print(stderr, "bench-chunk-generator: generate failed: {}\n",
-                       generated.error().message);
-            return false;
-        }
-        const auto digest = chunk_digest(**generated);
+    const auto emit_chunk = [&](const chunk_pos &position,
+                                const proto_chunk &chunk) {
+        const auto digest = chunk_digest(chunk);
         total = hash_integer(total, digest);
         const auto line = fmt::format(
             "CHUNK_HASH target={} seed={} pos={},{} digest={:016x}",
@@ -529,16 +526,233 @@ auto run_chunk_hash(const options &config, generation_target target,
         if (stream != nullptr) {
             *stream << line << '\n';
         }
+    };
+    if (config.worker_counts.front() > 1) {
+        // Worker instances keep their own mutable state, so an equal digest
+        // across worker counts pins the biome selection and the blocks as
+        // worker-independent.
+        auto generated = generator->generate_area(
+            chunk_pos{.x = config.origin_x, .z = config.origin_z}, width, depth,
+            config.worker_counts.front());
+        if (!generated) {
+            fmt::print(stderr,
+                       "bench-chunk-generator: generate_area failed: "
+                       "{}\n",
+                       generated.error().message);
+            return false;
+        }
+        for (std::size_t index = 0; index < positions.size(); ++index) {
+            emit_chunk(positions[index], *(*generated)[index]);
+        }
+    } else {
+        for (const auto &position : positions) {
+            auto generated = generator->generate(position);
+            if (!generated) {
+                fmt::print(stderr,
+                           "bench-chunk-generator: generate failed: {}\n",
+                           generated.error().message);
+                return false;
+            }
+            emit_chunk(position, **generated);
+        }
     }
-    const auto line = fmt::format(
-        "CHUNK_HASH_TOTAL target={} seed={} chunks={} digest={:016x}",
-        target_name(target), config.seed, positions.size(), total);
+    const auto line =
+        fmt::format("CHUNK_HASH_TOTAL target={} seed={} chunks={} workers={} "
+                    "digest={:016x}",
+                    target_name(target), config.seed, positions.size(),
+                    config.worker_counts.front(), total);
     fmt::print("{}\n", line);
     if (stream != nullptr) {
         *stream << line << '\n';
     }
     return true;
 }
+
+#if defined(REFRAIN_CLIMATE_TIE_STATS)
+auto format_target(const std::array<climate::coord, 7> &target) -> std::string {
+    return fmt::format("{};{};{};{};{};{};{}", target[0], target[1], target[2],
+                       target[3], target[4], target[5], target[6]);
+}
+
+auto format_box(const climate::parameter_point &point) -> std::string {
+    const auto interval = [](const climate::parameter &value) {
+        return fmt::format("[{},{}]", value.min, value.max);
+    };
+    return fmt::format("{};{};{};{};{};{};[{},{}]", interval(point.temperature),
+                       interval(point.humidity),
+                       interval(point.continentalness), interval(point.erosion),
+                       interval(point.depth), interval(point.weirdness),
+                       point.offset, point.offset);
+}
+
+auto capture_name(const climate::measurement::tie_capture &capture)
+    -> std::string_view {
+    return capture.kind == climate::measurement::capture_kind::hint_dependent
+               ? "hint_dependent"
+               : "equal_leaf";
+}
+
+/// Generates a chunk rectangle through the climate source and reports the
+/// equidistant-candidate counters per chunk. Only the chunks that produced a
+/// captured tie print a line, apart from the final total. The counters are
+/// process-wide, so one scenario per invocation keeps the total exact.
+///
+/// TODO: the captured target and its two leaves are reported but not asserted;
+/// add a regression test that replays the target through the real parameter
+/// table and pins both the warmed and the fresh selection, so a change to the
+/// tie order fails the suite.
+auto run_climate_ties(const options &config, std::ostream *stream) -> bool {
+    if (!config.biome.empty()) {
+        fmt::print(stderr,
+                   "bench-chunk-generator: --climate-ties needs an empty "
+                   "--biome so the climate source performs the search\n");
+        return false;
+    }
+    auto created = chunk_generator::create(chunk_generator_config{
+        .data_root = config.data_root,
+        .templates_root = config.templates_root,
+        .seed = config.seed,
+        .kind = config.kind,
+        .fixed_biome = config.biome,
+        .target = generation_target::terrain,
+        .structure_sets = {},
+        .reference_world = false,
+    });
+    if (!created) {
+        fmt::print(stderr, "bench-chunk-generator: create failed: {}\n",
+                   created.error().message);
+        return false;
+    }
+    auto generator = std::move(*created);
+    const auto emit = [stream](const std::string &line) {
+        fmt::print("{}\n", line);
+        if (stream != nullptr) {
+            *stream << line << '\n';
+        }
+    };
+    const auto [width, depth] = rectangle_for(config.chunk_counts.front());
+    const auto positions =
+        make_positions(config.origin_x, config.origin_z, width, depth);
+    const auto &names = generator->biome_names();
+    const auto name_of = [&names](std::uint16_t value) -> std::string_view {
+        return value < names.size() ? std::string_view{names[value]}
+                                    : std::string_view{"?"};
+    };
+    bool leaf_example_printed = false;
+    for (const auto &position : positions) {
+        climate::measurement::reset_captures();
+        const auto before = climate::measurement::totals();
+        auto generated = generator->generate(position);
+        if (!generated) {
+            fmt::print(stderr, "bench-chunk-generator: generate failed: {}\n",
+                       generated.error().message);
+            return false;
+        }
+        const auto after = climate::measurement::totals();
+        const auto hint_count = climate::measurement::hint_capture_count();
+        const auto leaf_count = climate::measurement::leaf_capture_count();
+        const bool report =
+            hint_count != 0 || (!leaf_example_printed && leaf_count != 0);
+        if (!report) {
+            continue;
+        }
+        emit(fmt::format(
+            "CLIMATE_TIES seed={} dimension={} chunk={},{} selects={} "
+            "equal_child_calls={} equal_child_prunes={} "
+            "rival_equal_child_calls={} rival_equal_child_prunes={} "
+            "equal_leaf_calls={} equal_leaf_rejections={} hint_dependent={} "
+            "biome_changes={} unsound={}",
+            config.seed, config.dimension, position.x, position.z,
+            after.selects - before.selects,
+            after.selects_with_equal_child - before.selects_with_equal_child,
+            after.equal_child_prunes - before.equal_child_prunes,
+            after.selects_with_rival_equal_child -
+                before.selects_with_rival_equal_child,
+            after.rival_equal_child_prunes - before.rival_equal_child_prunes,
+            after.selects_with_equal_leaf - before.selects_with_equal_leaf,
+            after.equal_leaf_rejections - before.equal_leaf_rejections,
+            after.hint_dependent_selects - before.hint_dependent_selects,
+            after.hint_dependent_biome_changes -
+                before.hint_dependent_biome_changes,
+            after.unsound_selects - before.unsound_selects));
+        const auto &profile = generator->profile();
+        const auto section_count =
+            static_cast<std::size_t>(profile.height / 16);
+        const auto fill_selects = section_count * 64U;
+        const auto explain = [&](const climate::measurement::tie_capture
+                                     &capture) {
+            const auto query = capture.select_ordinal - (before.selects + 1);
+            std::string cell{};
+            // The biome grid runs before the carvers, so a query ordinal
+            // inside the grid names the exact quart cell it selected.
+            if (query < fill_selects) {
+                std::size_t index = static_cast<std::size_t>(query);
+                const jint cell_z = static_cast<jint>(index % 4);
+                index /= 4;
+                const jint cell_y = static_cast<jint>(index % 4);
+                index /= 4;
+                const jint cell_x = static_cast<jint>(index % 4);
+                index /= 4;
+                const jint section = static_cast<jint>(index);
+                const jint quart_x = position.x * 4 + cell_x;
+                const jint quart_y =
+                    ((profile.min_y + section * 16) >> 2) + cell_y;
+                const jint quart_z = position.z * 4 + cell_z;
+                const auto stored =
+                    (*generated)->biome_at(cell_x * 4, quart_y * 4, cell_z * 4);
+                cell = fmt::format(
+                    " query_in_chunk={} cell={},{},{} cell_biome={}"
+                    " cell_matches_incumbent={}",
+                    query, quart_x, quart_y, quart_z, name_of(stored),
+                    stored == capture.incumbent_value ? "yes" : "no");
+            }
+            emit(fmt::format(
+                "CLIMATE_TIE kind={} seed={} dimension={} chunk={},{} "
+                "ordinal={} target={} distance={} rival_distance={} "
+                "incumbent_entry={} incumbent_value={} incumbent_biome={} "
+                "incumbent_box={} rival_entry={} rival_value={} "
+                "rival_biome={} rival_box={} query={}{}",
+                capture_name(capture), config.seed, config.dimension,
+                position.x, position.z, capture.select_ordinal,
+                format_target(capture.target), capture.distance,
+                capture.rival_distance, capture.incumbent_entry,
+                capture.incumbent_value, name_of(capture.incumbent_value),
+                format_box(capture.incumbent), capture.rival_entry,
+                capture.rival_value, name_of(capture.rival_value),
+                format_box(capture.rival), query, cell));
+        };
+        for (std::size_t index = 0; index < hint_count; ++index) {
+            explain(climate::measurement::hint_captures()[index]);
+        }
+        if (!leaf_example_printed) {
+            for (std::size_t index = 0; index < leaf_count; ++index) {
+                explain(climate::measurement::leaf_captures()[index]);
+            }
+            leaf_example_printed = true;
+        }
+    }
+    const auto totals = climate::measurement::totals();
+    emit(fmt::format(
+        "CLIMATE_TIES_TOTAL seed={} dimension={} chunks={} selects={} "
+        "equal_child_calls={} equal_child_prunes={} "
+        "rival_equal_child_calls={} rival_equal_child_prunes={} "
+        "equal_leaf_calls={} equal_leaf_rejections={} hint_dependent={} "
+        "biome_changes={} unsound={}",
+        config.seed, config.dimension, positions.size(), totals.selects,
+        totals.selects_with_equal_child, totals.equal_child_prunes,
+        totals.selects_with_rival_equal_child, totals.rival_equal_child_prunes,
+        totals.selects_with_equal_leaf, totals.equal_leaf_rejections,
+        totals.hint_dependent_selects, totals.hint_dependent_biome_changes,
+        totals.unsound_selects));
+    return true;
+}
+#else
+auto run_climate_ties(const options &, std::ostream *) -> bool {
+    fmt::print(stderr, "bench-chunk-generator: --climate-ties requires a build "
+                       "configured with REFRAIN_CLIMATE_TIE_STATS=ON\n");
+    return false;
+}
+#endif
 
 auto parse_options(int argc, char **argv) -> std::optional<options> {
     options config;
@@ -584,7 +798,10 @@ auto parse_options(int argc, char **argv) -> std::optional<options> {
                 "instead "
                 "of timing it\n"
                 "  --stages                 print the wall-clock time of each "
-                "generation stage per batch\n");
+                "generation stage per batch\n"
+                "  --climate-ties           count equidistant climate-search "
+                "candidates and print captured examples; requires a build "
+                "configured with REFRAIN_CLIMATE_TIE_STATS\n");
             return std::nullopt;
         }
         if (argument == "--data-root") {
@@ -683,6 +900,8 @@ auto parse_options(int argc, char **argv) -> std::optional<options> {
             config.chunk_hash = true;
         } else if (argument == "--stages") {
             config.stages = true;
+        } else if (argument == "--climate-ties") {
+            config.climate_ties = true;
         } else if (argument == "--output") {
             const auto value = next(argument);
             if (!value) {
@@ -730,6 +949,10 @@ auto main(int argc, char **argv) -> int {
             return 1;
         }
         stream = &output;
+    }
+
+    if (config.climate_ties) {
+        return run_climate_ties(config, stream) ? 0 : 1;
     }
 
     if (config.chunk_hash) {
