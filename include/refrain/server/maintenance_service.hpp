@@ -16,6 +16,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace refrain::server {
@@ -25,6 +27,55 @@ namespace refrain::server {
 /// One instance owns the background snapshot writer and, for an applying
 /// content-GC policy, the delete worker. `start()` resolves the task set from
 /// the effective options once; later ticks only run the scheduler grid.
+/// What the background writer tells an operator about autosave health.
+struct writer_status {
+    /// Snapshots the writer has failed to persist in a row. Zero while the
+    /// world is being saved.
+    std::uint64_t consecutive_failures{0};
+    /// Message of the most recent failure; empty after a success.
+    std::string last_error{};
+};
+
+/// Decide when a repeated write failure deserves another log line.
+///
+/// A world that cannot be written fails on every autosave, and one line per
+/// autosave buries the first one. The first failure is reported, then only a
+/// changed message or every `report_every` consecutive failure, so a persistent
+/// failure keeps surfacing without flooding the log.
+class write_failure_tracker {
+  public:
+    explicit write_failure_tracker(std::uint64_t report_every = 12)
+        : report_every_{report_every == 0 ? 1 : report_every} {}
+
+    /// Records a failure and returns whether the operator should hear about it.
+    auto record(std::string_view message) -> bool {
+        ++consecutive_;
+        const bool changed{message != last_error_};
+        last_error_.assign(message);
+        if (consecutive_ == 1) {
+            return true;
+        }
+        return changed || consecutive_ % report_every_ == 0;
+    }
+
+    void record_success() noexcept {
+        consecutive_ = 0;
+        last_error_.clear();
+    }
+
+    [[nodiscard]] auto consecutive() const noexcept -> std::uint64_t {
+        return consecutive_;
+    }
+    [[nodiscard]] auto last_error() const noexcept -> const std::string & {
+        return last_error_;
+    }
+
+  private:
+    std::uint64_t report_every_{12};
+    std::uint64_t consecutive_{0};
+    std::string last_error_{};
+};
+
 class maintenance_service {
   public:
     maintenance_service();
@@ -56,6 +107,11 @@ class maintenance_service {
     void stop() noexcept;
 
     [[nodiscard]] auto tasks() const -> std::vector<core::schedule::task_info>;
+
+    /// Autosave health: how many snapshots the writer has failed in a row and
+    /// why. The console reports it so a world that stopped saving is visible
+    /// without reading the log.
+    [[nodiscard]] auto writer_status() const -> writer_status;
 
   private:
     struct impl;

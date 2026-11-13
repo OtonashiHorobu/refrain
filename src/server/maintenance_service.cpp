@@ -97,6 +97,12 @@ class snapshot_writer {
         }
     }
 
+    [[nodiscard]] auto failures() const -> writer_status {
+        const std::lock_guard lock{failures_mutex_};
+        return writer_status{.consecutive_failures = failures_.consecutive(),
+                             .last_error = failures_.last_error()};
+    }
+
   private:
     void run() {
         refrain::log::set_thread_name("io-writer");
@@ -117,8 +123,36 @@ class snapshot_writer {
                 writing_ = true;
             }
             if (auto written{world_.write_pending(batch)}; !written) {
-                log_storage.error("{}", written.error().message);
+                bool report{false};
+                std::uint64_t consecutive{0};
+                {
+                    const std::lock_guard lock{failures_mutex_};
+                    report = failures_.record(written.error().message);
+                    consecutive = failures_.consecutive();
+                }
+                if (consecutive == 1) {
+                    log_storage.error(
+                        "{} (the chunks stay dirty and are retried by the next "
+                        "autosave)",
+                        written.error().message);
+                } else if (report) {
+                    log_storage.warn(
+                        "autosave has failed {} time(s) in a row: {}",
+                        consecutive, written.error().message);
+                }
             } else {
+                // A success after failures is worth one line: the operator
+                // needs to know the world is being written again.
+                std::uint64_t recovered{0};
+                {
+                    const std::lock_guard lock{failures_mutex_};
+                    recovered = failures_.consecutive();
+                    failures_.record_success();
+                }
+                if (recovered > 0) {
+                    log_storage.info("autosave recovered after {} failure(s)",
+                                     recovered);
+                }
                 const std::lock_guard lock{completed_mutex_};
                 completed_.push_back(std::move(*written));
             }
@@ -137,6 +171,9 @@ class snapshot_writer {
     std::deque<std::vector<refrain::sim::pending_snapshot>> pending_{};
     std::mutex completed_mutex_{};
     std::vector<std::vector<refrain::sim::snapshot_entry>> completed_{};
+    /// Shared with the console through `writer_status()`.
+    mutable std::mutex failures_mutex_{};
+    write_failure_tracker failures_{};
     bool stopping_{false};
     bool writing_{false};
     std::thread thread_;
@@ -552,6 +589,15 @@ void maintenance_service::stop() noexcept {
 auto maintenance_service::tasks() const
     -> std::vector<refrain::core::schedule::task_info> {
     return impl_->scheduler.tasks();
+}
+
+auto maintenance_service::writer_status() const
+    -> ::refrain::server::writer_status {
+    const auto &state{*impl_};
+    if (!state.writer.has_value()) {
+        return {};
+    }
+    return state.writer->failures();
 }
 
 } // namespace refrain::server

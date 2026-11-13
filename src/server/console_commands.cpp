@@ -46,7 +46,7 @@ void print_console_help() {
         "dig <x> <y> <z>, place <x> <y> <z> <block>, "
         "give [name] <item> <count>, inv [name], "
         "spawn <type> <x> <y> <z>, entities, kill <entity-id>, palette-gc, "
-        "schedules, config <namespace> get|set <key> [value], "
+        "storage, schedules, config <namespace> get|set <key> [value], "
         "config save|reload [namespace], config names");
 }
 
@@ -305,6 +305,22 @@ void console_commands::execute(std::string_view line,
         log_net.info("players={} in={} out={} bytes_in={} bytes_out={}",
                      stats.connections, stats.packets_in, stats.packets_out,
                      stats.bytes_in, stats.bytes_out);
+        return;
+    }
+    if (line == "storage") {
+        if (dependencies_.maintenance == nullptr) {
+            log_storage.warn("storage is unavailable");
+            return;
+        }
+        const auto status{dependencies_.maintenance->writer_status()};
+        if (status.consecutive_failures == 0) {
+            log_storage.info("autosave ok");
+            return;
+        }
+        log_storage.warn(
+            "autosave has failed {} time(s) in a row; the chunks stay dirty "
+            "and are retried: {}",
+            status.consecutive_failures, status.last_error);
         return;
     }
     if (line == "tps") {
