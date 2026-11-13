@@ -185,6 +185,20 @@ The fresh run also reports the spawn fill, the number of generator log lines
 and how many connections finished their viewport. Its numbers depend on the
 host's generator throughput; the reference below is the import baseline.
 
+`--slow-clients N --read-delay-ms MS` adds a second cohort that refuses to read
+at full speed, so its sockets stop draining and the transport's per-connection
+write queue fills the way it does for a client on a bad connection. The delay is
+per client, which is why the cohort is a separate load run:
+
+```bash
+scripts/soak.sh --fresh --seed 9 --bots 10 --seconds 40 --view-distance 6 \
+    --slow-clients 1 --read-delay-ms 400
+```
+
+The run prints one `load:` line per cohort, so the throttled client's join
+latency and chunk count are visible next to the normal bots'. It also prints a
+`slow:` line only when the cohort exists.
+
 The reference run uses 100 bots, a 6 chunk view distance and bots walking in an
 8 block circle. On an Intel Core i7-10700K with the release build it reports:
 
