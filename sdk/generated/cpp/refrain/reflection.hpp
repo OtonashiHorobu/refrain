@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 996e38144c4577ab
+// Schema hash: e168f1954a0feabb
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -3058,6 +3058,31 @@ template <> struct custom_traits<::refrain::services::world::world_config> {
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"storage", &::refrain::services::world::world_config::storage},
         refrain::reflect::custom_field{"seed", &::refrain::services::world::world_config::seed});
+};
+
+/// Generated RIDL struct 'refrain::services::world::level_info'.
+template <> struct custom_traits<::refrain::services::world::level_info> {
+    static constexpr std::string_view type_name = "refrain::services::world::level_info";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"data_version", &::refrain::services::world::level_info::data_version},
+        refrain::reflect::custom_field{"seed", &::refrain::services::world::level_info::seed},
+        refrain::reflect::custom_field{"spawn_x", &::refrain::services::world::level_info::spawn_x},
+        refrain::reflect::custom_field{"spawn_y", &::refrain::services::world::level_info::spawn_y},
+        refrain::reflect::custom_field{"spawn_z", &::refrain::services::world::level_info::spawn_z},
+        refrain::reflect::custom_field{"time", &::refrain::services::world::level_info::time},
+        refrain::reflect::custom_field{"level_name", &::refrain::services::world::level_info::level_name},
+        refrain::reflect::custom_field{"game_mode", &::refrain::services::world::level_info::game_mode},
+        refrain::reflect::custom_field{"hardcore", &::refrain::services::world::level_info::hardcore},
+        refrain::reflect::custom_field{"difficulty", &::refrain::services::world::level_info::difficulty},
+        refrain::reflect::custom_field{"difficulty_locked", &::refrain::services::world::level_info::difficulty_locked});
+};
+
+/// Generated RIDL struct 'refrain::services::world::level_projection'.
+template <> struct custom_traits<::refrain::services::world::level_projection> {
+    static constexpr std::string_view type_name = "refrain::services::world::level_projection";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"level", &::refrain::services::world::level_projection::level},
+        refrain::reflect::custom_field{"has_chunks", &::refrain::services::world::level_projection::has_chunks});
 };
 
 /// Generated RIDL struct 'refrain::services::worldgen::worldgen_config'.

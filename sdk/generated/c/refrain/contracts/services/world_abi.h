@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 996e38144c4577ab
+// Schema hash: e168f1954a0feabb
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_WORLD_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_WORLD_ABI_H
@@ -20,6 +20,8 @@ extern "C" {
 #endif
 
 typedef struct refrain_services_world_world_config refrain_services_world_world_config;
+typedef struct refrain_services_world_level_info refrain_services_world_level_info;
+typedef struct refrain_services_world_level_projection refrain_services_world_level_projection;
 
 typedef uint32_t refrain_services_world_world_error; // enum 'world_error'
 #define REFRAIN_SERVICES_WORLD_WORLD_ERROR_CHUNK_NOT_LOADED ((refrain_services_world_world_error)(1))
@@ -42,9 +44,52 @@ struct refrain_services_world_world_config {
 }; // refrain_services_world_world_config size = 72
 #define REFRAIN_SERVICES_WORLD_WORLD_CONFIG_SIZE ((uint32_t)sizeof(refrain_services_world_world_config))
 
+// Read-only projection of the world's level record. A provider resolves it
+// from the store it was handed; nothing here lets a provider open the level
+// directory itself.
+struct refrain_services_world_level_info {
+    uint32_t struct_size;
+    // `DataVersion` of the saved level.
+    int32_t data_version;
+    // World generation seed.
+    int64_t seed;
+    // Spawn position in block coordinates.
+    int32_t spawn_x;
+    int32_t spawn_y;
+    int32_t spawn_z;
+    uint8_t reserved_0[4];
+    // `Time` of the saved level.
+    int64_t time;
+    // `LevelName` as stored; empty when the tag is absent.
+    refrain_str level_name;
+    // `GameType`: 0 survival, 1 creative, 2 adventure, 3 spectator.
+    int32_t game_mode;
+    // `hardcore` (vanilla stores it as a byte).
+    uint8_t hardcore;
+    uint8_t reserved_1[3];
+    // `Difficulty`: 0 peaceful, 1 easy, 2 normal, 3 hard.
+    int32_t difficulty;
+    // `DifficultyLocked` (vanilla stores it as a byte).
+    uint8_t difficulty_locked;
+    uint8_t reserved_2[3];
+}; // refrain_services_world_level_info size = 72
+#define REFRAIN_SERVICES_WORLD_LEVEL_INFO_SIZE ((uint32_t)sizeof(refrain_services_world_level_info))
+
+// Boot projection of the world level. `has_chunks` is true once the store
+// holds a chunk, which tells the runtime that the spawn area does not need to
+// be filled.
+struct refrain_services_world_level_projection {
+    uint32_t struct_size;
+    uint8_t reserved_0[4];
+    refrain_services_world_level_info level;
+    uint8_t has_chunks;
+    uint8_t reserved_1[7];
+}; // refrain_services_world_level_projection size = 88
+#define REFRAIN_SERVICES_WORLD_LEVEL_PROJECTION_SIZE ((uint32_t)sizeof(refrain_services_world_level_projection))
+
 #define REFRAIN_SERVICES_WORLD_SERVICE_ID "refrain:world"
 #define REFRAIN_SERVICES_WORLD_ABI_MAJOR 1u
-#define REFRAIN_SERVICES_WORLD_ABI_MINOR 0u
+#define REFRAIN_SERVICES_WORLD_ABI_MINOR 1u
 #define REFRAIN_SERVICES_WORLD_ABI_PATCH 0u
 #define REFRAIN_SERVICES_WORLD_SIDE REFRAIN_SIDE_SERVER
 #define REFRAIN_SERVICES_WORLD_THREAD REFRAIN_THREAD_SIM
@@ -83,6 +128,11 @@ typedef struct refrain_services_world_vtable {
     // World tick counter (monotonic, survives save/load).
     // attributes: #[thread(sim)]
     int64_t (*world_tick)(void *self);
+    // Read-only boot projection: the level record and whether the world
+    // already holds a chunk. The provider answers from the store it was
+    // opened over; the level directory stays private to the storage provider.
+    // attributes: #[thread(sim)] #[can_fail]
+    refrain_status (*level)(void *self, refrain_services_world_level_projection *out_value);
 } refrain_services_world_vtable; // service refrain:world
 
 #define REFRAIN_SERVICES_WORLD_VTABLE_SIZE ((uint32_t)sizeof(refrain_services_world_vtable))

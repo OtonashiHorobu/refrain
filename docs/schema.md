@@ -45,6 +45,13 @@ is a 64-bit `void *` used for opaque provider tables/references, and
 `mut_bytes` is a writable byte span (`refrain_mut_bytes`) used for host-owned
 allocations. Both are rejected in RSC data schemas.
 
+A `string` field becomes a `refrain_str`, a borrowed view valid for the
+duration of the call. A provider that fills an output struct keeps the backing
+storage alive across the call and the caller copies the value out before it
+returns, so no provider-allocated memory has to cross the boundary or be freed
+by the consumer. The `refrain:world` level projection uses this for
+`level_name`.
+
 A service block declares its version, side, thread affinity, composition mode,
 provided and required services, and capabilities. Composition modes are
 `exclusive` (the default), `instanced`, `chain`, `registry` and `sealed`.
@@ -231,11 +238,18 @@ Generated files are not edited by hand. Change the schema or the emitter in
 
 ## Versioning
 
-Before the first public release every service, mod and manifest version stays
-`1.0.0`. Incompatible contract changes are made in place at `1.0.0`; only the
-schema hash changes, and no migration path or new `v2`/`v3` name is introduced.
-This keeps pre-release builds from accumulating versions with no external
-readers.
+Before the first public release, incompatible contract changes are made in
+place at the current major version; only the schema hash changes, and no
+migration path or new `v2`/`v3` name is introduced. This keeps pre-release
+builds from accumulating versions with no external readers.
 
-The ABI major version must match between a provider and its consumer. After the
-release freeze, contracts switch to SemVer increments with migrations.
+An additive method appends one slot to the vtable and bumps the service minor
+version: `refrain:world` moved from `1.0.0` to `1.1.0` when it gained the
+read-only `level()` projection, while every existing slot kept its offset. The
+table records its full length in `struct_size`, so a consumer can reject a
+provider built against the older layout with a version error before dispatching
+the new slot.
+
+The ABI major version must match between a provider and its consumer and only
+changes for an incompatible layout or calling change. After the release freeze,
+contracts switch to SemVer increments with migrations.

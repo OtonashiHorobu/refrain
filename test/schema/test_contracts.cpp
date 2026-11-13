@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -43,6 +44,49 @@ static_assert(REFRAIN_SERVICES_WORLDGEN_COMPOSITION ==
               REFRAIN_COMPOSITION_EXCLUSIVE);
 static_assert(std::string_view{refrain::services::worldgen::service_id} ==
               "refrain:worldgen");
+
+// `refrain:world` v1.1.0 appended the boot projection slot and its structs, so
+// the generated table grows by one pointer and carries the projection layout.
+namespace world_service = refrain::services::world;
+static_assert(world_service::abi_major == 1);
+static_assert(world_service::abi_minor == 1);
+static_assert(REFRAIN_SERVICES_WORLD_ABI_MINOR == 1);
+static_assert(std::string_view{world_service::service_id} == "refrain:world");
+static_assert(sizeof(world_service::level_info) == 72);
+static_assert(alignof(world_service::level_info) == 8);
+static_assert(offsetof(world_service::level_info, level_name) == 40);
+static_assert(sizeof(world_service::level_projection) == 88);
+static_assert(alignof(world_service::level_projection) == 8);
+static_assert(offsetof(world_service::level_projection, level) == 8);
+static_assert(offsetof(world_service::level_projection, has_chunks) == 80);
+static_assert(offsetof(refrain_services_world_vtable, level) ==
+              REFRAIN_SERVICES_WORLD_VTABLE_SIZE - sizeof(void *));
+
+refrain_status fake_world_level(void *self,
+                                refrain_services_world_level_projection *out) {
+    auto &name{*static_cast<std::string *>(self)};
+    name = "projected";
+    out->struct_size = REFRAIN_SERVICES_WORLD_LEVEL_PROJECTION_SIZE;
+    out->has_chunks = 1;
+    out->level.struct_size = REFRAIN_SERVICES_WORLD_LEVEL_INFO_SIZE;
+    out->level.data_version = 4189;
+    out->level.seed = 1234;
+    out->level.spawn_x = 1;
+    out->level.spawn_y = 64;
+    out->level.spawn_z = -1;
+    out->level.time = 6000;
+    out->level.level_name = refrain::contracts::to_borrowed(name);
+    out->level.game_mode = 1;
+    out->level.hardcore = 1;
+    out->level.difficulty = 2;
+    out->level.difficulty_locked = 1;
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status
+fake_world_level_missing(void *, refrain_services_world_level_projection *) {
+    return REFRAIN_SERVICES_WORLD_WORLD_ERROR_NOT_IMPLEMENTED;
+}
 
 // The `event` declared by `sdk/idl/refrain/services/sim.ridl` is an
 // in-process notification (no struct_size) with a stable id and traits.
@@ -310,6 +354,44 @@ const suite contracts_tests = [] {
         expect(!failed.has_value());
         if (!failed) {
             expect(failed.error() == worldgen_error::cancelled);
+        }
+    };
+
+    "contracts/world level projection dispatches through the vtable"_test = [] {
+        std::string level_name{};
+        refrain_services_world_vtable table{};
+        table.struct_size = REFRAIN_SERVICES_WORLD_VTABLE_SIZE;
+        table.abi_major = REFRAIN_SERVICES_WORLD_ABI_MAJOR;
+        table.abi_minor = REFRAIN_SERVICES_WORLD_ABI_MINOR;
+        table.abi_patch = REFRAIN_SERVICES_WORLD_ABI_PATCH;
+        table.level = &fake_world_level;
+        const world_service::provider service{table, &level_name};
+
+        const auto projected{service.level()};
+        expect(projected.has_value());
+        if (projected) {
+            expect(projected->level.data_version == 4189);
+            expect(projected->level.seed == 1234);
+            expect(projected->level.spawn_x == 1);
+            expect(projected->level.spawn_y == 64);
+            expect(projected->level.spawn_z == -1);
+            expect(projected->level.time == 6000);
+            expect(refrain::contracts::as_string_view(
+                       projected->level.level_name) == "projected");
+            expect(projected->level.game_mode == 1);
+            expect(projected->level.hardcore == 1);
+            expect(projected->level.difficulty == 2);
+            expect(projected->level.difficulty_locked == 1);
+            expect(projected->has_chunks == 1);
+        }
+
+        table.level = &fake_world_level_missing;
+        const world_service::provider missing{table, &level_name};
+        const auto failed{missing.level()};
+        expect(!failed.has_value());
+        if (!failed) {
+            expect(failed.error() ==
+                   world_service::world_error::not_implemented);
         }
     };
 

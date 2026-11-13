@@ -14,8 +14,11 @@
 //    `refrain:world` / `refrain:sim` / `refrain:storage` call, proven by an
 //    instrumented provider set the test swaps in (the same ids the gamepack
 //    pins, different code);
-//  * the runtime refuses to boot on a contract composition with the
-//    documented gap instead of ignoring the replacement.
+//  * the contract port projects the level record the runtime boots from, and a
+//    scripted world booted over it ticks to the same state hashes as the
+//    direct port;
+//  * the runtime refuses a composition whose provider does not answer that
+//    projection instead of ignoring the replacement.
 
 #include <refrain/builtin/image.hpp>
 #include <refrain/contracts/abi.hpp>
@@ -30,6 +33,7 @@
 #include <refrain/server/server_runtime.hpp>
 #include <refrain/server/world_port.hpp>
 #include <refrain/sim/world.hpp>
+#include <refrain/world/create.hpp>
 #include <refrain/world/model.hpp>
 #include <refrain/world/store.hpp>
 
@@ -65,6 +69,8 @@ struct recording_provider {
     sim::world *world{nullptr};
     std::uint64_t next_handle{1};
     std::string hash_hex{};
+    /// Backing store for the borrowed projection string.
+    std::string level_name{};
     /// The handle the runtime handed to each provider, so a test can prove
     /// that one store serves the whole composition.
     refrain_services_storage_storage_handle world_storage{};
@@ -76,6 +82,7 @@ struct recording_provider {
     int world_block_reads{0};
     int world_block_writes{0};
     int world_chunks{0};
+    int world_levels{0};
     int sim_opens{0};
     int sim_set_blocks{0};
     int sim_ticks{0};
@@ -180,6 +187,36 @@ record_world_apply_changes(void *self, refrain_core_slice_block_change changes,
 
 std::int64_t record_world_tick(void *self) {
     return static_cast<recording_provider *>(self)->world->ticks();
+}
+
+refrain_status
+record_world_level(void *self, refrain_services_world_level_projection *out) {
+    auto *provider{static_cast<recording_provider *>(self)};
+    if (provider == nullptr || provider->world == nullptr || out == nullptr) {
+        return REFRAIN_SERVICES_WORLD_WORLD_ERROR_INTERNAL;
+    }
+    ++provider->world_levels;
+    auto projected{provider->world->store().project_level()};
+    if (!projected) {
+        return REFRAIN_SERVICES_WORLD_WORLD_ERROR_INTERNAL;
+    }
+    const auto &record{projected->level};
+    provider->level_name = record.level_name;
+    out->struct_size = REFRAIN_SERVICES_WORLD_LEVEL_PROJECTION_SIZE;
+    out->has_chunks = projected->has_chunks ? 1 : 0;
+    out->level.struct_size = REFRAIN_SERVICES_WORLD_LEVEL_INFO_SIZE;
+    out->level.data_version = record.data_version;
+    out->level.seed = record.seed;
+    out->level.spawn_x = record.spawn_x;
+    out->level.spawn_y = record.spawn_y;
+    out->level.spawn_z = record.spawn_z;
+    out->level.time = record.time;
+    out->level.level_name = abi::to_borrowed(provider->level_name);
+    out->level.game_mode = record.game_mode;
+    out->level.hardcore = record.hardcore ? 1 : 0;
+    out->level.difficulty = record.difficulty;
+    out->level.difficulty_locked = record.difficulty_locked ? 1 : 0;
+    return REFRAIN_STATUS_OK;
 }
 
 refrain_status record_sim_open(void *self,
@@ -365,6 +402,7 @@ const refrain_services_world_vtable recording_world_vtable{
     .is_chunk_loaded = &record_world_is_chunk_loaded,
     .apply_block_changes = &record_world_apply_changes,
     .world_tick = &record_world_tick,
+    .level = &record_world_level,
 };
 
 const refrain_services_sim_vtable recording_sim_vtable{
@@ -418,9 +456,13 @@ const refrain_services_storage_vtable recording_storage_vtable{
     return chunk;
 }
 
-[[nodiscard]] auto open_flat_world(const std::filesystem::path &directory)
+[[nodiscard]] auto open_flat_world(const std::filesystem::path &directory,
+                                   std::int64_t seed = 0)
     -> std::optional<sim::world> {
-    auto store{world::world_store::create(directory.string())};
+    if (!world::create_world(directory.string(), seed, "world")) {
+        return std::nullopt;
+    }
+    auto store{world::world_store::open(directory.string())};
     if (!store) {
         return std::nullopt;
     }
@@ -646,13 +688,32 @@ const refrain_services_storage_vtable recording_storage_vtable{
             expect(port->commit().has_value());
             expect(provider.storage_syncs == 2);
 
-            // The v1 contracts cannot serve the boot projection or the packet
-            // encoder; the port names the gap instead of faking a value.
+            // The boot projection is one ABI call; its fields come from the
+            // same level record and chunk state the direct port reads.
             const auto level{port->level()};
-            expect(!level.has_value());
-            if (!level) {
-                expect(level.error().code == refrain::error_code::unsupported);
+            const auto expected{opened->store().project_level()};
+            expect(level.has_value());
+            expect(expected.has_value());
+            if (level && expected) {
+                expect(level->level.data_version ==
+                       expected->level.data_version);
+                expect(level->level.seed == expected->level.seed);
+                expect(level->level.spawn_x == expected->level.spawn_x);
+                expect(level->level.spawn_y == expected->level.spawn_y);
+                expect(level->level.spawn_z == expected->level.spawn_z);
+                expect(level->level.time == expected->level.time);
+                expect(level->level.level_name == expected->level.level_name);
+                expect(level->level.game_mode == expected->level.game_mode);
+                expect(level->level.hardcore == expected->level.hardcore);
+                expect(level->level.difficulty == expected->level.difficulty);
+                expect(level->level.difficulty_locked ==
+                       expected->level.difficulty_locked);
+                expect(level->has_chunks == expected->has_chunks);
             }
+            expect(provider.world_levels == 1);
+
+            // The packet path and snapshot lifecycle stay on the other side of
+            // the contract; the port names each gap instead of faking a value.
             expect(!port->chunk_load({0, 0}).has_value());
             expect(
                 !port->write_pending(std::span<const sim::pending_snapshot>{})
@@ -763,8 +824,234 @@ const refrain_services_storage_vtable recording_storage_vtable{
             }
         };
 
-    "world port/run_server refuses a contract composition without a level "
+    "world port/contract boot projection matches the direct port"_test = [] {
+        test_support::scratch_directory directory{};
+        const auto direct_path{directory.path() / "direct"};
+        const auto contract_path{directory.path() / "contract"};
+        auto direct_world{open_flat_world(direct_path, 424242)};
+        expect(direct_world.has_value());
+        if (!direct_world) {
+            return;
+        }
+        auto direct_port{server::make_borrowed_world_port(*direct_world)};
+        expect(direct_port != nullptr);
+        if (!direct_port) {
+            return;
+        }
+
+        auto contract_world{open_flat_world(contract_path, 424242)};
+        expect(contract_world.has_value());
+        if (!contract_world) {
+            return;
+        }
+        recording_provider provider{.world = &*contract_world};
+        auto contract_port{
+            server::make_world_port(recording_contract_handles(provider))};
+        expect(contract_port != nullptr);
+        if (!contract_port) {
+            return;
+        }
+        expect(contract_port->open(contract_path.string()).has_value());
+
+        const auto direct{direct_port->level()};
+        const auto contract{contract_port->level()};
+        expect(direct.has_value());
+        expect(contract.has_value());
+        if (direct && contract) {
+            expect(contract->level.data_version == direct->level.data_version);
+            expect(contract->level.seed == direct->level.seed);
+            expect(contract->level.spawn_x == direct->level.spawn_x);
+            expect(contract->level.spawn_y == direct->level.spawn_y);
+            expect(contract->level.spawn_z == direct->level.spawn_z);
+            expect(contract->level.time == direct->level.time);
+            expect(contract->level.level_name == direct->level.level_name);
+            expect(contract->level.level_name == "world");
+            expect(contract->level.game_mode == direct->level.game_mode);
+            expect(contract->level.hardcore == direct->level.hardcore);
+            expect(contract->level.difficulty == direct->level.difficulty);
+            expect(contract->level.difficulty_locked ==
+                   direct->level.difficulty_locked);
+            // The flat column written at creation is the "resume this world"
+            // signal the boot path reads.
+            expect(contract->has_chunks);
+            expect(contract->has_chunks == direct->has_chunks);
+        }
+        contract_port->close();
+
+        // A store without a column projects as empty, so the runtime fills the
+        // spawn area instead of resuming a world that does not exist yet.
+        const auto fresh_path{directory.path() / "fresh"};
+        expect(static_cast<bool>(
+            world::create_world(fresh_path.string(), 7, "fresh")));
+        auto fresh{sim::world::open(fresh_path.string())};
+        expect(fresh.has_value());
+        if (!fresh) {
+            return;
+        }
+        recording_provider fresh_provider{.world = &*fresh};
+        auto fresh_port{server::make_world_port(
+            recording_contract_handles(fresh_provider))};
+        expect(fresh_port != nullptr);
+        if (!fresh_port) {
+            return;
+        }
+        expect(fresh_port->open(fresh_path.string()).has_value());
+        const auto fresh_projection{fresh_port->level()};
+        expect(fresh_projection.has_value());
+        if (fresh_projection) {
+            expect(!fresh_projection->has_chunks);
+            expect(fresh_projection->level.seed == 7);
+        }
+        fresh_port->close();
+    };
+
+    "world port/contract boots a scripted world and matches direct tick "
+    "hashes"_test = [] {
+        test_support::scratch_directory directory{};
+        const auto direct_path{directory.path() / "direct"};
+        const auto contract_path{directory.path() / "contract"};
+        auto direct_world{open_flat_world(direct_path)};
+        expect(direct_world.has_value());
+        if (!direct_world) {
+            return;
+        }
+        auto direct_port{server::make_borrowed_world_port(*direct_world)};
+        expect(direct_port != nullptr);
+        if (!direct_port) {
+            return;
+        }
+
+        auto contract_world{open_flat_world(contract_path)};
+        expect(contract_world.has_value());
+        if (!contract_world) {
+            return;
+        }
+        recording_provider provider{.world = &*contract_world};
+        auto contract_port{
+            server::make_world_port(recording_contract_handles(provider))};
+        expect(contract_port != nullptr);
+        if (!contract_port) {
+            return;
+        }
+        expect(contract_port->open(contract_path.string()).has_value());
+
+        // Boot: read the projection and take the empty-world decision from
+        // it. The flat column means no spawn fill is due.
+        const auto direct_boot{direct_port->level()};
+        const auto contract_boot{contract_port->level()};
+        expect(direct_boot.has_value());
+        expect(contract_boot.has_value());
+        if (!direct_boot || !contract_boot) {
+            contract_port->close();
+            return;
+        }
+        expect(contract_boot->has_chunks);
+        expect(provider.world_levels == 1);
+
+        // The same script over both ports: dig, place, tick, hash. A block
+        // state id of 1 is `minecraft:stone`, which both worlds intern in the
+        // same order from the same stored column.
+        constexpr sim::block_state_id stone{1};
+        const auto script = [](server::world_port &port) {
+            std::vector<data::digest32> hashes{};
+            hashes.reserve(8);
+            for (int tick = 0; tick < 8; ++tick) {
+                if (tick == 1) {
+                    expect(
+                        port.set_block({0, 1, 0}, sim::air_block).has_value());
+                } else if (tick == 3) {
+                    expect(port.set_block({1, 40, 1}, stone).has_value());
+                } else if (tick == 5) {
+                    expect(
+                        port.set_block({2, 2, 2}, sim::air_block).has_value());
+                } else if (tick == 6) {
+                    expect(port.set_block({3, 40, 3}, stone).has_value());
+                }
+                port.tick();
+                hashes.push_back(port.state_hash());
+            }
+            return hashes;
+        };
+        const auto direct_hashes{script(*direct_port)};
+        const auto contract_hashes{script(*contract_port)};
+        expect(direct_hashes.size() == 8U);
+        expect(direct_hashes.size() == contract_hashes.size());
+        expect(provider.sim_ticks == 8);
+        for (std::size_t index{0}; index < direct_hashes.size(); ++index) {
+            expect(data::to_hex(direct_hashes[index]) ==
+                   data::to_hex(contract_hashes[index]));
+        }
+        contract_port->close();
+    };
+
+    "world port/contract reports unsupported when the provider has no level "
     "projection"_test = [] {
+        test_support::scratch_directory directory{};
+        const auto world_path{directory.path() / "world"};
+        auto opened{open_flat_world(world_path)};
+        expect(opened.has_value());
+        if (!opened) {
+            return;
+        }
+        recording_provider provider{.world = &*opened};
+        auto handles{recording_contract_handles(provider)};
+        // A table of the current length may still leave the slot empty; the
+        // port must report the operation by name instead of calling through
+        // null.
+        auto without_level{recording_world_vtable};
+        without_level.level = nullptr;
+        handles.world = &without_level;
+        auto port{server::make_world_port(handles)};
+        expect(port != nullptr);
+        if (!port) {
+            return;
+        }
+        expect(port->open(world_path.string()).has_value());
+        const auto level{port->level()};
+        expect(!level.has_value());
+        if (!level) {
+            expect(level.error().code == refrain::error_code::unsupported);
+            expect(level.error().message.find("level") != std::string::npos);
+        }
+        expect(provider.world_levels == 0);
+        port->close();
+    };
+
+    "world port/contract refuses a provider table from an older layout"_test =
+        [] {
+            test_support::scratch_directory directory{};
+            const auto world_path{directory.path() / "world"};
+            auto opened{open_flat_world(world_path)};
+            expect(opened.has_value());
+            if (!opened) {
+                return;
+            }
+            recording_provider provider{.world = &*opened};
+            auto handles{recording_contract_handles(provider)};
+            // Before the projection the table ended after `world_tick`, so a
+            // provider built against it declares a shorter table.
+            auto previous{recording_world_vtable};
+            previous.struct_size = static_cast<std::uint32_t>(
+                REFRAIN_SERVICES_WORLD_VTABLE_SIZE - sizeof(void *));
+            handles.world = &previous;
+            auto port{server::make_world_port(handles)};
+            expect(port != nullptr);
+            if (!port) {
+                return;
+            }
+            const auto result{port->open(world_path.string())};
+            expect(!result.has_value());
+            if (!result) {
+                expect(result.error().code ==
+                       refrain::error_code::version_mismatch);
+                expect(result.error().message.find("refrain:world") !=
+                       std::string::npos);
+            }
+            expect(provider.storage_opens == 0);
+        };
+
+    "world port/run_server reaches the boot projection through the contract "
+    "port"_test = [] {
         test_support::scratch_directory directory{};
         const auto world_path{directory.path() / "world"};
         auto opened{open_flat_world(world_path)};
@@ -782,12 +1069,47 @@ const refrain_services_storage_vtable recording_storage_vtable{
         server::server_run_options options{};
         options.world_path = world_path.string();
         options.ticks = 1;
-        // The contract port opens the provider set, then the runtime asks for
-        // the level projection and stops; no listener, no tick loop.
+        // The runtime now boots past the projection: it asks the provider for
+        // it before any other world call. The composition still stops at the
+        // store-configuration call the contracts do not expose, so the tick
+        // loop is not reached yet.
+        expect(server::run_server(options, handles, *port) == 1);
+        expect(provider.storage_opens == 1);
+        expect(provider.world_opens == 1);
+        expect(provider.sim_opens == 1);
+        expect(provider.world_levels == 1);
+        expect(provider.sim_ticks == 0);
+    };
+
+    "world port/run_server stops when no provider answers the level "
+    "projection"_test = [] {
+        test_support::scratch_directory directory{};
+        const auto world_path{directory.path() / "world"};
+        auto opened{open_flat_world(world_path)};
+        expect(opened.has_value());
+        if (!opened) {
+            return;
+        }
+        recording_provider provider{.world = &*opened};
+        auto handles{recording_contract_handles(provider)};
+        auto without_level{recording_world_vtable};
+        without_level.level = nullptr;
+        handles.world = &without_level;
+        auto port{server::make_world_port(handles)};
+        expect(port != nullptr);
+        if (!port) {
+            return;
+        }
+        server::server_run_options options{};
+        options.world_path = world_path.string();
+        options.ticks = 1;
+        // The contract port opens the provider set, the runtime asks for the
+        // level projection and stops; no listener, no tick loop.
         expect(server::run_server(options, handles, *port) == 1);
         expect(provider.world_opens == 1);
         expect(provider.sim_opens == 1);
         expect(provider.storage_opens == 1);
+        expect(provider.world_levels == 0);
         expect(provider.sim_ticks == 0);
     };
 };

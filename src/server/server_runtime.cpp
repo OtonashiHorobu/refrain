@@ -152,14 +152,14 @@ auto run_server(const server_run_options &options,
     const std::string datapack_root{options.datapack_root.empty()
                                         ? "content/vanilla/26.3/data"
                                         : options.datapack_root};
-    auto level_info{world.level()};
-    if (!level_info) {
-        return report_error(level_info.error());
+    auto boot_projection{world.level()};
+    if (!boot_projection) {
+        return report_error(boot_projection.error());
     }
-    if (world.loaded_chunks() == 0) {
-        // A world created from a seed starts empty; fill the spawn area
-        // before the listener accepts joins.
-        const auto seed{level_info->seed};
+    if (!boot_projection->has_chunks) {
+        // The store holds no chunk yet, so this is a fresh world: fill the
+        // spawn area before the listener accepts joins.
+        const auto seed{boot_projection->level.seed};
         const auto spawn{refrain::world::chunk_pos{0, 0}};
         auto generated{refrain::server::generate_spawn_area(
             world,
@@ -182,7 +182,7 @@ auto run_server(const server_run_options &options,
     refrain::server::chunk_generation::config generation_config{
         .data_root = datapack_root,
         .templates_root = datapack_root + "/../templates",
-        .seed = level_info->seed,
+        .seed = boot_projection->level.seed,
     };
     generation_config.admission.min_credits =
         static_cast<std::size_t>(std::max<std::int64_t>(
@@ -206,17 +206,17 @@ auto run_server(const server_run_options &options,
         !configured) {
         return report_error(configured.error());
     }
-    auto level{world.level()};
-    if (!level) {
-        return report_error(level.error());
+    auto projection{world.level()};
+    if (!projection) {
+        return report_error(projection.error());
     }
     log_world.info("{} dataversion={} seed={}", options.world_path,
-                   level->data_version, level->seed);
+                   projection->level.data_version, projection->level.seed);
     const auto initial_mode{
-        level->game_mode >= 0 && level->game_mode <= 3
-            ? static_cast<refrain::net::game_mode>(level->game_mode)
+        projection->level.game_mode >= 0 && projection->level.game_mode <= 3
+            ? static_cast<refrain::net::game_mode>(projection->level.game_mode)
             : refrain::net::game_mode::creative};
-    world.seed(static_cast<std::uint64_t>(level->seed));
+    world.seed(static_cast<std::uint64_t>(projection->level.seed));
     // The console and replay scripts drive one synthetic player; it is created
     // before the listener starts, so it is always the first player by entity id
     // and commands that omit a name keep addressing it.
@@ -225,9 +225,9 @@ auto run_server(const server_run_options &options,
             .connection = refrain::sim::synthetic_connection,
             .name = std::string{"@console"},
             .world = std::string{level_name},
-            .x = static_cast<double>(level->spawn_x) + 0.5,
-            .y = static_cast<double>(level->spawn_y),
-            .z = static_cast<double>(level->spawn_z) + 0.5,
+            .x = static_cast<double>(projection->level.spawn_x) + 0.5,
+            .y = static_cast<double>(projection->level.spawn_y),
+            .z = static_cast<double>(projection->level.spawn_z) + 0.5,
             .game_mode = static_cast<std::uint32_t>(initial_mode),
         })};
     if (!console_player) {
@@ -238,9 +238,11 @@ auto run_server(const server_run_options &options,
     // tick loop keeps them loaded; a missing chunk in a sparse imported world
     // is a warning, not a fatal startup error.
     const auto spawn_chunk{refrain::sim::chunk_pos{
-        level->spawn_x >= 0 ? level->spawn_x / 16 : (level->spawn_x - 15) / 16,
-        level->spawn_z >= 0 ? level->spawn_z / 16
-                            : (level->spawn_z - 15) / 16}};
+        projection->level.spawn_x >= 0 ? projection->level.spawn_x / 16
+                                       : (projection->level.spawn_x - 15) / 16,
+        projection->level.spawn_z >= 0
+            ? projection->level.spawn_z / 16
+            : (projection->level.spawn_z - 15) / 16}};
     for (std::int32_t dx{-1}; dx <= 1; ++dx) {
         for (std::int32_t dz{-1}; dz <= 1; ++dz) {
             const refrain::sim::chunk_pos pos{spawn_chunk.x + dx,
@@ -330,12 +332,13 @@ auto run_server(const server_run_options &options,
     refrain::net::server_inputs network_inputs{};
     network_inputs.commands =
         refrain::server::make_command_bridge(command_environment);
-    network_inputs.policy.hardcore = level->hardcore;
+    network_inputs.policy.hardcore = projection->level.hardcore;
     network_inputs.policy.difficulty =
-        level->difficulty >= 0 && level->difficulty <= 3
-            ? static_cast<std::uint32_t>(level->difficulty)
+        projection->level.difficulty >= 0 && projection->level.difficulty <= 3
+            ? static_cast<std::uint32_t>(projection->level.difficulty)
             : 2U;
-    network_inputs.policy.difficulty_locked = level->difficulty_locked;
+    network_inputs.policy.difficulty_locked =
+        projection->level.difficulty_locked;
     network_inputs.join_state =
         [command_environment](const refrain::net::player_identity &identity) {
             return command_environment->join_state(identity.connection);
@@ -363,8 +366,10 @@ auto run_server(const server_run_options &options,
     network_inputs.status = options.status;
     network_inputs.tab = options.tab;
     network_inputs.encode_tab = options.encode_tab;
-    const auto spawn_chunk_x{static_cast<std::int32_t>(level->spawn_x / 16)};
-    const auto spawn_chunk_z{static_cast<std::int32_t>(level->spawn_z / 16)};
+    const auto spawn_chunk_x{
+        static_cast<std::int32_t>(projection->level.spawn_x / 16)};
+    const auto spawn_chunk_z{
+        static_cast<std::int32_t>(projection->level.spawn_z / 16)};
     // The network shell queues this event from its I/O thread and delivers it
     // from `listener->tick()`, so the session table stays simulation-owned.
     network_inputs.player_join =
@@ -459,10 +464,12 @@ auto run_server(const server_run_options &options,
         broadcaster.respawn(players, connection);
     };
     network_inputs.verify_session = options.verify_session;
-    network_inputs.seed = level->seed;
-    network_inputs.spawn_x = static_cast<double>(level->spawn_x) + 0.5;
-    network_inputs.spawn_y = static_cast<double>(level->spawn_y);
-    network_inputs.spawn_z = static_cast<double>(level->spawn_z) + 0.5;
+    network_inputs.seed = projection->level.seed;
+    network_inputs.spawn_x =
+        static_cast<double>(projection->level.spawn_x) + 0.5;
+    network_inputs.spawn_y = static_cast<double>(projection->level.spawn_y);
+    network_inputs.spawn_z =
+        static_cast<double>(projection->level.spawn_z) + 0.5;
     network_inputs.registry_catalog_path =
         "content/vanilla/26.3/protocol_registry.json";
     // Apply one block mutation and publish it on the contract's event type.

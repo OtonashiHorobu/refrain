@@ -77,6 +77,20 @@ class contract_world_port final : public world_port {
                 error_code::not_found, "the composition has no active world, "
                                        "sim or storage provider")};
         }
+        // The generated wrapper reads slots past the header without checking
+        // the table length, so a provider built against an older layout is
+        // rejected here by its declared size instead of running a stale table.
+        if (handles_.world->struct_size < REFRAIN_SERVICES_WORLD_VTABLE_SIZE) {
+            return std::unexpected{make_error(
+                error_code::version_mismatch,
+                fmt::format("refrain:world provider vtable is {} bytes, the "
+                            "runtime needs the {}.{}.{} layout ({} bytes)",
+                            handles_.world->struct_size,
+                            REFRAIN_SERVICES_WORLD_ABI_MAJOR,
+                            REFRAIN_SERVICES_WORLD_ABI_MINOR,
+                            REFRAIN_SERVICES_WORLD_ABI_PATCH,
+                            REFRAIN_SERVICES_WORLD_VTABLE_SIZE))};
+        }
         if (opened_) {
             return std::unexpected{
                 make_error(error_code::already_exists,
@@ -140,13 +154,49 @@ class contract_world_port final : public world_port {
         }
     }
 
-    auto level() -> result<world::level_info> override {
-        // TODO: refuse at the contract layer until `refrain:world` can project
-        // the level record; until then the runtime cannot boot on a
-        // replacement provider, so this returns the explicit gap instead of a
-        // fabricated spawn or seed.
-        return std::unexpected{contract_error(
-            "level", "refrain:world v1 exposes no level projection")};
+    auto level() -> result<world::level_projection> override {
+        if (!world_open_) {
+            return std::unexpected{
+                contract_error("level", "the world is not open")};
+        }
+        if (world_provider().table().level == nullptr) {
+            // A table with the current length may still leave an optional slot
+            // empty; name the gap instead of calling through null.
+            return std::unexpected{contract_error(
+                "level", "the provider does not implement the level "
+                         "projection")};
+        }
+        auto projected{world_provider().level()};
+        if (!projected) {
+            if (projected.error() ==
+                services::world::world_error::not_implemented) {
+                return std::unexpected{contract_error(
+                    "level", "the provider does not implement the level "
+                             "projection")};
+            }
+            return std::unexpected{make_error(
+                error_code::io_error,
+                fmt::format("refrain:world level failed ({})",
+                            static_cast<std::uint32_t>(projected.error())))};
+        }
+        world::level_info record{};
+        record.data_version = projected->level.data_version;
+        record.seed = projected->level.seed;
+        record.spawn_x = projected->level.spawn_x;
+        record.spawn_y = projected->level.spawn_y;
+        record.spawn_z = projected->level.spawn_z;
+        record.time = projected->level.time;
+        // The ABI string is borrowed for the duration of the call, so own it
+        // before the provider can reuse its buffer.
+        record.level_name =
+            std::string{abi::as_string_view(projected->level.level_name)};
+        record.game_mode = projected->level.game_mode;
+        record.hardcore = projected->level.hardcore != 0;
+        record.difficulty = projected->level.difficulty;
+        record.difficulty_locked = projected->level.difficulty_locked != 0;
+        return world::level_projection{.level = std::move(record),
+                                       .has_chunks =
+                                           projected->has_chunks != 0};
     }
 
     auto loaded_chunks() const noexcept -> std::size_t override { return 0; }
@@ -371,9 +421,10 @@ class contract_world_port final : public world_port {
     }
 
     auto snapshot_pending() -> std::vector<sim::pending_snapshot> override {
-        // Unreachable through the runtime today: it refuses to boot without a
-        // level projection. A provider that grows a snapshot call replaces
-        // this empty result.
+        // TODO: the contracts expose block batches and chunk writes but no
+        // dirty-chunk snapshot/revision lifecycle, so a contract port cannot
+        // hand autosave a batch yet; a provider that grows a snapshot call
+        // replaces this empty result.
         return {};
     }
 

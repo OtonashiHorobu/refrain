@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 996e38144c4577ab
+// Schema hash: e168f1954a0feabb
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_WORLD_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_WORLD_HPP
@@ -44,16 +44,55 @@ using world_config = ::refrain_services_world_world_config;
     ::refrain::contracts::init_struct(value);
     return value;
 }
+/// Read-only projection of the world's level record. A provider resolves it
+/// from the store it was handed; nothing here lets a provider open the level
+/// directory itself.
+using level_info = ::refrain_services_world_level_info;
+/// Zero-initialized `level_info` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
+[[nodiscard]] inline auto make_level_info() noexcept -> level_info {
+    level_info value{};
+    ::refrain::contracts::init_struct(value);
+    return value;
+}
+/// Boot projection of the world level. `has_chunks` is true once the store
+/// holds a chunk, which tells the runtime that the spawn area does not need to
+/// be filled.
+using level_projection = ::refrain_services_world_level_projection;
+/// Zero-initialized `level_projection` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
+[[nodiscard]] inline auto make_level_projection() noexcept -> level_projection {
+    level_projection value{};
+    ::refrain::contracts::init_struct(value);
+    return value;
+}
 
 static_assert(sizeof(world_config) == 72);
 static_assert(alignof(world_config) == 8);
 static_assert(offsetof(world_config, struct_size) == 0);
 static_assert(offsetof(world_config, storage) == 8);
 static_assert(offsetof(world_config, seed) == 64);
+static_assert(sizeof(level_info) == 72);
+static_assert(alignof(level_info) == 8);
+static_assert(offsetof(level_info, struct_size) == 0);
+static_assert(offsetof(level_info, data_version) == 4);
+static_assert(offsetof(level_info, seed) == 8);
+static_assert(offsetof(level_info, spawn_x) == 16);
+static_assert(offsetof(level_info, spawn_y) == 20);
+static_assert(offsetof(level_info, spawn_z) == 24);
+static_assert(offsetof(level_info, time) == 32);
+static_assert(offsetof(level_info, level_name) == 40);
+static_assert(offsetof(level_info, game_mode) == 56);
+static_assert(offsetof(level_info, hardcore) == 60);
+static_assert(offsetof(level_info, difficulty) == 64);
+static_assert(offsetof(level_info, difficulty_locked) == 68);
+static_assert(sizeof(level_projection) == 88);
+static_assert(alignof(level_projection) == 8);
+static_assert(offsetof(level_projection, struct_size) == 0);
+static_assert(offsetof(level_projection, level) == 8);
+static_assert(offsetof(level_projection, has_chunks) == 80);
 
 inline constexpr std::string_view service_id = "refrain:world";
 inline constexpr std::uint32_t abi_major = 1;
-inline constexpr std::uint32_t abi_minor = 0;
+inline constexpr std::uint32_t abi_minor = 1;
 inline constexpr std::uint32_t abi_patch = 0;
 inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::side_kind::server;
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::sim;
@@ -139,6 +178,18 @@ class provider final {
     /// World tick counter (monotonic, survives save/load).
     [[nodiscard]] auto world_tick() const -> std::int64_t {
         return static_cast<std::int64_t>(table_->world_tick(self_));
+    }
+
+    /// Read-only boot projection: the level record and whether the world
+    /// already holds a chunk. The provider answers from the store it was
+    /// opened over; the level directory stays private to the storage provider.
+    [[nodiscard]] auto level() const -> std::expected<::refrain::services::world::level_projection, ::refrain::services::world::world_error> {
+        ::refrain_services_world_level_projection value{};
+        ::refrain::contracts::init_struct(value);
+        if (const auto code = table_->level(self_, &value); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::world::world_error>(code));
+        }
+        return value;
     }
 
   private:

@@ -102,9 +102,10 @@ class world_port {
     /// Release the world. Idempotent; a dirty world must be flushed first.
     virtual void close() noexcept = 0;
 
-    /// Level projection the runtime reads for seed, spawn, game mode and
-    /// difficulty.
-    [[nodiscard]] virtual auto level() -> result<world::level_info> = 0;
+    /// Level projection the runtime reads for seed, spawn, game mode,
+    /// difficulty and the empty-world decision. It is a read: the port never
+    /// exposes the level directory to a provider.
+    [[nodiscard]] virtual auto level() -> result<world::level_projection> = 0;
 
     [[nodiscard]] virtual auto loaded_chunks() const noexcept
         -> std::size_t = 0;
