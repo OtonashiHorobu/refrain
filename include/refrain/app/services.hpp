@@ -66,6 +66,10 @@ struct protocol_load_options {
     /// Walk in a circle of this radius while the connection is open.
     double walk_radius{0.0};
     int walk_period_ms{100};
+    /// Stall each bot's read loop by this long before it consumes a batch, so
+    /// the server sees a client that does not drain its socket. Zero reads at
+    /// full speed.
+    int read_delay_ms{0};
 };
 
 struct protocol_pool_load_options {

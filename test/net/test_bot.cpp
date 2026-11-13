@@ -145,6 +145,27 @@ suite bot_tests = [] {
             expect(report->packets > 0);
             expect(report->chunks >= 1);
         }
+        // A bot that refuses to consume for a while is the client the
+        // transport's write backlog exists for. It must still join, and the
+        // sleep must actually happen: the deadline below is a lower bound,
+        // because sleeping longer is the only way this can fail upward.
+        const auto read_delay{std::chrono::milliseconds{200}};
+        const auto delayed_started{std::chrono::steady_clock::now()};
+        auto delayed_report{net::run_bot(net::bot_options{
+            .target = {.host = "127.0.0.1", .port = port},
+            .username = "SlowBot",
+            .timeout = std::chrono::milliseconds{10000},
+            .wait_chunks = 1,
+            .read_delay = read_delay,
+        })};
+        const auto delayed_elapsed{std::chrono::steady_clock::now() -
+                                   delayed_started};
+        expect(static_cast<bool>(delayed_report));
+        if (delayed_report) {
+            expect(delayed_report->chunks >= 1);
+        }
+        expect(delayed_elapsed >= read_delay);
+
         auto chat_report{net::run_bot(net::bot_options{
             .target = {.host = "127.0.0.1", .port = port},
             .username = "ChatBot",

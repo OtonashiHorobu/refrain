@@ -535,6 +535,9 @@ int main(int argc, char **argv) {
     protocol_load_cmd->add_option("--walk-period-ms",
                                   protocol_load.walk_period_ms,
                                   "Milliseconds between walk steps");
+    protocol_load_cmd->add_option(
+        "--read-delay-ms", protocol_load.read_delay_ms,
+        "Stall each bot's reads by N milliseconds to simulate a slow client");
     protocol_load_cmd->add_option("--timeout-ms", protocol_load.timeout_ms,
                                   "Per-bot join timeout");
 

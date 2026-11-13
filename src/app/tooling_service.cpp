@@ -390,6 +390,8 @@ auto run_protocol_load(const protocol_load_options &options) -> int {
                 static_cast<double>((index / grid) % grid) * 16.0;
             bot.walk_period = std::chrono::milliseconds{
                 options.walk_period_ms > 0 ? options.walk_period_ms : 100};
+            bot.read_delay = std::chrono::milliseconds{
+                options.read_delay_ms > 0 ? options.read_delay_ms : 0};
             const auto started{std::chrono::steady_clock::now()};
             auto result{refrain::net::run_bot(bot)};
             if (result) {
