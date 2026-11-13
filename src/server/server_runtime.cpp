@@ -257,6 +257,11 @@ auto run_server(const server_run_options &options,
     }
     log_server.info("{} chunks {} tickets", world.loaded_chunks(),
                     world.ticket_count(spawn_chunk));
+    // Residency baseline for an operator: the set starts at the pinned spawn
+    // columns and is bounded from here by the viewports plus the ticket set.
+    log_world.info("resident={} rss={}MiB", world.loaded_chunks(),
+                   chunk_service::process_resident_bytes() /
+                       (1024ULL * 1024ULL));
 
     std::optional<refrain::data::vanilla_tables> tables{};
     auto table_bytes{
@@ -560,6 +565,10 @@ auto run_server(const server_run_options &options,
     if (auto started{maintenance.start(world, effective)}; !started) {
         return report_error(started.error());
     }
+    // A residency unload writes a dirty column synchronously. Wait for the
+    // autosave writer to go idle first, so an older snapshot of the same
+    // column cannot land on disk after the newer unload flush.
+    chunks.set_unload_barrier([&maintenance] { maintenance.drain(); });
 
     const auto state{std::make_shared<runtime_state>()};
     state->heartbeat_ns.store(refrain::core::now_ns(),
@@ -700,6 +709,14 @@ auto run_server(const server_run_options &options,
     maintenance.stop();
     log_sim.info("final tick={} hash={}", world.ticks(),
                  refrain::data::to_hex(world.state_hash()));
+    // Residency at the end of the run: the resident set follows the viewports,
+    // not the distance the players have walked, and the unload count is what
+    // the policy actually released.
+    const auto residency{chunks.residency()};
+    log_world.info(
+        "resident={} peak={} unloaded={} rss={}MiB", residency.resident_chunks,
+        residency.peak_resident_chunks, residency.unloaded_chunks,
+        chunk_service::process_resident_bytes() / (1024ULL * 1024ULL));
     auto committed{world.flush()};
     if (!committed) {
         log_server.error("commit failed: {}", committed.error().message);

@@ -7,6 +7,8 @@
 #include <refrain/core/error.hpp>
 #include <refrain/server/world_bootstrap.hpp>
 
+#include <fmt/format.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -45,6 +47,47 @@ auto select_world_port(const server_service_handles &services) noexcept
     return is_first_party_world(services) ? world_port_choice::direct
                                           : world_port_choice::contract;
 }
+
+// --- residency defaults -----------------------------------------------------
+
+namespace {
+
+/// A port without an in-process column store cannot pin, release or unload a
+/// column: the contract path keeps columns in the provider process and exposes
+/// no per-column residency call. Naming the gap here keeps the chunk pipeline's
+/// bounds honest instead of pretending the operation succeeded.
+[[nodiscard]] auto residency_gap(std::string_view operation) -> error {
+    return make_error(error_code::unsupported,
+                      fmt::format("the active world port cannot serve {}: it "
+                                  "keeps no in-process column store",
+                                  operation));
+}
+
+} // namespace
+
+auto world_port::hold_ticket(sim::chunk_pos, sim::ticket_kind) -> status {
+    return std::unexpected{residency_gap("hold_ticket")};
+}
+
+auto world_port::remove_ticket(sim::chunk_pos) -> status {
+    return std::unexpected{residency_gap("remove_ticket")};
+}
+
+auto world_port::unload_chunks(std::span<const sim::chunk_pos>, bool /*commit*/)
+    -> status {
+    return std::unexpected{residency_gap("unload_chunks")};
+}
+
+auto world_port::resident_chunks() const -> std::vector<sim::chunk_pos> {
+    return {};
+}
+
+auto world_port::unticketed_chunks() const
+    -> std::vector<sim::resident_column> {
+    return {};
+}
+
+auto world_port::controls_residency() const noexcept -> bool { return false; }
 
 // --- direct port ------------------------------------------------------------
 
@@ -135,6 +178,33 @@ class direct_world_port final : public world_port {
     auto ticket_count(sim::chunk_pos pos) const noexcept
         -> std::size_t override {
         return world().ticket_count(pos);
+    }
+
+    auto hold_ticket(sim::chunk_pos pos, sim::ticket_kind kind)
+        -> status override {
+        return world().hold_ticket(pos, kind);
+    }
+
+    auto remove_ticket(sim::chunk_pos pos) -> status override {
+        return world().remove_ticket(pos);
+    }
+
+    auto unload_chunks(std::span<const sim::chunk_pos> positions, bool commit)
+        -> status override {
+        return world().unload_chunks(positions, commit);
+    }
+
+    auto resident_chunks() const -> std::vector<sim::chunk_pos> override {
+        return world().chunk_positions();
+    }
+
+    auto unticketed_chunks() const
+        -> std::vector<sim::resident_column> override {
+        return world().unticketed_chunks();
+    }
+
+    auto controls_residency() const noexcept -> bool override {
+        return world_ != nullptr;
     }
 
     auto add_player(sim::player_table::registration record)

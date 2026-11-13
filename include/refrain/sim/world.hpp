@@ -147,6 +147,12 @@ inline constexpr int far_zstd_level = 6;
 inline constexpr std::int32_t near_chunk_radius = 2;
 inline constexpr std::int32_t mid_chunk_radius = 8;
 
+/// Store level used when an unload writes a dirty column. Unloading runs on the
+/// simulation thread inside a tick, so the fastest level matters more than the
+/// record size; the level is not part of the stored format, only of that one
+/// write.
+inline constexpr int eviction_zstd_level = 1;
+
 /// Distance-adaptive zstd policy. The defaults are a measured-phase heuristic,
 /// not a format contract; tests/operators may override them without changing
 /// bytes (the zstd level is not stored in RWF).
@@ -191,13 +197,32 @@ struct pending_snapshot {
     int level{::refrain::world::rwf::default_zstd_level};
 };
 
+/// One loaded column that holds no ticket, as seen by a residency sweep.
+struct resident_column {
+    chunk_pos pos{};
+    /// True when the column holds edits that are not in the store yet.
+    bool dirty{false};
+
+    friend auto operator==(const resident_column &, const resident_column &)
+        -> bool = default;
+};
+
 /// Overworld runtime view built on `refrain::world::world_store`.
 ///
 /// The sim is single-threaded (the sim thread owns every mutable field); reads
 /// and writes must not be called concurrently. Chunks are loaded on demand and
-/// kept until `flush()`/`unload_all()`. The world never creates chunks that are
-/// absent from the imported RWF world: it loads an existing vanilla world and
-/// does not generate terrain.
+/// stay resident until the caller unloads them: a chunk is kept while a ticket
+/// is held on it, and `unload_chunk()`/`unload_chunks()` drop it after flushing
+/// a dirty column to the store. Re-reading an unloaded column loads it from the
+/// store again; the world never generates terrain itself. The residency policy
+/// (which columns are worth keeping) belongs to the server runtime, which
+/// derives it from the connection viewports and the ticket set.
+///
+/// `state_hash()` covers the loaded chunks, so a replay has to unload the same
+/// columns at the same ticks. Callers must iterate resident columns through
+/// `chunk_positions()`, whose order is the position order, and never through a
+/// container whose iteration order is insertion or hash order.
+///
 /// One applied block mutation, as observed by a batch hook.
 struct block_change {
     block_pos pos{};
@@ -282,11 +307,46 @@ class world {
     [[nodiscard]] auto add_ticket(const chunk_pos &pos, ticket_kind kind)
         -> status;
 
+    /// Record one ticket without requiring the column to exist. This is what a
+    /// viewport pin uses: the columns of a viewport are pinned before they are
+    /// generated, and a column that arrives later is already resident. A
+    /// missing column is not an error here; it is simply pinned.
+    [[nodiscard]] auto hold_ticket(const chunk_pos &pos, ticket_kind kind)
+        -> status;
+
     /// Remove one ticket. Fails with `not_found` when no ticket is held.
     [[nodiscard]] auto remove_ticket(const chunk_pos &pos) -> status;
 
     [[nodiscard]] auto ticket_count(const chunk_pos &pos) const noexcept
         -> std::uint32_t;
+
+    /// Flush one loaded column when dirty and drop it from memory. The record
+    /// is written to the store before the column is erased, so a later load
+    /// from the same world reads the edits back. `commit` publishes the store
+    /// index (an fsync); pass false when the caller batches several unloads
+    /// between the normal commit points. Fails with `not_found` when the column
+    /// is not loaded, and with `invalid_argument` while a ticket still holds
+    /// it; a failed flush keeps the column resident and dirty.
+    [[nodiscard]] auto unload_chunk(const chunk_pos &pos, bool commit = true)
+        -> status;
+
+    /// Unload several columns as one batch: every dirty column is encoded and
+    /// written, then all of them are erased. Every position must be loaded and
+    /// free of tickets; otherwise nothing is unloaded and the first offending
+    /// position is named in the error. Positions are processed in the order
+    /// given, so pass them sorted. A single commit is made for the whole batch
+    /// when `commit` is true.
+    [[nodiscard]] auto unload_chunks(std::span<const chunk_pos> positions,
+                                     bool commit = true) -> status;
+
+    /// Loaded columns that hold no ticket, in ascending position order. This is
+    /// the residency sweep's input; it is also the order a batch unload uses.
+    [[nodiscard]] auto unticketed_chunks() const
+        -> std::vector<resident_column>;
+
+    /// Loaded column positions in ascending position order. This is the order
+    /// a residency sweep uses to decide what to unload.
+    [[nodiscard]] auto chunk_positions() const -> std::vector<chunk_pos>;
 
     /// Adaptive zstd level for a chunk, based on its horizontal (Chebyshev)
     /// chunk distance from the player: `near_zstd_level` up to
@@ -356,9 +416,10 @@ class world {
     /// `flush()`es, releases the world store (closing all region handles),
     /// rebuilds the palette through `world::rebuild_palette_in_place`, reopens
     /// the store, restores the store's zstd level and the adaptive
-    /// `zstd_policy_`, and reloads the chunks that were loaded (and the chunks
-    /// that still hold tickets). Tickets are kept; `state_hash()` is unchanged
-    /// when every reload succeeds.
+    /// `zstd_policy_`, and reloads the chunks that were loaded. Tickets are
+    /// kept; a ticketed column that is not resident is loaded on demand after
+    /// the rebuild, because a viewport pin may cover a column the store does
+    /// not hold yet. `state_hash()` is unchanged when every reload succeeds.
     ///
     /// On failure the original world is reopened and reloaded when possible
     /// and the maintenance error is returned. If the reopen itself fails, a
@@ -518,6 +579,13 @@ class world {
         -> result<chunk>;
     [[nodiscard]] auto encode_chunk(const chunk &value)
         -> result<storage_chunk>;
+    /// The record a flush writes: the decoded record while the column has
+    /// never been edited, the rebuilt encoding otherwise.
+    [[nodiscard]] auto store_record(const chunk &value)
+        -> result<storage_chunk>;
+    /// Write encoded entries and optionally publish the store index.
+    [[nodiscard]] auto write_entries(std::span<const snapshot_entry> entries,
+                                     bool commit) -> status;
     [[nodiscard]] static auto section_index(std::int32_t y) noexcept
         -> std::int32_t;
     [[nodiscard]] static auto local_index(std::int32_t y, std::int32_t z,

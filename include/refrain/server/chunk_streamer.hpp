@@ -33,6 +33,19 @@ namespace refrain::server {
 /// rather than re-requesting once per tick.
 class chunk_streamer {
   public:
+    /// One connection's viewport, in the form the residency policy consumes:
+    /// every column with Chebyshev distance at most `radius` from the centre is
+    /// expected to stay resident while the connection can see it.
+    struct viewport {
+        std::uint64_t connection{0};
+        std::int32_t chunk_x{0};
+        std::int32_t chunk_z{0};
+        std::int32_t radius{0};
+
+        friend auto operator==(const viewport &, const viewport &)
+            -> bool = default;
+    };
+
     /// Attempts one column is given before the streamer stops requesting it.
     /// A generator that keeps failing cannot make the streamer loop: the column
     /// is left unserved for this viewport visit, and a later viewport change
@@ -133,6 +146,11 @@ class chunk_streamer {
     /// A requested column is now in the world: enqueue it for every viewer
     /// whose viewport contains it.
     void chunk_ready(std::int32_t x, std::int32_t z);
+
+    /// One viewport per connection that has a stream, ordered by connection id.
+    /// The residency policy uses this to derive the set of columns a connection
+    /// keeps resident.
+    [[nodiscard]] auto viewports() const -> std::vector<viewport>;
 
     /// A generation task for `(x, z)` failed. Clears the in-flight marker of
     /// every connection that asked for the column and queues it again while the

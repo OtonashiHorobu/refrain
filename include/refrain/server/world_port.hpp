@@ -144,6 +144,44 @@ class world_port {
     [[nodiscard]] virtual auto ticket_count(sim::chunk_pos pos) const noexcept
         -> std::size_t = 0;
 
+    // --- chunk residency ---------------------------------------------------
+
+    /// Record a residency ticket without requiring the column to exist yet.
+    /// A port that keeps its columns in the provider process (the contract
+    /// path) has no in-process column store to pin, so the default reports
+    /// `unsupported` and the chunk pipeline leaves residency alone.
+    [[nodiscard]] virtual auto hold_ticket(sim::chunk_pos pos,
+                                           sim::ticket_kind kind) -> status;
+
+    /// Release one residency ticket. Default: `unsupported`, like
+    /// `hold_ticket()`.
+    [[nodiscard]] virtual auto remove_ticket(sim::chunk_pos pos) -> status;
+
+    /// Flush every dirty column of `positions` and drop them from memory. A
+    /// single store commit is made for the whole batch when `commit` is true;
+    /// false writes the records without publishing the store index, so the
+    /// caller can let the normal commit points (autosave, save, shutdown)
+    /// cover them. Default: `unsupported`, like `hold_ticket()`.
+    [[nodiscard]] virtual auto
+    unload_chunks(std::span<const sim::chunk_pos> positions, bool commit)
+        -> status;
+
+    /// Loaded column positions in ascending position order. Empty for a port
+    /// that does not keep columns in this process.
+    [[nodiscard]] virtual auto resident_chunks() const
+        -> std::vector<sim::chunk_pos>;
+
+    /// Loaded columns that hold no ticket, in ascending position order. This is
+    /// the residency sweep's input. Empty for a port without in-process
+    /// columns.
+    [[nodiscard]] virtual auto unticketed_chunks() const
+        -> std::vector<sim::resident_column>;
+
+    /// True when `hold_ticket()`, `remove_ticket()` and `unload_chunks()`
+    /// reach an in-process column store, so the chunk pipeline can enforce a
+    /// residency bound. False skips the policy entirely.
+    [[nodiscard]] virtual auto controls_residency() const noexcept -> bool;
+
     // --- players -----------------------------------------------------------
 
     [[nodiscard]] virtual auto
