@@ -44,7 +44,56 @@ class chunk_streamer {
     using chunk_encoder = std::function<result<std::vector<std::byte>>(
         const chunk_packet_source &source, refrain::sim::chunk_pos pos)>;
 
-    chunk_streamer(play_gateway &gateway, chunk_packet_source source);
+    /// Bytes one connection may have queued before the streamer leaves it
+    /// alone for a tick, and the aggregate above which the whole stream pauses.
+    ///
+    /// The first starves only the chunk stream, so a client that resumes
+    /// reading catches up instead of growing its queue; the second stops
+    /// generating and encoding while every client is behind, because that work
+    /// would be wasted. Both are work bounds, not wire limits: the transport
+    /// keeps its own per-connection cap and drops a client that passes it, and
+    /// the generator pauses at the same aggregate.
+    struct backlog_limits {
+        std::size_t max_connection_bytes{1U * 1024U * 1024U};
+        std::size_t max_total_bytes{64U * 1024U * 1024U};
+
+        /// Build from configured counts. Zero or a negative count would pause
+        /// the stream for good, so it is raised to one byte.
+        [[nodiscard]] static constexpr auto
+        from_config(std::int64_t connection_bytes, std::int64_t total_bytes)
+            -> backlog_limits {
+            return backlog_limits{
+                .max_connection_bytes = at_least_one(connection_bytes),
+                .max_total_bytes = at_least_one(total_bytes),
+            };
+        }
+
+        [[nodiscard]] constexpr auto clamped() const -> backlog_limits {
+            return backlog_limits{
+                .max_connection_bytes =
+                    max_connection_bytes < 1U ? 1U : max_connection_bytes,
+                .max_total_bytes = max_total_bytes < 1U ? 1U : max_total_bytes,
+            };
+        }
+
+      private:
+        [[nodiscard]] static constexpr auto at_least_one(std::int64_t value)
+            -> std::size_t {
+            if (value < 1) {
+                return 1U;
+            }
+            return static_cast<std::size_t>(value);
+        }
+    };
+
+    chunk_streamer(play_gateway &gateway, chunk_packet_source source,
+                   backlog_limits limits);
+
+    /// Same, with the default limits. This is a delegating constructor rather
+    /// than a default argument because the nested type cannot be aggregate-
+    /// initialized in the enclosing class's parameter list.
+    chunk_streamer(play_gateway &gateway, chunk_packet_source source)
+        : chunk_streamer(gateway, source, backlog_limits{}) {}
 
     /// Log the encoded-cache hit and miss totals at shutdown. The ratio is the
     /// cache hit rate; `cache_hits()` and `cache_misses()` expose the same
@@ -146,6 +195,7 @@ class chunk_streamer {
     std::unordered_map<std::uint64_t, stream_state> streams_{};
     std::map<std::pair<std::int32_t, std::int32_t>, cache_entry> cache_{};
     std::size_t cache_capacity_{1};
+    backlog_limits limits_{};
     std::uint64_t cache_hits_{0};
     std::uint64_t cache_misses_{0};
     std::uint64_t clock_{0};

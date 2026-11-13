@@ -25,6 +25,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -75,9 +76,15 @@ class recording_gateway final : public server::play_gateway {
         return active;
     }
 
-    [[nodiscard]] auto backlog(std::uint64_t) const -> std::size_t override {
-        return 0;
+    [[nodiscard]] auto backlog(std::uint64_t connection) const
+        -> std::size_t override {
+        const auto found{backlogs.find(connection)};
+        return found == backlogs.end() ? 0U : found->second;
     }
+
+    /// Bytes the gateway reports queued per connection. A test raises one to
+    /// make the streamer starve that client.
+    std::unordered_map<std::uint64_t, std::size_t> backlogs{};
 
     void send_chunk_batch(std::uint64_t connection, std::int32_t, std::int32_t,
                           std::span<const std::vector<std::byte>> packets,
@@ -429,6 +436,61 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
         if (!absent) {
             expect(absent.error().code == refrain::error_code::not_found);
         }
+    };
+
+    "server/chunk stream starves a client over its backlog limit"_test = [] {
+        recording_gateway gateway;
+        gateway.active = {1, 2};
+        // Connection 1 is over the per-connection limit and connection 2 is
+        // not, so one viewport must pause while the other drains.
+        gateway.backlogs[1] = 8U;
+        server::chunk_streamer streamer{gateway, server::chunk_packet_source{},
+                                        server::chunk_streamer::backlog_limits{
+                                            .max_connection_bytes = 4U,
+                                            .max_total_bytes = 1'000U,
+                                        }};
+        streamer.set_encoder(
+            [](const server::chunk_packet_source &,
+               sim::chunk_pos pos) -> refrain::result<std::vector<std::byte>> {
+                const coordinate value{pos.x, pos.z};
+                std::vector<std::byte> body(sizeof(value));
+                std::memcpy(body.data(), &value, sizeof(value));
+                return body;
+            });
+        session::chunk_tracker views;
+        static_cast<void>(views.update(1, 0, 0, 1));
+        static_cast<void>(views.update(2, 0, 0, 1));
+        const auto expected{viewport_order(1)};
+        for (std::size_t guard{0};
+             streamed(gateway, 2).size() < expected.size() && guard < 8;
+             ++guard) {
+            streamer.tick(views);
+        }
+        expect(streamed(gateway, 2) == expected);
+        // The starved connection keeps its pending viewport instead of
+        // dropping it, and receives nothing while it stays behind.
+        expect(streamed(gateway, 1).empty());
+        // Draining the queue lets it catch up with the same columns, not a
+        // regenerated set.
+        gateway.backlogs[1] = 0;
+        for (std::size_t guard{0};
+             streamed(gateway, 1).size() < expected.size() && guard < 8;
+             ++guard) {
+            streamer.tick(views);
+        }
+        expect(streamed(gateway, 1) == expected);
+    };
+
+    "server/chunk stream limits clamp to one byte"_test = [] {
+        const auto limits{
+            server::chunk_streamer::backlog_limits::from_config(0, -1)};
+        expect(limits.max_connection_bytes == 1U);
+        expect(limits.max_total_bytes == 1U);
+        const auto clamped{server::chunk_streamer::backlog_limits{
+            .max_connection_bytes = 0U, .max_total_bytes = 0U}
+                               .clamped()};
+        expect(clamped.max_connection_bytes == 1U);
+        expect(clamped.max_total_bytes == 1U);
     };
 };
 

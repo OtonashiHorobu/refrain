@@ -91,6 +91,10 @@ info_bytes_per_tick = 1048576
 queued_info_bytes = 33554432
 visibility_pairs_per_tick = 100000
 spawns_per_tick = 8000
+
+[chunk_stream]
+max_connection_backlog = 1048576
+max_total_backlog = 67108864
 ```
 
 `[broadcast]` bounds the work one tick spends on the player list and on entity
@@ -104,6 +108,16 @@ spread the visibility sweep over as many ticks as it needs without dropping a
 transition. The values shown are the defaults. A value below one is raised to
 one, and the effective values are logged at startup, because a zero budget
 would stop the corresponding pass from making progress.
+
+`[chunk_stream]` bounds what the chunk stream may queue. A connection whose
+write queue passes `max_connection_backlog` is left alone for that tick, so a
+client that stops reading slows only its own view and catches up when it
+resumes; `max_total_backlog` pauses the whole stream, generation included, once
+every client is behind. The transport has its own per-connection cap above both
+values and closes a connection that passes it, so these two decide when the
+stream yields first, not when a client is dropped. The values shown are the
+defaults, a value below one is raised to one, and the effective values are
+logged at startup.
 
 `storage.toml` holds the zstd policy and maintenance cadence:
 
