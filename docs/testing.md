@@ -166,12 +166,24 @@ server.
 
 ### Load baseline
 
-`scripts/soak.sh` generates a world, starts the server on it, runs the load
+`scripts/soak.sh` prepares a world, starts the server on it, runs the load
 client and prints one summary line per measurement:
 
 ```bash
 scripts/soak.sh --bots 100 --seconds 120 --view-distance 6
 ```
+
+By default the world is a synthetic anvil import. `--fresh` starts from an
+empty world the server creates from `--seed`, so the run measures runtime
+chunk generation against the tick budget instead of the storage path:
+
+```bash
+scripts/soak.sh --fresh --seed 99 --bots 20 --seconds 60 --view-distance 6
+```
+
+The fresh run also reports the spawn fill, the number of generator log lines
+and how many connections finished their viewport. Its numbers depend on the
+host's generator throughput; the reference below is the import baseline.
 
 The reference run uses 100 bots, a 6 chunk view distance and bots walking in an
 8 block circle. On an Intel Core i7-10700K with the release build it reports:
@@ -223,11 +235,12 @@ case over a second happy path.
 A change that touches the join path or the play loop is accepted against a real
 client, not only against the protocol bot. The reproducible steps are:
 
-1. `scripts/soak.sh --bots 20 --seconds 60` proves the server starts on a
-   generated world, accepts joins and shuts down cleanly. A client needs a
-   viewport of real terrain, so generate a world with
-   `tools/make_test_world.py gen --chunks 256` rather than the default
-   three-chunk fixture when the acceptance is a client join.
+1. `scripts/soak.sh --fresh --seed 99 --bots 20 --seconds 60
+   --view-distance 6` proves the server creates a world from a seed, fills the
+   spawn area, generates the viewport while the bots watch, accepts joins and
+   shuts down cleanly. For a client join against an imported world, generate
+   that world with `tools/make_test_world.py gen --chunks 256` rather than the
+   default three-chunk fixture.
 2. `refrain-tools protocol bot --host 127.0.0.1:25565 --username Bot
    --wait-chunks 1` proves the handshake, configuration and first chunks.
 3. `MC_CLIENT_HOME=/path/to/26.3-runtime scripts/dev/vanilla-acceptance.sh

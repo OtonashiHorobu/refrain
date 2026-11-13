@@ -83,12 +83,17 @@ void chunk_streamer::evict_least_recently_used() {
 void chunk_streamer::chunk_ready(std::int32_t x, std::int32_t z) {
     for (auto &[id, stream] : streams_) {
         static_cast<void>(id);
+        // The generator has answered every connection that asked for this
+        // column, including the ones whose viewport no longer contains it.
+        // Clearing the marker here is what lets a player who walked away and
+        // came back stream the column from the world instead of waiting for
+        // an answer that already arrived.
+        stream.requested.erase({x, z});
         const auto dx{x - stream.center_x};
         const auto dz{z - stream.center_z};
         if (std::max(std::abs(dx), std::abs(dz)) > stream.radius) {
             continue;
         }
-        stream.requested.erase({x, z});
         stream.known.erase({x, z});
         if (stream.queued.insert({x, z}).second) {
             stream.pending.emplace_back(x, z);
@@ -105,6 +110,7 @@ auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
         // Entries the world delivered on its own cost nothing to skip.
         while (!stream.pending.empty() &&
                stream.known.contains(stream.pending.front())) {
+            stream.queued.erase(stream.pending.front());
             stream.pending.pop_front();
         }
         if (stream.pending.empty()) {
@@ -120,7 +126,6 @@ auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
         const auto cache_key{std::pair{x, z}};
         auto cached{cache_.find(cache_key)};
         if (cached == cache_.end()) {
-            ++cache_misses_;
             auto encoded{encode(refrain::sim::chunk_pos{x, z})};
             if (!encoded) {
                 // The world does not hold this column yet. Ask the generator
@@ -137,6 +142,11 @@ auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
                 stream.pending.pop_front();
                 continue;
             }
+            // A lookup that failed because the column is still generating is
+            // not a cache miss: the cache was never asked for a body the world
+            // could produce. Only a successful encode counts, so the hit rate
+            // describes the cache and not the generation latency.
+            ++cache_misses_;
             // Evict before inserting so the new entry is never its own
             // victim, and so `cached` stays valid while the batch is built.
             while (cache_.size() >= cache_capacity_) {
@@ -154,8 +164,12 @@ auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
             cached->second.last_use = ++clock_;
         }
         stream.pending.pop_front();
+        stream.queued.erase({x, z});
         packets.push_back(cached->second.body);
         stream.known.emplace(x, z);
+        // The body came from the world, so no generator answer is outstanding
+        // for this connection even if a request is still in flight elsewhere.
+        stream.requested.erase({x, z});
         ++stream.sent;
     }
     if (stream.center_dirty || !packets.empty()) {
@@ -229,7 +243,12 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
                         const auto key{std::pair{stream.center_x + dx,
                                                  stream.center_z + dz}};
                         if (stream.known.contains(key) ||
-                            stream.queued.contains(key)) {
+                            stream.queued.contains(key) ||
+                            stream.requested.contains(key)) {
+                            // A column already handed to the generator stays
+                            // out of the queue until it answers; otherwise a
+                            // slow worker would make the streamer encode the
+                            // missing column once per tick.
                             continue;
                         }
                         stream.pending.push_back(key);
@@ -288,6 +307,7 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
             auto &stream{match->second};
             while (!stream.pending.empty() &&
                    stream.known.contains(stream.pending.front())) {
+                stream.queued.erase(stream.pending.front());
                 stream.pending.pop_front();
             }
             if (stream.pending.empty()) {
