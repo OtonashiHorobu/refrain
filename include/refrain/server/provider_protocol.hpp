@@ -9,7 +9,9 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
+#include <vector>
 
 namespace refrain::server {
 
@@ -40,6 +42,13 @@ class provider_protocol final : public net::protocol_codec {
                                    std::uint32_t packet_id,
                                    std::span<const std::byte> payload)
         -> status override;
+    /// Use the provider's broadcast extension when it offers one, so a cohort
+    /// body is framed once instead of once per recipient. Without the
+    /// extension the inherited per-recipient fallback still sends correctly.
+    [[nodiscard]] auto
+    send_shared_packet(std::span<const std::uint64_t> connections,
+                       std::uint32_t packet_id,
+                       std::span<const std::byte> payload) -> status override;
     [[nodiscard]] auto take_outbound(std::uint64_t connection,
                                      std::span<const std::byte> &data)
         -> bool override;
@@ -51,6 +60,10 @@ class provider_protocol final : public net::protocol_codec {
 
   private:
     std::unique_ptr<services::net_protocol::provider> provider_;
+    /// Bound once in the constructor; the reference is owned by the provider.
+    std::optional<services::net_protocol::broadcast_codec> broadcast_{};
+    /// Reused cohort scratch so a shared send does not allocate per call.
+    std::vector<services::net_protocol::connection_ref> cohort_{};
 };
 
 [[nodiscard]] auto make_provider_protocol(

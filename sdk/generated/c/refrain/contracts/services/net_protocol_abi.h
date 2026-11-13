@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9e471daa6562b9ea
+// Schema hash: 996e38144c4577ab
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_ABI_H
@@ -64,6 +64,7 @@ typedef struct refrain_services_net_protocol_protocol_version refrain_services_n
 typedef struct refrain_services_net_protocol_frame_header refrain_services_net_protocol_frame_header;
 typedef struct refrain_services_net_protocol_packet_view refrain_services_net_protocol_packet_view;
 typedef struct refrain_services_net_protocol_encoded_packet refrain_services_net_protocol_encoded_packet;
+typedef struct refrain_services_net_protocol_connection_ref refrain_services_net_protocol_connection_ref;
 
 typedef uint32_t refrain_services_net_protocol_protocol_edition; // enum 'protocol_edition'
 #define REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_EDITION_JAVA ((refrain_services_net_protocol_protocol_edition)(0))
@@ -90,6 +91,11 @@ typedef uint32_t refrain_services_net_protocol_connection_state; // enum 'connec
 #define REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_LOGIN ((refrain_services_net_protocol_connection_state)(2))
 #define REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_CONFIGURATION ((refrain_services_net_protocol_connection_state)(3))
 #define REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_STATE_PLAY ((refrain_services_net_protocol_connection_state)(4))
+
+typedef struct refrain_services_net_protocol_slice_connection_ref {
+    const refrain_services_net_protocol_connection_ref *data;
+    uint64_t len;
+} refrain_services_net_protocol_slice_connection_ref; // slice<connection_ref>
 
 // Provider identity and transport requirements. `transport_protocol` mirrors
 // the transport service values (tcp=0, tls_tcp=1, raknet=2, ...).
@@ -152,6 +158,15 @@ struct refrain_services_net_protocol_encoded_packet {
 }; // refrain_services_net_protocol_encoded_packet size = 24
 #define REFRAIN_SERVICES_NET_PROTOCOL_ENCODED_PACKET_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_encoded_packet))
 
+// One connection in a broadcast cohort. Contract slices carry structs, so a
+// cohort of connections is a slice of these thin wrappers.
+struct refrain_services_net_protocol_connection_ref {
+    uint32_t struct_size;
+    uint8_t reserved_0[4];
+    uint64_t connection;
+}; // refrain_services_net_protocol_connection_ref size = 16
+#define REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_REF_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_connection_ref))
+
 // Optional tab-list packet encoder. A protocol provider that exposes this
 // extension owns the version-specific text-component encoding.
 #define REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ID "refrain:net.protocol/tab_codec"
@@ -169,9 +184,32 @@ typedef struct refrain_services_net_protocol_tab_codec_vtable {
 
 #define REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_VTABLE_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_tab_codec_vtable))
 
+// Optional broadcast encoder. A provider that can frame one packet body once
+// and deliver that frame to every connection of a cohort exposes this
+// extension. The adapter uses it for a shared send, so a player-list update
+// that goes to a whole cohort is compressed once instead of once per
+// recipient. Without it the adapter falls back to one encode per recipient.
+#define REFRAIN_SERVICES_NET_PROTOCOL_BROADCAST_CODEC_ID "refrain:net.protocol/broadcast_codec"
+#define REFRAIN_SERVICES_NET_PROTOCOL_BROADCAST_CODEC_ABI_MAJOR 1u
+#define REFRAIN_SERVICES_NET_PROTOCOL_BROADCAST_CODEC_ABI_MINOR 0u
+#define REFRAIN_SERVICES_NET_PROTOCOL_BROADCAST_CODEC_ABI_PATCH 0u
+#define REFRAIN_SERVICES_NET_PROTOCOL_BROADCAST_CODEC_CAPABILITY "broadcast-codec"
+#define REFRAIN_SERVICES_NET_PROTOCOL_BROADCAST_CODEC_EXTENDS "refrain:net.protocol"
+
+typedef struct refrain_services_net_protocol_broadcast_codec_vtable {
+    uint32_t struct_size;
+    // Encode one packet for several connections. The provider may share the
+    // compressed frame between connections whose framing is identical and
+    // must still encrypt per connection when a cipher is active.
+    // attributes: #[thread(sim)] #[can_fail]
+    refrain_status (*send_shared)(void *self, refrain_services_net_protocol_slice_connection_ref connections, const refrain_services_net_protocol_packet_view *packet);
+} refrain_services_net_protocol_broadcast_codec_vtable; // extension refrain:net.protocol/broadcast_codec
+
+#define REFRAIN_SERVICES_NET_PROTOCOL_BROADCAST_CODEC_VTABLE_SIZE ((uint32_t)sizeof(refrain_services_net_protocol_broadcast_codec_vtable))
+
 #define REFRAIN_SERVICES_NET_PROTOCOL_SERVICE_ID "refrain:net.protocol"
 #define REFRAIN_SERVICES_NET_PROTOCOL_ABI_MAJOR 2u
-#define REFRAIN_SERVICES_NET_PROTOCOL_ABI_MINOR 0u
+#define REFRAIN_SERVICES_NET_PROTOCOL_ABI_MINOR 1u
 #define REFRAIN_SERVICES_NET_PROTOCOL_ABI_PATCH 0u
 #define REFRAIN_SERVICES_NET_PROTOCOL_SIDE REFRAIN_SIDE_SERVER
 #define REFRAIN_SERVICES_NET_PROTOCOL_THREAD REFRAIN_THREAD_NET
@@ -179,7 +217,7 @@ typedef struct refrain_services_net_protocol_tab_codec_vtable {
 #define REFRAIN_SERVICES_NET_PROTOCOL_CAPABILITIES "frame-compression,registry-sync"
 #define REFRAIN_SERVICES_NET_PROTOCOL_REQUIRES "refrain:core>=1.0.0"
 #define REFRAIN_SERVICES_NET_PROTOCOL_SERVICE_IDS "refrain:net.protocol"
-#define REFRAIN_SERVICES_NET_PROTOCOL_EXTENSION_IDS "refrain:net.protocol/tab_codec"
+#define REFRAIN_SERVICES_NET_PROTOCOL_EXTENSION_IDS "refrain:net.protocol/tab_codec,refrain:net.protocol/broadcast_codec"
 
 typedef struct refrain_services_net_protocol_vtable {
     uint32_t struct_size;

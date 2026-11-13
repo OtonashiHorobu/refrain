@@ -129,10 +129,28 @@ static_assert(std::string_view{refrain::services::net_translator::service_id} ==
 // path. The fake provider exercises registration, success, missing extension,
 // version mismatch and malformed/undersized vtable handling.
 
-static_assert(refrain::services::net_protocol::abi_minor == 0);
+static_assert(refrain::services::net_protocol::abi_minor == 1);
 static_assert(std::string_view{
                   refrain::services::net_protocol::tab_codec::extension_id} ==
               "refrain:net.protocol/tab_codec");
+static_assert(
+    std::string_view{
+        refrain::services::net_protocol::broadcast_codec::extension_id} ==
+    "refrain:net.protocol/broadcast_codec");
+static_assert(
+    std::string_view{
+        refrain::services::net_protocol::broadcast_codec::extends_service} ==
+    "refrain:net.protocol");
+static_assert(
+    std::string_view{
+        refrain::services::net_protocol::broadcast_codec::capability} ==
+    "broadcast-codec");
+static_assert(refrain::services::net_protocol::broadcast_codec::abi_major == 1);
+static_assert(refrain::services::net_protocol::broadcast_codec::abi_minor == 0);
+static_assert(REFRAIN_SERVICES_NET_PROTOCOL_BROADCAST_CODEC_VTABLE_SIZE ==
+              sizeof(refrain_services_net_protocol_broadcast_codec_vtable));
+static_assert(REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_REF_SIZE ==
+              sizeof(refrain_services_net_protocol_connection_ref));
 static_assert(
     std::string_view{
         refrain::services::net_protocol::tab_codec::extends_service} ==

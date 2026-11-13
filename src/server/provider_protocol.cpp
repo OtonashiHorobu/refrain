@@ -11,6 +11,7 @@
 #include <span>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace refrain::server {
 
@@ -27,7 +28,17 @@ namespace {
 
 provider_protocol::provider_protocol(
     std::unique_ptr<services::net_protocol::provider> provider)
-    : provider_{std::move(provider)} {}
+    : provider_{std::move(provider)} {
+    if (!provider_) {
+        return;
+    }
+    // The extension is optional: a provider that does not expose a broadcast
+    // encoder keeps the per-recipient fallback of `send_shared_packet`.
+    if (auto codec{
+            provider_->extension<services::net_protocol::broadcast_codec>()}) {
+        broadcast_ = std::move(*codec);
+    }
+}
 
 void provider_protocol::create_connection(std::uint64_t connection) {
     provider_->create_connection(connection);
@@ -104,6 +115,35 @@ auto provider_protocol::send_packet(std::uint64_t connection,
     auto result{provider_->send_packet(connection, view)};
     if (!result) {
         return protocol_error(result.error());
+    }
+    return status_ok();
+}
+
+auto provider_protocol::send_shared_packet(
+    std::span<const std::uint64_t> connections, std::uint32_t packet_id,
+    std::span<const std::byte> payload) -> status {
+    if (connections.empty()) {
+        return status_ok();
+    }
+    if (!broadcast_) {
+        return net::protocol_codec::send_shared_packet(connections, packet_id,
+                                                       payload);
+    }
+    cohort_.clear();
+    cohort_.reserve(connections.size());
+    for (const auto connection : connections) {
+        auto reference{services::net_protocol::make_connection_ref()};
+        reference.connection = connection;
+        cohort_.push_back(reference);
+    }
+    auto view{services::net_protocol::make_packet_view()};
+    view.packet_id = packet_id;
+    view.payload = contracts::to_borrowed(std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t *>(payload.data()),
+        payload.size()});
+    auto sent{broadcast_->send_shared(cohort_, view)};
+    if (!sent) {
+        return protocol_error(sent.error());
     }
     return status_ok();
 }
