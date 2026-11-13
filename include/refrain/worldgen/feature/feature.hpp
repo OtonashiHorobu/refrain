@@ -19,6 +19,10 @@
 #include <array>
 #include <optional>
 
+namespace refrain::worldgen {
+class stage_profile;
+} // namespace refrain::worldgen
+
 namespace refrain::worldgen::feature {
 
 struct feature_context {
@@ -38,6 +42,8 @@ struct feature_context {
     block_state_registry *registry{nullptr};
     std::function<const structure::structure_processor_list *(std::string_view)>
         processor_list{};
+    /// Optional per-stage accounting owned by the caller. Null in production.
+    stage_profile *profile{nullptr};
 };
 
 class feature {

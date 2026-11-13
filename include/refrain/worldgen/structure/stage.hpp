@@ -19,6 +19,10 @@
 #include <string_view>
 #include <vector>
 
+namespace refrain::worldgen {
+class stage_profile;
+} // namespace refrain::worldgen
+
 namespace refrain::worldgen::structure {
 
 /// The world access a starts stage needs. Biomes are queried at quart
@@ -62,6 +66,9 @@ struct structure_start_context {
     /// Restricts start generation to the selected structure sets. Empty
     /// accepts every set; a filter that selects none is an empty set.
     std::function<bool(std::string_view)> set_filter{};
+    /// Records the wall-clock time of the starts and reference stages when
+    /// non-null. The profile never affects the generated starts.
+    stage_profile *profile{nullptr};
 };
 
 /// The beardifier inputs one chunk sees: the rigid pieces and junction sources

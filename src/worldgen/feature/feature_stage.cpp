@@ -4,6 +4,8 @@
 
 #include <refrain/worldgen/feature/feature_stage.hpp>
 
+#include <refrain/worldgen/stage_profile.hpp>
+
 #include <algorithm>
 #include <memory>
 #include <set>
@@ -46,7 +48,14 @@ auto place_placed(feature_context &context,
     const top_feature_scope scope{context.placement,
                                   biome_check ? std::string_view{placed.id}
                                               : std::string_view{}};
+    // The breakdown groups by configured feature type, so the same row covers
+    // every placed feature built from one implementation.
+    const std::string_view feature_type =
+        placed.type.empty() ? std::string_view{"feature.generate.unknown"}
+                            : std::string_view{placed.type};
     if (placed.placement.empty()) {
+        const stage_timer timer{context.profile, feature_type,
+                                stage_kind::feature};
         return placed.configured->place(context, random, origin);
     }
 
@@ -61,8 +70,11 @@ auto place_placed(feature_context &context,
         const std::size_t modifier_index = modifier_indices.back();
         modifier_indices.pop_back();
         modified.clear();
-        placed.placement[modifier_index]->modify(context.placement, random,
-                                                 position, modified);
+        {
+            const stage_timer timer{context.profile, "feature.placement"};
+            placed.placement[modifier_index]->modify(context.placement, random,
+                                                     position, modified);
+        }
         const std::size_t next_index = modifier_index + 1;
         if (next_index < placed.placement.size()) {
             for (auto it = modified.rbegin(); it != modified.rend(); ++it) {
@@ -71,6 +83,8 @@ auto place_placed(feature_context &context,
             }
         } else {
             for (const auto &next_position : modified) {
+                const stage_timer timer{context.profile, feature_type,
+                                        stage_kind::feature};
                 placed_any =
                     placed.configured->place(context, random, next_position) ||
                     placed_any;

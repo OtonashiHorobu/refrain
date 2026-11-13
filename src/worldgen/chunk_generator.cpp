@@ -13,6 +13,7 @@
 #include <refrain/worldgen/feature/feature_plan.hpp>
 #include <refrain/worldgen/feature/feature_stage.hpp>
 #include <refrain/worldgen/provider.hpp>
+#include <refrain/worldgen/stage_profile.hpp>
 #include <refrain/worldgen/structure/feature_placement.hpp>
 #include <refrain/worldgen/structure/placement_stage.hpp>
 #include <refrain/worldgen/structure/stage.hpp>
@@ -40,6 +41,49 @@ namespace {
 
 auto fail(error_code code, std::string_view message) -> error {
     return make_error(code, message);
+}
+
+auto same_box(const bounding_box &left, const bounding_box &right) -> bool {
+    return left.min_x == right.min_x && left.min_y == right.min_y &&
+           left.min_z == right.min_z && left.max_x == right.max_x &&
+           left.max_y == right.max_y && left.max_z == right.max_z;
+}
+
+/// Exact comparison of two beardifier inputs. The fill samples the density
+/// with the beardifier added, so two fills are interchangeable exactly when
+/// these inputs are equal.
+auto same_beard(const structure::structure_beard &left,
+                const structure::structure_beard &right) -> bool {
+    if (left.pieces.size() != right.pieces.size() ||
+        left.junctions.size() != right.junctions.size()) {
+        return false;
+    }
+    if (left.affected_box.has_value() != right.affected_box.has_value()) {
+        return false;
+    }
+    if (left.affected_box.has_value() &&
+        !same_box(*left.affected_box, *right.affected_box)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.pieces.size(); ++index) {
+        const auto &first = left.pieces[index];
+        const auto &second = right.pieces[index];
+        if (first.adjustment != second.adjustment ||
+            first.ground_level_delta != second.ground_level_delta ||
+            !same_box(first.box, second.box)) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < left.junctions.size(); ++index) {
+        const auto &first = left.junctions[index];
+        const auto &second = right.junctions[index];
+        if (first.source_x != second.source_x ||
+            first.source_ground_y != second.source_ground_y ||
+            first.source_z != second.source_z) {
+            return false;
+        }
+    }
+    return true;
 }
 
 auto dimension_config_for(const chunk_generator_config &config)
@@ -349,15 +393,33 @@ auto chunk_generator::store_block_column(block_column_key key,
                 .first->second;
 }
 
-auto chunk_generator::cached_terrain(const chunk_pos &pos) const
+auto chunk_generator::cached_terrain(
+    const chunk_pos &pos, const structure::structure_beard *beard) const
     -> const proto_chunk * {
     const auto found = terrain_cache_.find(pos);
-    return found == terrain_cache_.end() ? nullptr : found->second.get();
+    if (found == terrain_cache_.end()) {
+        return nullptr;
+    }
+    const auto &entry = found->second;
+    if (beard == nullptr) {
+        return entry.bearded ? nullptr : entry.chunk.get();
+    }
+    return entry.bearded && same_beard(entry.beard, *beard) ? entry.chunk.get()
+                                                            : nullptr;
 }
 
 void chunk_generator::store_terrain(const chunk_pos &pos,
+                                    const structure::structure_beard *beard,
                                     std::unique_ptr<proto_chunk> chunk) {
-    if (terrain_cache_.contains(pos)) {
+    if (const auto found = terrain_cache_.find(pos);
+        found != terrain_cache_.end()) {
+        // A different beardifier input replaces the old fill; the position
+        // stays at its place in the eviction order.
+        found->second = cached_terrain_entry{
+            .bearded = beard != nullptr,
+            .beard = beard != nullptr ? *beard : structure::structure_beard{},
+            .chunk = std::move(chunk),
+        };
         return;
     }
     while (terrain_cache_order_.size() >= terrain_cache_capacity) {
@@ -365,7 +427,13 @@ void chunk_generator::store_terrain(const chunk_pos &pos,
         terrain_cache_order_.pop_front();
     }
     terrain_cache_order_.push_back(pos);
-    terrain_cache_.emplace(pos, std::move(chunk));
+    terrain_cache_.emplace(
+        pos,
+        cached_terrain_entry{
+            .bearded = beard != nullptr,
+            .beard = beard != nullptr ? *beard : structure::structure_beard{},
+            .chunk = std::move(chunk),
+        });
 }
 
 auto chunk_generator::start_height_at(const chunk_pos &column)
@@ -503,6 +571,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         start_context.block_at = block_at;
         start_context.states = &states;
         start_context.templates = templates_.get();
+        start_context.profile = profile_;
         if (!config_.structure_sets.empty()) {
             const auto &allowed = config_.structure_sets;
             start_context.set_filter = [&allowed](std::string_view id) {
@@ -586,29 +655,34 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         const chunk_pos target = region_positions[index];
         density::sampler_context fill_context;
         std::optional<beardifier> beard;
-        bool bearded = false;
+        std::optional<structure::structure_beard> collected_beard;
         if (area.has_value()) {
-            const auto collected = structure::collect_beard(
+            const stage_timer timer{profile_, "structure.beard"};
+            auto collected = structure::collect_beard(
                 area->starts, shared_->structure_data, target);
             if (!collected.pieces.empty() || !collected.junctions.empty() ||
                 collected.affected_box.has_value()) {
-                beard.emplace(collected.pieces, collected.junctions,
-                              collected.affected_box);
+                collected_beard = std::move(collected);
+                beard.emplace(collected_beard->pieces,
+                              collected_beard->junctions,
+                              collected_beard->affected_box);
                 fill_context.set_field(density::context_key::beardifier,
                                        &*beard);
-                bearded = true;
             }
         }
-        // Terrain is a pure function of the seed, the data and the position
-        // once the biome search starts from a fresh candidate, so the eight
-        // neighbour fills repeat neither across the batch nor within a
-        // target. A cached chunk is cloned because the structure and feature
-        // stages write into the generation region, and a bearded fill is
-        // never reused or stored: its result depends on the structure pieces
-        // around the target, not on the position alone.
-        if (needs_neighbours && !bearded) {
-            if (const auto *cached = cached_terrain(target);
+        // Terrain is a pure function of the seed, the data, the position and
+        // the beardifier input, so a fill repeats neither across the batch nor
+        // within a target. A cached chunk is cloned because the structure and
+        // feature stages write into the generation region. Two fills of one
+        // position are interchangeable exactly when their beardifier inputs
+        // match, which is why the cache compares the collected beard rather
+        // than keying on the position alone.
+        if (needs_neighbours) {
+            if (const auto *cached = cached_terrain(
+                    target,
+                    collected_beard.has_value() ? &*collected_beard : nullptr);
                 cached != nullptr) {
+                const stage_timer timer{profile_, "terrain.cached_clone"};
                 chunks[index] = cached->clone();
                 continue;
             }
@@ -621,14 +695,27 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
             .fill_context = area.has_value() ? &fill_context : nullptr,
             .carvers = reference_terrain ? dimension_->carvers() : nullptr,
             .surface = reference_terrain,
+            .profile = profile_,
         };
+        // A beardifier changes the density the fill samples, so a bearded fill
+        // only runs when the exact beard is not cached. Its row overlaps the
+        // terrain rows and reports how much of the fill work the beardifier
+        // costs.
+        std::optional<stage_timer> bearded_fill;
+        if (collected_beard.has_value()) {
+            bearded_fill.emplace(profile_, "terrain.bearded_fill");
+        }
         dimension_->reset_biome_search();
         auto generated = dimension_->generate_terrain(target, stages);
         if (!generated) {
             return std::unexpected{generated.error()};
         }
-        if (needs_neighbours && !bearded) {
-            store_terrain(target, (*generated)->clone());
+        if (needs_neighbours) {
+            const stage_timer timer{profile_, "terrain.cache_store"};
+            store_terrain(target,
+                          collected_beard.has_value() ? &*collected_beard
+                                                      : nullptr,
+                          (*generated)->clone());
         }
         chunks[index] = std::move(*generated);
     }
@@ -719,27 +806,36 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         .place_feature = {},
     };
 
-    std::vector<std::string> feature_ids;
-    for (const auto *start : active) {
-        for (const auto &piece : start->pieces) {
-            structure::collect_feature_ids(structure::to_piece_record(piece),
-                                           feature_ids);
-        }
-    }
     std::optional<structure::structure_feature_placer> structure_features;
-    if (!feature_ids.empty()) {
-        structure_features.emplace(place_context, shared_->feature_data);
-        if (const auto loaded = structure_features->load(feature_ids);
-            !loaded) {
-            return std::unexpected{loaded.error()};
+    {
+        const stage_timer timer{profile_, "structure.features"};
+        std::vector<std::string> feature_ids;
+        for (const auto *start : active) {
+            for (const auto &piece : start->pieces) {
+                structure::collect_feature_ids(
+                    structure::to_piece_record(piece), feature_ids);
+            }
         }
-        place_context.place_feature =
-            [&structure_features](std::string_view id, worldgen_random &random,
-                                  const block_pos &position) {
-                return structure_features->place(id, random, position);
-            };
+        if (!feature_ids.empty()) {
+            structure_features.emplace(place_context, shared_->feature_data);
+            if (const auto loaded = structure_features->load(feature_ids);
+                !loaded) {
+                return std::unexpected{loaded.error()};
+            }
+            place_context.place_feature =
+                [&structure_features](std::string_view id,
+                                      worldgen_random &random,
+                                      const block_pos &position) {
+                    return structure_features->place(id, random, position);
+                };
+        }
     }
 
+    stage_timer pieces{profile_, "structure.pieces"};
+    // Terrain never contains a shape-sensitive block, so the shape refresh
+    // only has work when a piece reached the target chunk. The flag is set on
+    // the same intersection test that gates the piece placement.
+    bool center_shapes{false};
     worldgen_random decoration{
         std::make_unique<xoroshiro_random_source>(config_.seed)};
     const jlong decoration_seed =
@@ -760,6 +856,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
                 piece.bounds.min_z > pos.z * 16 + 15) {
                 continue;
             }
+            center_shapes = true;
             structure::place_structure_piece(
                 place_context, structure::to_piece_record(piece), random);
         }
@@ -810,13 +907,18 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
             }
         }
     }
-    structure::refresh_chunk_shapes(*center, region, states);
+    pieces.stop();
+    if (center_shapes) {
+        const stage_timer timer{profile_, "structure.shapes"};
+        structure::refresh_chunk_shapes(*center, region, states);
+    }
 
     if (has_features_) {
         // Feature placement reads biomes through the chunks of the region and
         // falls back to the noise source only outside it. Starting that
         // fallback from a fresh candidate keeps the decoration independent of
         // how many fills the target needed.
+        stage_timer prepare{profile_, "feature.prepare"};
         dimension_->reset_biome_search();
         dimension_biome_resolver uncached{dimension_->biome_source(),
                                           dimension_->sampler()};
@@ -862,6 +964,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
             .templates = templates_.get(),
             .registry = &states,
             .processor_list = {},
+            .profile = profile_,
         };
         feature_context.placement.height = [&region](heightmap_kind kind,
                                                      jint x, jint z) {
@@ -953,12 +1056,14 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
             }
             candidate_biomes.assign(names.begin(), names.end());
         }
+        prepare.stop();
         const auto decorate_chunk = [&](proto_chunk &target) {
             feature_context.placement.chunk = &target;
             feature_context.placement.generation.min_y =
                 dimension_->generation_min_y();
             feature_context.placement.generation.height =
                 dimension_->generation_height();
+            const stage_timer timer{profile_, "feature.decorate"};
             feature::decorate(feature_context, shared_->feature_plan,
                               features_->placed(), candidate_biomes,
                               shared_->feature_data.biomes, config_.seed);

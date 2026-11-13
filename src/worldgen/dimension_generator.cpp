@@ -10,6 +10,7 @@
 #include <refrain/worldgen/carver/carver_stage.hpp>
 #include <refrain/worldgen/chunk/block_defaults.hpp>
 #include <refrain/worldgen/chunk/chunk_region.hpp>
+#include <refrain/worldgen/stage_profile.hpp>
 #include <refrain/worldgen/terrain/aquifer.hpp>
 
 #include <algorithm>
@@ -375,52 +376,71 @@ auto dimension_generator::generate(const chunk_pos &pos)
 auto dimension_generator::generate_terrain(const chunk_pos &pos,
                                            const terrain_stages &stages)
     -> result<std::unique_ptr<proto_chunk>> {
-    auto chunk = make_chunk(pos);
-    chunk->set_status(chunk_status::biomes);
-    fill_chunk_biomes(*chunk, biome_source_, sampler_);
+    std::unique_ptr<proto_chunk> chunk;
+    {
+        const stage_timer timer{stages.profile, "terrain.chunk"};
+        chunk = make_chunk(pos);
+    }
+    {
+        const stage_timer timer{stages.profile, "terrain.biome"};
+        chunk->set_status(chunk_status::biomes);
+        fill_chunk_biomes(*chunk, biome_source_, sampler_);
+    }
 
     const auto &fill_context = stages.fill_context != nullptr
                                    ? *stages.fill_context
                                    : sampler_context_;
-    auto aquifer = make_aquifer(pos.x, pos.z, fill_context);
-    const terrain::proto_fill_options fill_options{
-        .air = air_state_,
-        .default_block = default_block_state_,
-        .default_fluid = default_fluid_state_,
-        .lava = lava_state_,
-    };
-    terrain::fill_proto_chunk(*chunk, fill_options,
-                              terrain::proto_fill_volume{
-                                  .min_y = shared_->generation_min_y,
-                                  .height = shared_->generation_height,
-                              },
-                              *shared_->settings.router.final_density,
-                              fill_context, *aquifer.aquifer);
+    aquifer_holder aquifer;
+    {
+        const stage_timer timer{stages.profile, "terrain.fill"};
+        aquifer = make_aquifer(pos.x, pos.z, fill_context);
+        const terrain::proto_fill_options fill_options{
+            .air = air_state_,
+            .default_block = default_block_state_,
+            .default_fluid = default_fluid_state_,
+            .lava = lava_state_,
+        };
+        terrain::fill_proto_chunk(*chunk, fill_options,
+                                  terrain::proto_fill_volume{
+                                      .min_y = shared_->generation_min_y,
+                                      .height = shared_->generation_height,
+                                  },
+                                  *shared_->settings.router.final_density,
+                                  fill_context, *aquifer.aquifer);
+    }
 
     if (!stages.surface && stages.carvers == nullptr) {
         chunk->set_status(chunk_status::terrain);
         return chunk;
     }
 
-    // The surface rule resolves its anchors against the generation depth, so
-    // the nether roof lines up with `below_top` of 128, not 256.
+    // The scan for the highest occupied section and the rest of the surface
+    // inputs are timed apart because only the scan is proportional to the
+    // chunk height. The surface pass and the carvers follow under their own
+    // timers.
     jint max_block_y = profile_->min_y;
-    for (jint y = profile_->min_y + profile_->height - 1; y >= profile_->min_y;
-         --y) {
-        bool occupied = false;
-        for (jint z = 0; z < 16 && !occupied; ++z) {
-            for (jint x = 0; x < 16; ++x) {
-                if (chunk->state_at(x, y, z) != air_state_) {
-                    occupied = true;
-                    break;
+    {
+        const stage_timer timer{stages.profile, "terrain.surface_scan"};
+        // The surface rule resolves its anchors against the generation depth,
+        // so the nether roof lines up with `below_top` of 128, not 256.
+        for (jint y = profile_->min_y + profile_->height - 1;
+             y >= profile_->min_y; --y) {
+            bool occupied = false;
+            for (jint z = 0; z < 16 && !occupied; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    if (chunk->state_at(x, y, z) != air_state_) {
+                        occupied = true;
+                        break;
+                    }
                 }
             }
-        }
-        if (occupied) {
-            max_block_y = (y >> 4) * 16 + 15;
-            break;
+            if (occupied) {
+                max_block_y = (y >> 4) * 16 + 15;
+                break;
+            }
         }
     }
+    stage_timer prepare{stages.profile, "terrain.surface_prepare"};
 
     const surface::generation_bounds bounds{
         .min_gen_y = profile_->min_y,
@@ -492,22 +512,35 @@ auto dimension_generator::generate_terrain(const chunk_pos &pos,
     };
     providers.possible_biomes = &shared_->possible_biomes;
 
-    surface::material_context rule_context{rule_states_, bounds, providers,
-                                           sampler_context_};
-    surface::rule_compiler compiler{shared_->documents, rule_context};
-    auto compiled = compiler.compile(shared_->material_rule);
-    if (!compiled) {
-        return std::unexpected{compiled.error()};
+    if (rule_context_.has_value()) {
+        rule_context_->rebind(rule_states_, bounds, providers,
+                              sampler_context_);
+    } else {
+        rule_context_.emplace(rule_states_, bounds, providers,
+                              sampler_context_);
     }
+    if (!compiled_rule_.has_value()) {
+        surface::rule_compiler compiler{shared_->documents, *rule_context_};
+        auto compiled = compiler.compile(shared_->material_rule);
+        if (!compiled) {
+            return std::unexpected{compiled.error()};
+        }
+        compiled_rule_ = std::move(*compiled);
+    }
+    auto &rule_context = *rule_context_;
+    const auto &rule = *compiled_rule_;
+    prepare.stop();
     if (stages.surface) {
+        const stage_timer timer{stages.profile, "terrain.surface"};
         if (const auto built = system.build_surface(
-                *chunk, rule_context, *compiled, shared_->climates,
+                *chunk, rule_context, rule, shared_->climates,
                 shared_->temperatures, providers.biome);
             !built) {
             return std::unexpected{built.error()};
         }
     }
     if (stages.carvers != nullptr) {
+        const stage_timer timer{stages.profile, "terrain.carver"};
         carver::carver_generator generator{
             [this](jint quart_x, jint quart_z) -> std::string_view {
                 return biome_name(biome_at_quart(quart_x, 0, quart_z));
@@ -525,12 +558,12 @@ auto dimension_generator::generate_terrain(const chunk_pos &pos,
         };
         if (stages.surface) {
             apply.top_material =
-                [&system, &rule_context, &compiled,
+                [&system, &rule_context, &rule,
                  &chunk](jint block_x, jint block_y, jint block_z,
                          bool under_fluid) -> std::optional<surface::state_id> {
                 return system.top_material(
-                    rule_context, *compiled, block_x, block_y, block_z,
-                    under_fluid, [&chunk](jint x, jint z) {
+                    rule_context, rule, block_x, block_y, block_z, under_fluid,
+                    [&chunk](jint x, jint z) {
                         return chunk->first_available(
                                    heightmap_kind::world_surface_wg, x, z) -
                                1;
