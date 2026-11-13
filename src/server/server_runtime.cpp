@@ -342,8 +342,8 @@ auto run_server(const server_run_options &options,
     // The network shell queues this event from its I/O thread and delivers it
     // from `listener->tick()`, so the session table stays simulation-owned.
     network_inputs.player_join =
-        [&players, &views, &broadcaster, &active_listener, external_join,
-         spawn_chunk_x, spawn_chunk_z,
+        [&players, &views, &broadcaster, external_join, spawn_chunk_x,
+         spawn_chunk_z,
          view_distance](const refrain::net::player_identity &identity) {
             const auto added{players.add_player(
                 identity.connection, identity.id, std::string{identity.name},
@@ -352,9 +352,7 @@ auto run_server(const server_run_options &options,
                 static_cast<void>(views.update(identity.connection,
                                                spawn_chunk_x, spawn_chunk_z,
                                                view_distance));
-            }
-            if (added && active_listener != nullptr) {
-                broadcaster.joined(players, identity.connection);
+                broadcaster.joined(identity.connection);
             }
             if (external_join) {
                 external_join(identity);
@@ -371,7 +369,7 @@ auto run_server(const server_run_options &options,
             static_cast<void>(players.remove_player(identity.connection));
             static_cast<void>(views.remove(identity.connection));
             if (copy) {
-                broadcaster.left(players, *copy);
+                broadcaster.left(*copy);
             }
             if (external_leave) {
                 external_leave(identity);

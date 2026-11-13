@@ -132,6 +132,23 @@ Determinism is a contract: the same world and the same command sequence produce
 the same hash at the same tick. Timers are ordered by due tick and insertion
 id. The event bus is single-threaded and preserves subscription order.
 
+### Tick budget
+
+The simulation thread bounds the work a tick can take from state that arrives
+asynchronously. Three budgets keep a login storm from turning into a
+second-long tick:
+
+- the network shell delivers at most 64 join events per tick and carries the
+  remaining events to later ticks in queue order;
+- the broadcaster queues the player-list updates of a tick, encodes one body
+  per cohort, and hands at most 1 MiB to the transport per tick; the rest
+  follows in order on later ticks;
+- the visibility sweep walks a rotating window of viewers and stops at a pair
+  budget and a spawn budget, so a dense crowd fills over several ticks.
+
+A player that waits a few ticks for its tab-list entry or its entity spawn
+cannot observe the delay; a tick that applies the whole backlog can.
+
 ## Threading
 
 The server uses a small fixed set of threads: the main thread owns startup and

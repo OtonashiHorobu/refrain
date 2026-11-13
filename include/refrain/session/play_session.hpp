@@ -49,6 +49,19 @@ struct visibility_entry {
     float pitch{0.0F};
 };
 
+/// The fields the player list encodes for one connected player. The join path
+/// sends a listing to every client, so this projection deliberately omits the
+/// position, world and inventory of `player`: copying those per recipient is
+/// what made a join storm cost quadratic memory traffic.
+struct listing_entry {
+    std::uint64_t connection{0};
+    net::uuid id{};
+    /// View into the simulation record. It stays valid for the duration of the
+    /// callback and must not be stored.
+    std::string_view name{};
+    std::uint32_t game_mode{0};
+};
+
 /// Gameplay-side adapter over the simulation's player table. The network layer
 /// reports connection-scoped events; this object resolves them to the one
 /// authoritative player record and decides which entities a connection can see.
@@ -119,6 +132,24 @@ class play_session {
 
     /// Connected players in ascending entity id order.
     [[nodiscard]] auto all() const -> std::vector<player>;
+
+    /// Visit every connected player in ascending entity id order with the
+    /// fields the player list encodes, without projecting or copying the full
+    /// record. The listing name points into the simulation table.
+    template <typename F> void for_each_listing(F &&visit) const {
+        for (const auto &[id, record] : players_->records()) {
+            static_cast<void>(id);
+            if (record.connection == sim::synthetic_connection) {
+                continue;
+            }
+            visit(listing_entry{
+                .connection = record.connection,
+                .id = net::uuid{.bytes = record.profile_id},
+                .name = record.name,
+                .game_mode = record.game_mode,
+            });
+        }
+    }
 
     /// Visit every connected player in ascending entity id order without
     /// copying the projection. The pointers stay valid until the next call and

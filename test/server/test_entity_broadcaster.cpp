@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "support/counting_play_gateway.hpp"
 #include "support/fake_play_gateway.hpp"
 
 using namespace boost::ut;
@@ -33,6 +34,7 @@ namespace net = refrain::net;
 namespace session = refrain::session;
 namespace sim = refrain::sim;
 namespace support = refrain::test_support;
+using support::counting_play_gateway;
 namespace play_clientbound = refrain::protocol::current::play::clientbound;
 
 /// Reads the leading packet-id varint of an encoded body.
@@ -383,7 +385,8 @@ suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
         gateway.sent.clear();
         const auto leaving{*players.player_of(2)};
         static_cast<void>(players.remove_player(2));
-        broadcaster.left(players, leaving);
+        broadcaster.left(leaving);
+        broadcaster.flush_lifecycle(players);
 
         expect(gateway.sent.size() == 2U);
         expect(gateway.sent[0].connection == 1U);
@@ -542,4 +545,42 @@ suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
         expect(transitions > 0U) << "the run must exercise spawns or removals";
         expect(movements > 0U) << "the run must exercise movement packets";
     };
+    "a dense visibility sweep is bounded per tick and still completes"_test =
+        [] {
+            // Every player stands on the same spot, so the relation is
+            // O(players^2): the sweep must spread it over ticks instead of
+            // walking it in one.
+            constexpr std::uint64_t player_count{500};
+            constexpr std::int32_t tracking_chunks{32};
+            session::play_session players{};
+            for (std::uint64_t connection{1}; connection <= player_count;
+                 ++connection) {
+                join(players, connection, 0.0, 0.0);
+            }
+            counting_play_gateway gateway{};
+            entity_broadcaster broadcaster{gateway, tracking_chunks};
+
+            constexpr std::size_t pairs{player_count * (player_count - 1)};
+            constexpr std::size_t budget{
+                entity_broadcaster::max_visibility_pairs_per_tick};
+            constexpr std::size_t spawn_budget{
+                entity_broadcaster::max_spawns_per_tick};
+            std::size_t spawns{0};
+            std::size_t ticks{0};
+            while (ticks == 0 || gateway.spawn_packets > 0) {
+                gateway.reset();
+                broadcaster.tick(players);
+                spawns += gateway.spawn_packets;
+                // One tick may overrun a budget by the work of the viewer it
+                // was processing when the budget ran out.
+                expect(gateway.spawn_packets <= spawn_budget + player_count);
+                expect(gateway.spawn_packets <= budget + player_count);
+                expect(gateway.malformed == 0U);
+                ++ticks;
+                expect(ticks < 32U) << "the sweep must make progress";
+            }
+            expect(spawns == pairs);
+            // The whole relation cannot fit in one tick's pair budget.
+            expect(ticks >= (pairs + budget - 1) / budget);
+        };
 };
