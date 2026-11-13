@@ -21,24 +21,14 @@ constexpr refrain::log::logger log_net{"net"};
 /// tick's work: the drain keeps batching until the time budget expires.
 constexpr std::size_t max_batch_packets{8};
 
-/// Bytes one connection may have queued before the streamer leaves it alone
-/// for a tick. The transport itself keeps queueing other packets until its
-/// own cap; this one only starves the chunk stream, so a client that resumes
-/// reading catches up instead of growing the queue further.
-constexpr std::size_t max_connection_backlog{1U * 1024U * 1024U};
-
-/// Aggregate backlog above which the whole stream pauses: generation and
-/// encoding are wasted work while every client is behind. Must match the
-/// generator's pause threshold.
-constexpr std::size_t max_total_backlog{64U * 1024U * 1024U};
-
 } // namespace
 
 namespace refrain::server {
 
 chunk_streamer::chunk_streamer(play_gateway &gateway,
-                               chunk_packet_source source)
-    : gateway_(gateway), source_(source) {}
+                               chunk_packet_source source,
+                               backlog_limits limits)
+    : gateway_(gateway), source_(source), limits_(limits.clamped()) {}
 
 chunk_streamer::~chunk_streamer() {
     if (cache_hits_ == 0 && cache_misses_ == 0) {
@@ -277,7 +267,7 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
     for (const auto id : active_ids) {
         total_backlog += gateway_.backlog(id);
     }
-    if (total_backlog > max_total_backlog) {
+    if (total_backlog > limits_.max_total_bytes) {
         return;
     }
     std::vector<std::uint64_t> drainable{};
@@ -286,7 +276,7 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
         if (!streams_.contains(id)) {
             continue;
         }
-        if (gateway_.backlog(id) > max_connection_backlog) {
+        if (gateway_.backlog(id) > limits_.max_connection_bytes) {
             continue;
         }
         drainable.push_back(id);

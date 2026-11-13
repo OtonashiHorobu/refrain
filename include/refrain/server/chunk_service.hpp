@@ -40,7 +40,17 @@ class chunk_service {
         -> status;
 
     /// Attach the streamer once the listener and the protocol tables exist.
-    void attach(play_gateway &gateway, chunk_packet_source source);
+    /// `backlog` bounds what the stream may queue before it starves a client or
+    /// pauses entirely; the service uses the same aggregate limit to stop
+    /// admitting generation while the stream is paused.
+    void attach(play_gateway &gateway, chunk_packet_source source,
+                chunk_streamer::backlog_limits backlog);
+
+    /// Same, with the default limits; delegating keeps the nested type out of a
+    /// default argument.
+    void attach(play_gateway &gateway, chunk_packet_source source) {
+        attach(gateway, source, chunk_streamer::backlog_limits{});
+    }
 
     /// Apply the generated columns, stream one tick of the trackers'
     /// viewports, rank the wanted columns by the player positions and admit
@@ -55,6 +65,8 @@ class chunk_service {
     void observe_tick(std::uint64_t work_ns);
 
   private:
+    /// Limits shared by the streamer and the generator pause.
+    chunk_streamer::backlog_limits backlog_{};
     /// Controller update period and the tick work window its p99 covers.
     static constexpr std::size_t controller_window_ticks{20};
 

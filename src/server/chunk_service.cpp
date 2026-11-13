@@ -22,11 +22,6 @@ namespace {
 
 constexpr refrain::log::logger log_chunk_gen{"chunk-gen"};
 
-/// The streamer pauses a client view above the same aggregate backlog; the
-/// generator stops admitting work at that point so a slow drain cannot be fed
-/// by fresh columns.
-constexpr std::size_t max_total_backlog{64U * 1024U * 1024U};
-
 /// Chunk coordinate of a world position, rounding towards negative infinity so
 /// a position just west of zero stays in chunk -1.
 [[nodiscard]] auto chunk_of(double coordinate) -> std::int32_t {
@@ -89,9 +84,11 @@ auto chunk_service::start_generation(chunk_generation::config settings)
     return status_ok();
 }
 
-void chunk_service::attach(play_gateway &gateway, chunk_packet_source source) {
+void chunk_service::attach(play_gateway &gateway, chunk_packet_source source,
+                           chunk_streamer::backlog_limits backlog) {
     gateway_ = &gateway;
-    streamer_.emplace(gateway, source);
+    backlog_ = backlog.clamped();
+    streamer_.emplace(gateway, source, backlog_);
     streamer_->set_chunk_requester([this](std::int32_t x, std::int32_t z) {
         return generation_ != nullptr &&
                generation_->request(refrain::world::chunk_pos{x, z});
@@ -133,7 +130,8 @@ void chunk_service::tick(world_port &world,
     generation_->set_priority_centres(centres);
     // Hard pause: a client backlog above the bound means the stream cannot
     // drain what is already queued, so generating more would only grow it.
-    if (gateway_ != nullptr && total_backlog(*gateway_) > max_total_backlog) {
+    if (gateway_ != nullptr &&
+        total_backlog(*gateway_) > backlog_.max_total_bytes) {
         return;
     }
     generation_->dispatch(refrain::core::now_ns() - tick_start_ns);

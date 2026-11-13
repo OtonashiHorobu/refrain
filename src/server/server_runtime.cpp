@@ -521,11 +521,28 @@ auto run_server(const server_run_options &options,
     // encoded chunk cache) and is attached once the listener and the tables
     // exist.
     if (listener && tables && registries) {
-        chunks.attach(gateway, refrain::server::chunk_packet_source{
-                                   .world = &world,
-                                   .tables = &*tables,
-                                   .registries = &*registries,
-                               });
+        using chunk_backlog = refrain::server::chunk_streamer::backlog_limits;
+        constexpr chunk_backlog default_chunk_backlog{};
+        const auto chunk_limits{chunk_backlog::from_config(
+            options.network.get_int64(
+                "chunk_stream.max_connection_backlog",
+                static_cast<std::int64_t>(
+                    default_chunk_backlog.max_connection_bytes)),
+            options.network.get_int64(
+                "chunk_stream.max_total_backlog",
+                static_cast<std::int64_t>(
+                    default_chunk_backlog.max_total_bytes)))};
+        log_config.info("chunk stream max_connection_backlog={} "
+                        "max_total_backlog={}",
+                        chunk_limits.max_connection_bytes,
+                        chunk_limits.max_total_bytes);
+        chunks.attach(gateway,
+                      refrain::server::chunk_packet_source{
+                          .world = &world,
+                          .tables = &*tables,
+                          .registries = &*registries,
+                      },
+                      chunk_limits);
     }
 
     refrain::server::inventory_sync inventory{
