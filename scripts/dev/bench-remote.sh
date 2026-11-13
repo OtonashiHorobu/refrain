@@ -14,6 +14,8 @@
 # Environment:
 #   REFRAIN_BENCH_HOST       ssh target; unset means "run locally"
 #   REFRAIN_BENCH_SSH_KEY    identity file for that target; unset uses the agent
+#   REFRAIN_BENCH_LOCK       set to 0 to skip the host lock and run anyway
+#   REFRAIN_BENCH_LOCK_WAIT  seconds to wait for the lock (default 3600)
 #   REFRAIN_BENCH_DIR        remote checkout, relative to $HOME (default Projects/refrain)
 #   REFRAIN_BENCH_BUILD      remote build directory (default build/bench)
 #   REFRAIN_BENCH_ARCH       remote architecture level (default x86-64-v3)
@@ -33,6 +35,8 @@ REMOTE_BUILD="${REFRAIN_BENCH_BUILD:-build/bench}"
 ARCH_LEVEL="${REFRAIN_BENCH_ARCH:-x86-64-v3}"
 REQUIRE_REMOTE="${REFRAIN_BENCH_REQUIRE:-0}"
 SSH_KEY="${REFRAIN_BENCH_SSH_KEY:-}"
+TAKE_LOCK="${REFRAIN_BENCH_LOCK:-1}"
+LOCK_WAIT="${REFRAIN_BENCH_LOCK_WAIT:-3600}"
 
 # A dedicated identity makes the run work without an unlocked agent, which is
 # what an unattended benchmark needs.
@@ -61,16 +65,6 @@ die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # A benchmark needs the machine to itself. Refuse to present numbers from a
 # loaded host as comparable, but still run so the caller gets output.
-check_remote_idle() {
-    local load cores busy
-    load="$(ssh "${SSH_OPTS[@]}" "$HOST" 'cat /proc/loadavg | cut -d" " -f1')"
-    cores="$(ssh "${SSH_OPTS[@]}" "$HOST" 'nproc')"
-    busy="$(awk -v l="$load" -v c="$cores" 'BEGIN { printf "%d", (l * 100) / c }')"
-    say "remote load ${load} on ${cores} cores (${busy}%)"
-    if [[ "$busy" -gt 25 ]]; then
-        warn "the remote host is busy; treat these numbers as indicative only"
-    fi
-}
 
 run_local() {
     warn "running locally: the numbers share the machine with every other job"
@@ -101,17 +95,22 @@ if ! ssh "${SSH_OPTS[@]}" -o ConnectTimeout=5 "$HOST" true 2>/dev/null; then
     exit 0
 fi
 
-check_remote_idle
+# The idle check runs inside the lock: a lane that waited along with two
+# others must see the state it is about to measure, not the state at the
+# moment it asked.
 
 say "syncing the working tree to $HOST:$REMOTE_DIR"
 # Anchored patterns: an unanchored `world` would also drop src/world.
 # The host generates its own datapack once and keeps it. Syncing it would
-# replace a real directory there with a lane's symlink and dangle.
+# replace a real directory there with a lane's symlink and dangle. Lane
+# worktrees are excluded for the same reason: they hold their own build
+# trees, and copying a live one races with the lane that owns it.
 rsync -a --delete -e "ssh ${SSH_OPTS[*]}" \
     --exclude=/.git \
     --exclude='/build*' \
     --exclude=/.cache \
     --exclude=/refrain-internal \
+    --exclude=/.agents \
     --exclude=/world \
     --exclude='/install*' \
     --exclude=/run \
@@ -126,6 +125,24 @@ say "building and running on $HOST"
 # instead of assuming the path.
 ssh "${SSH_OPTS[@]}" "$HOST" bash -s <<REMOTE
 set -euo pipefail
+# One benchmark at a time on this host: two concurrent builds both skew the
+# numbers and fight for the cores. The lock is on the host, so it covers
+# lanes on different machines as well.
+if [ "${TAKE_LOCK}" != "0" ]; then
+    exec 9>"\$HOME/.refrain-bench.lock"
+    if ! flock -w "${LOCK_WAIT}" 9; then
+        echo "error: could not take the benchmark lock within ${LOCK_WAIT}s" >&2
+        exit 1
+    fi
+fi
+# Measured after the lock, so the load shown is the load this run will see.
+load="\$(cut -d' ' -f1 /proc/loadavg)"
+cores="\$(nproc)"
+busy="\$(awk -v l="\$load" -v c="\$cores" 'BEGIN { printf "%d", (l * 100) / c }')"
+echo "remote load \$load on \$cores cores (\$busy%)"
+if [ "\$busy" -gt 25 ]; then
+    echo "warning: the host is busy; treat these numbers as indicative only" >&2
+fi
 cd "\$HOME/${REMOTE_DIR}"
 export PATH="\$HOME/.venvs/conan/bin:\$PATH"
 # The chunk-generator benchmark needs the generated datapack; without it the
