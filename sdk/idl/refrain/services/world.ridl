@@ -4,8 +4,9 @@
 //
 // `refrain:world` service contract (hot path).
 // Exposes the versioned Chunk ABI from sdk/idl/refrain/core.ridl, batched
-// block mutation and the read-only level projection the runtime boots from;
-// per-block cross-plugin calls are intentionally absent.
+// block mutation, the read-only level projection the runtime boots from and
+// the optional storage compression settings; per-block cross-plugin calls are
+// intentionally absent.
 
 module refrain::services::world;
 version 1.0.0;
@@ -66,7 +67,20 @@ struct level_projection {
     bool has_chunks;
 }
 
-service world : 1.1.0 {
+/// Distance-adaptive zstd settings a provider applies to the chunks it stores.
+/// Levels are zstd compression levels; radii are horizontal chunk distances
+/// from the player. A chunk inside `near_radius` is stored with `near_level`,
+/// one inside `mid_radius` with `mid_level`, and everything beyond with
+/// `far_level`.
+struct zstd_policy {
+    i32 near_level;
+    i32 mid_level;
+    i32 far_level;
+    i32 near_radius;
+    i32 mid_radius;
+}
+
+service world : 1.2.0 {
     side = server;
     thread = sim;
     provides = [ "refrain:world" ];
@@ -112,4 +126,23 @@ service world : 1.1.0 {
     /// opened over; the level directory stays private to the storage provider.
     #[thread(sim)] #[can_fail]
     fn level() -> result<level_projection, world_error>;
+
+    /// Optional. Effective zstd level the provider stores chunks with; a
+    /// provider that does not apply compression settings leaves the slot
+    /// empty.
+    #[thread(sim)]
+    fn zstd_level() -> i32;
+
+    /// Optional. Replace the zstd level chunks are stored with. A provider
+    /// that does not apply compression settings leaves the slot empty, which
+    /// means the setting does not apply to it rather than that the call
+    /// failed.
+    #[thread(sim)] #[can_fail]
+    fn set_zstd_level(in i32 level) -> result<void, world_error>;
+
+    /// Optional. Replace the distance-adaptive zstd policy. A provider that
+    /// does not apply compression settings leaves the slot empty, which means
+    /// the setting does not apply to it rather than that the call failed.
+    #[thread(sim)] #[can_fail]
+    fn set_zstd_policy(in zstd_policy policy) -> result<void, world_error>;
 }

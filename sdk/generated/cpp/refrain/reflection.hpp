@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: e168f1954a0feabb
+// Schema hash: 9acb7bb41c6b4563
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -3083,6 +3083,17 @@ template <> struct custom_traits<::refrain::services::world::level_projection> {
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"level", &::refrain::services::world::level_projection::level},
         refrain::reflect::custom_field{"has_chunks", &::refrain::services::world::level_projection::has_chunks});
+};
+
+/// Generated RIDL struct 'refrain::services::world::zstd_policy'.
+template <> struct custom_traits<::refrain::services::world::zstd_policy> {
+    static constexpr std::string_view type_name = "refrain::services::world::zstd_policy";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"near_level", &::refrain::services::world::zstd_policy::near_level},
+        refrain::reflect::custom_field{"mid_level", &::refrain::services::world::zstd_policy::mid_level},
+        refrain::reflect::custom_field{"far_level", &::refrain::services::world::zstd_policy::far_level},
+        refrain::reflect::custom_field{"near_radius", &::refrain::services::world::zstd_policy::near_radius},
+        refrain::reflect::custom_field{"mid_radius", &::refrain::services::world::zstd_policy::mid_radius});
 };
 
 /// Generated RIDL struct 'refrain::services::worldgen::worldgen_config'.

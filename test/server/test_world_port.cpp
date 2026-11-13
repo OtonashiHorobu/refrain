@@ -26,6 +26,7 @@
 #include <refrain/contracts/services/storage_abi.h>
 #include <refrain/contracts/services/world_abi.h>
 #include <refrain/core/error.hpp>
+#include <refrain/core/log.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/mod/discovery.hpp>
 #include <refrain/mod/gamepack.hpp>
@@ -41,6 +42,8 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <string>
@@ -63,6 +66,22 @@ namespace sim = refrain::sim;
 namespace world = refrain::world;
 namespace test_support = refrain::test_support;
 
+[[nodiscard]] auto read_text(const std::filesystem::path &path) -> std::string {
+    std::ifstream in{path, std::ios::binary};
+    return std::string{std::istreambuf_iterator<char>{in},
+                       std::istreambuf_iterator<char>{}};
+}
+
+[[nodiscard]] auto count_occurrences(std::string_view text,
+                                     std::string_view needle) -> std::size_t {
+    std::size_t count{0};
+    for (auto at{text.find(needle)}; at != std::string_view::npos;
+         at = text.find(needle, at + needle.size())) {
+        ++count;
+    }
+    return count;
+}
+
 /// Instrumented provider set. All three services share one `sim::world`, which
 /// is what a correctly composed replacement would do at the process level.
 struct recording_provider {
@@ -83,6 +102,13 @@ struct recording_provider {
     int world_block_writes{0};
     int world_chunks{0};
     int world_levels{0};
+    /// Compression settings the provider was asked to apply. An implementing
+    /// provider records the exact value; a rejected value is not applied.
+    int zstd_level_calls{0};
+    int zstd_policy_calls{0};
+    std::int32_t zstd_level_requested{0};
+    std::int32_t effective_zstd_level{3};
+    sim::zstd_policy zstd_policy_applied{};
     int sim_opens{0};
     int sim_set_blocks{0};
     int sim_ticks{0};
@@ -216,6 +242,50 @@ record_world_level(void *self, refrain_services_world_level_projection *out) {
     out->level.hardcore = record.hardcore ? 1 : 0;
     out->level.difficulty = record.difficulty;
     out->level.difficulty_locked = record.difficulty_locked ? 1 : 0;
+    return REFRAIN_STATUS_OK;
+}
+
+std::int32_t record_world_zstd_level(void *self) {
+    auto *provider{static_cast<recording_provider *>(self)};
+    return provider == nullptr ? 0 : provider->effective_zstd_level;
+}
+
+refrain_status record_world_set_zstd_level(void *self, std::int32_t level) {
+    auto *provider{static_cast<recording_provider *>(self)};
+    if (provider == nullptr) {
+        return REFRAIN_SERVICES_WORLD_WORLD_ERROR_INTERNAL;
+    }
+    ++provider->zstd_level_calls;
+    provider->zstd_level_requested = level;
+    if (level < 1 || level > 19) {
+        return REFRAIN_SERVICES_WORLD_WORLD_ERROR_OUT_OF_BOUNDS;
+    }
+    provider->effective_zstd_level = level;
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status
+record_world_set_zstd_policy(void *self,
+                             const refrain_services_world_zstd_policy *policy) {
+    auto *provider{static_cast<recording_provider *>(self)};
+    if (provider == nullptr || policy == nullptr ||
+        policy->struct_size != REFRAIN_SERVICES_WORLD_ZSTD_POLICY_SIZE) {
+        return REFRAIN_SERVICES_WORLD_WORLD_ERROR_INTERNAL;
+    }
+    ++provider->zstd_policy_calls;
+    provider->zstd_policy_applied = sim::zstd_policy{
+        .near_level = policy->near_level,
+        .mid_level = policy->mid_level,
+        .far_level = policy->far_level,
+        .near_radius = policy->near_radius,
+        .mid_radius = policy->mid_radius,
+    };
+    if (policy->near_level < 1 || policy->near_level > 19 ||
+        policy->mid_level < 1 || policy->mid_level > 19 ||
+        policy->far_level < 1 || policy->far_level > 19 ||
+        policy->near_radius < 0 || policy->mid_radius < policy->near_radius) {
+        return REFRAIN_SERVICES_WORLD_WORLD_ERROR_OUT_OF_BOUNDS;
+    }
     return REFRAIN_STATUS_OK;
 }
 
@@ -403,6 +473,9 @@ const refrain_services_world_vtable recording_world_vtable{
     .apply_block_changes = &record_world_apply_changes,
     .world_tick = &record_world_tick,
     .level = &record_world_level,
+    .zstd_level = &record_world_zstd_level,
+    .set_zstd_level = &record_world_set_zstd_level,
+    .set_zstd_policy = &record_world_set_zstd_policy,
 };
 
 const refrain_services_sim_vtable recording_sim_vtable{
@@ -1028,11 +1101,11 @@ const refrain_services_storage_vtable recording_storage_vtable{
             }
             recording_provider provider{.world = &*opened};
             auto handles{recording_contract_handles(provider)};
-            // Before the projection the table ended after `world_tick`, so a
-            // provider built against it declares a shorter table.
+            // Before the compression settings the table ended after `level`,
+            // so a provider built against it declares a shorter table.
             auto previous{recording_world_vtable};
             previous.struct_size = static_cast<std::uint32_t>(
-                REFRAIN_SERVICES_WORLD_VTABLE_SIZE - sizeof(void *));
+                REFRAIN_SERVICES_WORLD_VTABLE_SIZE - 3 * sizeof(void *));
             handles.world = &previous;
             auto port{server::make_world_port(handles)};
             expect(port != nullptr);
@@ -1050,8 +1123,8 @@ const refrain_services_storage_vtable recording_storage_vtable{
             expect(provider.storage_opens == 0);
         };
 
-    "world port/run_server reaches the boot projection through the contract "
-    "port"_test = [] {
+    "world port/run_server applies the compression settings through the "
+    "contract port"_test = [] {
         test_support::scratch_directory directory{};
         const auto world_path{directory.path() / "world"};
         auto opened{open_flat_world(world_path)};
@@ -1069,16 +1142,232 @@ const refrain_services_storage_vtable recording_storage_vtable{
         server::server_run_options options{};
         options.world_path = world_path.string();
         options.ticks = 1;
-        // The runtime now boots past the projection: it asks the provider for
-        // it before any other world call. The composition still stops at the
-        // store-configuration call the contracts do not expose, so the tick
-        // loop is not reached yet.
+        options.world_zstd_level = 12;
+        options.zstd_near_level = 2;
+        options.zstd_mid_level = 4;
+        options.zstd_far_level = 8;
+        options.zstd_near_radius = 3;
+        options.zstd_mid_radius = 9;
+        // The runtime boots past the projection, asks the provider for it
+        // again after configuring the store, and stops at the player
+        // registration the sim contract does not expose.
         expect(server::run_server(options, handles, *port) == 1);
         expect(provider.storage_opens == 1);
         expect(provider.world_opens == 1);
         expect(provider.sim_opens == 1);
-        expect(provider.world_levels == 1);
+        expect(provider.world_levels == 2);
+        expect(provider.zstd_level_calls == 1);
+        expect(provider.zstd_level_requested == 12);
+        expect(provider.effective_zstd_level == 12);
+        expect(provider.zstd_policy_calls == 1);
+        expect(provider.zstd_policy_applied.near_level == 2);
+        expect(provider.zstd_policy_applied.mid_level == 4);
+        expect(provider.zstd_policy_applied.far_level == 8);
+        expect(provider.zstd_policy_applied.near_radius == 3);
+        expect(provider.zstd_policy_applied.mid_radius == 9);
         expect(provider.sim_ticks == 0);
+    };
+
+    "world port/contract hands the compression settings to the provider"_test =
+        [] {
+            test_support::scratch_directory directory{};
+            const auto world_path{directory.path() / "world"};
+            auto opened{open_flat_world(world_path)};
+            expect(opened.has_value());
+            if (!opened) {
+                return;
+            }
+            recording_provider provider{.world = &*opened};
+            auto port{
+                server::make_world_port(recording_contract_handles(provider))};
+            expect(port != nullptr);
+            if (!port) {
+                return;
+            }
+            expect(port->open(world_path.string()).has_value());
+
+            // A provider that applies compression settings answers with the
+            // level it currently uses, then the one the port configured.
+            const auto initial{port->zstd_level()};
+            expect(initial.has_value());
+            if (initial) {
+                expect(*initial == 3);
+            }
+            expect(port->set_zstd_level(14).has_value());
+            expect(provider.zstd_level_calls == 1);
+            expect(provider.zstd_level_requested == 14);
+            expect(provider.effective_zstd_level == 14);
+            const auto configured{port->zstd_level()};
+            expect(configured.has_value());
+            if (configured) {
+                expect(*configured == 14);
+            }
+
+            const sim::zstd_policy policy{.near_level = 2,
+                                          .mid_level = 5,
+                                          .far_level = 9,
+                                          .near_radius = 4,
+                                          .mid_radius = 10};
+            expect(port->set_zstd_policy(policy).has_value());
+            expect(provider.zstd_policy_calls == 1);
+            expect(provider.zstd_policy_applied.near_level == 2);
+            expect(provider.zstd_policy_applied.mid_level == 5);
+            expect(provider.zstd_policy_applied.far_level == 9);
+            expect(provider.zstd_policy_applied.near_radius == 4);
+            expect(provider.zstd_policy_applied.mid_radius == 10);
+            port->close();
+        };
+
+    "world port/contract reports a rejected compression setting"_test = [] {
+        test_support::scratch_directory directory{};
+        const auto world_path{directory.path() / "world"};
+        auto opened{open_flat_world(world_path)};
+        expect(opened.has_value());
+        if (!opened) {
+            return;
+        }
+        recording_provider provider{.world = &*opened};
+        auto port{
+            server::make_world_port(recording_contract_handles(provider))};
+        expect(port != nullptr);
+        if (!port) {
+            return;
+        }
+        expect(port->open(world_path.string()).has_value());
+
+        // A provider that answers the call and rejects the value is an error;
+        // the provider's own state shows it was asked.
+        const auto rejected{port->set_zstd_level(0)};
+        expect(!rejected.has_value());
+        if (!rejected) {
+            expect(rejected.error().code ==
+                   refrain::error_code::invalid_argument);
+            expect(rejected.error().message.find("set_zstd_level") !=
+                   std::string::npos);
+        }
+        expect(provider.zstd_level_calls == 1);
+        expect(provider.effective_zstd_level == 3);
+        // The rejected value was not applied: the provider still reports the
+        // level it had before.
+        const auto level{port->zstd_level()};
+        expect(level.has_value());
+        if (level) {
+            expect(*level == 3);
+        }
+
+        const auto rejected_policy{
+            port->set_zstd_policy(sim::zstd_policy{.near_radius = -1})};
+        expect(!rejected_policy.has_value());
+        if (!rejected_policy) {
+            expect(rejected_policy.error().code ==
+                   refrain::error_code::invalid_argument);
+            expect(rejected_policy.error().message.find("set_zstd_policy") !=
+                   std::string::npos);
+        }
+        expect(provider.zstd_policy_calls == 1);
+        port->close();
+    };
+
+    "world port/run_server proceeds when the provider has no compression "
+    "settings"_test = [] {
+        test_support::scratch_directory directory{};
+        const auto world_path{directory.path() / "world"};
+        auto opened{open_flat_world(world_path)};
+        expect(opened.has_value());
+        if (!opened) {
+            return;
+        }
+        recording_provider provider{.world = &*opened};
+        auto handles{recording_contract_handles(provider)};
+        auto without_settings{recording_world_vtable};
+        without_settings.zstd_level = nullptr;
+        without_settings.set_zstd_level = nullptr;
+        without_settings.set_zstd_policy = nullptr;
+        handles.world = &without_settings;
+        auto port{server::make_world_port(handles)};
+        expect(port != nullptr);
+        if (!port) {
+            return;
+        }
+
+        // Capture the skip through the logger's file sink: the port reports
+        // the setting once so an operator who pinned it learns it was ignored.
+        const auto log_path{directory.path() / "zstd-skip.log"};
+        refrain::log::shutdown();
+        refrain::log::config cfg{};
+        cfg.console_level = refrain::log::level::off;
+        cfg.file_path = log_path.string();
+        cfg.file_level = refrain::log::level::info;
+        cfg.enable_colors = false;
+        expect(static_cast<bool>(refrain::log::init(cfg)));
+
+        server::server_run_options options{};
+        options.world_path = world_path.string();
+        options.ticks = 1;
+        options.world_zstd_level = 12;
+        expect(server::run_server(options, handles, *port) == 1);
+        refrain::log::shutdown();
+        const auto text{read_text(log_path)};
+
+        // The runtime got past the configuration step (it projected the level
+        // a second time afterwards) and stopped at the player registration.
+        expect(provider.world_levels == 2);
+        expect(provider.zstd_level_calls == 0);
+        expect(provider.zstd_policy_calls == 0);
+        expect(provider.sim_ticks == 0);
+        expect(text.find("zstd level 12 not applied") != std::string::npos)
+            << text;
+        expect(count_occurrences(text, "zstd level 12 not applied") == 1U)
+            << text;
+        expect(text.find("zstd policy not applied") != std::string::npos)
+            << text;
+        expect(count_occurrences(text, "zstd policy not applied") == 1U)
+            << text;
+        expect(text.find("add_player") != std::string::npos) << text;
+    };
+
+    "world port/run_server reports a provider that rejects the zstd "
+    "level"_test = [] {
+        test_support::scratch_directory directory{};
+        const auto world_path{directory.path() / "world"};
+        auto opened{open_flat_world(world_path)};
+        expect(opened.has_value());
+        if (!opened) {
+            return;
+        }
+        recording_provider provider{.world = &*opened};
+        auto handles{recording_contract_handles(provider)};
+        auto port{server::make_world_port(handles)};
+        expect(port != nullptr);
+        if (!port) {
+            return;
+        }
+
+        const auto log_path{directory.path() / "zstd-rejected.log"};
+        refrain::log::shutdown();
+        refrain::log::config cfg{};
+        cfg.console_level = refrain::log::level::off;
+        cfg.file_path = log_path.string();
+        cfg.file_level = refrain::log::level::info;
+        cfg.enable_colors = false;
+        expect(static_cast<bool>(refrain::log::init(cfg)));
+
+        server::server_run_options options{};
+        options.world_path = world_path.string();
+        options.ticks = 1;
+        options.world_zstd_level = 0;
+        expect(server::run_server(options, handles, *port) == 1);
+        refrain::log::shutdown();
+        const auto text{read_text(log_path)};
+
+        // The rejected value stops the boot and the failure is reported; the
+        // second projection never happens.
+        expect(provider.world_levels == 1);
+        expect(provider.zstd_level_calls == 1);
+        expect(provider.zstd_level_requested == 0);
+        expect(provider.effective_zstd_level == 3);
+        expect(text.find("set_zstd_level") != std::string::npos) << text;
+        expect(text.find("invalid_argument") != std::string::npos) << text;
     };
 
     "world port/run_server stops when no provider answers the level "

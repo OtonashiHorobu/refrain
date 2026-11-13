@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: e168f1954a0feabb
+// Schema hash: 9acb7bb41c6b4563
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_WORLD_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_WORLD_HPP
@@ -64,6 +64,18 @@ using level_projection = ::refrain_services_world_level_projection;
     ::refrain::contracts::init_struct(value);
     return value;
 }
+/// Distance-adaptive zstd settings a provider applies to the chunks it stores.
+/// Levels are zstd compression levels; radii are horizontal chunk distances
+/// from the player. A chunk inside `near_radius` is stored with `near_level`,
+/// one inside `mid_radius` with `mid_level`, and everything beyond with
+/// `far_level`.
+using zstd_policy = ::refrain_services_world_zstd_policy;
+/// Zero-initialized `zstd_policy` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
+[[nodiscard]] inline auto make_zstd_policy() noexcept -> zstd_policy {
+    zstd_policy value{};
+    ::refrain::contracts::init_struct(value);
+    return value;
+}
 
 static_assert(sizeof(world_config) == 72);
 static_assert(alignof(world_config) == 8);
@@ -89,10 +101,18 @@ static_assert(alignof(level_projection) == 8);
 static_assert(offsetof(level_projection, struct_size) == 0);
 static_assert(offsetof(level_projection, level) == 8);
 static_assert(offsetof(level_projection, has_chunks) == 80);
+static_assert(sizeof(zstd_policy) == 24);
+static_assert(alignof(zstd_policy) == 4);
+static_assert(offsetof(zstd_policy, struct_size) == 0);
+static_assert(offsetof(zstd_policy, near_level) == 4);
+static_assert(offsetof(zstd_policy, mid_level) == 8);
+static_assert(offsetof(zstd_policy, far_level) == 12);
+static_assert(offsetof(zstd_policy, near_radius) == 16);
+static_assert(offsetof(zstd_policy, mid_radius) == 20);
 
 inline constexpr std::string_view service_id = "refrain:world";
 inline constexpr std::uint32_t abi_major = 1;
-inline constexpr std::uint32_t abi_minor = 1;
+inline constexpr std::uint32_t abi_minor = 2;
 inline constexpr std::uint32_t abi_patch = 0;
 inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::side_kind::server;
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::sim;
@@ -190,6 +210,35 @@ class provider final {
             return std::unexpected(static_cast<::refrain::services::world::world_error>(code));
         }
         return value;
+    }
+
+    /// Optional. Effective zstd level the provider stores chunks with; a
+    /// provider that does not apply compression settings leaves the slot
+    /// empty.
+    [[nodiscard]] auto zstd_level() const -> std::int32_t {
+        return static_cast<std::int32_t>(table_->zstd_level(self_));
+    }
+
+    /// Optional. Replace the zstd level chunks are stored with. A provider
+    /// that does not apply compression settings leaves the slot empty, which
+    /// means the setting does not apply to it rather than that the call
+    /// failed.
+    [[nodiscard]] auto set_zstd_level(std::int32_t level) const -> std::expected<void, ::refrain::services::world::world_error> {
+        if (const auto code = table_->set_zstd_level(self_, level); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::world::world_error>(code));
+        }
+        return {};
+    }
+
+    /// Optional. Replace the distance-adaptive zstd policy. A provider that
+    /// does not apply compression settings leaves the slot empty, which means
+    /// the setting does not apply to it rather than that the call failed.
+    [[nodiscard]] auto set_zstd_policy(const ::refrain::services::world::zstd_policy &policy) const -> std::expected<void, ::refrain::services::world::world_error> {
+        const auto abi_policy = ::refrain::contracts::with_struct_size(policy);
+        if (const auto code = table_->set_zstd_policy(self_, &abi_policy); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::world::world_error>(code));
+        }
+        return {};
     }
 
   private:

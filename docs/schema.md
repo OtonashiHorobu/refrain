@@ -245,10 +245,20 @@ builds from accumulating versions with no external readers.
 
 An additive method appends one slot to the vtable and bumps the service minor
 version: `refrain:world` moved from `1.0.0` to `1.1.0` when it gained the
-read-only `level()` projection, while every existing slot kept its offset. The
-table records its full length in `struct_size`, so a consumer can reject a
-provider built against the older layout with a version error before dispatching
-the new slot.
+read-only `level()` projection, and to `1.2.0` when it gained the storage
+compression settings, while every existing slot kept its offset. The table
+records its full length in `struct_size`, so a consumer can reject a provider
+built against the older layout with a version error before dispatching the new
+slot.
+
+An appended slot may be optional: a provider that does not implement the
+operation leaves the slot empty (a null function pointer), which declares that
+the operation does not apply to it. The consumer decides what absence means.
+The runtime cannot boot without the level projection and refuses a composition
+that does not answer it, while a provider that stores no zstd data simply has
+no compression settings to configure, so the runtime reports the skipped
+setting and continues. An error returned through a non-empty slot is a real
+failure, never a way to say the operation does not apply.
 
 The ABI major version must match between a provider and its consumer and only
 changes for an incompatible layout or calling change. After the release freeze,

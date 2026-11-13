@@ -242,6 +242,55 @@ struct world_provider {
         return REFRAIN_STATUS_OK;
     }
 
+    static auto zstd_level(void *self) -> std::int32_t {
+        auto *provider{static_cast<world_provider *>(self)};
+        if (provider == nullptr || !provider->world.has_value()) {
+            // The consumer reads the level only from an open world; an
+            // unopened store reports the format default it would start with.
+            return refrain::world::rwf::default_zstd_level;
+        }
+        return provider->world->store().zstd_level();
+    }
+
+    static auto set_zstd_level(void *self, std::int32_t level)
+        -> refrain_status {
+        auto *provider{static_cast<world_provider *>(self)};
+        if (provider == nullptr || !provider->world.has_value()) {
+            return REFRAIN_SERVICES_WORLD_WORLD_ERROR_CHUNK_NOT_LOADED;
+        }
+        auto configured{provider->world->store().set_zstd_level(level)};
+        return configured ? REFRAIN_STATUS_OK
+                          : abi::to_status(
+                                configured.error(), world_statuses,
+                                REFRAIN_SERVICES_WORLD_WORLD_ERROR_INTERNAL);
+    }
+
+    static auto
+    set_zstd_policy(void *self,
+                    const refrain_services_world_zstd_policy *policy)
+        -> refrain_status {
+        auto *provider{static_cast<world_provider *>(self)};
+        if (provider == nullptr || policy == nullptr ||
+            !provider->world.has_value()) {
+            return REFRAIN_SERVICES_WORLD_WORLD_ERROR_CHUNK_NOT_LOADED;
+        }
+        if (policy->struct_size != REFRAIN_SERVICES_WORLD_ZSTD_POLICY_SIZE) {
+            return REFRAIN_SERVICES_WORLD_WORLD_ERROR_INTERNAL;
+        }
+        auto configured{
+            provider->world->set_zstd_policy(refrain::sim::zstd_policy{
+                .near_level = policy->near_level,
+                .mid_level = policy->mid_level,
+                .far_level = policy->far_level,
+                .near_radius = policy->near_radius,
+                .mid_radius = policy->mid_radius,
+            })};
+        return configured ? REFRAIN_STATUS_OK
+                          : abi::to_status(
+                                configured.error(), world_statuses,
+                                REFRAIN_SERVICES_WORLD_WORLD_ERROR_INTERNAL);
+    }
+
     static constexpr std::int32_t world_limit{refrain::world::max_section_y *
                                                   refrain::world::section_edge +
                                               refrain::world::section_edge - 1};
@@ -262,6 +311,9 @@ auto world_vtable() -> const refrain_services_world_vtable & {
         .apply_block_changes = &world_provider::apply_block_changes,
         .world_tick = &world_provider::world_tick,
         .level = &world_provider::level,
+        .zstd_level = &world_provider::zstd_level,
+        .set_zstd_level = &world_provider::set_zstd_level,
+        .set_zstd_policy = &world_provider::set_zstd_policy,
     };
     return table;
 }

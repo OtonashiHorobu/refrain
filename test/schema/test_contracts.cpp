@@ -45,12 +45,13 @@ static_assert(REFRAIN_SERVICES_WORLDGEN_COMPOSITION ==
 static_assert(std::string_view{refrain::services::worldgen::service_id} ==
               "refrain:worldgen");
 
-// `refrain:world` v1.1.0 appended the boot projection slot and its structs, so
-// the generated table grows by one pointer and carries the projection layout.
+// `refrain:world` v1.2.0 appended the storage compression settings after the
+// boot projection slot, so the generated table grows by three pointers and
+// carries the policy layout.
 namespace world_service = refrain::services::world;
 static_assert(world_service::abi_major == 1);
-static_assert(world_service::abi_minor == 1);
-static_assert(REFRAIN_SERVICES_WORLD_ABI_MINOR == 1);
+static_assert(world_service::abi_minor == 2);
+static_assert(REFRAIN_SERVICES_WORLD_ABI_MINOR == 2);
 static_assert(std::string_view{world_service::service_id} == "refrain:world");
 static_assert(sizeof(world_service::level_info) == 72);
 static_assert(alignof(world_service::level_info) == 8);
@@ -59,8 +60,54 @@ static_assert(sizeof(world_service::level_projection) == 88);
 static_assert(alignof(world_service::level_projection) == 8);
 static_assert(offsetof(world_service::level_projection, level) == 8);
 static_assert(offsetof(world_service::level_projection, has_chunks) == 80);
+static_assert(sizeof(world_service::zstd_policy) == 24);
+static_assert(alignof(world_service::zstd_policy) == 4);
+static_assert(offsetof(world_service::zstd_policy, struct_size) == 0);
+static_assert(offsetof(world_service::zstd_policy, near_level) == 4);
+static_assert(offsetof(world_service::zstd_policy, mid_level) == 8);
+static_assert(offsetof(world_service::zstd_policy, far_level) == 12);
+static_assert(offsetof(world_service::zstd_policy, near_radius) == 16);
+static_assert(offsetof(world_service::zstd_policy, mid_radius) == 20);
 static_assert(offsetof(refrain_services_world_vtable, level) ==
+              REFRAIN_SERVICES_WORLD_VTABLE_SIZE - 4 * sizeof(void *));
+static_assert(offsetof(refrain_services_world_vtable, zstd_level) ==
+              REFRAIN_SERVICES_WORLD_VTABLE_SIZE - 3 * sizeof(void *));
+static_assert(offsetof(refrain_services_world_vtable, set_zstd_level) ==
+              REFRAIN_SERVICES_WORLD_VTABLE_SIZE - 2 * sizeof(void *));
+static_assert(offsetof(refrain_services_world_vtable, set_zstd_policy) ==
               REFRAIN_SERVICES_WORLD_VTABLE_SIZE - sizeof(void *));
+
+/// Settings a fake provider records when the generated wrapper dispatches the
+/// compression calls.
+struct fake_world_settings {
+    std::int32_t effective_level{0};
+    int set_level_calls{0};
+    int set_policy_calls{0};
+};
+
+refrain_status fake_world_set_zstd_level(void *self, std::int32_t level) {
+    auto &settings{*static_cast<fake_world_settings *>(self)};
+    ++settings.set_level_calls;
+    settings.effective_level = level;
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status
+fake_world_set_zstd_policy(void *self,
+                           const refrain_services_world_zstd_policy *policy) {
+    auto &settings{*static_cast<fake_world_settings *>(self)};
+    if (policy == nullptr ||
+        policy->struct_size != REFRAIN_SERVICES_WORLD_ZSTD_POLICY_SIZE) {
+        return REFRAIN_SERVICES_WORLD_WORLD_ERROR_INTERNAL;
+    }
+    ++settings.set_policy_calls;
+    settings.effective_level = policy->near_level;
+    return REFRAIN_STATUS_OK;
+}
+
+std::int32_t fake_world_zstd_level(void *self) {
+    return static_cast<fake_world_settings *>(self)->effective_level;
+}
 
 refrain_status fake_world_level(void *self,
                                 refrain_services_world_level_projection *out) {
@@ -394,6 +441,46 @@ const suite contracts_tests = [] {
                    world_service::world_error::not_implemented);
         }
     };
+
+    "contracts/world compression settings dispatch through the vtable"_test =
+        [] {
+            fake_world_settings settings{};
+            refrain_services_world_vtable table{};
+            table.struct_size = REFRAIN_SERVICES_WORLD_VTABLE_SIZE;
+            table.abi_major = REFRAIN_SERVICES_WORLD_ABI_MAJOR;
+            table.abi_minor = REFRAIN_SERVICES_WORLD_ABI_MINOR;
+            table.abi_patch = REFRAIN_SERVICES_WORLD_ABI_PATCH;
+            table.zstd_level = &fake_world_zstd_level;
+            table.set_zstd_level = &fake_world_set_zstd_level;
+            table.set_zstd_policy = &fake_world_set_zstd_policy;
+            const world_service::provider service{table, &settings};
+
+            expect(service.set_zstd_level(11).has_value());
+            expect(settings.set_level_calls == 1);
+            expect(settings.effective_level == 11);
+            expect(service.zstd_level() == 11);
+
+            auto policy{world_service::make_zstd_policy()};
+            policy.near_level = 2;
+            policy.mid_level = 4;
+            policy.far_level = 7;
+            policy.near_radius = 3;
+            policy.mid_radius = 9;
+            expect(service.set_zstd_policy(policy).has_value());
+            expect(settings.set_policy_calls == 1);
+            expect(settings.effective_level == 2);
+
+            // An unset slot is how a provider declares that the setting does
+            // not apply; the consumer must check it before dispatching.
+            refrain_services_world_vtable bare{};
+            bare.struct_size = REFRAIN_SERVICES_WORLD_VTABLE_SIZE;
+            bare.abi_major = REFRAIN_SERVICES_WORLD_ABI_MAJOR;
+            bare.abi_minor = REFRAIN_SERVICES_WORLD_ABI_MINOR;
+            bare.abi_patch = REFRAIN_SERVICES_WORLD_ABI_PATCH;
+            expect(bare.zstd_level == nullptr);
+            expect(bare.set_zstd_level == nullptr);
+            expect(bare.set_zstd_policy == nullptr);
+        };
 
     "contracts/malformed input is reported as a contract error"_test = [] {
         const auto table{make_vtable()};
