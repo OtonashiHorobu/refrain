@@ -87,9 +87,8 @@ struct chunk_generator_config {
     /// Feature reference mode: decorate the target chunk and then the eight
     /// neighbour chunks through the same region. A reference world saves every
     /// chunk of a generated area, so its chunks contain the feature writes of
-    /// their neighbours, which reach a few blocks across a border. Production
-    /// generation decorates the target chunk only. Requires a fixed biome,
-    /// because every decorated chunk uses the target's biome plan.
+    /// their neighbours, which reach a few blocks across a border. The
+    /// production tile path performs the same decoration for a whole tile.
     bool decorate_neighbours{false};
     /// With `decorate_neighbours`, decorate the eight neighbours before the
     /// target chunk. The target's own writes then win where two chunks touch;
@@ -133,6 +132,12 @@ struct chunk_generator_config {
     /// rectangle keeps the symmetric `neighbour_radius` behaviour. The target
     /// chunk must lie inside the rectangle.
     chunk_rectangle neighbour_box{};
+    /// Edge in chunks of the square `generate_tile` generates and serves as
+    /// one unit. A tile is filled together with one ring of terrain around it
+    /// and decorated together with that ring, so a served chunk contains the
+    /// feature writes its neighbours make across its border, exactly as a
+    /// saved world does. The single-chunk entry points ignore it.
+    jint tile_size{8};
 };
 
 /// The chunks a force-load of `box` runs features for, in the order the
@@ -178,6 +183,24 @@ class chunk_generator {
                                      std::size_t workers = 0)
         -> result<std::vector<std::unique_ptr<proto_chunk>>>;
 
+    /// Generates one production tile: the `tile_size` by `tile_size` square of
+    /// chunks whose minimum corner is `origin`. The tile and one ring around
+    /// it are filled and decorated in force-load order, then only the inner
+    /// tile is returned. Every returned chunk therefore holds the feature
+    /// writes its eight neighbours made across its border. The tile is the
+    /// production unit: callers generate tiles, not columns, so a chunk is
+    /// never served without its neighbours' decoration.
+    [[nodiscard]] auto generate_tile(const chunk_pos &origin)
+        -> result<std::vector<std::unique_ptr<proto_chunk>>>;
+
+    /// Generates every tile that covers a `width` by `depth` chunk rectangle
+    /// starting at `origin` and returns the chunks of that rectangle in
+    /// x-major order. Tiles are aligned to the tile grid, so the rectangle is
+    /// generated through whole tiles and chunks outside it are discarded.
+    [[nodiscard]] auto generate_area_tiled(chunk_pos origin, jint width,
+                                           jint depth, std::size_t workers = 0)
+        -> result<std::vector<std::unique_ptr<proto_chunk>>>;
+
     [[nodiscard]] auto config() const noexcept
         -> const chunk_generator_config & {
         return config_;
@@ -196,6 +219,10 @@ class chunk_generator {
     }
     [[nodiscard]] auto target() const noexcept -> generation_target {
         return config_.target;
+    }
+    /// Edge in chunks of the square the production tile path generates.
+    [[nodiscard]] auto tile_size() const noexcept -> jint {
+        return config_.tile_size;
     }
 
     /// Records the wall-clock time of every stage of the chunks generated
@@ -227,6 +254,62 @@ class chunk_generator {
 
     [[nodiscard]] auto generate_impl(const chunk_pos &pos)
         -> result<std::unique_ptr<proto_chunk>>;
+
+    /// Generates one tile. Implemented in the `.cpp` so the tile staging can
+    /// be written as one sequence: fill the tile and its rings, place the
+    /// structures once, repair shapes, decorate every chunk of the tile and
+    /// its ring in force-load order, then serve the inner tile.
+    [[nodiscard]] auto generate_tile_impl(const chunk_pos &origin)
+        -> result<std::vector<std::unique_ptr<proto_chunk>>>;
+
+    /// The structure-start context of this generator. A lazy height or block
+    /// probe that fails stores its error in `error` and keeps returning a
+    /// sentinel; the caller checks it after the starts stage.
+    [[nodiscard]] auto make_start_context(std::optional<error> &error)
+        -> structure::structure_start_context;
+
+    /// Fills the terrain stages of one chunk with `beard` as its beardifier
+    /// input; null means no beardifier. Resets the multi-noise search first, so
+    /// the biome grid does not depend on the chunks filled before it.
+    [[nodiscard]] auto fill_terrain(const chunk_pos &pos,
+                                    const structure::structure_beard *beard)
+        -> result<std::unique_ptr<proto_chunk>>;
+
+    /// The candidate biome plan of one decorated chunk: the fixed biome when
+    /// the generator pins one, otherwise the distinct biomes its own
+    /// three-by-three palette holds. The chunks must already be attached to
+    /// `region`.
+    [[nodiscard]] auto candidate_biomes_at(const chunk_region &region,
+                                           const chunk_pos &position) const
+        -> std::vector<std::string>;
+
+    /// One chunk a decoration pass decorates, with the candidate biomes its
+    /// own three-by-three biome window contributes. The plan is the generator
+    /// wide sorted feature plan; the candidates select which of its features
+    /// this decoration considers.
+    struct decoration_target {
+        chunk_pos position{};
+        proto_chunk *chunk{nullptr};
+        const std::vector<std::string> *candidate_biomes{nullptr};
+    };
+
+    /// Decorates `targets` in order through `region`. Writes are confined to
+    /// the one-chunk write radius around each target, like the reference
+    /// generation region. Builds the place and temperature state once, so the
+    /// biome search hint never depends on how many targets the pass has.
+    [[nodiscard]] auto
+    decorate_chunks(chunk_region &region,
+                    std::span<const decoration_target> targets) -> result<void>;
+
+    /// The structure placement context of one pass and the feature placers
+    /// its pieces resolve. Owned through a unique_ptr because the context
+    /// callback points back at the placers.
+    struct structure_placement;
+
+    [[nodiscard]] auto make_structure_placement(
+        chunk_region &region,
+        std::span<const structure::structure_start *const> starts)
+        -> result<std::unique_ptr<structure_placement>>;
 
     /// One cached unbearded start column: the six heightmap rows the starts
     /// stage reads. The column is filled at `biomes` status, so the four final
