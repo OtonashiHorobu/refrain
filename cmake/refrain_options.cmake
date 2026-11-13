@@ -12,6 +12,12 @@
 # --- options ---------------------------------------------------------------
 option(REFRAIN_BUILD_TESTS "Build unit tests" ON)
 option(REFRAIN_BUILD_BENCH "Build benchmarks" ON)
+# Measurement-only counters for the climate nearest-point search. The counters
+# are compiled out of every other build, so this option never changes world
+# generation output; it only makes `refrain-bench-runtime --climate-ties`
+# report tie counts and captured examples.
+option(REFRAIN_CLIMATE_TIE_STATS
+       "Count equidistant climate-search candidates in benchmark builds" OFF)
 option(REFRAIN_BUILD_FUZZ "Build libFuzzer harnesses (Clang only)" OFF)
 # Library-comparison benchmarks are optional benchmark sources that compare
 # third-party implementations behind the project's interfaces. They are not
