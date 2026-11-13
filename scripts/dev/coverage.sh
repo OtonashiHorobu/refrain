@@ -20,6 +20,9 @@ cd "$ROOT"
 BUILD="$ROOT/build/coverage"
 OUT="$ROOT/build/coverage-report"
 REPORT_ONLY=0
+# Set outside the build branch: --report-only has no suite run of its own, and
+# an unset variable would fail the script under `set -u`.
+suite_status=0
 for arg in "$@"; do
     case "$arg" in
         --report-only) REPORT_ONLY=1 ;;
@@ -34,8 +37,12 @@ mkdir -p "$OUT"
 if [[ "$REPORT_ONLY" == "0" ]]; then
     if [[ ! -d "$BUILD" ]]; then
         say "configuring $BUILD"
+        # `user_presets` is disabled: Conan rewrites the presets file at the
+        # source root and would make it include both this directory and the
+        # ordinary build directory, which CMake rejects as a duplicate preset.
         conan install . -pr gcc-release --build=missing \
-            --lockfile=conan/locks/vendor.lock -of "$BUILD" >/dev/null
+            --lockfile=conan/locks/vendor.lock -of "$BUILD" \
+            -c tools.cmake.cmaketoolchain:user_presets= >/dev/null
     fi
     toolchain="$(find "$BUILD" -name conan_toolchain.cmake -print -quit)"
     if [[ -z "$toolchain" ]]; then
@@ -75,19 +82,42 @@ if [[ "$REPORT_ONLY" == "0" ]]; then
         say "the suite failed under -O0 (exit $suite_status); see $OUT/suite.log"
     fi
 else
-    build_dir="$(dirname "$(dirname "$(find "$BUILD" -name conan_toolchain.cmake -print -quit)")")"
-    if [[ -z "$build_dir" || ! -d "$build_dir" ]]; then
-        echo "run without --report-only first" >&2
+    toolchain="$(find "$BUILD" -name conan_toolchain.cmake -print -quit)"
+    if [[ -z "$toolchain" ]]; then
+        echo "no conan_toolchain.cmake under $BUILD; run without --report-only" >&2
         exit 1
     fi
+    build_dir="$(dirname "$(dirname "$toolchain")")"
 fi
 
 say "suite exit: $suite_status (log: $OUT/suite.log)"
 
-# TODO: the report is not wired yet. gcov looks for the notes file next to the
-# source it thinks it compiled, so it asks for ./config.cpp.gcno while CMake has
-# it at src/core/config.cpp.gcno; every gcovr invocation so far therefore reads
-# nothing. The fix is either an object-path rewrite or dropping the project's
-# -ffile-prefix-map from this configuration; the instrumentation itself is
-# correct, and an instrumented build already found real defects.
+say "report"
+# gcov resolves the notes file from the object name and the source from the
+# working directory, and gcovr does not reproduce that pairing on this tree.
+# The tool walks the notes files itself, so it is the only writer of the report.
+report_status=0
+if python3 "$ROOT/tools/coverage_report.py" --build "$build_dir" --root "$ROOT" \
+    >"$OUT/summary.txt" 2>"$OUT/summary.err"; then
+    cat "$OUT/summary.txt"
+    if [[ -n "${REFRAIN_COVERAGE_MIN:-}" ]]; then
+        percent="$(sed -n 's/^lines:.*(\(.*\)%)$/\1/p' "$OUT/summary.txt")"
+        if [[ -z "$percent" ]]; then
+            say "cannot read the total line count from $OUT/summary.txt"
+            report_status=1
+        elif ! awk -v got="$percent" -v min="$REFRAIN_COVERAGE_MIN" \
+            'BEGIN { exit !(got + 0 >= min + 0) }'; then
+            say "line coverage ${percent}% is under REFRAIN_COVERAGE_MIN=$REFRAIN_COVERAGE_MIN"
+            report_status=1
+        fi
+    fi
+else
+    say "the report failed; see $OUT/summary.err"
+    report_status=1
+fi
+
+# A failing suite is the more urgent result, so it keeps its exit code.
+if [[ "$suite_status" == "0" && "$report_status" != "0" ]]; then
+    exit "$report_status"
+fi
 exit "$suite_status"
