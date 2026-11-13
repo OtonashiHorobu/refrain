@@ -3,13 +3,18 @@
 #
 # SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 #
-# Load and stability soak: start a server on a synthetic world, open protocol
-# bots that walk around, then report the join latency and the server tick
-# times. The world is generated locally; the run needs the worldgen datapack
-# (`scripts/fetch-content.sh <server.jar>`) for the vanilla world provider.
+# Load and stability soak: start a server on a world, open protocol bots that
+# walk around, then report the join latency and the server tick times. By
+# default the world is a synthetic anvil import generated locally; the run
+# needs the worldgen datapack (`scripts/fetch-content.sh <server.jar>`) for the
+# vanilla world provider. With `--fresh` the server creates an empty world from
+# `--seed` instead and generates terrain while the bots hold their viewports
+# open, which measures generation against the tick budget.
 #
 #   scripts/soak.sh                       # 100 bots, 120 s, port 25565
 #   scripts/soak.sh --bots 20 --seconds 60 --port 25570
+#   scripts/soak.sh --fresh --seed 99 --bots 20 --seconds 60 \
+#       --view-distance 6
 #
 # Exit code 0 means every bot joined and the p99 tick work stayed under
 # `--p99-ms` (default 15).
@@ -25,6 +30,9 @@ WALK_RADIUS=8
 VIEW_DISTANCE=10
 P99_MS=15
 KEEP=""
+FRESH=""
+SEED=99
+SEED_SET=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -34,11 +42,18 @@ while [[ $# -gt 0 ]]; do
         --walk-radius)   WALK_RADIUS="${2:?}"; shift 2 ;;
         --view-distance) VIEW_DISTANCE="${2:?}"; shift 2 ;;
         --p99-ms)        P99_MS="${2:?}"; shift 2 ;;
+        --fresh)         FRESH=1; shift ;;
+        --seed)          SEED="${2:?}"; SEED_SET=1; shift 2 ;;
         --keep)          KEEP=1; shift ;;
-        -h|--help)       sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)       sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
+
+if [[ -n "$SEED_SET" && -z "$FRESH" ]]; then
+    echo "soak: --seed requires --fresh" >&2
+    exit 2
+fi
 
 [[ -x "$BIN/refrain-server" ]] || { echo "refrain-server not built" >&2; exit 1; }
 [[ -x "$BIN/refrain-tools" ]] || { echo "refrain-tools not built" >&2; exit 1; }
@@ -61,8 +76,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-python3 "$ROOT/tools/make_test_world.py" gen --out "$WORK/anvil" --seed 1234 >/dev/null
-"$BIN/refrain-tools" world import --from "$WORK/anvil" --to "$WORK/world" >/dev/null
+WORLD="$WORK/world"
+SEED_ARGS=()
+if [[ -n "$FRESH" ]]; then
+    # The server creates the world from the seed and fills the spawn area
+    # before it listens; the viewport beyond it is generated during the run.
+    SEED_ARGS=(--seed "$SEED")
+else
+    python3 "$ROOT/tools/make_test_world.py" gen --out "$WORK/anvil" --seed 1234 >/dev/null
+    "$BIN/refrain-tools" world import --from "$WORK/anvil" --to "$WORLD" >/dev/null
+fi
 
 mkdir -p "$WORK/config"
 cat >"$WORK/config/network.toml" <<EOF
@@ -83,7 +106,7 @@ $((TICKS - 10)) net
 $TICKS stop
 EOF
 "$BIN/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --world "$WORK/world" --config-dir "$WORK/config" \
+    --world "$WORLD" "${SEED_ARGS[@]}" --config-dir "$WORK/config" \
     --script "$WORK/script.txt" --ticks $((TICKS + 20)) \
     >"$WORK/server.log" 2>&1 &
 SERVER_PID=$!
@@ -99,25 +122,33 @@ if ! grep -q "\[net\]: listening" "$WORK/server.log"; then
     exit 1
 fi
 
-echo "soak: bots=$BOTS seconds=$SECONDS_ port=$PORT walk_radius=$WALK_RADIUS"
+if [[ -n "$FRESH" ]]; then
+    echo "soak: bots=$BOTS seconds=$SECONDS_ port=$PORT walk_radius=$WALK_RADIUS world=fresh seed=$SEED"
+else
+    echo "soak: bots=$BOTS seconds=$SECONDS_ port=$PORT walk_radius=$WALK_RADIUS world=import"
+fi
 STARTED=$(date +%s)
 set +e
 if command -v /usr/bin/time >/dev/null 2>&1; then
     /usr/bin/time -v "$BIN/refrain-tools" protocol load \
         --host "127.0.0.1:$PORT" --bots "$BOTS" \
         --duration-ms $((SECONDS_ * 1000)) --walk-radius "$WALK_RADIUS" \
-        --walk-period-ms 100 2>"$WORK/load.txt"
+        --walk-period-ms 100 >"$WORK/load.out" 2>"$WORK/load.txt"
     LOAD_RC=$?
     BOT_RSS_KB="$(awk '/Maximum resident set size/ {print $NF}' "$WORK/load.txt" | tail -1)"
-    grep -E "^load:" "$WORK/load.txt" || true
 else
     "$BIN/refrain-tools" protocol load --host "127.0.0.1:$PORT" --bots "$BOTS" \
         --duration-ms $((SECONDS_ * 1000)) --walk-radius "$WALK_RADIUS" \
-        --walk-period-ms 100
+        --walk-period-ms 100 >"$WORK/load.out" 2>"$WORK/load.err"
     LOAD_RC=$?
     BOT_RSS_KB=""
 fi
 set -e
+LOAD_LINE="$(grep -E "^load:" "$WORK/load.out" | tail -1 || true)"
+SPAWN_LINE="$(grep -E "\[world\]: generated .* spawn chunk" "$WORK/server.log" | tail -1 || true)"
+SPAWN_COUNT="$(sed -n 's/.*generated \([0-9]*\) spawn chunk(s).*/\1/p' <<<"$SPAWN_LINE")"
+CHUNK_GEN_LINES="$(grep -c "\[chunk-gen\]" "$WORK/server.log" || true)"
+CHUNK_VIEW_READY="$(grep -c "chunk view ready" "$WORK/server.log" || true)"
 SERVER_RSS_KB="$(awk '/VmHWM/ {print $2}' "/proc/$SERVER_PID/status" 2>/dev/null || echo "")"
 
 # Shutdown time: the stop command fires on the tick grid, so record when the
@@ -150,6 +181,11 @@ if [[ -n "${SERVER_RSS_KB:-}" ]]; then
 fi
 if [[ -n "${BOT_RSS_KB:-}" ]]; then
     echo "soak: bots_peak_rss=$((BOT_RSS_KB / 1024))MiB"
+fi
+echo "${LOAD_LINE:-soak: load: (no sample)}"
+if [[ -n "$FRESH" ]]; then
+    echo "soak: spawn_chunks=${SPAWN_COUNT:-0}"
+    echo "soak: chunk-gen lines=$CHUNK_GEN_LINES chunk-view-ready=$CHUNK_VIEW_READY"
 fi
 echo "soak: ${TICK_LINE:-tick: (no sample)}"
 echo "soak: ${NET_LINE:-net: (no sample)}"
