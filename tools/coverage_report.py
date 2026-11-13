@@ -66,7 +66,7 @@ def main() -> int:
     # source relative to it, so the run happens in the repository root and the
     # produced file is removed straight away.
     for note in notes:
-            # src/core/log.cpp.gcno -> source src/core/log.cpp, object log.cpp.o
+        # src/core/log.cpp.gcno -> source src/core/log.cpp, object log.cpp.o
         # CMakeFiles/<target>.dir/<source path>.gcno; the source path is what
         # follows the .dir/ component.
         relative = note.relative_to(build)
@@ -85,15 +85,17 @@ def main() -> int:
             check=False,
         )
         produced = root / f"{source.name}.gcov"
-        if not produced.exists():
-            continue
-        executable, executed = parse_gcov(produced)
-        produced.unlink()
-        if executable == 0 or not str(source).startswith("src/"):
-            continue
-        slot = per_file[str(source)]
-        slot[0] += executable
-        slot[1] += executed
+        if produced.exists():
+            executable, executed = parse_gcov(produced)
+            if executable != 0 and str(source).startswith("src/"):
+                slot = per_file[str(source)]
+                slot[0] += executable
+                slot[1] += executed
+        # gcov writes one file per source it can attribute, which includes every
+        # header it walked; none of those are read here, and leaving them behind
+        # would litter the repository root with a few hundred generated files.
+        for leftover in root.glob("*.gcov"):
+            leftover.unlink()
 
     if not per_file:
         print("no coverage collected for src/", file=sys.stderr)
