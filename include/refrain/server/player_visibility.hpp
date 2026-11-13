@@ -96,6 +96,11 @@ class player_visibility_index {
     void viewers(std::string_view world, double x, double z,
                  std::vector<std::size_t> &out) const;
 
+    /// `viewers` for a chunk instead of a point, so a moved entity can query
+    /// the viewport it left as well as the one it entered.
+    void viewers_at(std::string_view world, std::int64_t chunk_x,
+                    std::int64_t chunk_z, std::vector<std::size_t> &out) const;
+
   private:
     /// Ordered by row first: a viewport window is a range of rows, and inside
     /// a row a range of columns.

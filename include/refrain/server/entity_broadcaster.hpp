@@ -88,6 +88,14 @@ class entity_broadcaster {
     /// the initial fill of a dense crowd is where that volume lives.
     static constexpr std::size_t max_spawns_per_tick{8'000U};
 
+    /// Ticks between two full visibility reconciles (thirty seconds at twenty
+    /// ticks per second). The per-tick pass is incremental and reacts to a
+    /// chunk change, a join or leave and a view-distance change; a pair whose
+    /// distance test changed while both players stayed inside their chunks is
+    /// picked up by this pass at worst. The pass is spread over as many ticks
+    /// as the per-tick pair and spawn budgets need and then waits again.
+    static constexpr std::int64_t full_reconcile_interval{600};
+
   private:
     /// One encoded player-list body and the connections that have not
     /// received it yet.
@@ -101,6 +109,38 @@ class entity_broadcaster {
     void drain_info_sends();
     void queue_info_send(std::vector<std::byte> body,
                          std::vector<std::uint64_t> recipients);
+
+    /// Where a player stood at the previous tick. A change in any field means
+    /// every visibility pair that involves the player is re-evaluated.
+    struct entity_anchor {
+        std::string_view world{};
+        std::int64_t chunk_x{0};
+        std::int64_t chunk_z{0};
+        std::int32_t view_distance{0};
+        friend auto operator==(const entity_anchor &, const entity_anchor &)
+            -> bool = default;
+    };
+
+    /// Compare the snapshot against the previous anchors and queue the players
+    /// whose visibility relation may have changed.
+    void collect_visibility_changes();
+    /// Re-evaluate every pair of one viewer: what it stops seeing and what it
+    /// starts seeing.
+    void refresh_viewer(std::size_t viewer_position);
+    /// Re-evaluate what every viewer sees of one entity that changed chunk.
+    void refresh_entity(std::uint64_t connection);
+    /// True when this tick has spent its pair or spawn budget.
+    [[nodiscard]] auto visibility_budget_spent() const -> bool {
+        return pair_work_ >= max_visibility_pairs_per_tick ||
+               spawn_work_ >= max_spawns_per_tick;
+    }
+    /// Visit the next window of the rotating full reconcile.
+    void sweep_viewers();
+    /// Encode the queued visibility transitions into one body per viewer.
+    void flush_visibility();
+    /// Encode the movement of this tick and append each mover's body to the
+    /// viewers that track it.
+    void flush_movement();
 
     play_gateway &gateway_;
     std::int32_t tracking_chunks_{0};
@@ -130,14 +170,43 @@ class entity_broadcaster {
     /// Per-tick scratch, kept across ticks so the hot path does not allocate
     /// three vectors per player per tick.
     std::vector<const refrain::session::player *> snapshot_{};
-    /// The snapshot indexed by connection: the visibility pass resolves a
-    /// tracked connection without scanning the session table or projecting
-    /// the record again.
-    std::unordered_map<std::uint64_t, const refrain::session::player *>
-        snapshot_by_connection_{};
+    /// The snapshot position indexed by connection: the visibility pass
+    /// resolves a tracked connection without scanning the session table or
+    /// projecting the record again.
+    std::unordered_map<std::uint64_t, std::size_t> snapshot_by_connection_{};
     std::vector<visibility_entity> entities_{};
     std::vector<std::size_t> candidates_{};
     std::vector<std::uint64_t> despawns_{};
+    /// Previous-tick position of every player in play.
+    std::unordered_map<std::uint64_t, entity_anchor> anchors_{};
+    /// Connections to re-evaluate this tick; a set deduplicates a player that
+    /// both moved and changed its view distance. `dirty_entities_` keeps the
+    /// anchor the player left so the old viewport can be queried too.
+    std::unordered_set<std::uint64_t> dirty_viewers_{};
+    std::unordered_set<std::uint64_t> dirty_entities_{};
+    std::vector<std::uint64_t> dirty_viewer_queue_{};
+    std::vector<std::uint64_t> dirty_entity_queue_{};
+    /// One body per viewer for the visibility pass, reused across ticks.
+    std::vector<std::vector<std::byte>> outbox_{};
+    /// Entity ids a viewer stops seeing this tick, sorted before encoding.
+    std::vector<std::vector<std::uint32_t>> removals_{};
+    /// Snapshot positions a viewer starts seeing this tick, in entity order.
+    std::vector<std::vector<std::size_t>> spawns_{};
+    /// Reverse of `visible_`: the viewers that track one entity, with the
+    /// snapshot position of each viewer as a hint. The movement fan-out walks
+    /// exactly the recipients of a mover instead of the whole chunk window and
+    /// a membership test per candidate, and the hint turns the per-recipient
+    /// connection lookup into an indexed read while the population is stable.
+    std::unordered_map<std::uint64_t,
+                       std::unordered_map<std::uint64_t, std::size_t>>
+        tracked_by_{};
+    /// Pair checks and spawns spent by the current tick.
+    std::size_t pair_work_{0};
+    std::size_t spawn_work_{0};
+    /// Tick counter and the state of the periodic full reconcile.
+    std::int64_t tick_index_{0};
+    bool reconciling_{false};
+    std::size_t reconcile_remaining_{0};
 };
 
 } // namespace refrain::server

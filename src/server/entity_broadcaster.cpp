@@ -9,6 +9,7 @@
 #include <refrain/server/player_visibility.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -212,6 +213,15 @@ void broadcast_session_animation(play_gateway &gateway,
     }
 }
 
+[[nodiscard]] auto chunk_coordinate(double value) -> std::int64_t {
+    return static_cast<std::int64_t>(std::floor(value / 16.0));
+}
+
+[[nodiscard]] auto angle_byte(float degrees) -> std::int8_t {
+    return static_cast<std::int8_t>(
+        std::lround(static_cast<double>(degrees) * (256.0 / 360.0)));
+}
+
 } // namespace
 
 entity_broadcaster::entity_broadcaster(play_gateway &gateway,
@@ -223,10 +233,6 @@ void entity_broadcaster::tick(const refrain::session::play_session &players) {
     // The lifecycle updates go out before the visibility pass: a client that
     // just entered play learns the player list before it sees any entity.
     flush_lifecycle(players);
-    const auto angle = [](float degrees) {
-        return static_cast<std::int8_t>(
-            std::lround(static_cast<double>(degrees) * (256.0 / 360.0)));
-    };
     // Pointers into the session table: the simulation thread is the only
     // writer, and copying every player record per tick is pure overhead.
     snapshot_.clear();
@@ -243,8 +249,9 @@ void entity_broadcaster::tick(const refrain::session::play_session &players) {
               });
     snapshot_by_connection_.clear();
     snapshot_by_connection_.reserve(snapshot_.size());
-    for (const auto *value : snapshot_) {
-        snapshot_by_connection_.emplace(value->connection, value);
+    for (std::size_t position{0}; position < snapshot_.size(); ++position) {
+        snapshot_by_connection_.emplace(snapshot_[position]->connection,
+                                        position);
     }
     entities_.clear();
     entities_.reserve(snapshot_.size());
@@ -258,98 +265,271 @@ void entity_broadcaster::tick(const refrain::session::play_session &players) {
         });
     }
     index_.rebuild(entities_);
-    // One buffer per viewer, indexed like the snapshot: the transport copies
-    // and posts once per viewer instead of once per entity update.
-    std::vector<std::vector<std::byte>> outbox(snapshot_.size());
-    const auto append = [&outbox](std::size_t target,
-                                  const std::vector<std::byte> &body) {
-        auto &buffer{outbox[target]};
-        buffer.insert(buffer.end(), body.begin(), body.end());
-    };
 
-    // Visibility transitions first: a viewer that has just come into range
-    // needs the spawn packet, one that left needs the removal. The sweep walks
-    // a rotating window of the snapshot and stops at the pair budget, so a
-    // dense crowd cannot make one tick do the whole relation.
     const auto viewer_count{snapshot_.size()};
-    std::size_t processed_viewers{0};
-    std::size_t pair_work{0};
-    std::size_t spawn_work{0};
-    while (processed_viewers < viewer_count) {
-        const auto viewer_position{(viewer_cursor_ + processed_viewers) %
-                                   viewer_count};
+    outbox_.resize(viewer_count);
+    removals_.resize(viewer_count);
+    spawns_.resize(viewer_count);
+    for (std::size_t position{0}; position < viewer_count; ++position) {
+        outbox_[position].clear();
+        removals_[position].clear();
+        spawns_[position].clear();
+    }
+
+    // The incremental pass reacts to what changed since the previous tick; the
+    // rotating reconcile below is the safety net for a pair whose distance
+    // test changed while both players stayed inside their chunks.
+    collect_visibility_changes();
+    pair_work_ = 0;
+    spawn_work_ = 0;
+
+    std::size_t viewer_index{0};
+    while (viewer_index < dirty_viewer_queue_.size() &&
+           !visibility_budget_spent()) {
+        const auto found{
+            snapshot_by_connection_.find(dirty_viewer_queue_[viewer_index])};
+        ++viewer_index;
+        if (found == snapshot_by_connection_.end()) {
+            continue;
+        }
+        refresh_viewer(found->second);
+    }
+    // A budget cut defers the rest of the cohort to the next tick; the player
+    // keeps its current tracking set until then.
+    for (; viewer_index < dirty_viewer_queue_.size(); ++viewer_index) {
+        dirty_viewers_.insert(dirty_viewer_queue_[viewer_index]);
+    }
+
+    std::size_t entity_index{0};
+    while (entity_index < dirty_entity_queue_.size() &&
+           !visibility_budget_spent()) {
+        const auto connection{dirty_entity_queue_[entity_index]};
+        ++entity_index;
+        refresh_entity(connection);
+    }
+    for (; entity_index < dirty_entity_queue_.size(); ++entity_index) {
+        dirty_entities_.insert(dirty_entity_queue_[entity_index]);
+    }
+
+    ++tick_index_;
+    if (viewer_count > 0 &&
+        tick_index_ % full_reconcile_interval == std::int64_t{0}) {
+        reconciling_ = true;
+        viewer_cursor_ = 0;
+        reconcile_remaining_ = viewer_count;
+    }
+    if (reconciling_) {
+        sweep_viewers();
+    }
+
+    flush_visibility();
+    flush_movement();
+}
+
+void entity_broadcaster::collect_visibility_changes() {
+    dirty_viewer_queue_.clear();
+    dirty_entity_queue_.clear();
+    for (const auto *value : snapshot_) {
+        const entity_anchor next{
+            .world = value->world,
+            .chunk_x = chunk_coordinate(value->x),
+            .chunk_z = chunk_coordinate(value->z),
+            .view_distance = value->view_distance,
+        };
+        const auto previous{anchors_.find(value->connection)};
+        if (previous == anchors_.end() || !(previous->second == next)) {
+            dirty_viewers_.insert(value->connection);
+            dirty_entities_.insert(value->connection);
+        }
+        anchors_.insert_or_assign(value->connection, next);
+        // Walking the snapshot in entity order produces queues that already
+        // follow the deterministic order the emitted streams use.
+        if (dirty_viewers_.contains(value->connection)) {
+            dirty_viewer_queue_.push_back(value->connection);
+        }
+        if (dirty_entities_.contains(value->connection)) {
+            dirty_entity_queue_.push_back(value->connection);
+        }
+    }
+    dirty_viewers_.clear();
+    dirty_entities_.clear();
+}
+
+void entity_broadcaster::refresh_viewer(std::size_t viewer_position) {
+    const auto *viewer{snapshot_[viewer_position]};
+    const refrain::server::visibility_query query{
+        .world = viewer->world,
+        .x = viewer->x,
+        .z = viewer->z,
+        .view_distance = viewer->view_distance,
+    };
+    auto &seen{visible_[viewer->connection]};
+    const auto tracked_pairs{seen.size()};
+    // Tracked entities are checked directly: one that left the viewport is no
+    // longer returned by the index, so it cannot be found there.
+    for (auto tracked{seen.begin()}; tracked != seen.end();) {
+        const auto found{snapshot_by_connection_.find(*tracked)};
+        const auto *other{found == snapshot_by_connection_.end()
+                              ? nullptr
+                              : snapshot_[found->second]};
+        if (other != nullptr &&
+            refrain::server::player_visible(query, other->world, other->x,
+                                            other->z, tracking_chunks_)) {
+            ++tracked;
+            continue;
+        }
+        if (other != nullptr) {
+            removals_[viewer_position].push_back(other->entity_id);
+            const auto reverse{tracked_by_.find(other->connection)};
+            if (reverse != tracked_by_.end()) {
+                reverse->second.erase(viewer->connection);
+                if (reverse->second.empty()) {
+                    tracked_by_.erase(reverse);
+                }
+            }
+        }
+        tracked = seen.erase(tracked);
+    }
+    // The index narrows the spawn candidates to the viewer's chunk viewport;
+    // player_visible still decides every pair.
+    index_.candidates(query, candidates_);
+    for (const auto other_position : candidates_) {
+        const auto *other{snapshot_[other_position]};
+        if (other == viewer || seen.contains(other->connection)) {
+            continue;
+        }
+        if (!refrain::server::player_visible(query, other->world, other->x,
+                                             other->z, tracking_chunks_)) {
+            continue;
+        }
+        seen.insert(other->connection);
+        tracked_by_[other->connection].insert(
+            {viewer->connection, viewer_position});
+        spawns_[viewer_position].push_back(other_position);
+        ++spawn_work_;
+    }
+    pair_work_ += tracked_pairs + candidates_.size();
+}
+
+void entity_broadcaster::refresh_entity(std::uint64_t connection) {
+    const auto found{snapshot_by_connection_.find(connection)};
+    if (found == snapshot_by_connection_.end()) {
+        return;
+    }
+    const auto entity_position{found->second};
+    const auto *entity{snapshot_[entity_position]};
+    // A viewer that still tracks the entity but can no longer see it has to
+    // drop it. The tracking set is the authority here: the pair may have been
+    // created while the entity stood in another chunk. A view distance is per
+    // viewer, so the viewer's own refresh of the same pair does not cover this
+    // direction when the two distances differ.
+    for (std::size_t viewer_position{0}; viewer_position < snapshot_.size();
+         ++viewer_position) {
+        if (viewer_position == entity_position) {
+            continue;
+        }
         const auto *viewer{snapshot_[viewer_position]};
+        const auto tracked{visible_.find(viewer->connection)};
+        if (tracked == visible_.end() ||
+            !tracked->second.contains(connection)) {
+            continue;
+        }
         const refrain::server::visibility_query query{
             .world = viewer->world,
             .x = viewer->x,
             .z = viewer->z,
             .view_distance = viewer->view_distance,
         };
-        auto &seen{visible_[viewer->connection]};
-        const auto tracked_pairs{seen.size()};
-        // Tracked entities are checked directly: one that left the viewport is
-        // no longer returned by the index, so it cannot be found there.
-        despawns_.clear();
-        for (auto tracked{seen.begin()}; tracked != seen.end();) {
-            const auto found{snapshot_by_connection_.find(*tracked)};
-            const auto *other{found == snapshot_by_connection_.end()
-                                  ? nullptr
-                                  : found->second};
-            if (other != nullptr &&
-                refrain::server::player_visible(query, other->world, other->x,
-                                                other->z, tracking_chunks_)) {
-                ++tracked;
-                continue;
-            }
-            if (other != nullptr) {
-                despawns_.push_back(other->entity_id);
-            }
-            tracked = seen.erase(tracked);
+        if (refrain::server::player_visible(query, entity->world, entity->x,
+                                            entity->z, tracking_chunks_)) {
+            continue;
         }
-        std::sort(despawns_.begin(), despawns_.end());
-        if (!despawns_.empty()) {
-            std::vector<std::uint32_t> removed{};
-            removed.reserve(despawns_.size());
-            for (const auto entity_id : despawns_) {
-                removed.push_back(static_cast<std::uint32_t>(entity_id));
-            }
-            if (auto body{encode_remove_entities_body(removed)};
-                !body.empty()) {
-                append(viewer_position, body);
+        tracked->second.erase(connection);
+        const auto reverse{tracked_by_.find(connection)};
+        if (reverse != tracked_by_.end()) {
+            reverse->second.erase(viewer->connection);
+            if (reverse->second.empty()) {
+                tracked_by_.erase(reverse);
             }
         }
-        // The index narrows the spawn candidates to the viewer's chunk
-        // viewport; player_visible still decides every pair.
-        index_.candidates(query, candidates_);
-        std::size_t spawned{0};
-        for (const auto position : candidates_) {
-            const auto *other{snapshot_[position]};
-            if (other == viewer || seen.contains(other->connection)) {
-                continue;
-            }
-            if (!refrain::server::player_visible(query, other->world, other->x,
-                                                 other->z, tracking_chunks_)) {
-                continue;
-            }
-            if (auto body{encode_add_entity_body(*other)}; !body.empty()) {
-                append(viewer_position, body);
-            }
-            seen.insert(other->connection);
-            ++spawned;
+        removals_[viewer_position].push_back(entity->entity_id);
+    }
+    pair_work_ += snapshot_.size();
+    // Every viewer that may see the entity now sits inside the chunk window
+    // of its current chunk.
+    index_.viewers_at(entity->world, chunk_coordinate(entity->x),
+                      chunk_coordinate(entity->z), candidates_);
+    pair_work_ += candidates_.size();
+    for (const auto viewer_position : candidates_) {
+        if (viewer_position == entity_position) {
+            continue;
         }
-        pair_work += tracked_pairs + candidates_.size();
-        spawn_work += spawned;
-        ++processed_viewers;
-        if (pair_work >= max_visibility_pairs_per_tick ||
-            spawn_work >= max_spawns_per_tick) {
-            break;
+        const auto *viewer{snapshot_[viewer_position]};
+        const auto tracked{visible_.find(viewer->connection)};
+        if (tracked != visible_.end() && tracked->second.contains(connection)) {
+            continue;
+        }
+        const refrain::server::visibility_query query{
+            .world = viewer->world,
+            .x = viewer->x,
+            .z = viewer->z,
+            .view_distance = viewer->view_distance,
+        };
+        if (!refrain::server::player_visible(query, entity->world, entity->x,
+                                             entity->z, tracking_chunks_)) {
+            continue;
+        }
+        visible_[viewer->connection].insert(connection);
+        tracked_by_[connection].insert({viewer->connection, viewer_position});
+        spawns_[viewer_position].push_back(entity_position);
+        ++spawn_work_;
+    }
+}
+
+void entity_broadcaster::sweep_viewers() {
+    const auto viewer_count{snapshot_.size()};
+    while (reconcile_remaining_ > 0 && viewer_count > 0 &&
+           !visibility_budget_spent()) {
+        refresh_viewer(viewer_cursor_);
+        viewer_cursor_ = (viewer_cursor_ + 1) % viewer_count;
+        --reconcile_remaining_;
+    }
+    if (reconcile_remaining_ == 0) {
+        reconciling_ = false;
+    }
+}
+
+void entity_broadcaster::flush_visibility() {
+    for (std::size_t position{0}; position < snapshot_.size(); ++position) {
+        auto &removed{removals_[position]};
+        auto &spawned{spawns_[position]};
+        if (removed.empty() && spawned.empty()) {
+            continue;
+        }
+        auto &body{outbox_[position]};
+        if (!removed.empty()) {
+            std::sort(removed.begin(), removed.end());
+            if (auto encoded{encode_remove_entities_body(removed)};
+                !encoded.empty()) {
+                body.insert(body.end(), encoded.begin(), encoded.end());
+            }
+        }
+        std::sort(spawned.begin(), spawned.end());
+        for (const auto spawn_position : spawned) {
+            if (auto encoded{
+                    encode_add_entity_body(*snapshot_[spawn_position])};
+                !encoded.empty()) {
+                body.insert(body.end(), encoded.begin(), encoded.end());
+            }
+        }
+        if (!body.empty()) {
+            gateway_.send_raw(snapshot_[position]->connection, body);
+            body.clear();
         }
     }
-    viewer_cursor_ = viewer_count == 0
-                         ? 0
-                         : (viewer_cursor_ + processed_viewers) % viewer_count;
+}
 
-    // Movement reaches only viewers that already track the mover.
+void entity_broadcaster::flush_movement() {
     for (std::size_t mover_position{0}; mover_position < snapshot_.size();
          ++mover_position) {
         const auto *mover{snapshot_[mover_position]};
@@ -436,8 +616,8 @@ void entity_broadcaster::tick(const refrain::session::play_session &players) {
                                 .y = move.dy,
                                 .z = move.dz,
                                 .steps = {}};
-                packet.y_rot = angle(current.yaw);
-                packet.x_rot = angle(current.pitch);
+                packet.y_rot = angle_byte(current.yaw);
+                packet.x_rot = angle_byte(current.pitch);
                 body = encode_play_body(
                     refrain::protocol::current::play::clientbound::
                         move_entity_pos_rot::packet_id,
@@ -451,8 +631,8 @@ void entity_broadcaster::tick(const refrain::session::play_session &players) {
                     packet{};
                 packet.entity_id = static_cast<std::uint32_t>(mover->entity_id);
                 packet.on_ground = current.on_ground;
-                packet.y_rot = angle(current.yaw);
-                packet.x_rot = angle(current.pitch);
+                packet.y_rot = angle_byte(current.yaw);
+                packet.x_rot = angle_byte(current.pitch);
                 body = encode_play_body(
                     refrain::protocol::current::play::clientbound::
                         move_entity_rot::packet_id,
@@ -469,28 +649,38 @@ void entity_broadcaster::tick(const refrain::session::play_session &players) {
         if (body.empty()) {
             continue;
         }
-        // The index returns every viewer whose viewport can hold the mover's
-        // chunk; the tracking set is the authority on who receives the move.
-        index_.viewers(mover->world, mover->x, mover->z, candidates_);
-        for (const auto target_position : candidates_) {
-            const auto *target{snapshot_[target_position]};
-            if (target == mover) {
-                continue;
+        // The reverse index holds exactly the viewers that track the mover, in
+        // the order the pairs were created; the body order stays the mover
+        // order because movers are walked in ascending entity id.
+        const auto tracked{tracked_by_.find(mover->connection)};
+        if (tracked == tracked_by_.end()) {
+            continue;
+        }
+        for (auto &[viewer_connection, hint] : tracked->second) {
+            auto viewer_position{hint};
+            if (viewer_position >= snapshot_.size() ||
+                snapshot_[viewer_position]->connection != viewer_connection) {
+                // The population changed since the pair was created: fall
+                // back to the connection index and refresh the hint.
+                const auto viewer{
+                    snapshot_by_connection_.find(viewer_connection)};
+                if (viewer == snapshot_by_connection_.end()) {
+                    continue;
+                }
+                viewer_position = viewer->second;
+                hint = viewer_position;
             }
-            const auto found{visible_.find(target->connection)};
-            if (found == visible_.end() ||
-                !found->second.contains(mover->connection)) {
-                continue;
-            }
-            append(target_position, body);
+            auto &buffer{outbox_[viewer_position]};
+            buffer.insert(buffer.end(), body.begin(), body.end());
         }
     }
-
     for (std::size_t position{0}; position < snapshot_.size(); ++position) {
-        if (!outbox[position].empty()) {
-            gateway_.send_raw(snapshot_[position]->connection,
-                              outbox[position]);
+        auto &body{outbox_[position]};
+        if (body.empty()) {
+            continue;
         }
+        gateway_.send_raw(snapshot_[position]->connection, body);
+        body.clear();
     }
 }
 
@@ -503,7 +693,24 @@ void entity_broadcaster::left(const refrain::session::player &value) {
     // consider the connection; the packets go out with the rest of the tick's
     // leaves.
     last_moves_.erase(value.connection);
-    visible_.erase(value.connection);
+    tracked_by_.erase(value.connection);
+    const auto leaving{visible_.find(value.connection)};
+    if (leaving != visible_.end()) {
+        for (const auto tracked : leaving->second) {
+            const auto reverse{tracked_by_.find(tracked)};
+            if (reverse == tracked_by_.end()) {
+                continue;
+            }
+            reverse->second.erase(value.connection);
+            if (reverse->second.empty()) {
+                tracked_by_.erase(reverse);
+            }
+        }
+        visible_.erase(leaving);
+    }
+    anchors_.erase(value.connection);
+    dirty_viewers_.erase(value.connection);
+    dirty_entities_.erase(value.connection);
     for (auto &[viewer, seen] : visible_) {
         if (seen.erase(value.connection) > 0) {
             pending_removals_[viewer].push_back(

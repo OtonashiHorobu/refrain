@@ -142,9 +142,17 @@ second-long tick:
   remaining events to later ticks in queue order;
 - the broadcaster queues the player-list updates of a tick, encodes one body
   per cohort, and hands at most 1 MiB to the transport per tick; the rest
-  follows in order on later ticks;
-- the visibility sweep walks a rotating window of viewers and stops at a pair
-  budget and a spawn budget, so a dense crowd fills over several ticks.
+  follows in order on later ticks. A body that goes to several connections is
+  framed once by the transport, and each connection still takes its own
+  ciphertext;
+- the visibility pass re-evaluates only the players whose chunk, view distance
+  or presence changed since the previous tick, in both directions, and stops
+  at a pair budget and a spawn budget, so a dense fill spreads over several
+  ticks. A full reconcile of every viewer runs every 600 ticks (thirty seconds)
+  as the safety net for a pair whose distance test changed while both players
+  stayed inside their chunks;
+- the movement fan-out walks a reverse tracking index, so a mover is encoded
+  once and appended only to the viewers that actually track it.
 
 A player that waits a few ticks for its tab-list entry or its entity spawn
 cannot observe the delay; a tick that applies the whole backlog can.
