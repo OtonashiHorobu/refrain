@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -112,8 +113,14 @@ class entity_broadcaster {
 
     /// Where a player stood at the previous tick. A change in any field means
     /// every visibility pair that involves the player is re-evaluated.
+    ///
+    /// The world is owned here rather than borrowed from the session record:
+    /// the projection is rebuilt in place on every tick, so a view into it
+    /// names a freed buffer by the time the next comparison runs, and a
+    /// dimension change would read as "no change" whenever the new name fits
+    /// the old allocation.
     struct entity_anchor {
-        std::string_view world{};
+        std::string world{};
         std::int64_t chunk_x{0};
         std::int64_t chunk_z{0};
         std::int32_t view_distance{0};

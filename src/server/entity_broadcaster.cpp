@@ -330,18 +330,32 @@ void entity_broadcaster::collect_visibility_changes() {
     dirty_viewer_queue_.clear();
     dirty_entity_queue_.clear();
     for (const auto *value : snapshot_) {
-        const entity_anchor next{
-            .world = value->world,
-            .chunk_x = chunk_coordinate(value->x),
-            .chunk_z = chunk_coordinate(value->z),
-            .view_distance = value->view_distance,
-        };
-        const auto previous{anchors_.find(value->connection)};
-        if (previous == anchors_.end() || !(previous->second == next)) {
+        const auto chunk_x{chunk_coordinate(value->x)};
+        const auto chunk_z{chunk_coordinate(value->z)};
+        const auto found{anchors_.find(value->connection)};
+        if (found == anchors_.end()) {
+            const entity_anchor anchor{
+                .world = std::string{value->world},
+                .chunk_x = chunk_x,
+                .chunk_z = chunk_z,
+                .view_distance = value->view_distance,
+            };
+            anchors_.emplace(value->connection, anchor);
+            dirty_viewers_.insert(value->connection);
+            dirty_entities_.insert(value->connection);
+        } else if (found->second.world != value->world ||
+                   found->second.chunk_x != chunk_x ||
+                   found->second.chunk_z != chunk_z ||
+                   found->second.view_distance != value->view_distance) {
+            // Only a change touches the stored anchor: the steady state is one
+            // comparison against the record, not a copy of it.
+            found->second.world.assign(value->world);
+            found->second.chunk_x = chunk_x;
+            found->second.chunk_z = chunk_z;
+            found->second.view_distance = value->view_distance;
             dirty_viewers_.insert(value->connection);
             dirty_entities_.insert(value->connection);
         }
-        anchors_.insert_or_assign(value->connection, next);
         // Walking the snapshot in entity order produces queues that already
         // follow the deterministic order the emitted streams use.
         if (dirty_viewers_.contains(value->connection)) {
