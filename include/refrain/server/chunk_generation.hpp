@@ -119,6 +119,16 @@ class admission_controller {
     std::uint32_t good_samples_{0};
 };
 
+/// One generation task that did not produce its tile.
+///
+/// The tile is the admission and accounting unit, so a failure covers every
+/// column of the tile: the task produced no columns at all. The message says
+/// why the task failed and is meant for the operator log.
+struct generation_failure {
+    refrain::world::chunk_pos tile{};
+    std::string message{};
+};
+
 /// Generates world columns off the simulation thread.
 ///
 /// A fixed pool of workers runs at startup; each worker owns its own generator
@@ -200,6 +210,18 @@ class chunk_generation {
     [[nodiscard]] auto take_results() -> std::vector<
         std::pair<refrain::world::chunk_pos, refrain::world::chunk>>;
 
+    /// Take every tile whose task failed since the last call, ordered by the
+    /// tile position. A failure produces no columns; the caller forgets the
+    /// tile's columns so the streamer can request the position again instead of
+    /// waiting for an answer that will never arrive.
+    [[nodiscard]] auto take_failures() -> std::vector<generation_failure>;
+
+    /// Edge in chunks of the square one task produces. Failures name the
+    /// minimum corner of such a square, so a caller expands it by this edge.
+    [[nodiscard]] auto tile_size() const noexcept -> std::int32_t {
+        return settings_.tile_size;
+    }
+
     [[nodiscard]] auto credits() const -> std::size_t;
     [[nodiscard]] auto queue_depth() const -> std::size_t;
     [[nodiscard]] auto in_flight() const -> std::size_t;
@@ -212,6 +234,10 @@ class chunk_generation {
     explicit chunk_generation(config settings);
 
     void run();
+
+    /// Clear the in-flight markers of `origin` and report the failure so the
+    /// caller can ask for the tile again. Runs on a worker thread.
+    void fail_task(refrain::world::chunk_pos origin, std::string message);
 
     config settings_{};
     mutable std::mutex mutex_{};
@@ -232,6 +258,8 @@ class chunk_generation {
     std::vector<refrain::world::chunk_pos> centres_{};
     std::deque<refrain::world::chunk_pos> work_{};
     std::vector<tile_result> finished_{};
+    /// Tiles whose task failed since the last `take_failures()`.
+    std::vector<generation_failure> failed_{};
     std::size_t in_flight_{0};
     admission_controller admission_{};
     bool stopping_{false};

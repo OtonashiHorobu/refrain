@@ -440,6 +440,29 @@ auto chunk_generation::take_results() -> std::vector<
     return results;
 }
 
+auto chunk_generation::take_failures() -> std::vector<generation_failure> {
+    std::vector<generation_failure> failures{};
+    {
+        const std::lock_guard lock{mutex_};
+        failures = std::exchange(failed_, {});
+    }
+    std::sort(
+        failures.begin(), failures.end(),
+        [](const generation_failure &left, const generation_failure &right) {
+            return key_of(left.tile) < key_of(right.tile);
+        });
+    return failures;
+}
+
+void chunk_generation::fail_task(refrain::world::chunk_pos origin,
+                                 std::string message) {
+    const std::lock_guard lock{mutex_};
+    active_.erase(key_of(origin));
+    in_flight_ -= std::min<std::size_t>(in_flight_, 1);
+    failed_.push_back(
+        generation_failure{.tile = origin, .message = std::move(message)});
+}
+
 auto chunk_generation::credits() const -> std::size_t {
     const std::lock_guard lock{mutex_};
     return admission_.credits();
@@ -483,12 +506,13 @@ void chunk_generation::run() {
     // a quiet server pays for the generator instances it actually uses, and
     // the resident set the controller samples grows with the credit level
     // instead of being fixed before the controller has a reading.
+    //
+    // A worker whose generator cannot be created keeps serving its queue by
+    // failing every task with the same message. Exiting here would leave the
+    // queued tiles in flight for good, and the caller would never learn which
+    // columns went unanswered.
     std::unique_ptr<worldgen::chunk_generator> generator{};
-    const auto fail_task = [this](refrain::world::chunk_pos origin) {
-        const std::lock_guard lock{mutex_};
-        active_.erase(key_of(origin));
-        in_flight_ -= std::min<std::size_t>(in_flight_, 1);
-    };
+    std::optional<std::string> generator_error{};
     for (;;) {
         refrain::world::chunk_pos origin{};
         {
@@ -501,6 +525,10 @@ void chunk_generation::run() {
             work_.pop_front();
         }
         if (!generator) {
+            if (generator_error) {
+                fail_task(origin, *generator_error);
+                continue;
+            }
             auto created{worldgen::chunk_generator::create(
                 worldgen::chunk_generator_config{
                     .data_root = settings_.data_root,
@@ -515,8 +543,9 @@ void chunk_generation::run() {
                     log_generation.error("generator unavailable: {}",
                                          created.error().message);
                 }
-                fail_task(origin);
-                return;
+                generator_error = created.error().message;
+                fail_task(origin, *generator_error);
+                continue;
             }
             generator = std::move(*created);
         }
@@ -526,15 +555,19 @@ void chunk_generation::run() {
         if (!protos) {
             log_generation.debug("tile ({}, {}) failed: {}", origin.x, origin.z,
                                  protos.error().message);
-            fail_task(origin);
+            fail_task(origin, protos.error().message);
             continue;
         }
         tile_result result{.origin = origin, .columns = {}};
         result.columns.reserve(protos->size());
         bool failed{false};
+        std::string failure_message{};
         for (auto &proto : *protos) {
             if (proto == nullptr) {
                 failed = true;
+                failure_message =
+                    fmt::format("tile ({}, {}) produced an empty column",
+                                origin.x, origin.z);
                 break;
             }
             const auto position{
@@ -546,12 +579,15 @@ void chunk_generation::run() {
                                      position.x, position.z,
                                      column.error().message);
                 failed = true;
+                failure_message =
+                    fmt::format("column ({}, {}) conversion failed: {}",
+                                position.x, position.z, column.error().message);
                 break;
             }
             result.columns.emplace_back(position, std::move(*column));
         }
         if (failed) {
-            fail_task(origin);
+            fail_task(origin, std::move(failure_message));
             continue;
         }
         {
