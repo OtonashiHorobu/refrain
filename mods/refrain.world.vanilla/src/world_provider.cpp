@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -45,6 +46,9 @@ constexpr abi::status_entry world_statuses[]{
 struct world_provider {
     std::optional<refrain::sim::world> world{};
     std::vector<refrain_core_chunk_section_view> sections{};
+    /// Backing storage for the borrowed `refrain_str` a level projection
+    /// returns; the value is valid until the next projection call.
+    std::string level_name{};
 
     static auto open_world(void *self,
                            const refrain_services_world_world_config *config)
@@ -205,6 +209,39 @@ struct world_provider {
                    : 0;
     }
 
+    static auto level(void *self, refrain_services_world_level_projection *out)
+        -> refrain_status {
+        auto *provider{static_cast<world_provider *>(self)};
+        if (provider == nullptr || out == nullptr ||
+            !provider->world.has_value()) {
+            return REFRAIN_SERVICES_WORLD_WORLD_ERROR_CHUNK_NOT_LOADED;
+        }
+        auto projected{provider->world->store().project_level()};
+        if (!projected) {
+            return abi::to_status(projected.error(), world_statuses,
+                                  REFRAIN_SERVICES_WORLD_WORLD_ERROR_INTERNAL);
+        }
+        const auto &record{projected->level};
+        // Keep the borrowed string in the provider so the pointer outlives the
+        // call; the projection is a read and the buffer is reused next time.
+        provider->level_name = record.level_name;
+        out->struct_size = REFRAIN_SERVICES_WORLD_LEVEL_PROJECTION_SIZE;
+        out->has_chunks = projected->has_chunks ? 1 : 0;
+        out->level.struct_size = REFRAIN_SERVICES_WORLD_LEVEL_INFO_SIZE;
+        out->level.data_version = record.data_version;
+        out->level.seed = record.seed;
+        out->level.spawn_x = record.spawn_x;
+        out->level.spawn_y = record.spawn_y;
+        out->level.spawn_z = record.spawn_z;
+        out->level.time = record.time;
+        out->level.level_name = abi::to_borrowed(provider->level_name);
+        out->level.game_mode = record.game_mode;
+        out->level.hardcore = record.hardcore ? 1 : 0;
+        out->level.difficulty = record.difficulty;
+        out->level.difficulty_locked = record.difficulty_locked ? 1 : 0;
+        return REFRAIN_STATUS_OK;
+    }
+
     static constexpr std::int32_t world_limit{refrain::world::max_section_y *
                                                   refrain::world::section_edge +
                                               refrain::world::section_edge - 1};
@@ -224,6 +261,7 @@ auto world_vtable() -> const refrain_services_world_vtable & {
         .is_chunk_loaded = &world_provider::is_chunk_loaded,
         .apply_block_changes = &world_provider::apply_block_changes,
         .world_tick = &world_provider::world_tick,
+        .level = &world_provider::level,
     };
     return table;
 }

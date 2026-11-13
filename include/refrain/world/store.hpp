@@ -51,6 +51,14 @@ struct level_info {
     bool difficulty_locked{false};
 };
 
+/// Boot projection of the world level: the `meta.level` record plus whether
+/// the store already holds a chunk. The server fills the spawn area only when
+/// `has_chunks` is false, so an existing world is not regenerated on start.
+struct level_projection {
+    level_info level{};
+    bool has_chunks{false};
+};
+
 /// Editable gameplay subset of `meta.level`; the vanilla tag names are
 /// `GameType`, `hardcore`, `Difficulty` and `DifficultyLocked`.
 struct gameplay_settings {
@@ -166,6 +174,16 @@ class world_store {
 
     /// Parsed view of `meta.level` (lenient projection).
     [[nodiscard]] auto level() -> result<level_info>;
+
+    /// True when the store already holds at least one overworld chunk. Scans
+    /// the region indexes and stops at the first live entry; an absent or
+    /// empty regions directory is an empty world.
+    [[nodiscard]] auto has_chunks() -> result<bool>;
+
+    /// Boot projection: `level()` plus `has_chunks()` read through one call,
+    /// so a consumer cannot mix a level record with another world's chunk
+    /// state.
+    [[nodiscard]] auto project_level() -> result<level_projection>;
 
     /// Gameplay fields of `meta.level`, using the same lenient projection as
     /// `level()`: missing tags keep their default and tags stored as a byte or

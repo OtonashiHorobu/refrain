@@ -2,9 +2,10 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// `refrain:world` service contract v0 (hot path).
-// Exposes the versioned Chunk ABI from sdk/idl/refrain/core.ridl and batched
-// block mutation; per-block cross-plugin calls are intentionally absent.
+// `refrain:world` service contract (hot path).
+// Exposes the versioned Chunk ABI from sdk/idl/refrain/core.ridl, batched
+// block mutation and the read-only level projection the runtime boots from;
+// per-block cross-plugin calls are intentionally absent.
 
 module refrain::services::world;
 version 1.0.0;
@@ -31,7 +32,41 @@ struct world_config {
     i64 seed;
 }
 
-service world : 1.0.0 {
+/// Read-only projection of the world's level record. A provider resolves it
+/// from the store it was handed; nothing here lets a provider open the level
+/// directory itself.
+struct level_info {
+    /// `DataVersion` of the saved level.
+    i32 data_version;
+    /// World generation seed.
+    i64 seed;
+    /// Spawn position in block coordinates.
+    i32 spawn_x;
+    i32 spawn_y;
+    i32 spawn_z;
+    /// `Time` of the saved level.
+    i64 time;
+    /// `LevelName` as stored; empty when the tag is absent.
+    string level_name;
+    /// `GameType`: 0 survival, 1 creative, 2 adventure, 3 spectator.
+    i32 game_mode;
+    /// `hardcore` (vanilla stores it as a byte).
+    bool hardcore;
+    /// `Difficulty`: 0 peaceful, 1 easy, 2 normal, 3 hard.
+    i32 difficulty;
+    /// `DifficultyLocked` (vanilla stores it as a byte).
+    bool difficulty_locked;
+}
+
+/// Boot projection of the world level. `has_chunks` is true once the store
+/// holds a chunk, which tells the runtime that the spawn area does not need to
+/// be filled.
+struct level_projection {
+    level_info level;
+    bool has_chunks;
+}
+
+service world : 1.1.0 {
     side = server;
     thread = sim;
     provides = [ "refrain:world" ];
@@ -71,4 +106,10 @@ service world : 1.0.0 {
     /// World tick counter (monotonic, survives save/load).
     #[thread(sim)]
     fn world_tick() -> i64;
+
+    /// Read-only boot projection: the level record and whether the world
+    /// already holds a chunk. The provider answers from the store it was
+    /// opened over; the level directory stays private to the storage provider.
+    #[thread(sim)] #[can_fail]
+    fn level() -> result<level_projection, world_error>;
 }

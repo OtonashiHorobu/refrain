@@ -78,8 +78,8 @@ class direct_world_port final : public world_port {
         owned_.reset();
     }
 
-    auto level() -> result<world::level_info> override {
-        return world().store().level();
+    auto level() -> result<world::level_projection> override {
+        return world().store().project_level();
     }
 
     auto loaded_chunks() const noexcept -> std::size_t override {

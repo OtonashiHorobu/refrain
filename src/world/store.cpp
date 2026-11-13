@@ -731,6 +731,52 @@ auto world_store::level() -> result<level_info> {
     return info;
 }
 
+auto world_store::has_chunks() -> result<bool> {
+    if (!valid()) {
+        return std::unexpected{
+            make_error(error_code::not_initialized, "world store is closed")};
+    }
+    const auto directory{join_path(impl_->overworld_root, "regions")};
+    if (!core::io::is_directory(directory)) {
+        return false;
+    }
+    auto names{core::io::list_directory(directory)};
+    if (!names) {
+        return std::unexpected{names.error()};
+    }
+    for (const auto &name : *names) {
+        const auto coordinates{parse_region_name(name)};
+        if (!coordinates) {
+            continue;
+        }
+        auto region{
+            impl_->region_for(coordinates->first, coordinates->second, false)};
+        if (!region) {
+            return std::unexpected{region.error()};
+        }
+        const auto entries{(*region)->entries()};
+        const auto live{std::find_if(
+            entries.begin(), entries.end(),
+            [](const rwf::region_entry &entry) { return !entry.empty(); })};
+        if (live != entries.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+auto world_store::project_level() -> result<level_projection> {
+    auto record{level()};
+    if (!record) {
+        return std::unexpected{record.error()};
+    }
+    auto chunks{has_chunks()};
+    if (!chunks) {
+        return std::unexpected{chunks.error()};
+    }
+    return level_projection{.level = std::move(*record), .has_chunks = *chunks};
+}
+
 auto world_store::read_gameplay() -> result<gameplay_settings> {
     auto info{level()};
     if (!info) {
