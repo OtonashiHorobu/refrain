@@ -105,7 +105,10 @@ say "syncing the working tree to $HOST:$REMOTE_DIR"
 # replace a real directory there with a lane's symlink and dangle. Lane
 # worktrees are excluded for the same reason: they hold their own build
 # trees, and copying a live one races with the lane that owns it.
-rsync -a --delete -e "ssh ${SSH_OPTS[*]}" \
+# --checksum, not the default size+mtime: a file that matches its old size
+# and keeps its source mtime is skipped, so the host can silently build a
+# stale object and report the previous run's numbers.
+rsync -a --checksum --delete -e "ssh ${SSH_OPTS[*]}" \
     --exclude=/.git \
     --exclude='/build*' \
     --exclude=/.cache \
