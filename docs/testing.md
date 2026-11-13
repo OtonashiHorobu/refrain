@@ -27,6 +27,37 @@ from a locally owned `server.jar` with `scripts/fetch-content.sh` as described
 in [World generation data](worldgen.md). When it is absent, those cases are
 skipped with a diagnostic.
 
+## Configurations
+
+The suite runs in more than one configuration because they do not agree about
+what counts as an error.
+
+```bash
+cmake -S . -B build/debug -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=build/Release/generators/conan_toolchain.cmake \
+  -DREFRAIN_DEBUG_ASSERTS=ON -DREFRAIN_LTO=OFF
+cmake --build build/debug
+build/debug/bin/refrain-tests
+```
+
+`-DREFRAIN_DEBUG_ASSERTS=ON` builds without optimisation and defines
+`_GLIBCXX_ASSERTIONS`, so the standard library checks its preconditions: reading
+the error of a successful `std::expected`, indexing a vector out of range or
+using a disabled iterator aborts there instead of returning whatever the invalid
+state holds. An optimised build compiles those checks away, which is why a
+defect of that class passes every other gate; it is also the configuration that
+catches a pointer handed to a C library that keeps it past the call, because the
+bytes read back from a reused stack slot are stable enough to look correct once
+optimised. It is still a CPU-bound suite, so the build is `-O0` and not a
+sanitizer configuration.
+
+`-DREFRAIN_COVERAGE=ON` instruments the same binary for gcov and lowers the
+optimisation the same way. `scripts/dev/coverage.sh` drives the whole sequence
+and writes `build/coverage-report/summary.txt`; set `REFRAIN_COVERAGE_MIN` to
+fail under a threshold. Coverage is a local and scheduled measurement, never a
+pull-request gate: the total is a weak signal, and the list of files no test
+ever enters is the part worth reading.
+
 ## Continuous integration
 
 ```bash

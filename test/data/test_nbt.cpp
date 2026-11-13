@@ -105,9 +105,9 @@ using nbt::tag_type;
     }
     const auto hex = [](std::span<const std::byte> bytes) {
         std::string text{};
-        for (const auto byte :
-             bytes.first(std::min<std::size_t>(20U, bytes.size()))) {
-            text += std::format("{:02x}", static_cast<unsigned>(byte));
+        const auto shown{std::min<std::size_t>(20U, bytes.size())};
+        for (std::size_t index{0}; index < shown; ++index) {
+            text += std::format("{:02x}", static_cast<unsigned>(bytes[index]));
         }
         return text;
     };

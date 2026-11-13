@@ -371,6 +371,124 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
+  # Unoptimised build. The standard library checks its preconditions only when
+  # optimisation is off: reading the error of a successful std::expected, an
+  # out-of-range subscript and a disabled-iterator access abort here and return
+  # a value in every other configuration, so this job is the only place that
+  # class of defect has somewhere to fail.
+  # ---------------------------------------------------------------------------
+  debug-asserts:
+    name: debug+assert
+    # Like the sanitizer jobs, this runs on the default branch and on demand.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    container:
+      image: gcc:16
+    timeout-minutes: 60
+    needs: vendor-guard
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Mark the workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install toolchain
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ninja-build ccache python3 python3-pip git ca-certificates
+          python3 -m pip install --break-system-packages \
+            "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
+          gcc --version | head -1
+          conan --version
+          cmake --version | head -1
+          ninja --version
+
+      - name: Restore Conan cache
+        id: conan-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.conan2
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
+          restore-keys: |
+            conan-${{ runner.os }}-
+
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-linux-debug-${{ github.sha }}
+          restore-keys: |
+            ccache-linux-debug-
+
+      - name: Create Conan profile
+        run: bash scripts/bootstrap.sh --profile-only
+
+      - name: Build vendor recipes
+        run: python3 tools/vendor_export.py --build --profile "${REFRAIN_CONAN_PROFILE}"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          conan install . -pr "${REFRAIN_CONAN_PROFILE}" --build=missing \
+            -o "&:lto=False" --lockfile=conan/locks/vendor.lock \
+            -of build/debug-deps
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          toolchain="$(find build/debug-deps -name conan_toolchain.cmake -print -quit)"
+          test -n "$toolchain"
+          cmake -S . -B build/debug -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$toolchain" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DREFRAIN_DEBUG_ASSERTS=ON -DREFRAIN_LTO=OFF \
+            -DREFRAIN_WITH_CRASHPAD=OFF -DREFRAIN_WITH_WASM=OFF \
+            -DREFRAIN_BUILD_BENCH=OFF
+
+      - name: Build
+        run: cmake --build build/debug -j "$(nproc)"
+
+      - name: Save ccache
+        if: github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-linux-debug-${{ github.sha }}
+
+      - name: Save Conan cache
+        if: github.ref == 'refs/heads/main' && steps.conan-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.conan2
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
+
+      - name: Test
+        run: |
+          set -euo pipefail
+          run_env="$(find build/debug-deps -name conanrun.sh -print -quit)"
+          # shellcheck disable=SC1090
+          source "$run_env"
+          ctest --test-dir build/debug --output-on-failure
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: debug-test-logs
+          path: |
+            build/debug/Testing/Temporary/LastTest.log
+            build/debug/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
   # ASan+UBSan build. The stack is reduced to the portable kernel bits so
   # the job is fast and independent of Crashpad/wasmtime binaries.
   # ---------------------------------------------------------------------------
