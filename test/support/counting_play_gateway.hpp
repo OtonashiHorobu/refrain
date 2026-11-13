@@ -25,9 +25,34 @@ class counting_play_gateway final : public refrain::server::play_gateway {
 
     void send_raw(std::uint64_t connection,
                   std::span<const std::byte> body) override {
-        namespace play_cb = protocol::current::play::clientbound;
         last_connection = connection;
         bytes += body.size();
+        tally(body);
+    }
+
+    /// A shared body reaches every connection of the cohort, so its packets
+    /// are tallied once and the cohort size is recorded separately.
+    void send_raw_many(std::span<const std::uint64_t> connections,
+                       std::span<const std::byte> body) override {
+        ++shared_sends;
+        shared_recipients += connections.size();
+        shared_bytes += body.size();
+        bytes += body.size() * connections.size();
+        // The counters describe delivered packets, so a shared body counts
+        // once per recipient.
+        for (std::size_t index{0}; index < connections.size(); ++index) {
+            tally(body);
+        }
+    }
+
+    [[nodiscard]] auto active_connections() const
+        -> std::vector<std::uint64_t> override {
+        return {};
+    }
+
+  private:
+    void tally(std::span<const std::byte> body) {
+        namespace play_cb = protocol::current::play::clientbound;
         net::reader in{body};
         while (!in.empty()) {
             const auto packet_id{in.read_varint()};
@@ -111,10 +136,7 @@ class counting_play_gateway final : public refrain::server::play_gateway {
         }
     }
 
-    [[nodiscard]] auto active_connections() const
-        -> std::vector<std::uint64_t> override {
-        return {};
-    }
+  public:
     [[nodiscard]] auto backlog(std::uint64_t) const -> std::size_t override {
         return 0;
     }
@@ -154,6 +176,9 @@ class counting_play_gateway final : public refrain::server::play_gateway {
         malformed = 0;
         bytes = 0;
         last_connection = 0;
+        shared_sends = 0;
+        shared_recipients = 0;
+        shared_bytes = 0;
     }
 
     std::size_t info_packets{0};
@@ -166,6 +191,10 @@ class counting_play_gateway final : public refrain::server::play_gateway {
     std::size_t malformed{0};
     std::size_t bytes{0};
     std::uint64_t last_connection{0};
+    /// Shared-body sends and the connections they reached.
+    std::size_t shared_sends{0};
+    std::size_t shared_recipients{0};
+    std::size_t shared_bytes{0};
 };
 
 } // namespace refrain::test_support

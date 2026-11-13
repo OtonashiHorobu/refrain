@@ -14,10 +14,12 @@
 #include <refrain/protocol/current.hpp>
 #include <refrain/protocol/java777_codec.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace {
 
@@ -256,6 +258,35 @@ auto encode_tab(void *self, refrain_str header, refrain_str footer,
     return REFRAIN_STATUS_OK;
 }
 
+auto send_shared(void *self,
+                 refrain_services_net_protocol_slice_connection_ref connections,
+                 const refrain_services_net_protocol_packet_view *packet)
+    -> refrain_status {
+    if (packet == nullptr ||
+        (connections.data == nullptr && connections.len > 0)) {
+        return REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_ERROR_MALFORMED_PACKET;
+    }
+    std::vector<std::uint64_t> cohort{};
+    cohort.reserve(static_cast<std::size_t>(connections.len));
+    for (std::uint64_t index{0}; index < connections.len; ++index) {
+        const auto &reference{connections.data[index]};
+        if (reference.struct_size <
+            REFRAIN_SERVICES_NET_PROTOCOL_CONNECTION_REF_SIZE) {
+            return REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_ERROR_MALFORMED_PACKET;
+        }
+        cohort.push_back(reference.connection);
+    }
+    const auto payload{as_bytes(packet->payload)};
+    auto result{static_cast<protocol_state *>(self)->codec.send_shared_packet(
+        cohort, packet->packet_id,
+        std::span<const std::byte>{
+            reinterpret_cast<const std::byte *>(payload.data()),
+            payload.size()})};
+    return result
+               ? REFRAIN_STATUS_OK
+               : REFRAIN_SERVICES_NET_PROTOCOL_PROTOCOL_ERROR_MALFORMED_PACKET;
+}
+
 auto query_extension(void *self, refrain_str id, std::uint32_t min_version,
                      refrain_extension_ref *out) -> refrain_status {
     if (self == nullptr || out == nullptr) {
@@ -265,22 +296,42 @@ auto query_extension(void *self, refrain_str id, std::uint32_t min_version,
         .struct_size = REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_VTABLE_SIZE,
         .encode_tab = &encode_tab,
     };
-    if (as_string_view(id) != REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ID) {
+    static const refrain_services_net_protocol_broadcast_codec_vtable
+        broadcast_vtable{
+            .struct_size =
+                REFRAIN_SERVICES_NET_PROTOCOL_BROADCAST_CODEC_VTABLE_SIZE,
+            .send_shared = &send_shared,
+    };
+    const auto id_text{as_string_view(id)};
+    const void *extension_vtable{nullptr};
+    std::string_view stable_id{};
+    std::uint32_t major{0};
+    std::uint32_t minor{0};
+    std::uint32_t patch{0};
+    if (id_text == REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ID) {
+        extension_vtable = &tab_vtable;
+        stable_id = REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ID;
+        major = REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_MAJOR;
+        minor = REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_MINOR;
+        patch = REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_PATCH;
+    } else if (id_text == REFRAIN_SERVICES_NET_PROTOCOL_BROADCAST_CODEC_ID) {
+        extension_vtable = &broadcast_vtable;
+        stable_id = REFRAIN_SERVICES_NET_PROTOCOL_BROADCAST_CODEC_ID;
+        major = REFRAIN_SERVICES_NET_PROTOCOL_BROADCAST_CODEC_ABI_MAJOR;
+        minor = REFRAIN_SERVICES_NET_PROTOCOL_BROADCAST_CODEC_ABI_MINOR;
+        patch = REFRAIN_SERVICES_NET_PROTOCOL_BROADCAST_CODEC_ABI_PATCH;
+    } else {
         return REFRAIN_EXTENSION_NOT_FOUND;
     }
-    const auto version{
-        (REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_MAJOR << 16U) |
-        REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_MINOR};
-    if (min_version > version) {
+    if (min_version > ((major << 16U) | minor)) {
         return REFRAIN_EXTENSION_VERSION_MISMATCH;
     }
     out->struct_size = REFRAIN_EXTENSION_REF_SIZE;
-    out->abi_major = REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_MAJOR;
-    out->abi_minor = REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_MINOR;
-    out->abi_patch = REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ABI_PATCH;
-    out->id = refrain::contracts::to_borrowed(
-        REFRAIN_SERVICES_NET_PROTOCOL_TAB_CODEC_ID);
-    out->vtable = &tab_vtable;
+    out->abi_major = major;
+    out->abi_minor = minor;
+    out->abi_patch = patch;
+    out->id = refrain::contracts::to_borrowed(stable_id);
+    out->vtable = extension_vtable;
     out->self = self;
     return REFRAIN_STATUS_OK;
 }

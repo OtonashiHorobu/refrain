@@ -2932,8 +2932,32 @@ void server::impl::send_many(std::span<const std::uint64_t> ids,
     if (!packet_id) {
         return;
     }
-    static_cast<void>(protocol->send_shared_packet(
-        ids, *packet_id, packet.subspan(in.position())));
+    const auto payload{packet.subspan(in.position())};
+    static_cast<void>(protocol->send_shared_packet(ids, *packet_id, payload));
+    if (!socket) {
+        return;
+    }
+    // A shared send only queues the frame on each recipient's codec, while a
+    // single send both queues and drains. Drain every recipient here under the
+    // same per-connection lock as a single send, so the codec queue still
+    // decides the byte order of the connection and a concurrent single send
+    // cannot split the pump.
+    for (const auto id : ids) {
+        const auto live{find_connection(id)};
+        if (!live || live->closed.load(std::memory_order_acquire)) {
+            continue;
+        }
+        const std::lock_guard lock{live->mutex};
+        if (live->closed.load(std::memory_order_relaxed)) {
+            continue;
+        }
+        packets_out.fetch_add(1, std::memory_order_relaxed);
+        bytes_out.fetch_add(payload.size(), std::memory_order_relaxed);
+        std::span<const std::byte> framed{};
+        while (protocol->take_outbound(id, framed)) {
+            socket->send(id, framed);
+        }
+    }
 }
 
 void server::impl::send(std::uint64_t id, std::uint16_t packet_id,

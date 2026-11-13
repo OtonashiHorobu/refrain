@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9e471daa6562b9ea
+// Schema hash: 996e38144c4577ab
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2848,6 +2848,13 @@ template <> struct custom_traits<::refrain::services::net_protocol::encoded_pack
         refrain::reflect::custom_field{"data", &::refrain::services::net_protocol::encoded_packet::data});
 };
 
+/// Generated RIDL struct 'refrain::services::net_protocol::connection_ref'.
+template <> struct custom_traits<::refrain::services::net_protocol::connection_ref> {
+    static constexpr std::string_view type_name = "refrain::services::net_protocol::connection_ref";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"connection", &::refrain::services::net_protocol::connection_ref::connection});
+};
+
 /// Generated RIDL struct 'refrain::services::net_session::session_profile'.
 template <> struct custom_traits<::refrain::services::net_session::session_profile> {
     static constexpr std::string_view type_name = "refrain::services::net_session::session_profile";
@@ -3162,6 +3169,16 @@ template <> struct custom_extension_traits<::refrain::services::net_protocol::ta
     static constexpr std::string_view id = "refrain:net.protocol/tab_codec";
     static constexpr std::string_view extends = "refrain:net.protocol";
     static constexpr std::string_view capability = "tab-codec";
+    static constexpr std::uint32_t abi_major = 1;
+    static constexpr std::uint32_t abi_minor = 0;
+    static constexpr std::uint32_t abi_patch = 0;
+};
+
+/// Generated RIDL extension 'refrain:net.protocol/broadcast_codec'.
+template <> struct custom_extension_traits<::refrain::services::net_protocol::broadcast_codec> {
+    static constexpr std::string_view id = "refrain:net.protocol/broadcast_codec";
+    static constexpr std::string_view extends = "refrain:net.protocol";
+    static constexpr std::string_view capability = "broadcast-codec";
     static constexpr std::uint32_t abi_major = 1;
     static constexpr std::uint32_t abi_minor = 0;
     static constexpr std::uint32_t abi_patch = 0;

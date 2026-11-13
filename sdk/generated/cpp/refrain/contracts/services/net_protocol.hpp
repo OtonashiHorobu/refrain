@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9e471daa6562b9ea
+// Schema hash: 996e38144c4577ab
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_NET_PROTOCOL_HPP
@@ -108,6 +108,15 @@ using encoded_packet = ::refrain_services_net_protocol_encoded_packet;
     ::refrain::contracts::init_struct(value);
     return value;
 }
+/// One connection in a broadcast cohort. Contract slices carry structs, so a
+/// cohort of connections is a slice of these thin wrappers.
+using connection_ref = ::refrain_services_net_protocol_connection_ref;
+/// Zero-initialized `connection_ref` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
+[[nodiscard]] inline auto make_connection_ref() noexcept -> connection_ref {
+    connection_ref value{};
+    ::refrain::contracts::init_struct(value);
+    return value;
+}
 
 static_assert(sizeof(protocol_descriptor) == 72);
 static_assert(alignof(protocol_descriptor) == 8);
@@ -147,6 +156,10 @@ static_assert(sizeof(encoded_packet) == 24);
 static_assert(alignof(encoded_packet) == 8);
 static_assert(offsetof(encoded_packet, struct_size) == 0);
 static_assert(offsetof(encoded_packet, data) == 8);
+static_assert(sizeof(connection_ref) == 16);
+static_assert(alignof(connection_ref) == 8);
+static_assert(offsetof(connection_ref, struct_size) == 0);
+static_assert(offsetof(connection_ref, connection) == 8);
 
 /// Optional tab-list packet encoder. A protocol provider that exposes this
 /// extension owns the version-specific text-component encoding.
@@ -197,9 +210,64 @@ class tab_codec final {
 
 static_assert(offsetof(::refrain_services_net_protocol_tab_codec_vtable, struct_size) == 0);
 
+/// Optional broadcast encoder. A provider that can frame one packet body once
+/// and deliver that frame to every connection of a cohort exposes this
+/// extension. The adapter uses it for a shared send, so a player-list update
+/// that goes to a whole cohort is compressed once instead of once per
+/// recipient. Without it the adapter falls back to one encode per recipient.
+/// Provider-implemented extension extending 'refrain:net.protocol'.
+/// A host binds the reference once through `provider::extension<T>()`;
+/// method calls below dispatch through the bound vtable.
+class broadcast_codec final {
+  public:
+    using vtable = ::refrain_services_net_protocol_broadcast_codec_vtable;
+    static constexpr std::string_view extension_id =
+        "refrain:net.protocol/broadcast_codec";
+    static constexpr std::string_view extends_service =
+        "refrain:net.protocol";
+    static constexpr std::string_view capability =
+        "broadcast-codec";
+    static constexpr std::uint32_t abi_major = 1;
+    static constexpr std::uint32_t abi_minor = 0;
+    static constexpr std::uint32_t abi_patch = 0;
+    /// Packed minimum version requested from a provider:
+    /// (major << 16) | minor.
+    static constexpr std::uint32_t abi_version =
+        (1u << 16u) | 0u;
+
+    broadcast_codec(const vtable &table, void *self) noexcept
+        : table_{&table}, self_{self} {}
+
+    [[nodiscard]] auto table() const noexcept
+        -> const vtable & {
+        return *table_;
+    }
+
+    [[nodiscard]] auto self() const noexcept -> void * {
+        return self_;
+    }
+
+    /// Encode one packet for several connections. The provider may share the
+    /// compressed frame between connections whose framing is identical and
+    /// must still encrypt per connection when a cipher is active.
+    [[nodiscard]] auto send_shared(std::span<const ::refrain::services::net_protocol::connection_ref> connections, const ::refrain::services::net_protocol::packet_view &packet) const -> std::expected<void, ::refrain::services::net_protocol::protocol_error> {
+        const auto abi_packet = ::refrain::contracts::with_struct_size(packet);
+        if (const auto code = table_->send_shared(self_, refrain_services_net_protocol_slice_connection_ref{connections.data(), static_cast<std::uint64_t>(connections.size())}, &abi_packet); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::net_protocol::protocol_error>(code));
+        }
+        return {};
+    }
+
+  private:
+    const vtable *table_;
+    void *self_;
+};
+
+static_assert(offsetof(::refrain_services_net_protocol_broadcast_codec_vtable, struct_size) == 0);
+
 inline constexpr std::string_view service_id = "refrain:net.protocol";
 inline constexpr std::uint32_t abi_major = 2;
-inline constexpr std::uint32_t abi_minor = 0;
+inline constexpr std::uint32_t abi_minor = 1;
 inline constexpr std::uint32_t abi_patch = 0;
 inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::side_kind::server;
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::net;
@@ -208,7 +276,7 @@ inline constexpr std::string_view capabilities = "frame-compression,registry-syn
 inline constexpr std::string_view required_services = "refrain:core>=1.0.0";
 inline constexpr std::string_view service_ids[] = {"refrain:net.protocol"};
 inline constexpr std::string_view extension_ids[] = {
-"refrain:net.protocol/tab_codec"};
+"refrain:net.protocol/tab_codec", "refrain:net.protocol/broadcast_codec"};
 
 namespace detail {
 [[nodiscard]] inline auto extension_failure(::refrain_status status,

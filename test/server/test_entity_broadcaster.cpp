@@ -314,13 +314,25 @@ suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
 
             broadcaster.tick(players);
 
-            expect(gateway.sent.size() == 2U);
-            for (const auto &sent : gateway.sent) {
-                expect(packet_id(sent.body) ==
-                       refrain::protocol::current::play::clientbound::
-                           add_entity::packet_id);
-                expect(sent.connection == 1U || sent.connection == 2U);
+            // Visibility and movement are separate sends; the contract is the
+            // packet stream of each connection, not the frame boundaries.
+            const auto streams{decode_gateway(gateway)};
+            expect(streams.size() == 2U);
+            const auto *first{players.player_of(1)};
+            const auto *second{players.player_of(2)};
+            expect(first != nullptr);
+            expect(second != nullptr);
+            if (first == nullptr || second == nullptr) {
+                return;
             }
+            const auto expected_for = [](std::uint32_t other) {
+                return std::vector<emitted_packet>{
+                    {tick_packet::spawn, other},
+                    {tick_packet::teleport, other},
+                };
+            };
+            expect(streams.at(1) == expected_for(second->entity_id));
+            expect(streams.at(2) == expected_for(first->entity_id));
         };
 
     "a second tick with no movement sends nothing"_test = [] {
@@ -508,10 +520,11 @@ suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
             float yaw{value->yaw};
             const float pitch{value->pitch};
             if (roll == 1) {
-                x += position(engine) / 500.0;
-                z += position(engine) / 500.0;
+                x += 17.0;
+                z -= 17.0;
                 yaw += 0.25F;
             } else if (roll == 2) {
+                x -= 17.0;
                 yaw += 0.5F;
             } else {
                 x += position(engine) * 2.0;
@@ -582,5 +595,61 @@ suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
             expect(spawns == pairs);
             // The whole relation cannot fit in one tick's pair budget.
             expect(ticks >= (pairs + budget - 1) / budget);
+        };
+
+    "a dense cohort stays inside the per-tick bound and idles in between"_test =
+        [] {
+            // Every player stands on the same spot, so the relation is
+            // O(players^2). The initial fill must respect the per-tick spawn
+            // bound, a tick with no change must do no visibility work, and a
+            // step inside the chunk must reach every viewer.
+            constexpr std::uint64_t player_count{200};
+            constexpr std::int32_t tracking_chunks{32};
+            session::play_session players{};
+            for (std::uint64_t connection{1}; connection <= player_count;
+                 ++connection) {
+                join(players, connection, 0.0, 0.0);
+            }
+            counting_play_gateway gateway{};
+            entity_broadcaster broadcaster{gateway, tracking_chunks};
+
+            std::size_t ticks{0};
+            do {
+                gateway.reset();
+                broadcaster.tick(players);
+                expect(gateway.spawn_packets <=
+                       entity_broadcaster::max_spawns_per_tick + player_count);
+                expect(gateway.malformed == 0U);
+                expect(gateway.other_packets == 0U);
+                ++ticks;
+                expect(ticks < 64U) << "the dense fill must complete";
+            } while (gateway.spawn_packets > 0);
+            expect(ticks > 1U) << "the dense fill must be spread over ticks";
+
+            // No player changed chunk or view distance, so the incremental
+            // pass has nothing to do; only a periodic reconcile would run, and
+            // it is not due.
+            gateway.reset();
+            broadcaster.tick(players);
+            expect(gateway.spawn_packets == 0U);
+            expect(gateway.remove_packets == 0U);
+            expect(gateway.move_packets == 0U);
+            expect(gateway.bytes == 0U);
+
+            // A step that stays inside the chunk changes no visibility pair;
+            // the movement fan-out must still reach every other player.
+            for (std::uint64_t connection{1}; connection <= player_count;
+                 ++connection) {
+                const auto *value{players.player_of(connection)};
+                static_cast<void>(players.update_position(
+                    connection, value->x + 1.0, value->y, value->z, value->yaw,
+                    value->pitch));
+            }
+            gateway.reset();
+            broadcaster.tick(players);
+            expect(gateway.spawn_packets == 0U);
+            expect(gateway.remove_packets == 0U);
+            expect(gateway.move_packets == player_count * (player_count - 1));
+            expect(gateway.malformed == 0U);
         };
 };

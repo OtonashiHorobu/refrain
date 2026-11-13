@@ -97,13 +97,18 @@ void player_visibility_index::candidates(const visibility_query &viewer,
 void player_visibility_index::viewers(std::string_view world_name, double x,
                                       double z,
                                       std::vector<std::size_t> &out) const {
+    viewers_at(world_name, chunk_coordinate(x), chunk_coordinate(z), out);
+}
+
+void player_visibility_index::viewers_at(std::string_view world_name,
+                                         std::int64_t centre_x,
+                                         std::int64_t centre_z,
+                                         std::vector<std::size_t> &out) const {
     out.clear();
     const auto world{worlds_.find(world_name)};
     if (world == worlds_.end()) {
         return;
     }
-    const auto centre_x{chunk_coordinate(x)};
-    const auto centre_z{chunk_coordinate(z)};
     const auto x_min{centre_x - max_chunks_};
     const auto x_max{centre_x + max_chunks_};
     const auto z_max{centre_z + max_chunks_};

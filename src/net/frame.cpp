@@ -18,6 +18,13 @@
 namespace refrain::net {
 namespace {
 
+/// Frames up to this size are latency-bound fan-out, not bulk transfer: their
+/// absolute bandwidth is small and deflate spends most of the call building
+/// the Huffman trees. They are compressed at the fastest level, which costs
+/// roughly a third more bytes but several times less CPU. Larger frames, where
+/// the ratio is what saves bandwidth, keep the default level.
+constexpr std::size_t fast_compression_limit{16U * 1024U};
+
 [[nodiscard]] auto frame_failure(std::string_view message) -> error {
     return make_error(error_code::parse_error, message);
 }
@@ -97,10 +104,13 @@ auto frame_encoder::encode(std::span<const std::byte> packet,
     // Deflater produces for one packet.
     uLongf compressed_size{compressBound(static_cast<uLong>(packet.size()))};
     std::vector<std::byte> compressed(compressed_size);
-    const auto result{compress2(
-        reinterpret_cast<Bytef *>(compressed.data()), &compressed_size,
-        reinterpret_cast<const Bytef *>(packet.data()),
-        static_cast<uLong>(packet.size()), Z_DEFAULT_COMPRESSION)};
+    const auto level{packet.size() <= fast_compression_limit
+                         ? Z_BEST_SPEED
+                         : Z_DEFAULT_COMPRESSION};
+    const auto result{compress2(reinterpret_cast<Bytef *>(compressed.data()),
+                                &compressed_size,
+                                reinterpret_cast<const Bytef *>(packet.data()),
+                                static_cast<uLong>(packet.size()), level)};
     if (result != Z_OK) {
         return std::unexpected{make_error(
             error_code::unknown,

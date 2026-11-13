@@ -13,6 +13,7 @@
 
 #include <boost/ut.hpp>
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -300,6 +301,33 @@ suite<"net/send-order"> server_send_order_tests = [] {
                 test.frames(static_cast<std::uint64_t>(index + 1))};
             expect(stream.size() == per_connection);
             expect(strictly_ordered(stream));
+        }
+    };
+
+    "net/send many drains every recipient to the transport"_test = [] {
+        // `send_raw_many` queues one shared frame per codec connection; the
+        // transport must receive it without waiting for a later single send.
+        fixture test{};
+        expect(static_cast<bool>(test.running));
+        if (!test.running) {
+            return;
+        }
+        constexpr std::array<std::uint64_t, 4> connections{1, 2, 3, 4};
+        for (const auto connection : connections) {
+            test.open(connection);
+        }
+        const std::array payload{std::byte{0x2C}, std::byte{0x07},
+                                 std::byte{0x08}, std::byte{0x09}};
+        test.running->send_raw_many(connections, payload);
+        const std::array expected{std::byte{0x07}, std::byte{0x08},
+                                  std::byte{0x09}};
+        for (const auto connection : connections) {
+            const auto stream{test.frames(connection)};
+            expect(stream.size() == 1U);
+            if (!stream.empty()) {
+                expect(stream.front() == std::vector<std::byte>{
+                                             expected.begin(), expected.end()});
+            }
         }
     };
 
