@@ -14,6 +14,7 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace refrain::sim {
@@ -94,6 +95,7 @@ class player_table {
     [[nodiscard]] auto find(entity_id id) noexcept -> player_state *;
     [[nodiscard]] auto find(entity_id id) const noexcept
         -> const player_state *;
+    /// O(1) lookup by connection; the record map is keyed by entity id.
     [[nodiscard]] auto find_by_connection(std::uint64_t connection) noexcept
         -> player_state *;
     [[nodiscard]] auto
@@ -143,6 +145,10 @@ class player_table {
 
   private:
     std::map<entity_id, player_state> players_{};
+    /// Connection to entity id. A record's connection never changes, so the
+    /// index only follows `add()` and `remove()`; no ordering decision reads
+    /// it.
+    std::unordered_map<std::uint64_t, entity_id> by_connection_{};
     entity_id next_entity_id_{1};
 };
 

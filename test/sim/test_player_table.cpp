@@ -113,6 +113,16 @@ suite player_table_tests = [] {
         expect(!table.remove(1));
         expect(table.size() == 1U);
         expect(table.find(*alice) == nullptr);
+        expect(table.find_by_connection(1) == nullptr);
+
+        // The connection index follows a leave: the same connection may
+        // register again and resolves to the new record.
+        const auto again{table.add(sim::player_table::registration{
+            .connection = 1, .name = "Alice Again", .world = "overworld"})};
+        expect(again.has_value());
+        expect(table.find_by_connection(1) != nullptr);
+        expect(table.find_by_connection(1)->id == *again);
+        expect(table.find_by_connection(1)->name == "Alice Again");
     };
 
     "sim/players and spawned entities share one entity id sequence"_test = [] {
