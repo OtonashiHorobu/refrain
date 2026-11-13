@@ -60,7 +60,8 @@ Configuration lives in one TOML file per namespace under `--config-dir`:
 
 ```text
 config/
-  network.toml      bind_host, port, compression, view distance, status, online mode
+  network.toml      bind_host, port, compression, view distance, status,
+                    online mode, broadcast budgets
   world.toml        path, level_name, allow_nether
   runtime.toml      tick/watchdog/autosave knobs
   storage.toml      zstd and compaction policy
@@ -84,7 +85,25 @@ player_idle_timeout = 0 # minutes; 0 disables
 [status]
 motd = "A Refrain Server"
 max_players = 20
+
+[broadcast]
+info_bytes_per_tick = 1048576
+queued_info_bytes = 33554432
+visibility_pairs_per_tick = 100000
+spawns_per_tick = 8000
 ```
+
+`[broadcast]` bounds the work one tick spends on the player list and on entity
+visibility. The byte counts are tick work budgets, not wire limits:
+`info_bytes_per_tick` is the encoded player-list fan-out a tick hands to the
+transport, and a cohort that does not fit stays queued, in order, for the next
+tick. `queued_info_bytes` is the backlog valve: above it the whole queue drains
+in one tick even though that overruns the per-tick budget, because an unbounded
+queue is the worse failure. `visibility_pairs_per_tick` and `spawns_per_tick`
+spread the visibility sweep over as many ticks as it needs without dropping a
+transition. The values shown are the defaults. A value below one is raised to
+one, and the effective values are logged at startup, because a zero budget
+would stop the corresponding pass from making progress.
 
 `storage.toml` holds the zstd policy and maintenance cadence:
 
