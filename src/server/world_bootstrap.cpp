@@ -39,9 +39,12 @@ auto generate_spawn_area(world_port &world,
     const auto side{static_cast<std::int32_t>(radius * 2 + 1)};
     const auto origin{
         refrain::world::chunk_pos{center.x - radius, center.z - radius}};
-    auto generated{(*generator)
-                       ->generate_area(worldgen::chunk_pos{origin.x, origin.z},
-                                       side, side, config.workers)};
+    // The spawn square is generated through whole tiles, so every written
+    // chunk holds the feature writes its neighbours made across its border.
+    auto generated{
+        (*generator)
+            ->generate_area_tiled(worldgen::chunk_pos{origin.x, origin.z}, side,
+                                  side, config.workers)};
     if (!generated) {
         return std::unexpected{generated.error()};
     }
@@ -53,7 +56,8 @@ auto generate_spawn_area(world_port &world,
             return std::unexpected{make_error(
                 error_code::unknown, "spawn generator returned no chunk")};
         }
-        // `generate_area` returns chunks with x outer and z inner.
+        // `generate_area_tiled` returns the requested square in the same
+        // x-outer, z-inner order.
         const auto x{origin.x + static_cast<std::int32_t>(index / side)};
         const auto z{origin.z + static_cast<std::int32_t>(index % side)};
         ++index;
