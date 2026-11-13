@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -110,10 +111,18 @@ class world_port {
     [[nodiscard]] virtual auto loaded_chunks() const noexcept
         -> std::size_t = 0;
 
+    /// Storage compression settings the runtime applies while it boots. A port
+    /// whose provider does not apply compression settings configures nothing
+    /// and reports success; the port implementation decides how the skip is
+    /// reported to the operator. A provider that accepts the call and rejects
+    /// the value returns an error.
     [[nodiscard]] virtual auto set_zstd_level(int level) -> status = 0;
     [[nodiscard]] virtual auto set_zstd_policy(const sim::zstd_policy &policy)
         -> status = 0;
-    [[nodiscard]] virtual auto zstd_level() const noexcept -> int = 0;
+    /// Effective zstd level the world stores chunks with, or nullopt when the
+    /// port's provider applies no compression settings.
+    [[nodiscard]] virtual auto zstd_level() const noexcept
+        -> std::optional<int> = 0;
 
     virtual void seed(std::uint64_t value) noexcept = 0;
     virtual void set_item_table(sim::item_table table) = 0;

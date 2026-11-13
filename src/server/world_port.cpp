@@ -94,8 +94,10 @@ class direct_world_port final : public world_port {
         return world().set_zstd_policy(policy);
     }
 
-    auto zstd_level() const noexcept -> int override {
-        return world().store().zstd_level();
+    auto zstd_level() const noexcept -> std::optional<int> override {
+        return world_ == nullptr
+                   ? std::nullopt
+                   : std::optional<int>{world().store().zstd_level()};
     }
 
     void seed(std::uint64_t value) noexcept override { world().seed(value); }

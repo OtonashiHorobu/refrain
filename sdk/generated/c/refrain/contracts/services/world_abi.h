@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: e168f1954a0feabb
+// Schema hash: 9acb7bb41c6b4563
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_WORLD_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_WORLD_ABI_H
@@ -22,6 +22,7 @@ extern "C" {
 typedef struct refrain_services_world_world_config refrain_services_world_world_config;
 typedef struct refrain_services_world_level_info refrain_services_world_level_info;
 typedef struct refrain_services_world_level_projection refrain_services_world_level_projection;
+typedef struct refrain_services_world_zstd_policy refrain_services_world_zstd_policy;
 
 typedef uint32_t refrain_services_world_world_error; // enum 'world_error'
 #define REFRAIN_SERVICES_WORLD_WORLD_ERROR_CHUNK_NOT_LOADED ((refrain_services_world_world_error)(1))
@@ -87,9 +88,24 @@ struct refrain_services_world_level_projection {
 }; // refrain_services_world_level_projection size = 88
 #define REFRAIN_SERVICES_WORLD_LEVEL_PROJECTION_SIZE ((uint32_t)sizeof(refrain_services_world_level_projection))
 
+// Distance-adaptive zstd settings a provider applies to the chunks it stores.
+// Levels are zstd compression levels; radii are horizontal chunk distances
+// from the player. A chunk inside `near_radius` is stored with `near_level`,
+// one inside `mid_radius` with `mid_level`, and everything beyond with
+// `far_level`.
+struct refrain_services_world_zstd_policy {
+    uint32_t struct_size;
+    int32_t near_level;
+    int32_t mid_level;
+    int32_t far_level;
+    int32_t near_radius;
+    int32_t mid_radius;
+}; // refrain_services_world_zstd_policy size = 24
+#define REFRAIN_SERVICES_WORLD_ZSTD_POLICY_SIZE ((uint32_t)sizeof(refrain_services_world_zstd_policy))
+
 #define REFRAIN_SERVICES_WORLD_SERVICE_ID "refrain:world"
 #define REFRAIN_SERVICES_WORLD_ABI_MAJOR 1u
-#define REFRAIN_SERVICES_WORLD_ABI_MINOR 1u
+#define REFRAIN_SERVICES_WORLD_ABI_MINOR 2u
 #define REFRAIN_SERVICES_WORLD_ABI_PATCH 0u
 #define REFRAIN_SERVICES_WORLD_SIDE REFRAIN_SIDE_SERVER
 #define REFRAIN_SERVICES_WORLD_THREAD REFRAIN_THREAD_SIM
@@ -133,6 +149,22 @@ typedef struct refrain_services_world_vtable {
     // opened over; the level directory stays private to the storage provider.
     // attributes: #[thread(sim)] #[can_fail]
     refrain_status (*level)(void *self, refrain_services_world_level_projection *out_value);
+    // Optional. Effective zstd level the provider stores chunks with; a
+    // provider that does not apply compression settings leaves the slot
+    // empty.
+    // attributes: #[thread(sim)]
+    int32_t (*zstd_level)(void *self);
+    // Optional. Replace the zstd level chunks are stored with. A provider
+    // that does not apply compression settings leaves the slot empty, which
+    // means the setting does not apply to it rather than that the call
+    // failed.
+    // attributes: #[thread(sim)] #[can_fail]
+    refrain_status (*set_zstd_level)(void *self, int32_t level);
+    // Optional. Replace the distance-adaptive zstd policy. A provider that
+    // does not apply compression settings leaves the slot empty, which means
+    // the setting does not apply to it rather than that the call failed.
+    // attributes: #[thread(sim)] #[can_fail]
+    refrain_status (*set_zstd_policy)(void *self, const refrain_services_world_zstd_policy *policy);
 } refrain_services_world_vtable; // service refrain:world
 
 #define REFRAIN_SERVICES_WORLD_VTABLE_SIZE ((uint32_t)sizeof(refrain_services_world_vtable))

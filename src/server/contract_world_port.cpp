@@ -13,6 +13,7 @@
 #include <refrain/contracts/services/storage.hpp>
 #include <refrain/contracts/services/world.hpp>
 #include <refrain/core/error.hpp>
+#include <refrain/core/log.hpp>
 #include <refrain/server/world_bootstrap.hpp>
 #include <refrain/world/chunk_codec.hpp>
 
@@ -44,6 +45,22 @@ namespace {
                                    std::string_view reason) -> refrain::status {
     return std::unexpected{contract_error(operation, reason)};
 }
+
+/// A provider that answers an optional call with an error is reporting a real
+/// failure: the empty slot is how a provider declares a setting does not
+/// apply, so an error status from a filled slot is never a skip.
+[[nodiscard]] auto provider_failure(std::string_view call, std::uint32_t code)
+    -> refrain::status {
+    const auto rejected{
+        code == static_cast<std::uint32_t>(
+                    refrain::services::world::world_error::out_of_bounds)};
+    return std::unexpected{refrain::make_error(
+        rejected ? refrain::error_code::invalid_argument
+                 : refrain::error_code::io_error,
+        fmt::format("refrain:world {} failed ({})", call, code))};
+}
+
+constexpr refrain::log::logger log_world{"world"};
 
 /// `refrain:world` v1 carries section metadata but no block-array payload, so
 /// a contract port cannot hand the packet encoder a runtime column. Every
@@ -201,19 +218,69 @@ class contract_world_port final : public world_port {
 
     auto loaded_chunks() const noexcept -> std::size_t override { return 0; }
 
-    auto set_zstd_level(int) -> status override {
-        // TODO: `refrain:storage` v1 has no compression settings call; a
-        // replacement store keeps its own defaults.
-        return contract_status("set_zstd_level",
-                               "refrain:storage v1 has no zstd settings");
+    auto set_zstd_level(int level) -> status override {
+        if (!world_open_) {
+            return contract_status("set_zstd_level", "the world is not open");
+        }
+        if (world_provider().table().set_zstd_level == nullptr) {
+            // An empty slot means the provider does not apply compression
+            // settings: nothing to configure, and the requested level does not
+            // take effect. Report that once so an operator who pinned a level
+            // learns the provider ignored it.
+            if (!zstd_level_skip_reported_) {
+                log_world.warn(
+                    "zstd level {} not applied: the provider applies "
+                    "no compression settings",
+                    level);
+                zstd_level_skip_reported_ = true;
+            }
+            return status_ok();
+        }
+        auto configured{world_provider().set_zstd_level(level)};
+        if (!configured) {
+            return provider_failure(
+                "set_zstd_level",
+                static_cast<std::uint32_t>(configured.error()));
+        }
+        return status_ok();
     }
 
-    auto set_zstd_policy(const sim::zstd_policy &) -> status override {
-        return contract_status("set_zstd_policy",
-                               "refrain:storage v1 has no zstd settings");
+    auto set_zstd_policy(const sim::zstd_policy &policy) -> status override {
+        if (!world_open_) {
+            return contract_status("set_zstd_policy", "the world is not open");
+        }
+        if (world_provider().table().set_zstd_policy == nullptr) {
+            if (!zstd_policy_skip_reported_) {
+                log_world.warn("zstd policy not applied: the provider applies "
+                               "no compression settings");
+                zstd_policy_skip_reported_ = true;
+            }
+            return status_ok();
+        }
+        auto abi_policy{services::world::make_zstd_policy()};
+        abi_policy.near_level = policy.near_level;
+        abi_policy.mid_level = policy.mid_level;
+        abi_policy.far_level = policy.far_level;
+        abi_policy.near_radius = policy.near_radius;
+        abi_policy.mid_radius = policy.mid_radius;
+        auto configured{world_provider().set_zstd_policy(abi_policy)};
+        if (!configured) {
+            return provider_failure(
+                "set_zstd_policy",
+                static_cast<std::uint32_t>(configured.error()));
+        }
+        return status_ok();
     }
 
-    auto zstd_level() const noexcept -> int override { return 3; }
+    auto zstd_level() const noexcept -> std::optional<int> override {
+        if (!world_open_ || world_provider().table().zstd_level == nullptr) {
+            // A provider that does not apply compression settings has no
+            // effective level to report; absence of the setting is not a
+            // failure.
+            return std::nullopt;
+        }
+        return static_cast<int>(world_provider().zstd_level());
+    }
 
     void seed(std::uint64_t) noexcept override {}
 
@@ -551,6 +618,10 @@ class contract_world_port final : public world_port {
     core::storage_world storage_world_{};
     bool world_open_{false};
     bool opened_{false};
+    /// One line per skipped compression setting: the first call names the
+    /// setting, later calls stay silent.
+    bool zstd_level_skip_reported_{false};
+    bool zstd_policy_skip_reported_{false};
 };
 
 } // namespace
