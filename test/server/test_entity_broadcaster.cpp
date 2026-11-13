@@ -385,6 +385,46 @@ suite<"server/entity-broadcaster"> entity_broadcaster_tests = [] {
                    packet_id);
     };
 
+    "a dimension change drops the pairs from the old world"_test = [] {
+        sim::player_table table{};
+        session::play_session players{table};
+        // Long enough for std::string to keep the name on the heap, which is
+        // where a borrowed view into it would point after the next projection.
+        join(players, 1, 0.0, 0.0, "minecraft:overworld");
+        join(players, 2, 32.0, 0.0, "minecraft:overworld");
+        support::fake_play_gateway gateway{};
+        entity_broadcaster broadcaster{gateway, 16};
+
+        broadcaster.tick(players);
+        expect(!gateway.sent.empty());
+        gateway.sent.clear();
+
+        // Same coordinates, other dimension: the pair has to be re-evaluated
+        // even though no chunk, distance or view distance changed.
+        auto *record{table.find_by_connection(2)};
+        expect(record != nullptr);
+        if (record == nullptr) {
+            return;
+        }
+        record->world = "minecraft:the_nether";
+        broadcaster.tick(players);
+
+        const auto *first{players.player_of(1)};
+        const auto *second{players.player_of(2)};
+        expect(first != nullptr);
+        expect(second != nullptr);
+        if (first == nullptr || second == nullptr) {
+            return;
+        }
+        const auto streams{decode_gateway(gateway)};
+        expect(streams.size() == 2U);
+        const auto removed_for = [](std::uint32_t other) {
+            return std::vector<emitted_packet>{{tick_packet::remove, other}};
+        };
+        expect(streams.at(1) == removed_for(second->entity_id));
+        expect(streams.at(2) == removed_for(first->entity_id));
+    };
+
     "leaving removes the entity before the tab entry"_test = [] {
         sim::player_table table{};
         session::play_session players{table};
