@@ -38,6 +38,12 @@ using simd_f64 = hn::Rebind<double, simd_f64_half>;
         std::nextafter(noise_detail::half_wrap, 0.0);
     const auto inside = hn::And(hn::Ge(value, hn::Set(d, -half_round_off)),
                                 hn::Lt(value, hn::Set(d, half_round_off)));
+    // Terrain coordinates are far inside the stable range, so the reduction
+    // is dead for every block a chunk produces; skip it when every lane keeps
+    // the scalar helper's fast branch.
+    if (hn::AllTrue(d, inside)) {
+        return value;
+    }
     const auto period = hn::Set(d, noise_detail::wrap_period);
     const auto reduced = hn::Sub(
         value,
@@ -86,8 +92,10 @@ perlin_volume_avx2(const noise_detail::perlin_volume_parameters &parameters,
     const auto y_base = hn::Set(d64, static_cast<double>(vol.min_block_y()));
     const auto y_scale_v = hn::Set(d64, y_scale);
     const auto offset_y_v = hn::Set(d64, parameters.offset_y);
-    const auto fudge_scale_v = hn::Set(d64, parameters.fudge_y_scale);
+    const auto fudge_scale_v = hn::Set(d64, parameters.fudge.value);
+    const auto fudge_reciprocal_v = hn::Set(d64, parameters.fudge.reciprocal);
     const auto fudge_rounding_v = hn::Set(d64, 1.0E-7);
+    const bool exact_fudge_reciprocal = parameters.fudge.exact_reciprocal;
 
     std::size_t index = 0;
     for (jint index_z = 0; index_z < vol.size_z(); ++index_z) {
@@ -131,9 +139,9 @@ perlin_volume_avx2(const noise_detail::perlin_volume_parameters &parameters,
                 float fudged_relative_y = relative_y;
                 if (parameters.smeared) {
                     fudged_relative_y = static_cast<float>(
-                        relative_y_double - noise_detail::smeared_fudge_y(
-                                                original_y, relative_y_double,
-                                                parameters.fudge_y_scale));
+                        relative_y_double -
+                        noise_detail::smeared_fudge_y(
+                            original_y, relative_y_double, parameters.fudge));
                 }
                 output.add_to(
                     index,
@@ -172,12 +180,11 @@ perlin_volume_avx2(const noise_detail::perlin_volume_parameters &parameters,
                 const auto floored_lo = hn::Floor(y_lo);
                 const auto floored_hi = hn::Floor(y_hi);
 
-                // The scalar floor of the first lane names the shared floor
-                // for the whole block; a block that straddles a floor change
-                // falls back to the scalar path.
-                const jint first_floor = mth::floor(
-                    noise_detail::wrap(vol.block_y(index_y) * y_scale) +
-                    parameters.offset_y);
+                // The floor of the first lane names the shared floor for the
+                // whole block; a block that straddles a floor change falls
+                // back to the scalar path.
+                const jint first_floor =
+                    static_cast<jint>(hn::GetLane(floored_lo));
                 const auto floor_target =
                     hn::Set(d64, static_cast<double>(first_floor));
                 if (!hn::AllTrue(d64, hn::Eq(floored_lo, floor_target)) ||
@@ -214,13 +221,21 @@ perlin_volume_avx2(const noise_detail::perlin_volume_parameters &parameters,
                         in_range_lo, original_lo, relative_lo_double);
                     const auto limit_hi = hn::IfThenElse(
                         in_range_hi, original_hi, relative_hi_double);
+                    // A power-of-two scale rounds the same through a multiply
+                    // by its exact reciprocal as through the division.
+                    const auto quotient_lo =
+                        exact_fudge_reciprocal
+                            ? hn::Mul(limit_lo, fudge_reciprocal_v)
+                            : hn::Div(limit_lo, fudge_scale_v);
+                    const auto quotient_hi =
+                        exact_fudge_reciprocal
+                            ? hn::Mul(limit_hi, fudge_reciprocal_v)
+                            : hn::Div(limit_hi, fudge_scale_v);
                     const auto fudge_lo = hn::Mul(
-                        hn::Floor(hn::Add(hn::Div(limit_lo, fudge_scale_v),
-                                          fudge_rounding_v)),
+                        hn::Floor(hn::Add(quotient_lo, fudge_rounding_v)),
                         fudge_scale_v);
                     const auto fudge_hi = hn::Mul(
-                        hn::Floor(hn::Add(hn::Div(limit_hi, fudge_scale_v),
-                                          fudge_rounding_v)),
+                        hn::Floor(hn::Add(quotient_hi, fudge_rounding_v)),
                         fudge_scale_v);
                     fudged = hn::Combine(
                         d32,

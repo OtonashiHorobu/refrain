@@ -74,6 +74,11 @@ class perlin_noise : public noise {
         return interval::of_symmetric(2.0F);
     }
 
+    /// The sampling body without the virtual dispatch. `noise_stack::get`
+    /// calls this for its plain Perlin layers so the sample stays inlined in
+    /// the layer loop; the public `get` keeps the same arithmetic.
+    [[nodiscard]] auto sample_at(double x, double y, double z) const -> float;
+
     [[nodiscard]] auto offset_x() const noexcept -> double { return offset_x_; }
     [[nodiscard]] auto offset_y() const noexcept -> double { return offset_y_; }
     [[nodiscard]] auto offset_z() const noexcept -> double { return offset_z_; }
@@ -165,11 +170,14 @@ class noise_stack final : public noise {
         std::unique_ptr<noise> source;
         double frequency{0.0};
         float amplitude{0.0F};
+        /// Set when `source` is a plain Perlin instance, so `get` can call the
+        /// non-virtual sample body instead of dispatching per layer.
+        const perlin_noise *plain{nullptr};
     };
 
-    noise_stack() = default;
-    noise_stack(noise_stack &&) = default;
-    auto operator=(noise_stack &&) -> noise_stack & = default;
+    noise_stack();
+    noise_stack(noise_stack &&other) noexcept;
+    auto operator=(noise_stack &&other) noexcept -> noise_stack &;
     explicit noise_stack(std::vector<layer> layers);
 
     [[nodiscard]] auto get(double x, double y, double z) const
@@ -188,6 +196,10 @@ class noise_stack final : public noise {
   private:
     std::vector<layer> layers_{};
     interval range_{interval::of_exact(0.0F)};
+    /// Identity of this instance. A stack is immutable after construction, so
+    /// the identity makes a cached sample safe across object lifetimes: the
+    /// counter is never reused and a moved-from stack carries zero.
+    std::uint64_t id_{0};
 };
 
 /// Decoded `minecraft:noise` document.

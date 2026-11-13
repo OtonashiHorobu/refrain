@@ -9,7 +9,10 @@
 #include "noise_detail.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <utility>
@@ -18,15 +21,50 @@ namespace refrain::worldgen {
 
 namespace {
 
+using noise_detail::float_gradients;
 using noise_detail::gradients;
+using noise_detail::make_smear_scale;
 using noise_detail::permute;
 using noise_detail::smeared_fudge_y;
 using noise_detail::wrap;
 
 auto grad_dot(jint hash, float x, float y, float z) -> float {
-    const auto &g = gradients[static_cast<std::size_t>(hash) & 15U];
-    return static_cast<float>(g.x) * x + static_cast<float>(g.y) * y +
-           static_cast<float>(g.z) * z;
+    const auto &g = float_gradients[static_cast<std::size_t>(hash) & 15U];
+    return g.x * x + g.y * y + g.z * z;
+}
+
+/// One sampled coordinate of one stack. A stack is immutable, so the value of
+/// a coordinate is fixed for the lifetime of the instance and the instance id
+/// makes the entry safe when an object is destroyed and another is placed at
+/// the same address.
+struct cached_sample {
+    std::uint64_t stack{0};
+    std::uint64_t x{0};
+    std::uint64_t y{0};
+    std::uint64_t z{0};
+    float value{0.0F};
+};
+
+/// Direct-mapped per-thread table. A caller that walks a sampling volume along
+/// an axis the noise does not depend on queries the same coordinate many times
+/// in a row, and the layer loop is the cost of each repeat.
+constexpr std::size_t sample_cache_size = 256;
+thread_local std::array<cached_sample, sample_cache_size> sample_cache{};
+
+[[nodiscard]] auto coordinate_bits(double value) -> std::uint64_t {
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+[[nodiscard]] auto sample_cache_index(std::uint64_t stack, std::uint64_t x,
+                                      std::uint64_t y, std::uint64_t z)
+    -> std::size_t {
+    std::uint64_t hash = x ^ (y >> 1U) ^ (z >> 2U) ^ stack;
+    hash ^= hash >> 33U;
+    hash *= 0xff51afd7ed558ccdULL;
+    hash ^= hash >> 33U;
+    return static_cast<std::size_t>(hash >> 56U);
 }
 
 } // namespace
@@ -51,6 +89,10 @@ auto perlin_noise::get(double x, double y) const -> float {
 }
 
 auto perlin_noise::get(double x, double y, double z) const -> float {
+    return sample_at(x, y, z);
+}
+
+auto perlin_noise::sample_at(double x, double y, double z) const -> float {
     const double wrapped_x = wrap(x) + offset_x_;
     const double wrapped_y = wrap(y) + offset_y_;
     const double wrapped_z = wrap(z) + offset_z_;
@@ -109,82 +151,24 @@ void perlin_noise::add_perlin_volume(buffer &output, const volume &vol,
                                      double xz_scale, double y_scale,
                                      float amplitude,
                                      double fudge_y_scale) const {
+    const noise_detail::perlin_volume_parameters parameters{
+        .perms = perms_.data(),
+        .offset_x = offset_x_,
+        .offset_y = offset_y_,
+        .offset_z = offset_z_,
+        .fudge = make_smear_scale(fudge_y_scale),
+        .smeared = smeared,
+    };
 #if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
     if (__builtin_cpu_supports("avx2")) {
-        const noise_detail::perlin_volume_parameters parameters{
-            .perms = perms_.data(),
-            .offset_x = offset_x_,
-            .offset_y = offset_y_,
-            .offset_z = offset_z_,
-            .fudge_y_scale = fudge_y_scale,
-            .smeared = smeared,
-        };
         perlin_volume_avx2(parameters, output, vol, xz_scale, y_scale,
                            amplitude);
         return;
     }
 #endif
 
-    std::size_t index = 0;
-
-    for (jint index_z = 0; index_z < vol.size_z(); ++index_z) {
-        const double z = wrap(vol.block_z(index_z) * xz_scale) + offset_z_;
-        const jint floor_z = mth::floor(z);
-        const float relative_z = static_cast<float>(z - floor_z);
-        const float alpha_z = mth::smoothstep(relative_z);
-
-        for (jint index_x = 0; index_x < vol.size_x(); ++index_x) {
-            const double x = wrap(vol.block_x(index_x) * xz_scale) + offset_x_;
-            const jint floor_x = mth::floor(x);
-            const float relative_x = static_cast<float>(x - floor_x);
-            const jint x0 = permute(perms_, floor_x);
-            const jint x1 = permute(perms_, floor_x + 1);
-            const float alpha_x = mth::smoothstep(relative_x);
-
-            noise_detail::perlin_corner_terms terms;
-            jint last_floor_y = std::numeric_limits<jint>::min();
-            for (jint index_y = 0; index_y < vol.size_y(); ++index_y) {
-                const double original_y = vol.block_y(index_y) * y_scale;
-                const double y = wrap(original_y) + offset_y_;
-                const jint floor_y = mth::floor(y);
-                const double relative_y_double =
-                    y - static_cast<double>(floor_y);
-                const float relative_y = static_cast<float>(relative_y_double);
-                const float alpha_y = mth::smoothstep(relative_y);
-                if (last_floor_y != floor_y) {
-                    noise_detail::update_corner_terms(perms_, x0, x1, floor_z,
-                                                      floor_y, relative_x,
-                                                      relative_z, terms);
-                    last_floor_y = floor_y;
-                }
-                float fudged_relative_y = relative_y;
-                if constexpr (smeared) {
-                    fudged_relative_y = static_cast<float>(
-                        relative_y_double - smeared_fudge_y(original_y,
-                                                            relative_y_double,
-                                                            fudge_y_scale));
-                }
-                output.add_to(
-                    index,
-                    amplitude *
-                        mth::lerp3(
-                            alpha_x, alpha_y, alpha_z,
-                            terms.d000xz + terms.g000y * fudged_relative_y,
-                            terms.d100xz + terms.g100y * fudged_relative_y,
-                            terms.d010xz +
-                                terms.g010y * (fudged_relative_y - 1.0F),
-                            terms.d110xz +
-                                terms.g110y * (fudged_relative_y - 1.0F),
-                            terms.d001xz + terms.g001y * fudged_relative_y,
-                            terms.d101xz + terms.g101y * fudged_relative_y,
-                            terms.d011xz +
-                                terms.g011y * (fudged_relative_y - 1.0F),
-                            terms.d111xz +
-                                terms.g111y * (fudged_relative_y - 1.0F)));
-                ++index;
-            }
-        }
-    }
+    noise_detail::perlin_volume_scalar(parameters, output, vol, xz_scale,
+                                       y_scale, amplitude);
 }
 
 void perlin_noise::add_to_volume(buffer &output, const volume &volume,
@@ -393,8 +377,33 @@ auto simplex_noise::range() const -> interval {
     return interval::of_symmetric(2.0F);
 }
 
+namespace {
+auto next_stack_id() -> std::uint64_t {
+    static std::atomic<std::uint64_t> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
+} // namespace
+
+noise_stack::noise_stack() : id_{next_stack_id()} {}
+
+noise_stack::noise_stack(noise_stack &&other) noexcept
+    : noise{std::move(other)}, layers_{std::move(other.layers_)},
+      range_{other.range_}, id_{other.id_} {
+    other.id_ = 0;
+}
+
+auto noise_stack::operator=(noise_stack &&other) noexcept -> noise_stack & {
+    if (this != &other) {
+        layers_ = std::move(other.layers_);
+        range_ = other.range_;
+        id_ = other.id_;
+        other.id_ = 0;
+    }
+    return *this;
+}
+
 noise_stack::noise_stack(std::vector<layer> layers)
-    : layers_{std::move(layers)} {
+    : layers_{std::move(layers)}, id_{next_stack_id()} {
     for (const auto &l : layers_) {
         range_ = interval::add(range_,
                                interval::mul(interval::of_symmetric(2.0F),
@@ -403,12 +412,44 @@ noise_stack::noise_stack(std::vector<layer> layers)
 }
 
 auto noise_stack::get(double x, double y, double z) const -> float {
+    if (id_ == 0) {
+        // A moved-from stack has no identity to key a cache entry by.
+        float value = 0.0F;
+        for (const auto &l : layers_) {
+            value +=
+                l.amplitude * l.source->get(x * l.frequency, y * l.frequency,
+                                            z * l.frequency);
+        }
+        return value;
+    }
+
+    const std::uint64_t x_bits = coordinate_bits(x);
+    const std::uint64_t y_bits = coordinate_bits(y);
+    const std::uint64_t z_bits = coordinate_bits(z);
+    cached_sample &entry =
+        sample_cache[sample_cache_index(id_, x_bits, y_bits, z_bits)];
+    if (entry.stack == id_ && entry.x == x_bits && entry.y == y_bits &&
+        entry.z == z_bits) {
+        return entry.value;
+    }
+
     float value = 0.0F;
     for (const auto &l : layers_) {
         const double frequency = l.frequency;
-        value += l.amplitude *
-                 l.source->get(x * frequency, y * frequency, z * frequency);
+        const float sample =
+            l.plain != nullptr
+                ? l.plain->sample_at(x * frequency, y * frequency,
+                                     z * frequency)
+                : l.source->get(x * frequency, y * frequency, z * frequency);
+        value += l.amplitude * sample;
     }
+    entry = cached_sample{
+        .stack = id_,
+        .x = x_bits,
+        .y = y_bits,
+        .z = z_bits,
+        .value = value,
+    };
     return value;
 }
 
@@ -526,6 +567,7 @@ auto normal_noise::create_legacy_nether_biome(random_source &random) const
                 .source = std::move(layer.source),
                 .frequency = layer.frequency * scale,
                 .amplitude = layer.amplitude * value_factor,
+                .plain = layer.plain,
             });
         }
     };
@@ -592,11 +634,13 @@ auto normal_noise::build_legacy_nether_layers(
     for (jint i = 0; i < octave_count; ++i) {
         auto &level = levels[static_cast<std::size_t>(i)];
         if (level != nullptr) {
+            const auto *plain = level.get();
             layers.push_back(noise_stack::layer{
                 .source = std::move(level),
                 .frequency = frequency,
                 .amplitude = static_cast<float>(
                     amplitude_factor * amplitudes[static_cast<std::size_t>(i)]),
+                .plain = plain,
             });
         }
         frequency *= 2.0;
@@ -618,15 +662,21 @@ auto normal_noise::create(random_source &random) const -> noise_stack {
         const auto value_factor =
             static_cast<float>(normalization_factor_ * octave.amplitude);
 
+        auto first_layer = std::make_unique<perlin_noise>(*first_source);
+        const auto *first_plain = first_layer.get();
         layers.push_back(noise_stack::layer{
-            .source = std::make_unique<perlin_noise>(*first_source),
+            .source = std::move(first_layer),
             .frequency = octave.frequency,
             .amplitude = value_factor,
+            .plain = first_plain,
         });
+        auto second_layer = std::make_unique<perlin_noise>(*second_source);
+        const auto *second_plain = second_layer.get();
         layers.push_back(noise_stack::layer{
-            .source = std::make_unique<perlin_noise>(*second_source),
+            .source = std::move(second_layer),
             .frequency = octave.frequency * 1.0181268882175227,
             .amplitude = value_factor,
+            .plain = second_plain,
         });
     }
     return noise_stack{std::move(layers)};
