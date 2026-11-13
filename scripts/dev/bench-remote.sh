@@ -113,6 +113,9 @@ rsync -a --delete -e "ssh ${SSH_OPTS[*]}" \
     --exclude=/world \
     --exclude='/install*' \
     --exclude=/run \
+    # The host generates its own datapack once and keeps it; syncing it would
+    # replace a real directory there with the lane's symlink and dangle.
+    --exclude='/content/vanilla/*/data' \
     --exclude=/AGENTS.local.md \
     ./ "$HOST:$REMOTE_DIR/"
 
