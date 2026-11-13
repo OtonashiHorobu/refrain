@@ -10,6 +10,7 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -532,11 +533,28 @@ auto world::encode_chunk(const chunk &value) -> result<storage_chunk> {
     return out;
 }
 
+auto world::store_record(const chunk &value) -> result<storage_chunk> {
+    // A column with revision zero has never been edited: its decoded record is
+    // still the authoritative encoding, so a flush skips rebuilding TLV from
+    // the runtime sections and writes the record back unchanged.
+    if (value.revision == 0) {
+        storage_chunk record{value.storage};
+        record.y_pos = value.y_pos;
+        return record;
+    }
+    return encode_chunk(value);
+}
+
 auto world::add_ticket(const chunk_pos &pos, ticket_kind /*kind*/) -> status {
     auto column{ensure_chunk(pos)};
     if (!column) {
         return std::unexpected{std::move(column.error())};
     }
+    ++tickets_[pos];
+    return status_ok();
+}
+
+auto world::hold_ticket(const chunk_pos &pos, ticket_kind /*kind*/) -> status {
     ++tickets_[pos];
     return status_ok();
 }
@@ -557,6 +575,131 @@ auto world::remove_ticket(const chunk_pos &pos) -> status {
 auto world::ticket_count(const chunk_pos &pos) const noexcept -> std::uint32_t {
     const auto found{tickets_.find(pos)};
     return found == tickets_.end() ? 0 : found->second;
+}
+
+auto world::write_entries(std::span<const snapshot_entry> entries, bool commit)
+    -> status {
+    const std::lock_guard lock{store_mutex_};
+    for (const auto &entry : entries) {
+        auto written{
+            store_ref().write_chunk(entry.pos, entry.chunk, entry.level)};
+        if (!written) {
+            return written;
+        }
+    }
+    if (!commit) {
+        return status_ok();
+    }
+    return store_ref().commit();
+}
+
+auto world::unload_chunk(const chunk_pos &pos, bool commit) -> status {
+    const auto found{chunks_.find(pos)};
+    if (found == chunks_.end()) {
+        return std::unexpected{make_error(
+            error_code::not_found,
+            fmt::format("chunk ({}, {}) is not loaded", pos.x, pos.z))};
+    }
+    const auto held{ticket_count(pos)};
+    if (held != 0) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       fmt::format("chunk ({}, {}) still holds {} ticket(s)",
+                                   pos.x, pos.z, held))};
+    }
+    if (found->second.dirty) {
+        // The column is dropped, so its edits reach the store first. The level
+        // is the fastest one: this write happens on the simulation thread.
+        auto encoded{store_record(found->second)};
+        if (!encoded) {
+            return std::unexpected{std::move(encoded.error())};
+        }
+        std::array<snapshot_entry, 1> batch{snapshot_entry{
+            .pos = pos,
+            .chunk = std::move(*encoded),
+            .revision = found->second.revision,
+            .level = eviction_zstd_level,
+        }};
+        if (auto written{write_entries(batch, commit)}; !written) {
+            return written;
+        }
+    }
+    chunks_.erase(found);
+    return status_ok();
+}
+
+auto world::unload_chunks(std::span<const chunk_pos> positions, bool commit)
+    -> status {
+    // Validate the whole set before touching the store: a caller that passes
+    // one pinned or unloaded column gets a single error and no partial unload.
+    std::vector<const chunk *> victims{};
+    victims.reserve(positions.size());
+    for (const auto &pos : positions) {
+        const auto found{chunks_.find(pos)};
+        if (found == chunks_.end()) {
+            return std::unexpected{make_error(
+                error_code::not_found,
+                fmt::format("chunk ({}, {}) is not loaded", pos.x, pos.z))};
+        }
+        const auto held{ticket_count(pos)};
+        if (held != 0) {
+            return std::unexpected{make_error(
+                error_code::invalid_argument,
+                fmt::format("chunk ({}, {}) still holds {} ticket(s)", pos.x,
+                            pos.z, held))};
+        }
+        victims.push_back(&found->second);
+    }
+    std::vector<snapshot_entry> dirty{};
+    dirty.reserve(victims.size());
+    for (std::size_t index{0}; index < victims.size(); ++index) {
+        const auto &column{*victims[index]};
+        if (!column.dirty) {
+            continue;
+        }
+        auto encoded{store_record(column)};
+        if (!encoded) {
+            return std::unexpected{std::move(encoded.error())};
+        }
+        dirty.push_back(snapshot_entry{
+            .pos = positions[index],
+            .chunk = std::move(*encoded),
+            .revision = column.revision,
+            .level = eviction_zstd_level,
+        });
+    }
+    if (!dirty.empty()) {
+        if (auto written{write_entries(dirty, commit)}; !written) {
+            return written;
+        }
+    }
+    for (const auto &pos : positions) {
+        chunks_.erase(pos);
+    }
+    return status_ok();
+}
+
+auto world::unticketed_chunks() const -> std::vector<resident_column> {
+    std::vector<resident_column> candidates{};
+    candidates.reserve(chunks_.size());
+    for (const auto &[pos, column] : chunks_) {
+        if (tickets_.contains(pos)) {
+            continue;
+        }
+        candidates.push_back(
+            resident_column{.pos = pos, .dirty = column.dirty});
+    }
+    return candidates;
+}
+
+auto world::chunk_positions() const -> std::vector<chunk_pos> {
+    std::vector<chunk_pos> positions{};
+    positions.reserve(chunks_.size());
+    for (const auto &[pos, column] : chunks_) {
+        static_cast<void>(column);
+        positions.push_back(pos);
+    }
+    return positions;
 }
 
 auto world::set_zstd_policy(const zstd_policy &policy) -> status {
@@ -723,27 +866,18 @@ auto world::rebuild_palette_in_place(unsigned threads, int zstd_level)
 
     // The rebuilt world has a fresh palette table, so every runtime chunk must
     // be decoded again (its `section.base` would otherwise carry stale palette
-    // ids). Reload the previously loaded chunks and every ticketed position so
-    // the runtime view and `state_hash()` survive the swap.
+    // ids). Reload the chunks that were loaded so the runtime view and
+    // `state_hash()` survive the swap. Tickets are kept, but a ticket is a
+    // residency pin rather than proof that the store holds the column: a
+    // viewport pin covers columns that have not been generated yet, and those
+    // must not turn the rebuild into a failure.
     std::vector<chunk_pos> positions;
-    positions.reserve(chunks_.size() + tickets_.size());
+    positions.reserve(chunks_.size());
     for (const auto &[pos, column] : chunks_) {
         static_cast<void>(column);
         positions.push_back(pos);
     }
-    for (const auto &[pos, count] : tickets_) {
-        static_cast<void>(count);
-        if (!chunks_.contains(pos)) {
-            positions.push_back(pos);
-        }
-    }
-    const auto order = [](const chunk_pos &left, const chunk_pos &right) {
-        if (left.x != right.x) {
-            return left.x < right.x;
-        }
-        return left.z < right.z;
-    };
-    std::sort(positions.begin(), positions.end(), order);
+    std::sort(positions.begin(), positions.end(), chunk_order{});
 
     // Release every region handle before the helper renames the directory.
     store_ = store_type{};

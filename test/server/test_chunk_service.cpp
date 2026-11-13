@@ -9,6 +9,7 @@
 // and re-entered. The store half writes a generated column, reloads it and
 // compares the content by state hash and block values.
 
+#include <refrain/core/time.hpp>
 #include <refrain/data/checksum.hpp>
 #include <refrain/server/chunk_service.hpp>
 #include <refrain/server/chunk_streamer.hpp>
@@ -19,12 +20,14 @@
 #include <boost/ut.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <span>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -382,6 +385,139 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
             expect(streamed(gateway, 3) == std::vector<coordinate>{{0, 0}});
             expect(std::count(requested.begin(), requested.end(),
                               coordinate{0, 0}) == 1);
+        };
+
+    "server/chunk residency follows the viewport and reloads left columns from disk"_test =
+        [] {
+            test_support::scratch_directory scratch;
+            const auto path{(scratch.path() / "world").string()};
+            expect(static_cast<bool>(world::create_world(path, 7, "probe")));
+            // Every column of every viewport the walk visits exists on disk
+            // before the walk starts; the world keeps none of them resident.
+            {
+                auto writer{sim::world::open(path)};
+                expect(static_cast<bool>(writer));
+                if (!writer) {
+                    return;
+                }
+                for (std::int32_t x{-10}; x <= 10; ++x) {
+                    for (std::int32_t z{-1}; z <= 1; ++z) {
+                        auto inserted{writer->insert_chunk(sim::chunk_pos{x, z},
+                                                           make_column())};
+                        expect(static_cast<bool>(inserted))
+                            << (inserted ? std::string{}
+                                         : inserted.error().message);
+                    }
+                }
+                expect(static_cast<bool>(writer->flush()));
+                writer->unload_all();
+                expect(writer->loaded_chunks() == 0U);
+            }
+
+            auto opened{sim::world::open(path)};
+            expect(static_cast<bool>(opened));
+            if (!opened) {
+                return;
+            }
+            auto &runtime{*opened};
+            const auto port{server::make_borrowed_world_port(runtime)};
+            recording_gateway gateway;
+            gateway.active = {9};
+            server::chunk_service service;
+            service.attach(gateway,
+                           server::chunk_packet_source{.world = port.get()});
+            auto *streamer{service.streamer()};
+            expect(streamer != nullptr);
+            if (streamer == nullptr) {
+                return;
+            }
+            auto log{std::make_shared<encode_log>()};
+            // Encode through the port, like the packet encoder does: a column
+            // that left the world is loaded from the store here.
+            streamer->set_encoder(
+                [&port, log](const server::chunk_packet_source &,
+                             sim::chunk_pos pos)
+                    -> refrain::result<std::vector<std::byte>> {
+                    ++log->calls;
+                    auto loaded{port->chunk_load(pos)};
+                    if (!loaded) {
+                        return std::unexpected{std::move(loaded.error())};
+                    }
+                    const coordinate value{pos.x, pos.z};
+                    std::vector<std::byte> body(sizeof(value));
+                    std::memcpy(body.data(), &value, sizeof(value));
+                    return body;
+                });
+            std::vector<coordinate> requested{};
+            streamer->set_chunk_requester(
+                [&requested](std::int32_t x, std::int32_t z) {
+                    requested.push_back({x, z});
+                    return false;
+                });
+            session::chunk_tracker views;
+            const auto tick_start{refrain::core::now_ns()};
+            const auto tick_once{
+                [&] { service.tick(*port, views, tick_start); }};
+            const auto streamed_after_walk{
+                [](std::int32_t center_x) -> std::size_t {
+                    // A step of one column adds the three columns of the new
+                    // edge; the rest of the square was already streamed.
+                    return static_cast<std::size_t>(9 + 3 * (center_x + 8));
+                }};
+
+            // Walk one viewport at a time across a corridor much longer than
+            // the resident bound.
+            for (std::int32_t center_x{-8}; center_x <= 8; ++center_x) {
+                static_cast<void>(views.update(9, center_x, 0, 1));
+                const auto expected{streamed_after_walk(center_x)};
+                for (int guard{0};
+                     guard < 8 && streamed(gateway, 9).size() < expected;
+                     ++guard) {
+                    tick_once();
+                }
+                expect(streamed(gateway, 9).size() == expected);
+                // The resident set follows the viewport: never more than the
+                // nine columns one viewport holds.
+                expect(runtime.loaded_chunks() <= 9U);
+                expect(service.residency().resident_chunks <= 9U);
+                expect(port->resident_chunks().size() ==
+                       runtime.loaded_chunks());
+                expect(port->ticket_count(sim::chunk_pos{center_x, 0}) == 1U);
+                if (center_x >= -6) {
+                    expect(port->ticket_count(
+                               sim::chunk_pos{center_x - 2, 0}) == 0U);
+                }
+                // Everything came from the store: no column was handed to the
+                // generator on the way out.
+                expect(requested.empty());
+            }
+            expect(service.residency().peak_resident_chunks <= 9U);
+            expect(service.residency().unloaded_chunks > 0U);
+
+            // Walk back. The origin columns were unloaded long ago, so they
+            // come back through a disk load and still never reach the
+            // generator.
+            auto expected{streamed(gateway, 9).size()};
+            for (std::int32_t center_x{7}; center_x >= -8; --center_x) {
+                static_cast<void>(views.update(9, center_x, 0, 1));
+                expected += 3;
+                for (int guard{0};
+                     guard < 8 && streamed(gateway, 9).size() < expected;
+                     ++guard) {
+                    tick_once();
+                }
+                expect(streamed(gateway, 9).size() == expected);
+                expect(runtime.loaded_chunks() <= 9U);
+                expect(requested.empty());
+            }
+            expect(streamed(gateway, 9).size() == 105U);
+            // Every body was encoded exactly once: the return trip needed no
+            // re-encode of a body the cache still held, and no body came from
+            // the generator, so the encodes read the evicted columns back from
+            // the store.
+            expect(log->calls == 105U);
+            expect(streamer->cache_misses() == 105U);
+            expect(requested.empty());
         };
 
     "server/chunk store reload returns the same content"_test = [] {

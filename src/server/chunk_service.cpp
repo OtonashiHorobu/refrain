@@ -114,6 +114,7 @@ void chunk_service::tick(world_port &world,
     if (streamer_) {
         streamer_->tick(views);
     }
+    enforce_residency(world);
     if (!generation_) {
         return;
     }
@@ -135,6 +136,107 @@ void chunk_service::tick(world_port &world,
         return;
     }
     generation_->dispatch(refrain::core::now_ns() - tick_start_ns);
+}
+
+auto chunk_service::process_resident_bytes() -> std::uint64_t {
+    return resident_bytes();
+}
+
+void chunk_service::enforce_residency(world_port &world) {
+    if (!world.controls_residency()) {
+        return;
+    }
+    // Pin sync runs only when a viewport moved. Between moves the pin set is
+    // still exact, so a still camera costs nothing beyond the sweep below.
+    auto views{streamer_ ? streamer_->viewports()
+                         : std::vector<chunk_streamer::viewport>{}};
+    if (views != viewports_) {
+        viewports_ = std::move(views);
+        // The resident set the viewports ask for: the union of their squares.
+        std::set<sim::chunk_pos, chunk_order> wanted{};
+        for (const auto &view : viewports_) {
+            for (std::int32_t dz{-view.radius}; dz <= view.radius; ++dz) {
+                for (std::int32_t dx{-view.radius}; dx <= view.radius; ++dx) {
+                    wanted.insert(
+                        sim::chunk_pos{view.chunk_x + dx, view.chunk_z + dz});
+                }
+            }
+        }
+        // Release first, then pin: a column that left one viewport but is
+        // inside another keeps exactly one ticket, and every step walks a
+        // sorted set.
+        for (auto ticket = view_tickets_.begin();
+             ticket != view_tickets_.end();) {
+            if (wanted.contains(*ticket)) {
+                ++ticket;
+                continue;
+            }
+            if (auto released{world.remove_ticket(*ticket)}; !released) {
+                log_chunk_gen.debug("release ({}, {}) failed: {}", ticket->x,
+                                    ticket->z, released.error().message);
+            }
+            ticket = view_tickets_.erase(ticket);
+        }
+        for (const auto &pos : wanted) {
+            if (view_tickets_.contains(pos)) {
+                continue;
+            }
+            if (auto held{world.hold_ticket(pos, sim::ticket_kind::player)};
+                !held) {
+                log_chunk_gen.debug("pin ({}, {}) failed: {}", pos.x, pos.z,
+                                    held.error().message);
+                continue;
+            }
+            view_tickets_.insert(pos);
+        }
+    }
+    // Everything loaded and unpinned is eligible. The positions come back in
+    // ascending order, which is the order the batch unloads them, so a replay
+    // drops the same columns at the same ticks.
+    std::vector<sim::chunk_pos> clean{};
+    std::vector<sim::chunk_pos> dirty{};
+    for (const auto &entry : world.unticketed_chunks()) {
+        if (entry.dirty) {
+            dirty.push_back(entry.pos);
+        } else {
+            clean.push_back(entry.pos);
+        }
+    }
+    std::size_t unloaded{0};
+    const auto unload_batch{[&](std::vector<sim::chunk_pos> &victims) {
+        if (victims.empty()) {
+            return;
+        }
+        auto dropped{world.unload_chunks(victims, false)};
+        if (dropped) {
+            unloaded += victims.size();
+            return;
+        }
+        // The batch is all-or-nothing: a failed flush keeps every column
+        // resident and dirty for the next pass.
+        log_chunk_gen.warn("chunk unload failed: {}", dropped.error().message);
+    }};
+    // A clean column needs no store traffic: drop it without touching the
+    // writer or the disk.
+    unload_batch(clean);
+    if (!dirty.empty()) {
+        if (dirty.size() > max_dirty_unloads_per_tick) {
+            // The rest waits for the next pass; the prefix is the ascending
+            // order, so the choice is deterministic.
+            dirty.resize(max_dirty_unloads_per_tick);
+        }
+        // An older snapshot of a flushed column may still be in flight on the
+        // writer thread; let it land first so this newer write is the last one
+        // for the column.
+        if (unload_barrier_) {
+            unload_barrier_();
+        }
+        unload_batch(dirty);
+    }
+    residency_.unloaded_chunks += unloaded;
+    residency_.resident_chunks = world.loaded_chunks();
+    residency_.peak_resident_chunks =
+        std::max(residency_.peak_resident_chunks, residency_.resident_chunks);
 }
 
 void chunk_service::observe_tick(std::uint64_t work_ns) {

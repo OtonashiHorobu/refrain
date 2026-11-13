@@ -132,6 +132,30 @@ Determinism is a contract: the same world and the same command sequence produce
 the same hash at the same tick. Timers are ordered by due tick and insertion
 id. The event bus is single-threaded and preserves subscription order.
 
+### Chunk residency
+
+The chunk pipeline pins what the players can see. A column is resident while it
+is inside at least one connection's viewport or holds a ticket (the spawn area
+and any forced load); every other loaded column is unloaded at the end of the
+tick. Unloading writes a dirty column to the store first and only then drops
+it, so a later viewport that covers the column reads it back from the region
+file instead of handing it to the generator again. The store index is published
+at the normal commit points (autosave, save, shutdown), so the tick never waits
+for an fsync. A clean column needs no store traffic at all and is dropped
+immediately; at most a small number of dirty columns are written per tick, so a
+burst of generated columns cannot turn into a long tick.
+
+The bound is the union of the active viewport squares plus the ticket set. It
+follows the view distances, so walking away from an area releases its memory
+instead of growing the resident set for as long as the process lives. A viewport
+pin covers columns that do not exist yet, which is what keeps a generated column
+resident when it arrives.
+
+The pass walks resident columns in ascending position order and unloads in that
+order. `state_hash()` covers the loaded columns, so a replay has to unload the
+same set at the same ticks; an order taken from a hash map or from task
+completion would make the hash depend on thread timing.
+
 ### Tick budget
 
 The simulation thread bounds the work a tick can take from state that arrives

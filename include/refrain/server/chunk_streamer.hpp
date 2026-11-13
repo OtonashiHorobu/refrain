@@ -27,6 +27,19 @@ namespace refrain::server {
 /// are shared by every connection.
 class chunk_streamer {
   public:
+    /// One connection's viewport, in the form the residency policy consumes:
+    /// every column with Chebyshev distance at most `radius` from the centre is
+    /// expected to stay resident while the connection can see it.
+    struct viewport {
+        std::uint64_t connection{0};
+        std::int32_t chunk_x{0};
+        std::int32_t chunk_z{0};
+        std::int32_t radius{0};
+
+        friend auto operator==(const viewport &, const viewport &)
+            -> bool = default;
+    };
+
     /// Wall-clock time one stream pass may spend draining client queues.
     ///
     /// A tick lasts 50 ms and the simulation, the column generator and the
@@ -121,6 +134,11 @@ class chunk_streamer {
     /// A requested column is now in the world: enqueue it for every viewer
     /// whose viewport contains it.
     void chunk_ready(std::int32_t x, std::int32_t z);
+
+    /// One viewport per connection that has a stream, ordered by connection id.
+    /// The residency policy uses this to derive the set of columns a connection
+    /// keeps resident.
+    [[nodiscard]] auto viewports() const -> std::vector<viewport>;
 
     /// Bodies served from the encoded cache and lookups that had to encode,
     /// since construction. The ratio is the cache hit rate; it approaches one

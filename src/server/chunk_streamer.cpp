@@ -91,6 +91,24 @@ void chunk_streamer::chunk_ready(std::int32_t x, std::int32_t z) {
     }
 }
 
+auto chunk_streamer::viewports() const -> std::vector<viewport> {
+    std::vector<viewport> views{};
+    views.reserve(streams_.size());
+    for (const auto &[connection, stream] : streams_) {
+        views.push_back(viewport{.connection = connection,
+                                 .chunk_x = stream.center_x,
+                                 .chunk_z = stream.center_z,
+                                 .radius = stream.radius});
+    }
+    // The caller derives a pinned set from this; hash-map order is not an
+    // order, so sort by the connection id that produced each viewport.
+    std::sort(views.begin(), views.end(),
+              [](const viewport &left, const viewport &right) {
+                  return left.connection < right.connection;
+              });
+    return views;
+}
+
 auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
                            std::int64_t deadline_ns) -> bool {
     bool expired{false};
