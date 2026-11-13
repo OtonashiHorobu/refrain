@@ -1123,10 +1123,15 @@ template <typename EndFunction> struct zlib_end_guard {
     }
     const auto guard{zlib_end_guard{
         &stream, [](z_stream *state) { return deflateEnd(state); }}};
+    // The gzip header lives until the stream is finished, not until the call
+    // that installs it: zlib keeps the pointer and reads the struct when the
+    // first deflate() writes the member header. Declaring it inside the branch
+    // below left that read pointing at a reused stack slot, so the flag byte
+    // and the modification time came from whatever the compiler put there.
+    gz_header header{};
     if (mode == compression::gzip) {
         // Fixed gzip header: no wall-clock timestamp and "unknown" OS byte, so
         // equal trees produce byte-identical output on every platform.
-        gz_header header{};
         header.time = 0;
         header.os = 255;
         if (deflateSetHeader(&stream, &header) != Z_OK) {

@@ -120,13 +120,14 @@ void check_tie(const tie_case &value) {
         .fixed_biome = {},
         .target = generation_target::terrain,
     });
-    expect(generated.has_value()) << generated.error().message;
+    expect(generated.has_value())
+        << (generated ? "" : generated.error().message);
     if (!generated) {
         return;
     }
     auto &generator = **generated;
     const auto chunk = generator.generate(value.chunk);
-    expect(chunk.has_value()) << chunk.error().message;
+    expect(chunk.has_value()) << (chunk ? "" : chunk.error().message);
     if (!chunk) {
         return;
     }
@@ -150,7 +151,8 @@ void check_tie(const tie_case &value) {
         .kind = value.kind,
         .seed = value.seed,
     });
-    expect(dimension.has_value()) << dimension.error().message;
+    expect(dimension.has_value())
+        << (dimension ? "" : dimension.error().message);
     if (!dimension) {
         return;
     }
@@ -180,12 +182,12 @@ auto batch_digest(dimension_kind kind, jlong seed, std::size_t workers,
         .fixed_biome = {},
         .target = generation_target::terrain,
     });
-    expect(created.has_value()) << created.error().message;
+    expect(created.has_value()) << (created ? "" : created.error().message);
     if (!created) {
         return std::nullopt;
     }
     const auto chunks = (*created)->generate_batch(positions, workers);
-    expect(chunks.has_value()) << chunks.error().message;
+    expect(chunks.has_value()) << (chunks ? "" : chunks.error().message);
     if (!chunks) {
         return std::nullopt;
     }
@@ -261,19 +263,21 @@ suite<"worldgen/biome-ties"> biome_tie_tests = [] {
                 .fixed_biome = {},
                 .target = generation_target::terrain,
             });
-            expect(created.has_value()) << created.error().message;
+            expect(created.has_value())
+                << (created ? "" : created.error().message);
             if (!created) {
                 return;
             }
             const auto previous =
                 (*created)->generate(chunk_pos{.x = 77589, .z = 0});
-            expect(previous.has_value()) << previous.error().message;
+            expect(previous.has_value())
+                << (previous ? "" : previous.error().message);
             if (!previous) {
                 return;
             }
             const auto next =
                 (*created)->generate(chunk_pos{.x = 77590, .z = 0});
-            expect(next.has_value()) << next.error().message;
+            expect(next.has_value()) << (next ? "" : next.error().message);
             if (!next) {
                 return;
             }

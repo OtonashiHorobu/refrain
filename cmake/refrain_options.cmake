@@ -72,6 +72,15 @@ option(REFRAIN_LTO "Enable link-time optimization for optimized builds" ON)
 option(REFRAIN_COVERAGE
        "Instrument for gcov coverage; never combined with LTO or sanitizers"
        OFF)
+# The standard library checks its preconditions only in a build without
+# optimisation: reading the error of a successful std::expected, indexing a
+# vector out of range and the like abort there and return a value here. That
+# makes an unoptimised build a gate of its own, not just a slower copy of the
+# suite, so it runs as a job and the option keeps the check explicit instead of
+# depending on the toolchain enabling it by default.
+option(REFRAIN_DEBUG_ASSERTS
+       "Unoptimised build with the standard library precondition checks on"
+       OFF)
 
 # Microarchitecture level for code generation, mapped per target architecture
 # by cmake/refrain_arch.cmake. A binary built for a higher level does not run

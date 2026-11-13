@@ -23,6 +23,23 @@ if(REFRAIN_COVERAGE)
     add_link_options(--coverage)
 endif()
 
+if(REFRAIN_DEBUG_ASSERTS)
+    # An unoptimised build is a correctness gate, not a slow release build: the
+    # standard library removes its precondition checks as soon as optimisation
+    # is on, so this configuration is the only place a violated precondition
+    # (reading the error of a successful result, an out-of-range subscript) is
+    # diagnosed instead of silently producing a value. `_GLIBCXX_ASSERTIONS`
+    # states the requirement rather than letting the toolchain infer it from the
+    # absence of optimisation, and `-UNDEBUG` keeps the project's own assertions
+    # and the fortify headers active in the same run.
+    if(REFRAIN_LTO OR REFRAIN_SANITIZE OR REFRAIN_COVERAGE)
+        message(FATAL_ERROR
+                "REFRAIN_DEBUG_ASSERTS=ON needs REFRAIN_LTO=OFF, "
+                "REFRAIN_COVERAGE=OFF and no REFRAIN_SANITIZE")
+    endif()
+    add_compile_options(-O0 -g -UNDEBUG -D_GLIBCXX_ASSERTIONS)
+endif()
+
 # LTO support probe: check_ipo_supported links a small program with the
 # toolchain (no run), so it also works for the MinGW cross build. The
 # sanitizer builds and MSVC opt out through REFRAIN_LTO/refrain_apply_lto.
