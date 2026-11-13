@@ -79,6 +79,8 @@ void chunk_streamer::chunk_ready(std::int32_t x, std::int32_t z) {
         // came back stream the column from the world instead of waiting for
         // an answer that already arrived.
         stream.requested.erase({x, z});
+        stream.attempts.erase({x, z});
+        stream.abandoned.erase({x, z});
         const auto dx{x - stream.center_x};
         const auto dz{z - stream.center_z};
         if (std::max(std::abs(dx), std::abs(dz)) > stream.radius) {
@@ -88,6 +90,45 @@ void chunk_streamer::chunk_ready(std::int32_t x, std::int32_t z) {
         if (stream.queued.insert({x, z}).second) {
             stream.pending.emplace_back(x, z);
         }
+    }
+}
+
+void chunk_streamer::chunk_failed(std::int32_t x, std::int32_t z) {
+    for (auto &[id, stream] : streams_) {
+        static_cast<void>(id);
+        const auto key{std::pair{x, z}};
+        if (stream.requested.erase(key) == 0) {
+            // The connection never asked for this column, or another path
+            // already answered it; nothing is waiting on the answer.
+            continue;
+        }
+        const auto &attempts{++stream.attempts[key]};
+        const auto dx{x - stream.center_x};
+        const auto dz{z - stream.center_z};
+        if (std::max(std::abs(dx), std::abs(dz)) > stream.radius) {
+            // The viewport left the column while the task ran. Keep the
+            // attempt count for a possible return, but do not queue off-screen
+            // work.
+            continue;
+        }
+        if (attempts >= max_chunk_attempts) {
+            // Bound the retry: a tile that keeps failing would otherwise be
+            // requested once per tick for as long as the player stands there.
+            // A later viewport change clears the history, so walking away and
+            // back does give the column another chance.
+            stream.abandoned.insert(key);
+            stream.queued.erase(key);
+            log_net.debug(
+                "chunk ({}, {}) abandoned after {} generation failure(s)", x, z,
+                attempts);
+            continue;
+        }
+        if (stream.known.contains(key) || !stream.queued.insert(key).second) {
+            continue;
+        }
+        // Put the column back where the drain will find it; the request is
+        // repeated on the next pass rather than on every tick from here.
+        stream.pending.emplace_back(x, z);
     }
 }
 
@@ -204,6 +245,20 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
                                            position.z);
                 stream.known.erase({position.x, position.z});
             }
+            // Failure history belongs to one viewport visit. A column that
+            // leaves the view gets a fresh attempt allowance on the next visit
+            // instead of staying abandoned forever.
+            for (auto entry = stream.attempts.begin();
+                 entry != stream.attempts.end();) {
+                const auto dx{entry->first.first - stream.center_x};
+                const auto dz{entry->first.second - stream.center_z};
+                if (std::max(std::abs(dx), std::abs(dz)) <= stream.radius) {
+                    ++entry;
+                    continue;
+                }
+                stream.abandoned.erase(entry->first);
+                entry = stream.attempts.erase(entry);
+            }
         }
         if (center_changed || stream.pending.empty()) {
             // A walking player changes the centre often. Rebuilding the queue
@@ -234,11 +289,14 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
                                                  stream.center_z + dz}};
                         if (stream.known.contains(key) ||
                             stream.queued.contains(key) ||
+                            stream.abandoned.contains(key) ||
                             stream.requested.contains(key)) {
                             // A column already handed to the generator stays
                             // out of the queue until it answers; otherwise a
                             // slow worker would make the streamer encode the
-                            // missing column once per tick.
+                            // missing column once per tick. A column whose
+                            // attempts are exhausted stays out until it
+                            // arrives through another path.
                             continue;
                         }
                         stream.pending.push_back(key);

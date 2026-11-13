@@ -110,6 +110,7 @@ void chunk_service::tick(world_port &world,
                 streamer_->chunk_ready(pos.x, pos.z);
             }
         }
+        apply_generation_failures();
     }
     if (streamer_) {
         streamer_->tick(views);
@@ -135,6 +136,38 @@ void chunk_service::tick(world_port &world,
         return;
     }
     generation_->dispatch(refrain::core::now_ns() - tick_start_ns);
+}
+
+void chunk_service::apply_generation_failures() {
+    if (!generation_) {
+        return;
+    }
+    const auto edge{generation_->tile_size()};
+    for (const auto &failure : generation_->take_failures()) {
+        // The first distinct message is operator-visible; a generator that
+        // keeps failing the same way is only debug detail after that.
+        if (failure.message == logged_failure_message_) {
+            log_chunk_gen.debug("chunk ({}, {}) generation failed: {}",
+                                failure.tile.x, failure.tile.z,
+                                failure.message);
+        } else {
+            logged_failure_message_ = failure.message;
+            log_chunk_gen.warn("chunk ({}, {}) generation failed: {}",
+                               failure.tile.x, failure.tile.z, failure.message);
+        }
+        if (!streamer_) {
+            continue;
+        }
+        // The tile is the unit that failed, so every column of it is free to
+        // be requested again; the streamer keeps the ones a connection is
+        // waiting for out of the request set until the attempt bound is hit.
+        for (std::int32_t dz{0}; dz < edge; ++dz) {
+            for (std::int32_t dx{0}; dx < edge; ++dx) {
+                streamer_->chunk_failed(failure.tile.x + dx,
+                                        failure.tile.z + dz);
+            }
+        }
+    }
 }
 
 void chunk_service::observe_tick(std::uint64_t work_ns) {

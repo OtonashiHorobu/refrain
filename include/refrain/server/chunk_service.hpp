@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace refrain::server {
 
@@ -64,7 +65,22 @@ class chunk_service {
     /// controller with the tick p99, the wanted depth and the resident memory.
     void observe_tick(std::uint64_t work_ns);
 
+    /// The background generator, null when generation did not start.
+    [[nodiscard]] auto generation() noexcept -> chunk_generation * {
+        return generation_.get();
+    }
+
+    /// The attached streamer, null before `attach()`. A host may replace its
+    /// encoder or read its counters.
+    [[nodiscard]] auto streamer() noexcept -> chunk_streamer * {
+        return streamer_ ? &*streamer_ : nullptr;
+    }
+
   private:
+    /// Tell the streamer about every tile whose task failed, so the columns are
+    /// requested again instead of staying in flight forever.
+    void apply_generation_failures();
+
     /// Limits shared by the streamer and the generator pause.
     chunk_streamer::backlog_limits backlog_{};
     /// Controller update period and the tick work window its p99 covers.
@@ -73,6 +89,9 @@ class chunk_service {
     std::unique_ptr<chunk_generation> generation_{};
     std::optional<chunk_streamer> streamer_{};
     play_gateway *gateway_{nullptr};
+    /// The last failure message that reached the operator log; repeated
+    /// messages stay at debug so a broken generator cannot flood the log.
+    std::string logged_failure_message_{};
     std::array<std::uint64_t, controller_window_ticks> tick_samples_{};
     std::size_t tick_sample_next_{0};
     std::uint32_t ticks_since_update_{0};
