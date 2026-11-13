@@ -89,6 +89,32 @@ using nbt::tag_type;
     return encoded ? std::move(*encoded) : std::vector<std::byte>{};
 }
 
+/// Where two encodings diverge, in the form the failure message needs: two
+/// gzip encodings of equal input are equal byte for byte, so the offset names
+/// the field that is not pinned (the header bytes and the deflate body fail
+/// differently and the message has to say which one moved).
+[[nodiscard]] auto describe_difference(std::span<const std::byte> left,
+                                       std::span<const std::byte> right)
+    -> std::string {
+    std::size_t at{0};
+    while (at < left.size() && at < right.size() && left[at] == right[at]) {
+        ++at;
+    }
+    if (at == left.size() && at == right.size()) {
+        return "identical";
+    }
+    const auto hex = [](std::span<const std::byte> bytes) {
+        std::string text{};
+        for (const auto byte :
+             bytes.first(std::min<std::size_t>(20U, bytes.size()))) {
+            text += std::format("{:02x}", static_cast<unsigned>(byte));
+        }
+        return text;
+    };
+    return std::format("first difference at byte {} of {}/{}: {} vs {}", at,
+                       left.size(), right.size(), hex(left), hex(right));
+}
+
 /// Self-cleaning unique scratch file (std::filesystem only, no OS calls).
 class temp_file {
   public:
@@ -547,11 +573,49 @@ const suite nbt_tests = [] {
         const auto structure{make_structure()};
         const auto gzip_once{write_ok(structure, "", compression::gzip)};
         const auto gzip_twice{write_ok(structure, "", compression::gzip)};
-        expect(gzip_once == gzip_twice);
+        expect(gzip_once == gzip_twice)
+            << describe_difference(gzip_once, gzip_twice);
 
         const auto zlib_once{write_ok(structure, "", compression::zlib)};
         const auto zlib_twice{write_ok(structure, "", compression::zlib)};
         expect(zlib_once == zlib_twice);
+    };
+
+    "nbt/gzip header carries no wall-clock timestamp"_test = [] {
+        const auto structure{make_structure()};
+        const auto first{write_ok(structure, "", compression::gzip)};
+        // A gzip member starts with the magic, the deflate method and the flag
+        // byte. With no optional fields the modification time follows, then the
+        // compression flags and the originating OS. The time stays zero and the
+        // OS byte stays "unknown": a header stamped with the clock, or with the
+        // platform, makes two encodings of equal data differ, which breaks
+        // every deterministic consumer of the format.
+        expect(first.size() > 10U);
+        if (first.size() <= 10U) {
+            return;
+        }
+        expect(first[0] == std::byte{0x1f});
+        expect(first[1] == std::byte{0x8b});
+        expect(first[2] == std::byte{0x08});
+        // A non-zero flag byte would push the fixed header fields elsewhere, so
+        // the offsets asserted below only hold when it is zero.
+        expect(first[3] == std::byte{0x00});
+        if (first[3] != std::byte{0x00}) {
+            return;
+        }
+        for (std::size_t index{4}; index < 8U; ++index) {
+            expect(first[index] == std::byte{0x00})
+                << "modification time byte " << index;
+        }
+        expect(first[9] == std::byte{0xff});
+        // Repeating the call is what catches a value that changes per call
+        // rather than per platform; the loop covers the whole encoding, not
+        // just the header.
+        for (int round{0}; round < 8; ++round) {
+            const auto again{write_ok(structure, "", compression::gzip)};
+            expect(again == first) << "round " << round << ": "
+                                   << describe_difference(first, again);
+        }
     };
 
     // --- malformed input --------------------------------------------------
