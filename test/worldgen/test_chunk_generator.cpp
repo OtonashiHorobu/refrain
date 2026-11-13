@@ -226,7 +226,7 @@ auto read_reference(std::string_view region_path, jint chunk_x, jint chunk_z,
                     const dimension_profile &profile)
     -> std::optional<reference_data> {
     const auto region = core::io::read_file(region_path);
-    expect(region.has_value()) << region.error().message;
+    expect(region.has_value()) << (region ? "" : region.error().message);
     if (!region) {
         return std::nullopt;
     }
@@ -237,12 +237,13 @@ auto read_reference(std::string_view region_path, jint chunk_x, jint chunk_z,
     }
     const auto document =
         data::nbt::read(*payload, data::nbt::compression::zlib);
-    expect(document.has_value()) << document.error().message;
+    expect(document.has_value()) << (document ? "" : document.error().message);
     if (!document) {
         return std::nullopt;
     }
     const auto block_tags = load_block_tags(data_root);
-    expect(block_tags.has_value()) << block_tags.error().message;
+    expect(block_tags.has_value())
+        << (block_tags ? "" : block_tags.error().message);
     if (!block_tags) {
         return std::nullopt;
     }
@@ -325,13 +326,14 @@ void run_reference_case(std::string_view prefix) {
         .structure_sets = std::move(structure_sets),
         .reference_world = true,
     });
-    expect(generator.has_value()) << generator.error().message;
+    expect(generator.has_value())
+        << (generator ? "" : generator.error().message);
     if (!generator) {
         return;
     }
     const auto chunk =
         (*generator)->generate(chunk_pos{.x = chunk_x, .z = chunk_z});
-    expect(chunk.has_value()) << chunk.error().message;
+    expect(chunk.has_value()) << (chunk ? "" : chunk.error().message);
     if (!chunk) {
         return;
     }
@@ -390,13 +392,14 @@ void run_carver_reference_case() {
         .reference_world = true,
         .reference_carvers = true,
     });
-    expect(generator.has_value()) << generator.error().message;
+    expect(generator.has_value())
+        << (generator ? "" : generator.error().message);
     if (!generator) {
         return;
     }
     const auto chunk =
         (*generator)->generate(chunk_pos{.x = chunk_x, .z = chunk_z});
-    expect(chunk.has_value()) << chunk.error().message;
+    expect(chunk.has_value()) << (chunk ? "" : chunk.error().message);
     if (!chunk) {
         return;
     }
@@ -429,7 +432,7 @@ auto make_terrain_generator(generation_target target,
         .structure_sets = std::move(structure_sets),
         .reference_world = false,
     });
-    expect(created.has_value()) << created.error().message;
+    expect(created.has_value()) << (created ? "" : created.error().message);
     return created ? std::move(*created) : nullptr;
 }
 
@@ -473,9 +476,12 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         auto production = create_nether(false, false);
         auto reference = create_nether(true, true);
         auto stripped = create_nether(true, false);
-        expect(production.has_value()) << production.error().message;
-        expect(reference.has_value()) << reference.error().message;
-        expect(stripped.has_value()) << stripped.error().message;
+        expect(production.has_value())
+            << (production ? "" : production.error().message);
+        expect(reference.has_value())
+            << (reference ? "" : reference.error().message);
+        expect(stripped.has_value())
+            << (stripped ? "" : stripped.error().message);
         if (!production || !reference || !stripped) {
             return;
         }
@@ -483,9 +489,9 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         const auto a = (*production)->generate(position);
         const auto b = (*reference)->generate(position);
         const auto c = (*stripped)->generate(position);
-        expect(a.has_value()) << a.error().message;
-        expect(b.has_value()) << b.error().message;
-        expect(c.has_value()) << c.error().message;
+        expect(a.has_value()) << (a ? "" : a.error().message);
+        expect(b.has_value()) << (b ? "" : b.error().message);
+        expect(c.has_value()) << (c ? "" : c.error().message);
         if (!a || !b || !c) {
             return;
         }
@@ -508,13 +514,14 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
             {2, 2},
         }};
         const auto serial = generator->generate_batch(positions, 1);
-        expect(serial.has_value()) << serial.error().message;
+        expect(serial.has_value()) << (serial ? "" : serial.error().message);
         if (!serial) {
             return;
         }
         expect(serial->size() == positions.size());
         const auto parallel = generator->generate_batch(positions, 3);
-        expect(parallel.has_value()) << parallel.error().message;
+        expect(parallel.has_value())
+            << (parallel ? "" : parallel.error().message);
         if (!parallel) {
             return;
         }
@@ -529,7 +536,7 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         }
         const auto area =
             generator->generate_area(chunk_pos{.x = 0, .z = 0}, 2, 2, 2);
-        expect(area.has_value()) << area.error().message;
+        expect(area.has_value()) << (area ? "" : area.error().message);
         if (area) {
             const std::array<chunk_pos, 4> area_positions{{
                 {0, 0},
@@ -563,7 +570,7 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
             .structure_sets = {"minecraft:mineshafts"},
             .reference_world = true,
         });
-        expect(created.has_value()) << created.error().message;
+        expect(created.has_value()) << (created ? "" : created.error().message);
         if (!created) {
             return;
         }
@@ -574,12 +581,13 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
             {-4, 1},
         }};
         const auto serial = generator->generate_batch(positions, 1);
-        expect(serial.has_value()) << serial.error().message;
+        expect(serial.has_value()) << (serial ? "" : serial.error().message);
         if (!serial) {
             return;
         }
         const auto parallel = generator->generate_batch(positions, 3);
-        expect(parallel.has_value()) << parallel.error().message;
+        expect(parallel.has_value())
+            << (parallel ? "" : parallel.error().message);
         if (!parallel) {
             return;
         }
@@ -607,7 +615,7 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
             .structure_sets = {},
             .reference_world = false,
         });
-        expect(created.has_value()) << created.error().message;
+        expect(created.has_value()) << (created ? "" : created.error().message);
         if (!created) {
             return;
         }
@@ -616,17 +624,18 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         // The first call fills the start-probe caches, the second reuses them,
         // and the parallel call uses one cache per worker.
         const auto cold = generator->generate_area(origin, 4, 2, 1);
-        expect(cold.has_value()) << cold.error().message;
+        expect(cold.has_value()) << (cold ? "" : cold.error().message);
         if (!cold) {
             return;
         }
         const auto warm = generator->generate_area(origin, 4, 2, 1);
-        expect(warm.has_value()) << warm.error().message;
+        expect(warm.has_value()) << (warm ? "" : warm.error().message);
         if (!warm) {
             return;
         }
         const auto parallel = generator->generate_area(origin, 4, 2, 4);
-        expect(parallel.has_value()) << parallel.error().message;
+        expect(parallel.has_value())
+            << (parallel ? "" : parallel.error().message);
         if (!parallel) {
             return;
         }
@@ -662,21 +671,22 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
             .structure_sets = {"minecraft:villages"},
             .reference_world = true,
         });
-        expect(village.has_value()) << village.error().message;
+        expect(village.has_value()) << (village ? "" : village.error().message);
         if (!village) {
             return;
         }
         const chunk_pos village_origin{.x = 0, .z = 0};
         const auto village_serial =
             (*village)->generate_area(village_origin, 3, 2, 1);
-        expect(village_serial.has_value()) << village_serial.error().message;
+        expect(village_serial.has_value())
+            << (village_serial ? "" : village_serial.error().message);
         if (!village_serial) {
             return;
         }
         const auto village_parallel =
             (*village)->generate_area(village_origin, 3, 2, 3);
         expect(village_parallel.has_value())
-            << village_parallel.error().message;
+            << (village_parallel ? "" : village_parallel.error().message);
         if (!village_parallel) {
             return;
         }
@@ -725,7 +735,7 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         }
 
         const auto chunk = generator->generate(chunk_pos{.x = 0, .z = 0});
-        expect(chunk.has_value()) << chunk.error().message;
+        expect(chunk.has_value()) << (chunk ? "" : chunk.error().message);
         if (chunk) {
             expect((*chunk)->status() == chunk_status::terrain);
             expect((*chunk)->structure_starts().empty());
@@ -787,12 +797,13 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
                 .structure_sets = {"oracle:no_structure_set"},
                 .reference_world = false,
             });
-            expect(created.has_value()) << created.error().message;
+            expect(created.has_value())
+                << (created ? "" : created.error().message);
             if (!created) {
                 return;
             }
             const auto chunk = (*created)->generate(chunk_pos{.x = 0, .z = 0});
-            expect(chunk.has_value()) << chunk.error().message;
+            expect(chunk.has_value()) << (chunk ? "" : chunk.error().message);
             if (!chunk) {
                 return;
             }
@@ -827,9 +838,9 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         auto boxed = make(
             chunk_rectangle{.min_x = -3, .min_z = -2, .max_x = 1, .max_z = 2},
             2);
-        expect(one.has_value()) << one.error().message;
-        expect(two.has_value()) << two.error().message;
-        expect(boxed.has_value()) << boxed.error().message;
+        expect(one.has_value()) << (one ? "" : one.error().message);
+        expect(two.has_value()) << (two ? "" : two.error().message);
+        expect(boxed.has_value()) << (boxed ? "" : boxed.error().message);
         if (!one || !two || !boxed) {
             return;
         }
@@ -837,9 +848,10 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         auto near = (*one)->generate(position);
         auto wide = (*two)->generate(position);
         auto rectangle = (*boxed)->generate(position);
-        expect(near.has_value()) << near.error().message;
-        expect(wide.has_value()) << wide.error().message;
-        expect(rectangle.has_value()) << rectangle.error().message;
+        expect(near.has_value()) << (near ? "" : near.error().message);
+        expect(wide.has_value()) << (wide ? "" : wide.error().message);
+        expect(rectangle.has_value())
+            << (rectangle ? "" : rectangle.error().message);
         if (!near || !wide || !rectangle) {
             return;
         }
@@ -919,7 +931,7 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         }
         auto outside = create(
             chunk_rectangle{.min_x = 4, .min_z = 4, .max_x = 6, .max_z = 6}, 1);
-        expect(outside.has_value()) << outside.error().message;
+        expect(outside.has_value()) << (outside ? "" : outside.error().message);
         if (!outside) {
             return;
         }
@@ -947,7 +959,8 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         first.reserve(area.size());
         for (const auto &position : area) {
             auto generated = generator->generate(position);
-            expect(generated.has_value()) << generated.error().message;
+            expect(generated.has_value())
+                << (generated ? "" : generated.error().message);
             if (!generated) {
                 return;
             }
@@ -957,7 +970,8 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         // reads its terrain back from the cache instead of sampling it.
         for (std::size_t index = 0; index < area.size(); ++index) {
             auto generated = generator->generate(area[index]);
-            expect(generated.has_value()) << generated.error().message;
+            expect(generated.has_value())
+                << (generated ? "" : generated.error().message);
             if (!generated) {
                 return;
             }
@@ -980,9 +994,10 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
         auto terrain = terrain_generator->generate(chunk_pos{.x = 0, .z = 0});
         auto features = features_generator->generate(chunk_pos{.x = 0, .z = 0});
         auto full = full_generator->generate(chunk_pos{.x = 0, .z = 0});
-        expect(terrain.has_value()) << terrain.error().message;
-        expect(features.has_value()) << features.error().message;
-        expect(full.has_value()) << full.error().message;
+        expect(terrain.has_value()) << (terrain ? "" : terrain.error().message);
+        expect(features.has_value())
+            << (features ? "" : features.error().message);
+        expect(full.has_value()) << (full ? "" : full.error().message);
         if (!terrain || !features || !full) {
             return;
         }

@@ -498,7 +498,8 @@ native = "libexternal.so"
 )";
         auto written{refrain::core::io::write_text(
             (root / "manifest.toml").string(), manifest_text)};
-        expect(static_cast<bool>(written)) << written.error().message;
+        expect(static_cast<bool>(written))
+            << (written ? "" : written.error().message);
 
         mod::composition plan{};
         plan.spec.id = "refrain.test.external.plan";

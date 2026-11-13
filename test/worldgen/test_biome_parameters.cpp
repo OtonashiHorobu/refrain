@@ -46,7 +46,7 @@ void write_report(const scratch_directory &root, std::string_view name,
     expect(!error);
     const auto written =
         core::io::write_text((directory / name).string(), document);
-    expect(written.has_value()) << written.error().message;
+    expect(written.has_value()) << (written ? "" : written.error().message);
 }
 
 auto report(std::string_view dimension, int entry_count,
@@ -82,7 +82,8 @@ suite<"worldgen/biome-parameters"> biome_parameters_tests = [] {
                      report(overworld_dimension, 2, two_entries));
         const auto parameters =
             load_biome_parameters(data_root(root), dimension_kind::overworld);
-        expect(parameters.has_value()) << parameters.error().message;
+        expect(parameters.has_value())
+            << (parameters ? "" : parameters.error().message);
         if (!parameters) {
             return;
         }
@@ -106,7 +107,8 @@ suite<"worldgen/biome-parameters"> biome_parameters_tests = [] {
                      report(overworld_dimension, 2, two_entries));
         const auto parameters = load_biome_parameters(
             data_root(root) + "/", dimension_kind::overworld);
-        expect(parameters.has_value()) << parameters.error().message;
+        expect(parameters.has_value())
+            << (parameters ? "" : parameters.error().message);
         if (parameters) {
             expect(parameters->size() == 2U);
         }
@@ -225,7 +227,8 @@ suite<"worldgen/biome-parameters"> biome_parameters_tests = [] {
 
         const auto overworld =
             load_biome_parameters(root, dimension_kind::overworld);
-        expect(overworld.has_value()) << overworld.error().message;
+        expect(overworld.has_value())
+            << (overworld ? "" : overworld.error().message);
         if (!overworld) {
             return;
         }
@@ -235,7 +238,7 @@ suite<"worldgen/biome-parameters"> biome_parameters_tests = [] {
         expect(source.parameters().size() == overworld->size());
 
         const auto nether = load_biome_parameters(root, dimension_kind::nether);
-        expect(nether.has_value()) << nether.error().message;
+        expect(nether.has_value()) << (nether ? "" : nether.error().message);
         if (!nether) {
             return;
         }

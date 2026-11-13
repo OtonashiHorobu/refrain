@@ -335,13 +335,13 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             seed = std::strtoll(raw, nullptr, 10);
         }
         const auto region = core::io::read_file(region_path);
-        expect(region.has_value()) << region.error().message;
+        expect(region.has_value()) << (region ? "" : region.error().message);
         if (!region) {
             return;
         }
         const auto documents_result = load_material_documents(data_root);
         expect(documents_result.has_value())
-            << documents_result.error().message;
+            << (documents_result ? "" : documents_result.error().message);
         if (!documents_result) {
             return;
         }
@@ -372,7 +372,8 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
         auto root_factory = new_positional_factory(algorithm::xoroshiro, seed);
         auto parameters =
             load_biome_parameters(data_root, dimension_kind::overworld);
-        expect(parameters.has_value()) << parameters.error().message;
+        expect(parameters.has_value())
+            << (parameters ? "" : parameters.error().message);
         if (!parameters) {
             return;
         }
@@ -392,7 +393,8 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
                 return;
             }
             auto loaded = feature::load_feature_data(feature_root);
-            expect(loaded.has_value()) << loaded.error().message;
+            expect(loaded.has_value())
+                << (loaded ? "" : loaded.error().message);
             if (!loaded) {
                 return;
             }
@@ -401,7 +403,8 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
         std::optional<carver::loaded_carvers> carvers;
         if (carver_mode) {
             auto loaded = carver::load_carvers(data_root);
-            expect(loaded.has_value()) << loaded.error().message;
+            expect(loaded.has_value())
+                << (loaded ? "" : loaded.error().message);
             if (!loaded) {
                 return;
             }
@@ -447,14 +450,16 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             }
             const auto document =
                 data::nbt::read(*payload, data::nbt::compression::zlib);
-            expect(document.has_value()) << document.error().message;
+            expect(document.has_value())
+                << (document ? "" : document.error().message);
             if (!document) {
                 continue;
             }
 
             auto settings = density::load_noise_settings(
                 data_root, "minecraft/overworld", algorithm::xoroshiro, seed);
-            expect(settings.has_value()) << settings.error().message;
+            expect(settings.has_value())
+                << (settings ? "" : settings.error().message);
             if (!settings) {
                 return;
             }
@@ -789,7 +794,8 @@ suite<"worldgen/surface-oracle"> surface_oracle_tests = [] {
             if (feature_mode) {
                 feature::feature_registry feature_registry{block_registry};
                 const auto loaded = feature_registry.load(*feature_data);
-                expect(loaded.has_value()) << loaded.error().message;
+                expect(loaded.has_value())
+                    << (loaded ? "" : loaded.error().message);
                 if (!loaded) {
                     continue;
                 }

@@ -1048,14 +1048,15 @@ suite<"worldgen/template"> template_tests = [] {
             return;
         }
         const auto bytes = core::io::read_file(path);
-        expect(bytes.has_value()) << bytes.error().message;
+        expect(bytes.has_value()) << (bytes ? "" : bytes.error().message);
         if (!bytes) {
             return;
         }
         const auto document = data::nbt::read(
             std::span<const std::byte>{bytes->data(), bytes->size()},
             data::nbt::compression::gzip);
-        expect(document.has_value()) << document.error().message;
+        expect(document.has_value())
+            << (document ? "" : document.error().message);
         if (!document) {
             return;
         }

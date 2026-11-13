@@ -135,7 +135,7 @@ void run_full_stage_case(std::string_view prefix,
     }
     const auto &profile = dimension_profile_for(dimension);
     const auto region = core::io::read_file(region_path);
-    expect(region.has_value()) << region.error().message;
+    expect(region.has_value()) << (region ? "" : region.error().message);
     if (!region) {
         return;
     }
@@ -146,12 +146,13 @@ void run_full_stage_case(std::string_view prefix,
     }
     const auto document =
         data::nbt::read(*payload, data::nbt::compression::zlib);
-    expect(document.has_value()) << document.error().message;
+    expect(document.has_value()) << (document ? "" : document.error().message);
     if (!document) {
         return;
     }
     const auto block_tags = load_block_tags(data_root);
-    expect(block_tags.has_value()) << block_tags.error().message;
+    expect(block_tags.has_value())
+        << (block_tags ? "" : block_tags.error().message);
     if (!block_tags) {
         return;
     }
@@ -179,7 +180,7 @@ void run_full_stage_case(std::string_view prefix,
     }
     auto settings = density::load_noise_settings(
         data_root, profile.noise_settings, algorithm::xoroshiro, seed);
-    expect(settings.has_value()) << settings.error().message;
+    expect(settings.has_value()) << (settings ? "" : settings.error().message);
     if (!settings) {
         return;
     }
@@ -351,7 +352,7 @@ void run_full_stage_case(std::string_view prefix,
             return;
         }
         const auto tagged = apply_block_tags(states, *block_tags);
-        expect(tagged.has_value()) << tagged.error().message;
+        expect(tagged.has_value()) << (tagged ? "" : tagged.error().message);
         if (!tagged) {
             return;
         }
@@ -460,7 +461,7 @@ void run_full_stage_case(std::string_view prefix,
         if (!feature_ids.empty()) {
             auto loaded_features = feature::load_feature_data(data_root);
             expect(loaded_features.has_value())
-                << loaded_features.error().message;
+                << (loaded_features ? "" : loaded_features.error().message);
             if (!loaded_features) {
                 return;
             }
@@ -496,7 +497,7 @@ void run_full_stage_case(std::string_view prefix,
             feature_placer.emplace(place_context, *feature_data);
             const auto loaded_features = feature_placer->load(feature_ids);
             expect(loaded_features.has_value())
-                << loaded_features.error().message;
+                << (loaded_features ? "" : loaded_features.error().message);
             if (!loaded_features) {
                 return;
             }

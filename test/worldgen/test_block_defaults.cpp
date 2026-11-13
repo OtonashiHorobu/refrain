@@ -43,7 +43,7 @@ void write_report(const scratch_directory &root, std::string_view document) {
     expect(!error);
     const auto written =
         core::io::write_text((directory / "defaults.json").string(), document);
-    expect(written.has_value()) << written.error().message;
+    expect(written.has_value()) << (written ? "" : written.error().message);
 }
 
 } // namespace
@@ -62,7 +62,8 @@ suite<"worldgen/block-defaults"> block_defaults_tests = [] {
                                               "half":"bottom",
                                               "shape":"straight"}}})");
         const auto defaults = load_block_defaults(data_root(root));
-        expect(defaults.has_value()) << defaults.error().message;
+        expect(defaults.has_value())
+            << (defaults ? "" : defaults.error().message);
         if (!defaults) {
             return;
         }

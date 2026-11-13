@@ -42,7 +42,8 @@ suite<"worldgen/feature-coverage"> feature_coverage_tests = [] {
             auto shared =
                 dimension_generator::load_shared(dimension_generator_config{
                     .data_root = data_root, .kind = kind});
-            expect(shared.has_value()) << shared.error().message;
+            expect(shared.has_value())
+                << (shared ? "" : shared.error().message);
             if (!shared) {
                 return;
             }
@@ -50,7 +51,8 @@ suite<"worldgen/feature-coverage"> feature_coverage_tests = [] {
                 dimension_generator_config{.data_root = data_root,
                                            .kind = kind},
                 *shared);
-            expect(generator.has_value()) << generator.error().message;
+            expect(generator.has_value())
+                << (generator ? "" : generator.error().message);
             if (!generator) {
                 return;
             }

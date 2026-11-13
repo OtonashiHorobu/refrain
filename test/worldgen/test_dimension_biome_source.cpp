@@ -58,7 +58,7 @@ suite<"worldgen/dimension-biome-source"> dimension_biome_source_tests = [] {
         }
         auto source =
             dimension_biome_source::load(snapshot.path, dimension_kind::nether);
-        expect(source.has_value()) << source.error().message;
+        expect(source.has_value()) << (source ? "" : source.error().message);
         if (!source) {
             return;
         }
@@ -98,7 +98,7 @@ suite<"worldgen/dimension-biome-source"> dimension_biome_source_tests = [] {
         }
         auto source =
             dimension_biome_source::load(snapshot.path, dimension_kind::end);
-        expect(source.has_value()) << source.error().message;
+        expect(source.has_value()) << (source ? "" : source.error().message);
         if (!source) {
             return;
         }

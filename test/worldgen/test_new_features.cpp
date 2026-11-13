@@ -37,7 +37,7 @@ using namespace refrain::worldgen::feature;
 
 auto parse(std::string_view text) -> data::json::value {
     auto parsed = data::json::value::parse(text);
-    expect(parsed.has_value()) << parsed.error().message;
+    expect(parsed.has_value()) << (parsed ? "" : parsed.error().message);
     return parsed ? std::move(*parsed) : data::json::value{};
 }
 
@@ -131,7 +131,7 @@ struct decoded_feature {
         placed.placement = parse("[]");
         data.placed.emplace(placed.id, std::move(placed));
         const auto loaded = registry.load(data);
-        expect(loaded.has_value()) << loaded.error().message;
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
         return loaded.has_value();
     }
 
@@ -362,7 +362,7 @@ suite<"worldgen/state-provider-noise"> state_provider_noise_tests = [] {
                       "scale":0.5,
                       "states":["minecraft:stone","minecraft:dirt"]})"),
                                   registry);
-        expect(decoded.has_value()) << decoded.error().message;
+        expect(decoded.has_value()) << (decoded ? "" : decoded.error().message);
         if (!decoded) {
             return;
         }
@@ -388,7 +388,8 @@ suite<"worldgen/state-provider-noise"> state_provider_noise_tests = [] {
                           "states":["minecraft:stone","minecraft:dirt",
                                     "minecraft:grass_block"]})"),
                 registry);
-            expect(decoded.has_value()) << decoded.error().message;
+            expect(decoded.has_value())
+                << (decoded ? "" : decoded.error().message);
             if (!decoded) {
                 return;
             }
@@ -417,7 +418,7 @@ suite<"worldgen/state-provider-noise"> state_provider_noise_tests = [] {
             decode_state_provider(parse(R"({"type":"minecraft:random_block",
                       "blocks":"#oracle:random_blocks"})"),
                                   registry);
-        expect(decoded.has_value()) << decoded.error().message;
+        expect(decoded.has_value()) << (decoded ? "" : decoded.error().message);
         if (!decoded) {
             return;
         }
@@ -725,7 +726,7 @@ suite<"worldgen/feature-closure"> feature_closure_tests = [] {
 
         const std::array<std::string, 1> ids{"oracle:entry"};
         const auto loaded = registry.load_placed(data, ids);
-        expect(loaded.has_value()) << loaded.error().message;
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
         if (!loaded) {
             return;
         }

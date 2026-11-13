@@ -2491,7 +2491,7 @@ suite<"worldgen/feature/disk"> disk_feature_tests = [] {
 
         feature_registry features{registry};
         const auto loaded = features.load(data);
-        expect(loaded.has_value()) << loaded.error().message;
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
         if (!loaded) {
             return;
         }
@@ -2555,7 +2555,7 @@ suite<"worldgen/overlay"> overlay_tests = [] {
                                                  .steps = {{"oracle:p"}}});
         feature_registry features{registry};
         const auto loaded = features.load(data);
-        expect(loaded.has_value()) << loaded.error().message;
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
         if (!loaded) {
             return;
         }
@@ -2641,7 +2641,7 @@ suite<"worldgen/selector"> selector_tests = [] {
 
         feature_registry features{registry};
         const auto loaded = features.load(data);
-        expect(loaded.has_value()) << loaded.error().message;
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
         const auto plan = feature_sorter::build({"oracle:test"}, data.biomes);
         expect(plan.has_value());
         if (!plan) {
@@ -3577,7 +3577,7 @@ suite<"worldgen/feature-survival"> feature_survival_tests = [] {
                                           "oracle:basalt_side_placed"}}});
         feature_registry features{registry};
         const auto loaded = features.load(data);
-        expect(loaded.has_value()) << loaded.error().message;
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
         if (!loaded) {
             return;
         }
@@ -3642,7 +3642,7 @@ suite<"worldgen/feature-survival"> feature_survival_tests = [] {
                 {}, {}, {}, {}, {}, {}, {}, {}, {}, {"oracle:spring_placed"}}});
         feature_registry features{registry};
         const auto loaded = features.load(data);
-        expect(loaded.has_value()) << loaded.error().message;
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
         if (!loaded) {
             return;
         }
@@ -3684,7 +3684,8 @@ suite<"worldgen/feature-survival"> feature_survival_tests = [] {
             parse(
                 R"({"type":"minecraft:height_range","height":{"type":"minecraft:uniform","max_inclusive":{"below_top":0},"min_inclusive":{"above_bottom":0}}})"),
             registry);
-        expect(modifier.has_value()) << modifier.error().message;
+        expect(modifier.has_value())
+            << (modifier ? "" : modifier.error().message);
         if (!modifier) {
             return;
         }

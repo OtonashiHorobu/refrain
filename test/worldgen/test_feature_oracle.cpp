@@ -95,7 +95,7 @@ auto read_reference(std::string_view region_path, jint chunk_x, jint chunk_z,
                     const dimension_profile &profile)
     -> std::optional<reference_chunk> {
     const auto region = core::io::read_file(region_path);
-    expect(region.has_value()) << region.error().message;
+    expect(region.has_value()) << (region ? "" : region.error().message);
     if (!region) {
         return std::nullopt;
     }
@@ -106,12 +106,13 @@ auto read_reference(std::string_view region_path, jint chunk_x, jint chunk_z,
     }
     const auto document =
         data::nbt::read(*payload, data::nbt::compression::zlib);
-    expect(document.has_value()) << document.error().message;
+    expect(document.has_value()) << (document ? "" : document.error().message);
     if (!document) {
         return std::nullopt;
     }
     const auto block_tags = load_block_tags(data_root);
-    expect(block_tags.has_value()) << block_tags.error().message;
+    expect(block_tags.has_value())
+        << (block_tags ? "" : block_tags.error().message);
     if (!block_tags) {
         return std::nullopt;
     }
@@ -223,13 +224,14 @@ void run_feature_case(std::string_view prefix) {
         .neighbour_radius = neighbour_radius.value_or(1),
         .neighbour_box = neighbour_box,
     });
-    expect(generator.has_value()) << generator.error().message;
+    expect(generator.has_value())
+        << (generator ? "" : generator.error().message);
     if (!generator) {
         return;
     }
     const auto chunk =
         (*generator)->generate(chunk_pos{.x = *chunk_x, .z = *chunk_z});
-    expect(chunk.has_value()) << chunk.error().message;
+    expect(chunk.has_value()) << (chunk ? "" : chunk.error().message);
     if (!chunk) {
         return;
     }

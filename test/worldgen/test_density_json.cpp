@@ -171,13 +171,14 @@ suite<"worldgen/density-json"> density_json_tests = [] {
                                   std::string{id} +
                                   "\",\"xz_scale\":0.25,\"y_scale\":0.0}";
             auto decoded = decode_density(document, documents);
-            expect(decoded.has_value()) << decoded.error().message;
+            expect(decoded.has_value())
+                << (decoded ? "" : decoded.error().message);
             if (!decoded) {
                 continue;
             }
             legacy_random_source random{documents.seed + offset};
             auto stack = normal.create_legacy_nether_biome(random);
-            expect(stack.has_value()) << stack.error().message;
+            expect(stack.has_value()) << (stack ? "" : stack.error().message);
             if (!stack) {
                 continue;
             }
@@ -189,7 +190,8 @@ suite<"worldgen/density-json"> density_json_tests = [] {
         auto standard = decode_density(
             R"({"type":"minecraft:noise","noise":"test:climate","xz_scale":0.25,"y_scale":0.0})",
             documents);
-        expect(standard.has_value()) << standard.error().message;
+        expect(standard.has_value())
+            << (standard ? "" : standard.error().message);
         if (!standard) {
             return;
         }

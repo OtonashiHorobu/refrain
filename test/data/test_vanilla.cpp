@@ -474,7 +474,8 @@ suite<"data/vanilla-tables"> vanilla_tables_tests = [] {
         options.out = out_dir.string();
         options.data_version = 5023;
         auto imported = import_vanilla_reports(options);
-        expect(imported.has_value()) << imported.error().message;
+        expect(imported.has_value())
+            << (imported ? "" : imported.error().message);
         if (!imported.has_value()) {
             return;
         }
