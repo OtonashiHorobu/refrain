@@ -163,6 +163,37 @@ auto center_first_positions(std::vector<chunk_pos> positions,
 
 } // namespace
 
+/// The rectangle grown by `radius` chunks on every side.
+auto expand(const chunk_rectangle &box, jint radius) -> chunk_rectangle {
+    return chunk_rectangle{.min_x = box.min_x - radius,
+                           .min_z = box.min_z - radius,
+                           .max_x = box.max_x + radius,
+                           .max_z = box.max_z + radius};
+}
+
+auto contains(const chunk_rectangle &box, const chunk_pos &pos) -> bool {
+    return pos.x >= box.min_x && pos.x <= box.max_x && pos.z >= box.min_z &&
+           pos.z <= box.max_z;
+}
+
+/// The distinct biome ids a chunk's palette holds, one per 4x4x4 cell.
+auto chunk_biomes(const proto_chunk &chunk) -> std::vector<std::uint16_t> {
+    std::vector<std::uint16_t> ids;
+    ids.reserve(16);
+    const jint top = chunk.min_y() + chunk.height();
+    for (jint y = chunk.min_y(); y < top; y += 4) {
+        for (jint z = 0; z < 16; z += 4) {
+            for (jint x = 0; x < 16; x += 4) {
+                const auto id = chunk.biome_at(x, y, z);
+                if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
+                    ids.push_back(id);
+                }
+            }
+        }
+    }
+    return ids;
+}
+
 auto force_load_decoration_order(const chunk_rectangle &box)
     -> std::vector<chunk_pos> {
     std::vector<chunk_pos> order;
@@ -237,10 +268,10 @@ auto chunk_generator::create(chunk_generator_config config)
             fail(error_code::invalid_argument,
                  "chunk generator has no content data root")};
     }
-    if (config.decorate_neighbours && config.fixed_biome.empty()) {
+    if (config.tile_size < 1 || config.tile_size > 32) {
         return std::unexpected{
             fail(error_code::invalid_argument,
-                 "neighbour feature decoration requires a fixed biome")};
+                 "generation tile edge is outside its supported range")};
     }
     if (config.neighbour_radius < 0 || config.neighbour_radius > 8) {
         return std::unexpected{
@@ -500,6 +531,147 @@ auto chunk_generator::start_block_at(const chunk_pos &column, jint x, jint y,
     return (*stored)[static_cast<std::size_t>(y - profile.min_y)];
 }
 
+auto chunk_generator::make_start_context(std::optional<error> &error)
+    -> structure::structure_start_context {
+    auto &states = dimension_->states();
+    const auto &profile = dimension_->profile();
+    // The height and block probes are lazily read while a start expands. The
+    // first failure is stored and every later probe returns a sentinel, so the
+    // caller reports one error after the stage instead of throwing mid-scan.
+    const auto height_at = [&error, &profile,
+                            this](jint x, jint z, heightmap_kind kind) -> jint {
+        if (error.has_value()) {
+            return profile.min_y;
+        }
+        const chunk_pos column{.x = x >> 4, .z = z >> 4};
+        const auto found = start_height_at(column);
+        if (!found) {
+            error = found.error();
+            return profile.min_y;
+        }
+        return (*found)->heights[static_cast<std::size_t>(kind)]
+                                [static_cast<std::size_t>(z & 15) * 16U +
+                                 static_cast<std::size_t>(x & 15)];
+    };
+    const auto block_at = [&error, &states, this](jint x, jint y,
+                                                  jint z) -> block_state_id {
+        if (error.has_value()) {
+            return states.air();
+        }
+        const chunk_pos column{.x = x >> 4, .z = z >> 4};
+        const auto found = start_block_at(column, x & 15, y, z & 15);
+        if (!found) {
+            error = found.error();
+            return states.air();
+        }
+        return *found;
+    };
+
+    structure::structure_start_context context{
+        .seed = config_.seed,
+        .data = &shared_->structure_data,
+        .min_y = profile.min_y,
+        .world_height = profile.height,
+        .sea_level = profile.sea_level,
+        .generation_min_y = dimension_->generation_min_y(),
+        .generation_height = dimension_->generation_height(),
+        .fixed_biome = !config_.fixed_biome.empty(),
+    };
+    if (config_.fixed_biome.empty()) {
+        context.biome_at = [this](jint quart_x, jint quart_y, jint quart_z) {
+            return dimension_->biome_at_quart(quart_x, quart_y, quart_z);
+        };
+        context.biome_name = [this](std::uint16_t id) {
+            return dimension_->biome_name(id);
+        };
+    } else {
+        context.biome_at = [](jint, jint, jint) { return std::uint16_t{0}; };
+        context.biome_name = [this](std::uint16_t) {
+            return std::string_view{config_.fixed_biome};
+        };
+    }
+    context.height_at = height_at;
+    context.block_at = block_at;
+    context.states = &states;
+    context.templates = templates_.get();
+    context.profile = profile_;
+    if (!config_.structure_sets.empty()) {
+        const auto &allowed = config_.structure_sets;
+        context.set_filter = [&allowed](std::string_view id) {
+            return std::find(allowed.begin(), allowed.end(), id) !=
+                   allowed.end();
+        };
+    }
+    return context;
+}
+
+auto chunk_generator::fill_terrain(const chunk_pos &pos,
+                                   const structure::structure_beard *beard)
+    -> result<std::unique_ptr<proto_chunk>> {
+    density::sampler_context fill_context;
+    std::optional<beardifier> beardifier;
+    if (beard != nullptr) {
+        beardifier.emplace(beard->pieces, beard->junctions,
+                           beard->affected_box);
+        fill_context.set_field(density::context_key::beardifier, &*beardifier);
+    }
+    // A reference world strips the surface pass and carvers unless the carver
+    // reference mode asks for the terrain stages of the dimension.
+    const bool reference_terrain =
+        !config_.reference_world || config_.reference_carvers;
+    const terrain_stages stages{
+        .fill_context = beard != nullptr ? &fill_context : nullptr,
+        .carvers = reference_terrain ? dimension_->carvers() : nullptr,
+        .surface = reference_terrain,
+        .profile = profile_,
+    };
+    // A beardifier changes the density the fill samples, so its row overlaps
+    // the terrain rows and reports how much of the fill work it costs.
+    std::optional<stage_timer> bearded_fill;
+    if (beard != nullptr) {
+        bearded_fill.emplace(profile_, "terrain.bearded_fill");
+    }
+    dimension_->reset_biome_search();
+    auto generated = dimension_->generate_terrain(pos, stages);
+    if (!generated) {
+        return std::unexpected{generated.error()};
+    }
+    return std::move(*generated);
+}
+
+auto chunk_generator::candidate_biomes_at(const chunk_region &region,
+                                          const chunk_pos &position) const
+    -> std::vector<std::string> {
+    if (!config_.fixed_biome.empty()) {
+        return {config_.fixed_biome};
+    }
+    // The reference possible-biome set of a chunk is the palette of its
+    // three-by-three. Reading the filled palettes reuses the biome grid the
+    // fill already sampled, so the set does not depend on the query order.
+    std::set<std::uint16_t> ids;
+    for (jint dx = -1; dx <= 1; ++dx) {
+        for (jint dz = -1; dz <= 1; ++dz) {
+            const auto *chunk = region.find(position.x + dx, position.z + dz);
+            if (chunk == nullptr) {
+                continue;
+            }
+            const jint top = chunk->min_y() + chunk->height();
+            for (jint y = chunk->min_y(); y < top; y += 4) {
+                for (jint z = 0; z < 16; z += 4) {
+                    for (jint x = 0; x < 16; x += 4) {
+                        ids.insert(chunk->biome_at(x, y, z));
+                    }
+                }
+            }
+        }
+    }
+    std::set<std::string> names;
+    for (const auto id : ids) {
+        names.emplace(dimension_->biome_name(id));
+    }
+    return {names.begin(), names.end()};
+}
+
 auto chunk_generator::generate_impl(const chunk_pos &pos)
     -> result<std::unique_ptr<proto_chunk>> {
     auto &states = dimension_->states();
@@ -513,72 +685,7 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
     std::optional<structure::structure_area> area;
     if (has_structures_) {
         std::optional<error> height_error;
-        const auto height_at = [&](jint x, jint z,
-                                   heightmap_kind kind) -> jint {
-            if (height_error.has_value()) {
-                return profile.min_y;
-            }
-            const chunk_pos column{.x = x >> 4, .z = z >> 4};
-            const auto found = start_height_at(column);
-            if (!found) {
-                height_error = found.error();
-                return profile.min_y;
-            }
-            return (*found)->heights[static_cast<std::size_t>(kind)]
-                                    [static_cast<std::size_t>(z & 15) * 16U +
-                                     static_cast<std::size_t>(x & 15)];
-        };
-        const auto block_at = [&](jint x, jint y, jint z) -> block_state_id {
-            if (height_error.has_value()) {
-                return states.air();
-            }
-            const chunk_pos column{.x = x >> 4, .z = z >> 4};
-            const auto found = start_block_at(column, x & 15, y, z & 15);
-            if (!found) {
-                height_error = found.error();
-                return states.air();
-            }
-            return *found;
-        };
-
-        structure::structure_start_context start_context{
-            .seed = config_.seed,
-            .data = &shared_->structure_data,
-            .min_y = profile.min_y,
-            .world_height = profile.height,
-            .sea_level = profile.sea_level,
-            .generation_min_y = dimension_->generation_min_y(),
-            .generation_height = dimension_->generation_height(),
-            .fixed_biome = !config_.fixed_biome.empty(),
-        };
-        if (config_.fixed_biome.empty()) {
-            start_context.biome_at = [this](jint quart_x, jint quart_y,
-                                            jint quart_z) {
-                return dimension_->biome_at_quart(quart_x, quart_y, quart_z);
-            };
-            start_context.biome_name = [this](std::uint16_t id) {
-                return dimension_->biome_name(id);
-            };
-        } else {
-            start_context.biome_at = [](jint, jint, jint) {
-                return std::uint16_t{0};
-            };
-            start_context.biome_name = [this](std::uint16_t) {
-                return std::string_view{config_.fixed_biome};
-            };
-        }
-        start_context.height_at = height_at;
-        start_context.block_at = block_at;
-        start_context.states = &states;
-        start_context.templates = templates_.get();
-        start_context.profile = profile_;
-        if (!config_.structure_sets.empty()) {
-            const auto &allowed = config_.structure_sets;
-            start_context.set_filter = [&allowed](std::string_view id) {
-                return std::find(allowed.begin(), allowed.end(), id) !=
-                       allowed.end();
-            };
-        }
+        auto start_context = make_start_context(height_error);
         area = structure::generate_structure_area(pos, start_context, 9);
         if (height_error) {
             return std::unexpected{*height_error};
@@ -653,8 +760,6 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
     std::vector<std::unique_ptr<proto_chunk>> chunks(chunk_count);
     for (std::size_t index = 0; index < chunk_count; ++index) {
         const chunk_pos target = region_positions[index];
-        density::sampler_context fill_context;
-        std::optional<beardifier> beard;
         std::optional<structure::structure_beard> collected_beard;
         if (area.has_value()) {
             const stage_timer timer{profile_, "structure.beard"};
@@ -663,11 +768,6 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
             if (!collected.pieces.empty() || !collected.junctions.empty() ||
                 collected.affected_box.has_value()) {
                 collected_beard = std::move(collected);
-                beard.emplace(collected_beard->pieces,
-                              collected_beard->junctions,
-                              collected_beard->affected_box);
-                fill_context.set_field(density::context_key::beardifier,
-                                       &*beard);
             }
         }
         // Terrain is a pure function of the seed, the data, the position and
@@ -687,26 +787,8 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
                 continue;
             }
         }
-        // A reference world strips the surface pass and carvers unless the
-        // carver reference mode asks for the terrain stages of the dimension.
-        const bool reference_terrain =
-            !config_.reference_world || config_.reference_carvers;
-        const terrain_stages stages{
-            .fill_context = area.has_value() ? &fill_context : nullptr,
-            .carvers = reference_terrain ? dimension_->carvers() : nullptr,
-            .surface = reference_terrain,
-            .profile = profile_,
-        };
-        // A beardifier changes the density the fill samples, so a bearded fill
-        // only runs when the exact beard is not cached. Its row overlaps the
-        // terrain rows and reports how much of the fill work the beardifier
-        // costs.
-        std::optional<stage_timer> bearded_fill;
-        if (collected_beard.has_value()) {
-            bearded_fill.emplace(profile_, "terrain.bearded_fill");
-        }
-        dimension_->reset_biome_search();
-        auto generated = dimension_->generate_terrain(target, stages);
+        auto generated = fill_terrain(
+            target, collected_beard.has_value() ? &*collected_beard : nullptr);
         if (!generated) {
             return std::unexpected{generated.error()};
         }
@@ -914,208 +996,557 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
     }
 
     if (has_features_) {
-        // Feature placement reads biomes through the chunks of the region and
-        // falls back to the noise source only outside it. Starting that
-        // fallback from a fresh candidate keeps the decoration independent of
-        // how many fills the target needed.
-        stage_timer prepare{profile_, "feature.prepare"};
-        dimension_->reset_biome_search();
-        dimension_biome_resolver uncached{dimension_->biome_source(),
-                                          dimension_->sampler()};
-        chunk_biome_resolver biome_view{
-            [&region](jint chunk_x, jint chunk_z) -> const proto_chunk * {
-                return region.find(chunk_x, chunk_z);
-            },
-            uncached};
-        biome_manager manager{biome_view,
-                              biome_manager::obfuscate_seed(config_.seed)};
-        const auto biome_of =
-            [this, &manager](const block_pos &block) -> std::string_view {
-            if (!config_.fixed_biome.empty()) {
-                return config_.fixed_biome;
-            }
-            return dimension_->biome_name(
-                manager.get_biome(block.x, block.y, block.z));
-        };
-        const auto temperature =
-            [this, &biome_of](const block_pos &block) -> std::optional<float> {
-            return dimension_->biome_temperature(biome_of(block), block.x,
-                                                 block.y, block.z);
-        };
-        const auto world_state = [&region](const block_pos &block) {
-            return region.state_at(block.x, block.y, block.z);
-        };
-
-        feature::feature_context feature_context{
-            .placement =
-                feature::placement_context{
-                    .region = &region,
-                    .chunk = center,
-                    .states = &states,
-                    .generation =
-                        provider::generation_context{
-                            .min_y = dimension_->generation_min_y(),
-                            .height = dimension_->generation_height(),
-                            .sea_level = profile.sea_level,
-                            .world_seed = config_.seed,
-                        },
-                },
-            .place_by_id = {},
-            .templates = templates_.get(),
-            .registry = &states,
-            .processor_list = {},
-            .profile = profile_,
-        };
-        feature_context.placement.height = [&region](heightmap_kind kind,
-                                                     jint x, jint z) {
-            return region.height_at(kind, x, z);
-        };
-        feature_context.place_configured = [&feature_context,
-                                            this](std::string_view id,
-                                                  worldgen_random &random,
-                                                  const block_pos &position) {
-            const auto *configured =
-                features_ == nullptr ? nullptr : features_->configured(id);
-            return configured != nullptr &&
-                   configured->place(feature_context, random, position);
-        };
-        feature_context.placement.biome = biome_of;
-        feature_context.placement.resolve_state = resolve_state;
-        feature_context.placement.should_freeze =
-            [&temperature, &world_state, &states](const block_pos &block) {
-                const auto value = temperature(
-                    block_pos{.x = block.x, .y = block.y + 1, .z = block.z});
-                if (!value.has_value() || *value >= 0.15F) {
-                    return false;
-                }
-                return states.traits(world_state(block)).water;
-            };
-        feature_context.placement.should_snow = [&temperature, &world_state,
-                                                 &states](
-                                                    const block_pos &block) {
-            const auto value = temperature(block);
-            if (!value.has_value() || *value >= 0.15F) {
-                return false;
-            }
-            const auto state = world_state(block);
-            const auto name = states.name(state);
-            if (!states.traits(state).air &&
-                !name.starts_with("minecraft:snow")) {
-                return false;
-            }
-            const auto below = world_state(
-                block_pos{.x = block.x, .y = block.y - 1, .z = block.z});
-            if (states.in_tag(below, "minecraft:cannot_support_snow_layer")) {
-                return false;
-            }
-            if (states.in_tag(below, "minecraft:support_override_snow_layer")) {
-                return true;
-            }
-            const auto below_name = states.name(below);
-            if (below_name.ends_with("_leaves") ||
-                below_name.starts_with("minecraft:bamboo") ||
-                below_name.starts_with("minecraft:vine") ||
-                below_name.starts_with("minecraft:snow")) {
-                return false;
-            }
-            return states.traits(below).blocks_motion;
-        };
-        if (templates_ != nullptr) {
-            feature_context.processor_list = [this](std::string_view id)
-                -> const structure::structure_processor_list * {
-                const auto found = shared_->structure_data.processor_lists.find(
-                    std::string{id});
-                if (found == shared_->structure_data.processor_lists.end()) {
-                    return nullptr;
-                }
-                return &templates_->processor_list(id, found->second);
-            };
-        }
-
-        std::vector<std::string> candidate_biomes;
-        if (!config_.fixed_biome.empty()) {
-            candidate_biomes.push_back(config_.fixed_biome);
-        } else {
-            std::set<std::string> names;
-            const jint min_quart_x = (pos.x - 1) * 4;
-            const jint max_quart_x = (pos.x + 2) * 4;
-            const jint min_quart_z = (pos.z - 1) * 4;
-            const jint max_quart_z = (pos.z + 2) * 4;
-            const jint min_quart_y = profile.min_y >> 2;
-            const jint max_quart_y = (profile.min_y + profile.height) >> 2;
-            for (jint quart_x = min_quart_x; quart_x < max_quart_x; ++quart_x) {
-                for (jint quart_y = min_quart_y; quart_y < max_quart_y;
-                     ++quart_y) {
-                    for (jint quart_z = min_quart_z; quart_z < max_quart_z;
-                         ++quart_z) {
-                        names.emplace(
-                            dimension_->biome_name(dimension_->biome_at_quart(
-                                quart_x, quart_y, quart_z)));
-                    }
-                }
-            }
-            candidate_biomes.assign(names.begin(), names.end());
-        }
-        prepare.stop();
-        const auto decorate_chunk = [&](proto_chunk &target) {
-            feature_context.placement.chunk = &target;
-            feature_context.placement.generation.min_y =
-                dimension_->generation_min_y();
-            feature_context.placement.generation.height =
-                dimension_->generation_height();
-            const stage_timer timer{profile_, "feature.decorate"};
-            feature::decorate(feature_context, shared_->feature_plan,
-                              features_->placed(), candidate_biomes,
-                              shared_->feature_data.biomes, config_.seed);
-        };
-        // A reference world saves every chunk of the generated area, so its
-        // chunks contain the feature writes of their neighbours. Decorating
-        // the target chunk first and then its neighbours reproduces those
-        // writes for a target chunk that the reference generated before its
-        // neighbours. The generation-order mode follows the ticket order of a
-        // force-load instead: every chunk that precedes the target in
-        // ascending x and z decorates first, then the target, then the rest.
-        const auto decorate_position = [&](const chunk_pos &position) {
+        // The decoration order: a reference world saves every chunk of the
+        // generated area, so its chunks contain the feature writes of their
+        // neighbours. Decorating the target chunk first and then its
+        // neighbours reproduces those writes for a target chunk that the
+        // reference generated before its neighbours. The generation-order
+        // mode follows the ticket order of a force-load instead: every chunk
+        // that precedes the target in ascending x and z decorates first, then
+        // the target, then the rest.
+        std::vector<chunk_pos> ordered_positions;
+        ordered_positions.reserve(decorated_positions.size());
+        const auto add = [&](const chunk_pos &position) {
             if (position == pos) {
-                // The target writes through its own generation region too,
-                // so restore its write zone after a neighbour decoration.
-                region.set_write_focus(pos, 1);
-                decorate_chunk(*center);
+                ordered_positions.push_back(pos);
                 return;
             }
-            if (auto *target = region.find(position); target != nullptr) {
+            if (region.find(position) != nullptr) {
                 // The reference generation region of this chunk allows writes
                 // in its eight neighbours, not around the compared chunk.
-                region.set_write_focus(position, 1);
-                decorate_chunk(*target);
+                ordered_positions.push_back(position);
             }
         };
         if (!config_.decorate_neighbours) {
-            decorate_chunk(*center);
+            add(pos);
         } else if (config_.neighbours_in_generation_order ||
                    config_.neighbours_ticket_sweep) {
             for (const auto &position : decorated_positions) {
-                decorate_position(position);
+                add(position);
             }
         } else if (config_.neighbours_before_target) {
             for (const auto &position : decorated_positions) {
                 if (position != pos) {
-                    decorate_position(position);
+                    add(position);
                 }
             }
-            decorate_position(pos);
+            add(pos);
         } else {
-            decorate_position(pos);
+            add(pos);
             for (const auto &position : decorated_positions) {
                 if (position != pos) {
-                    decorate_position(position);
+                    add(position);
                 }
             }
+        }
+        // Every decorated chunk runs its own candidate-biome plan, so a
+        // neighbour with a different set of palettes considers a different
+        // feature set than the target does.
+        std::vector<std::vector<std::string>> plans;
+        plans.reserve(ordered_positions.size());
+        for (const auto &position : ordered_positions) {
+            plans.push_back(candidate_biomes_at(region, position));
+        }
+        std::vector<decoration_target> order;
+        order.reserve(ordered_positions.size());
+        for (std::size_t index = 0; index < ordered_positions.size(); ++index) {
+            const auto &position = ordered_positions[index];
+            order.push_back(decoration_target{
+                .position = position,
+                .chunk = position == pos ? center : region.find(position),
+                .candidate_biomes = &plans[index]});
+        }
+        if (const auto decorated = decorate_chunks(region, order); !decorated) {
+            return std::unexpected{decorated.error()};
         }
     }
 
     center->set_status(target_status(config_.target));
     return std::move(chunks[0]);
+}
+
+auto chunk_generator::decorate_chunks(
+    chunk_region &region, std::span<const decoration_target> targets)
+    -> result<void> {
+    if (targets.empty()) {
+        return {};
+    }
+    auto &states = dimension_->states();
+    const auto &profile = dimension_->profile();
+    // Feature placement reads biomes through the chunks of the region and
+    // falls back to the noise source only outside it. Starting that fallback
+    // from a fresh candidate keeps the decoration independent of how many
+    // fills the pass needed.
+    stage_timer prepare{profile_, "feature.prepare"};
+    dimension_->reset_biome_search();
+    dimension_biome_resolver uncached{dimension_->biome_source(),
+                                      dimension_->sampler()};
+    chunk_biome_resolver biome_view{
+        [&region](jint chunk_x, jint chunk_z) -> const proto_chunk * {
+            return region.find(chunk_x, chunk_z);
+        },
+        uncached};
+    biome_manager manager{biome_view,
+                          biome_manager::obfuscate_seed(config_.seed)};
+    const auto biome_of =
+        [this, &manager](const block_pos &block) -> std::string_view {
+        if (!config_.fixed_biome.empty()) {
+            return config_.fixed_biome;
+        }
+        return dimension_->biome_name(
+            manager.get_biome(block.x, block.y, block.z));
+    };
+    const auto temperature =
+        [this, &biome_of](const block_pos &block) -> std::optional<float> {
+        return dimension_->biome_temperature(biome_of(block), block.x, block.y,
+                                             block.z);
+    };
+    const auto world_state = [&region](const block_pos &block) {
+        return region.state_at(block.x, block.y, block.z);
+    };
+
+    feature::feature_context feature_context{
+        .placement =
+            feature::placement_context{
+                .region = &region,
+                .chunk = &region.center(),
+                .states = &states,
+                .generation =
+                    provider::generation_context{
+                        .min_y = dimension_->generation_min_y(),
+                        .height = dimension_->generation_height(),
+                        .sea_level = profile.sea_level,
+                        .world_seed = config_.seed,
+                    },
+            },
+        .place_by_id = {},
+        .templates = templates_.get(),
+        .registry = &states,
+        .processor_list = {},
+        .profile = profile_,
+    };
+    feature_context.placement.height = [&region](heightmap_kind kind, jint x,
+                                                 jint z) {
+        return region.height_at(kind, x, z);
+    };
+    feature_context.place_configured =
+        [&feature_context, this](std::string_view id, worldgen_random &random,
+                                 const block_pos &position) {
+            const auto *configured =
+                features_ == nullptr ? nullptr : features_->configured(id);
+            return configured != nullptr &&
+                   configured->place(feature_context, random, position);
+        };
+    feature_context.placement.biome = biome_of;
+    feature_context.placement.resolve_state =
+        [&states](std::string_view key) -> block_state_id {
+        if (const auto found = states.find(key); found.has_value()) {
+            return *found;
+        }
+        const auto interned = states.intern(key, states.infer_traits(key));
+        return interned.has_value() ? *interned : no_block_state;
+    };
+    feature_context.placement.should_freeze =
+        [&temperature, &world_state, &states](const block_pos &block) {
+            const auto value = temperature(
+                block_pos{.x = block.x, .y = block.y + 1, .z = block.z});
+            if (!value.has_value() || *value >= 0.15F) {
+                return false;
+            }
+            return states.traits(world_state(block)).water;
+        };
+    feature_context.placement.should_snow = [&temperature, &world_state,
+                                             &states](const block_pos &block) {
+        const auto value = temperature(block);
+        if (!value.has_value() || *value >= 0.15F) {
+            return false;
+        }
+        const auto state = world_state(block);
+        const auto name = states.name(state);
+        if (!states.traits(state).air && !name.starts_with("minecraft:snow")) {
+            return false;
+        }
+        const auto below = world_state(
+            block_pos{.x = block.x, .y = block.y - 1, .z = block.z});
+        if (states.in_tag(below, "minecraft:cannot_support_snow_layer")) {
+            return false;
+        }
+        if (states.in_tag(below, "minecraft:support_override_snow_layer")) {
+            return true;
+        }
+        const auto below_name = states.name(below);
+        if (below_name.ends_with("_leaves") ||
+            below_name.starts_with("minecraft:bamboo") ||
+            below_name.starts_with("minecraft:vine") ||
+            below_name.starts_with("minecraft:snow")) {
+            return false;
+        }
+        return states.traits(below).blocks_motion;
+    };
+    if (templates_ != nullptr) {
+        feature_context.processor_list = [this](std::string_view id)
+            -> const structure::structure_processor_list * {
+            const auto found =
+                shared_->structure_data.processor_lists.find(std::string{id});
+            if (found == shared_->structure_data.processor_lists.end()) {
+                return nullptr;
+            }
+            return &templates_->processor_list(id, found->second);
+        };
+    }
+    prepare.stop();
+    for (const auto &target : targets) {
+        region.set_write_focus(target.position, 1);
+        feature_context.placement.chunk = target.chunk;
+        feature_context.placement.generation.min_y =
+            dimension_->generation_min_y();
+        feature_context.placement.generation.height =
+            dimension_->generation_height();
+        const stage_timer timer{profile_, "feature.decorate"};
+        feature::decorate(feature_context, shared_->feature_plan,
+                          features_->placed(), *target.candidate_biomes,
+                          shared_->feature_data.biomes, config_.seed);
+    }
+    return {};
+}
+
+struct chunk_generator::structure_placement {
+    structure::structure_place_context context{};
+    std::unordered_map<std::string, jint> adjusted_heights{};
+    std::optional<structure::structure_feature_placer> features{};
+};
+
+auto chunk_generator::make_structure_placement(
+    chunk_region &region,
+    std::span<const structure::structure_start *const> starts)
+    -> result<std::unique_ptr<structure_placement>> {
+    auto &states = dimension_->states();
+    auto placement = std::make_unique<structure_placement>();
+    placement->context = structure::structure_place_context{
+        .region = &region,
+        .chunk = nullptr,
+        .states = &states,
+        .state = [&states](std::string_view key) -> block_state_id {
+            if (const auto found = states.find(key); found.has_value()) {
+                return *found;
+            }
+            const auto interned = states.intern(key, states.infer_traits(key));
+            return interned.has_value() ? *interned : no_block_state;
+        },
+        .templates = templates_.get(),
+        .registry = &states,
+        .seed = config_.seed,
+        .sea_level = dimension_->profile().sea_level,
+        .level_random = nullptr,
+        .adjusted_heights = &placement->adjusted_heights,
+        .data = &shared_->structure_data,
+        .place_feature = {},
+    };
+    std::vector<std::string> feature_ids;
+    for (const auto *start : starts) {
+        for (const auto &piece : start->pieces) {
+            structure::collect_feature_ids(structure::to_piece_record(piece),
+                                           feature_ids);
+        }
+    }
+    if (!feature_ids.empty()) {
+        placement->features.emplace(placement->context, shared_->feature_data);
+        if (const auto loaded = placement->features->load(feature_ids);
+            !loaded) {
+            return std::unexpected{loaded.error()};
+        }
+        placement->context.place_feature =
+            [pointer = placement.get()](std::string_view id,
+                                        worldgen_random &random,
+                                        const block_pos &position) {
+                return pointer->features->place(id, random, position);
+            };
+    }
+    return placement;
+}
+
+auto chunk_generator::generate_tile(const chunk_pos &origin)
+    -> result<std::vector<std::unique_ptr<proto_chunk>>> {
+    return generate_tile_impl(origin);
+}
+
+auto chunk_generator::generate_tile_impl(const chunk_pos &origin)
+    -> result<std::vector<std::unique_ptr<proto_chunk>>> {
+    const jint size = config_.tile_size;
+    if (size <= 0) {
+        return std::unexpected{fail(error_code::invalid_argument,
+                                    "a generation tile needs a positive edge")};
+    }
+    auto &states = dimension_->states();
+    // The served tile, the one-chunk ring around it every feature write may
+    // land in, and the one further ring every decorated chunk reads. The ring
+    // sizes follow the reference generation region: a features step reads its
+    // three-by-three at the terrain status, so the terrain ring is the
+    // decorated ring plus one.
+    const chunk_rectangle served{.min_x = origin.x,
+                                 .min_z = origin.z,
+                                 .max_x = origin.x + size - 1,
+                                 .max_z = origin.z + size - 1};
+    const chunk_rectangle decorated =
+        has_features_ ? expand(served, 1) : served;
+    const chunk_rectangle filled =
+        has_features_ ? expand(decorated, 1) : served;
+
+    // The starts stage feeds the beardifier, so it runs before the fill. Its
+    // height probes read unbearded fill columns, not surface or carvers. The
+    // scanned rectangle reaches eight chunks past the filled one, because a
+    // start up to eight chunks away can still beard or reference a chunk.
+    std::vector<structure::structure_start> starts;
+    std::optional<error> height_error;
+    if (has_structures_) {
+        const stage_timer timer{profile_, "structure.starts"};
+        dimension_->reset_biome_search();
+        auto start_context = make_start_context(height_error);
+        const auto scanned = expand(filled, 8);
+        for (jint x = scanned.min_x; x <= scanned.max_x; ++x) {
+            for (jint z = scanned.min_z; z <= scanned.max_z; ++z) {
+                auto found = structure::generate_structure_starts(
+                    chunk_pos{.x = x, .z = z}, start_context);
+                starts.insert(starts.end(),
+                              std::make_move_iterator(found.begin()),
+                              std::make_move_iterator(found.end()));
+            }
+        }
+        if (height_error) {
+            return std::unexpected{*height_error};
+        }
+    }
+
+    const jint filled_width = filled.max_x - filled.min_x + 1;
+    const jint filled_depth = filled.max_z - filled.min_z + 1;
+    const auto index_of = [&filled, filled_depth](const chunk_pos &pos) {
+        return static_cast<std::size_t>(pos.x - filled.min_x) *
+                   static_cast<std::size_t>(filled_depth) +
+               static_cast<std::size_t>(pos.z - filled.min_z);
+    };
+    std::vector<std::unique_ptr<proto_chunk>> chunks(
+        static_cast<std::size_t>(filled_width) *
+        static_cast<std::size_t>(filled_depth));
+    for (jint x = filled.min_x; x <= filled.max_x; ++x) {
+        for (jint z = filled.min_z; z <= filled.max_z; ++z) {
+            const chunk_pos position{.x = x, .z = z};
+            std::optional<structure::structure_beard> collected_beard;
+            if (has_structures_) {
+                const stage_timer timer{profile_, "structure.beard"};
+                auto collected = structure::collect_beard(
+                    starts, shared_->structure_data, position);
+                if (!collected.pieces.empty() || !collected.junctions.empty() ||
+                    collected.affected_box.has_value()) {
+                    collected_beard = std::move(collected);
+                }
+            }
+            auto generated = fill_terrain(position, collected_beard.has_value()
+                                                        ? &*collected_beard
+                                                        : nullptr);
+            if (!generated) {
+                return std::unexpected{generated.error()};
+            }
+            chunks[index_of(position)] = std::move(*generated);
+        }
+    }
+
+    chunk_region region{*chunks[index_of(origin)], 1};
+    for (auto &chunk : chunks) {
+        region.attach(*chunk);
+    }
+    std::vector<bool> shaped(chunks.size(), false);
+
+    // Structures are placed once per decorated chunk, in force-load order.
+    // A piece is clipped to the chunk whose step places it, which is what the
+    // reference does: the chunk's writable area is its own column, so a piece
+    // never writes outside the chunk running the step.
+    if (has_structures_) {
+        std::vector<const structure::structure_start *> start_pointers;
+        start_pointers.reserve(starts.size());
+        for (const auto &start : starts) {
+            start_pointers.push_back(&start);
+        }
+        std::unique_ptr<structure_placement> placement;
+        {
+            const stage_timer timer{profile_, "structure.features"};
+            auto created = make_structure_placement(region, start_pointers);
+            if (!created) {
+                return std::unexpected{created.error()};
+            }
+            placement = std::move(*created);
+        }
+        stage_timer pieces{profile_, "structure.pieces"};
+        for (jint x = decorated.min_x; x <= decorated.max_x; ++x) {
+            for (jint z = decorated.min_z; z <= decorated.max_z; ++z) {
+                const chunk_pos position{.x = x, .z = z};
+                auto *chunk = region.find(position);
+                if (chunk == nullptr) {
+                    continue;
+                }
+                // The reference places a start's pieces in the chunk whose
+                // features step runs them, clipped to that chunk's column.
+                region.set_write_focus(position, 0);
+                worldgen_random decoration{
+                    std::make_unique<xoroshiro_random_source>(0)};
+                const jlong decoration_seed = decoration.set_decoration_seed(
+                    config_.seed, position.x * 16, position.z * 16);
+                std::vector<structure_reference> references;
+                bool placed_piece = false;
+                for (const auto *start : start_pointers) {
+                    const bool owned = start->chunk.x == position.x &&
+                                       start->chunk.z == position.z;
+                    if (!owned && !start->bounds.intersects_chunk(position)) {
+                        continue;
+                    }
+                    if (contains(served, position)) {
+                        if (owned) {
+                            chunk->add_structure_start(
+                                make_start_record(*start));
+                        }
+                        const auto duplicate = std::find_if(
+                            references.begin(), references.end(),
+                            [start](const structure_reference &reference) {
+                                return reference.structure ==
+                                           start->structure &&
+                                       reference.chunk_x == start->chunk.x &&
+                                       reference.chunk_z == start->chunk.z;
+                            });
+                        if (duplicate != references.end()) {
+                            ++duplicate->count;
+                        } else {
+                            references.push_back(structure_reference{
+                                .structure = start->structure,
+                                .chunk_x = start->chunk.x,
+                                .chunk_z = start->chunk.z,
+                                .count = 1});
+                        }
+                    }
+                    const auto structure_index =
+                        structure::structure_step_index(shared_->structure_data,
+                                                        start->structure);
+                    if (!structure_index.has_value()) {
+                        continue;
+                    }
+                    auto piece_context = placement->context;
+                    piece_context.chunk = chunk;
+                    if (!start->pieces.empty()) {
+                        piece_context.reference =
+                            structure::start_reference_position(
+                                structure::to_piece_record(
+                                    start->pieces.front()));
+                    }
+                    worldgen_random random{
+                        std::make_unique<xoroshiro_random_source>(0)};
+                    random.set_feature_seed(
+                        decoration_seed, *structure_index,
+                        structure::generation_step_ordinal(start->step));
+                    for (const auto &piece : start->pieces) {
+                        if (!piece.bounds.intersects_chunk(position)) {
+                            continue;
+                        }
+                        placed_piece = true;
+                        structure::place_structure_piece(
+                            piece_context, structure::to_piece_record(piece),
+                            random);
+                    }
+                }
+                for (const auto &reference : references) {
+                    chunk->add_structure_reference(
+                        reference.structure, reference.chunk_x,
+                        reference.chunk_z, reference.count);
+                }
+                if (contains(served, position)) {
+                    shaped[index_of(position)] = placed_piece;
+                }
+            }
+        }
+        pieces.stop();
+        // Shape-sensitive blocks are repaired once every piece landed, so a
+        // border wall or fence sees the pieces on both sides of the seam.
+        for (jint x = served.min_x; x <= served.max_x; ++x) {
+            for (jint z = served.min_z; z <= served.max_z; ++z) {
+                const chunk_pos position{.x = x, .z = z};
+                if (!shaped[index_of(position)]) {
+                    continue;
+                }
+                const stage_timer timer{profile_, "structure.shapes"};
+                region.set_write_focus(position, 0);
+                structure::refresh_chunk_shapes(*region.find(position), region,
+                                                states);
+            }
+        }
+    }
+
+    if (has_features_) {
+        // Each decorated chunk considers the features of the biomes its own
+        // three-by-three palette holds, exactly like the reference possible
+        // biome set. The plans are taken from the fill's biome grid, so a
+        // chunk's candidate set never depends on the query order.
+        std::vector<std::vector<std::uint16_t>> palettes(chunks.size());
+        if (config_.fixed_biome.empty()) {
+            for (std::size_t index = 0; index < chunks.size(); ++index) {
+                palettes[index] = chunk_biomes(*chunks[index]);
+            }
+        }
+        std::vector<std::vector<std::string>> candidates(
+            static_cast<std::size_t>(decorated.max_x - decorated.min_x + 1) *
+            static_cast<std::size_t>(decorated.max_z - decorated.min_z + 1));
+        const auto candidates_at =
+            [&](const chunk_pos &position) -> std::vector<std::string> & {
+            return candidates
+                [static_cast<std::size_t>(position.x - decorated.min_x) *
+                     static_cast<std::size_t>(decorated.max_z -
+                                              decorated.min_z + 1) +
+                 static_cast<std::size_t>(position.z - decorated.min_z)];
+        };
+        std::vector<decoration_target> targets;
+        targets.reserve(candidates.size());
+        for (jint x = decorated.min_x; x <= decorated.max_x; ++x) {
+            for (jint z = decorated.min_z; z <= decorated.max_z; ++z) {
+                const chunk_pos position{.x = x, .z = z};
+                auto &list = candidates_at(position);
+                if (!config_.fixed_biome.empty()) {
+                    list.push_back(config_.fixed_biome);
+                } else {
+                    std::set<std::string> names;
+                    for (jint dx = -1; dx <= 1; ++dx) {
+                        for (jint dz = -1; dz <= 1; ++dz) {
+                            const chunk_pos source{.x = x + dx, .z = z + dz};
+                            if (!contains(filled, source)) {
+                                continue;
+                            }
+                            for (const auto id : palettes[index_of(source)]) {
+                                names.emplace(dimension_->biome_name(id));
+                            }
+                        }
+                    }
+                    list.assign(names.begin(), names.end());
+                }
+                targets.push_back(
+                    decoration_target{.position = position,
+                                      .chunk = region.find(position),
+                                      .candidate_biomes = &list});
+            }
+        }
+        if (const auto decorated_chunks = decorate_chunks(region, targets);
+            !decorated_chunks) {
+            return std::unexpected{decorated_chunks.error()};
+        }
+    }
+
+    // Serve only the inner tile. The status is raised after every neighbour
+    // write landed, so the heightmaps the served chunks report are final.
+    std::vector<std::unique_ptr<proto_chunk>> result;
+    result.reserve(static_cast<std::size_t>(size) *
+                   static_cast<std::size_t>(size));
+    for (jint x = served.min_x; x <= served.max_x; ++x) {
+        for (jint z = served.min_z; z <= served.max_z; ++z) {
+            auto &chunk = chunks[index_of(chunk_pos{.x = x, .z = z})];
+            chunk->set_status(target_status(config_.target));
+            result.push_back(std::move(chunk));
+        }
+    }
+    return result;
 }
 
 auto chunk_generator::worker_instances(std::size_t worker_count)
@@ -1276,6 +1707,111 @@ auto chunk_generator::generate_area(chunk_pos origin, jint width, jint depth,
                 } catch (...) {
                     errors[index] =
                         fail(error_code::unknown, "chunk generation failed");
+                }
+            }
+        });
+        begin = end;
+    }
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    for (const auto &error : errors) {
+        if (error.has_value()) {
+            return std::unexpected{*error};
+        }
+    }
+    return chunks;
+}
+
+auto chunk_generator::generate_area_tiled(chunk_pos origin, jint width,
+                                          jint depth, std::size_t workers)
+    -> result<std::vector<std::unique_ptr<proto_chunk>>> {
+    if (width <= 0 || depth <= 0) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "generation area needs a positive width and depth")};
+    }
+    const jint size = config_.tile_size;
+    if (size <= 0) {
+        return std::unexpected{fail(error_code::invalid_argument,
+                                    "a generation tile needs a positive edge")};
+    }
+    std::vector<chunk_pos> tile_origins;
+    const jint first_x = floor_div(origin.x, size) * size;
+    const jint first_z = floor_div(origin.z, size) * size;
+    const jint last_x = floor_div(origin.x + width - 1, size) * size;
+    const jint last_z = floor_div(origin.z + depth - 1, size) * size;
+    for (jint x = first_x; x <= last_x; x += size) {
+        for (jint z = first_z; z <= last_z; z += size) {
+            tile_origins.push_back(chunk_pos{.x = x, .z = z});
+        }
+    }
+    // Every tile in the rectangle is generated whole so the served chunks
+    // keep their neighbours' writes; the chunks of a tile that fall outside
+    // the requested rectangle are discarded.
+    std::vector<std::unique_ptr<proto_chunk>> chunks(
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(depth));
+    const auto take = [&](std::vector<std::unique_ptr<proto_chunk>> &tile) {
+        for (auto &chunk : tile) {
+            if (chunk == nullptr) {
+                continue;
+            }
+            const jint x = chunk->chunk_x() - origin.x;
+            const jint z = chunk->chunk_z() - origin.z;
+            if (x < 0 || x >= width || z < 0 || z >= depth) {
+                continue;
+            }
+            chunks[static_cast<std::size_t>(x) *
+                       static_cast<std::size_t>(depth) +
+                   static_cast<std::size_t>(z)] = std::move(chunk);
+        }
+    };
+    std::size_t worker_count = workers;
+    if (worker_count == 0) {
+        worker_count = std::thread::hardware_concurrency();
+        if (worker_count == 0) {
+            worker_count = 1;
+        }
+    }
+    worker_count = std::min(worker_count, tile_origins.size());
+    if (worker_count <= 1) {
+        for (const auto &tile_origin : tile_origins) {
+            auto generated = generate_tile_impl(tile_origin);
+            if (!generated) {
+                return std::unexpected{generated.error()};
+            }
+            take(*generated);
+        }
+        return chunks;
+    }
+    auto instances = worker_instances(worker_count);
+    if (!instances) {
+        return std::unexpected{instances.error()};
+    }
+    std::vector<std::optional<error>> errors(tile_origins.size());
+    std::vector<std::jthread> threads;
+    threads.reserve(worker_count);
+    const std::size_t base = tile_origins.size() / worker_count;
+    const std::size_t extra = tile_origins.size() % worker_count;
+    std::size_t begin = 0;
+    for (std::size_t worker = 0; worker < worker_count; ++worker) {
+        const std::size_t end = begin + base + (worker < extra ? 1U : 0U);
+        auto *generator = (*instances)[worker];
+        threads.emplace_back([&, generator, begin, end] {
+            for (std::size_t index = begin; index < end; ++index) {
+                try {
+                    auto generated =
+                        generator->generate_tile_impl(tile_origins[index]);
+                    if (!generated) {
+                        errors[index] = generated.error();
+                    } else {
+                        take(*generated);
+                    }
+                } catch (const std::exception &exception) {
+                    errors[index] = fail(error_code::unknown, exception.what());
+                } catch (...) {
+                    errors[index] =
+                        fail(error_code::unknown, "tile generation failed");
                 }
             }
         });

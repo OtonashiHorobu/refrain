@@ -141,9 +141,15 @@ class chunk_generation {
         /// `worker_count`, so generation does not oversubscribe the machine.
         std::uint32_t sim_threads{1};
         std::uint32_t io_threads{2};
-        /// Upper bound on wanted positions; further requests are refused so a
+        /// Upper bound on wanted tiles; further requests are refused so a
         /// burst of viewport changes cannot grow the queue without bound.
         std::size_t max_pending{512};
+        /// Edge in chunks of the square one generation task produces. A tile
+        /// is filled and decorated with one ring around it before any of its
+        /// chunks is served, so cross-border feature writes land in the
+        /// chunks a client receives. The tile is also the unit the priority
+        /// queue and the admission credits count.
+        std::int32_t tile_size{8};
         /// Logical CPUs the generation workers pin to; empty leaves the OS
         /// default. Pinning away from the simulation and IO cores is a hint,
         /// never a requirement.
@@ -165,14 +171,15 @@ class chunk_generation {
                                                    std::uint32_t io_threads)
         -> std::size_t;
 
-    /// Queue one column. Returns false when it is already wanted or in
-    /// flight, the queue is full, or generation is stopping.
+    /// Queue the tile that contains one column. Returns false when the tile is
+    /// already wanted or in flight, the queue is full, or generation is
+    /// stopping; the column is still served when its tile completes.
     auto request(refrain::world::chunk_pos pos) -> bool;
 
-    /// Drop one wanted column (the caller no longer needs it).
+    /// Drop the tile that contains one column (the caller no longer needs it).
     void forget(refrain::world::chunk_pos pos);
 
-    /// Centres the dispatch ranks wanted columns by, nearest first. The
+    /// Centres the dispatch ranks wanted tiles by, nearest first. The
     /// simulation thread refreshes them from the player positions each tick.
     void
     set_priority_centres(std::span<const refrain::world::chunk_pos> centres);
@@ -181,14 +188,15 @@ class chunk_generation {
     /// per change and nothing otherwise.
     void update_admission(const admission_sample &sample);
 
-    /// Admit wanted columns to the workers while credits and tick-budget
+    /// Admit wanted tiles to the workers while credits and tick-budget
     /// headroom allow, nearest first. `tick_elapsed_ns` is the work the
     /// current tick already did: once it passes the headroom the tick stops
-    /// admitting. Returns the number admitted.
+    /// admitting. Returns the number of tiles admitted.
     auto dispatch(std::uint64_t tick_elapsed_ns) -> std::size_t;
 
-    /// Take every finished column, ordered by position so the order the world
-    /// applies them never depends on which worker finished first.
+    /// Take every column of every finished tile, ordered by position so the
+    /// order the world applies them never depends on which worker finished
+    /// first.
     [[nodiscard]] auto take_results() -> std::vector<
         std::pair<refrain::world::chunk_pos, refrain::world::chunk>>;
 
@@ -208,15 +216,22 @@ class chunk_generation {
     config settings_{};
     mutable std::mutex mutex_{};
     std::condition_variable wake_{};
-    /// Wanted columns, keyed by position for deduplication.
+    /// The columns one finished tile produced. The tile is the admission and
+    /// accounting unit; the columns are what the world applies.
+    struct tile_result {
+        refrain::world::chunk_pos origin{};
+        std::vector<std::pair<refrain::world::chunk_pos, refrain::world::chunk>>
+            columns{};
+    };
+
+    /// Wanted tile origins, keyed by the minimum corner for deduplication.
     std::set<std::pair<std::int32_t, std::int32_t>> wanted_{};
-    /// Admitted columns the simulation has not applied yet, keyed by
-    /// position; a column is never admitted twice.
+    /// Admitted tiles the simulation has not applied yet, keyed by the
+    /// minimum corner; a tile is never admitted twice.
     std::set<std::pair<std::int32_t, std::int32_t>> active_{};
     std::vector<refrain::world::chunk_pos> centres_{};
     std::deque<refrain::world::chunk_pos> work_{};
-    std::vector<std::pair<refrain::world::chunk_pos, refrain::world::chunk>>
-        finished_{};
+    std::vector<tile_result> finished_{};
     std::size_t in_flight_{0};
     admission_controller admission_{};
     bool stopping_{false};

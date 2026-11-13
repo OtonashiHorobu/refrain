@@ -66,6 +66,10 @@ struct options {
     bool chunk_hash{false};
     bool stages{false};
     bool climate_ties{false};
+    /// Generate through whole tiles instead of one chunk at a time.
+    bool tiled{false};
+    /// Edge in chunks of one generated tile.
+    jint tile_size{8};
 };
 
 auto hash_bytes(std::uint64_t hash, std::string_view text) -> std::uint64_t {
@@ -207,6 +211,28 @@ auto rectangle_for(jint chunks) -> std::pair<jint, jint> {
     return {width, depth};
 }
 
+/// Minimum corner of the tile that contains a chunk coordinate.
+auto tile_floor(jint value, jint tile_size) -> jint {
+    const jint quotient = value / tile_size;
+    return value % tile_size != 0 && value < 0 ? quotient - 1 : quotient;
+}
+
+/// Every tile origin that covers a `width` by `depth` chunk rectangle.
+auto make_tile_origins(jint origin_x, jint origin_z, jint width, jint depth,
+                       jint tile_size) -> std::vector<chunk_pos> {
+    std::vector<chunk_pos> origins;
+    const jint first_x = tile_floor(origin_x, tile_size) * tile_size;
+    const jint first_z = tile_floor(origin_z, tile_size) * tile_size;
+    const jint last_x = tile_floor(origin_x + width - 1, tile_size) * tile_size;
+    const jint last_z = tile_floor(origin_z + depth - 1, tile_size) * tile_size;
+    for (jint x = first_x; x <= last_x; x += tile_size) {
+        for (jint z = first_z; z <= last_z; z += tile_size) {
+            origins.push_back(chunk_pos{.x = x, .z = z});
+        }
+    }
+    return origins;
+}
+
 auto make_positions(jint origin_x, jint origin_z, jint width, jint depth)
     -> std::vector<chunk_pos> {
     std::vector<chunk_pos> positions;
@@ -224,6 +250,7 @@ auto make_positions(jint origin_x, jint origin_z, jint width, jint depth)
 struct scenario_result {
     std::string target{};
     jint chunks{0};
+    jint tile{1};
     std::size_t workers{0};
     double create_ms{0.0};
     double cold_batch_ms{0.0};
@@ -250,6 +277,7 @@ auto run_scenario(const options &config, generation_target target, jint chunks,
         .target = target,
         .structure_sets = {},
         .reference_world = false,
+        .tile_size = config.tile_size,
     });
     const auto create_ms = milliseconds(clock_type::now() - create_begin);
     if (!created) {
@@ -275,7 +303,7 @@ auto run_scenario(const options &config, generation_target target, jint chunks,
         make_positions(config.origin_x, config.origin_z, width, depth);
     for (jint repeat = 0; repeat < config.repeat; ++repeat) {
         const auto begin = clock_type::now();
-        if (workers == 1) {
+        if (workers == 1 && !config.tiled) {
             // The serial path is also the per-chunk latency sample: it runs
             // the same stage sequence the batch entry point uses for one
             // worker.
@@ -297,9 +325,14 @@ auto run_scenario(const options &config, generation_target target, jint chunks,
             const auto elapsed = milliseconds(clock_type::now() - begin);
             batch_ms.push_back(elapsed);
         } else {
-            auto generated = generator->generate_area(
-                chunk_pos{.x = config.origin_x, .z = config.origin_z}, width,
-                depth, workers);
+            auto generated =
+                config.tiled
+                    ? generator->generate_area_tiled(
+                          chunk_pos{.x = config.origin_x, .z = config.origin_z},
+                          width, depth, workers)
+                    : generator->generate_area(
+                          chunk_pos{.x = config.origin_x, .z = config.origin_z},
+                          width, depth, workers);
             if (!generated) {
                 fmt::print(stderr,
                            "bench-chunk-generator: generate_area failed: {}\n",
@@ -324,9 +357,11 @@ auto run_scenario(const options &config, generation_target target, jint chunks,
         static_cast<double>(chunks) * 1000.0 / median_batch_ms;
     const double cold_chunks_per_second =
         static_cast<double>(chunks) * 1000.0 / cold_batch_ms;
-    if (workers != 1) {
+    if (workers != 1 || config.tiled) {
         // The batch entry point does not expose per-chunk completion times, so
-        // the tail statistics use each batch's per-chunk amortised time.
+        // the tail statistics use each batch's per-chunk amortised time. A
+        // tile is one batch of `tile_size` squared chunks, so its per-chunk
+        // time is the amortised cost the served tile pays.
         per_chunk_ms.clear();
         for (const double batch : batch_ms) {
             per_chunk_ms.push_back(batch / static_cast<double>(chunks));
@@ -336,6 +371,7 @@ auto run_scenario(const options &config, generation_target target, jint chunks,
     scenario_result result;
     result.target = std::string{target_name(target)};
     result.chunks = chunks;
+    result.tile = config.tiled ? config.tile_size : 1;
     result.workers = workers;
     result.create_ms = create_ms;
     result.cold_batch_ms = cold_batch_ms;
@@ -348,13 +384,13 @@ auto run_scenario(const options &config, generation_target target, jint chunks,
     result.peak_rss_kib = read_peak_rss_kib();
 
     const auto line = fmt::format(
-        "RESULT target={} chunks={} workers={} create_ms={:.1f} "
+        "RESULT target={} chunks={} tile={} workers={} create_ms={:.1f} "
         "cold_batch_ms={:.1f} median_batch_ms={:.1f} "
         "cold_chunks_per_s={:.3f} warm_chunks_per_s={:.3f} "
         "p50_ms_per_chunk={:.1f} p95_ms_per_chunk={:.1f} rss_mib={:.1f} "
         "peak_rss_mib={:.1f}",
-        result.target, result.chunks, result.workers, result.create_ms,
-        result.cold_batch_ms, result.median_batch_ms,
+        result.target, result.chunks, result.tile, result.workers,
+        result.create_ms, result.cold_batch_ms, result.median_batch_ms,
         result.cold_chunks_per_second, result.warm_chunks_per_second,
         result.p50_ms_per_chunk, result.p95_ms_per_chunk,
         static_cast<double>(result.rss_kib) / 1024.0,
@@ -382,6 +418,7 @@ auto run_stage_scenario(const options &config, generation_target target,
         .target = target,
         .structure_sets = {},
         .reference_world = false,
+        .tile_size = config.tile_size,
     });
     if (!created) {
         fmt::print(stderr, "bench-chunk-generator: create failed: {}\n",
@@ -401,25 +438,52 @@ auto run_stage_scenario(const options &config, generation_target target,
         }
     };
     const auto chunk_count = static_cast<double>(positions.size());
+    const auto tile_origins =
+        config.tiled ? make_tile_origins(config.origin_x, config.origin_z,
+                                         width, depth, config.tile_size)
+                     : std::vector<chunk_pos>{};
+    const auto tile_count = static_cast<double>(tile_origins.size());
     for (jint repeat = 0; repeat < config.repeat; ++repeat) {
         profile.clear();
         const auto begin = clock_type::now();
-        for (const auto &position : positions) {
-            auto generated = generator->generate(position);
-            if (!generated) {
-                fmt::print(stderr,
-                           "bench-chunk-generator: generate failed: {}\n",
-                           generated.error().message);
-                return false;
+        if (config.tiled) {
+            for (const auto &tile_origin : tile_origins) {
+                auto generated = generator->generate_tile(tile_origin);
+                if (!generated) {
+                    fmt::print(stderr,
+                               "bench-chunk-generator: tile generation "
+                               "failed: {}\n",
+                               generated.error().message);
+                    return false;
+                }
+                for (const auto &chunk : *generated) {
+                    sink.store(chunk->state_at(8, 0, 8),
+                               std::memory_order_relaxed);
+                }
             }
-            sink.store(generated->get()->state_at(8, 0, 8),
-                       std::memory_order_relaxed);
+        } else {
+            for (const auto &position : positions) {
+                auto generated = generator->generate(position);
+                if (!generated) {
+                    fmt::print(stderr,
+                               "bench-chunk-generator: generate failed: {}\n",
+                               generated.error().message);
+                    return false;
+                }
+                sink.store(generated->get()->state_at(8, 0, 8),
+                           std::memory_order_relaxed);
+            }
         }
         const auto elapsed = milliseconds(clock_type::now() - begin);
-        emit(fmt::format("STAGE_BATCH target={} batch={} chunks={} workers=1 "
-                         "measured_ms={:.3f} per_chunk_ms={:.3f}",
-                         target_name(target), repeat, chunks, elapsed,
-                         elapsed / chunk_count));
+        emit(fmt::format(
+            "STAGE_BATCH target={} batch={} chunks={} tile={} tiles={} "
+            "workers=1 measured_ms={:.3f} per_chunk_ms={:.3f} "
+            "per_tile_ms={:.3f}",
+            target_name(target), repeat, chunks,
+            config.tiled ? config.tile_size : 1,
+            config.tiled ? tile_origins.size() : positions.size(), elapsed,
+            elapsed / chunk_count,
+            config.tiled ? elapsed / tile_count : elapsed / chunk_count));
         for (const auto &entry : profile.stages()) {
             emit(fmt::format("STAGE target={} batch={} name={} total_ms={:.3f} "
                              "per_chunk_ms={:.3f} samples={}",
@@ -504,6 +568,7 @@ auto run_chunk_hash(const options &config, generation_target target,
         .target = target,
         .structure_sets = {},
         .reference_world = false,
+        .tile_size = config.tile_size,
     });
     if (!created) {
         fmt::print(stderr, "bench-chunk-generator: create failed: {}\n",
@@ -527,7 +592,7 @@ auto run_chunk_hash(const options &config, generation_target target,
             *stream << line << '\n';
         }
     };
-    if (config.worker_counts.front() > 1) {
+    if (config.worker_counts.front() > 1 && !config.tiled) {
         // Worker instances keep their own mutable state, so an equal digest
         // across worker counts pins the biome selection and the blocks as
         // worker-independent.
@@ -538,6 +603,21 @@ auto run_chunk_hash(const options &config, generation_target target,
             fmt::print(stderr,
                        "bench-chunk-generator: generate_area failed: "
                        "{}\n",
+                       generated.error().message);
+            return false;
+        }
+        for (std::size_t index = 0; index < positions.size(); ++index) {
+            emit_chunk(positions[index], *(*generated)[index]);
+        }
+    } else if (config.tiled) {
+        // A tile is generated whole, so the worker count changes which worker
+        // owns a tile and nothing else: the digest set must not move.
+        auto generated = generator->generate_area_tiled(
+            chunk_pos{.x = config.origin_x, .z = config.origin_z}, width, depth,
+            config.worker_counts.front());
+        if (!generated) {
+            fmt::print(stderr,
+                       "bench-chunk-generator: tiled generation failed: {}\n",
                        generated.error().message);
             return false;
         }
@@ -796,6 +876,10 @@ auto parse_options(int argc, char **argv) -> std::optional<options> {
                 "  --chunk-hash             hash the generated chunk set "
                 "instead "
                 "of timing it\n"
+                "  --tiles                  generate whole tiles instead of "
+                "one chunk at a time\n"
+                "  --tile-size <n>          tile edge in chunks (default 8; "
+                "implies --tiles)\n"
                 "  --stages                 print the wall-clock time of each "
                 "generation stage per batch\n"
                 "  --climate-ties           count equidistant climate-search "
@@ -897,6 +981,17 @@ auto parse_options(int argc, char **argv) -> std::optional<options> {
             }
         } else if (argument == "--chunk-hash") {
             config.chunk_hash = true;
+        } else if (argument == "--tiles") {
+            config.tiled = true;
+        } else if (argument == "--tile-size") {
+            const auto value = next(argument);
+            jlong parsed = 0;
+            if (!value || !parse_integer(*value, parsed) || parsed < 1 ||
+                parsed > 32) {
+                return std::nullopt;
+            }
+            config.tile_size = static_cast<jint>(parsed);
+            config.tiled = true;
         } else if (argument == "--stages") {
             config.stages = true;
         } else if (argument == "--climate-ties") {
