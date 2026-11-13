@@ -154,6 +154,30 @@ auto leaky_relu(float value, float negative_factor) -> float {
     return value > 0.0F ? value : value * negative_factor;
 }
 
+/// Applies one element operation to a whole buffer. The operation must be the
+/// exact scalar expression of the node; each element then rounds the same way
+/// and the loop is the shape the compiler widens.
+template <typename Operation>
+void map_buffer(buffer &target, Operation operation) {
+    float *values = target.data();
+    const std::size_t count = target.size();
+    for (std::size_t i = 0; i < count; ++i) {
+        values[i] = operation(values[i]);
+    }
+}
+
+/// Applies one two-input element operation to a buffer, reading the second
+/// operand from another buffer of the same length.
+template <typename Operation>
+void zip_buffer(buffer &target, const buffer &other, Operation operation) {
+    float *values = target.data();
+    const float *others = other.data();
+    const std::size_t count = target.size();
+    for (std::size_t i = 0; i < count; ++i) {
+        values[i] = operation(values[i], others[i]);
+    }
+}
+
 class constant_sampler final : public sampler {
   public:
     explicit constant_sampler(float value) : value_{value} {}
@@ -193,9 +217,8 @@ class add_sampler final : public sampler {
         left_->sample_volume(context, output, vol);
         auto right_buffer = context.acquire(vol.size());
         right_->sample_volume(context, right_buffer, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            output.add_to(i, right_buffer.get(i));
-        }
+        zip_buffer(output, right_buffer,
+                   [](float left, float right) { return left + right; });
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::add(left_->range(), right_->range());
@@ -218,9 +241,8 @@ class const_add_sampler final : public sampler {
     void sample_volume(const sampler_context &context, buffer &output,
                        const volume &vol) const override {
         left_->sample_volume(context, output, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            output.add_to(i, right_);
-        }
+        const float right = right_;
+        map_buffer(output, [right](float value) { return value + right; });
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::add(left_->range(), interval::of_exact(right_));
@@ -246,9 +268,8 @@ class sub_sampler final : public sampler {
         left_->sample_volume(context, output, vol);
         auto right_buffer = context.acquire(vol.size());
         right_->sample_volume(context, right_buffer, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            output.add_to(i, -right_buffer.get(i));
-        }
+        zip_buffer(output, right_buffer,
+                   [](float left, float right) { return left - right; });
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::sub(left_->range(), right_->range());
@@ -271,9 +292,8 @@ class const_sub_sampler final : public sampler {
     void sample_volume(const sampler_context &context, buffer &output,
                        const volume &vol) const override {
         right_->sample_volume(context, output, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            output.set(i, left_ - output.get(i));
-        }
+        const float left = left_;
+        map_buffer(output, [left](float value) { return left - value; });
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::sub(interval::of_exact(left_), right_->range());
@@ -300,9 +320,8 @@ class mul_sampler final : public sampler {
         left_->sample_volume(context, output, vol);
         auto right_buffer = context.acquire(vol.size());
         right_->sample_volume(context, right_buffer, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            output.set(i, output.get(i) * right_buffer.get(i));
-        }
+        zip_buffer(output, right_buffer,
+                   [](float left, float right) { return left * right; });
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::mul(left_->range(), right_->range());
@@ -325,9 +344,8 @@ class const_mul_sampler final : public sampler {
     void sample_volume(const sampler_context &context, buffer &output,
                        const volume &vol) const override {
         left_->sample_volume(context, output, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            output.set(i, output.get(i) * right_);
-        }
+        const float right = right_;
+        map_buffer(output, [right](float value) { return value * right; });
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::mul(left_->range(), interval::of_exact(right_));
@@ -354,9 +372,8 @@ class div_sampler final : public sampler {
         left_->sample_volume(context, output, vol);
         auto right_buffer = context.acquire(vol.size());
         right_->sample_volume(context, right_buffer, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            output.set(i, output.get(i) / right_buffer.get(i));
-        }
+        zip_buffer(output, right_buffer,
+                   [](float left, float right) { return left / right; });
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::div(left_->range(), right_->range());
@@ -379,9 +396,8 @@ class const_div_sampler final : public sampler {
     void sample_volume(const sampler_context &context, buffer &output,
                        const volume &vol) const override {
         right_->sample_volume(context, output, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            output.set(i, left_ / output.get(i));
-        }
+        const float left = left_;
+        map_buffer(output, [left](float value) { return left / value; });
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::div(interval::of_exact(left_), right_->range());
@@ -410,12 +426,9 @@ class min_sampler final : public sampler {
         left_->sample_volume(context, output, vol);
         auto right_buffer = context.acquire(vol.size());
         right_->sample_volume(context, right_buffer, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            const float right = right_buffer.get(i);
-            if (right < output.get(i)) {
-                output.set(i, right);
-            }
-        }
+        zip_buffer(output, right_buffer, [](float left, float right) {
+            return right < left ? right : left;
+        });
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::min(left_->range(), right_->range());
@@ -439,11 +452,10 @@ class const_min_sampler final : public sampler {
     void sample_volume(const sampler_context &context, buffer &output,
                        const volume &vol) const override {
         left_->sample_volume(context, output, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            if (right_ < output.get(i)) {
-                output.set(i, right_);
-            }
-        }
+        const float right = right_;
+        map_buffer(output, [right](float value) {
+            return right < value ? right : value;
+        });
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::min(left_->range(), interval::of_exact(right_));
@@ -472,12 +484,9 @@ class max_sampler final : public sampler {
         left_->sample_volume(context, output, vol);
         auto right_buffer = context.acquire(vol.size());
         right_->sample_volume(context, right_buffer, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            const float right = right_buffer.get(i);
-            if (right > output.get(i)) {
-                output.set(i, right);
-            }
-        }
+        zip_buffer(output, right_buffer, [](float left, float right) {
+            return right > left ? right : left;
+        });
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::max(left_->range(), right_->range());
@@ -501,11 +510,10 @@ class const_max_sampler final : public sampler {
     void sample_volume(const sampler_context &context, buffer &output,
                        const volume &vol) const override {
         left_->sample_volume(context, output, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            if (right_ > output.get(i)) {
-                output.set(i, right_);
-            }
-        }
+        const float right = right_;
+        map_buffer(output, [right](float value) {
+            return right > value ? right : value;
+        });
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::max(left_->range(), interval::of_exact(right_));
@@ -561,6 +569,15 @@ enum class unary_kind : std::uint8_t {
     return value;
 }
 
+/// The buffer form of `apply_unary`: the switch is hoisted out of the loop so
+/// each case is a single element-wide expression the compiler can widen.
+template <typename Operation>
+auto map_values(float *values, std::size_t count, Operation operation) -> void {
+    for (std::size_t i = 0; i < count; ++i) {
+        values[i] = operation(values[i]);
+    }
+}
+
 class unary_sampler final : public sampler {
   public:
     unary_sampler(sampler_ptr input, interval range, unary_kind kind)
@@ -575,8 +592,52 @@ class unary_sampler final : public sampler {
         input_->sample_volume(context, output, vol);
         auto *values = output.data();
         const std::size_t count = output.size();
-        for (std::size_t i = 0; i < count; ++i) {
-            values[i] = apply_unary(kind_, values[i]);
+        switch (kind_) {
+        case unary_kind::absolute:
+            map_values(values, count,
+                       [](float value) { return std::abs(value); });
+            break;
+        case unary_kind::square:
+            map_values(values, count,
+                       [](float value) { return value * value; });
+            break;
+        case unary_kind::cube:
+            map_values(values, count,
+                       [](float value) { return cube_value(value); });
+            break;
+        case unary_kind::square_root:
+            map_values(values, count, [](float value) {
+                return static_cast<float>(std::sqrt(value));
+            });
+            break;
+        case unary_kind::half_negative:
+            map_values(values, count,
+                       [](float value) { return leaky_relu(value, 0.5F); });
+            break;
+        case unary_kind::quarter_negative:
+            map_values(values, count,
+                       [](float value) { return leaky_relu(value, 0.25F); });
+            break;
+        case unary_kind::reciprocal:
+            map_values(values, count, [](float value) { return 1.0F / value; });
+            break;
+        case unary_kind::negate:
+            map_values(values, count, [](float value) { return -value; });
+            break;
+        case unary_kind::squeeze:
+            map_values(values, count,
+                       [](float value) { return squeeze_value(value); });
+            break;
+        case unary_kind::logarithm:
+            map_values(values, count, [](float value) {
+                return static_cast<float>(std::log(value));
+            });
+            break;
+        case unary_kind::sign:
+            map_values(values, count, [](float value) {
+                return value > 0.0F ? 1.0F : (value < 0.0F ? -1.0F : value);
+            });
+            break;
         }
     }
     [[nodiscard]] auto range() const -> interval override { return range_; }
@@ -602,9 +663,11 @@ class clamp_sampler final : public sampler {
     void sample_volume(const sampler_context &context, buffer &output,
                        const volume &vol) const override {
         input_->sample_volume(context, output, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            output.set(i, std::clamp(output.get(i), min_, max_));
-        }
+        const float min_value = min_;
+        const float max_value = max_;
+        map_buffer(output, [min_value, max_value](float value) {
+            return std::clamp(value, min_value, max_value);
+        });
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::clamp(input_->range(), min_, max_);
@@ -637,12 +700,17 @@ class gradient_sampler final : public sampler {
     }
     void sample_volume(const sampler_context &, buffer &output,
                        const volume &vol) const override {
+        // Y is the contiguous buffer axis and this node depends on Y alone, so
+        // the column is computed once and copied into every XZ position: the
+        // values are identical to setting each cell and the stores are dense.
+        std::vector<float> column(static_cast<std::size_t>(vol.size_y()));
         for (jint y = 0; y < vol.size_y(); ++y) {
-            const float value = compute(vol.block_y(y));
-            for (jint z = 0; z < vol.size_z(); ++z) {
-                for (jint x = 0; x < vol.size_x(); ++x) {
-                    output.set(vol.index_unchecked(x, y, z), value);
-                }
+            column[static_cast<std::size_t>(y)] = compute(vol.block_y(y));
+        }
+        for (jint z = 0; z < vol.size_z(); ++z) {
+            for (jint x = 0; x < vol.size_x(); ++x) {
+                std::copy(column.begin(), column.end(),
+                          output.data() + vol.index_unchecked(x, 0, z));
             }
         }
     }
@@ -1107,10 +1175,16 @@ class range_choice_sampler final : public sampler {
         when_in_range_->sample_volume(context, output, vol);
         auto out_buffer = context.acquire(vol.size());
         when_out_of_range_->sample_volume(context, out_buffer, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            const float input = input_buffer.get(i);
-            if (!(input >= min_inclusive_) || !(input < max_exclusive_)) {
-                output.set(i, out_buffer.get(i));
+        float *values = output.data();
+        const float *inputs = input_buffer.data();
+        const float *outs = out_buffer.data();
+        const std::size_t count = output.size();
+        const float min_inclusive = min_inclusive_;
+        const float max_exclusive = max_exclusive_;
+        for (std::size_t i = 0; i < count; ++i) {
+            const float input = inputs[i];
+            if (!(input >= min_inclusive) || !(input < max_exclusive)) {
+                values[i] = outs[i];
             }
         }
     }
@@ -1236,9 +1310,16 @@ class const_range_choice_sampler final : public sampler {
     void sample_volume(const sampler_context &context, buffer &output,
                        const volume &vol) const override {
         input_->sample_volume(context, output, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            output.set(i, choose(output.get(i)));
-        }
+        const float min_inclusive = min_inclusive_;
+        const float max_exclusive = max_exclusive_;
+        const float when_in_range = when_in_range_;
+        const float when_out_of_range = when_out_of_range_;
+        map_buffer(output, [min_inclusive, max_exclusive, when_in_range,
+                            when_out_of_range](float input) {
+            return input >= min_inclusive && input < max_exclusive
+                       ? when_in_range
+                       : when_out_of_range;
+        });
     }
     [[nodiscard]] auto range() const -> interval override {
         return interval::encapsulating(when_in_range_, when_out_of_range_);
@@ -1283,16 +1364,20 @@ class lerp_sampler final : public sampler {
         first_->sample_volume(context, first_buffer, vol);
         auto second_buffer = context.acquire(vol.size());
         second_->sample_volume(context, second_buffer, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            const float alpha = output.get(i);
-            const float first = first_buffer.get(i);
-            const float second = second_buffer.get(i);
+        float *values = output.data();
+        const float *firsts = first_buffer.data();
+        const float *seconds = second_buffer.data();
+        const std::size_t count = output.size();
+        for (std::size_t i = 0; i < count; ++i) {
+            const float alpha = values[i];
+            const float first = firsts[i];
+            const float second = seconds[i];
             if (alpha == 0.0F) {
-                output.set(i, first);
+                values[i] = first;
             } else if (alpha == 1.0F) {
-                output.set(i, second);
+                values[i] = second;
             } else {
-                output.set(i, mth::lerp(alpha, first, second));
+                values[i] = mth::lerp(alpha, first, second);
             }
         }
     }
@@ -1329,15 +1414,19 @@ class const_first_lerp_sampler final : public sampler {
         alpha_->sample_volume(context, output, vol);
         auto second_buffer = context.acquire(vol.size());
         second_->sample_volume(context, second_buffer, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            const float alpha = output.get(i);
-            const float second = second_buffer.get(i);
+        float *values = output.data();
+        const float *seconds = second_buffer.data();
+        const float first = first_;
+        const std::size_t count = output.size();
+        for (std::size_t i = 0; i < count; ++i) {
+            const float alpha = values[i];
+            const float second = seconds[i];
             if (alpha == 0.0F) {
-                output.set(i, first_);
+                values[i] = first;
             } else if (alpha == 1.0F) {
-                output.set(i, second);
+                values[i] = second;
             } else {
-                output.set(i, mth::lerp(alpha, first_, second));
+                values[i] = mth::lerp(alpha, first, second);
             }
         }
     }
@@ -1375,15 +1464,19 @@ class const_second_lerp_sampler final : public sampler {
         alpha_->sample_volume(context, output, vol);
         auto first_buffer = context.acquire(vol.size());
         first_->sample_volume(context, first_buffer, vol);
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            const float alpha = output.get(i);
-            const float first = first_buffer.get(i);
+        float *values = output.data();
+        const float *firsts = first_buffer.data();
+        const float second = second_;
+        const std::size_t count = output.size();
+        for (std::size_t i = 0; i < count; ++i) {
+            const float alpha = values[i];
+            const float first = firsts[i];
             if (alpha == 0.0F) {
-                output.set(i, first);
+                values[i] = first;
             } else if (alpha == 1.0F) {
-                output.set(i, second_);
+                values[i] = second;
             } else {
-                output.set(i, mth::lerp(alpha, first, second_));
+                values[i] = mth::lerp(alpha, first, second);
             }
         }
     }
