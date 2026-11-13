@@ -105,6 +105,8 @@ check_remote_idle
 
 say "syncing the working tree to $HOST:$REMOTE_DIR"
 # Anchored patterns: an unanchored `world` would also drop src/world.
+# The host generates its own datapack once and keeps it. Syncing it would
+# replace a real directory there with a lane's symlink and dangle.
 rsync -a --delete -e "ssh ${SSH_OPTS[*]}" \
     --exclude=/.git \
     --exclude='/build*' \
@@ -113,8 +115,6 @@ rsync -a --delete -e "ssh ${SSH_OPTS[*]}" \
     --exclude=/world \
     --exclude='/install*' \
     --exclude=/run \
-    # The host generates its own datapack once and keeps it; syncing it would
-    # replace a real directory there with the lane's symlink and dangle.
     --exclude='/content/vanilla/*/data' \
     --exclude=/AGENTS.local.md \
     ./ "$HOST:$REMOTE_DIR/"
