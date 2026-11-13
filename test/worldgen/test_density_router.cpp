@@ -92,7 +92,8 @@ suite<"worldgen/density-router"> density_router_tests = [] {
             std::fprintf(stderr, "loader error: %s\n",
                          settings.error().message.c_str());
         }
-        expect(settings.has_value()) << settings.error().message;
+        expect(settings.has_value())
+            << (settings ? "" : settings.error().message);
         if (!settings) {
             return;
         }
@@ -144,7 +145,8 @@ suite<"worldgen/density-router"> density_router_tests = [] {
                 std::fprintf(stderr, "vanilla loader error: %s\n",
                              settings.error().message.c_str());
             }
-            expect(settings.has_value()) << settings.error().message;
+            expect(settings.has_value())
+                << (settings ? "" : settings.error().message);
             if (!settings) {
                 return;
             }

@@ -32,7 +32,7 @@ using namespace refrain::worldgen;
 
 auto parse(std::string_view text) -> data::json::value {
     auto value = data::json::value::parse(text);
-    expect(value.has_value()) << value.error().message;
+    expect(value.has_value()) << (value ? "" : value.error().message);
     return value.has_value() ? std::move(*value) : data::json::value{};
 }
 
@@ -121,7 +121,7 @@ suite<"worldgen/feature-pool"> feature_pool_tests = [] {
         structure::structure_feature_placer placer{state.context, data};
         const std::array marker_ids{std::string{"oracle:marker"}};
         const auto loaded = placer.load(marker_ids);
-        expect(loaded.has_value()) << loaded.error().message;
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
         if (!loaded) {
             return;
         }
@@ -201,7 +201,7 @@ suite<"worldgen/feature-pool"> feature_pool_tests = [] {
         structure::structure_feature_placer placer{state.context, data};
         const std::array weighted_ids{std::string{"oracle:weighted"}};
         const auto loaded = placer.load(weighted_ids);
-        expect(loaded.has_value()) << loaded.error().message;
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
         if (!loaded) {
             return;
         }

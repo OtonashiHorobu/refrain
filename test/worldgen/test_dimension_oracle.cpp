@@ -418,14 +418,14 @@ void compare(const oracle_inputs &inputs, dimension_kind kind,
                                    .kind = kind,
                                    .seed = inputs.seed,
                                    .fixed_biome = std::string{fixed_biome}});
-    expect(created.has_value()) << created.error().message;
+    expect(created.has_value()) << (created ? "" : created.error().message);
     if (!created) {
         return;
     }
     dimension_generator &generator = **created;
     block_states states{generator.states()};
     const auto region = core::io::read_file(inputs.region_path);
-    expect(region.has_value()) << region.error().message;
+    expect(region.has_value()) << (region ? "" : region.error().message);
     if (!region) {
         return;
     }
@@ -443,7 +443,8 @@ void compare(const oracle_inputs &inputs, dimension_kind kind,
         }
         const auto document =
             data::nbt::read(*payload, data::nbt::compression::zlib);
-        expect(document.has_value()) << document.error().message;
+        expect(document.has_value())
+            << (document ? "" : document.error().message);
         if (!document) {
             continue;
         }
@@ -461,7 +462,8 @@ void compare(const oracle_inputs &inputs, dimension_kind kind,
             chunk_pos{.x = chunk_x, .z = chunk_z},
             terrain_stages{.carvers =
                                run_carvers ? generator.carvers() : nullptr});
-        expect(generated.has_value()) << generated.error().message;
+        expect(generated.has_value())
+            << (generated ? "" : generated.error().message);
         if (!generated) {
             continue;
         }

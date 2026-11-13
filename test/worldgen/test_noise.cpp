@@ -209,7 +209,7 @@ suite<"worldgen/noise"> noise_tests = [] {
 
         legacy_random_source source{24680};
         auto stack = normal.create_legacy_nether_biome(source);
-        expect(stack.has_value()) << stack.error().message;
+        expect(stack.has_value()) << (stack ? "" : stack.error().message);
         if (!stack) {
             return;
         }

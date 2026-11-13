@@ -173,7 +173,8 @@ suite<"worldgen/material-rules"> material_rule_tests = [] {
             return;
         }
         const auto documents = load_material_documents(root);
-        expect(documents.has_value()) << documents.error().message;
+        expect(documents.has_value())
+            << (documents ? "" : documents.error().message);
         if (!documents) {
             return;
         }

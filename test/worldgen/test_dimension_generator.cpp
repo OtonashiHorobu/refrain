@@ -95,7 +95,7 @@ auto make_generator(dimension_kind kind, std::string biome)
                                    .kind = kind,
                                    .seed = 1,
                                    .fixed_biome = std::move(biome)});
-    expect(created.has_value()) << created.error().message;
+    expect(created.has_value()) << (created ? "" : created.error().message);
     return created ? std::move(*created) : nullptr;
 }
 
@@ -117,7 +117,7 @@ suite<"worldgen/dimension-generator"> dimension_generator_tests = [] {
         expect(generator->material_rule() == "minecraft:nether");
 
         const auto chunk = generator->generate(chunk_pos{.x = 0, .z = 0});
-        expect(chunk.has_value()) << chunk.error().message;
+        expect(chunk.has_value()) << (chunk ? "" : chunk.error().message);
         if (!chunk) {
             return;
         }
@@ -148,7 +148,7 @@ suite<"worldgen/dimension-generator"> dimension_generator_tests = [] {
             expect(generator->material_rule() == "minecraft:end");
 
             const auto chunk = generator->generate(chunk_pos{.x = 0, .z = 0});
-            expect(chunk.has_value()) << chunk.error().message;
+            expect(chunk.has_value()) << (chunk ? "" : chunk.error().message);
             if (!chunk) {
                 return;
             }
@@ -194,8 +194,9 @@ suite<"worldgen/dimension-generator"> dimension_generator_tests = [] {
         const auto carved = generator->generate(chunk_pos{.x = 0, .z = 0});
         const auto uncarved = generator->generate_terrain(
             chunk_pos{.x = 0, .z = 0}, terrain_stages{.carvers = nullptr});
-        expect(carved.has_value()) << carved.error().message;
-        expect(uncarved.has_value()) << uncarved.error().message;
+        expect(carved.has_value()) << (carved ? "" : carved.error().message);
+        expect(uncarved.has_value())
+            << (uncarved ? "" : uncarved.error().message);
         if (!carved || !uncarved) {
             return;
         }

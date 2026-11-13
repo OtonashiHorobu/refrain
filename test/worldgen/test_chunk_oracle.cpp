@@ -364,13 +364,14 @@ suite<"worldgen/chunk-oracle"> chunk_oracle_tests = [] {
             seed = std::strtoll(raw, nullptr, 10);
         }
         const auto region = core::io::read_file(region_path);
-        expect(region.has_value()) << region.error().message;
+        expect(region.has_value()) << (region ? "" : region.error().message);
         if (!region) {
             return;
         }
         auto settings = density::load_noise_settings(
             data_root, "minecraft/overworld", algorithm::xoroshiro, seed);
-        expect(settings.has_value()) << settings.error().message;
+        expect(settings.has_value())
+            << (settings ? "" : settings.error().message);
         if (!settings) {
             return;
         }
@@ -420,7 +421,8 @@ suite<"worldgen/chunk-oracle"> chunk_oracle_tests = [] {
             }
             const auto document =
                 data::nbt::read(*payload, data::nbt::compression::zlib);
-            expect(document.has_value()) << document.error().message;
+            expect(document.has_value())
+                << (document ? "" : document.error().message);
             if (!document) {
                 continue;
             }

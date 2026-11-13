@@ -372,7 +372,8 @@ suite<"worldgen/surface-rules"> surface_rule_tests = [] {
             return;
         }
         const auto documents = load_material_documents(root);
-        expect(documents.has_value()) << documents.error().message;
+        expect(documents.has_value())
+            << (documents ? "" : documents.error().message);
         if (!documents) {
             return;
         }
@@ -380,7 +381,8 @@ suite<"worldgen/surface-rules"> surface_rule_tests = [] {
         env.documents = *documents;
         const auto parameters =
             load_biome_parameters(root, dimension_kind::overworld);
-        expect(parameters.has_value()) << parameters.error().message;
+        expect(parameters.has_value())
+            << (parameters ? "" : parameters.error().message);
         if (!parameters) {
             return;
         }

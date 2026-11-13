@@ -42,7 +42,7 @@ using namespace refrain::worldgen::feature;
 
 auto parse(std::string_view text) -> data::json::value {
     auto parsed = data::json::value::parse(text);
-    expect(parsed.has_value()) << parsed.error().message;
+    expect(parsed.has_value()) << (parsed ? "" : parsed.error().message);
     return parsed ? std::move(*parsed) : data::json::value{};
 }
 
@@ -61,7 +61,8 @@ suite<"worldgen/placement-noise"> placement_noise_tests = [] {
                           "below_noise":3,
                           "above_noise":7})"),
                              registry);
-        expect(modifier.has_value()) << modifier.error().message;
+        expect(modifier.has_value())
+            << (modifier ? "" : modifier.error().message);
         if (!modifier) {
             return;
         }
@@ -84,7 +85,8 @@ suite<"worldgen/placement-noise"> placement_noise_tests = [] {
                       "below_noise":3,
                       "above_noise":7})"),
                              registry);
-        expect(modifier.has_value()) << modifier.error().message;
+        expect(modifier.has_value())
+            << (modifier ? "" : modifier.error().message);
         if (!modifier) {
             return;
         }
@@ -128,7 +130,8 @@ suite<"worldgen/placement-noise"> placement_noise_tests = [] {
                       "noise_factor":2.0,
                       "noise_offset":0.25})"),
                              registry);
-        expect(modifier.has_value()) << modifier.error().message;
+        expect(modifier.has_value())
+            << (modifier ? "" : modifier.error().message);
         if (!modifier) {
             return;
         }
@@ -241,7 +244,8 @@ suite<"worldgen/placement-surface"> placement_surface_tests = [] {
                           "min_inclusive":-1,
                           "max_inclusive":0})"),
                 registry);
-            expect(modifier.has_value()) << modifier.error().message;
+            expect(modifier.has_value())
+                << (modifier ? "" : modifier.error().message);
             if (!modifier) {
                 return;
             }
@@ -319,7 +323,8 @@ suite<"worldgen/placement-biome"> placement_biome_tests = [] {
         block_state_registry registry;
         auto modifier =
             decode_placement(parse(R"({"type":"minecraft:biome"})"), registry);
-        expect(modifier.has_value()) << modifier.error().message;
+        expect(modifier.has_value())
+            << (modifier ? "" : modifier.error().message);
         if (!modifier) {
             return;
         }
@@ -426,7 +431,7 @@ suite<"worldgen/placement-biome"> placement_biome_tests = [] {
 
         feature_registry features{registry};
         const auto loaded = features.load(data);
-        expect(loaded.has_value()) << loaded.error().message;
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
         if (!loaded) {
             return;
         }
@@ -462,7 +467,8 @@ suite<"worldgen/block-predicate-volume"> new_block_predicate_tests = [] {
             chunk_region region{chunk, 1};
             auto predicate = decode_block_predicate(
                 parse(R"({"type":"minecraft:inside_world_bounds"})"), registry);
-            expect(predicate.has_value()) << predicate.error().message;
+            expect(predicate.has_value())
+                << (predicate ? "" : predicate.error().message);
             if (!predicate) {
                 return;
             }
@@ -522,7 +528,8 @@ suite<"worldgen/block-predicate-volume"> new_block_predicate_tests = [] {
                       "match":{"type":"minecraft:matching_blocks",
                                "blocks":["minecraft:stone"]}})"),
                                    registry);
-        expect(predicate.has_value()) << predicate.error().message;
+        expect(predicate.has_value())
+            << (predicate ? "" : predicate.error().message);
         if (!predicate) {
             return;
         }
@@ -651,7 +658,8 @@ suite<"worldgen/placement-random"> placement_random_tests = [] {
                       {"type":"minecraft:count","count":1},
                       {"type":"minecraft:count","count":3}]})"),
             registry);
-        expect(modifier.has_value()) << modifier.error().message;
+        expect(modifier.has_value())
+            << (modifier ? "" : modifier.error().message);
         if (!modifier) {
             return;
         }
@@ -688,7 +696,8 @@ suite<"worldgen/placement-random"> placement_random_tests = [] {
                       "xz_size":2,
                       "y_size":2})"),
                                          registry);
-        expect(modifier.has_value()) << modifier.error().message;
+        expect(modifier.has_value())
+            << (modifier ? "" : modifier.error().message);
         if (!modifier) {
             return;
         }
@@ -713,7 +722,8 @@ suite<"worldgen/placement-random"> placement_random_tests = [] {
         block_state_registry registry;
         const auto run_case = [&](std::string_view document) {
             auto modifier = decode_placement(parse(document), registry);
-            expect(modifier.has_value()) << modifier.error().message;
+            expect(modifier.has_value())
+                << (modifier ? "" : modifier.error().message);
             std::vector<block_pos> out;
             if (modifier) {
                 auto random = make_random(3);
@@ -850,7 +860,7 @@ suite<"worldgen/feature-template"> feature_template_tests = [] {
             .biome = "oracle:test", .steps = {{"oracle:template_placed"}}});
         feature_registry features{registry};
         const auto loaded = features.load(data);
-        expect(loaded.has_value()) << loaded.error().message;
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
         if (!loaded) {
             return;
         }
@@ -910,7 +920,7 @@ suite<"worldgen/feature-template"> feature_template_tests = [] {
             .biome = "oracle:test", .steps = {{"oracle:template_placed"}}});
         feature_registry features{registry};
         const auto loaded = features.load(data);
-        expect(loaded.has_value()) << loaded.error().message;
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
         if (!loaded) {
             return;
         }
@@ -971,7 +981,7 @@ suite<"worldgen/feature-template"> feature_template_tests = [] {
             .biome = "oracle:test", .steps = {{"oracle:overlay_placed"}}});
         feature_registry features{registry};
         const auto loaded = features.load(data);
-        expect(loaded.has_value()) << loaded.error().message;
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
         if (!loaded) {
             return;
         }
@@ -1019,7 +1029,7 @@ suite<"worldgen/feature-template"> feature_template_tests = [] {
             .biome = "oracle:test", .steps = {{"oracle:template_placed"}}});
         feature_registry features{registry};
         const auto loaded = features.load(data);
-        expect(loaded.has_value()) << loaded.error().message;
+        expect(loaded.has_value()) << (loaded ? "" : loaded.error().message);
         if (!loaded) {
             return;
         }

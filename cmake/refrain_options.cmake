@@ -69,6 +69,9 @@ option(REFRAIN_HARDEN_MAX
 # skipped for sanitizer builds (instrumentation and LTO interact poorly) and
 # for the MSVC toolchain (LTCG build time is not worth the CI budget).
 option(REFRAIN_LTO "Enable link-time optimization for optimized builds" ON)
+option(REFRAIN_COVERAGE
+       "Instrument for gcov coverage; never combined with LTO or sanitizers"
+       OFF)
 
 # Microarchitecture level for code generation, mapped per target architecture
 # by cmake/refrain_arch.cmake. A binary built for a higher level does not run

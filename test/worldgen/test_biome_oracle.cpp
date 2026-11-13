@@ -194,14 +194,15 @@ suite<"worldgen/nether-biome-oracle"> nether_biome_oracle_tests = [] {
         }
         const jlong seed = std::strtoll(raw_seed, nullptr, 10);
         const auto region = core::io::read_file(region_path);
-        expect(region.has_value()) << region.error().message;
+        expect(region.has_value()) << (region ? "" : region.error().message);
         if (!region) {
             return;
         }
         auto settings =
             density::load_noise_settings(data_root, "minecraft/nether",
                                          worldgen::algorithm::xoroshiro, seed);
-        expect(settings.has_value()) << settings.error().message;
+        expect(settings.has_value())
+            << (settings ? "" : settings.error().message);
         if (!settings) {
             return;
         }
@@ -215,7 +216,8 @@ suite<"worldgen/nether-biome-oracle"> nether_biome_oracle_tests = [] {
                                       context};
         auto parameters =
             load_biome_parameters(data_root, dimension_kind::nether);
-        expect(parameters.has_value()) << parameters.error().message;
+        expect(parameters.has_value())
+            << (parameters ? "" : parameters.error().message);
         if (!parameters) {
             return;
         }
@@ -233,7 +235,8 @@ suite<"worldgen/nether-biome-oracle"> nether_biome_oracle_tests = [] {
                 }
                 const auto document =
                     data::nbt::read(*payload, data::nbt::compression::zlib);
-                expect(document.has_value()) << document.error().message;
+                expect(document.has_value())
+                    << (document ? "" : document.error().message);
                 if (!document) {
                     continue;
                 }
@@ -349,14 +352,15 @@ suite<"worldgen/biome-oracle"> biome_oracle_tests = [] {
             seed = std::strtoll(raw, nullptr, 10);
         }
         const auto region = core::io::read_file(region_path);
-        expect(region.has_value()) << region.error().message;
+        expect(region.has_value()) << (region ? "" : region.error().message);
         if (!region) {
             return;
         }
         auto settings =
             density::load_noise_settings(data_root, "minecraft/overworld",
                                          worldgen::algorithm::xoroshiro, seed);
-        expect(settings.has_value()) << settings.error().message;
+        expect(settings.has_value())
+            << (settings ? "" : settings.error().message);
         if (!settings) {
             return;
         }
@@ -371,7 +375,8 @@ suite<"worldgen/biome-oracle"> biome_oracle_tests = [] {
                                       context};
         auto parameters =
             load_biome_parameters(data_root, dimension_kind::overworld);
-        expect(parameters.has_value()) << parameters.error().message;
+        expect(parameters.has_value())
+            << (parameters ? "" : parameters.error().message);
         if (!parameters) {
             return;
         }
@@ -397,7 +402,8 @@ suite<"worldgen/biome-oracle"> biome_oracle_tests = [] {
             }
             const auto document =
                 data::nbt::read(*payload, data::nbt::compression::zlib);
-            expect(document.has_value()) << document.error().message;
+            expect(document.has_value())
+                << (document ? "" : document.error().message);
             if (!document) {
                 continue;
             }

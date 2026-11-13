@@ -90,10 +90,12 @@ suite insert_chunk_tests = [] {
         std::uint32_t surface{0};
         if (!column.sections.empty()) {
             auto opened{sim::world::open(path)};
-            expect(static_cast<bool>(opened)) << opened.error().message;
+            expect(static_cast<bool>(opened))
+                << (opened ? "" : opened.error().message);
             if (opened) {
                 auto inserted{opened->insert_chunk(pos, std::move(column))};
-                expect(static_cast<bool>(inserted)) << inserted.error().message;
+                expect(static_cast<bool>(inserted))
+                    << (inserted ? "" : inserted.error().message);
                 if (inserted) {
                     expect(opened->find_chunk(pos) != nullptr);
                     // The column starts at the world bottom; terrain is above
@@ -118,7 +120,8 @@ suite insert_chunk_tests = [] {
         }
 
         auto reopened{sim::world::open(path)};
-        expect(static_cast<bool>(reopened)) << reopened.error().message;
+        expect(static_cast<bool>(reopened))
+            << (reopened ? "" : reopened.error().message);
         if (reopened && !column.sections.empty()) {
             expect(reopened->find_chunk(pos) != nullptr);
             expect(reopened->block_at(sim::block_pos{

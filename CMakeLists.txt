@@ -7,6 +7,22 @@ project(Refrain VERSION 0.1.0 LANGUAGES C CXX)
 
 include(cmake/refrain_options.cmake)
 
+if(REFRAIN_COVERAGE)
+    # Coverage and LTO are mutually exclusive: LTO discards the counters. The
+    # sanitizers replace the allocator and abort on the first report, so a
+    # coverage build that also instruments for a race would not finish a suite.
+    if(REFRAIN_LTO OR REFRAIN_SANITIZE)
+        message(FATAL_ERROR
+                "REFRAIN_COVERAGE=ON needs REFRAIN_LTO=OFF and no REFRAIN_SANITIZE")
+    endif()
+    # The project strips the source root from __FILE__ for reproducible builds,
+    # and gcov then records a path relative to the object directory, where the
+    # source does not exist. Map the root onto itself so gcov sees real paths.
+    add_compile_options(--coverage -O0 -g
+                        "-ffile-prefix-map=${PROJECT_SOURCE_DIR}/=${PROJECT_SOURCE_DIR}/")
+    add_link_options(--coverage)
+endif()
+
 # LTO support probe: check_ipo_supported links a small program with the
 # toolchain (no run), so it also works for the MinGW cross build. The
 # sanitizer builds and MSVC opt out through REFRAIN_LTO/refrain_apply_lto.
