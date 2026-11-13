@@ -15,6 +15,7 @@
 #   scripts/soak.sh --bots 20 --seconds 60 --port 25570
 #   scripts/soak.sh --fresh --seed 99 --bots 20 --seconds 60 \
 #       --view-distance 6
+#   scripts/soak.sh --bots 20 --slow-clients 1 --read-delay-ms 400
 #
 # Exit code 0 means every bot joined and the p99 tick work stayed under
 # `--p99-ms` (default 15).
@@ -33,6 +34,11 @@ KEEP=""
 FRESH=""
 SEED=99
 SEED_SET=""
+# Extra clients that refuse to read at full speed. They are started as their own
+# load run because the delay is per client, and they are what gives the
+# transport's write queue something to hold.
+SLOW_CLIENTS=0
+READ_DELAY_MS=400
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -44,6 +50,8 @@ while [[ $# -gt 0 ]]; do
         --p99-ms)        P99_MS="${2:?}"; shift 2 ;;
         --fresh)         FRESH=1; shift ;;
         --seed)          SEED="${2:?}"; SEED_SET=1; shift 2 ;;
+        --slow-clients)  SLOW_CLIENTS="${2:?}"; shift 2 ;;
+        --read-delay-ms) READ_DELAY_MS="${2:?}"; shift 2 ;;
         --keep)          KEEP=1; shift ;;
         -h|--help)       sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -128,6 +136,18 @@ else
     echo "soak: bots=$BOTS seconds=$SECONDS_ port=$PORT walk_radius=$WALK_RADIUS world=import"
 fi
 STARTED=$(date +%s)
+SLOW_PID=""
+if [[ "$SLOW_CLIENTS" -gt 0 ]]; then
+    # Started before the main cohort so it joins while the tick is already
+    # busy, and stopped with it: a slow client that never recovers would grow
+    # the server's queue without bound, which is the failure this measures.
+    "$BIN/refrain-tools" protocol load --host "127.0.0.1:$PORT" \
+        --bots "$SLOW_CLIENTS" --username-prefix Slow \
+        --duration-ms $((SECONDS_ * 1000)) --walk-radius "$WALK_RADIUS" \
+        --walk-period-ms 100 --read-delay-ms "$READ_DELAY_MS" \
+        >"$WORK/slow.out" 2>"$WORK/slow.err" &
+    SLOW_PID=$!
+fi
 set +e
 if command -v /usr/bin/time >/dev/null 2>&1; then
     /usr/bin/time -v "$BIN/refrain-tools" protocol load \
@@ -144,7 +164,11 @@ else
     BOT_RSS_KB=""
 fi
 set -e
+if [[ -n "$SLOW_PID" ]]; then
+    wait "$SLOW_PID" 2>/dev/null || true
+fi
 LOAD_LINE="$(grep -E "^load:" "$WORK/load.out" | tail -1 || true)"
+SLOW_LINE="$(grep -E "^load:" "$WORK/slow.out" 2>/dev/null | tail -1 || true)"
 SPAWN_LINE="$(grep -E "\[world\]: generated .* spawn chunk" "$WORK/server.log" | tail -1 || true)"
 SPAWN_COUNT="$(sed -n 's/.*generated \([0-9]*\) spawn chunk(s).*/\1/p' <<<"$SPAWN_LINE")"
 CHUNK_GEN_LINES="$(grep -c "\[chunk-gen\]" "$WORK/server.log" || true)"
@@ -183,6 +207,9 @@ if [[ -n "${BOT_RSS_KB:-}" ]]; then
     echo "soak: bots_peak_rss=$((BOT_RSS_KB / 1024))MiB"
 fi
 echo "${LOAD_LINE:-soak: load: (no sample)}"
+if [[ -n "$SLOW_PID" ]]; then
+    echo "${SLOW_LINE:-soak: slow: (no sample)}"
+fi
 if [[ -n "$FRESH" ]]; then
     echo "soak: spawn_chunks=${SPAWN_COUNT:-0}"
     echo "soak: chunk-gen lines=$CHUNK_GEN_LINES chunk-view-ready=$CHUNK_VIEW_READY"
