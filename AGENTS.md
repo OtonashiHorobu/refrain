@@ -121,17 +121,26 @@ thread and documents the exception next to the code.
 
 ## Logging
 
-Runtime logs record operator-visible facts, not how the code works. Keep
-info/warn/error lines short and self-contained:
+Every runtime log line is a sentence written for the operator, with the emitting
+component as its implicit subject. A reader who has never seen the source must
+be able to say what happened, to which object, and whether anything still needs
+attention.
 
 - Tag every line with its subsystem through a per-module logger
-  (`refrain::log::logger`): `[12:00:00] [main/info] [mod-host]: 11 mod(s)
-  loaded`. Module names are lowercase and hyphen-separated (`mod-host`,
-  `net-transport`); the message body stays prose and does not use a hyphen or
-  an underscore as a word separator.
-- Use `component: fact` and `key=value` for identifiers, counts and paths.
-- Do not add parenthetical asides, rationale or mechanism descriptions; a
-  reader should not need the source to understand the line.
+  (`refrain::log::logger`): `[12:00:00] [main/info] [mod-host]: loaded 11 mods`.
+  Module names are lowercase and hyphen-separated (`mod-host`, `net-transport`);
+  never repeat the module name in the message body.
+- Start the message with a lowercase letter and leave the period off. Proper
+  nouns keep their case (`Minecraft`, `Asio`, `zstd`).
+- Use the tense that matches the state: `-ing` for an action that has started
+  and is observable, `-ed` for a finished action, `failed to <verb> <object>`
+  for a failure, `received <object> from <actor>` for input, and
+  `<verb>ing/<verb>ed <object> because <reason>` for a decision.
+- Name the object: the path, the id, the coordinate, the count. Counts are
+  `<number> <noun>` with a correct plural (`49 chunks`, never `chunk(s)`);
+  units attach to the number (`6.8s`, `255MiB`, `60000ms`).
+- One line, one event, one sentence. Put details after commas, never in
+  parentheses. Do not dump bare `key=value` pairs as a message.
 - Put the cause of a failure in the returned error message instead of a second
   log line.
 - Debug logs may carry detail; info/warn/error stay terse.

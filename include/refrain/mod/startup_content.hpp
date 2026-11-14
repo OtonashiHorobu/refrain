@@ -137,9 +137,8 @@ struct startup_content_options {
     int lock_timeout_ms{5000};
     /// Optional per-stage log sink. Each call receives one complete line
     /// without the trailing newline (same contract as
-    /// `data::collect_garbage`); lines are stable, prefixed with
-    /// `startup-content: ` and report outcomes or warnings, not per-file
-    /// progress.
+    /// `data::collect_garbage`); lines are stable sentences that report
+    /// outcomes or failures, not per-file progress.
     std::function<void(std::string_view)> log{};
 };
 

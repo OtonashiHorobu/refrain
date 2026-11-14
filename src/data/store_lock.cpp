@@ -119,10 +119,11 @@ struct stale_lock {
         return stale_lock{
             .stale = true,
             .reason = io::exists(owner)
-                          ? fmt::format("owner is older than {} hour(s)",
+                          ? fmt::format("the owner record is older than the "
+                                        "{} hour threshold",
                                         stale_lock_age.count())
-                          : std::string{"owner record is older than 1 "
-                                        "minute(s)"}};
+                          : std::string{"the owner record is older than the 1 "
+                                        "minute threshold"}};
     }
     return stale_lock{};
 }
@@ -313,8 +314,7 @@ auto store_lock::acquire(std::string_view store_root, int timeout_ms,
         const auto state{inspect_lock(path, owner)};
         if (state.stale) {
             if (!reclaimed) {
-                emit(fmt::format("lock: warning: reclaiming stale lock '{}' "
-                                 "({})",
+                emit(fmt::format("reclaiming the stale lock '{}' because {}",
                                  path, state.reason));
                 reclaimed = true;
             }
@@ -333,9 +333,9 @@ auto store_lock::acquire(std::string_view store_root, int timeout_ms,
                     std::filesystem::remove(std::filesystem::path{path},
                                             remove_error);
                     if (remove_error) {
-                        emit(fmt::format("lock: warning: cannot reclaim '{}': "
-                                         "{}",
-                                         path, remove_error.message()));
+                        emit(fmt::format(
+                            "failed to reclaim the stale lock '{}': {}", path,
+                            remove_error.message()));
                     }
                 }
                 continue; // guard releases the marker at the end of scope

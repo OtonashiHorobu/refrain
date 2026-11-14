@@ -54,7 +54,7 @@ void configure_logging(bool verbose) {
 }
 
 [[nodiscard]] auto report_error(const refrain::error &error) -> int {
-    log_app.error("{} ({})", error.message, refrain::to_string(error.code));
+    log_app.error("{}: {}", error.message, refrain::to_string(error.code));
     // When logging is unavailable (init failed, or every sink filters the
     // level out) print to stderr so a tool failure is never silent.
     if (!log::enabled(log::level::error)) {

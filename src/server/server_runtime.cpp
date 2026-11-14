@@ -74,7 +74,7 @@ struct runtime_state {
 auto run_server(const server_run_options &options,
                 const server_service_handles &services, world_port &world)
     -> int {
-    log_server.debug("world port={}",
+    log_server.debug("using the {} world port",
                      is_first_party_world(services) ? "direct" : "contract");
     if (options.world_path.empty()) {
         return report_error(refrain::make_error(
@@ -89,9 +89,11 @@ auto run_server(const server_run_options &options,
         options.network.get_int64("simulation_distance", 10))};
     const auto max_players{options.network.get_int64("status.max_players", 20)};
     const auto online_mode{options.network.get_bool("online_mode", false)};
-    log_config.info("level={} view={} sim={} max_players={} online_mode={}",
-                    level_name, view_distance, simulation_distance, max_players,
-                    online_mode);
+    log_config.info(
+        "configured level name '{}', view distance {}, simulation distance {}, "
+        "{} max players, online mode {}",
+        level_name, view_distance, simulation_distance, max_players,
+        online_mode);
     const auto zstd_level{static_cast<int>(
         options.storage.get_int64("zstd_level", options.world_zstd_level))};
     const auto zstd_near_level{static_cast<int>(
@@ -127,8 +129,9 @@ auto run_server(const server_run_options &options,
     const auto watchdog_timeout{
         static_cast<std::uint32_t>(options.runtime.get_int64(
             "watchdog_timeout_ms", options.watchdog_timeout_ms))};
-    log_config.info("zstd={}, watchdog={}ms, autosave={}", zstd_level,
-                    watchdog_timeout, autosave_interval);
+    log_config.info(
+        "using zstd level {}, watchdog timeout {}ms, autosave every {} ticks",
+        zstd_level, watchdog_timeout, autosave_interval);
 
     // Keep the maintenance worker's option view consistent with the resolved
     // configuration values.
@@ -173,7 +176,7 @@ auto run_server(const server_run_options &options,
         if (!generated) {
             return report_error(generated.error());
         }
-        refrain::log::info("[world]: generated {} spawn chunk(s)", *generated);
+        log_world.info("generated {} spawn chunks", *generated);
     }
     // Columns the viewport needs but the store does not hold are generated on
     // a fixed worker pool, so walking past the spawn area keeps streaming
@@ -191,8 +194,8 @@ auto run_server(const server_run_options &options,
         static_cast<std::size_t>(std::max<std::int64_t>(
             options.runtime.get_int64("generation_max_credits", 8), 1));
     if (auto started{chunks.start_generation(generation_config)}; !started) {
-        refrain::log::warn("[world]: generation unavailable: {}",
-                           started.error().message);
+        log_world.warn("chunk generation is unavailable: {}",
+                       started.error().message);
     }
     if (auto configured{world.set_zstd_level(zstd_level)}; !configured) {
         return report_error(configured.error());
@@ -210,8 +213,9 @@ auto run_server(const server_run_options &options,
     if (!projection) {
         return report_error(projection.error());
     }
-    log_world.info("{} dataversion={} seed={}", options.world_path,
-                   projection->level.data_version, projection->level.seed);
+    log_world.info("opened world '{}' with data version {} and seed {}",
+                   options.world_path, projection->level.data_version,
+                   projection->level.seed);
     const auto initial_mode{
         projection->level.game_mode >= 0 && projection->level.game_mode <= 3
             ? static_cast<refrain::net::game_mode>(projection->level.game_mode)
@@ -250,29 +254,33 @@ auto run_server(const server_run_options &options,
             auto ticketed{
                 world.add_ticket(pos, refrain::sim::ticket_kind::spawn)};
             if (!ticketed) {
-                log_server.warn("{},{}: {}", pos.x, pos.z,
-                                ticketed.error().message);
+                log_server.warn(
+                    "failed to add a spawn ticket for chunk {},{}: {}", pos.x,
+                    pos.z, ticketed.error().message);
             }
         }
     }
-    log_server.info("{} chunks {} tickets", world.loaded_chunks(),
-                    world.ticket_count(spawn_chunk));
+    const auto tickets{world.ticket_count(spawn_chunk)};
+    log_server.info("loaded {} chunks with {} spawn {}", world.loaded_chunks(),
+                    tickets, tickets == 1 ? "ticket" : "tickets");
     // Residency baseline for an operator: the set starts at the pinned spawn
     // columns and is bounded from here by the viewports plus the ticket set.
-    log_world.info("resident={} rss={}MiB", world.loaded_chunks(),
+    log_world.info("resident memory is {}MiB across {} chunks",
                    chunk_service::process_resident_bytes() /
-                       (1024ULL * 1024ULL));
+                       (1024ULL * 1024ULL),
+                   world.loaded_chunks());
 
     std::optional<refrain::data::vanilla_tables> tables{};
     auto table_bytes{
         refrain::core::io::read_file("content/vanilla/26.3/tables.rvtb")};
     if (!table_bytes) {
-        log_net.warn("vanilla tables unavailable: {}",
+        log_net.warn("vanilla tables are unavailable: {}",
                      table_bytes.error().message);
     } else {
         auto opened{refrain::data::vanilla_tables::open(*table_bytes)};
         if (!opened) {
-            log_net.warn("vanilla tables invalid: {}", opened.error().message);
+            log_net.warn("vanilla tables are invalid: {}",
+                         opened.error().message);
         } else {
             tables = std::move(*opened);
         }
@@ -284,7 +292,7 @@ auto run_server(const server_run_options &options,
     auto loaded_registries{refrain::net::registry_catalog::load(
         "content/vanilla/26.3/protocol_registry.json")};
     if (!loaded_registries) {
-        log_net.warn("registry catalog unavailable: {}",
+        log_net.warn("registry catalog is unavailable: {}",
                      loaded_registries.error().message);
     } else {
         registries = std::move(*loaded_registries);
@@ -322,12 +330,13 @@ auto run_server(const server_run_options &options,
             "broadcast.spawns_per_tick",
             static_cast<std::int64_t>(
                 default_broadcast_budgets.max_spawns_per_tick)))};
-    log_config.info("broadcast info_bytes_per_tick={} queued_info_bytes={} "
-                    "visibility_pairs_per_tick={} spawns_per_tick={}",
-                    broadcast_limits.max_info_bytes_per_tick,
-                    broadcast_limits.max_queued_info_bytes,
-                    broadcast_limits.max_visibility_pairs_per_tick,
-                    broadcast_limits.max_spawns_per_tick);
+    log_config.info(
+        "broadcast is limited to {} info bytes per tick, {} queued info bytes, "
+        "{} visibility pairs per tick and {} spawns per tick",
+        broadcast_limits.max_info_bytes_per_tick,
+        broadcast_limits.max_queued_info_bytes,
+        broadcast_limits.max_visibility_pairs_per_tick,
+        broadcast_limits.max_spawns_per_tick);
     refrain::server::server_gateway gateway{};
     refrain::server::entity_broadcaster broadcaster{gateway, tracking_chunks,
                                                     broadcast_limits};
@@ -518,7 +527,10 @@ auto run_server(const server_run_options &options,
                                              options.network)};
     std::unique_ptr<refrain::net::server> listener{};
     if (!network) {
-        log_net.error("listener failed: {}", network.error().message);
+        log_net.error("failed to start listening on {}:{}: {}",
+                      options.network.get_string("bind_host", "0.0.0.0"),
+                      options.network.get_int64("port", 25565),
+                      network.error().message);
     } else {
         listener = std::move(*network);
         active_listener = listener.get();
@@ -544,10 +556,10 @@ auto run_server(const server_run_options &options,
                 "chunk_stream.max_total_backlog",
                 static_cast<std::int64_t>(
                     default_chunk_backlog.max_total_bytes)))};
-        log_config.info("chunk stream max_connection_backlog={} "
-                        "max_total_backlog={}",
-                        chunk_limits.max_connection_bytes,
-                        chunk_limits.max_total_bytes);
+        log_config.info(
+            "chunk stream backlog is limited to {} bytes per connection and {} "
+            "bytes in total",
+            chunk_limits.max_connection_bytes, chunk_limits.max_total_bytes);
         chunks.attach(gateway,
                       refrain::server::chunk_packet_source{
                           .world = &world,
@@ -631,10 +643,10 @@ auto run_server(const server_run_options &options,
                                    refrain::core::now_ns() - heartbeat >
                                        timeout_ns};
                 if (stalled && !warned) {
-                    log_server.warn("stalled {}ms", timeout);
+                    log_server.warn("tick stalled for {}ms", timeout);
                     warned = true;
                 } else if (!stalled && warned) {
-                    log_server.info("recovered");
+                    log_server.info("tick recovered");
                     warned = false;
                 }
             }
@@ -644,7 +656,8 @@ auto run_server(const server_run_options &options,
     refrain::core::tick_clock clock{};
     clock.start();
     std::int64_t ticks_run{0};
-    log_server.info("{} tps", refrain::core::ticks_per_second);
+    log_server.info("target tick rate is {} tps",
+                    refrain::core::ticks_per_second);
 
     while (!state->stop->load(std::memory_order_acquire)) {
         auto tick{clock.wait_next()};
@@ -676,17 +689,16 @@ auto run_server(const server_run_options &options,
         }
         if (options.hash_every > 0 &&
             (ticks_run % static_cast<std::int64_t>(options.hash_every)) == 0) {
-            log_sim.info("tick={} hash={}", ticks_run,
+            log_sim.info("tick {} state hash is {}", ticks_run,
                          refrain::data::to_hex(world.state_hash()));
         }
         if (options.ticks > 0 && ticks_run >= options.ticks) {
-            log_server.info("{}", ticks_run);
             state->stop->store(true, std::memory_order_release);
             break;
         }
         if ((ticks_run % 20) == 0) {
             log_server.debug(
-                "tick {}: {}ms missed={}", tick->index,
+                "tick {} took {}ms and missed {} ticks", tick->index,
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     tick->actual)
                     .count(),
@@ -707,19 +719,22 @@ auto run_server(const server_run_options &options,
     // Shutdown order: the world writer first, then the content queue worker
     // (so no unlink overlaps store teardown), and only then the final flush.
     maintenance.stop();
-    log_sim.info("final tick={} hash={}", world.ticks(),
+    log_sim.info("final state hash at tick {} is {}", world.ticks(),
                  refrain::data::to_hex(world.state_hash()));
     // Residency at the end of the run: the resident set follows the viewports,
     // not the distance the players have walked, and the unload count is what
     // the policy actually released.
     const auto residency{chunks.residency()};
     log_world.info(
-        "resident={} peak={} unloaded={} rss={}MiB", residency.resident_chunks,
-        residency.peak_resident_chunks, residency.unloaded_chunks,
+        "stopped world: {} resident chunks, peak {}, {} unloaded, resident "
+        "memory {}MiB",
+        residency.resident_chunks, residency.peak_resident_chunks,
+        residency.unloaded_chunks,
         chunk_service::process_resident_bytes() / (1024ULL * 1024ULL));
     auto committed{world.flush()};
     if (!committed) {
-        log_server.error("commit failed: {}", committed.error().message);
+        log_server.error("failed to commit the world: {}",
+                         committed.error().message);
         return 1;
     }
     if (options.config != nullptr) {
@@ -729,14 +744,15 @@ auto run_server(const server_run_options &options,
         }
         if (dirty) {
             if (auto saved{options.config->save_all()}; !saved) {
-                log_config.error("shutdown save failed: {}",
-                                 saved.error().message);
+                log_config.error(
+                    "failed to save the configuration at shutdown: {}",
+                    saved.error().message);
             } else {
-                log_config.info("saved");
+                log_config.info("saved all dirty namespaces");
             }
         }
     }
-    log_server.info("{} ticks", ticks_run);
+    log_server.info("ran {} ticks", ticks_run);
     return 0;
 }
 

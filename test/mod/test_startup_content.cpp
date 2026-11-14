@@ -535,9 +535,9 @@ const suite startup_content_tests = [] {
         expect(report->receipt_files == 2U);
         expect(report->scanned == 0U);
         expect(report->installed == 0U);
-        const auto layer_line{std::find(
-            lines.begin(), lines.end(),
-            "startup-content: layer: refrain.test.index@1.0.0 priority=1000")};
+        const auto layer_line{
+            std::find(lines.begin(), lines.end(),
+                      "layered refrain.test.index 1.0.0 at priority 1000")};
         expect(layer_line != lines.end());
 
         auto table{read_table(store_root)};
@@ -614,16 +614,12 @@ const suite startup_content_tests = [] {
             expect(report->index_published);
             expect(report->published_entries == 2U);
             expect(report->failed == 0U);
-            expect(
-                std::find(
-                    lines.begin(), lines.end(),
-                    "startup-content: layer: mod.beta@1.0.0 priority=1000") !=
-                lines.end());
-            expect(
-                std::find(
-                    lines.begin(), lines.end(),
-                    "startup-content: layer: mod.alpha@1.0.0 priority=999") !=
-                lines.end());
+            expect(std::find(lines.begin(), lines.end(),
+                             "layered mod.beta 1.0.0 at priority 1000") !=
+                   lines.end());
+            expect(std::find(lines.begin(), lines.end(),
+                             "layered mod.alpha 1.0.0 at priority 999") !=
+                   lines.end());
 
             auto table{read_table(store_root)};
             expect(table.has_value());
@@ -799,10 +795,10 @@ const suite startup_content_tests = [] {
             if (!report) {
                 return;
             }
-            expect(std::find(lines.begin(), lines.end(),
-                             "startup-content: index: mod.alpha multiple "
-                             "versions, using 1.0.0 origin=user") !=
-                   lines.end());
+            expect(
+                std::find(lines.begin(), lines.end(),
+                          "using mod.alpha 1.0.0 because multiple versions are "
+                          "installed and the user origin wins") != lines.end());
             auto table{read_table(store_root)};
             expect(table.has_value());
             if (!table) {
@@ -896,11 +892,11 @@ const suite startup_content_tests = [] {
             return;
         }
         expect(std::find(lines.begin(), lines.end(),
-                         "startup-content: layer: mod.user@1.0.0 "
-                         "priority=1000") != lines.end());
+                         "layered mod.user 1.0.0 "
+                         "at priority 1000") != lines.end());
         expect(std::find(lines.begin(), lines.end(),
-                         "startup-content: layer: mod.first@1.0.0 "
-                         "priority=999") != lines.end());
+                         "layered mod.first 1.0.0 "
+                         "at priority 999") != lines.end());
     };
 
     "startup content: a pinned version that is not installed fails closed"_test =
@@ -1058,27 +1054,27 @@ const suite startup_content_tests = [] {
                                                 std::string::npos;
                                      });
             };
-            expect(count_containing("declared id(s) missing") == 1);
-            expect(count_containing("appended:") == 1);
+            expect(count_containing(
+                       "declared layer ids have no install receipt") == 1);
+            expect(count_containing("unlisted layer ids") == 1);
             const auto missing_line{std::find_if(
                 lines.begin(), lines.end(), [](const std::string &line) {
-                    return line.find("declared id(s) missing") !=
+                    return line.find(
+                               "declared layer ids have no install receipt") !=
                            std::string::npos;
                 })};
             expect(missing_line != lines.end());
             if (missing_line != lines.end()) {
-                expect(missing_line->find("7 declared id(s)") !=
+                expect(missing_line->find("7 declared layer ids") !=
                        std::string::npos);
                 expect(missing_line->find("and 2 more") != std::string::npos);
             }
-            expect(
-                std::find(
-                    lines.begin(), lines.end(),
-                    "startup-content: layer: mod.beta@1.0.0 priority=1000") !=
-                lines.end());
             expect(std::find(lines.begin(), lines.end(),
-                             "startup-content: layer: "
-                             "mod.alpha@1.0.0 priority=999") != lines.end());
+                             "layered mod.beta 1.0.0 at priority 1000") !=
+                   lines.end());
+            expect(std::find(lines.begin(), lines.end(),
+                             "layered mod.alpha 1.0.0 "
+                             "at priority 999") != lines.end());
 
             auto table{read_table(store_root)};
             expect(table.has_value());

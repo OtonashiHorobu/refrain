@@ -41,7 +41,7 @@ namespace {
 
 void print_console_help() {
     log_server.info(
-        "commands: stop, save, tps, hash, pos [name], "
+        "available commands are stop, save, tps, hash, pos [name], "
         "move [name] <dx> <dy> <dz>, walk [name] <dx> <dz>, jump [name], "
         "dig <x> <y> <z>, place <x> <y> <z> <block>, "
         "give [name] <item> <count>, inv [name], "
@@ -106,7 +106,7 @@ void execute_config_command(std::span<const std::string_view> tokens,
                             refrain::core::config::store *config) {
     namespace cfg = refrain::core::config;
     if (config == nullptr) {
-        log_config.warn("no host configuration store");
+        log_config.warn("the host configuration store is unavailable");
         return;
     }
     if (tokens.size() >= 2 && tokens[1] == "names") {
@@ -118,37 +118,44 @@ void execute_config_command(std::span<const std::string_view> tokens,
             }
             joined += name;
         }
-        log_config.info("namespaces={} list={}", names.size(), joined);
+        log_config.info("{} configuration namespaces are available: {}",
+                        names.size(), joined);
         return;
     }
     if (tokens.size() >= 2 && tokens[1] == "save") {
         if (tokens.size() == 2) {
             if (auto saved{config->save_all()}; !saved) {
-                log_config.error("save failed: {}", saved.error().message);
+                log_config.error(
+                    "failed to save all dirty configuration namespaces: {}",
+                    saved.error().message);
             } else {
                 log_config.info("saved dirty namespaces");
             }
         } else if (auto saved{config->save(tokens[2])}; !saved) {
-            log_config.error("save '{}' failed: {}", tokens[2],
+            log_config.error("failed to save namespace '{}': {}", tokens[2],
                              saved.error().message);
         } else {
-            log_config.info("saved '{}'", tokens[2]);
+            log_config.info("saved namespace '{}'", tokens[2]);
         }
         return;
     }
     if (tokens.size() >= 2 && tokens[1] == "reload") {
         if (tokens.size() == 2) {
             if (auto loaded{config->reload_all()}; !loaded) {
-                log_config.error("reload failed: {}", loaded.error().message);
+                log_config.error(
+                    "failed to reload all configuration namespaces: {}",
+                    loaded.error().message);
             } else {
-                log_config.info("reloaded; running subsystems keep their "
-                                "startup snapshot until restart");
+                log_config.info("reloaded the configuration, but running "
+                                "subsystems keep their startup snapshot until "
+                                "restart");
             }
         } else if (auto loaded{config->reload(tokens[2])}; !loaded) {
-            log_config.error("reload '{}' failed: {}", tokens[2],
+            log_config.error("failed to reload namespace '{}': {}", tokens[2],
                              loaded.error().message);
         } else {
-            log_config.info("reloaded '{}'; restart required to apply",
+            log_config.info("reloaded namespace '{}', but the change takes "
+                            "effect after a restart",
                             tokens[2]);
         }
         return;
@@ -213,11 +220,12 @@ void execute_config_command(std::span<const std::string_view> tokens,
             },
             value)};
         if (!result) {
-            log_config.error("set failed: {}", result.error().message);
+            log_config.error("failed to set {}.{}: {}", name_space, key,
+                             result.error().message);
         } else {
             log_config.info(
-                "{}.{} updated in memory; 'config save' persists it "
-                "and subsystems pick it up after restart",
+                "updated {}.{} in memory, 'config save' persists it and "
+                "running subsystems pick it up after restart",
                 name_space, key);
         }
         return;
@@ -259,7 +267,7 @@ void console_commands::execute(std::string_view line,
                                const refrain::core::tick_info &tick) {
     auto &world{*dependencies_.world};
     if (line == "stop") {
-        log_server.info("stop");
+        log_server.info("stopping the server");
         dependencies_.stop->store(true, std::memory_order_release);
         return;
     }
@@ -270,7 +278,8 @@ void console_commands::execute(std::string_view line,
         dependencies_.maintenance->drain();
         auto rebuilt{world.rebuild_palette(1)};
         if (!rebuilt) {
-            log_server.error("palette-gc failed: {}", rebuilt.error().message);
+            log_server.error("failed to rebuild the world palette: {}",
+                             rebuilt.error().message);
             // A failed reopen leaves the store invalid; continuing to tick
             // would operate on a closed world.
             if (!world.store_valid()) {
@@ -278,9 +287,11 @@ void console_commands::execute(std::string_view line,
             }
             return;
         }
-        log_server.info("palette-gc: entries {}->{} bytes {}->{}",
-                        rebuilt->entries_before, rebuilt->entries_after,
-                        rebuilt->bytes_before, rebuilt->bytes_after);
+        log_server.info(
+            "rebuilt the world palette, entries went from {} to {} and bytes "
+            "from {} to {}",
+            rebuilt->entries_before, rebuilt->entries_after,
+            rebuilt->bytes_before, rebuilt->bytes_after);
         return;
     }
     if (line == "save") {
@@ -292,7 +303,7 @@ void console_commands::execute(std::string_view line,
         if (!committed) {
             log_storage.error("{}", committed.error().message);
         } else {
-            log_storage.info("ok");
+            log_storage.info("saved all dirty chunks");
         }
         return;
     }
@@ -302,9 +313,12 @@ void console_commands::execute(std::string_view line,
             return;
         }
         const auto stats{dependencies_.listener->stats()};
-        log_net.info("players={} in={} out={} bytes_in={} bytes_out={}",
-                     stats.connections, stats.packets_in, stats.packets_out,
-                     stats.bytes_in, stats.bytes_out);
+        const bool one_player{stats.connections == 1};
+        log_net.info("{} {} {} connected, received {} packets and {} bytes, "
+                     "sent {} packets and {} bytes",
+                     stats.connections, one_player ? "player" : "players",
+                     one_player ? "is" : "are", stats.packets_in,
+                     stats.bytes_in, stats.packets_out, stats.bytes_out);
         return;
     }
     if (line == "storage") {
@@ -314,12 +328,12 @@ void console_commands::execute(std::string_view line,
         }
         const auto status{dependencies_.maintenance->writer_status()};
         if (status.consecutive_failures == 0) {
-            log_storage.info("autosave ok");
+            log_storage.info("autosave is healthy");
             return;
         }
         log_storage.warn(
-            "autosave has failed {} time(s) in a row; the chunks stay dirty "
-            "and are retried: {}",
+            "autosave has failed {} times in a row, the chunks stay dirty and "
+            "are retried: {}",
             status.consecutive_failures, status.last_error);
         return;
     }
@@ -343,8 +357,9 @@ void console_commands::execute(std::string_view line,
                                      static_cast<double>(metrics_.count) /
                                      1000.0};
         log_server.info(
-            "{} interval={}ms missed={} work_avg={:.2f}ms "
-            "work_p99={:.2f}ms work_max={:.2f}ms samples={}",
+            "tick {} ran with an interval of {}ms and missed {} ticks, work "
+            "averaged {:.2f}ms with p99 {:.2f}ms and max {:.2f}ms across {} "
+            "samples",
             tick.index,
             std::chrono::duration_cast<std::chrono::milliseconds>(tick.actual)
                 .count(),
@@ -354,7 +369,8 @@ void console_commands::execute(std::string_view line,
         return;
     }
     if (line == "hash") {
-        log_sim.info("{}", refrain::data::to_hex(world.state_hash()));
+        log_sim.info("state hash is {}",
+                     refrain::data::to_hex(world.state_hash()));
         return;
     }
     const auto tokens{split_console_line(line)};
@@ -362,14 +378,14 @@ void console_commands::execute(std::string_view line,
         const auto *player{
             select_player(world, tokens.size() == 2 ? tokens[1] : "")};
         if (player == nullptr) {
-            log_server.warn("no player");
+            log_server.warn("no player is connected");
             return;
         }
         if (player->inventory.empty()) {
-            log_server.info("{}: empty", player->name);
+            log_server.info("the inventory of {} is empty", player->name);
         } else {
             for (const auto &stack : player->inventory) {
-                log_server.info("{}: {} x{}", player->name, stack.item,
+                log_server.info("{} holds {} x{}", player->name, stack.item,
                                 stack.count);
             }
         }
@@ -379,21 +395,22 @@ void console_commands::execute(std::string_view line,
         const auto *player{
             select_player(world, tokens.size() == 2 ? tokens[1] : "")};
         if (player == nullptr) {
-            log_server.warn("no player");
+            log_server.warn("no player is connected");
             return;
         }
-        log_server.info("{} x={:.1f} y={:.1f} z={:.1f}", player->name,
+        log_server.info("{} is at x={:.1f} y={:.1f} z={:.1f}", player->name,
                         player->x, player->y, player->z);
         return;
     }
     if (line == "entities") {
         const auto *entities{world.entities()};
         if (entities == nullptr || entities->empty()) {
-            log_server.info("none");
+            log_server.info("no entities are loaded");
         } else {
             for (const auto &[id, value] : *entities) {
-                log_server.info("entity {} {} x={:.1f} y={:.1f} z={:.1f}", id,
-                                value.type, value.x, value.y, value.z);
+                log_server.info(
+                    "entity #{} is {} at x={:.1f} y={:.1f} z={:.1f}", id,
+                    value.type, value.x, value.y, value.z);
             }
         }
         return;
@@ -405,18 +422,19 @@ void console_commands::execute(std::string_view line,
     if ((tokens.size() == 1 || tokens.size() == 2) && tokens[0] == "jump") {
         auto *player{select_player(world, tokens.size() == 2 ? tokens[1] : "")};
         if (player == nullptr) {
-            log_server.warn("no player");
+            log_server.warn("no player is connected");
             return;
         }
         world.jump(*player);
-        log_server.info("{} on_ground={}", player->name, player->on_ground);
+        log_server.info("{} jumped and is {}", player->name,
+                        player->on_ground ? "on the ground" : "in the air");
         return;
     }
     if ((tokens.size() == 3 || tokens.size() == 4) && tokens[0] == "give") {
         const bool named{tokens.size() == 4};
         auto *player{select_player(world, named ? tokens[1] : "")};
         if (player == nullptr) {
-            log_server.warn("no player");
+            log_server.warn("no player is connected");
             return;
         }
         std::uint32_t count{0};
@@ -427,10 +445,11 @@ void console_commands::execute(std::string_view line,
         const auto item{tokens[named ? 2 : 1]};
         auto added{world.add_item(*player, item, count)};
         if (!added) {
-            log_server.warn("give failed: {}", added.error().message);
+            log_server.warn("failed to give {} to {}: {}", item, player->name,
+                            added.error().message);
             return;
         }
-        log_server.info("{}: {} x{}", player->name, item, count);
+        log_server.info("{} received {} x{}", player->name, item, count);
         return;
     }
     if (tokens.size() == 5 && tokens[0] == "spawn") {
@@ -444,10 +463,11 @@ void console_commands::execute(std::string_view line,
         }
         auto spawned{world.spawn_entity(tokens[1], x, y, z)};
         if (!spawned) {
-            log_server.warn("spawn failed: {}", spawned.error().message);
+            log_server.warn("failed to spawn {}: {}", tokens[1],
+                            spawned.error().message);
             return;
         }
-        log_server.info("{} #{}", tokens[1], *spawned);
+        log_server.info("spawned entity #{} of type {}", *spawned, tokens[1]);
         return;
     }
     if (tokens.size() == 2 && tokens[0] == "kill") {
@@ -457,17 +477,17 @@ void console_commands::execute(std::string_view line,
             return;
         }
         if (!world.remove_entity(id)) {
-            log_server.warn("no entity {}", id);
+            log_server.warn("no entity #{} is loaded", id);
             return;
         }
-        log_server.info("#{}", id);
+        log_server.info("killed entity #{}", id);
         return;
     }
     if ((tokens.size() == 3 || tokens.size() == 4) && tokens[0] == "walk") {
         const bool named{tokens.size() == 4};
         auto *player{select_player(world, named ? tokens[1] : "")};
         if (player == nullptr) {
-            log_server.warn("no player");
+            log_server.warn("no player is connected");
             return;
         }
         double dx{0.0};
@@ -478,15 +498,16 @@ void console_commands::execute(std::string_view line,
             return;
         }
         const auto moved{world.move_player(*player, dx, 0.0, dz)};
-        log_server.info("{} {:.1f},{:.1f},{:.1f} {}", player->name, player->x,
-                        player->y, player->z, moved ? "moved" : "blocked");
+        log_server.info("{} {} x={:.1f} y={:.1f} z={:.1f}", player->name,
+                        moved ? "moved to" : "was blocked at", player->x,
+                        player->y, player->z);
         return;
     }
     if ((tokens.size() == 4 || tokens.size() == 5) && tokens[0] == "move") {
         const bool named{tokens.size() == 5};
         auto *player{select_player(world, named ? tokens[1] : "")};
         if (player == nullptr) {
-            log_server.warn("no player");
+            log_server.warn("no player is connected");
             return;
         }
         double dx{0.0};
@@ -500,8 +521,8 @@ void console_commands::execute(std::string_view line,
         }
         world.set_player_position(*player, player->x + dx, player->y + dy,
                                   player->z + dz);
-        log_server.info("{} {:.1f},{:.1f},{:.1f}", player->name, player->x,
-                        player->y, player->z);
+        log_server.info("{} is now at x={:.1f} y={:.1f} z={:.1f}", player->name,
+                        player->x, player->y, player->z);
         return;
     }
     if ((tokens.size() == 4 && tokens[0] == "dig") ||
@@ -516,7 +537,9 @@ void console_commands::execute(std::string_view line,
         }
         if (y < std::numeric_limits<std::int16_t>::min() ||
             y > std::numeric_limits<std::int16_t>::max()) {
-            log_server.warn("block y={} is out of range", y);
+            log_server.warn("the y coordinate {} is outside the valid block "
+                            "range",
+                            y);
             return;
         }
         auto value{refrain::sim::air_block};
@@ -534,7 +557,8 @@ void console_commands::execute(std::string_view line,
             refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z},
             value)};
         if (!applied) {
-            log_server.warn("{} failed: {}", tokens[0],
+            log_server.warn("failed to {} the block at {}, {}, {}: {}",
+                            tokens[0] == "dig" ? "break" : "place", x, y, z,
                             applied.error().message);
             return;
         }
@@ -567,7 +591,7 @@ void console_commands::execute(std::string_view line,
             // but do not reject a scripted placement without a prior `give`.
             (void)world.remove_item(*player, tokens[4], 1);
         }
-        log_server.info("{}: {},{},{} -> {}", tokens[0], x, y, z,
+        log_server.info("set block at {},{},{} to {}", x, y, z,
                         tokens[0] == "place" ? tokens[4] : "air");
         return;
     }
@@ -577,31 +601,32 @@ void console_commands::execute(std::string_view line,
     }
     if (line == "schedules") {
         if (dependencies_.maintenance == nullptr) {
-            log_schedule.info("unavailable");
+            log_schedule.info("the maintenance scheduler is unavailable");
             return;
         }
         const auto tasks{dependencies_.maintenance->tasks()};
         if (tasks.empty()) {
-            log_schedule.info("none");
+            log_schedule.info("no scheduled tasks are registered");
             return;
         }
         for (const auto &task : tasks) {
             log_schedule.info(
-                "{}.{} phase={} interval={} enabled={} runs={} "
-                "failures={} coalesced={} last_tick={}",
+                "schedule {}.{}: phase {}, interval {} ticks, enabled {}, runs "
+                "{}, failures {}, coalesced {}, last tick {}",
                 task.service, task.method,
                 refrain::core::schedule::phase_name(task.phase_of),
                 task.interval_ticks, task.enabled ? "yes" : "no",
                 task.stats.runs, task.stats.failures, task.stats.coalesced,
                 task.stats.last_tick);
             if (!task.stats.last_error.empty()) {
-                log_schedule.info("{}.{} last_error={}", task.service,
-                                  task.method, task.stats.last_error);
+                log_schedule.info("schedule {}.{} last failed with: {}",
+                                  task.service, task.method,
+                                  task.stats.last_error);
             }
         }
         return;
     }
-    log_server.warn("unknown '{}'", line);
+    log_server.warn("unknown command '{}'", line);
 }
 
 } // namespace refrain::server

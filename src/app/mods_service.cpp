@@ -171,8 +171,8 @@ auto run_mods_check(const mods_check_options &options) -> int {
     }
     if (missing != 0 || mismatched != 0) {
         if (options.strict) {
-            log_mods.error("{} missing manifest(s), {} version mismatch(es) "
-                           "(--strict)",
+            log_mods.error("failed with {} missing manifests and {} version "
+                           "mismatches because --strict is enabled",
                            missing, mismatched);
             return 1;
         }

@@ -226,11 +226,11 @@ void inventory_sync::process_container_clicks(
         auto &carried{carried_items_[click.connection]};
         const auto changed{refrain::server::apply_player_click(
             *inventory, carried, click.slot, click.button, items_)};
-        log_server.debug("click conn={} slot={} button={} mode={} "
-                         "state={} stale={} -> carried='{}' x{} changed={}",
-                         click.connection, click.slot, click.button, click.mode,
-                         click.state_id, stale, carried.item, carried.count,
-                         changed);
+        log_server.debug(
+            "received click from connection {} on slot {}, button {}, mode "
+            "{}, state {}, stale {}, carried {} x{} and changed {}",
+            click.connection, click.slot, click.button, click.mode,
+            click.state_id, stale, carried.item, carried.count, changed);
         if (stale) {
             inventory_forced_.insert(click.connection);
         }

@@ -97,8 +97,9 @@ namespace io = core::io;
     }
     return std::unexpected{make_error(
         error_code::invalid_argument,
-        fmt::format("content publish: composition must be a safe file name of "
-                    "at most {} bytes ([A-Za-z0-9._-], not starting with '.')",
+        fmt::format("the content composition must be a safe file name of at "
+                    "most {} bytes made of letters, digits, '.', '_' and '-', "
+                    "and must not start with '.'",
                     max_content_composition_bytes))};
 }
 
@@ -198,9 +199,9 @@ constexpr std::uint64_t max_pending_delete_queue_bytes{64ULL * 1024ULL *
 
 [[nodiscard]] auto pending_queue_error(std::string_view queue_path,
                                        std::string detail) -> error {
-    return make_error(error_code::parse_error,
-                      fmt::format("content gc: pending-delete queue '{}': {}",
-                                  queue_path, detail));
+    return make_error(
+        error_code::parse_error,
+        fmt::format("pending delete queue '{}': {}", queue_path, detail));
 }
 
 /// Deterministic UTF-8 JSON: sorted by path (the vector is sorted by the
@@ -252,7 +253,7 @@ pending_queue_text(const std::vector<pending_delete> &entries) -> std::string {
     }
     if (*schema_text != pending_delete_schema) {
         return std::unexpected{pending_queue_error(
-            queue_path, fmt::format("unsupported schema '{}' (expected '{}')",
+            queue_path, fmt::format("unsupported schema '{}', expected '{}'",
                                     *schema_text, pending_delete_schema))};
     }
     const auto &entries_node{members.find("entries")->second};
@@ -404,7 +405,8 @@ struct pending_delete_guard {
     if (info->directory) {
         return std::unexpected{make_error(
             error_code::io_error,
-            fmt::format("'{}' is a directory; refusing to delete", path))};
+            fmt::format("refusing to delete '{}' because it is a directory",
+                        path))};
     }
     std::error_code error;
     const auto removed{
@@ -545,25 +547,24 @@ struct physical_blob {
                   });
         for (const auto *entry : ordered) {
             if ((entry->flags & blob_flags_packed) != 0U) {
-                return std::unexpected{
-                    make_error(error_code::parse_error,
-                               "content gc: in-segment blob " +
-                                   to_hex(entry->digest).substr(0, 16) +
-                                   " is packed; refusing to compact segment " +
-                                   segment_id_text(segment->id))};
+                return std::unexpected{make_error(
+                    error_code::parse_error,
+                    "failed to compact the gc segment " +
+                        segment_id_text(segment->id) + " because blob " +
+                        to_hex(entry->digest).substr(0, 16) + " is packed")};
             }
             auto bytes{store.read(blob_location_from_table_entry(*entry))};
             if (!bytes) {
-                return std::unexpected{
-                    wrap_error(bytes.error(), "content gc: compacting blob " +
-                                                  to_hex(entry->digest))};
+                return std::unexpected{wrap_error(
+                    bytes.error(), "compacting blob " + to_hex(entry->digest))};
             }
             if (bytes->size() != entry->stored_size) {
                 return std::unexpected{make_error(
                     error_code::parse_error,
-                    "content gc: compacting blob " +
-                        to_hex(entry->digest).substr(0, 16) + " read " +
-                        std::to_string(bytes->size()) + " byte(s), recorded " +
+                    "failed to compact blob " +
+                        to_hex(entry->digest).substr(0, 16) +
+                        " because it read " + std::to_string(bytes->size()) +
+                        " bytes but the record says " +
                         std::to_string(entry->stored_size))};
             }
             if (!writer) {
@@ -734,7 +735,7 @@ auto load_pending_deletes(std::string_view store_root)
     if (store_root.empty()) {
         return std::unexpected{
             make_error(error_code::invalid_argument,
-                       "content gc: store root must not be empty")};
+                       "the content store root must not be empty")};
     }
     const auto queue_path{pending_delete_queue_path(store_root)};
     auto info{io::status_at(queue_path)};
@@ -744,8 +745,8 @@ auto load_pending_deletes(std::string_view store_root)
     if (info->symlink || (info->exists && !info->regular)) {
         return std::unexpected{pending_queue_error(
             queue_path,
-            "the path is not a regular file (symlinks and directories are "
-            "refused)")};
+            "the path is not a regular file, symlinks and directories are "
+            "refused")};
     }
     if (!info->exists) {
         return std::vector<pending_delete>{};
@@ -756,8 +757,8 @@ auto load_pending_deletes(std::string_view store_root)
     }
     if (*size > max_pending_delete_queue_bytes) {
         return std::unexpected{pending_queue_error(
-            queue_path, fmt::format("{} byte(s) exceed the {} byte limit",
-                                    *size, max_pending_delete_queue_bytes))};
+            queue_path, fmt::format("{} bytes exceed the {} byte limit", *size,
+                                    max_pending_delete_queue_bytes))};
     }
     auto text{
         io::read_text(queue_path, {.max_bytes = max_pending_delete_queue_bytes,
@@ -774,7 +775,7 @@ auto enqueue_pending_deletes(std::string_view store_root,
     if (store_root.empty()) {
         return std::unexpected{
             make_error(error_code::invalid_argument,
-                       "content gc: store root must not be empty")};
+                       "the content store root must not be empty")};
     }
     // A corrupt queue must never be replaced by a partial merge: load fails
     // closed and the original file stays for diagnosis/manual repair.
@@ -791,7 +792,7 @@ auto enqueue_pending_deletes(std::string_view store_root,
         if (auto valid{validate_pending_delete(entry)}; !valid) {
             auto failure{std::move(valid.error())};
             failure.message =
-                "content gc: pending-delete entry: " + failure.message;
+                "invalid pending delete entry: " + failure.message;
             return std::unexpected{std::move(failure)};
         }
         auto found{merged.find(entry.path)};
@@ -818,8 +819,8 @@ auto enqueue_pending_deletes(std::string_view store_root,
     if (merged.size() > max_pending_delete_entries) {
         return std::unexpected{make_error(
             error_code::invalid_argument,
-            fmt::format("content gc: pending-delete queue would hold {} "
-                        "entries (limit {})",
+            fmt::format("the pending delete queue would hold {} entries, over "
+                        "the limit of {}",
                         merged.size(), max_pending_delete_entries))};
     }
     // No-op when the queue already holds exactly these entries; this avoids
@@ -850,7 +851,7 @@ auto drain_pending_deletes(std::string_view store_root, std::uint64_t budget_ms,
     if (store_root.empty()) {
         return std::unexpected{
             make_error(error_code::invalid_argument,
-                       "content gc: store root must not be empty")};
+                       "the content store root must not be empty")};
     }
     auto loaded{load_pending_deletes(store_root)};
     if (!loaded) {
@@ -897,9 +898,10 @@ auto drain_pending_deletes(std::string_view store_root, std::uint64_t budget_ms,
             pending_entry_is_live(*live_guard, entry)) {
             ++report.skipped_referenced;
             changed = true;
-            emit(fmt::format("warning: queued delete '{}' is referenced by "
-                             "blobs.idx again; dropping the stale entry",
-                             entry.path));
+            emit(fmt::format(
+                "failed to delete '{}' because blobs.idx references it again, "
+                "dropping the stale queue entry",
+                entry.path));
             continue;
         }
         if (entry.attempts >= max_pending_delete_attempts) {
@@ -942,7 +944,7 @@ auto drain_pending_deletes(std::string_view store_root, std::uint64_t budget_ms,
             }
             remaining.push_back(std::move(kept));
             changed = true;
-            emit(fmt::format("warning: failed to delete '{}': {}", entry.path,
+            emit(fmt::format("failed to delete '{}': {}", entry.path,
                              removed.error().message));
             continue;
         }
@@ -959,27 +961,30 @@ auto drain_pending_deletes(std::string_view store_root, std::uint64_t budget_ms,
     }
     report.remaining = remaining.size();
     if (report.skipped_referenced != 0U) {
-        emit(fmt::format("dropped {} stale pending-delete entr{}",
-                         report.skipped_referenced,
-                         report.skipped_referenced == 1U ? "y" : "ies"));
+        emit(fmt::format("dropped {} stale pending deletes",
+                         report.skipped_referenced));
     }
     if (report.failed_stuck != 0U) {
-        emit(fmt::format("warning: {} pending delete(s) reached the retry "
-                         "limit ({}); kept for manual repair",
-                         report.failed_stuck, max_pending_delete_attempts));
+        emit(fmt::format(
+            "failed to delete {} pending deletes because they reached the "
+            "retry limit of {}, kept for manual repair",
+            report.failed_stuck, max_pending_delete_attempts));
     }
     if (report.deleted != 0U) {
-        emit(fmt::format("deleted {} pending file(s), {} byte(s)",
+        emit(fmt::format("deleted {} pending files totaling {} bytes",
                          report.deleted, report.deleted_bytes));
     }
     if (report.deferred != 0U) {
-        emit(fmt::format("deferred {} pending file(s), {} byte(s) (gc budget)",
-                         report.deferred, report.deferred_bytes));
+        emit(fmt::format(
+            "deferred {} pending files totaling {} bytes because the gc "
+            "budget ran out",
+            report.deferred, report.deferred_bytes));
     }
     if (report.failed != 0U) {
-        emit(
-            fmt::format("failed {} pending file(s), {} byte(s); kept for retry",
-                        report.failed, report.failed_bytes));
+        emit(fmt::format(
+            "kept {} pending files totaling {} bytes for retry because "
+            "deleting them failed",
+            report.failed, report.failed_bytes));
     }
 
     const auto queue_path{pending_delete_queue_path(store_root)};
@@ -989,8 +994,8 @@ auto drain_pending_deletes(std::string_view store_root, std::uint64_t budget_ms,
             const auto removed{std::filesystem::remove(
                 std::filesystem::path{queue_path}, error)};
             if (error) {
-                emit(fmt::format("warning: failed to remove empty "
-                                 "pending-delete queue '{}': {}",
+                emit(fmt::format("failed to remove the empty pending delete "
+                                 "queue '{}': {}",
                                  queue_path, error.message()));
             } else if (removed) {
                 // The rename/create fsync in atomic_write_file covers queue
@@ -1001,8 +1006,9 @@ auto drain_pending_deletes(std::string_view store_root, std::uint64_t budget_ms,
                     if (auto synced{platform::file::sync_directory(
                             std::string{directory})};
                         !synced) {
-                        emit(fmt::format("warning: failed to flush '{}': {}",
-                                         directory, synced.error().message));
+                        emit(fmt::format(
+                            "failed to flush the directory '{}': {}", directory,
+                            synced.error().message));
                     }
                 }
             }
@@ -1025,7 +1031,7 @@ auto publish_resolution(std::string_view store_root,
     if (store_root.empty()) {
         return std::unexpected{
             make_error(error_code::invalid_argument,
-                       "content publish: store root must not be empty")};
+                       "the content store root must not be empty")};
     }
     if (auto valid{validate_composition(options.composition)}; !valid) {
         return valid;
@@ -1061,9 +1067,9 @@ auto publish_resolution(std::string_view store_root,
         const auto found{counts.find(entry.digest)};
         const auto count{found == counts.end() ? 0U : found->second};
         if (count > std::numeric_limits<std::uint32_t>::max()) {
-            return std::unexpected{make_error(
-                error_code::invalid_argument,
-                "content publish: blob refcount exceeds the 32-bit field")};
+            return std::unexpected{
+                make_error(error_code::invalid_argument,
+                           "the blob refcount exceeds the 32-bit field")};
         }
         entry.refcount = static_cast<std::uint32_t>(count);
     }
@@ -1123,7 +1129,7 @@ auto publish_resolution_bytes(std::string_view index_path,
     if (index_path.empty()) {
         return std::unexpected{
             make_error(error_code::invalid_argument,
-                       "content publish: resolution index path is empty")};
+                       "the resolution index path must not be empty")};
     }
     const auto parent{parent_path(index_path)};
     if (!parent.empty()) {
@@ -1152,21 +1158,20 @@ auto collect_garbage(std::string_view store_root, const gc_options &options,
     if (store_root.empty()) {
         return std::unexpected{
             make_error(error_code::invalid_argument,
-                       "content gc: store root must not be empty")};
+                       "the content store root must not be empty")};
     }
     if (options.keep_days < 0) {
-        return std::unexpected{
-            make_error(error_code::invalid_argument,
-                       "content gc: --keep-days must not be negative")};
+        return std::unexpected{make_error(error_code::invalid_argument,
+                                          "--keep-days must not be negative")};
     }
     // Reject rather than clamp: `now - hours(24 * keep_days)` overflows the
     // filesystem clock's int64 nanoseconds above ~106,751 days (signed-overflow
     // UB) and the wrapped cutoff silently disables the retention window.
     if (options.keep_days > max_gc_keep_days) {
-        return std::unexpected{make_error(
-            error_code::invalid_argument,
-            fmt::format("content gc: --keep-days {} exceeds the maximum of {}",
-                        options.keep_days, max_gc_keep_days))};
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       fmt::format("--keep-days {} exceeds the maximum of {}",
+                                   options.keep_days, max_gc_keep_days))};
     }
     const auto emit = [&log](std::string line) {
         if (log) {
@@ -1212,8 +1217,9 @@ auto collect_garbage(std::string_view store_root, const gc_options &options,
         ++report.root_extra;
     }
     report.root_blobs = root_counts.size();
-    emit(fmt::format("roots: {} index reference(s), {} receipt file(s)",
-                     report.root_index_references, report.root_extra));
+    emit(
+        fmt::format("the gc roots are {} index references and {} receipt files",
+                    report.root_index_references, report.root_extra));
 
     // No root at all would make every record look unreferenced; an --apply
     // rebuild would wipe a store whose indexes/receipts were never published.
@@ -1221,8 +1227,8 @@ auto collect_garbage(std::string_view store_root, const gc_options &options,
     if (options.apply && root_counts.empty() && !table->entries.empty()) {
         return std::unexpected{make_error(
             error_code::not_found,
-            "content gc: no GC roots found (no resolution indexes or install "
-            "receipts); refusing to rebuild blobs.idx from an empty root set")};
+            "failed to rebuild the blobs.idx because there are no gc roots, "
+            "no resolution indexes and no install receipts")};
     }
     // Opening a content_store ensures <root>/content/blobs exists. A dry run
     // must not create anything, so it only opens the handle when the directory
@@ -1253,9 +1259,9 @@ auto collect_garbage(std::string_view store_root, const gc_options &options,
     std::vector<digest32> missing_blobs;
     for (const auto &[digest, count] : root_counts) {
         if (count > std::numeric_limits<std::uint32_t>::max()) {
-            return std::unexpected{make_error(
-                error_code::invalid_argument,
-                "content gc: blob refcount exceeds the 32-bit field")};
+            return std::unexpected{
+                make_error(error_code::invalid_argument,
+                           "the blob refcount exceeds the 32-bit field")};
         }
         blob_table_entry entry{};
         entry.digest = digest;
@@ -1334,14 +1340,15 @@ auto collect_garbage(std::string_view store_root, const gc_options &options,
     for (const auto &[id, entries] : live_entries) {
         const auto found{segment_by_id.find(id)};
         if (found == segment_by_id.end()) {
-            invalid_segments.push_back("segment " + segment_id_text(id) +
-                                       " is missing");
+            invalid_segments.push_back("failed to find the gc segment " +
+                                       segment_id_text(id));
             continue;
         }
         const auto &segment{*found->second};
         if (!segment.header_ok) {
-            invalid_segments.push_back("segment " + segment_id_text(id) +
-                                       " has an unreadable header");
+            invalid_segments.push_back(
+                "failed to read the header of the gc segment " +
+                segment_id_text(id));
             continue;
         }
         std::uint64_t total{0};
@@ -1349,25 +1356,27 @@ auto collect_garbage(std::string_view store_root, const gc_options &options,
             const auto start{static_cast<std::uint64_t>(entry->segment_offset)};
             const auto size{static_cast<std::uint64_t>(entry->stored_size)};
             if (start % content_segment_alignment != 0U) {
-                invalid_segments.push_back("segment " + segment_id_text(id) +
-                                           ": blob " +
+                invalid_segments.push_back("failed to validate blob " +
                                            to_hex(entry->digest).substr(0, 16) +
-                                           " is not 8-byte aligned");
+                                           " of the gc segment " +
+                                           segment_id_text(id) +
+                                           ", it is not 8-byte aligned");
             } else if (start > segment.data_bytes ||
                        size > segment.data_bytes - start) {
                 invalid_segments.push_back(
-                    "segment " + segment_id_text(id) + ": blob " +
+                    "failed to validate blob " +
                     to_hex(entry->digest).substr(0, 16) +
-                    fmt::format(" span {}+{} exceeds the body ({})", start,
-                                size, segment.data_bytes));
+                    " of the gc segment " + segment_id_text(id) +
+                    fmt::format(", the span {}+{} exceeds the body of {} bytes",
+                                start, size, segment.data_bytes));
             }
             total += size;
         }
         if (total > segment.data_bytes) {
             invalid_segments.push_back(
-                "segment " + segment_id_text(id) +
-                fmt::format(": live bytes ({}) exceed the body ({})", total,
-                            segment.data_bytes));
+                "failed to validate the gc segment " + segment_id_text(id) +
+                fmt::format(", the live bytes {} exceed the body of {} bytes",
+                            total, segment.data_bytes));
         }
     }
 
@@ -1431,21 +1440,24 @@ auto collect_garbage(std::string_view store_root, const gc_options &options,
     report.compact_dead_bytes = candidate_dead_bytes;
 
     if (!options.apply) {
-        emit(fmt::format("{} blob(s) unreferenced, {} byte(s)",
+        emit(fmt::format("found {} unreferenced blobs totaling {} bytes",
                          removable.size(), removable_bytes));
-        emit(fmt::format("{} orphan segment(s), {} byte(s)",
+        emit(fmt::format("found {} orphan segments totaling {} bytes",
                          orphan_segments.size(), orphan_bytes));
         if (options.compact) {
             emit(fmt::format(
-                "{} segment(s) to compact, {} live byte(s), {} dead byte(s)",
+                "found {} segments to compact holding {} live bytes and {} "
+                "dead bytes",
                 candidates.size(), candidate_live_bytes, candidate_dead_bytes));
         }
         for (const auto &problem : invalid_segments) {
-            emit("warning: " + problem);
+            emit(problem);
         }
         if (!missing_blobs.empty()) {
-            emit(fmt::format("warning: {} referenced blob(s) are missing",
-                             missing_blobs.size()));
+            emit(fmt::format(
+                "failed to find {} referenced blobs because they are missing "
+                "from the store",
+                missing_blobs.size()));
         }
         return report;
     }
@@ -1462,11 +1474,11 @@ auto collect_garbage(std::string_view store_root, const gc_options &options,
             }
             sample += to_hex(missing_blobs[index]);
         }
-        return std::unexpected{
-            make_error(error_code::not_found,
-                       "content gc: " + std::to_string(missing_blobs.size()) +
-                           " referenced blob(s) are missing (" + sample +
-                           "); refusing to rebuild blobs.idx")};
+        return std::unexpected{make_error(
+            error_code::not_found,
+            "failed to rebuild the content index because " +
+                std::to_string(missing_blobs.size()) +
+                " referenced blobs are missing, including " + sample)};
     }
     if (!invalid_segments.empty()) {
         std::string sample{invalid_segments.front()};
@@ -1475,9 +1487,9 @@ auto collect_garbage(std::string_view store_root, const gc_options &options,
         }
         return std::unexpected{make_error(
             error_code::parse_error,
-            "content gc: " + std::to_string(invalid_segments.size()) +
-                " referenced segment reference(s) are invalid (" + sample +
-                "); refusing to rebuild blobs.idx")};
+            "failed to rebuild the content index because " +
+                std::to_string(invalid_segments.size()) +
+                " referenced segments are invalid, including " + sample)};
     }
 
     // Compaction reads the live blobs of each candidate and writes them into
@@ -1547,13 +1559,14 @@ auto collect_garbage(std::string_view store_root, const gc_options &options,
         }
     }
     report.table_blobs = table_entries.size();
-    emit(fmt::format("blobs.idx: {} blob(s)", table_entries.size()));
+    emit(fmt::format("published the blobs.idx with {} blobs",
+                     table_entries.size()));
     if (options.compact && !candidates.empty()) {
         report.compacted_segments = candidates.size();
         report.new_segments = new_segment_count;
         emit(fmt::format(
-            "compacted {} segment(s) into {} new segment(s), {} live byte(s), "
-            "{} dead byte(s)",
+            "compacted {} segments into {} new segments holding {} live bytes "
+            "and {} dead bytes",
             candidates.size(), new_segment_count, candidate_live_bytes,
             candidate_dead_bytes));
     }
@@ -1608,9 +1621,9 @@ auto collect_garbage(std::string_view store_root, const gc_options &options,
     if (!queued.empty()) {
         if (auto enqueued{enqueue_pending_deletes(store_root, queued)};
             !enqueued) {
-            return std::unexpected{wrap_error(
-                std::move(enqueued.error()),
-                "content gc: cannot persist the pending-delete queue")};
+            return std::unexpected{
+                wrap_error(std::move(enqueued.error()),
+                           "failed to persist the pending delete queue")};
         }
     }
     report.queued_blobs = removable.size();
@@ -1619,19 +1632,19 @@ auto collect_garbage(std::string_view store_root, const gc_options &options,
     report.queued_segment_bytes = queued_segment_bytes;
 
     if (options.defer_deletes) {
-        emit(fmt::format("queued {} blob(s), {} byte(s)", report.queued_blobs,
-                         report.queued_blob_bytes));
-        emit(fmt::format("queued {} segment(s), {} byte(s)",
+        emit(fmt::format("queued {} blobs totaling {} bytes",
+                         report.queued_blobs, report.queued_blob_bytes));
+        emit(fmt::format("queued {} segments totaling {} bytes",
                          report.queued_segments, report.queued_segment_bytes));
         return report;
     }
 
     // Synchronous drain (foreground CLI/startup): the drain summary lines would
-    // duplicate the stable blob/segment lines below, so forward its warnings
-    // only and map the counters into `gc_report`.
+    // duplicate the stable blob/segment lines below, so forward its failure
+    // lines only and map the counters into `gc_report`.
     auto drained{drain_pending_deletes(
         store_root, options.budget_ms, [&log](std::string_view line) {
-            if (log && line.starts_with("warning:")) {
+            if (log && line.starts_with("failed to ")) {
                 log(line);
             }
         })};
@@ -1654,23 +1667,25 @@ auto collect_garbage(std::string_view store_root, const gc_options &options,
     report.skipped_referenced = drained->skipped_referenced;
     report.budget_exhausted = drained->budget_exhausted;
 
-    emit(fmt::format("deleted {} blob(s), {} byte(s)", report.deleted_blobs,
+    emit(fmt::format("deleted {} blobs totaling {} bytes", report.deleted_blobs,
                      report.deleted_blob_bytes));
     if (report.deferred_blobs != 0U) {
-        emit(fmt::format("deferred {} blob(s), {} byte(s) (gc budget)",
-                         report.deferred_blobs, report.deferred_blob_bytes));
+        emit(fmt::format(
+            "deferred {} blobs totaling {} bytes because the gc budget ran out",
+            report.deferred_blobs, report.deferred_blob_bytes));
     }
-    emit(fmt::format("deleted {} segment(s), {} byte(s)",
+    emit(fmt::format("deleted {} segments totaling {} bytes",
                      report.deleted_segments, report.deleted_segment_bytes));
     if (report.deferred_segments != 0U) {
-        emit(fmt::format("deferred {} segment(s), {} byte(s) (gc budget)",
-                         report.deferred_segments,
-                         report.deferred_segment_bytes));
+        emit(fmt::format(
+            "deferred {} segments totaling {} bytes because the gc budget ran "
+            "out",
+            report.deferred_segments, report.deferred_segment_bytes));
     }
     if (report.failed_blobs != 0U || report.failed_segments != 0U) {
         emit(fmt::format(
-            "failed {} blob(s), {} byte(s), {} segment(s), {} byte(s); kept "
-            "in the pending-delete queue",
+            "kept {} failed blobs totaling {} bytes and {} failed segments "
+            "totaling {} bytes in the pending delete queue",
             report.failed_blobs, report.failed_blob_bytes,
             report.failed_segments, report.failed_segment_bytes));
     }

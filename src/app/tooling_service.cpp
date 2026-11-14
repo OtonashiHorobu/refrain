@@ -693,7 +693,7 @@ auto run_schema_gen(const std::string &output_root,
         for (const auto &path : report->stale) {
             std::cout << "  stale:   " << path << '\n';
         }
-        log_schema.error("generated files are out of date; run "
+        log_schema.error("generated files are out of date, run "
                          "'refrain-tools schema gen' and commit the result");
         // Same stderr fallback as report_error().
         if (!log::enabled(log::level::error)) {
@@ -730,9 +730,7 @@ auto run_crash_smoke(const std::string &database_path,
     }
     if (!kernel::crash_reporter::enabled()) {
         log_crash_reporter.error(
-            "Crashpad client is not attached (is '{}' a real "
-            "crashpad_handler?)",
-            handler_path);
+            "failed to attach Crashpad client to handler '{}'", handler_path);
         return 1;
     }
     std::cout << "crash: handler attached, database=" << database_path
@@ -773,7 +771,7 @@ auto run_wasm_smoke() -> int {
         return report_error(result.error());
     }
     if (*result != 5) {
-        log_wasm.error("expected 5, got {}", *result);
+        log_wasm.error("add returned {}, expected 5", *result);
         return 1;
     }
     std::cout << "wasm: OK (wasmtime module add(2,3) = " << *result << ")\n";

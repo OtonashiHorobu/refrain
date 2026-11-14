@@ -84,27 +84,26 @@ void emit(const log_sink &log, std::string line) {
     if (options.store_root.empty()) {
         return std::unexpected{
             fail(error_code::invalid_argument,
-                 "startup-content: content store root must not be empty")};
+                 "the content store root must not be empty")};
     }
     if (options.store_root.find('\0') != std::string::npos) {
         return std::unexpected{
             fail(error_code::invalid_argument,
-                 "startup-content: content store root contains a NUL byte")};
+                 "the content store root contains a NUL byte")};
     }
     if (!data::is_valid_content_composition(options.composition)) {
         return std::unexpected{fail(
             error_code::invalid_argument,
-            fmt::format("startup-content: composition must be a safe file name "
-                        "of at most {} bytes ([A-Za-z0-9._-], not starting "
-                        "with '.')",
+            fmt::format("the content composition must be a safe file name of "
+                        "at most {} bytes made of letters, digits, '.', '_' "
+                        "and '-', and must not start with '.'",
                         data::max_content_composition_bytes))};
     }
     if (options.base_priority >
         static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())) {
-        return std::unexpected{
-            fail(error_code::invalid_argument,
-                 "startup-content: base_priority does not fit the RFRX int32 "
-                 "field")};
+        return std::unexpected{fail(error_code::invalid_argument,
+                                    "base_priority does not fit the RFRX int32 "
+                                    "field")};
     }
     {
         std::vector<std::string> ordered{options.layer_order};
@@ -112,22 +111,20 @@ void emit(const log_sink &log, std::string line) {
         const auto duplicate{
             std::adjacent_find(ordered.begin(), ordered.end())};
         if (duplicate != ordered.end()) {
-            return std::unexpected{fail(
-                error_code::invalid_argument,
-                fmt::format("startup-content: layer_order contains duplicate "
-                            "id '{}'",
-                            *duplicate))};
+            return std::unexpected{
+                fail(error_code::invalid_argument,
+                     fmt::format("layer_order contains the duplicate "
+                                 "id '{}'",
+                                 *duplicate))};
         }
     }
     if (options.gc_keep_days < 0) {
-        return std::unexpected{
-            fail(error_code::invalid_argument,
-                 "startup-content: gc_keep_days must not be negative")};
+        return std::unexpected{fail(error_code::invalid_argument,
+                                    "gc_keep_days must not be negative")};
     }
     if (options.lock_timeout_ms < 0) {
-        return std::unexpected{
-            fail(error_code::invalid_argument,
-                 "startup-content: lock_timeout_ms must not be negative")};
+        return std::unexpected{fail(error_code::invalid_argument,
+                                    "lock_timeout_ms must not be negative")};
     }
     return status_ok();
 }
@@ -157,7 +154,7 @@ struct package_identity {
     if (!bytes) {
         return std::unexpected{
             annotate(std::move(bytes.error()),
-                     fmt::format("startup-content: '{}'", path))};
+                     fmt::format("using content path '{}'", path))};
     }
     const std::string text{
         reinterpret_cast<const char *>(bytes->data()), // NOLINT
@@ -167,14 +164,14 @@ struct package_identity {
     if (!document) {
         return std::unexpected{
             annotate(std::move(document.error()),
-                     fmt::format("startup-content: '{}'", path))};
+                     fmt::format("using content path '{}'", path))};
     }
     auto manifest{mod::parse_mod_manifest(
         *document, mod::manifest_parse_options{.allow_package_tables = true})};
     if (!manifest) {
         return std::unexpected{
             annotate(std::move(manifest.error()),
-                     fmt::format("startup-content: '{}'", path))};
+                     fmt::format("using content path '{}'", path))};
     }
     return package_identity{.id = manifest->common.id,
                             .version = manifest->common.version,
@@ -213,14 +210,13 @@ struct package_identity {
     if (auto created{io::create_directories(directory)}; !created) {
         return std::unexpected{annotate(
             std::move(created.error()),
-            fmt::format("startup-content: inbox directory '{}'", directory))};
+            fmt::format("creating the inbox directory '{}'", directory))};
     }
     auto target{unique_target(directory, data::filename(source))};
     if (!target) {
         return std::unexpected{
             fail(error_code::io_error,
-                 fmt::format("startup-content: cannot find a free name for "
-                             "'{}' in '{}'",
+                 fmt::format("failed to find a free name for '{}' in '{}'",
                              source, directory))};
     }
     std::error_code error;
@@ -229,8 +225,8 @@ struct package_identity {
     if (error) {
         return std::unexpected{
             fail(error_code::io_error,
-                 fmt::format("startup-content: cannot move '{}' to '{}': {}",
-                             source, *target, error.message()))};
+                 fmt::format("failed to move '{}' to '{}': {}", source, *target,
+                             error.message()))};
     }
     return *target;
 }
@@ -240,9 +236,8 @@ struct package_identity {
     std::filesystem::remove(std::filesystem::path{std::string{path}}, error);
     if (error) {
         return std::unexpected{
-            fail(error_code::io_error,
-                 fmt::format("startup-content: cannot remove '{}': {}", path,
-                             error.message()))};
+            fail(error_code::io_error, fmt::format("failed to remove '{}': {}",
+                                                   path, error.message()))};
     }
     return status_ok();
 }
@@ -254,8 +249,7 @@ void reject_package(const startup_content_options &options,
                     std::string reason, startup_content_report &report,
                     const log_sink &log) {
     ++report.failed;
-    emit(log, fmt::format("startup-content: install: rejected {}: {}", path,
-                          reason));
+    emit(log, fmt::format("failed to install '{}': {}", path, reason));
     if (!options.auto_install) {
         return;
     }
@@ -298,19 +292,17 @@ void reject_package(const startup_content_options &options,
         }
         if (parsed->archive_blake3 == reader->archive_digest()) {
             ++report.skipped;
-            emit(log, fmt::format(
-                          "startup-content: install: {}@{} already installed",
-                          identity->id, identity->version));
+            emit(log,
+                 fmt::format("skipped {} {} because it is already installed",
+                             identity->id, identity->version));
             return status_ok();
         }
     }
 
     if (!options.auto_install) {
         ++report.skipped;
-        emit(log,
-             fmt::format(
-                 "startup-content: install: {}@{} skipped auto_install=off",
-                 identity->id, identity->version));
+        emit(log, fmt::format("skipped {} {} because auto_install is off",
+                              identity->id, identity->version));
         return status_ok();
     }
 
@@ -319,7 +311,7 @@ void reject_package(const startup_content_options &options,
         if (!opened) {
             return std::unexpected{
                 annotate(std::move(opened.error()),
-                         fmt::format("startup-content: content store '{}'",
+                         fmt::format("opening the content store '{}'",
                                      options.store_root))};
         }
         store.emplace(std::move(*opened));
@@ -342,7 +334,7 @@ void reject_package(const startup_content_options &options,
 
     ++report.installed;
     emit(log,
-         fmt::format("startup-content: install: installed {}@{} files={}",
+         fmt::format("installed startup content {} {} with {} files",
                      identity->id, identity->version, installed->files.size()));
     if (options.keep_installed) {
         auto moved{move_package(
@@ -370,7 +362,7 @@ void reject_package(const startup_content_options &options,
     if (!names) {
         return std::unexpected{
             annotate(std::move(names.error()),
-                     fmt::format("startup-content: scan '{}'", inbox))};
+                     fmt::format("scanning the inbox '{}'", inbox))};
     }
     std::vector<std::string> packages;
     for (const auto &name : *names) {
@@ -403,16 +395,17 @@ struct receipt_set {
     if (!paths) {
         return std::unexpected{annotate(
             std::move(paths.error()),
-            fmt::format("startup-content: receipts in '{}'", store_root))};
+            fmt::format("reading the install receipts in '{}'", store_root))};
     }
     receipt_set set;
     set.receipts.reserve(paths->size());
     for (const auto &path : *paths) {
         auto receipt{read_receipt(path)};
         if (!receipt) {
-            return std::unexpected{annotate(
-                std::move(receipt.error()),
-                fmt::format("startup-content: receipts in '{}'", store_root))};
+            return std::unexpected{
+                annotate(std::move(receipt.error()),
+                         fmt::format("reading the install receipts in '{}'",
+                                     store_root))};
         }
         set.files += receipt->files.size();
         set.receipts.push_back(std::move(*receipt));
@@ -436,8 +429,8 @@ select_receipts(const std::vector<mod_receipt> &receipts,
         if (!version) {
             return std::unexpected{
                 annotate(std::move(version.error()),
-                         fmt::format("startup-content: receipt {}@{}",
-                                     receipt.id, receipt.version))};
+                         fmt::format("install receipt {}@{}", receipt.id,
+                                     receipt.version))};
         }
         versions.push_back(std::move(*version));
     }
@@ -459,7 +452,7 @@ select_receipts(const std::vector<mod_receipt> &receipts,
                 if (exact.has_value()) {
                     return std::unexpected{
                         fail(error_code::already_exists,
-                             fmt::format("startup-content: pinned '{}@{}' has "
+                             fmt::format("the pinned version '{}@{}' has "
                                          "multiple install receipts",
                                          id, pin->second))};
                 }
@@ -468,8 +461,8 @@ select_receipts(const std::vector<mod_receipt> &receipts,
             if (!exact.has_value()) {
                 return std::unexpected{
                     fail(error_code::not_found,
-                         fmt::format("startup-content: pinned '{}@{}' is not "
-                                     "installed (receipts present: {})",
+                         fmt::format("the pinned version '{}@{}' is not "
+                                     "installed, {} receipts are present",
                                      id, pin->second, indices.size()))};
             }
             selected.emplace(id, *exact);
@@ -498,12 +491,11 @@ select_receipts(const std::vector<mod_receipt> &receipts,
             }
         }
         if (indices.size() > 1U) {
-            emit(log,
-                 fmt::format(
-                     "startup-content: index: {} multiple versions, using {} "
-                     "origin={}",
-                     id, receipts[best].version,
-                     to_string(receipts[best].origin)));
+            emit(log, fmt::format(
+                          "using {} {} because multiple versions are installed "
+                          "and the {} origin wins",
+                          id, receipts[best].version,
+                          to_string(receipts[best].origin)));
         }
         selected.emplace(id, best);
     }
@@ -568,7 +560,7 @@ assign_layer_priorities(const startup_content_options &options,
     if (selected.size() > options.base_priority) {
         return std::unexpected{
             fail(error_code::invalid_argument,
-                 fmt::format("startup-content: {} selected layer(s) do not fit "
+                 fmt::format("{} selected layers do not fit "
                              "base_priority {}",
                              selected.size(), options.base_priority))};
     }
@@ -613,18 +605,17 @@ assign_layer_priorities(const startup_content_options &options,
     }
 
     if (!missing.empty()) {
-        emit(log, fmt::format("startup-content: layer-order: {} declared "
-                              "id(s) missing: {}",
+        emit(log, fmt::format("{} declared layer ids have no install receipt: "
+                              "{}",
                               missing.size(), summarize_ids(missing)));
     }
     if (!appended.empty()) {
-        emit(log, fmt::format("startup-content: layer-order: {} appended: {}",
+        emit(log, fmt::format("appended {} unlisted layer ids: {}",
                               appended.size(), summarize_ids(appended)));
     }
     for (const auto &layer : layers) {
-        emit(log, fmt::format("startup-content: layer: {}@{} priority={}",
-                              layer.receipt->id, layer.receipt->version,
-                              layer.priority));
+        emit(log, fmt::format("layered {} {} at priority {}", layer.receipt->id,
+                              layer.receipt->version, layer.priority));
     }
     return layers;
 }
@@ -680,13 +671,14 @@ assign_layer_priorities(const startup_content_options &options,
     publish.entries = std::move(entries);
     auto written{data::publish_resolution(options.store_root, publish)};
     if (!written) {
-        return std::unexpected{annotate(
-            std::move(written.error()),
-            fmt::format("startup-content: index '{}'", options.composition))};
+        return std::unexpected{
+            annotate(std::move(written.error()),
+                     fmt::format("publishing the content index '{}'",
+                                 options.composition))};
     }
     report.index_published = true;
     report.published_entries = entry_count;
-    emit(log, fmt::format("startup-content: index: published {} entries={}",
+    emit(log, fmt::format("published the content index {} with {} entries",
                           data::content_resolution_path(options.store_root,
                                                         options.composition),
                           entry_count));
@@ -702,12 +694,13 @@ assign_layer_priorities(const startup_content_options &options,
                                    startup_content_report &report,
                                    const log_sink &log) -> status {
     if (options.gc == startup_content_options::gc_mode::off) {
-        emit(log, "startup-content: gc: off");
+        emit(log, "skipped content garbage collection because gc is off");
         return status_ok();
     }
     const auto table_path{data::content_blob_table_path(options.store_root)};
     if (!io::exists(table_path)) {
-        emit(log, "startup-content: gc: skipped");
+        emit(log, "skipped content garbage collection because no blobs.idx "
+                  "exists");
         return status_ok();
     }
 
@@ -725,14 +718,14 @@ assign_layer_priorities(const startup_content_options &options,
     }
     auto collected{data::collect_garbage(
         options.store_root, gc, [&log](std::string_view line) {
-            if (line.find("warning") == std::string_view::npos) {
+            if (!line.starts_with("failed to ")) {
                 return;
             }
-            emit(log, fmt::format("startup-content: gc: {}", line));
+            emit(log, std::string{line});
         })};
     if (!collected) {
-        return std::unexpected{
-            annotate(std::move(collected.error()), "startup-content: gc")};
+        return std::unexpected{annotate(std::move(collected.error()),
+                                        "content garbage collection")};
     }
     report.gc_planned_blobs = collected->unreferenced_blobs;
     report.gc_planned_segments = collected->orphan_segments;
@@ -742,9 +735,11 @@ assign_layer_priorities(const startup_content_options &options,
     report.gc_deferred_segments = collected->deferred_segments;
     emit(log,
          gc.apply
-             ? fmt::format("startup-content: gc: applied blobs={} segments={}",
+             ? fmt::format("applied content garbage collection and deleted {} "
+                           "blobs and {} segments",
                            report.gc_deleted_blobs, report.gc_deleted_segments)
-             : fmt::format("startup-content: gc: dry run blobs={} segments={}",
+             : fmt::format("planned content garbage collection and found {} "
+                           "unreferenced blobs and {} orphan segments",
                            report.gc_planned_blobs,
                            report.gc_planned_segments));
     return status_ok();
@@ -777,10 +772,9 @@ assign_layer_priorities(const startup_content_options &options,
         }
     }
     if (!packages->empty()) {
-        emit(log,
-             fmt::format(
-                 "startup-content: install: installed={} skipped={} failed={}",
-                 report.installed, report.skipped, report.failed));
+        emit(log, fmt::format("installed {} packages, skipped {} and failed to "
+                              "install {}",
+                              report.installed, report.skipped, report.failed));
     }
 
     auto receipts{load_receipts(options.store_root)};
@@ -829,9 +823,7 @@ auto run_startup_content(const startup_content_options &options)
 
     auto lock{data::store_lock::acquire(
         options.store_root, options.lock_timeout_ms,
-        [&log](std::string_view line) {
-            emit(log, fmt::format("startup-content: {}", line));
-        })};
+        [&log](std::string_view line) { emit(log, std::string{line}); })};
     if (!lock) {
         if (lock.error().code != error_code::permission_denied) {
             return std::unexpected{std::move(lock.error())};
@@ -845,7 +837,7 @@ auto run_startup_content(const startup_content_options &options)
             return std::unexpected{std::move(lock.error())};
         }
         report.read_only = true;
-        emit(log, "startup-content: lock: read-only");
+        emit(log, "continuing with a read-only content store");
         if (auto ran{run_pipeline(options, false, report, log)}; !ran) {
             return std::unexpected{std::move(ran.error())};
         }
@@ -853,7 +845,7 @@ auto run_startup_content(const startup_content_options &options)
     }
 
     report.lock_acquired = lock->held();
-    emit(log, "startup-content: lock: acquired");
+    emit(log, "acquired the content store lock");
     if (auto ran{run_pipeline(options, true, report, log)}; !ran) {
         return std::unexpected{std::move(ran.error())};
     }

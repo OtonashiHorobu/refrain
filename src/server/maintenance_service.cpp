@@ -132,13 +132,12 @@ class snapshot_writer {
                 }
                 if (consecutive == 1) {
                     log_storage.error(
-                        "{} (the chunks stay dirty and are retried by the next "
-                        "autosave)",
+                        "failed to write dirty chunks, the next autosave "
+                        "retries them: {}",
                         written.error().message);
                 } else if (report) {
-                    log_storage.warn(
-                        "autosave has failed {} time(s) in a row: {}",
-                        consecutive, written.error().message);
+                    log_storage.warn("autosave failed {} times in a row: {}",
+                                     consecutive, written.error().message);
                 }
             } else {
                 // A success after failures is worth one line: the operator
@@ -150,7 +149,7 @@ class snapshot_writer {
                     failures_.record_success();
                 }
                 if (recovered > 0) {
-                    log_storage.info("autosave recovered after {} failure(s)",
+                    log_storage.info("autosave recovered after {} failures",
                                      recovered);
                 }
                 const std::lock_guard lock{completed_mutex_};
@@ -246,20 +245,23 @@ class gc_delete_worker {
             // fails instead of waiting for a blocking unlink.
             auto report{refrain::data::drain_pending_deletes(
                 store_root_, budget_ms_, [](std::string_view line) {
-                    if (line.starts_with("warning:")) {
-                        log_server.warn("gc-delete: {}", line);
+                    if (line.starts_with("failed to ")) {
+                        log_server.warn("{}", line);
                     } else {
-                        log_server.info("gc-delete: {}", line);
+                        log_server.info("{}", line);
                     }
                 })};
             if (!report) {
-                log_server.error("gc-delete: {}", report.error().message);
+                log_server.error(
+                    "failed to drain pending content deletions: {}",
+                    report.error().message);
             } else if (report->deleted != 0U || report->deferred != 0U ||
                        report->failed != 0U || report->failed_stuck != 0U ||
                        report->skipped_referenced != 0U) {
                 log_server.info(
-                    "gc-delete: deleted={} blobs={} segments={} deferred={} "
-                    "failed={} stuck={} remaining={}",
+                    "deleted {} files, {} blobs and {} segments, with {} "
+                    "deferred, {} failed, {} stuck at the retry limit and {} "
+                    "remaining",
                     report->deleted, report->deleted_blobs,
                     report->deleted_segments, report->deferred, report->failed,
                     report->failed_stuck, report->remaining);
@@ -301,19 +303,21 @@ auto run_content_gc(const server_run_options &options, gc_delete_worker *worker)
     if (worker != nullptr) {
         queue_lock.emplace(worker->queue_mutex(), std::try_to_lock);
         if (!queue_lock->owns_lock()) {
-            log_content.debug("busy");
+            log_content.debug(
+                "skipped garbage collection because the delete worker is busy");
             return refrain::status_ok();
         }
     }
     const auto index{
         fmt::format("{}/content/blobs.idx", options.content_store)};
     if (!refrain::core::io::exists(index)) {
-        log_content.debug("no index");
+        log_content.debug("skipped garbage collection because no index exists");
         return refrain::status_ok();
     }
     auto receipts{refrain::mod::list_receipt_paths(options.content_store)};
     if (!receipts) {
-        log_content.error("receipt scan failed: {}", receipts.error().message);
+        log_content.error("failed to scan install receipts: {}",
+                          receipts.error().message);
         return std::unexpected{refrain::make_error(
             refrain::error_code::io_error,
             fmt::format("content-gc: receipt scan failed: {}",
@@ -331,7 +335,8 @@ auto run_content_gc(const server_run_options &options, gc_delete_worker *worker)
     for (const auto &path : *receipts) {
         auto receipt{refrain::mod::read_receipt(path)};
         if (!receipt) {
-            log_content.error("{}: {}", path, receipt.error().message);
+            log_content.error("failed to read the install receipt '{}': {}",
+                              path, receipt.error().message);
             continue;
         }
         for (const auto &file : receipt->files) {
@@ -342,7 +347,8 @@ auto run_content_gc(const server_run_options &options, gc_delete_worker *worker)
         options.content_store, gc,
         [](std::string_view line) { log_content.info("{}", line); })};
     if (!report) {
-        log_content.error("{}", report.error().message);
+        log_content.error("failed to collect content garbage: {}",
+                          report.error().message);
         return std::unexpected{refrain::make_error(
             report.error().code,
             fmt::format("content-gc: {}", report.error().message))};
@@ -351,10 +357,10 @@ auto run_content_gc(const server_run_options &options, gc_delete_worker *worker)
         // The enqueue is complete; let the worker pick it up even when this
         // run planned nothing new (an earlier queue may still be pending).
         worker->notify();
-        log_content.info("queued {} blobs {} segments", report->queued_blobs,
-                         report->queued_segments);
+        log_content.info("queued {} blobs and {} segments",
+                         report->queued_blobs, report->queued_segments);
     } else {
-        log_content.info("dry run");
+        log_content.info("dry run: nothing was deleted");
     }
     return refrain::status_ok();
 }
@@ -390,10 +396,12 @@ auto maintenance_autosave(void *self, const void *, std::int64_t) noexcept
         }
         const auto batch_size{snapshot.size()};
         if (context.writer->submit(std::move(snapshot))) {
-            log_storage.debug("{} chunks tick={}", batch_size,
-                              context.world->ticks());
+            log_storage.debug("queued {} chunks for the autosave at tick {}",
+                              batch_size, context.world->ticks());
         } else {
-            log_storage.warn("writer busy");
+            log_storage.warn(
+                "skipped the autosave because the writer is busy, retrying on "
+                "the next interval");
             return std::unexpected{
                 refrain::make_error(refrain::error_code::io_error,
                                     "autosave: writer busy, snapshot skipped")};
@@ -424,11 +432,13 @@ auto maintenance_store_compact(void *self, const void *, std::int64_t) noexcept
     try {
         auto compacted{context.world->compact_stores()};
         if (!compacted) {
-            log_server.error("store compaction failed: {}",
+            log_server.error("failed to compact the store: {}",
                              compacted.error().message);
             return std::unexpected{compacted.error()};
         }
-        log_storage.info("objects={} blobs={}", compacted->objects.segments,
+        log_storage.info("the store now has {} object segments and {} blob "
+                         "segments",
+                         compacted->objects.segments,
                          compacted->blobs.segments);
         return refrain::status_ok();
     } catch (...) {
@@ -444,12 +454,12 @@ auto maintenance_region_compact(void *self, const void *, std::int64_t) noexcept
             context.options->compact_min_bytes,
             context.options->compact_garbage_percent)};
         if (!compacted) {
-            log_server.error("runtime compaction failed: {}",
+            log_server.error("failed to compact regions: {}",
                              compacted.error().message);
             return std::unexpected{compacted.error()};
         }
         if (*compacted != 0) {
-            log_storage.info("{} regions", *compacted);
+            log_storage.info("compacted {} regions", *compacted);
         }
         return refrain::status_ok();
     } catch (...) {
@@ -508,7 +518,10 @@ auto maintenance_service::start(world_port &world,
                               refrain::core::schedule::invoker invoke) {
         const auto clamped{clamp_interval(interval)};
         if (clamped != interval) {
-            log_schedule.warn("{} interval {}->{}", method, interval, clamped);
+            log_schedule.warn(
+                "the {} interval of {} ticks exceeds the maximum, using {} "
+                "ticks",
+                method, interval, clamped);
         }
         tasks[task_count++] = refrain::core::schedule::task_descriptor{
             .service = "runtime",

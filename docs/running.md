@@ -222,7 +222,7 @@ tick.
 ## Client
 
 The server speaks the 26.3 protocol (777), so an unmodified client joins with
-the address the server prints on startup (`network: listening on ...`). Set
+the address the server prints on startup (`[net]: listening on ...`). Set
 `online_mode = false` in `network.toml` to accept any username; enable it when
 the server is reachable from outside the machine.
 

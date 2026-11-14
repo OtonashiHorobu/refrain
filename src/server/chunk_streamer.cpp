@@ -34,7 +34,8 @@ chunk_streamer::~chunk_streamer() {
     if (cache_hits_ == 0 && cache_misses_ == 0) {
         return;
     }
-    log_net.info("chunk cache hits={} misses={}", cache_hits_, cache_misses_);
+    log_net.info("chunk cache served {} hits and {} misses", cache_hits_,
+                 cache_misses_);
 }
 
 void chunk_streamer::set_chunk_requester(chunk_requester requester) {
@@ -119,7 +120,7 @@ void chunk_streamer::chunk_failed(std::int32_t x, std::int32_t z) {
             stream.abandoned.insert(key);
             stream.queued.erase(key);
             log_net.debug(
-                "chunk ({}, {}) abandoned after {} generation failure(s)", x, z,
+                "abandoned chunk ({}, {}) after {} generation failures", x, z,
                 attempts);
             continue;
         }
@@ -185,7 +186,7 @@ auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
                         stream.requested.erase({x, z});
                     }
                 }
-                log_net.debug("chunk ({}, {}) encode failed: {}", x, z,
+                log_net.debug("failed to encode chunk ({}, {}): {}", x, z,
                               encoded.error().message);
                 stream.queued.erase({x, z});
                 stream.pending.pop_front();
@@ -397,8 +398,8 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
             stream.center_dirty = false;
         }
         if (stream.pending.empty() && !stream.reported) {
-            log_net.info("chunk view ready for connection {} ({} chunk(s) "
-                         "streamed)",
+            log_net.info("prepared chunk view for connection {} with {} chunks "
+                         "streamed",
                          id, stream.sent);
             stream.reported = true;
         }

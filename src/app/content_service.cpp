@@ -1129,8 +1129,7 @@ auto run_content_gc(const content_gc_options &options) -> int {
     gc.extra_roots = std::move(*extra_roots);
 
     // The library emits the stable report lines without the `gc: ` prefix; the
-    // CLI only adds that prefix and a newline, keeping the output that
-    // CI greps byte-for-byte.
+    // CLI only adds that prefix and a newline.
     auto report{
         data::collect_garbage(options.store, gc, [](std::string_view line) {
             std::cout << "gc: " << line << '\n';
@@ -1141,10 +1140,11 @@ auto run_content_gc(const content_gc_options &options) -> int {
     // A budgeted run reports its deferred counters once more as a single
     // stable line (the per-kind `deferred ...` lines come from the library).
     if (report->deferred_blobs != 0U || report->deferred_segments != 0U) {
-        std::cout << "gc: deferred: " << report->deferred_blobs << " blob(s), "
-                  << report->deferred_blob_bytes << " byte(s), "
-                  << report->deferred_segments << " segment(s), "
-                  << report->deferred_segment_bytes << " byte(s)\n";
+        std::cout << "gc: deferred " << report->deferred_blobs
+                  << " blobs totaling " << report->deferred_blob_bytes
+                  << " bytes and " << report->deferred_segments
+                  << " segments totaling " << report->deferred_segment_bytes
+                  << " bytes\n";
     }
     return 0;
 }
