@@ -431,8 +431,8 @@ struct server::impl {
                      const Packet &packet, Encoder encode) {
         auto body{encode_packet(packet_id, packet, encode)};
         if (!body) {
-            log_net.error("packet encode failed connection={} packet={}", id,
-                          packet_id);
+            log_net.error("failed to encode packet {} for connection {}: {}",
+                          packet_id, id, body.error().message);
             close(id);
             return;
         }
@@ -610,7 +610,7 @@ void server::impl::on_open(std::uint64_t id) {
     if (stopped.load(std::memory_order_relaxed)) {
         return;
     }
-    log_net.debug("connection opened id={}", id);
+    log_net.debug("connection {} opened", id);
     protocol->create_connection(id);
     protocol->notify_state(id, connection_state::handshake);
     auto live{std::make_shared<connection>()};
@@ -700,8 +700,9 @@ void server::impl::on_data(std::uint64_t id, std::span<const std::byte> bytes) {
         // closed through the same local-close step as a protocol error, so a
         // flooding client cannot keep the socket open. The limiter is per
         // connection and only play traffic is counted.
-        log_net.warn("rate limit exceeded id={} limit={}", id,
-                     config.rate_limit);
+        log_net.warn(
+            "connection {} exceeded the rate limit of {} packets per second",
+            id, config.rate_limit);
         close(id);
         return;
     }
@@ -766,8 +767,10 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
             })) {
             return;
         }
-        log_net.debug("handshake id={} protocol={} next={}", id,
-                      intention.protocol, intention.next);
+        log_net.debug(
+            "received handshake from connection {} with protocol {}, next "
+            "state {}",
+            id, intention.protocol, intention.next);
         if (intention.next == 1) {
             return;
         }
@@ -855,7 +858,7 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 reject(id, "malformed or unexpected packet");
                 return;
             }
-            log_net.info("login started id={} name={}", id, packet.name);
+            log_net.info("connection {} started login as {}", id, packet.name);
             const auto session{random_uuid()};
             if (!with_connection(
                     id, [&packet, session](connection_state_data &data) {
@@ -924,7 +927,7 @@ void server::impl::handle(std::uint64_t id, std::span<const std::byte> body) {
                 })) {
                 return;
             }
-            log_net.info("login complete id={} name={}", id, name);
+            log_net.info("connection {} finished login as {}", id, name);
             send_configuration(id);
             return;
         }
@@ -1407,7 +1410,7 @@ void server::impl::send_play_login(std::uint64_t id) {
             id, [mode](connection_state_data &data) { data.mode = mode; })) {
         return;
     }
-    log_net.info("player joined id={} name={}", id, name);
+    log_net.info("player joined with id {} as {}", id, name);
     server_policy policy_snapshot{};
     {
         const std::lock_guard lock{policy_mutex};
@@ -2990,7 +2993,7 @@ void server::impl::send(std::uint64_t id, std::uint16_t packet_id,
 }
 
 void server::impl::reject(std::uint64_t id, std::string_view reason) {
-    log_net.warn("protocol error id={} reason={}", id, reason);
+    log_net.warn("connection {} hit a protocol error: {}", id, reason);
     close(id);
 }
 
@@ -3022,9 +3025,9 @@ void server::impl::close(std::uint64_t id) {
                           {});
     }
     if (name.empty()) {
-        log_net.debug("connection closed id={} state={}", id, to_string(state));
+        log_net.debug("connection {} closed in state {}", id, to_string(state));
     } else {
-        log_net.info("player left id={} name={}", id, name);
+        log_net.info("player {} left with id {}", name, id);
     }
     // A local close leaves through the same removal step as an abrupt drop, so
     // the session is released once. The transport callback that follows finds
@@ -3067,7 +3070,7 @@ void server::impl::keepalive_loop() {
             }
         }
         for (const auto id : expired) {
-            log_net.warn("keepalive timeout id={}", id);
+            log_net.warn("connection {} missed its keepalive", id);
             close(id);
         }
         for (const auto id : due) {
@@ -3176,7 +3179,7 @@ void server::impl::tick() {
             }
         }
         for (const auto id : idle) {
-            log_net.info("player idle timeout id={}", id);
+            log_net.info("connection {} timed out while idle", id);
             close(id);
         }
     }

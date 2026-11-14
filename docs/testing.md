@@ -208,18 +208,19 @@ soak: elapsed=125s
 soak: shutdown=89ms
 soak: server_peak_rss=48MiB
 soak: bots_peak_rss=382MiB
-soak: tick: 2480 interval=50ms missed=0 work_avg=1.79ms work_p99=3.51ms work_max=14.88ms samples=2048
-soak: net: players=0 in=121498 out=271851 bytes_in=4335818 bytes_out=75668261
+soak: tick 2480 ran with an interval of 50ms and missed 0 ticks, work averaged 1.79ms with p99 3.51ms and max 14.88ms across 2048 samples
+soak: 0 players are connected, received 121498 packets and 4335818 bytes, sent 271851 packets and 75668261 bytes
 ```
 
 Read the numbers as follows:
 
-- `work_p99` is the server tick work per 50 ms interval; `missed=0` means no
-  interval overran its budget.
+- `p99` is the server tick work per 50 ms interval; `missed 0 ticks` means
+  no interval overran its budget.
 - `server_peak_rss` is the peak resident set of the server process, bots
   excluded.
-- `out` and `bytes_out` are the clientbound packet count and payload over the
-  whole run, so the 120 s run sends roughly 630 KiB/s to 100 players.
+- `sent ... packets and ... bytes` are the clientbound packet count and
+  payload over the whole run, so the 120 s run sends roughly 630 KiB/s to 100
+  players.
 - `shutdown` is the time from the `stop` console command to process exit.
 
 ### Client input (X11)

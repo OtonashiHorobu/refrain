@@ -102,8 +102,8 @@ void chunk_service::tick(world_port &world,
         for (auto &[pos, column] : generation_->take_results()) {
             auto inserted{world.chunk_insert(pos, std::move(column))};
             if (!inserted) {
-                log_chunk_gen.debug("insert ({}, {}) failed: {}", pos.x, pos.z,
-                                    inserted.error().message);
+                log_chunk_gen.debug("failed to insert chunk ({}, {}): {}",
+                                    pos.x, pos.z, inserted.error().message);
                 continue;
             }
             if (streamer_) {
@@ -148,12 +148,12 @@ void chunk_service::apply_generation_failures() {
         // The first distinct message is operator-visible; a generator that
         // keeps failing the same way is only debug detail after that.
         if (failure.message == logged_failure_message_) {
-            log_chunk_gen.debug("chunk ({}, {}) generation failed: {}",
+            log_chunk_gen.debug("failed to generate chunk ({}, {}): {}",
                                 failure.tile.x, failure.tile.z,
                                 failure.message);
         } else {
             logged_failure_message_ = failure.message;
-            log_chunk_gen.warn("chunk ({}, {}) generation failed: {}",
+            log_chunk_gen.warn("failed to generate chunk ({}, {}): {}",
                                failure.tile.x, failure.tile.z, failure.message);
         }
         if (!streamer_) {
@@ -205,8 +205,9 @@ void chunk_service::enforce_residency(world_port &world) {
                 continue;
             }
             if (auto released{world.remove_ticket(*ticket)}; !released) {
-                log_chunk_gen.debug("release ({}, {}) failed: {}", ticket->x,
-                                    ticket->z, released.error().message);
+                log_chunk_gen.debug(
+                    "failed to release the ticket for chunk ({}, {}): {}",
+                    ticket->x, ticket->z, released.error().message);
             }
             ticket = view_tickets_.erase(ticket);
         }
@@ -216,8 +217,8 @@ void chunk_service::enforce_residency(world_port &world) {
             }
             if (auto held{world.hold_ticket(pos, sim::ticket_kind::player)};
                 !held) {
-                log_chunk_gen.debug("pin ({}, {}) failed: {}", pos.x, pos.z,
-                                    held.error().message);
+                log_chunk_gen.debug("failed to pin chunk ({}, {}): {}", pos.x,
+                                    pos.z, held.error().message);
                 continue;
             }
             view_tickets_.insert(pos);
@@ -247,7 +248,8 @@ void chunk_service::enforce_residency(world_port &world) {
         }
         // The batch is all-or-nothing: a failed flush keeps every column
         // resident and dirty for the next pass.
-        log_chunk_gen.warn("chunk unload failed: {}", dropped.error().message);
+        log_chunk_gen.warn("failed to unload chunks: {}",
+                           dropped.error().message);
     }};
     // A clean column needs no store traffic: drop it without touching the
     // writer or the disk.

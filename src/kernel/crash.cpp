@@ -147,7 +147,8 @@ template <typename Fn>
 /// Not `noexcept`: `log::error` formats (allocates) and `make_error` copies the
 /// message. Reached only through the barrier in `initialize_impl()`.
 [[nodiscard]] auto fail(error_code code, std::string message) -> status {
-    log_crash_reporter.error("{}", message);
+    log_crash_reporter.error("failed to initialize the crash reporter: {}",
+                             message);
     return std::unexpected{make_error(code, std::move(message))};
 }
 
@@ -254,8 +255,8 @@ auto to_file_path(std::string_view utf8_path) -> base::FilePath {
 [[nodiscard]] auto start_crashpad(reporter_state &current,
                                   const crash_config &cfg) -> bool {
     if (cfg.handler_path.empty()) {
-        log_kernel.error(
-            "Crashpad is enabled but crash_config.handler_path is empty");
+        log_kernel.error("Crashpad is enabled but no handler path is "
+                         "configured");
         return false;
     }
     auto client = std::make_unique<crashpad::CrashpadClient>();
@@ -271,11 +272,12 @@ auto to_file_path(std::string_view utf8_path) -> base::FilePath {
         if (auto *settings = database_instance->GetSettings(); settings) {
             if (!settings->SetUploadsEnabled(cfg.upload ==
                                              crash_upload::enabled)) {
-                log_crash_reporter.warn("cannot persist uploads preference");
+                log_crash_reporter.warn(
+                    "failed to persist the upload preference");
             }
         }
     } else {
-        log_crash_reporter.warn("cannot open crash database at {}",
+        log_crash_reporter.warn("failed to open the crash database at '{}'",
                                 cfg.database_path);
     }
 
@@ -296,7 +298,7 @@ auto to_file_path(std::string_view utf8_path) -> base::FilePath {
         std::string{}, annotations, arguments,
         /*restartable=*/false, /*asynchronous_start=*/false);
     if (!started) {
-        log_crash_reporter.error("Crashpad StartHandler failed (handler={})",
+        log_crash_reporter.error("failed to start the Crashpad handler at '{}'",
                                  cfg.handler_path);
         return false;
     }
@@ -341,8 +343,8 @@ auto to_file_path(std::string_view utf8_path) -> base::FilePath {
     if (!cfg.start_handler) {
         // Test-only stub: no handler is attached and no marker is installed.
         current.initialized.store(true, std::memory_order_release);
-        log_kernel.warn(
-            "crash reporter initialized in stub mode (start_handler=false)");
+        log_kernel.warn("started the crash reporter in stub mode, the handler "
+                        "stays disabled");
         return status_ok();
     }
 
@@ -350,15 +352,14 @@ auto to_file_path(std::string_view utf8_path) -> base::FilePath {
     if (start_crashpad(current, cfg)) {
         current.enabled.store(true, std::memory_order_release);
         current.initialized.store(true, std::memory_order_release);
-        log_kernel.info("Crashpad attached (database={}, uploads={})",
+        log_kernel.info("started Crashpad with database '{}' and uploads {}",
                         current.database_path,
                         cfg.upload == crash_upload::enabled ? "enabled"
                                                             : "disabled");
         return status_ok();
     }
 #else
-    log_kernel.warn(
-        "crash reporter built without Crashpad (REFRAIN_WITH_CRASHPAD=0)");
+    log_kernel.warn("this build has no Crashpad support");
 #endif
 
     if (cfg.fallback_marker) {
@@ -371,7 +372,8 @@ auto to_file_path(std::string_view utf8_path) -> base::FilePath {
         current.fallback_installed = true;
         current.initialized.store(true, std::memory_order_release);
         log_kernel.warn(
-            "Crashpad unavailable; fallback crash marker enabled at {}",
+            "Crashpad is unavailable, the fallback crash marker is enabled "
+            "at '{}'",
             std::string_view{g_marker_path});
         return status_ok();
     }
@@ -439,9 +441,8 @@ void crash_reporter::set_annotation(std::string_view key,
         if (current.initialized.load(std::memory_order_acquire) &&
             current.enabled.load(std::memory_order_acquire)) {
             log_crash_reporter.debug(
-                "annotation '{}' recorded after the "
-                "handler started; it is attached on the next handler "
-                "start only",
+                "recorded annotation '{}' after the handler started, it is "
+                "attached on the next handler start only",
                 key);
         }
     });
@@ -479,10 +480,10 @@ void crash_reporter::shutdown() noexcept {
         // Diagnostics run after the state is consistent: a formatting failure
         // must not skip the teardown above (the barrier swallows it).
         if (detached) {
-            log_kernel.info("Crashpad client detached");
+            log_kernel.info("detached the Crashpad client");
         }
         if (removed) {
-            log_kernel.info("fallback crash handler removed");
+            log_kernel.info("removed the fallback crash handler");
         }
     });
 }
@@ -525,17 +526,14 @@ void crash_reporter::trigger_for_testing() noexcept {
         // Matches the documented contract: returns when no handler is attached.
         guarded_void([] {
             log_kernel.warn(
-                "crash_reporter::trigger_for_testing() ignored: no crash "
-                "handler attached");
+                "ignored the test crash: no crash handler is installed");
         });
         return;
     }
     // The deliberate fault stays outside the logging barrier: diagnostics must
     // not be able to swallow the crash this function exists to trigger.
-    guarded_void([] {
-        log_kernel.error(
-            "crash_reporter::trigger_for_testing(): crashing on purpose");
-    });
+    guarded_void(
+        [] { log_kernel.error("triggered a deliberate crash for testing"); });
     // Deliberate fault, implemented inside the platform layer: exercises the
     // attached handler in CI smoke tests. UBSan builds are expected to
     // flag it on purpose.

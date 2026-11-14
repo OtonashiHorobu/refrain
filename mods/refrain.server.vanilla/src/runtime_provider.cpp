@@ -368,7 +368,7 @@ struct runtime_provider {
                 return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INVALID_CONFIG;
             }
             log_protocol.info(
-                "{} {} over {}",
+                "serving {} protocol {} with accepted versions {}",
                 refrain::contracts::as_string_view(descriptor.family),
                 descriptor.canonical_version,
                 refrain::contracts::as_string_view(
@@ -440,7 +440,7 @@ struct runtime_provider {
             const auto transport{provider->host->services().active_provider(
                 "refrain:transport", transport_instance)};
             if (transport) {
-                log_net_transport.info("{}", transport->id);
+                log_net_transport.info("using transport {}", transport->id);
             }
             if (transport && transport->instance != nullptr) {
                 const auto *api{static_cast<const refrain::mod::provider_api *>(
@@ -490,12 +490,12 @@ struct runtime_provider {
         if (!world) {
             return REFRAIN_SERVICES_RUNTIME_RUNTIME_ERROR_INTERNAL;
         }
-        log_runtime.debug("port={} world={} sim={} storage={}",
-                          choice == refrain::server::world_port_choice::direct
-                              ? "direct"
-                              : "contract",
-                          services.world_provider, services.sim_provider,
-                          services.storage_provider);
+        log_runtime.debug(
+            "using the {} world port with world {}, sim {} and storage {}",
+            choice == refrain::server::world_port_choice::direct ? "direct"
+                                                                 : "contract",
+            services.world_provider, services.sim_provider,
+            services.storage_provider);
         // `run_server` reports startup/shutdown failures through the log and
         // returns the process exit code; the contract forwards that code
         // unchanged (0 = clean stop), so the host never reinterprets it.

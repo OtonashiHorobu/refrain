@@ -272,7 +272,9 @@ auto chunk_generation::start(config settings)
             fmt::format("chunk generation could not start its workers: {}",
                         error.what()))};
     }
-    log_generation.info("workers={} credit={}", service->settings_.worker_count,
+    log_generation.info("started chunk generation with {} workers and credit "
+                        "{}",
+                        service->settings_.worker_count,
                         service->admission_.credits());
     return service;
 }
@@ -369,8 +371,9 @@ void chunk_generation::update_admission(const admission_sample &sample) {
         change = admission_.update(sample);
     }
     if (change) {
-        log_generation.info("credit={} reason={}", change->credits,
-                            to_string(change->reason));
+        log_generation.info(
+            "chunk generation credit is now {} after the {} signal",
+            change->credits, to_string(change->reason));
     }
 }
 
@@ -540,8 +543,9 @@ void chunk_generation::run() {
                 })};
             if (!created) {
                 if (!generator_failure_reported_.exchange(true)) {
-                    log_generation.error("generator unavailable: {}",
-                                         created.error().message);
+                    log_generation.error(
+                        "the chunk generator is unavailable: {}",
+                        created.error().message);
                 }
                 generator_error = created.error().message;
                 fail_task(origin, *generator_error);
@@ -553,8 +557,8 @@ void chunk_generation::run() {
         auto protos{engine.generate_tile(
             worldgen::chunk_pos{.x = origin.x, .z = origin.z})};
         if (!protos) {
-            log_generation.debug("tile ({}, {}) failed: {}", origin.x, origin.z,
-                                 protos.error().message);
+            log_generation.debug("failed to generate tile ({}, {}): {}",
+                                 origin.x, origin.z, protos.error().message);
             fail_task(origin, protos.error().message);
             continue;
         }
@@ -575,7 +579,7 @@ void chunk_generation::run() {
             auto column{
                 refrain::world::from_proto_chunk(*proto, engine.biome_names())};
             if (!column) {
-                log_generation.debug("chunk ({}, {}) conversion failed: {}",
+                log_generation.debug("failed to convert chunk ({}, {}): {}",
                                      position.x, position.z,
                                      column.error().message);
                 failed = true;

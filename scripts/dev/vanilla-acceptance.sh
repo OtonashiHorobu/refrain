@@ -148,10 +148,10 @@ if [[ "$STATUS" == "joined" ]]; then
     # for them while the client is still connected, not after it left.
     printf 'net\n' >&9
     for _ in $(seq 1 100); do
-        grep -q "\[net\]: players=1 " "$WORK/server.log" && break
+        grep -q "\[net\]: 1 player is connected" "$WORK/server.log" && break
         sleep 0.05
     done
-    if grep -q "\[net\]: players=1 " "$WORK/server.log"; then
+    if grep -q "\[net\]: 1 player is connected" "$WORK/server.log"; then
         echo "acceptance: the server counts one player in play"
     else
         echo "acceptance: FAILED (the server does not count the client)" >&2

@@ -191,7 +191,8 @@ void bus::publish_raw(event_type type, const void *event) {
         } catch (...) {
             if (!failure) {
                 failure = std::current_exception();
-                log_event.error("listener={} type={} threw", id, type);
+                log_event.error(
+                    "listener {} threw while handling event type {}", id, type);
             }
         }
     }

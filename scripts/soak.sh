@@ -170,16 +170,16 @@ fi
 LOAD_LINE="$(grep -E "^load:" "$WORK/load.out" | tail -1 || true)"
 SLOW_LINE="$(grep -E "^load:" "$WORK/slow.out" 2>/dev/null | tail -1 || true)"
 SPAWN_LINE="$(grep -E "\[world\]: generated .* spawn chunk" "$WORK/server.log" | tail -1 || true)"
-SPAWN_COUNT="$(sed -n 's/.*generated \([0-9]*\) spawn chunk(s).*/\1/p' <<<"$SPAWN_LINE")"
+SPAWN_COUNT="$(sed -n 's/.*generated \([0-9]*\) spawn chunks.*/\1/p' <<<"$SPAWN_LINE")"
 CHUNK_GEN_LINES="$(grep -c "\[chunk-gen\]" "$WORK/server.log" || true)"
-CHUNK_VIEW_READY="$(grep -c "chunk view ready" "$WORK/server.log" || true)"
+CHUNK_VIEW_READY="$(grep -c "prepared chunk view" "$WORK/server.log" || true)"
 SERVER_RSS_KB="$(awk '/VmHWM/ {print $2}' "/proc/$SERVER_PID/status" 2>/dev/null || echo "")"
 
 # Shutdown time: the stop command fires on the tick grid, so record when the
 # console command lands and how long the process needs to leave afterwards.
 STOP_MS=""
 for _ in $(seq 1 6000); do
-    if grep -q "\[server\]: stop" "$WORK/server.log"; then
+    if grep -q "\[server\]: stopping the server" "$WORK/server.log"; then
         STOP_MS=$(date +%s%3N)
         break
     fi
@@ -194,8 +194,8 @@ if [[ -n "$STOP_MS" ]]; then
     SHUTDOWN_MS=$(( EXIT_MS - STOP_MS ))
 fi
 
-TICK_LINE="$(grep -E "work_p99=" "$WORK/server.log" | tail -1 || true)"
-NET_LINE="$(grep -E "\[net\]: players=" "$WORK/server.log" | tail -1 || true)"
+TICK_LINE="$(grep -E "\[server\]: tick .* work averaged " "$WORK/server.log" | tail -1 || true)"
+NET_LINE="$(grep -E "\[net\]: [0-9]+ player" "$WORK/server.log" | tail -1 || true)"
 echo "soak: elapsed=${ELAPSED}s"
 if [[ -n "$SHUTDOWN_MS" ]]; then
     echo "soak: shutdown=${SHUTDOWN_MS}ms"
@@ -222,7 +222,7 @@ if [[ "$LOAD_RC" -ne 0 ]]; then
     exit "$LOAD_RC"
 fi
 
-P99="$(sed -n 's/.*work_p99=\([0-9.]*\)ms.*/\1/p' <<<"$TICK_LINE")"
+P99="$(sed -n 's/.*p99 \([0-9.]*\)ms.*/\1/p' <<<"$TICK_LINE")"
 if [[ -n "$P99" ]] && awk "BEGIN { exit !($P99 > $P99_MS) }"; then
     echo "soak: work_p99 ${P99}ms exceeds ${P99_MS}ms" >&2
     exit 1

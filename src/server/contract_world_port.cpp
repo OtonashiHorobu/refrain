@@ -228,10 +228,9 @@ class contract_world_port final : public world_port {
             // take effect. Report that once so an operator who pinned a level
             // learns the provider ignored it.
             if (!zstd_level_skip_reported_) {
-                log_world.warn(
-                    "zstd level {} not applied: the provider applies "
-                    "no compression settings",
-                    level);
+                log_world.warn("the provider applies its own compression "
+                               "policy, so zstd level {} is not applied",
+                               level);
                 zstd_level_skip_reported_ = true;
             }
             return status_ok();
@@ -251,8 +250,8 @@ class contract_world_port final : public world_port {
         }
         if (world_provider().table().set_zstd_policy == nullptr) {
             if (!zstd_policy_skip_reported_) {
-                log_world.warn("zstd policy not applied: the provider applies "
-                               "no compression settings");
+                log_world.warn("the provider applies its own compression "
+                               "policy, so the zstd policy is not applied");
                 zstd_policy_skip_reported_ = true;
             }
             return status_ok();

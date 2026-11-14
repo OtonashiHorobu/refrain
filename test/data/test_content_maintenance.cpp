@@ -770,7 +770,8 @@ const suite content_maintenance_tests = [] {
         bool saw_budget_line{false};
         for (const auto &line : lines) {
             if (line.find("deferred") != std::string::npos &&
-                line.find("(gc budget)") != std::string::npos) {
+                line.find("because the gc budget ran out") !=
+                    std::string::npos) {
                 saw_budget_line = true;
             }
         }
@@ -949,7 +950,7 @@ const suite content_maintenance_tests = [] {
         expect(!refused);
         if (!refused) {
             expect(refused.error().code == refrain::error_code::not_found);
-            expect(refused.error().message.find("refusing to rebuild") !=
+            expect(refused.error().message.find("no gc roots") !=
                    std::string::npos);
         }
         if (table_before) {
@@ -1009,7 +1010,7 @@ const suite content_maintenance_tests = [] {
         if (!refused) {
             expect(refused.error().code == refrain::error_code::not_found);
             expect(refused.error().message.find(
-                       "referenced blob(s) are missing") != std::string::npos);
+                       "referenced blobs are missing") != std::string::npos);
         }
         if (table_before) {
             expect(io::read_file(content_blob_table_path(root))
@@ -1376,8 +1377,7 @@ const suite content_maintenance_tests = [] {
             expect(!io::exists(pending_queue_path(root)));
             bool saw_deleted{false};
             for (const auto &line : lines) {
-                if (line.find("deleted 2 pending file(s)") !=
-                    std::string::npos) {
+                if (line.find("deleted 2 pending files") != std::string::npos) {
                     saw_deleted = true;
                 }
             }

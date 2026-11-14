@@ -210,8 +210,8 @@ enqueue_pending_deletes(std::string_view store_root,
 /// queue file is a successful empty pass. Repeated drains are idempotent.
 ///
 /// `log`, when set, receives stable lines without the `gc: ` prefix and
-/// without a trailing newline: one `warning: failed to delete '...': ...` per
-/// failure, a retry-limit warning, then the `deleted`/`deferred`/`failed`
+/// without a trailing newline: one `failed to delete '...': ...` per
+/// failure, a retry-limit failure line, then the `deleted`/`deferred`/`failed`
 /// summary lines.
 ///
 /// Callers must serialise concurrent `enqueue`/`drain` calls for one store
@@ -378,9 +378,9 @@ struct gc_report {
 ///
 /// When `log` is non-empty, every stable report line is emitted without the
 /// `gc: ` prefix and without a trailing newline, in CLI order: the roots line
-/// first, then (dry run) plan/warning lines, or (apply) `blobs.idx`, compaction
-/// and deletion lines. This is what `content gc` forwards verbatim and what the
-/// startup bootstrap logs.
+/// first, then (dry run) plan and failure lines, or (apply) `blobs.idx`,
+/// compaction and deletion lines. This is what `content gc` forwards verbatim
+/// and what the startup bootstrap logs.
 ///
 /// Apply never unlinks inline. After publishing the rebuilt `blobs.idx` and all
 /// RFRX, the planned blobs/segments are merged into
@@ -399,8 +399,8 @@ struct gc_report {
 /// point because the new table is already published.
 ///
 /// Deletion failures are not returned as an error: the drain keeps the entry,
-/// increments `attempts` (up to `max_pending_delete_attempts`), emits a warning
-/// through `log`, and reports the counters through `gc_report::failed_*` /
+/// increments `attempts` (up to `max_pending_delete_attempts`), emits a failure
+/// line through `log`, and reports the counters through `gc_report::failed_*` /
 /// `failed_stuck`. A later drain (or the worker) retries; a stuck entry stays
 /// queued for manual repair. A corrupt/foreign pending queue fails the apply
 /// with `parse_error` before any table is published.

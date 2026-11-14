@@ -170,7 +170,7 @@ SERVER_LOCK="$EXTRACT_DIR/mods.lock"
     --mods "$ROOT/test/fixtures/instance" --auto-scan \
     --mods-lock "$SERVER_LOCK" --update-lock --check \
     >"$EXTRACT_DIR/auto-scan-1.txt" 2>&1
-grep -q '\[mods\]: written' "$EXTRACT_DIR/auto-scan-1.txt" \
+grep -q '\[mods\]: wrote lockfile' "$EXTRACT_DIR/auto-scan-1.txt" \
     || die "auto_scan: lock was not written"
 grep -q 'refrain.test.extra@1.0.0' "$EXTRACT_DIR/auto-scan-1.txt" \
     || die "auto_scan: fixture user mod missing from the lock"
@@ -437,13 +437,13 @@ STARTUP_SERVER_ARGS=(--gamepack "$ROOT/gamepack/gamepack.toml"
     --content-trusted-key "ci-test:$RF_PUB" --dump-gamepack)
 "$BIN_DIR/refrain-server" "${STARTUP_SERVER_ARGS[@]}" \
     >"$STARTUP_DIR/server1.txt" 2>&1
-grep -q 'startup-content: install: installed refrain.test.rfmod@1.0.0' \
+grep -q 'installed startup content refrain.test.rfmod 1.0.0' \
     "$STARTUP_DIR/server1.txt" \
     || die "startup content: package was not installed"
-grep -q 'startup-content: index: published .*test-gp.idx' \
+grep -q 'published the content index .*test-gp.idx' \
     "$STARTUP_DIR/server1.txt" \
     || die "startup content: index was not published"
-grep -q 'startup-content: lock: acquired' "$STARTUP_DIR/server1.txt" \
+grep -q 'acquired the content store lock' "$STARTUP_DIR/server1.txt" \
     || die "startup content: store lock was not acquired"
 [[ -f "$STARTUP_STORE/mods/refrain.test.rfmod/1.0.0.json" ]] \
     || die "startup content: receipt missing"
@@ -470,7 +470,7 @@ STARTUP_SEGMENT_SHA="$(cd "$STARTUP_STORE/content/segments" && sha256sum *.rfseg
 cp "$RFMOD_DIR/a.rfmod" "$STARTUP_INBOX/a.rfmod"
 "$BIN_DIR/refrain-server" "${STARTUP_SERVER_ARGS[@]}" \
     >"$STARTUP_DIR/server2.txt" 2>&1
-grep -q 'startup-content: install: refrain.test.rfmod@1.0.0 already installed' \
+grep -q 'skipped refrain.test.rfmod 1.0.0 because it is already installed' \
     "$STARTUP_DIR/server2.txt" \
     || die "startup content: second run did not skip the installed package"
 cmp "$STARTUP_STORE/mods/refrain.test.rfmod/1.0.0.json" \
@@ -483,7 +483,7 @@ cmp "$STARTUP_STORE/mods/refrain.test.rfmod/1.0.0.json" \
 # passes and the installed blobs stay in the store.
 "$BIN_DIR/refrain-server" "${STARTUP_SERVER_ARGS[@]}" --content-gc=apply \
     >"$STARTUP_DIR/server3.txt" 2>&1
-grep -q 'startup-content: gc: applied' "$STARTUP_DIR/server3.txt" \
+grep -q 'applied content garbage collection' "$STARTUP_DIR/server3.txt" \
     || die "startup content: applying GC did not run"
 [[ -f "$STARTUP_STORE/mods/refrain.test.rfmod/1.0.0.json" ]] \
     || die "startup content: GC removed the receipt root"
@@ -527,10 +527,10 @@ JSON
     --content-composition test-gp --datapack "$RUNTIME_PACK" --check \
     >"$RUNTIME_DIR/server.txt" 2>&1 \
     || die "runtime content: server failed to mount the content layers"
-grep -q '\[content\]: layers=2 files=5' \
+grep -q '\[content\]: loaded 2 content layers and 5 files' \
     "$RUNTIME_DIR/server.txt" \
     || die "runtime content: content composition + datapack did not merge"
-grep -q 'errors=0 warnings=0' "$RUNTIME_DIR/server.txt" \
+grep -q '0 errors and 0 warnings' "$RUNTIME_DIR/server.txt" \
     || die "runtime content: merged datapack set did not validate"
 # Malformed JSON in a --datapack directory is fail-closed: non-zero exit and a
 # diagnostic naming the offending file.
@@ -657,7 +657,7 @@ grep -q 'orphan segment' "$EXTRACT_DIR/content-gc.txt" \
     || die "content gc: segment statistics missing"
 "$BIN_DIR/refrain-tools" content gc --store "$CONTENT_STORE" --dry-run --compact \
     >"$EXTRACT_DIR/content-gc-compact-dry.txt"
-grep -q 'segment(s) to compact' "$EXTRACT_DIR/content-gc-compact-dry.txt" \
+grep -q 'segments to compact holding' "$EXTRACT_DIR/content-gc-compact-dry.txt" \
     || die "content gc: compaction plan missing"
 # Ingest refuses symbolic links instead of following them outside --root.
 mkdir -p "$EXTRACT_DIR/content-symlink"
@@ -682,7 +682,7 @@ if "$BIN_DIR/refrain-tools" content gc --store "$GC_STORE" --apply \
     >"$EXTRACT_DIR/content-gc-missing.txt" 2>&1; then
     die "content gc: missing referenced blob was accepted"
 fi
-grep -q 'referenced blob(s) are missing' "$EXTRACT_DIR/content-gc-missing.txt" \
+grep -q 'referenced blobs are missing' "$EXTRACT_DIR/content-gc-missing.txt" \
     || die "content gc: missing-blob error is missing"
 cmp "$EXTRACT_DIR/content-gc-table-before.idx" "$GC_STORE/content/blobs.idx" \
     || die "content gc: blobs.idx changed on a failed apply"
@@ -735,9 +735,9 @@ rm -f "$COMPACT_STORE/content/resolutions/keep-all.idx"
 "$BIN_DIR/refrain-tools" content gc --store "$COMPACT_STORE" --apply --compact \
     >"$EXTRACT_DIR/content-gc-compact.txt" \
     || die "content gc: --apply --compact failed"
-grep -q 'gc: compacted 1 segment(s)' "$EXTRACT_DIR/content-gc-compact.txt" \
+grep -q 'gc: compacted 1 segments into' "$EXTRACT_DIR/content-gc-compact.txt" \
     || die "content gc: segment was not compacted"
-grep -q 'gc: deleted 1 segment(s)' "$EXTRACT_DIR/content-gc-compact.txt" \
+grep -q 'gc: deleted 1 segments totaling' "$EXTRACT_DIR/content-gc-compact.txt" \
     || die "content gc: old segment was not deleted"
 [[ "$(find "$COMPACT_STORE/content/segments" -maxdepth 1 -type f -name '*.rfseg' | wc -l)" -eq 1 ]] \
     || die "content gc: unexpected segment count after compaction"
@@ -759,14 +759,14 @@ GC_RECEIPT_SEGMENTS="$(find "$GC_RECEIPT_STORE/content/segments" -maxdepth 1 \
 "$BIN_DIR/refrain-tools" content gc --store "$GC_RECEIPT_STORE" --apply \
     >"$EXTRACT_DIR/gc-receipt-apply.txt" \
     || die "content gc: --apply with only receipt roots failed"
-grep -q 'gc: roots: 0 index reference(s), 4 receipt file(s)' \
+grep -q 'gc: the gc roots are 0 index references and 4 receipt files' \
     "$EXTRACT_DIR/gc-receipt-apply.txt" \
     || die "content gc: receipt roots were not counted"
-grep -q 'gc: blobs.idx: 4 blob(s)' "$EXTRACT_DIR/gc-receipt-apply.txt" \
+grep -q 'gc: published the blobs.idx with 4 blobs' "$EXTRACT_DIR/gc-receipt-apply.txt" \
     || die "content gc: receipt-rooted records were dropped"
-grep -q 'gc: deleted 0 blob(s), 0 byte(s)' "$EXTRACT_DIR/gc-receipt-apply.txt" \
+grep -q 'gc: deleted 0 blobs totaling 0 bytes' "$EXTRACT_DIR/gc-receipt-apply.txt" \
     || die "content gc: receipt-rooted blobs were deleted"
-grep -q 'gc: deleted 0 segment(s), 0 byte(s)' "$EXTRACT_DIR/gc-receipt-apply.txt" \
+grep -q 'gc: deleted 0 segments totaling 0 bytes' "$EXTRACT_DIR/gc-receipt-apply.txt" \
     || die "content gc: receipt-rooted segment was deleted"
 [[ "$(find "$GC_RECEIPT_STORE/content/segments" -maxdepth 1 -type f \
     -name '*.rfseg' | wc -l)" -eq "$GC_RECEIPT_SEGMENTS" ]] \
@@ -810,12 +810,12 @@ rm -f "$GC_DROP_STORE/mods/refrain.test.rfmod/1.0.0.json"
 "$BIN_DIR/refrain-tools" content gc --store "$GC_DROP_STORE" --apply \
     >"$EXTRACT_DIR/gc-drop-apply.txt" \
     || die "content gc: --apply after receipt removal failed"
-grep -q 'gc: roots: 4 index reference(s), 0 receipt file(s)' \
+grep -q 'gc: the gc roots are 4 index references and 0 receipt files' \
     "$EXTRACT_DIR/gc-drop-apply.txt" \
     || die "content gc: index roots were not counted after receipt removal"
-grep -q 'gc: blobs.idx: 3 blob(s)' "$EXTRACT_DIR/gc-drop-apply.txt" \
+grep -q 'gc: published the blobs.idx with 3 blobs' "$EXTRACT_DIR/gc-drop-apply.txt" \
     || die "content gc: install-only records were not removed"
-grep -q 'gc: deleted 1 segment(s)' "$EXTRACT_DIR/gc-drop-apply.txt" \
+grep -q 'gc: deleted 1 segments totaling' "$EXTRACT_DIR/gc-drop-apply.txt" \
     || die "content gc: install-only segment was not removed"
 [[ "$(find "$GC_DROP_STORE/content/segments" -maxdepth 1 -type f \
     -name '*.rfseg' | wc -l)" -eq $((GC_DROP_SEGMENTS - 1)) ]] \
@@ -863,10 +863,10 @@ echo "  content: 4 file(s) -> 3 blob(s) (2 in segments), deterministic RFRX, whe
     --dump-gamepack | grep -Eq 'worldgen[[:space:]]*-> refrain.worldgen.flat@1.0.0' \
     || die "server did not resolve the flat-worldgen preset"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --dump-gamepack 2>&1 | grep -q '\[content\]: files=12' \
+    --dump-gamepack 2>&1 | grep -q '\[content\]: loaded 12 content files totaling' \
     || die "server did not load the embedded built-in image"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" --check \
-    2>&1 | grep -q '\[host\]: 11 mod(s) loaded' \
+    2>&1 | grep -q '\[host\]: loaded 11 mods' \
     || die "server did not load the gamepack mods through the mod host"
 # Console diagnostics are stderr; stdout carries only the command's data.
 # CI/scripts grep these streams directly (`dump > out.txt`), so a console log
@@ -988,12 +988,12 @@ for run in 1 2; do
         --world "$WORLD_ROOT/rwf" --script "$RUNTIME_SCRIPT" \
         --hash-every 5 --ticks 20 >"$WORLD_ROOT/runtime-$run.log" 2>&1 \
         || die "runtime smoke run $run failed"
-    grep -q '\[sim\]: tick=5 hash=' "$WORLD_ROOT/runtime-$run.log" \
+    grep -q '\[sim\]: tick 5 state hash is ' "$WORLD_ROOT/runtime-$run.log" \
         || die "runtime smoke run $run did not emit its replay hash"
 done
-sed -n 's/.*\[sim\]: tick=5 hash=//p' "$WORLD_ROOT/runtime-1.log" \
+sed -n 's/.*\[sim\]: tick 5 state hash is //p' "$WORLD_ROOT/runtime-1.log" \
     >"$WORLD_ROOT/runtime-hash-1.txt"
-sed -n 's/.*\[sim\]: tick=5 hash=//p' "$WORLD_ROOT/runtime-2.log" \
+sed -n 's/.*\[sim\]: tick 5 state hash is //p' "$WORLD_ROOT/runtime-2.log" \
     >"$WORLD_ROOT/runtime-hash-2.txt"
 cmp -s "$WORLD_ROOT/runtime-hash-1.txt" "$WORLD_ROOT/runtime-hash-2.txt" \
     || die "runtime replay hash is not deterministic across runs"
@@ -1010,12 +1010,12 @@ EOF
     --autosave-interval-ticks 2 --ticks 10 \
     >"$WORLD_ROOT/schedule.log" 2>&1 \
     || die "scheduler smoke run failed"
-grep -q '\[schedule\]: runtime.autosave phase=post_tick interval=2 .*runs=0' \
+grep -q '\[schedule\]: schedule runtime.autosave: phase post_tick, interval 2 ticks, enabled yes, runs 0' \
     "$WORLD_ROOT/schedule.log" \
     || die "scheduler smoke did not list the autosave task before it ran"
-grep -q '\[schedule\]: runtime.autosave .*runs=1' "$WORLD_ROOT/schedule.log" \
+grep -q '\[schedule\]: schedule runtime.autosave: phase post_tick, interval 2 ticks, enabled yes, runs 1,' "$WORLD_ROOT/schedule.log" \
     || die "scheduler smoke did not run autosave on its tick grid"
-grep -q '\[schedule\]: runtime.autosave .*failures=0' "$WORLD_ROOT/schedule.log" \
+grep -q '\[schedule\]: schedule runtime.autosave: .*failures 0' "$WORLD_ROOT/schedule.log" \
     || die "scheduler smoke recorded a spurious autosave failure"
 echo "  runtime: scripted edit + deterministic replay hash OK"
 echo "  scheduler: autosave grid + console stats OK"

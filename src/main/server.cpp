@@ -483,7 +483,7 @@ int main(int argc, char **argv) {
         }
     } shutdown_guard_instance{};
 
-    log_cli.info("{}", refrain::version::string());
+    log_cli.info("starting {}", refrain::version::string());
 
     // Crash reporting is opt-in. Without --crash-dir no crash
     // database is created (CI smoke runs and the working tree stay clean).
@@ -501,18 +501,18 @@ int main(int argc, char **argv) {
         auto crash_initialized{
             refrain::kernel::crash_reporter::initialize(crash)};
         if (!crash_initialized) {
-            log_cli.warn("crash reporter disabled: {}",
+            log_cli.warn("failed to start crash reporter: {}",
                          crash_initialized.error().message);
         } else {
             log_crash_reporter.info(
-                "{} db={}",
+                "started {} crash reporter with database {}",
                 refrain::kernel::crash_reporter::enabled() ? "crashpad"
                                                            : "fallback",
                 refrain::kernel::crash_reporter::database_path());
         }
     }
 
-    log_host.info("{}", gamepack);
+    log_host.info("loading gamepack from '{}'", gamepack);
 
     std::vector<std::string_view> services{};
     services.reserve(required_services.size());
@@ -548,8 +548,8 @@ int main(int argc, char **argv) {
         return report_error(image.error());
     }
 
-    log_content.info("files={} bytes={} digest={}", image->file_count(),
-                     image_bytes.size(),
+    log_content.info("loaded {} content files totaling {} bytes, digest {}",
+                     image->file_count(), image_bytes.size(),
                      refrain::data::to_hex(image->digest()));
 
     // Composition name shared by the startup publish and the runtime
@@ -605,12 +605,13 @@ int main(int argc, char **argv) {
                         })};
                     if (found != baseline->mods.end() &&
                         found->version != pin.version) {
-                        log_content.info("pin {} {}->{}", pin.id,
+                        log_content.info("pinned {} from {} to {}", pin.id,
                                          found->version, pin.version);
                     }
                 }
             } else {
-                log_content.info("pin: no lock");
+                log_content.info(
+                    "found no mods.lock, using only the gamepack pins");
             }
         }
         content.pinned_versions = refrain::mod::merge_pinned_versions(
@@ -630,8 +631,9 @@ int main(int argc, char **argv) {
             return report_fatal(content_report.error());
         }
         log_content.info(
-            "scan={} install={} skip={} fail={} receipts={} "
-            "entries={} index={} gc={}/{} deferred={}/{}",
+            "scanned {} entries, installed {}, skipped {}, failed {}, read {} "
+            "receipt files and {} index entries, index is {}, deleted {} blobs "
+            "and {} segments, deferred {} blobs and {} segments",
             content_report->scanned, content_report->installed,
             content_report->skipped, content_report->failed,
             content_report->receipt_files, content_report->published_entries,
@@ -673,11 +675,12 @@ int main(int argc, char **argv) {
     if (!plan) {
         return report_error(plan.error());
     }
-    log_host.info("{}@{} abi={} mods={} providers={}", plan->spec.id,
-                  plan->spec.version, plan->spec.abi, plan->load_order.size(),
-                  plan->providers.size());
+    log_host.info("resolved gamepack {} {} with ABI {}, {} mods and {} "
+                  "providers",
+                  plan->spec.id, plan->spec.version, plan->spec.abi,
+                  plan->load_order.size(), plan->providers.size());
     for (const auto &mod : plan->load_order) {
-        log_host.info("resolve {}@{}", mod.id, mod.version);
+        log_host.info("planned mod {} {}", mod.id, mod.version);
     }
 
     // Load the resolved gamepack's internal mods through the mod host
@@ -748,9 +751,10 @@ int main(int argc, char **argv) {
                 return report_error(imported.error());
             }
             for (const auto &key : imported->unknown_keys) {
-                log_config.warn("unknown server.properties key '{}'", key);
+                log_config.warn("ignoring unknown server.properties key '{}'",
+                                key);
             }
-            log_config.info("imported properties={} source={}",
+            log_config.info("imported {} properties from '{}'",
                             imported->applied, import_properties_path);
         }
         if (auto view{config_store.module("world")}) {
@@ -842,8 +846,8 @@ int main(int argc, char **argv) {
             !status) {
             return report_error(status.error());
         }
-        log_config.info("namespaces={} source={}", config_store.names().size(),
-                        config_dir);
+        log_config.info("loaded {} configuration namespaces from '{}'",
+                        config_store.names().size(), config_dir);
     }
 
     std::string resolved_world_path{world_path.empty() ? config_world_path
@@ -851,7 +855,7 @@ int main(int argc, char **argv) {
     if (resolved_world_path.empty()) {
         resolved_world_path = "world";
     }
-    log_config.info("world.path='{}'", resolved_world_path);
+    log_config.info("using world directory '{}'", resolved_world_path);
 
     refrain::mod::host mods{};
     mods.set_config(config_store);
@@ -899,18 +903,18 @@ int main(int argc, char **argv) {
         !registered) {
         return report_fatal(registered.error());
     }
-    log_host.info("sealed=refrain:host.core,"
-                  "refrain:host.platform,refrain:host.kernel,"
+    log_host.info("registered sealed providers refrain:host.core, "
+                  "refrain:host.platform, refrain:host.kernel and "
                   "refrain:host.metadata");
     auto mods_loaded{
         refrain::app::activate_server_mods(mods, *plan, image_bytes)};
     if (!mods_loaded) {
         return report_error(mods_loaded.error());
     }
-    log_host.info("{} mod(s) loaded", mods.mods().size());
+    log_host.info("loaded {} mods", mods.mods().size());
     for (const auto &mod : mods.mods()) {
-        log_host.info("mod {}@{} abi={} {}{}", mod.id, mod.version, mod.abi,
-                      mod.has_code ? "code" : "data only",
+        log_host.info("loaded mod {} {} with ABI {}, {}{}", mod.id, mod.version,
+                      mod.abi, mod.has_code ? "code" : "data only",
                       mod.provides_summary.empty()
                           ? std::string{}
                           : ", provides " + mod.provides_summary);
@@ -930,7 +934,7 @@ int main(int argc, char **argv) {
                                                      content_composition_name)};
         if (!opened) {
             if (opened.error().code == refrain::error_code::not_found) {
-                log_content.warn("no composition {} in {}",
+                log_content.warn("found no composition '{}' in '{}'",
                                  content_composition_name, content_store);
             } else {
                 return report_fatal(opened.error());
@@ -957,7 +961,7 @@ int main(int argc, char **argv) {
     }
 
     if (runtime_vfs.pack_count() == 0) {
-        log_content.info("none");
+        log_content.info("found no external content packages");
     } else {
         runtime_vfs.freeze();
         auto loaded{refrain::data::datapack_set::load(
@@ -973,7 +977,7 @@ int main(int argc, char **argv) {
             const auto shown_errors{
                 std::min(validation.errors.size(), max_reported_diagnostics)};
             for (std::size_t index{0}; index < shown_errors; ++index) {
-                log_content.error("error: {}", validation.errors[index]);
+                log_content.error("{}", validation.errors[index]);
             }
             return report_fatal(refrain::make_error(
                 refrain::error_code::parse_error,
@@ -983,14 +987,14 @@ int main(int argc, char **argv) {
         const auto shown_warnings{
             std::min(validation.warnings.size(), max_reported_diagnostics)};
         for (std::size_t index{0}; index < shown_warnings; ++index) {
-            log_content.warn("warning: {}", validation.warnings[index]);
+            log_content.warn("{}", validation.warnings[index]);
         }
         if (validation.warnings.size() > shown_warnings) {
-            log_content.warn("{} more warnings",
+            log_content.warn("{} more warnings were suppressed",
                              validation.warnings.size() - shown_warnings);
         }
-        log_content.info("layers={} files={} errors={} "
-                         "warnings={}",
+        log_content.info("loaded {} content layers and {} files with {} "
+                         "errors and {} warnings",
                          runtime_vfs.pack_count(), runtime_vfs.file_count(),
                          validation.errors.size(), validation.warnings.size());
     }
@@ -999,7 +1003,7 @@ int main(int argc, char **argv) {
     // last optional stage, so a gamepack with auto_scan disabled returns before
     // it (the lock is only meaningful for a scanned catalog).
     if (!effective_auto_scan) {
-        log_discovery.info("off");
+        log_discovery.info("mod auto-discovery is disabled");
     } else {
         // --- mods.lock wiring ----------------------------------------------
         // The composition above already merged the builtin image candidates
@@ -1023,8 +1027,8 @@ int main(int argc, char **argv) {
                 runtime_hash && *runtime_hash == selected.manifest_hash) {
                 continue;
             }
-            log_cli.warn("mod {}: {} copy shadows builtin", selected.id,
-                         refrain::mod::to_string(selected.origin));
+            log_cli.warn("mod {} from {} shadows the built-in copy",
+                         selected.id, refrain::mod::to_string(selected.origin));
         }
 
         const auto lock_path{
@@ -1034,7 +1038,7 @@ int main(int argc, char **argv) {
             if (!written) {
                 return report_fatal(written.error());
             }
-            log_mods.info("written {}", lock_path);
+            log_mods.info("wrote lockfile {}", lock_path);
         } else {
             auto stored{refrain::mod::read_mod_lock(lock_path)};
             if (!stored) {
@@ -1045,20 +1049,21 @@ int main(int argc, char **argv) {
             const bool drifted{!verified ||
                                stored->fingerprint() != lock.fingerprint()};
             if (!drifted) {
-                log_mods.info("verified {}", lock_path);
+                log_mods.info("verified lockfile {}", lock_path);
             } else if (update_lock) {
                 if (!verified) {
-                    log_mods.warn("{} drifted: {}", lock_path,
+                    log_mods.warn("failed to verify lockfile {}: {}", lock_path,
                                   verified.error().message);
                 } else {
-                    log_mods.warn("{} drift {}->{}", lock_path,
-                                  stored->fingerprint(), lock.fingerprint());
+                    log_mods.warn("lockfile {} drifted from {} to {}",
+                                  lock_path, stored->fingerprint(),
+                                  lock.fingerprint());
                 }
                 auto rewritten{refrain::mod::write_mod_lock(lock_path, lock)};
                 if (!rewritten) {
                     return report_fatal(rewritten.error());
                 }
-                log_mods.info("updated {}", lock_path);
+                log_mods.info("updated lockfile {}", lock_path);
             } else {
                 const auto detail{
                     verified
@@ -1090,8 +1095,10 @@ int main(int argc, char **argv) {
                 break;
             }
         }
-        log_mods.info("{} builtin={} first_party={} user={}", lock.mods.size(),
-                      builtin_count, first_party_count, user_count);
+        log_mods.info("resolved {} mods, {} builtin, {} first-party and {} "
+                      "user",
+                      lock.mods.size(), builtin_count, first_party_count,
+                      user_count);
         log_cli.info("{}", refrain::mod::format_mod_lock(lock));
     }
 
@@ -1114,7 +1121,8 @@ int main(int argc, char **argv) {
         if (!created) {
             return report_fatal(created.error());
         }
-        log_world.info("created '{}' seed={}", resolved_world_path, seed_value);
+        log_world.info("created world at '{}' with seed {}",
+                       resolved_world_path, seed_value);
     }
 
     const auto runtime_provider{

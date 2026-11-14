@@ -173,10 +173,11 @@ suite console_player_tests = [] {
         commands.execute("pos Carol", tick);
         refrain::log::shutdown();
         const auto text{read_text(log_path)};
-        expect(text.find("Bob x=10.5 y=64.0 z=0.5") != std::string::npos)
+        expect(text.find("Bob is at x=10.5 y=64.0 z=0.5") != std::string::npos)
             << text;
         // Without a name the command reports the first player by entity id.
-        expect(text.find("@console x=0.5 y=64.0 z=0.5") != std::string::npos)
+        expect(text.find("@console is at x=0.5 y=64.0 z=0.5") !=
+               std::string::npos)
             << text;
         expect(text.find("no player") != std::string::npos) << text;
         // Reporting never moves the record.

@@ -1315,13 +1315,13 @@ const refrain_services_storage_vtable recording_storage_vtable{
         expect(provider.zstd_level_calls == 0);
         expect(provider.zstd_policy_calls == 0);
         expect(provider.sim_ticks == 0);
-        expect(text.find("zstd level 12 not applied") != std::string::npos)
+        expect(text.find("zstd level 12 is not applied") != std::string::npos)
             << text;
-        expect(count_occurrences(text, "zstd level 12 not applied") == 1U)
+        expect(count_occurrences(text, "zstd level 12 is not applied") == 1U)
             << text;
-        expect(text.find("zstd policy not applied") != std::string::npos)
+        expect(text.find("zstd policy is not applied") != std::string::npos)
             << text;
-        expect(count_occurrences(text, "zstd policy not applied") == 1U)
+        expect(count_occurrences(text, "zstd policy is not applied") == 1U)
             << text;
         expect(text.find("add_player") != std::string::npos) << text;
     };

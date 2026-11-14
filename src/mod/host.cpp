@@ -497,8 +497,9 @@ auto host::load_one(const composition &plan, const package_source &package,
     if (manifest->is_external()) {
         const auto activate_external{!declares_provides || selected_provider};
         if (declares_provides && !selected_provider) {
-            log_mod.info("id={} provider=none provides={}", manifest->common.id,
-                         provides_summary(*manifest));
+            log_mod.info("mod {} provides {} but the gamepack does not select "
+                         "it as a provider, so it loads as data only",
+                         manifest->common.id, provides_summary(*manifest));
         }
         loaded_mod loaded{.id = manifest->common.id,
                           .version = manifest->common.version,
@@ -542,8 +543,9 @@ auto host::load_one(const composition &plan, const package_source &package,
                         provides_summary(*manifest)))};
     }
     if (declares_provides && !selected_provider) {
-        log_mod.info("id={} provider=none provides={}", manifest->common.id,
-                     provides_summary(*manifest));
+        log_mod.info("mod {} provides {} but the gamepack does not select it "
+                     "as a provider, so it loads as data only",
+                     manifest->common.id, provides_summary(*manifest));
     }
 
     loaded_mod loaded{.id = manifest->common.id,
