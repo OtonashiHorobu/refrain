@@ -44,9 +44,12 @@ auto inside_chunk(const proto_chunk &chunk, const block_pos &pos) -> bool {
 void place_end_city_piece(const structure_place_context &context,
                           const structure_piece_record &piece,
                           worldgen_random &random) {
-    // TODO: read the end city loot table from the structure document instead
-    // of naming it here; the reference structure hard-codes the id, so the
-    // structure document has no field for it yet.
+    // The reference end city piece names the built-in
+    // `BuiltInLootTables.END_CITY_TREASURE` constant; no 26.3 structure,
+    // template or processor document carries a loot-table field for it.
+    // Placement consumes the container's placement-time seed (the template
+    // block entity path) and the data-marker pass below consumes the seed the
+    // world keeps, in that order.
     if (context.templates == nullptr || context.registry == nullptr ||
         context.chunk == nullptr || context.region == nullptr) {
         return;

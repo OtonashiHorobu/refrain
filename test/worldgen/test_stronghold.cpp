@@ -392,4 +392,64 @@ suite<"worldgen/stronghold"> stronghold_tests = [] {
         expect(state_name(states, region.state_at(3, 41, 0)) ==
                "minecraft:stone_button");
     };
+
+    "the crossing container keeps the stronghold crossing table"_test = [] {
+        auto states = make_registry();
+        proto_chunk chunk{states, 0, 0, -64, 384};
+        chunk_region region{chunk, 0};
+        const auto stone = resolve_state(states, "minecraft:stone");
+        for (jint y = 38; y <= 46; ++y) {
+            for (jint z = 0; z <= 10; ++z) {
+                for (jint x = 0; x <= 10; ++x) {
+                    (void)region.set_block_state(x, y, z, stone);
+                }
+            }
+        }
+        structure::structure_piece piece{
+            .type = "minecraft:shrc",
+            .bounds = {.min_x = 0,
+                       .min_y = 39,
+                       .min_z = 0,
+                       .max_x = 10,
+                       .max_y = 45,
+                       .max_z = 10},
+            .orientation = 0, // south
+            .stronghold =
+                structure::stronghold_piece_data{
+                    .kind = structure::stronghold_piece_kind::room_crossing,
+                    .door = structure::stronghold_door::opening,
+                    .variant = 2,
+                },
+        };
+        const auto record = structure::to_piece_record(piece);
+        const structure::structure_place_context place_context{
+            .region = &region,
+            .chunk = &chunk,
+            .states = &states,
+            .state =
+                [&states](std::string_view key) {
+                    return resolve_state(states, key);
+                },
+            .registry = &states,
+            .seed = 1,
+            .sea_level = 63,
+        };
+        worldgen_random random{std::make_unique<legacy_random_source>(1)};
+        structure::place_structure_piece(place_context, record, random);
+        // The room crossing's third design writes its container at local
+        // (3, 4, 8); the id is the built-in crossing constant.
+        const auto *entity =
+            chunk.block_entity_at(block_pos{.x = 3, .y = 43, .z = 8});
+        expect(entity != nullptr);
+        if (entity == nullptr) {
+            return;
+        }
+        const auto table = entity->find("LootTable");
+        expect(table != entity->end());
+        if (table != entity->end()) {
+            expect(table->second.as_string().value_or("") ==
+                   "minecraft:chests/stronghold_crossing");
+        }
+        expect(entity->find("LootTableSeed") != entity->end());
+    };
 };

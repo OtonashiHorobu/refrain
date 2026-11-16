@@ -610,6 +610,41 @@ REFRAIN_FULL_STAGE_SEED=1 REFRAIN_FULL_STAGE_BIOME=minecraft:plains \
     ./build/Release/bin/refrain-tests "fill and structure placement reproduce the reference chunk"
 ```
 
+The container cases need a world whose other structure sets are empty. A
+stronghold piece draws its smooth-stone selector from the block state a
+position holds, and the earlier `underground_structures` step writes the
+chunks of this area, so a mineshaft or trial chambers piece changes the draw
+count before a container and therefore its seed. Generate the stronghold-only
+world with the same command plus `--only-structure-set strongholds`:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --structures \
+    --fixed-biome minecraft:plains --only-structure-set strongholds \
+    --settle 60 --force-load-box 1616 704 1855 943 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2stronghold-only
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRONGHOLD_REGION=/tmp/t2stronghold-only/world/dimensions/minecraft/overworld/region/r.3.1.mca \
+    ./build/Release/bin/refrain-tests \
+    "the stronghold containers keep the reference tables and seeds"
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_RUNTIME_STRONGHOLD_REGION=/tmp/t2stronghold-only/world/dimensions/minecraft/overworld/region/r.3.1.mca \
+REFRAIN_RUNTIME_STRONGHOLD_CHUNK_X=105 \
+REFRAIN_RUNTIME_STRONGHOLD_CHUNK_Z=51 \
+REFRAIN_RUNTIME_STRONGHOLD_SEED=1 \
+REFRAIN_RUNTIME_STRONGHOLD_BIOME=minecraft:plains \
+REFRAIN_RUNTIME_STRONGHOLD_STRUCTURE_SET=minecraft:strongholds \
+    ./build/Release/bin/refrain-tests \
+    "the runtime service reproduces reference stronghold containers"
+```
+
+Chunk `(105, 51)` holds a library container and chunk `(107, 51)` a corridor
+container; the start chunk `(108, 51)` holds none, so the container cases
+compare the first two. The piece-placement case can be pointed at another
+chunk with `REFRAIN_VANILLA_STRONGHOLD_LOOT_CHUNK_X` and
+`REFRAIN_VANILLA_STRONGHOLD_LOOT_CHUNK_Z`.
+
 `worldgen/chunk-generator` runs the production service against the same
 reference worlds. It reads the village case from the `REFRAIN_FULL_STAGE_*`
 variables above and the mansion and stronghold cases from
@@ -624,8 +659,8 @@ REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
 REFRAIN_RUNTIME_MANSION_REGION=/tmp/t2mansion/world/dimensions/minecraft/overworld/region/r.1.0.mca \
 REFRAIN_RUNTIME_MANSION_CHUNK_X=46 REFRAIN_RUNTIME_MANSION_CHUNK_Z=5 \
 REFRAIN_RUNTIME_MANSION_SEED=1 REFRAIN_RUNTIME_MANSION_BIOME=minecraft:dark_forest \
-REFRAIN_RUNTIME_STRONGHOLD_REGION=/tmp/t2stronghold/world/dimensions/minecraft/overworld/region/r.3.1.mca \
-REFRAIN_RUNTIME_STRONGHOLD_CHUNK_X=108 REFRAIN_RUNTIME_STRONGHOLD_CHUNK_Z=51 \
+REFRAIN_RUNTIME_STRONGHOLD_REGION=/tmp/t2stronghold-only/world/dimensions/minecraft/overworld/region/r.3.1.mca \
+REFRAIN_RUNTIME_STRONGHOLD_CHUNK_X=105 REFRAIN_RUNTIME_STRONGHOLD_CHUNK_Z=51 \
 REFRAIN_RUNTIME_STRONGHOLD_SEED=1 REFRAIN_RUNTIME_STRONGHOLD_BIOME=minecraft:plains \
 REFRAIN_RUNTIME_STRONGHOLD_STRUCTURE_SET=minecraft:strongholds \
     ./build/Release/bin/refrain-tests "the runtime service reproduces"
@@ -824,7 +859,57 @@ REFRAIN_JIGSAW_TRIAL_LOOT_FULL_STAGE_BIOME=minecraft:plains \
 ```
 
 Any other full-stage case enables the same comparison with a non-empty
-`<PREFIX>_BLOCK_ENTITIES` variable.
+`<PREFIX>_BLOCK_ENTITIES` variable. Two dedicated cases cover the end city and
+nether fortress containers of their structure reference worlds:
+
+```bash
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_END_CITY_LOOT_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_END_CITY_LOOT_FULL_STAGE_DIMENSION=the_end \
+REFRAIN_END_CITY_LOOT_FULL_STAGE_REGION=/tmp/t2end-city/world/dimensions/minecraft/the_end/region/r.-3.-1.mca \
+REFRAIN_END_CITY_LOOT_FULL_STAGE_CHUNK_X=-73 \
+REFRAIN_END_CITY_LOOT_FULL_STAGE_CHUNK_Z=-15 \
+REFRAIN_END_CITY_LOOT_FULL_STAGE_START_CHUNK_X=-73 \
+REFRAIN_END_CITY_LOOT_FULL_STAGE_START_CHUNK_Z=-15 \
+REFRAIN_END_CITY_LOOT_FULL_STAGE_SEED=1 \
+REFRAIN_END_CITY_LOOT_FULL_STAGE_BIOME=minecraft:end_highlands \
+    ./build/Release/bin/refrain-tests \
+    "an end city chest chunk matches the reference loot block entities"
+
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_VANILLA_STRUCTURES=/path/to/extracted/templates \
+REFRAIN_FORTRESS_LOOT_FULL_STAGE_STRUCTURES=1 \
+REFRAIN_FORTRESS_LOOT_FULL_STAGE_DIMENSION=the_nether \
+REFRAIN_FORTRESS_LOOT_FULL_STAGE_REGION=/tmp/t2nether-fortress/world/dimensions/minecraft/the_nether/region/r.0.-1.mca \
+REFRAIN_FORTRESS_LOOT_FULL_STAGE_CHUNK_X=17 \
+REFRAIN_FORTRESS_LOOT_FULL_STAGE_CHUNK_Z=-8 \
+REFRAIN_FORTRESS_LOOT_FULL_STAGE_START_CHUNK_X=21 \
+REFRAIN_FORTRESS_LOOT_FULL_STAGE_START_CHUNK_Z=-8 \
+REFRAIN_FORTRESS_LOOT_FULL_STAGE_SEED=1 \
+REFRAIN_FORTRESS_LOOT_FULL_STAGE_BIOME=minecraft:nether_wastes \
+    ./build/Release/bin/refrain-tests \
+    "a nether fortress chest chunk matches the reference loot block entities"
+```
+
+Chunk `(17, -8)` holds a fortress chest owned by the start at chunk
+`(21, -8)`; the end city start chunk holds three treasure containers.
+
+The piece-placement loot suite (`worldgen/structure-loot`) compares the table
+id and the stored seed of one container per family. Every case needs
+`REFRAIN_VANILLA_WORLDGEN` and its own region variable:
+`REFRAIN_VANILLA_STRUCTURE_REGION` (buried treasure, with
+`REFRAIN_VANILLA_STRUCTURE_REAL` and optional `_BURIED_CHUNK_X`/`_Z`),
+`REFRAIN_VANILLA_JUNGLE_REGION` (`_JUNGLE_BLOCKS_REAL`),
+`REFRAIN_VANILLA_PYRAMID_REGION` (`_PYRAMID_REAL`),
+`REFRAIN_VANILLA_WRECK_REGION` (`_WRECK_BLOCKS_REAL`, plus
+`_WRECK_CHUNK_X`/`_Z`, `_WRECK_SEED`, `_WRECK_BEACHED`, `_WRECK_TPY`),
+`REFRAIN_VANILLA_RUIN_REGION` (`_RUIN_BLOCKS_REAL`),
+`REFRAIN_VANILLA_IGLOO_BASEMENT_REGION` (or `_IGLOO_REGION`, with
+`_IGLOO_BASEMENT_REAL`), `REFRAIN_VANILLA_STRONGHOLD_REGION` and
+`REFRAIN_VANILLA_FORTRESS_REGION`. The suite also runs a negative case that
+checks a wrong or missing container id is reported as a mismatch, so it needs
+no reference world.
 
 The start cases read `_STRUCTURE`, `_BIOME` and `_TEMPLATE_DIRS` overrides when
 the structure document differs from the defaults. Every candidate value comes

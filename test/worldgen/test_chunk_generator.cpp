@@ -540,8 +540,11 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
             templates_root == nullptr) {
             return;
         }
+        // Chunk (105, 51) of the stronghold-only reference world holds a
+        // library container, so the comparison has a loot table id and seed to
+        // check. The start lives in chunk (108, 51), which holds none.
         const jint chunk_x =
-            integer_environment("REFRAIN_RUNTIME_STRONGHOLD_CHUNK_X", 108);
+            integer_environment("REFRAIN_RUNTIME_STRONGHOLD_CHUNK_X", 105);
         const jint chunk_z =
             integer_environment("REFRAIN_RUNTIME_STRONGHOLD_CHUNK_Z", 51);
         const jlong seed =

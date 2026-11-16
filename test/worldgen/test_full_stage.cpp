@@ -822,6 +822,21 @@ suite<"worldgen/full-stage"> full_stage_tests = [] {
                                 "minecraft/structure/trial_chambers", true);
         };
 
+    "an end city chest chunk matches the reference loot block entities"_test =
+        [] {
+            run_full_stage_case("END_CITY_LOOT_FULL_STAGE", std::nullopt,
+                                std::nullopt, std::nullopt,
+                                "minecraft:end_highlands",
+                                "minecraft/structure/end_city", true);
+        };
+
+    "a nether fortress chest chunk matches the reference loot block entities"_test =
+        [] {
+            run_full_stage_case("FORTRESS_LOOT_FULL_STAGE", std::nullopt,
+                                std::nullopt, std::nullopt,
+                                "minecraft:nether_wastes", "", true);
+        };
+
     "a bastion high rampart chunk matches the reference full-stage world"_test =
         [] {
             run_full_stage_case("BASTION_RAMPART_FULL_STAGE", std::nullopt,

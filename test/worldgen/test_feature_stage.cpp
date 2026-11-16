@@ -1625,6 +1625,104 @@ suite<"worldgen/monster-room"> monster_room_tests = [] {
                               block_pos{.x = 8, .y = 30, .z = 8}));
         expect(chunk.state_at(8, 30, 8) == *stone);
     };
+    "the dungeon chest stores the built-in table and its seed draw order"_test =
+        [] {
+            block_state_registry registry;
+            const auto stone = registry.intern(
+                "minecraft:stone", {.air = false,
+                                    .blocks_motion = true,
+                                    .blocks_motion_no_leaves = true});
+            const auto cave_air =
+                registry.intern("minecraft:cave_air", {.air = true});
+            const auto cobblestone = registry.intern(
+                "minecraft:cobblestone", {.air = false,
+                                          .blocks_motion = true,
+                                          .blocks_motion_no_leaves = true});
+            const auto mossy =
+                registry.intern("minecraft:mossy_cobblestone",
+                                {.air = false,
+                                 .blocks_motion = true,
+                                 .blocks_motion_no_leaves = true});
+            const auto spawner = registry.intern(
+                "minecraft:spawner", {.air = false, .blocks_motion = true});
+            expect(stone && cave_air && cobblestone && mossy && spawner);
+            if (!stone || !cave_air || !cobblestone || !mossy || !spawner) {
+                return;
+            }
+            proto_chunk chunk{registry, 0, 0, 0, 64};
+            for (jint y = 24; y <= 36; ++y) {
+                for (jint z = 2; z <= 14; ++z) {
+                    for (jint x = 2; x <= 14; ++x) {
+                        chunk.set_state(x, y, z, *stone);
+                    }
+                }
+            }
+            // Exactly one wall hole; it stays away from the chest position the
+            // expected stream selects, so that chest has one solid horizontal
+            // neighbour.
+            for (jint y = 30; y <= 31; ++y) {
+                chunk.set_state(8, y, 4, *cave_air);
+            }
+            chunk_region region{chunk, 0};
+            const auto resolve = [&](std::string_view key) -> block_state_id {
+                if (const auto found = registry.find(key); found.has_value()) {
+                    return *found;
+                }
+                const auto block = state_block_name(key);
+                const bool air = is_air_block_name(block);
+                const auto inserted =
+                    registry.intern(key, {.air = air, .blocks_motion = !air});
+                return inserted.has_value() ? *inserted : no_block_state;
+            };
+            feature_context context{.placement = placement_context{
+                                        .region = &region,
+                                        .chunk = &chunk,
+                                        .states = &registry,
+                                        .generation =
+                                            generation_context{
+                                                .min_y = 0,
+                                                .height = 64,
+                                                .sea_level = 8,
+                                            },
+                                        .resolve_state = resolve,
+                                    }};
+            worldgen_random random{std::make_unique<legacy_random_source>(17)};
+            monster_room_feature feature;
+            expect(feature.place(context, random,
+                                 block_pos{.x = 8, .y = 30, .z = 8}));
+            // The room size pair, one nextInt(4) per solid block of the floor
+            // ring and the chest search pair precede the container seed.
+            // Replay that order on a fresh stream: the expected position and
+            // seed only match when the draws are the reference ones.
+            legacy_random_source expected{17};
+            const jint xr = expected.next_int(2) + 2;
+            const jint zr = expected.next_int(2) + 2;
+            expect(xr == 3 && zr == 3);
+            const jint ring = (2 * xr + 3) * (2 * zr + 3);
+            for (jint i = 0; i < ring; ++i) {
+                (void)expected.next_int(4);
+            }
+            const jint chest_x = 8 + expected.next_int(xr * 2 + 1) - xr;
+            const jint chest_z = 8 + expected.next_int(zr * 2 + 1) - zr;
+            const jlong expected_seed = expected.next_long();
+            const auto *entity = chunk.block_entity_at(
+                block_pos{.x = chest_x, .y = 30, .z = chest_z});
+            expect(entity != nullptr);
+            if (entity == nullptr) {
+                return;
+            }
+            const auto table = entity->find("LootTable");
+            const auto seed = entity->find("LootTableSeed");
+            expect(table != entity->end());
+            expect(seed != entity->end());
+            if (table != entity->end()) {
+                expect(table->second.as_string().value_or("") ==
+                       "minecraft:chests/simple_dungeon");
+            }
+            if (seed != entity->end()) {
+                expect(seed->second.as_long().value_or(0) == expected_seed);
+            }
+        };
 };
 
 suite<"worldgen/lake"> lake_tests = [] {
@@ -2966,6 +3064,82 @@ suite<"worldgen/feature/bonus-chest"> bonus_chest_tests = [] {
         expect(chests == 1);
         expect(torches > 0);
     };
+    "the bonus chest stores the built-in table and its seed draw order"_test =
+        [] {
+            block_state_registry states;
+            (void)states.intern("minecraft:air", {.air = true});
+            const auto stone = states.intern("minecraft:stone",
+                                             {.air = false,
+                                              .blocks_motion = true,
+                                              .blocks_motion_no_leaves = true});
+            const auto chest = states.intern("minecraft:chest", {.air = false});
+            const auto torch = states.intern("minecraft:torch", {.air = false});
+            expect(stone && chest && torch);
+            if (!stone || !chest || !torch) {
+                return;
+            }
+            proto_chunk chunk{states, 0, 0, 0, 32};
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    for (jint y = 0; y < 5; ++y) {
+                        chunk.set_state(x, y, z, *stone);
+                    }
+                }
+            }
+            chunk.set_status(chunk_status::terrain);
+            chunk_region region{chunk, 0};
+            feature::placement_context placement{
+                .region = &region,
+                .chunk = &chunk,
+                .states = &states,
+                .generation = generation_context{.min_y = 0,
+                                                 .height = 32,
+                                                 .sea_level = 8},
+            };
+            feature::feature_context context{.placement = placement};
+            const feature::bonus_chest_feature feature{*chest, *torch};
+            worldgen_random random{std::make_unique<legacy_random_source>(7)};
+            expect(feature.place(context, random,
+                                 block_pos{.x = 0, .y = 0, .z = 0}));
+            // The reference shuffles both sixteen-entry coordinate lists and
+            // places the chest at the first pair; the container seed is the
+            // next draw. Replay that order on a fresh stream: the expected
+            // position and seed only match when the draws are the reference
+            // ones.
+            legacy_random_source expected{7};
+            std::array<jint, 16> xs{};
+            std::array<jint, 16> zs{};
+            for (jint i = 0; i < 16; ++i) {
+                xs[static_cast<std::size_t>(i)] = i;
+                zs[static_cast<std::size_t>(i)] = i;
+            }
+            for (auto *list : {&xs, &zs}) {
+                for (jint i = 16; i > 1; --i) {
+                    const jint swap = expected.next_int(i);
+                    std::swap((*list)[static_cast<std::size_t>(i - 1)],
+                              (*list)[static_cast<std::size_t>(swap)]);
+                }
+            }
+            const jlong expected_seed = expected.next_long();
+            const block_pos expected_chest{
+                .x = xs.front(), .y = 5, .z = zs.front()};
+            const auto *entity = chunk.block_entity_at(expected_chest);
+            expect(entity != nullptr);
+            if (entity == nullptr) {
+                return;
+            }
+            const auto table = entity->find("LootTable");
+            const auto seed = entity->find("LootTableSeed");
+            expect(table != entity->end());
+            expect(seed != entity->end());
+            if (table != entity->end()) {
+                expect(table->second.as_string().value_or("") ==
+                       "minecraft:chests/spawn_bonus_chest");
+            }
+            if (seed != entity->end()) {
+                expect(seed->second.as_long().value_or(0) == expected_seed);
+            }
+        };
 };
 
 suite<"worldgen/feature/end-spike"> end_spike_tests = [] {

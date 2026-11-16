@@ -116,6 +116,7 @@ inline auto canonical(std::string name) -> std::string {
     const bool glazed_terracotta = base.ends_with("_glazed_terracotta");
     const bool bed = base.ends_with("_bed");
     const bool cactus = base == "minecraft:cactus";
+    const bool nether_wart = base == "minecraft:nether_wart";
     std::vector<std::string> parts;
     std::string_view body{name.data() + open + 1, close - open - 1};
     while (true) {
@@ -141,7 +142,7 @@ inline auto canonical(std::string name) -> std::string {
             (glazed_terracotta && part == "facing=north") ||
             (bed && (part == "facing=north" || part == "occupied=false" ||
                      part == "part=foot")) ||
-            (cactus && part == "age=0");
+            (cactus && part == "age=0") || (nether_wart && part == "age=0");
         if (!default_property) {
             parts.emplace_back(part);
         }
