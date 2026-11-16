@@ -156,9 +156,6 @@ struct mod_manifest {
     /// Effective loader id that executes this package: the declared
     /// `[entry].loader`, or `builtin` for a package without an entry section.
     std::string loader{};
-    /// Always false: every effective loader is declared in `[entry].loader` or
-    /// is the implicit `builtin` loader of a package without an entry section.
-    bool loader_inferred{false};
 
     [[nodiscard]] auto is_external() const noexcept -> bool {
         return entry.has_value();
