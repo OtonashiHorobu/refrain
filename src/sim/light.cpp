@@ -11,9 +11,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <span>
 #include <string_view>
@@ -89,263 +91,150 @@ void nibble_set(std::vector<std::byte> &data, std::size_t index,
                                             ((value & 0x0FU) << shift));
 }
 
-[[nodiscard]] auto split_block_name(std::string_view key) noexcept
-    -> std::string_view {
-    const auto bracket{key.find('[')};
-    return bracket == std::string_view::npos ? key : key.substr(0, bracket);
-}
-
-/// True when the canonical key carries `property=value`.
-[[nodiscard]] auto has_property(std::string_view key, std::string_view property,
-                                std::string_view value) noexcept -> bool {
-    const auto bracket{key.find('[')};
-    if (bracket == std::string_view::npos) {
-        return false;
-    }
-    const auto properties{key.substr(bracket + 1)};
-    std::size_t start{0};
-    while (start <= properties.size()) {
-        const auto end{properties.find(',', start)};
-        const auto token{properties.substr(
-            start, end == std::string_view::npos ? properties.size() - start
-                                                 : end - start)};
-        const auto equal{token.find('=')};
-        if (equal != std::string_view::npos) {
-            auto name{token.substr(0, equal)};
-            while (!name.empty() && name.front() == ' ') {
-                name.remove_prefix(1);
-            }
-            auto text{token.substr(equal + 1)};
-            while (!text.empty() &&
-                   (text.back() == ']' || text.back() == ' ')) {
-                text.remove_suffix(1);
-            }
-            if (name == property && text == value) {
-                return true;
-            }
-        }
-        if (end == std::string_view::npos) {
-            break;
-        }
-        start = end + 1;
-    }
-    return false;
-}
-
-/// A block light source. An entry with `condition` only emits while the
-/// canonical key carries `<condition>=true`.
-struct emission_entry {
-    std::string_view name;
-    std::uint8_t level;
-    std::string_view condition;
-};
-
-// TODO: the reference derives light emission and dampening from block code and
-// the shipped content tables carry neither. This curated table stands in for
-// the table import until the block-behaviour tables expose both fields; a block
-// outside it is opaque and emits nothing, which can only make a scene darker
-// than the reference.
-constexpr std::array<emission_entry, 40> emission_table{{
-    {"minecraft:amethyst_cluster", 5, ""},
-    {"minecraft:beacon", 15, ""},
-    {"minecraft:brewing_stand", 1, ""},
-    {"minecraft:brown_mushroom", 1, ""},
-    {"minecraft:campfire", 15, "lit"},
-    {"minecraft:cave_vines", 14, ""},
-    {"minecraft:cave_vines_plant", 14, ""},
-    {"minecraft:conduit", 15, ""},
-    {"minecraft:copper_torch", 14, ""},
-    {"minecraft:copper_wall_torch", 14, ""},
-    {"minecraft:crying_obsidian", 10, ""},
-    {"minecraft:dragon_egg", 1, ""},
-    {"minecraft:end_gateway", 15, ""},
-    {"minecraft:end_rod", 14, ""},
-    {"minecraft:enchanting_table", 7, ""},
-    {"minecraft:ender_chest", 7, ""},
-    {"minecraft:fire", 15, ""},
-    {"minecraft:glow_lichen", 7, ""},
-    {"minecraft:glowstone", 15, ""},
-    {"minecraft:jack_o_lantern", 15, ""},
-    {"minecraft:lantern", 15, ""},
-    {"minecraft:large_amethyst_bud", 4, ""},
-    {"minecraft:lava", 15, ""},
-    {"minecraft:lava_cauldron", 15, ""},
-    {"minecraft:magma_block", 3, ""},
-    {"minecraft:medium_amethyst_bud", 2, ""},
-    {"minecraft:ochre_froglight", 15, ""},
-    {"minecraft:pearlescent_froglight", 15, ""},
-    {"minecraft:redstone_lamp", 15, "lit"},
-    {"minecraft:redstone_torch", 7, "lit"},
-    {"minecraft:redstone_wall_torch", 7, "lit"},
-    {"minecraft:respawn_anchor", 15, ""},
-    {"minecraft:sea_lantern", 15, ""},
-    {"minecraft:shroomlight", 15, ""},
-    {"minecraft:soul_fire", 10, ""},
-    {"minecraft:soul_lantern", 10, ""},
-    {"minecraft:soul_torch", 10, ""},
-    {"minecraft:soul_wall_torch", 10, ""},
-    {"minecraft:torch", 14, ""},
-    {"minecraft:wall_torch", 14, ""},
+/// Directions of the propagation loop below, in the face order of the
+/// content table: +x (east), -x (west), +y (up), -y (down), +z (south),
+/// -z (north).
+constexpr std::array<light_face, 6> step_face{{
+    light_face::east,
+    light_face::west,
+    light_face::up,
+    light_face::down,
+    light_face::south,
+    light_face::north,
 }};
 
-/// Blocks whose shape does not fill their cell: light passes through the empty
-/// part without a loss, so they take no part in the sky source edge.
-constexpr std::string_view no_dampening_names[] = {
-    "minecraft:air",
-    "minecraft:cave_air",
-    "minecraft:void_air",
-    "minecraft:glass",
-    "minecraft:glass_pane",
-    "minecraft:iron_bars",
-    "minecraft:chain",
-    "minecraft:ladder",
-    "minecraft:vine",
-    "minecraft:glow_lichen",
-    "minecraft:sculk_vein",
-    "minecraft:torch",
-    "minecraft:wall_torch",
-    "minecraft:soul_torch",
-    "minecraft:soul_wall_torch",
-    "minecraft:copper_torch",
-    "minecraft:copper_wall_torch",
-    "minecraft:redstone_torch",
-    "minecraft:redstone_wall_torch",
-    "minecraft:fire",
-    "minecraft:soul_fire",
-    "minecraft:end_rod",
-    "minecraft:lightning_rod",
-    "minecraft:lantern",
-    "minecraft:soul_lantern",
-    "minecraft:campfire",
-    "minecraft:soul_campfire",
-    "minecraft:bamboo",
-    "minecraft:pointed_dripstone",
-    "minecraft:amethyst_cluster",
-    "minecraft:short_grass",
-    "minecraft:tall_grass",
-    "minecraft:fern",
-    "minecraft:large_fern",
-    "minecraft:dead_bush",
-    "minecraft:sugar_cane",
-    "minecraft:seagrass",
-    "minecraft:tall_seagrass",
-    "minecraft:kelp",
-    "minecraft:kelp_plant",
-    "minecraft:nether_sprouts",
-    "minecraft:crimson_roots",
-    "minecraft:warped_roots",
-    "minecraft:redstone_wire",
-    "minecraft:tripwire",
-    "minecraft:tripwire_hook",
-    "minecraft:rail",
-    "minecraft:powered_rail",
-    "minecraft:detector_rail",
-    "minecraft:activator_rail",
-    "minecraft:wildflowers",
-    "minecraft:leaf_litter",
-    "minecraft:pale_hanging_moss",
-    "minecraft:hanging_roots",
-    "minecraft:moss_carpet",
-    "minecraft:pink_petals",
-    "minecraft:dandelion",
-    "minecraft:poppy",
-    "minecraft:blue_orchid",
-    "minecraft:allium",
-    "minecraft:azure_bluet",
-    "minecraft:red_tulip",
-    "minecraft:orange_tulip",
-    "minecraft:white_tulip",
-    "minecraft:pink_tulip",
-    "minecraft:oxeye_daisy",
-    "minecraft:cornflower",
-    "minecraft:lily_of_the_valley",
-    "minecraft:wither_rose",
-    "minecraft:torchflower",
-    "minecraft:brown_mushroom",
-    "minecraft:red_mushroom",
-    "minecraft:sweet_berry_bush",
-    "minecraft:cocoa",
-    "minecraft:cave_vines",
-    "minecraft:cave_vines_plant",
-    "minecraft:crimson_fungus",
-    "minecraft:warped_fungus",
-    "minecraft:sculk_sensor",
-    "minecraft:calibrated_sculk_sensor",
+[[nodiscard]] constexpr auto opposite_face(light_face face) noexcept
+    -> light_face {
+    return static_cast<light_face>(static_cast<std::uint8_t>(face) ^ 1U);
+}
+
+/// Bounds indices of the two axes perpendicular to one face: (u, v) into
+/// `{min_x, min_y, min_z, max_x, max_y, max_z}`.
+constexpr std::array<std::pair<std::size_t, std::size_t>, 6> face_axes{{
+    {0, 2}, // down:  u = x, v = z
+    {0, 2}, // up:    u = x, v = z
+    {0, 1}, // north: u = x, v = y
+    {0, 1}, // south: u = x, v = y
+    {1, 2}, // west:  u = y, v = z
+    {1, 2}, // east:  u = y, v = z
+}};
+
+/// The content table bounds one face at `max_light_boxes_per_face` boxes.
+constexpr std::size_t max_face_boxes = 16;
+
+/// One face box projected onto the plane perpendicular to its face axis and
+/// clipped to the block cell.
+struct face_rect {
+    double u0{0.0};
+    double u1{0.0};
+    double v0{0.0};
+    double v1{0.0};
 };
 
-/// Blocks whose cell is full but not solid for light: a path through them
-/// loses one level. Fluids and translucent full blocks.
-constexpr std::string_view partial_dampening_names[] = {
-    "minecraft:water",       "minecraft:lava",          "minecraft:ice",
-    "minecraft:frosted_ice", "minecraft:bubble_column", "minecraft:snow",
-    "minecraft:snow_block",  "minecraft:powder_snow",
-};
-
-/// Suffixes of blocks whose shape covers only part of their cell. The
-/// reference decides this from the collision shape; the name family is the
-/// approximation available here.
-constexpr std::string_view no_dampening_suffixes[] = {
-    "_sapling",        "_tulip",  "_orchid",  "_bluet",  "_daisy",  "_bush",
-    "_grass",          "_fern",   "_sprouts", "_roots",  "_flower", "_coral",
-    "_vine",           "_lichen", "_hanging", "_carpet", "_candle", "_button",
-    "_pressure_plate", "_sign",   "_banner",  "_slab",   "_stairs", "_trapdoor",
-};
-
-/// Suffixes the reference stores as a full block that is not solid for light.
-constexpr std::string_view partial_dampening_suffixes[] = {
-    "_leaves",
-    "_fence",
-    "_wall",
-};
-
-[[nodiscard]] auto light_property_for(std::string_view key)
-    -> block_light_property {
-    block_light_property property{};
-    const auto name{split_block_name(key)};
-    for (const auto &entry : emission_table) {
-        if (entry.name != name) {
+/// Append the projected, clipped rectangles of one face shape. Returns false
+/// when a hand-built shape exceeds the content bound; the caller treats that
+/// as occluding instead of silently misjudging it.
+[[nodiscard]] auto
+append_face_rects(const block_light_shape *shape, light_face face,
+                  std::array<face_rect, 2 * max_face_boxes> &rects,
+                  std::size_t &count) -> bool {
+    if (shape == nullptr) {
+        return true;
+    }
+    const auto &boxes{shape->faces[static_cast<std::size_t>(face)]};
+    const auto [u_axis, v_axis]{face_axes[static_cast<std::size_t>(face)]};
+    for (const auto &box : boxes) {
+        face_rect rect{};
+        rect.u0 = std::clamp(box.bounds[u_axis], 0.0, 1.0);
+        rect.u1 = std::clamp(box.bounds[u_axis + 3], 0.0, 1.0);
+        rect.v0 = std::clamp(box.bounds[v_axis], 0.0, 1.0);
+        rect.v1 = std::clamp(box.bounds[v_axis + 3], 0.0, 1.0);
+        if (rect.u1 <= rect.u0 || rect.v1 <= rect.v0) {
             continue;
         }
-        if (entry.condition.empty() ||
-            has_property(key, entry.condition, "true")) {
-            property.emission = entry.level;
+        if (count == rects.size()) {
+            return false;
         }
-        break;
+        rects[count++] = rect;
     }
-    if (name == "minecraft:light") {
-        // The light block's level property is its own emission.
-        for (auto level{15}; level >= 1; --level) {
-            if (has_property(key, "level", std::to_string(level))) {
-                property.emission = static_cast<std::uint8_t>(level);
-                break;
+    return true;
+}
+
+/// True when the union of the rectangles covers the whole unit square. The
+/// reference lighting engine asks the same question of the joined face shapes.
+[[nodiscard]] auto covers_unit_square(const face_rect *rects, std::size_t count)
+    -> bool {
+    if (count == 0) {
+        return false;
+    }
+    std::array<double, 2 + 2 * 2 * max_face_boxes> u_coords{};
+    std::size_t u_count{0};
+    u_coords[u_count++] = 0.0;
+    u_coords[u_count++] = 1.0;
+    const auto add_u = [&u_coords, &u_count](double value) {
+        if (value <= 0.0 || value >= 1.0) {
+            return;
+        }
+        for (std::size_t i{0}; i < u_count; ++i) {
+            if (u_coords[i] == value) {
+                return;
             }
         }
+        u_coords[u_count++] = value;
+    };
+    for (std::size_t i{0}; i < count; ++i) {
+        add_u(rects[i].u0);
+        add_u(rects[i].u1);
     }
-    for (const auto candidate : no_dampening_names) {
-        if (candidate == name) {
-            property.dampening = 0;
-            return property;
+    std::ranges::sort(
+        u_coords.begin(),
+        std::next(u_coords.begin(), static_cast<std::ptrdiff_t>(u_count)));
+    for (std::size_t slab{1}; slab < u_count; ++slab) {
+        const auto u0{u_coords[slab - 1]};
+        const auto u1{u_coords[slab]};
+        std::array<std::pair<double, double>, 2 * max_face_boxes> spans{};
+        std::size_t span_count{0};
+        for (std::size_t i{0}; i < count; ++i) {
+            if (rects[i].u0 <= u0 && rects[i].u1 >= u1) {
+                spans[span_count++] = {rects[i].v0, rects[i].v1};
+            }
+        }
+        if (span_count == 0) {
+            return false;
+        }
+        std::ranges::sort(
+            spans.begin(),
+            std::next(spans.begin(), static_cast<std::ptrdiff_t>(span_count)));
+        double covered{0.0};
+        for (std::size_t i{0}; i < span_count; ++i) {
+            if (spans[i].first > covered) {
+                return false;
+            }
+            covered = std::max(covered, spans[i].second);
+        }
+        if (covered < 1.0) {
+            return false;
         }
     }
-    for (const auto candidate : partial_dampening_names) {
-        if (candidate == name) {
-            property.dampening = 1;
-            return property;
-        }
+    return true;
+}
+
+/// True when the union of two face shapes covers the whole block cell: the
+/// reference light engine's shape-occlusion test for one step between two
+/// cells, or for the edge between two vertically adjacent cells.
+[[nodiscard]] auto face_occludes(const block_light_shape *from,
+                                 const block_light_shape *to, light_face face)
+    -> bool {
+    if (from == nullptr && to == nullptr) {
+        return false;
     }
-    for (const auto suffix : no_dampening_suffixes) {
-        if (name.ends_with(suffix)) {
-            property.dampening = 0;
-            return property;
-        }
+    std::array<face_rect, 2 * max_face_boxes> rects{};
+    std::size_t count{0};
+    if (!append_face_rects(from, face, rects, count) ||
+        !append_face_rects(to, opposite_face(face), rects, count)) {
+        return true;
     }
-    for (const auto suffix : partial_dampening_suffixes) {
-        if (name.ends_with(suffix)) {
-            property.dampening = 1;
-            return property;
-        }
-    }
-    return property;
+    return covers_unit_square(rects.data(), count);
 }
 
 /// One loaded column as the engine sees it.
@@ -454,15 +343,53 @@ struct light_engine::impl {
 
     void clear_cache() noexcept { cached_ = nullptr; }
 
+    /// Light property of one runtime state. Unknown states fall back to the
+    /// documented default of the table: opaque and emitting nothing.
     [[nodiscard]] auto property(block_state_id id) -> block_light_property {
         const auto found{properties_.find(id)};
         if (found != properties_.end()) {
             return found->second;
         }
-        const auto key{owner_->registry().key(id)};
-        const auto property{light_property_for(key)};
+        block_light_property property{};
+        const auto &table{owner_->block_light()};
+        if (!table.empty()) {
+            if (const auto *entry{table.find(owner_->registry().key(id))};
+                entry != nullptr) {
+                property = *entry;
+            }
+        }
         properties_.emplace(id, property);
         return property;
+    }
+
+    /// True when the vertical edge under an open-air cell and `below` stops
+    /// the sky source search: the cell below is not a sky source.
+    [[nodiscard]] auto edge_occluded_under_air(block_state_id below) -> bool {
+        const auto lower{property(below)};
+        if (lower.dampening != 0) {
+            return true;
+        }
+        return face_occludes(nullptr, lower.shape, light_face::down);
+    }
+
+    /// True when the vertical edge between `above` and `below` stops the sky
+    /// source search: the cell below is not a sky source.
+    [[nodiscard]] auto edge_occluded(block_state_id above, block_state_id below)
+        -> bool {
+        const auto lower{property(below)};
+        if (lower.dampening != 0) {
+            return true;
+        }
+        return face_occludes(property(above).shape, lower.shape,
+                             light_face::down);
+    }
+
+    /// True when the step from `from` to `to` in `step_face[direction]` is
+    /// blocked by the shapes of both states.
+    [[nodiscard]] auto shape_occludes(block_state_id from, block_state_id to,
+                                      std::size_t direction) -> bool {
+        return face_occludes(property(from).shape, property(to).shape,
+                             step_face[direction]);
     }
 
     [[nodiscard]] auto block_state_at(std::int32_t x, std::int32_t y,
@@ -646,32 +573,63 @@ struct light_engine::impl {
     }
 
     /// Scan one column of blocks from the top down and return the Y of its
-    /// lowest source cell, or `block_top + 1` when no cell of the column sees
-    /// the sky.
+    /// lowest sky source cell, or `block_top + 1` when no cell of the column
+    /// sees the sky.
+    ///
+    /// The reference lighting engine places the sky source edge at the highest
+    /// vertical edge whose two states occlude the edge together: the cell below
+    /// loses its direct sky view when the cell below is not fully transparent
+    /// (its light dampening is nonzero) or when the face shapes of the two
+    /// cells cover the whole cell. A uniform section is one repeated state, so
+    /// one edge test covers its whole interior.
     [[nodiscard]] auto compute_floor(const column_state &column,
                                      std::int32_t local_x, std::int32_t local_z)
         -> std::int32_t {
-        const auto &chunk{*column.record};
-        const auto &sections{chunk.sections};
-        for (std::size_t index{sections.size()}; index-- > 0;) {
-            const auto &section{sections[index]};
-            const auto base_y{static_cast<std::int32_t>(section.y) *
-                              section_edge};
-            if (section.uniform) {
-                if (property(section.value).dampening != 0) {
-                    return base_y + section_edge;
-                }
-                continue;
-            }
-            for (auto local_y{section_edge - 1}; local_y >= 0; --local_y) {
-                const auto id{section.blocks[static_cast<std::size_t>(
-                    (local_y << 8) | (local_z << 4) | local_x)]};
-                if (property(id).dampening != 0) {
-                    return base_y + local_y + 1;
-                }
-            }
+        const auto world_x{column.record->pos.x * section_edge + local_x};
+        const auto world_z{column.record->pos.z * section_edge + local_z};
+        const auto top{block_top(column)};
+        const auto bottom{block_bottom(column)};
+        // The cell above the column is open air; an occluding top cell starts
+        // no sky source inside the column.
+        if (edge_occluded_under_air(block_state_at(world_x, top, world_z))) {
+            return top + 1;
         }
-        return block_bottom(column);
+        auto y{top};
+        while (y > bottom) {
+            const auto lookup_y{section_coord(y) + section_index_offset};
+            if (lookup_y >= 0 && lookup_y < section_span) {
+                const auto index{
+                    column.section_lookup[static_cast<std::size_t>(lookup_y)]};
+                if (index >= 0) {
+                    const auto &section{
+                        column.record
+                            ->sections[static_cast<std::size_t>(index)]};
+                    if (section.uniform) {
+                        if (edge_occluded(section.value, section.value)) {
+                            return y;
+                        }
+                        const auto base{static_cast<std::int32_t>(section.y) *
+                                        section_edge};
+                        if (base <= bottom) {
+                            return bottom;
+                        }
+                        if (edge_occluded(
+                                section.value,
+                                block_state_at(world_x, base - 1, world_z))) {
+                            return base;
+                        }
+                        y = base - 1;
+                        continue;
+                    }
+                }
+            }
+            if (edge_occluded(block_state_at(world_x, y, world_z),
+                              block_state_at(world_x, y - 1, world_z))) {
+                return y;
+            }
+            --y;
+        }
+        return bottom;
     }
 
     void refresh_floors(column_state &column) {
@@ -822,6 +780,10 @@ struct light_engine::impl {
                     {.x = inside[2].x, .y = inside[2].y, .z = inside[2].z - 1},
                     {.x = inside[3].x, .y = inside[3].y, .z = inside[3].z + 1},
                 }};
+                // Direction from the outside cell into the column: +x, -x, +z,
+                // -z for the four borders.
+                constexpr std::array<std::size_t, 4> border_directions{
+                    {0, 1, 4, 5}};
                 for (std::size_t side{0}; side < inside.size(); ++side) {
                     if (find_column(section_coord(outside[side].x),
                                     section_coord(outside[side].z)) ==
@@ -830,6 +792,14 @@ struct light_engine::impl {
                     }
                     const auto outside_level{level_at(outside[side], which)};
                     if (outside_level == 0) {
+                        continue;
+                    }
+                    if (shape_occludes(
+                            block_state_at(outside[side].x, outside[side].y,
+                                           outside[side].z),
+                            block_state_at(inside[side].x, inside[side].y,
+                                           inside[side].z),
+                            border_directions[side])) {
                         continue;
                     }
                     const auto &node{inside[side]};
@@ -901,7 +871,10 @@ struct light_engine::impl {
         if (level > level_at(node, which)) {
             set_level(node, which, level);
         }
-        for (const auto &step : directions) {
+        const auto from_state{block_state_at(node.x, node.y, node.z)};
+        for (std::size_t direction{0}; direction < directions.size();
+             ++direction) {
+            const auto &step{directions[direction]};
             const node_pos neighbour{
                 .x = node.x + step.dx,
                 .y = static_cast<std::int16_t>(node.y + step.dy),
@@ -920,7 +893,11 @@ struct light_engine::impl {
                 continue;
             }
             const auto candidate{static_cast<std::uint8_t>(level - cost)};
-            if (candidate > level_at(neighbour, which)) {
+            if (candidate > level_at(neighbour, which) &&
+                !shape_occludes(
+                    from_state,
+                    block_state_at(neighbour.x, neighbour.y, neighbour.z),
+                    direction)) {
                 set_level(neighbour, which, candidate);
                 queues_[layer_index(which)].increase.push_back(
                     increase_entry{.node = neighbour, .level = candidate});
@@ -1119,9 +1096,7 @@ auto light_engine::operator=(light_engine &&other) noexcept
 
 light_engine::~light_engine() = default;
 
-auto block_light_property_for(std::string_view key) -> block_light_property {
-    return light_property_for(key);
-}
+void light_engine::reload_properties() { impl_->properties_.clear(); }
 
 void light_engine::attach(world &owner) {
     impl_->owner_ = &owner;

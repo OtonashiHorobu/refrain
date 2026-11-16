@@ -240,11 +240,17 @@ deterministic order (ascending column position, then ascending section) for
 every propagation and every drained change, and a column's light does not
 depend on the order the generator delivered its neighbours.
 
-Block light emission and sky dampening come from a curated block table inside
-the engine: the shipped content tables carry block states but no light
-properties. The table matches the reference for solid terrain, fluids, leaves
-and the common sources; blocks outside it are opaque and emit nothing, so a
-scene can only be darker than the reference, never brighter.
+Block light emission, sky dampening and shape-based occlusion come from the
+content data. The tracked vanilla container carries one record per block state:
+the block light level the state emits, the light levels a path loses when it
+enters the state, and the six face shapes the reference lighting engine uses
+for shape-based occlusion. A state the table does not carry - a modded state,
+or a container imported without the block light report - falls back to the
+documented default of opaque and emitting nothing; the table is never guessed
+from a block name. The report is generated from the block registry of the
+operator's own `server.jar` by `tools/light/extract.sh`, and the tables are
+imported from it, so a game update updates the light data with the rest of the
+content rather than an in-source table.
 
 ### Generated entities
 

@@ -318,6 +318,36 @@ auto run_server(const server_run_options &options,
         options.protocol_registry_path.empty()
             ? data_root + "/protocol_registry.json"
             : options.protocol_registry_path};
+    // The content tables are read before the first column loads: the light
+    // engine derives every stored light array from them, so a table installed
+    // after the spawn area was lit would leave those columns on the fallback.
+    std::optional<refrain::data::vanilla_tables> tables{};
+    auto table_bytes{refrain::core::io::read_file(tables_path)};
+    if (!table_bytes) {
+        log_net.warn("vanilla tables are unavailable: {}",
+                     table_bytes.error().message);
+    } else {
+        auto opened{refrain::data::vanilla_tables::open(*table_bytes)};
+        if (!opened) {
+            log_net.warn("vanilla tables are invalid: {}",
+                         opened.error().message);
+        } else {
+            tables = std::move(*opened);
+        }
+    }
+    if (tables) {
+        world.set_item_table(refrain::sim::item_table::from_tables(*tables));
+        if (auto *sim_level{world.sim_world()}; sim_level != nullptr) {
+            auto light_table{
+                refrain::sim::block_light_table::from_tables(*tables)};
+            if (light_table.empty()) {
+                log_world.warn(
+                    "vanilla tables carry no block light data: every block "
+                    "state falls back to opaque and emits nothing");
+            }
+            sim_level->set_block_light_table(std::move(light_table));
+        }
+    }
     auto boot_projection{world.level()};
     if (!boot_projection) {
         return report_error(boot_projection.error());
@@ -455,23 +485,6 @@ auto run_server(const server_run_options &options,
                        (1024ULL * 1024ULL),
                    world.loaded_chunks());
 
-    std::optional<refrain::data::vanilla_tables> tables{};
-    auto table_bytes{refrain::core::io::read_file(tables_path)};
-    if (!table_bytes) {
-        log_net.warn("vanilla tables are unavailable: {}",
-                     table_bytes.error().message);
-    } else {
-        auto opened{refrain::data::vanilla_tables::open(*table_bytes)};
-        if (!opened) {
-            log_net.warn("vanilla tables are invalid: {}",
-                         opened.error().message);
-        } else {
-            tables = std::move(*opened);
-        }
-    }
-    if (tables) {
-        world.set_item_table(refrain::sim::item_table::from_tables(*tables));
-    }
     std::optional<refrain::net::registry_catalog> registries{};
     auto loaded_registries{
         refrain::net::registry_catalog::load(protocol_registry_path)};

@@ -75,8 +75,10 @@ data/
     <namespace>/tags/block/**     block tags
     <namespace>/tags/worldgen/**  biome and structure tags
   templates/              structure templates, <namespace>/structure/**.nbt
-  reports/                the climate and default-state reports, when copied
-  tables.rvtb             tracked block, item and registry tables, when staged
+  reports/                the climate, default-state and block light
+                          reports, when copied
+  tables.rvtb             tracked block, item, registry and light tables, when
+                          staged
   protocol_registry.json  tracked protocol registry, when staged
 ```
 
@@ -88,7 +90,11 @@ that carries the datapack is used as-is and reported as pre-staged.
 
 The tracked tables and reports ship with the release archive under
 `content/vanilla/26.3`; a data directory that only holds the downloaded datapack
-receives the reports from there on first start.
+receives the reports from there on first start. The tracked tables carry the
+block light table, so the runtime warns at startup when the tables it loaded
+carry no light data: every block state then falls back to opaque and emitting
+nothing, and lighting stays dark until a table with the block light report is
+staged.
 
 The release archive layout is:
 

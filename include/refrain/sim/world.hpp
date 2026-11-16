@@ -597,6 +597,19 @@ class world {
         return items_;
     }
 
+    /// Install the per-state light properties read from the content tables.
+    /// Replacing a table after columns loaded relights every loaded column;
+    /// the runtime installs it before the first column loads, so a replacing
+    /// call is a rare recovery path.
+    void set_block_light_table(block_light_table table);
+    /// The light table of this world. An empty table means the world runs with
+    /// the documented fallback (every state opaque and emitting nothing);
+    /// callers that know the content version should install one.
+    [[nodiscard]] auto block_light() const noexcept
+        -> const block_light_table & {
+        return light_table_;
+    }
+
     /// Basic inventory mutation. Stacks are capped at the item's own stack
     /// limit; adding more fills existing partial stacks first and then appends
     /// full stacks (deterministic order). `item_count` sums every stack,
@@ -815,6 +828,10 @@ class world {
     std::map<chunk_pos, std::uint32_t, chunk_order> tickets_{};
     player_table players_{};
     item_table items_{};
+    /// Per-state light properties. Declared before the light engine so a
+    /// column's light arrays are only ever read while the table they were
+    /// computed from is alive.
+    block_light_table light_table_{};
     zstd_policy zstd_policy_{};
     std::map<entity_id, entity_state> entities_{};
     spawn_point spawn_{};

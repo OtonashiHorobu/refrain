@@ -22,26 +22,36 @@
 // `source level - sum of dampening`; propagation is bounded because every
 // step costs at least one level.
 //
-// Per-block light behaviour is approximated from the canonical block key: the
-// game derives emission and dampening from code, and the shipped content
-// tables carry neither. The approximation is exact for the blocks the tests
-// and the acceptance criteria name (air, water, leaves, stone, torch,
-// glowstone, lava and the common plants); every other block falls back to
-// opaque. A TODO at the table marks the missing content source.
+// Per-block light behaviour comes from the content data: the vanilla table
+// container carries, for every block state, the block light level the state
+// emits, the light levels a path loses when it enters the state, and the six
+// face shapes the reference lighting engine uses for shape-based occlusion.
+// A state the table does not carry - a modded state, or a table imported
+// without the block light report - falls back to the documented default:
+// opaque, emitting nothing. The table is never guessed from a block name.
 
 #pragma once
 
 #include <refrain/world/model.hpp>
 
+#include <array>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
+
+namespace refrain::data {
+class vanilla_tables;
+} // namespace refrain::data
 
 namespace refrain::sim {
 
@@ -68,19 +78,107 @@ struct light_section_change {
     auto operator<=>(const light_section_change &) const = default;
 };
 
-/// Emission and sky dampening of one block state.
-struct block_light_property {
-    /// Block light level the block emits; 0 when it emits nothing.
-    std::uint8_t emission{0};
-    /// Light levels a path loses when it enters the block: 0 (a full source
-    /// cell for sky light, no loss), 1..14 (partial) or 15 (opaque).
-    std::uint8_t dampening{15};
+/// One box of a light occlusion face shape, in block units. A box may extend
+/// beyond its cell: a piston head's arm does.
+struct block_light_box {
+    std::array<double, 6> bounds{};
 };
 
-/// Light property of a canonical block key (`minecraft:oak_leaves` or
-/// `minecraft:redstone_lamp[lit=true]`). Unknown keys are opaque.
-[[nodiscard]] auto block_light_property_for(std::string_view key)
-    -> block_light_property;
+/// Face order of a light occlusion shape: the order the content report uses.
+enum class light_face : std::uint8_t {
+    down = 0,
+    up = 1,
+    north = 2,
+    south = 3,
+    west = 4,
+    east = 5,
+};
+
+/// Face shapes of one block state, in `light_face` order.
+///
+/// The reference lighting engine slices the state's occlusion shape at the
+/// cell boundary for each direction; the content table carries those six face
+/// shapes. The lighting engine tests shape occlusion by asking whether the
+/// union of two face shapes covers the whole cell.
+struct block_light_shape {
+    std::array<std::vector<block_light_box>, 6> faces{};
+};
+
+/// Light behaviour of one block state.
+struct block_light_property {
+    /// Block light level the state emits; 0 when it emits nothing.
+    std::uint8_t emission{0};
+    /// Light levels a path loses when it enters the state: 0 (a full source
+    /// cell for sky light, no loss), 1..14 (partial) or 15 (opaque).
+    std::uint8_t dampening{15};
+    /// Face shapes of the state, or null when the state has no shape for light
+    /// occlusion. Only states that occlude and ask the lighting engine to use
+    /// their shape carry one.
+    const block_light_shape *shape{nullptr};
+};
+
+/// Light table of one content version: canonical block-state key -> property.
+///
+/// `from_tables` copies the per-state records and occlusion shapes out of an
+/// opened vanilla table container; tests fill one directly. A table that does
+/// not carry a key - a modded state, or a container imported without the
+/// block light report - answers `find` with null, and the light engine uses
+/// the documented fallback (opaque, emitting nothing) for that state.
+class block_light_table {
+  public:
+    block_light_table() = default;
+    block_light_table(const block_light_table &) = delete;
+    auto operator=(const block_light_table &) -> block_light_table & = delete;
+    block_light_table(block_light_table &&other) noexcept = default;
+    auto operator=(block_light_table &&other) noexcept
+        -> block_light_table & = default;
+    ~block_light_table() = default;
+
+    /// Copy the light records of an opened vanilla table. A container without
+    /// light sections produces an empty table.
+    [[nodiscard]] static auto from_tables(const data::vanilla_tables &tables)
+        -> block_light_table;
+
+    /// Property of a canonical key, or null when the table does not carry it.
+    [[nodiscard]] auto find(std::string_view key) const
+        -> const block_light_property *;
+
+    [[nodiscard]] auto empty() const noexcept -> bool {
+        return properties_.empty();
+    }
+    [[nodiscard]] auto size() const noexcept -> std::size_t {
+        return properties_.size();
+    }
+    [[nodiscard]] auto shape_count() const noexcept -> std::size_t {
+        return shapes_.size();
+    }
+
+    /// Append one occlusion shape and return it. The pointer stays valid for
+    /// the lifetime of the table.
+    auto append_shape(block_light_shape shape) -> const block_light_shape *;
+
+    /// Add or replace the property of one canonical key.
+    void insert(std::string key, block_light_property property);
+
+  private:
+    /// Lookup that accepts a `string_view` key without allocating.
+    struct key_hash {
+        using is_transparent = void;
+        [[nodiscard]] auto operator()(std::string_view value) const noexcept
+            -> std::size_t {
+            return std::hash<std::string_view>{}(value);
+        }
+        [[nodiscard]] auto operator()(const std::string &value) const noexcept
+            -> std::size_t {
+            return std::hash<std::string_view>{}(value);
+        }
+    };
+
+    std::deque<block_light_shape> shapes_{};
+    std::unordered_map<std::string, block_light_property, key_hash,
+                       std::equal_to<>>
+        properties_{};
+};
 
 /// Sky and block light engine for one `world`.
 ///
@@ -104,6 +202,11 @@ class light_engine {
     /// A column joined the loaded set: allocate its light layers, compute sky
     /// and block light and propagate into the loaded neighbours.
     void column_loaded(chunk &column);
+
+    /// The world's light table changed: drop the cached per-state properties.
+    /// Light arrays are not recomputed by this call; `world` relights its
+    /// columns after installing a table.
+    void reload_properties();
 
     /// A column is about to leave the loaded set. The column's light arrays are
     /// dropped with it; the loaded neighbours keep their values until the

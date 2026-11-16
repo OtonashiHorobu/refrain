@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -471,6 +472,182 @@ auto manifest_json(const vanilla_import_options &options,
     return json::value{std::move(root)}.dump_pretty();
 }
 
+/// Parses the tracked block light report: per-state emission, dampening and
+/// occlusion shape references, plus the six face box lists of each shape.
+///
+/// The report is generated from the user's own jar by the light probe and is
+/// game-derived data. Every count and id is validated here; the table builder
+/// then checks that the records cover every state of the block list report.
+auto parse_block_light(std::string_view json, std::int32_t data_version,
+                       std::vector<light_shape_spec> &shapes,
+                       std::vector<block_light_spec> &lights) -> result<void> {
+    simdjson::dom::parser parser;
+    simdjson::dom::element document;
+    if (const auto error = parser.parse(json).get(document);
+        error != simdjson::SUCCESS) {
+        return std::unexpected{parse_fail("block_light/light.json",
+                                          simdjson::error_message(error))};
+    }
+    simdjson::dom::object root;
+    if (document.get_object().get(root) != simdjson::SUCCESS) {
+        return std::unexpected{
+            parse_fail("block_light/light.json", "root is not an object")};
+    }
+    simdjson::dom::element field;
+    std::string_view format;
+    if (!member(root, "format", field) ||
+        field.get_string().get(format) != simdjson::SUCCESS ||
+        format != "refrain.block-light/1") {
+        return std::unexpected{
+            parse_fail("block_light/light.json", "unexpected report format")};
+    }
+    std::int64_t version = 0;
+    if (!member(root, "data_version", field) ||
+        field.get_int64().get(version) != simdjson::SUCCESS ||
+        static_cast<std::int32_t>(version) != data_version) {
+        return std::unexpected{
+            parse_fail("block_light/light.json", "data version mismatch")};
+    }
+    std::int64_t state_count = 0;
+    std::int64_t shape_count = 0;
+    if (!member(root, "state_count", field) ||
+        field.get_int64().get(state_count) != simdjson::SUCCESS ||
+        state_count < 0 || state_count > 0xFFFFFFFFLL) {
+        return std::unexpected{
+            parse_fail("block_light/light.json", "state count invalid")};
+    }
+    if (!member(root, "shape_count", field) ||
+        field.get_int64().get(shape_count) != simdjson::SUCCESS ||
+        shape_count < 0 || shape_count > 0xFFFFLL) {
+        return std::unexpected{
+            parse_fail("block_light/light.json", "shape count invalid")};
+    }
+
+    simdjson::dom::array shape_array;
+    if (!member(root, "shapes", field) ||
+        field.get_array().get(shape_array) != simdjson::SUCCESS) {
+        return std::unexpected{
+            parse_fail("block_light/light.json", "shapes is not an array")};
+    }
+    if (static_cast<std::int64_t>(shape_array.size()) != shape_count) {
+        return std::unexpected{
+            parse_fail("block_light/light.json", "shape count does not match")};
+    }
+    shapes.clear();
+    shapes.reserve(static_cast<std::size_t>(shape_count));
+    for (const auto shape_element : shape_array) {
+        simdjson::dom::array face_array;
+        if (shape_element.get_array().get(face_array) != simdjson::SUCCESS ||
+            face_array.size() != light_shape_faces) {
+            return std::unexpected{parse_fail(
+                "block_light/light.json", "shape does not carry six faces")};
+        }
+        light_shape_spec shape;
+        std::size_t face_index = 0;
+        for (const auto face_element : face_array) {
+            simdjson::dom::array box_array;
+            if (face_element.get_array().get(box_array) != simdjson::SUCCESS) {
+                return std::unexpected{parse_fail("block_light/light.json",
+                                                  "face is not a box array")};
+            }
+            if (box_array.size() > max_light_boxes_per_face) {
+                return std::unexpected{parse_fail(
+                    "block_light/light.json", "face carries too many boxes")};
+            }
+            for (const auto box_element : box_array) {
+                simdjson::dom::array coordinate_array;
+                if (box_element.get_array().get(coordinate_array) !=
+                        simdjson::SUCCESS ||
+                    coordinate_array.size() != 6) {
+                    return std::unexpected{
+                        parse_fail("block_light/light.json",
+                                   "box is not six coordinates")};
+                }
+                std::array<double, 6> bounds{};
+                std::size_t coordinate = 0;
+                for (const auto value : coordinate_array) {
+                    const auto parsed = as_double(value);
+                    if (!parsed.has_value() || !std::isfinite(*parsed)) {
+                        return std::unexpected{parse_fail(
+                            "block_light/light.json",
+                            "box coordinate is not a finite number")};
+                    }
+                    bounds[coordinate++] = *parsed;
+                }
+                if (bounds[0] > bounds[3] || bounds[1] > bounds[4] ||
+                    bounds[2] > bounds[5]) {
+                    return std::unexpected{parse_fail("block_light/light.json",
+                                                      "box has min above max")};
+                }
+                shape.faces[face_index].push_back(bounds);
+            }
+            ++face_index;
+        }
+        shapes.push_back(std::move(shape));
+    }
+
+    simdjson::dom::array state_array;
+    if (!member(root, "states", field) ||
+        field.get_array().get(state_array) != simdjson::SUCCESS) {
+        return std::unexpected{
+            parse_fail("block_light/light.json", "states is not an array")};
+    }
+    if (static_cast<std::int64_t>(state_array.size()) != state_count) {
+        return std::unexpected{
+            parse_fail("block_light/light.json", "state count does not match")};
+    }
+    lights.clear();
+    lights.reserve(static_cast<std::size_t>(state_count));
+    std::int64_t previous_id = -1;
+    for (const auto state_element : state_array) {
+        simdjson::dom::array record;
+        if (state_element.get_array().get(record) != simdjson::SUCCESS ||
+            record.size() != 5) {
+            return std::unexpected{parse_fail(
+                "block_light/light.json", "state record is not five values")};
+        }
+        std::array<std::int64_t, 5> values{};
+        std::size_t value_index = 0;
+        for (const auto value : record) {
+            if (value.get_int64().get(values[value_index]) !=
+                simdjson::SUCCESS) {
+                return std::unexpected{
+                    parse_fail("block_light/light.json",
+                               "state record value is not an integer")};
+            }
+            ++value_index;
+        }
+        const auto id = values[0];
+        if (id <= previous_id || id > 0xFFFF) {
+            return std::unexpected{
+                parse_fail("block_light/light.json",
+                           "state ids are not dense and ascending")};
+        }
+        previous_id = id;
+        if (values[1] < 0 || values[1] > max_light_level || values[2] < 0 ||
+            values[2] > max_light_level) {
+            return std::unexpected{parse_fail("block_light/light.json",
+                                              "light level out of range")};
+        }
+        if (values[3] < 0 || (values[3] & ~3LL) != 0 || values[4] < -1 ||
+            values[4] >= shape_count) {
+            return std::unexpected{parse_fail("block_light/light.json",
+                                              "state record flags or shape "
+                                              "out of range")};
+        }
+        block_light_spec light;
+        light.vanilla_id = static_cast<std::uint16_t>(id);
+        light.emission = static_cast<std::uint8_t>(values[1]);
+        light.dampening = static_cast<std::uint8_t>(values[2]);
+        light.can_occlude = (values[3] & 1) != 0;
+        light.use_shape_for_light_occlusion = (values[3] & 2) != 0;
+        light.shape = values[4] < 0 ? no_light_shape
+                                    : static_cast<std::uint32_t>(values[4]);
+        lights.push_back(light);
+    }
+    return status_ok();
+}
+
 } // namespace
 
 auto build_vanilla_from_reports(const vanilla_reports &reports,
@@ -492,6 +669,14 @@ auto build_vanilla_from_reports(const vanilla_reports &reports,
             parse_registries(reports.registries_json, spec.registries);
         !parsed) {
         return std::unexpected{parsed.error()};
+    }
+    if (!reports.block_light_json.empty()) {
+        if (auto parsed =
+                parse_block_light(reports.block_light_json, data_version,
+                                  spec.light_shapes, spec.block_lights);
+            !parsed) {
+            return std::unexpected{parsed.error()};
+        }
     }
     spec.items.reserve(reports.item_components.size());
     for (const auto &[name, json] : reports.item_components) {
@@ -534,6 +719,17 @@ auto import_vanilla_reports(const vanilla_import_options &options)
     std::vector<std::pair<std::string, std::string>> inputs;
     inputs.emplace_back("blocks.json", hash_text(reports.blocks_json));
     inputs.emplace_back("registries.json", hash_text(reports.registries_json));
+
+    const auto light_path = options.reports + "/block_light/light.json";
+    if (io::is_regular_file(light_path)) {
+        auto light = io::read_text(light_path);
+        if (!light) {
+            return std::unexpected{light.error()};
+        }
+        reports.block_light_json = std::move(*light);
+        inputs.emplace_back("block_light/light.json",
+                            hash_text(reports.block_light_json));
+    }
 
     const auto biome_root = options.reports + "/biome_parameters";
     if (!io::is_directory(biome_root)) {
@@ -620,6 +816,7 @@ auto import_vanilla_reports(const vanilla_import_options &options)
     result.presets = tables->preset_count();
     result.registries = tables->registry_count();
     result.items = tables->item_count();
+    result.light_shapes = tables->light_shape_count();
     result.tables_path = options.out + "/tables.rvtb";
     result.manifest_path = options.out + "/MANIFEST.json";
     result.tables_bytes = bytes->size();

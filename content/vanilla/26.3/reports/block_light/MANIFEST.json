@@ -1,0 +1,19 @@
+{
+  "data_version": 5023,
+  "extractor": "tools/light/extract.sh",
+  "files": {
+    "light.json": {
+      "block_count": 1286,
+      "bytes": 610478,
+      "format": "refrain.block-light/1",
+      "sha256": "efbd29d4bacacc9877e4f249e8d18ef8d692dfff5947b84938ce4a97a79488b2",
+      "shape_count": 52,
+      "state_count": 35723
+    }
+  },
+  "game_version": "26.3",
+  "kind": "block_light",
+  "notice": "../../../NOTICE.md",
+  "server_jar_sha256": "d052f14d7a173734fba553711e5b570162e2f2a313267ee31a21b975a679be64",
+  "source": "official server.jar block registry"
+}

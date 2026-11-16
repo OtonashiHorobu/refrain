@@ -12,7 +12,25 @@
 // light arrays, lets the engine recompute the light of the same columns and
 // reports the number of differing nibbles. It skips itself when the variable is
 // unset, so CI never needs the game.
+//
+// The comparison is exact: a generated column stores the light of the blocks
+// it was saved with, so a full recompute must reproduce both layers cell for
+// cell. A reference world made with commands can keep stale light of removed
+// sources; regenerate it from a plain generation run for this test:
+//
+//   python3 tools/worldgen/oracle/generate.py --plain --seed 12345 --output
+//       /tmp/light-oracle
+//   REFRAIN_VANILLA_LIGHT_WORLD=/tmp/light-oracle/world ./build/Release/bin/
+//       refrain-tests "world/light-oracle"
+//
+// `REFRAIN_VANILLA_LIGHT_CHUNK` pins the compared column as `x,z`; without it
+// the test picks the fully generated column with the most stored light. A
+// column whose saved light predates a later block write (a generated chunk
+// can carry such stale light) does not compare equal; pin a settled column
+// for the gate run.
 
+#include <refrain/core/io.hpp>
+#include <refrain/data/vanilla.hpp>
 #include <refrain/sim/world.hpp>
 #include <refrain/world/anvil.hpp>
 #include <refrain/world/store.hpp>
@@ -40,6 +58,7 @@ using boost::ut::expect;
 using boost::ut::suite;
 using namespace boost::ut::literals;
 
+namespace data = refrain::data;
 namespace sim = refrain::sim;
 namespace world = refrain::world;
 
@@ -96,14 +115,51 @@ using light_map =
     return light;
 }
 
+/// Light table of the tracked content snapshot. The oracle recomputes the
+/// reference light from the same content a release ships, so a wrong table is
+/// reported as a light mismatch rather than hiding in a fixture.
+[[nodiscard]] auto tracked_light_table()
+    -> std::optional<sim::block_light_table> {
+    const std::string path{std::string{REFRAIN_SOURCE_DIR} +
+                           "/content/vanilla/26.3/tables.rvtb"};
+    auto bytes = refrain::core::io::read_file(path);
+    if (!bytes) {
+        std::fprintf(stderr, "light-oracle: %s\n",
+                     bytes.error().message.c_str());
+        return std::nullopt;
+    }
+    auto tables = data::vanilla_tables::open(*bytes);
+    if (!tables) {
+        std::fprintf(stderr, "light-oracle: %s\n",
+                     tables.error().message.c_str());
+        return std::nullopt;
+    }
+    return sim::block_light_table::from_tables(*tables);
+}
+
 struct mismatch_counts {
-    /// Nibbles where the engine is brighter than the reference: a light source
-    /// or a transmission rule the reference does not have.
+    /// Nibbles where the engine is brighter than the reference.
     std::uint64_t brighter{0};
-    /// Nibbles where the reference is brighter. A saved reference column can
-    /// keep the light of a removed source, so a full recompute may be darker.
+    /// Nibbles where the engine is darker than the reference.
     std::uint64_t darker{0};
     std::uint64_t compared{0};
+    /// First mismatching cells and levels, for the failure message.
+    struct cell {
+        std::int32_t x{0};
+        std::int32_t y{0};
+        std::int32_t z{0};
+        std::uint8_t actual{0};
+        std::uint8_t expected{0};
+    };
+    std::array<cell, 4> first{};
+    std::size_t first_count{0};
+
+    void note(std::int32_t x, std::int32_t y, std::int32_t z,
+              std::uint8_t actual, std::uint8_t expected) {
+        if (first_count < first.size()) {
+            first[first_count++] = cell{x, y, z, actual, expected};
+        }
+    }
 };
 
 } // namespace
@@ -135,35 +191,47 @@ suite<"world/light-oracle"> light_oracle_tests = [] {
             if (!positions) {
                 return;
             }
-            // The reference chunk with a complete 3×3 neighbourhood and the
-            // most stored light layers: light propagation needs one column of
-            // context in every direction, and partially generated columns
-            // carry no light.
+            // An explicitly pinned column wins over the heuristic below. It
+            // is how a fixed reference chunk is compared reproducibly.
+            if (const char *pinned = std::getenv("REFRAIN_VANILLA_LIGHT_CHUNK");
+                pinned != nullptr) {
+                std::int32_t x = 0;
+                std::int32_t z = 0;
+                if (std::sscanf(pinned, "%d,%d", &x, &z) == 2) {
+                    centre = world::chunk_pos{x, z};
+                }
+            }
+            // Without a pinned column, compare the reference chunk with a
+            // complete 3x3 neighbourhood and the most stored light layers:
+            // light propagation needs one column of context in every
+            // direction, and partially generated columns carry no light.
             std::size_t best_values{0};
-            for (const auto &candidate : *positions) {
-                bool complete{true};
-                for (auto dz{-1}; dz <= 1 && complete; ++dz) {
-                    for (auto dx{-1}; dx <= 1 && complete; ++dx) {
-                        auto neighbour{store->read_chunk(world::chunk_pos{
-                            candidate.x + dx, candidate.z + dz})};
-                        complete = neighbour.has_value();
+            if (!centre.has_value()) {
+                for (const auto &candidate : *positions) {
+                    bool complete{true};
+                    for (auto dz{-1}; dz <= 1 && complete; ++dz) {
+                        for (auto dx{-1}; dx <= 1 && complete; ++dx) {
+                            auto neighbour{store->read_chunk(world::chunk_pos{
+                                candidate.x + dx, candidate.z + dz})};
+                            complete = neighbour.has_value();
+                        }
                     }
-                }
-                if (!complete) {
-                    continue;
-                }
-                auto light{reference_light(*store, candidate)};
-                if (!light) {
-                    continue;
-                }
-                std::size_t values{0};
-                for (const auto &[section_y, arrays] : *light) {
-                    static_cast<void>(section_y);
-                    values += arrays.first.size() + arrays.second.size();
-                }
-                if (values > best_values) {
-                    best_values = values;
-                    centre = candidate;
+                    if (!complete) {
+                        continue;
+                    }
+                    auto light{reference_light(*store, candidate)};
+                    if (!light) {
+                        continue;
+                    }
+                    std::size_t values{0};
+                    for (const auto &[section_y, arrays] : *light) {
+                        static_cast<void>(section_y);
+                        values += arrays.first.size() + arrays.second.size();
+                    }
+                    if (values > best_values) {
+                        best_values = values;
+                        centre = candidate;
+                    }
                 }
             }
             expect(centre.has_value())
@@ -186,6 +254,13 @@ suite<"world/light-oracle"> light_oracle_tests = [] {
         if (!runtime) {
             return;
         }
+        auto light_table{tracked_light_table()};
+        expect(light_table.has_value());
+        expect(light_table.has_value() && !light_table->empty());
+        if (!light_table.has_value() || light_table->empty()) {
+            return;
+        }
+        runtime->set_block_light_table(std::move(*light_table));
         for (auto dz{-1}; dz <= 1; ++dz) {
             for (auto dx{-1}; dx <= 1; ++dx) {
                 auto loaded{runtime->ensure_chunk(
@@ -254,14 +329,41 @@ suite<"world/light-oracle"> light_oracle_tests = [] {
                         expected_level =
                             have_sky && section_y > top_sky_y ? 15 : 0;
                     }
+                    if (actual_level == expected_level) {
+                        continue;
+                    }
                     if (actual_level > expected_level) {
                         ++counts.brighter;
-                    } else if (actual_level < expected_level) {
+                    } else {
                         ++counts.darker;
                     }
+                    const auto local_y{static_cast<std::int32_t>(index >> 8U)};
+                    const auto local_z{
+                        static_cast<std::int32_t>((index >> 4U) & 0xFU)};
+                    const auto local_x{static_cast<std::int32_t>(index & 0xFU)};
+                    counts.note(
+                        centre->x * 16 + local_x, section_y * 16 + local_y,
+                        centre->z * 16 + local_z, actual_level, expected_level);
                 }
             }
         }
+        const auto print_first = [&runtime](const char *name,
+                                            const mismatch_counts &counts) {
+            for (std::size_t i{0}; i < counts.first_count; ++i) {
+                const auto &cell{counts.first[i]};
+                const auto id{runtime->block_at(sim::block_pos{
+                    cell.x, static_cast<std::int16_t>(cell.y), cell.z})};
+                std::printf(
+                    "light-oracle: %s mismatch at (%d, %d, %d) actual=%u "
+                    "expected=%u block=%s\n",
+                    name, cell.x, cell.y, cell.z,
+                    static_cast<unsigned>(cell.actual),
+                    static_cast<unsigned>(cell.expected),
+                    std::string{runtime->registry().key(id)}.c_str());
+            }
+        };
+        print_first("block", block_counts);
+        print_first("sky", sky_counts);
         std::printf(
             "light-oracle: block light compared %llu cells, brighter %llu, "
             "darker %llu; sky light compared %llu cells, brighter %llu, "
@@ -272,27 +374,16 @@ suite<"world/light-oracle"> light_oracle_tests = [] {
             static_cast<unsigned long long>(sky_counts.compared),
             static_cast<unsigned long long>(sky_counts.brighter),
             static_cast<unsigned long long>(sky_counts.darker));
-        // The engine must never invent light the reference does not have: a
-        // brighter cell means a wrong transmission rule or a modelled source
-        // the reference does not have.
+        // A generated reference column stores the light its blocks imply, so
+        // the recompute must match both layers cell for cell: a difference is
+        // a wrong source table, transmission rule or shape occlusion.
         expect(block_counts.brighter == 0)
             << "computed block light is brighter than the reference";
+        expect(block_counts.darker == 0)
+            << "computed block light is darker than the reference";
         expect(sky_counts.brighter == 0)
             << "computed sky light is brighter than the reference";
-        // The initial computation matches the reference sky light exactly.
         expect(sky_counts.darker == 0)
             << "computed sky light is darker than the reference";
-        // A saved reference column can keep the light of a removed source: the
-        // reference never lowers light of a column that was unloaded when the
-        // source was removed. The stale ratio bounds that artifact.
-        const auto stale_ratio{
-            block_counts.compared == 0
-                ? 0.0
-                : static_cast<double>(block_counts.darker) /
-                      static_cast<double>(block_counts.compared)};
-        std::printf("light-oracle: block light stale ratio %.4f\n",
-                    stale_ratio);
-        expect(block_counts.darker <= block_counts.compared / 100)
-            << "more than one percent of the block light is stale";
     };
 };
