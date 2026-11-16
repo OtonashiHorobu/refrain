@@ -167,8 +167,7 @@ auto runtime::compile_wat(std::string_view wat) -> result<module_handle> {
     if (auto *error{wasmtime_wat2wasm(wat.data(), wat.size(), &wasm)}) {
         return std::unexpected{take_error(error)};
     }
-    auto handle{compile_bytes(
-        std::span{reinterpret_cast<const std::byte *>(wasm.data), wasm.size})};
+    auto handle{compile_bytes(std::as_bytes(std::span{wasm.data, wasm.size}))};
     wasm_byte_vec_delete(&wasm);
     return handle;
 }

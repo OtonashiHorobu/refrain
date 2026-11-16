@@ -11,8 +11,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
-#include <cstring>
 #include <limits>
 #include <string>
 #include <utility>
@@ -52,9 +52,7 @@ constexpr std::size_t sample_cache_size = 256;
 thread_local std::array<cached_sample, sample_cache_size> sample_cache{};
 
 [[nodiscard]] auto coordinate_bits(double value) -> std::uint64_t {
-    std::uint64_t bits = 0;
-    std::memcpy(&bits, &value, sizeof(bits));
-    return bits;
+    return std::bit_cast<std::uint64_t>(value);
 }
 
 [[nodiscard]] auto sample_cache_index(std::uint64_t stack, std::uint64_t x,

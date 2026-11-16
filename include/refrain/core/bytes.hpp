@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <refrain/core/byte_order.hpp>
+
 #include <cassert>
 #include <concepts>
 #include <cstddef>
@@ -11,39 +13,24 @@
 #include <limits>
 #include <optional>
 #include <span>
-#include <type_traits>
 
 namespace refrain::core::bytes {
 
 /// Read an integer from little-endian bytes. The caller guarantees that
 /// `[offset, offset + sizeof(T))` is in bounds; format parsers validate sizes
-/// before calling this. The byte-at-a-time loop yields the same value on every
-/// host byte order.
-template <std::integral T>
+/// before calling this. The value is loaded through `byte_order`, so it is the
+/// same on every host byte order.
+template <byte_order::fixed_width_integer T>
 [[nodiscard]] constexpr auto read_le(std::span<const std::byte> bytes,
                                      std::size_t offset) noexcept -> T {
-    static_assert(std::is_integral_v<T>);
-    using value_type = std::make_unsigned_t<T>;
-    value_type value{0};
-    for (std::size_t index{0}; index < sizeof(T); ++index) {
-        const auto byte_value{static_cast<value_type>(
-            std::to_integer<unsigned int>(bytes[offset + index]))};
-        value |= static_cast<value_type>(byte_value << (8U * index));
-    }
-    return static_cast<T>(value);
+    return byte_order::load_le<T>(bytes, offset);
 }
 
 /// Write an integer as little-endian bytes. Same bounds contract as `read_le`.
-template <std::integral T>
+template <byte_order::fixed_width_integer T>
 constexpr void write_le(std::span<std::byte> out, std::size_t offset,
                         T value) noexcept {
-    static_assert(std::is_integral_v<T>);
-    using value_type = std::make_unsigned_t<T>;
-    const auto converted{static_cast<value_type>(value)};
-    for (std::size_t index{0}; index < sizeof(T); ++index) {
-        out[offset + index] =
-            static_cast<std::byte>((converted >> (8U * index)) & 0xFFU);
-    }
+    byte_order::store_le<T>(out, offset, value);
 }
 
 /// Convenience wrappers for the fixed-width fields of the on-disk formats.
