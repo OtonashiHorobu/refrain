@@ -275,6 +275,87 @@ auto read_reference(std::string_view region_path, jint chunk_x, jint chunk_z,
     return result;
 }
 
+/// Compares every loot container the reference document stores against the
+/// generated chunk: table id and seed. Returns [checked, mismatches].
+auto compare_loot_containers(const data::nbt::value &document,
+                             const proto_chunk &chunk)
+    -> std::pair<std::size_t, std::size_t> {
+    std::size_t checked = 0;
+    std::size_t mismatches = 0;
+    const auto *block_entities =
+        child(document.as_compound(), "block_entities");
+    if (block_entities == nullptr || block_entities->as_list() == nullptr) {
+        return {0, 0};
+    }
+    for (const auto &entry : block_entities->as_list()->items) {
+        const auto *entity = entry.as_compound();
+        const auto *table = child(entity, "LootTable");
+        if (table == nullptr) {
+            continue;
+        }
+        const auto *x = child(entity, "x");
+        const auto *y = child(entity, "y");
+        const auto *z = child(entity, "z");
+        if (x == nullptr || y == nullptr || z == nullptr) {
+            continue;
+        }
+        const auto world_x = x->as_int();
+        const auto world_y = y->as_int();
+        const auto world_z = z->as_int();
+        if (!world_x || !world_y || !world_z) {
+            continue;
+        }
+        const block_pos position{
+            .x = *world_x & 15, .y = *world_y, .z = *world_z & 15};
+        if (position.y < chunk.min_y() ||
+            position.y >= chunk.min_y() + chunk.height()) {
+            continue;
+        }
+        ++checked;
+        const auto *placed = chunk.block_entity_at(position);
+        const auto *placed_table =
+            placed == nullptr ? nullptr : child(placed, "LootTable");
+        const auto *placed_seed =
+            placed == nullptr ? nullptr : child(placed, "LootTableSeed");
+        const auto *reference_seed = child(entity, "LootTableSeed");
+        const bool table_matches =
+            placed_table != nullptr &&
+            placed_table->as_string() == table->as_string();
+        bool seed_matches = false;
+        if (reference_seed == nullptr) {
+            seed_matches = placed_seed == nullptr;
+        } else {
+            seed_matches = placed_seed != nullptr &&
+                           placed_seed->as_long() == reference_seed->as_long();
+        }
+        if (!table_matches || !seed_matches) {
+            ++mismatches;
+            if (mismatches <= 8) {
+                std::fprintf(
+                    stderr,
+                    "loot container (%d,%d,%d): got %s want %s, seed %lld vs "
+                    "%lld\n",
+                    static_cast<int>(*world_x), static_cast<int>(*world_y),
+                    static_cast<int>(*world_z),
+                    placed_table == nullptr
+                        ? "<none>"
+                        : std::string{placed_table->as_string().value_or("")}
+                              .c_str(),
+                    std::string{table->as_string().value_or("")}.c_str(),
+                    static_cast<long long>(
+                        placed_seed == nullptr
+                            ? 0
+                            : placed_seed->as_long().value_or(0)),
+                    static_cast<long long>(
+                        reference_seed == nullptr
+                            ? 0
+                            : reference_seed->as_long().value_or(0)));
+            }
+        }
+    }
+    return {checked, mismatches};
+}
+
 /// Compares one opt-in reference chunk. `prefix` names the environment group:
 /// `<prefix>_REGION`, `_CHUNK_X`, `_CHUNK_Z`, `_SEED`, `_BIOME`, `_DIMENSION`.
 void run_reference_case(std::string_view prefix) {
@@ -449,6 +530,65 @@ suite<"worldgen/chunk-generator"> chunk_generator_tests = [] {
 
     "the runtime service reproduces a reference stronghold chunk"_test = [] {
         run_reference_case("REFRAIN_RUNTIME_STRONGHOLD");
+    };
+
+    "the runtime service reproduces reference stronghold containers"_test = [] {
+        const char *region = environment("REFRAIN_RUNTIME_STRONGHOLD_REGION");
+        const char *data_root = environment("REFRAIN_VANILLA_WORLDGEN");
+        const char *templates_root = environment("REFRAIN_VANILLA_STRUCTURES");
+        if (region == nullptr || data_root == nullptr ||
+            templates_root == nullptr) {
+            return;
+        }
+        const jint chunk_x =
+            integer_environment("REFRAIN_RUNTIME_STRONGHOLD_CHUNK_X", 108);
+        const jint chunk_z =
+            integer_environment("REFRAIN_RUNTIME_STRONGHOLD_CHUNK_Z", 51);
+        const jlong seed =
+            long_environment("REFRAIN_RUNTIME_STRONGHOLD_SEED", 1);
+        const auto biome = string_environment(
+            "REFRAIN_RUNTIME_STRONGHOLD_BIOME", "minecraft:plains");
+        const auto dimension =
+            dimension_environment("REFRAIN_RUNTIME_STRONGHOLD_DIMENSION");
+        const auto &profile = dimension_profile_for(dimension);
+        const auto reference =
+            read_reference(region, chunk_x, chunk_z, data_root, profile);
+        expect(reference.has_value());
+        if (!reference) {
+            return;
+        }
+        std::vector<std::string> structure_sets;
+        if (const auto *set =
+                environment("REFRAIN_RUNTIME_STRONGHOLD_STRUCTURE_SET");
+            set != nullptr) {
+            structure_sets.emplace_back(set);
+        }
+        auto generator = chunk_generator::create(chunk_generator_config{
+            .data_root = data_root,
+            .templates_root = templates_root,
+            .seed = seed,
+            .kind = dimension,
+            .fixed_biome = biome,
+            .target = generation_target::full,
+            .structure_sets = std::move(structure_sets),
+            .reference_world = true,
+        });
+        expect(generator.has_value())
+            << (generator ? "" : generator.error().message);
+        if (!generator) {
+            return;
+        }
+        const auto chunk =
+            (*generator)->generate(chunk_pos{.x = chunk_x, .z = chunk_z});
+        expect(chunk.has_value()) << (chunk ? "" : chunk.error().message);
+        if (!chunk) {
+            return;
+        }
+        const auto [checked, mismatches] =
+            compare_loot_containers(reference->document, **chunk);
+        expect(checked > 0)
+            << "no reference container in the compared stronghold chunk";
+        expect(mismatches == 0);
     };
 
     "the runtime service reproduces a reference nether carver chunk"_test = [] {

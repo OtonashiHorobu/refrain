@@ -139,7 +139,16 @@ worlds whose preset declares a single biome.
 
 The structure generator runs starts in every dimension: the nether generates
 fortresses, bastion remnants and fossils, and the end generates end cities,
-next to the overworld structure types. A structure start reads the
+next to the overworld structure types. The loot tables a structure's containers
+carry are built-in constants of the target version rather than datapack fields:
+the 26.3 structure, template and processor documents name none for the buried
+treasure, igloo, jungle temple, ocean ruin, shipwreck, desert pyramid and
+stronghold pieces, so the placers use the same ids the reference piece classes
+name and consume the piece seed at the same point. A template container tag
+takes its seed from the piece stream during placement, while a processor rule
+that appends a loot table draws the seed from the rule's own positional stream.
+Reference chunks store both the table and the seed, so the container oracles
+compare them directly. A structure start reads the
 dimension's noise settings through the same profile the terrain stages use.
 Height providers sample over the generator's generation depth, which is shorter
 than the level for the nether and the end, while jigsaw padding and distance
@@ -466,7 +475,10 @@ feature stage. The obsidian platform chunk is compared against a reference
 world; the gateway frame, exit block entity and rotation are covered by
 feature-level tests. The fixed-biome end feature worlds the oracle generates
 contain no generated gateway even at several thousand chunks, so no reference
-chunk compares a gateway position yet.
+chunk compares a gateway position yet. Stronghold containers match the
+reference loot table ids, but the reference draws their seeds after a different
+number of piece-placement draws than this server does, so the seed comparison
+for the stronghold family is not asserted yet.
 
 Ruined portal starts place the template at the reference position and
 orientation. A dry reference candidate at chunk (-65, 0) matches block for
@@ -492,6 +504,14 @@ its fluid pools. A trail ruins chunk exercises both capped archaeology lists:
 the reference and runtime chunks agree on every block, heightmap and brushable
 block entity, including the loot seed each capped selection stored. A trial
 chambers chest chunk agrees on its container loot tables and seeds as well.
+The same comparison runs for the procedural structure families: the buried
+treasure chest, the basement igloo chest, every jungle temple chest and
+dispenser, the four desert pyramid chests, the shipwreck markers and the ocean
+ruin chest and brushable block all match a reference chunk in both fields. The
+stronghold container oracles compare the loot table ids; their seed stream
+still diverges from the reference because the piece placement randomness before
+the container runs on a different draw count, so the two seeds do not yet match
+(see Known gaps).
 The clean chunks are chosen deliberately: reference worlds settle flowing
 water and lava after saving, so a chunk whose pieces place fluids cannot be
 compared block for block, and a feature element that writes into the compared
