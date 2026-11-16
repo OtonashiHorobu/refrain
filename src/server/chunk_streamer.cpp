@@ -406,4 +406,18 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
     }
 }
 
+auto chunk_streamer::connections_with_chunk(std::int32_t x,
+                                            std::int32_t z) const
+    -> std::vector<std::uint64_t> {
+    std::vector<std::uint64_t> connections{};
+    const auto key{std::pair<std::int32_t, std::int32_t>{x, z}};
+    for (const auto &[connection, state] : streams_) {
+        if (state.known.contains(key)) {
+            connections.push_back(connection);
+        }
+    }
+    std::sort(connections.begin(), connections.end());
+    return connections;
+}
+
 } // namespace refrain::server

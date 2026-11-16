@@ -16,6 +16,7 @@
 #include <charconv>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -106,6 +107,23 @@ set_gameplay_integer(data::nbt::value &level, std::string_view key,
                          data::nbt::make_byte(static_cast<std::int8_t>(value)));
     }
     return level.set(std::string{key}, data::nbt::make_int(value));
+}
+
+/// Replace a level time field, keeping an existing int width.
+[[nodiscard]] auto set_level_time(data::nbt::value &level, std::string_view key,
+                                  std::int64_t value) -> status {
+    if (const auto *existing{level.get(key)};
+        existing != nullptr && existing->is(data::nbt::tag_type::int_)) {
+        if (value < std::numeric_limits<std::int32_t>::min() ||
+            value > std::numeric_limits<std::int32_t>::max()) {
+            return std::unexpected{
+                make_error(error_code::invalid_argument,
+                           "level time does not fit the stored int field")};
+        }
+        return level.set(std::string{key},
+                         data::nbt::make_int(static_cast<std::int32_t>(value)));
+    }
+    return level.set(std::string{key}, data::nbt::make_long(value));
 }
 
 [[nodiscard]] auto valid_dimension_component(std::string_view value) -> bool {
@@ -856,6 +874,43 @@ auto world_store::write_gameplay(const gameplay_settings &settings) -> status {
                                           settings.difficulty_locked ? 1 : 0,
                                           data::nbt::tag_type::byte)};
         !written) {
+        return written;
+    }
+    auto bytes{data::nbt::write(*document, "", data::nbt::compression::none)};
+    if (!bytes) {
+        return std::unexpected{bytes.error()};
+    }
+    return rwf::write_record_file(path, *bytes);
+}
+
+auto world_store::write_level_time(std::int64_t time) -> status {
+    if (!valid()) {
+        return failing(error_code::not_initialized, "world store is closed");
+    }
+    if (time < 0) {
+        return failing(error_code::invalid_argument,
+                       fmt::format("level time {} is negative", time));
+    }
+    const auto path{join_path(impl_->root, "meta.rfw")};
+    if (!core::io::exists(path)) {
+        return failing(error_code::not_found, "meta.rfw is missing");
+    }
+    auto payload{rwf::read_record_file(path)};
+    if (!payload) {
+        return std::unexpected{payload.error()};
+    }
+    auto document{data::nbt::read(*payload)};
+    if (!document) {
+        return std::unexpected{document.error()};
+    }
+    auto *level{document->get("level")};
+    if (level == nullptr || level->as_compound() == nullptr) {
+        return failing(error_code::parse_error,
+                       "meta.rfw has no 'level' compound");
+    }
+    // Keep the stored tag width: an existing int stays an int so the field is
+    // only rewritten, not retyped.
+    if (auto written{set_level_time(*level, "Time", time)}; !written) {
         return written;
     }
     auto bytes{data::nbt::write(*document, "", data::nbt::compression::none)};

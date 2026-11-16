@@ -6,6 +6,7 @@
 
 #include <refrain/data/nbt.hpp>
 #include <refrain/net/base.hpp>
+#include <refrain/protocol/current.hpp>
 
 #include <algorithm>
 #include <array>
@@ -23,6 +24,8 @@
 
 namespace refrain::server {
 namespace {
+
+namespace play_cb = ::refrain::protocol::current::play::clientbound;
 
 using net::writer;
 
@@ -89,6 +92,19 @@ void write_bitset(std::vector<std::byte> &out,
 
 void set_bit(std::vector<std::uint64_t> &words, std::size_t index) {
     words[index / 64] |= std::uint64_t{1} << (index % 64);
+}
+
+template <typename Packet>
+[[nodiscard]] auto encode_packet(std::uint16_t packet_id, const Packet &packet,
+                                 auto (*encode)(writer &, const Packet &))
+    -> result<std::vector<std::byte>> {
+    std::vector<std::byte> body;
+    writer out{body};
+    out.write_varint(packet_id);
+    if (auto written = encode(out, packet); !written) {
+        return std::unexpected{std::move(written.error())};
+    }
+    return body;
 }
 
 [[nodiscard]] auto registry_id(const net::registry_catalog *catalog,
@@ -164,6 +180,115 @@ struct light_data {
     std::vector<std::vector<std::byte>> sky_updates{};
     std::vector<std::vector<std::byte>> block_updates{};
 };
+
+/// Light section range of the protocol: one padding section below the lowest
+/// block section and one above the highest.
+struct light_range {
+    std::int32_t minimum{0};
+    std::size_t count{0};
+};
+
+[[nodiscard]] auto light_range_for(const chunk_packet_source &source)
+    -> light_range {
+    return light_range{
+        .minimum = source.min_section_y - 1,
+        .count = static_cast<std::size_t>(source.max_section_y -
+                                          source.min_section_y + 3),
+    };
+}
+
+/// Collect the light data of one column. `sections` selects absolute section Y
+/// values to include (empty means every section of the range); sections that
+/// are not selected carry no mask bit, which tells the client their data did
+/// not change.
+[[nodiscard]] auto build_light_data(const chunk_packet_source &source,
+                                    const sim::chunk &chunk,
+                                    std::span<const std::int8_t> sections)
+    -> light_data {
+    const auto range{light_range_for(source)};
+    const auto word_count{(range.count + 63) / 64};
+    light_data light{};
+    light.sky_mask.assign(word_count, 0);
+    light.block_mask.assign(word_count, 0);
+    light.empty_sky.assign(word_count, 0);
+    light.empty_block.assign(word_count, 0);
+    std::array<bool, 130> selected{};
+    for (const auto section_y : sections) {
+        const auto index{static_cast<std::int32_t>(section_y) - range.minimum};
+        if (index >= 0 && index < static_cast<std::int32_t>(range.count)) {
+            selected[static_cast<std::size_t>(index)] = true;
+        }
+    }
+    std::map<std::int32_t, const refrain::storage::light_section *>
+        light_by_y{};
+    for (const auto &layer : chunk.storage.light_sections) {
+        light_by_y.emplace(layer.y, &layer);
+    }
+    std::optional<std::size_t> highest_light{};
+    if (!light_by_y.empty()) {
+        highest_light = static_cast<std::size_t>(light_by_y.rbegin()->first -
+                                                 range.minimum);
+    }
+    for (std::size_t index{0}; index < range.count; ++index) {
+        if (!sections.empty() && !selected[index]) {
+            continue;
+        }
+        const auto y{static_cast<std::int32_t>(
+            range.minimum + static_cast<std::int32_t>(index))};
+        const auto found{light_by_y.find(y)};
+        if (found == light_by_y.end()) {
+            if (highest_light && index <= *highest_light) {
+                set_bit(light.empty_sky, index);
+                set_bit(light.empty_block, index);
+            }
+            continue;
+        }
+        const auto &layer{*found->second};
+        if (layer.sky_light.size() == light_bytes) {
+            if (std::all_of(
+                    layer.sky_light.begin(), layer.sky_light.end(),
+                    [](std::byte value) { return value == std::byte{0}; })) {
+                set_bit(light.empty_sky, index);
+            } else {
+                set_bit(light.sky_mask, index);
+                light.sky_updates.push_back(layer.sky_light);
+            }
+        } else {
+            set_bit(light.empty_sky, index);
+        }
+        if (layer.block_light.size() == light_bytes) {
+            if (std::all_of(
+                    layer.block_light.begin(), layer.block_light.end(),
+                    [](std::byte value) { return value == std::byte{0}; })) {
+                set_bit(light.empty_block, index);
+            } else {
+                set_bit(light.block_mask, index);
+                light.block_updates.push_back(layer.block_light);
+            }
+        } else {
+            set_bit(light.empty_block, index);
+        }
+    }
+    return light;
+}
+
+void write_light_data(std::vector<std::byte> &packet, const light_data &light) {
+    write_bitset(packet, light.sky_mask);
+    write_bitset(packet, light.block_mask);
+    write_bitset(packet, light.empty_sky);
+    write_bitset(packet, light.empty_block);
+    writer out{packet};
+    out.write_varint(static_cast<std::uint32_t>(light.sky_updates.size()));
+    for (const auto &layer : light.sky_updates) {
+        out.write_varint(static_cast<std::uint32_t>(layer.size()));
+        out.write_bytes(layer);
+    }
+    out.write_varint(static_cast<std::uint32_t>(light.block_updates.size()));
+    for (const auto &layer : light.block_updates) {
+        out.write_varint(static_cast<std::uint32_t>(layer.size()));
+        out.write_bytes(layer);
+    }
+}
 
 [[nodiscard]] auto block_state(const sim::section &section, std::size_t index)
     -> sim::block_state_id {
@@ -395,6 +520,18 @@ struct light_data {
 
 } // namespace
 
+namespace {
+
+/// Wire form of a block position: vanilla `BlockPos.asLong`.
+[[nodiscard]] auto pack_block_position(std::int32_t x, std::int32_t y,
+                                       std::int32_t z) -> std::int64_t {
+    return (static_cast<std::int64_t>(x & 0x3FFFFFF) << 38) |
+           (static_cast<std::int64_t>(z & 0x3FFFFFF) << 12) |
+           static_cast<std::int64_t>(y & 0xFFF);
+}
+
+} // namespace
+
 auto encode_full_chunk(const chunk_packet_source &source, sim::chunk_pos pos)
     -> result<std::vector<std::byte>> {
     if (source.world == nullptr) {
@@ -528,78 +665,8 @@ auto encode_full_chunk(const chunk_packet_source &source, sim::chunk_pos pos)
                           entity_entries.end());
     out.write_bytes(block_entities);
 
-    // Light: one mask entry per light section. A layer that the chunk does not
-    // carry leaves both masks clear, matching the protocol's "no data" state;
-    // a carried layer with an empty array is marked empty.
-    const auto light_min{source.min_section_y - 1};
-    const auto light_count{static_cast<std::size_t>(source.max_section_y -
-                                                    source.min_section_y + 3)};
-    const auto word_count{(light_count + 63) / 64};
-    light_data light{};
-    light.sky_mask.assign(word_count, 0);
-    light.block_mask.assign(word_count, 0);
-    light.empty_sky.assign(word_count, 0);
-    light.empty_block.assign(word_count, 0);
-    std::map<std::int32_t, const refrain::storage::light_section *>
-        light_by_y{};
-    for (const auto &layer : chunk.storage.light_sections) {
-        light_by_y.emplace(layer.y, &layer);
-    }
-    std::optional<std::size_t> highest_light{};
-    if (!light_by_y.empty()) {
-        highest_light =
-            static_cast<std::size_t>(light_by_y.rbegin()->first - light_min);
-    }
-    for (std::size_t index{0}; index < light_count; ++index) {
-        const auto y{static_cast<std::int32_t>(light_min + index)};
-        const auto found{light_by_y.find(y)};
-        if (found == light_by_y.end()) {
-            if (highest_light && index <= *highest_light) {
-                set_bit(light.empty_sky, index);
-                set_bit(light.empty_block, index);
-            }
-            continue;
-        }
-        const auto &layer{*found->second};
-        if (layer.sky_light.size() == light_bytes) {
-            if (std::all_of(
-                    layer.sky_light.begin(), layer.sky_light.end(),
-                    [](std::byte value) { return value == std::byte{0}; })) {
-                set_bit(light.empty_sky, index);
-            } else {
-                set_bit(light.sky_mask, index);
-                light.sky_updates.push_back(layer.sky_light);
-            }
-        } else {
-            set_bit(light.empty_sky, index);
-        }
-        if (layer.block_light.size() == light_bytes) {
-            if (std::all_of(
-                    layer.block_light.begin(), layer.block_light.end(),
-                    [](std::byte value) { return value == std::byte{0}; })) {
-                set_bit(light.empty_block, index);
-            } else {
-                set_bit(light.block_mask, index);
-                light.block_updates.push_back(layer.block_light);
-            }
-        } else {
-            set_bit(light.empty_block, index);
-        }
-    }
-    write_bitset(packet, light.sky_mask);
-    write_bitset(packet, light.block_mask);
-    write_bitset(packet, light.empty_sky);
-    write_bitset(packet, light.empty_block);
-    out.write_varint(static_cast<std::uint32_t>(light.sky_updates.size()));
-    for (const auto &layer : light.sky_updates) {
-        out.write_varint(static_cast<std::uint32_t>(layer.size()));
-        out.write_bytes(layer);
-    }
-    out.write_varint(static_cast<std::uint32_t>(light.block_updates.size()));
-    for (const auto &layer : light.block_updates) {
-        out.write_varint(static_cast<std::uint32_t>(layer.size()));
-        out.write_bytes(layer);
-    }
+    // Light: one mask entry per light section; the whole range is sent.
+    write_light_data(packet, build_light_data(source, chunk, {}));
 
     if (packet.size() > net::max_frame_length) {
         return std::unexpected{
@@ -608,6 +675,45 @@ auto encode_full_chunk(const chunk_packet_source &source, sim::chunk_pos pos)
                                    pos.x, pos.z))};
     }
     return packet;
+}
+
+auto encode_light_update(const chunk_packet_source &source, sim::chunk_pos pos,
+                         std::span<const std::int8_t> sections)
+    -> result<std::vector<std::byte>> {
+    if (source.world == nullptr) {
+        return std::unexpected{make_error(error_code::invalid_argument,
+                                          "chunk source has no world")};
+    }
+    auto loaded{source.world->chunk_load(pos)};
+    if (!loaded) {
+        return std::unexpected{std::move(loaded.error())};
+    }
+    std::vector<std::byte> packet;
+    writer out{packet};
+    out.write_varint(49); // light_update
+    out.write_varint(static_cast<std::uint32_t>(pos.x));
+    out.write_varint(static_cast<std::uint32_t>(pos.z));
+    write_light_data(packet, build_light_data(source, **loaded, sections));
+    return packet;
+}
+
+auto encode_block_update(const chunk_packet_source &source,
+                         const sim::block_change &change)
+    -> result<std::vector<std::byte>> {
+    if (source.world == nullptr) {
+        return std::unexpected{make_error(error_code::invalid_argument,
+                                          "chunk source has no world")};
+    }
+    const auto *registry{source.world->registry()};
+    const auto key{registry == nullptr ? std::string_view{}
+                                       : registry->key(change.new_state)};
+    play_cb::block_update update{
+        .position =
+            pack_block_position(change.pos.x, change.pos.y, change.pos.z),
+        .state = vanilla_state_id(source.tables, key),
+    };
+    return encode_packet(play_cb::block_update::packet_id, update,
+                         play_cb::encode_block_update);
 }
 
 } // namespace refrain::server

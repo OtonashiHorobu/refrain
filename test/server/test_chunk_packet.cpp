@@ -355,20 +355,20 @@ suite chunk_packet_tests = [] {
                        (static_cast<std::uint8_t>(mask[index]) &
                         (1U << (bit % 8U))) != 0U;
             };
-            expect(sky_mask.size() == 4U);
-            expect(!mask_bit(sky_mask, 0));
-            expect(mask_bit(sky_mask, 1));
-            expect(mask_bit(sky_mask, 24));
-            expect(mask_bit(block_mask, 1));
-            expect(mask_bit(block_mask, 24));
-            expect(!mask_bit(empty_sky, 1));
-            expect(!mask_bit(empty_sky, 24));
+            // The fixture column is solid stone: every light layer is empty,
+            // so no data mask is set and every light section is marked empty.
+            expect(sky_mask.empty());
+            expect(block_mask.empty());
+            expect(empty_sky.size() == 4U);
+            expect(empty_block.size() == 4U);
             expect(mask_bit(empty_sky, 0));
             expect(mask_bit(empty_sky, 23));
+            expect(mask_bit(empty_sky, 25));
             expect(mask_bit(empty_block, 0));
             expect(mask_bit(empty_block, 23));
-            expect(sky_updates == 2U);
-            expect(block_updates == 2U);
+            expect(mask_bit(empty_block, 25));
+            expect(sky_updates == 0U);
+            expect(block_updates == 0U);
         };
 
     "server/chunk packet computes relative heightmaps when none are stored"_test =
@@ -423,8 +423,12 @@ suite chunk_packet_tests = [] {
             }
             expect(sky_mask.empty());
             expect(block_mask.empty());
-            expect(empty_sky.empty());
-            expect(empty_block.empty());
+            // Only the light layers around the single block section exist; the
+            // rest of the light range has no data at all.
+            expect(empty_sky.size() == 1U);
+            expect(empty_block.size() == 1U);
+            expect(static_cast<std::uint8_t>(empty_sky[0]) == 0x07U);
+            expect(static_cast<std::uint8_t>(empty_block[0]) == 0x07U);
             expect(sky_updates == 0U);
             expect(block_updates == 0U);
         };

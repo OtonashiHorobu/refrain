@@ -46,7 +46,9 @@ void print_console_help() {
         "dig <x> <y> <z>, place <x> <y> <z> <block>, "
         "give [name] <item> <count>, inv [name], "
         "spawn <type> <x> <y> <z>, entities, kill <entity-id>, palette-gc, "
-        "storage, schedules, config <namespace> get|set <key> [value], "
+        "storage, time query|set|add|pause|resume, "
+        "weather clear|rain|thunder [duration], schedules, "
+        "config <namespace> get|set <key> [value], "
         "config save|reload [namespace], config names");
 }
 
@@ -415,6 +417,152 @@ void console_commands::execute(std::string_view line,
     if (line == "hash") {
         log_sim.info("state hash is {}",
                      refrain::data::to_hex(world.state_hash()));
+        return;
+    }
+    if (line == "time" || line.starts_with("time ")) {
+        auto *clock{world.clock()};
+        if (clock == nullptr) {
+            log_server.warn("the active world provider keeps no clock");
+            return;
+        }
+        const auto tokens{split_console_line(line)};
+        const auto publish = [&] {
+            if (dependencies_.listener == nullptr) {
+                return;
+            }
+            const auto snapshot{clock->snapshot()};
+            const auto weather{clock->weather()};
+            dependencies_.listener->set_world_state(net::world_state_snapshot{
+                .game_time = snapshot.game_time,
+                .clock_total_ticks = snapshot.total_ticks,
+                .clock_partial_tick = snapshot.partial_tick,
+                .clock_rate = snapshot.paused ? 0.0F : snapshot.rate,
+                .raining = weather.raining,
+                .rain_level = weather.rain_level,
+                .thunder_level = weather.thunder_level,
+            });
+            dependencies_.listener->broadcast_world_time();
+        };
+        const auto named_ticks =
+            [](std::string_view name) -> std::optional<std::int64_t> {
+            if (name == "day" || name == "morning") {
+                return 1000;
+            }
+            if (name == "noon") {
+                return 6000;
+            }
+            if (name == "night") {
+                return 13000;
+            }
+            if (name == "midnight") {
+                return 18000;
+            }
+            return std::nullopt;
+        };
+        if (tokens.size() == 1 ||
+            (tokens.size() == 2 && tokens[1] == "query")) {
+            const auto snapshot{clock->snapshot()};
+            log_server.info(
+                "game time is {} ticks and the overworld clock is at {} ticks, "
+                "{}",
+                snapshot.game_time, snapshot.total_ticks,
+                snapshot.paused ? "paused" : "running");
+            return;
+        }
+        if (tokens.size() >= 3 && tokens[1] == "set") {
+            std::int64_t ticks{0};
+            if (const auto named{named_ticks(tokens[2])}; named) {
+                ticks = *named;
+            } else if (!parse_number(tokens[2], ticks)) {
+                log_server.warn("time set expects a tick count or day, noon, "
+                                "night or midnight");
+                return;
+            }
+            clock->set_total_ticks(ticks);
+            publish();
+            log_server.info("set the overworld clock to {} ticks", ticks);
+            return;
+        }
+        if (tokens.size() >= 3 && tokens[1] == "add") {
+            std::int64_t ticks{0};
+            if (!parse_number(tokens[2], ticks)) {
+                log_server.warn("time add expects a tick count");
+                return;
+            }
+            clock->add_total_ticks(ticks);
+            publish();
+            log_server.info("added {} ticks to the overworld clock", ticks);
+            return;
+        }
+        if (tokens.size() == 2 && tokens[1] == "pause") {
+            clock->set_paused(true);
+            publish();
+            log_server.info("paused the overworld clock");
+            return;
+        }
+        if (tokens.size() == 2 && tokens[1] == "resume") {
+            clock->set_paused(false);
+            publish();
+            log_server.info("resumed the overworld clock");
+            return;
+        }
+        log_server.warn("time expects query, set <ticks|day|noon|night|"
+                        "midnight>, add <ticks>, pause or resume");
+        return;
+    }
+    if (line == "weather" || line.starts_with("weather ")) {
+        auto *clock{world.clock()};
+        if (clock == nullptr) {
+            log_server.warn("the active world provider keeps no weather");
+            return;
+        }
+        const auto tokens{split_console_line(line)};
+        if (tokens.size() < 2) {
+            const auto weather{clock->weather()};
+            log_server.info("weather is {}, rain level {:.2f}, thunder level "
+                            "{:.2f}",
+                            weather.raining
+                                ? (weather.thundering ? "thunder" : "rain")
+                                : "clear",
+                            static_cast<double>(weather.rain_level),
+                            static_cast<double>(weather.thunder_level));
+            return;
+        }
+        std::int32_t duration{6000};
+        if (tokens.size() >= 3 && !parse_number(tokens[2], duration)) {
+            log_server.warn("weather expects an optional duration in ticks");
+            return;
+        }
+        duration = std::max<std::int32_t>(duration, 1);
+        if (tokens[1] == "clear") {
+            clock->set_weather(false, false, duration, 0, 0);
+        } else if (tokens[1] == "rain") {
+            clock->set_weather(true, false, 0, duration, 0);
+        } else if (tokens[1] == "thunder") {
+            clock->set_weather(true, true, 0, duration, duration);
+        } else {
+            log_server.warn("weather expects clear, rain or thunder");
+            return;
+        }
+        if (dependencies_.listener != nullptr) {
+            const auto weather{clock->weather()};
+            dependencies_.listener->set_world_state(net::world_state_snapshot{
+                .game_time = clock->snapshot().game_time,
+                .clock_total_ticks = clock->snapshot().total_ticks,
+                .clock_partial_tick = clock->snapshot().partial_tick,
+                .clock_rate =
+                    clock->snapshot().paused ? 0.0F : clock->snapshot().rate,
+                .raining = weather.raining,
+                .rain_level = weather.rain_level,
+                .thunder_level = weather.thunder_level,
+            });
+            dependencies_.listener->broadcast_game_event(
+                weather.raining ? 1 : 2, 0.0F);
+            dependencies_.listener->broadcast_game_event(7, weather.rain_level);
+            dependencies_.listener->broadcast_game_event(8,
+                                                         weather.thunder_level);
+        }
+        log_server.info("set the weather to {}", tokens[1]);
         return;
     }
     const auto tokens{split_console_line(line)};

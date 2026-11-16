@@ -343,6 +343,32 @@ class world_port {
 
     virtual void tick() noexcept = 0;
     [[nodiscard]] virtual auto ticks() const noexcept -> std::int64_t = 0;
+
+    // --- clock, weather and pending updates --------------------------------
+
+    /// In-process clock and weather. Null for a port whose provider keeps time
+    /// elsewhere; the runtime then leaves time and weather to the provider.
+    [[nodiscard]] virtual auto clock() noexcept -> sim::world_clock * {
+        return nullptr;
+    }
+    [[nodiscard]] virtual auto clock() const noexcept
+        -> const sim::world_clock * {
+        return nullptr;
+    }
+
+    /// Light sections whose contents changed since the previous call, in
+    /// section order. Empty for a port that cannot expose in-process light.
+    [[nodiscard]] virtual auto take_light_changes()
+        -> std::vector<sim::light_section_change> {
+        return {};
+    }
+
+    /// Block mutations applied since the previous call, in application order.
+    /// Empty for a port that cannot expose its in-process edits.
+    [[nodiscard]] virtual auto take_block_edits()
+        -> std::vector<sim::block_change> {
+        return {};
+    }
     [[nodiscard]] virtual auto state_hash() const -> data::digest32 = 0;
 
     [[nodiscard]] virtual auto read_gameplay()

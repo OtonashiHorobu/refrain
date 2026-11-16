@@ -200,6 +200,13 @@ class world_store {
     [[nodiscard]] auto write_gameplay(const gameplay_settings &settings)
         -> status;
 
+    /// Replace `meta.level.Time` (the level age in ticks) and atomically
+    /// rewrite `meta.rwf`; every other tag and the single-record container are
+    /// left intact. Negative values are rejected. A missing `meta.rwf` is an
+    /// error (the store never creates a world here). Callers serialize this
+    /// with other writes to the same world.
+    [[nodiscard]] auto write_level_time(std::int64_t time) -> status;
+
     /// Strict identity validation of `meta.level`: DataVersion, spawn.pos,
     /// Time and LevelName must exist with the expected NBT types; a
     /// `world_gen_settings.dat` that exists must parse and carry `data.seed`.
