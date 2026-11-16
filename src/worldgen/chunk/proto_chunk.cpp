@@ -65,6 +65,7 @@ auto proto_chunk::clone() const -> std::unique_ptr<proto_chunk> {
     copy->biomes_ = biomes_;
     copy->heightmaps_ = heightmaps_;
     copy->block_entities_ = block_entities_;
+    copy->entities_ = entities_;
     copy->post_processing_ = post_processing_;
     copy->status_ = status_;
     return copy;
@@ -116,6 +117,10 @@ void proto_chunk::set_biome(jint x, jint y, jint z, std::uint16_t biome) {
         return;
     }
     biomes_[biome_index(x, y, z)] = biome;
+}
+
+void proto_chunk::add_entity(data::nbt::compound entity) {
+    entities_.push_back(std::move(entity));
 }
 
 void proto_chunk::set_block_entity(const block_pos &pos,

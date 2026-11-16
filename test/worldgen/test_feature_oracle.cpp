@@ -291,4 +291,8 @@ suite<"worldgen/feature-oracle"> feature_oracle_tests = [] {
     "the runtime feature oracle reproduces a badlands chunk"_test = [] {
         run_feature_case("REFRAIN_FEATURE_BADLANDS");
     };
+
+    "the runtime feature oracle reproduces the end platform chunk"_test = [] {
+        run_feature_case("REFRAIN_FEATURE_END_PLATFORM");
+    };
 };

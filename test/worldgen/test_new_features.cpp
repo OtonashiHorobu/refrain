@@ -599,6 +599,114 @@ suite<"worldgen/tree-new"> tree_new_tests = [] {
         expect(leaves > 0);
     };
 
+    "a mega pine foliage placer grows a canopy from its crown height provider"_test =
+        [] {
+            fixture environment;
+            decoded_feature feature{environment.registry};
+            const auto document = tree_document(
+                R"({"type":"minecraft:straight_trunk_placer","base_height":8,
+                "height_rand_a":0,"height_rand_b":0})",
+                R"({"type":"minecraft:mega_pine_foliage_placer","radius":1,
+                "offset":1,"crown_height":4})",
+                "minecraft:spruce_log");
+            if (!feature.load(document)) {
+                return;
+            }
+            const auto stone = environment.resolve("minecraft:stone");
+            environment.fill_layer(4, stone);
+            auto random = make_random(36);
+            expect(feature.place(environment.context, random,
+                                 block_pos{.x = 8, .y = 5, .z = 8}));
+            expect(environment.count_blocks("minecraft:spruce_log") > 0);
+            jint leaves = 0;
+            for (jint y = 0; y < 32; ++y) {
+                for (jint x = 0; x < 16; ++x) {
+                    for (jint z = 0; z < 16; ++z) {
+                        if (environment.name_at(x, y, z).starts_with(
+                                "minecraft:oak_leaves")) {
+                            ++leaves;
+                        }
+                    }
+                }
+            }
+            expect(leaves > 0);
+        };
+
+    "the pine foliage placers reject a document without their height "
+    "provider"_test = [] {
+        fixture environment;
+        constexpr std::string_view trunk =
+            R"({"type":"minecraft:straight_trunk_placer","base_height":6,
+                "height_rand_a":0,"height_rand_b":0})";
+        struct case_definition {
+            std::string_view field;
+            std::string document;
+        };
+        const std::array cases{
+            case_definition{
+                .field = "height",
+                .document = tree_document(
+                    trunk,
+                    R"({"type":"minecraft:pine_foliage_placer","radius":1,
+                        "offset":1})",
+                    "minecraft:spruce_log"),
+            },
+            case_definition{
+                .field = "crown_height",
+                .document = tree_document(
+                    trunk,
+                    R"({"type":"minecraft:mega_pine_foliage_placer","radius":1,
+                        "offset":1})",
+                    "minecraft:spruce_log"),
+            },
+        };
+        for (const auto &entry : cases) {
+            feature_registry registry{environment.registry};
+            feature_data_set data;
+            configured_feature_document configured;
+            configured.id = "oracle:test_feature";
+            configured.document = parse(entry.document);
+            data.features.emplace(configured.id, std::move(configured));
+            placed_feature_document placed;
+            placed.id = "oracle:test";
+            placed.feature = "oracle:test_feature";
+            placed.placement = parse("[]");
+            data.placed.emplace(placed.id, std::move(placed));
+            const auto loaded = registry.load(data);
+            expect(!loaded.has_value()) << entry.field;
+            if (!loaded) {
+                expect(loaded.error().code == error_code::parse_error);
+                expect(loaded.error().message.find(entry.field) !=
+                       std::string::npos)
+                    << loaded.error().message;
+            }
+        }
+    };
+
+    "an unknown configured feature type fails closed and is named"_test = [] {
+        fixture environment;
+        feature_registry registry{environment.registry};
+        feature_data_set data;
+        configured_feature_document configured;
+        configured.id = "oracle:unknown_feature";
+        configured.document =
+            parse(R"({"type":"minecraft:oracle_unknown_feature"})");
+        data.features.emplace(configured.id, std::move(configured));
+        placed_feature_document placed;
+        placed.id = "oracle:unknown";
+        placed.feature = "oracle:unknown_feature";
+        placed.placement = parse("[]");
+        data.placed.emplace(placed.id, std::move(placed));
+        const auto loaded = registry.load(data);
+        expect(!loaded.has_value());
+        if (!loaded) {
+            expect(loaded.error().code == error_code::unsupported);
+            expect(loaded.error().message.find(
+                       "minecraft:oracle_unknown_feature") != std::string::npos)
+                << loaded.error().message;
+        }
+    };
+
     "a mangrove root placer writes roots below the trunk origin"_test = [] {
         fixture environment;
         decoded_feature feature{environment.registry};

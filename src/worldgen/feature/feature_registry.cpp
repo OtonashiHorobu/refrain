@@ -220,7 +220,8 @@ auto feature_registry::decode_provider(const data::json::value &document)
         document, *states_,
         [this](std::string_view id) -> const state_provider * {
             return resolve_provider(id);
-        });
+        },
+        &tags_);
     if (provider_error_) {
         return std::unexpected{*provider_error_};
     }
@@ -248,7 +249,8 @@ auto feature_registry::resolve_provider(std::string_view id)
         document->second.document, *states_,
         [this](std::string_view nested) -> const state_provider * {
             return resolve_provider(nested);
-        });
+        },
+        &tags_);
     decoding_providers_.erase(key);
     if (!decoded) {
         if (!provider_error_) {
@@ -436,6 +438,7 @@ auto feature_registry::load_placed(const feature_data_set &data,
     for (;;) {
         feature_data_set subset;
         subset.state_providers = data.state_providers;
+        subset.tags = data.tags;
         std::set<std::string> pending;
         for (const auto &id : placed_ids) {
             const auto found = data.placed.find(id);
@@ -504,6 +507,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
     decoding_providers_.clear();
     provider_error_.reset();
     provider_documents_ = data.state_providers;
+    tags_ = data.tags;
     // Inline configured features append themselves to this list while the
     // selected documents decode, so one pass decodes the whole closure.
     std::deque<configured_feature_document> documents;
@@ -616,7 +620,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                     error_code::parse_error, "disk feature is incomplete")};
             }
             auto state = decode_provider(*state_provider);
-            auto predicate = decode_block_predicate(*target, *states_);
+            auto predicate = decode_block_predicate(*target, *states_, &tags_);
             auto radius_provider = provider::int_provider::decode(*radius);
             const auto half = half_height->as_int64();
             if (!state || !predicate || !radius_provider || !half) {
@@ -1148,7 +1152,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             }
             auto root_state = decode_provider(*root_provider);
             auto hanging_state = decode_provider(*hanging_provider);
-            auto allowed = decode_block_predicate(*predicate, *states_);
+            auto allowed = decode_block_predicate(*predicate, *states_, &tags_);
             if (!nested || !root_state || !hanging_state || !allowed) {
                 return std::unexpected{make_error(
                     error_code::parse_error, "root system states are invalid")};
@@ -1443,9 +1447,10 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                     make_error(error_code::parse_error, "spike is incomplete")};
             }
             const auto state_id = decode_simple_state(*state, *states_);
-            auto place_predicate = decode_block_predicate(*can_place, *states_);
+            auto place_predicate =
+                decode_block_predicate(*can_place, *states_, &tags_);
             auto replace_predicate =
-                decode_block_predicate(*can_replace, *states_);
+                decode_block_predicate(*can_replace, *states_, &tags_);
             if (!state_id || !place_predicate || !replace_predicate) {
                 return std::unexpected{
                     make_error(error_code::parse_error, "spike is invalid")};
@@ -1497,11 +1502,12 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             }
             auto fluid_provider = decode_provider(*fluid);
             auto barrier_provider = decode_provider(*barrier);
-            auto place_predicate = decode_block_predicate(*can_place, *states_);
+            auto place_predicate =
+                decode_block_predicate(*can_place, *states_, &tags_);
             auto air_predicate =
-                decode_block_predicate(*can_replace_air, *states_);
+                decode_block_predicate(*can_replace_air, *states_, &tags_);
             auto barrier_predicate =
-                decode_block_predicate(*can_replace_barrier, *states_);
+                decode_block_predicate(*can_replace_barrier, *states_, &tags_);
             const auto cave_air = resolve_state(*states_, "minecraft:cave_air");
             const auto ice = resolve_state(*states_, "minecraft:ice");
             if (!fluid_provider || !barrier_provider || !place_predicate ||
@@ -1569,7 +1575,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             }
             auto cap_provider = decode_provider(*cap);
             auto stem_provider = decode_provider(*stem);
-            auto predicate = decode_block_predicate(*can_place, *states_);
+            auto predicate =
+                decode_block_predicate(*can_place, *states_, &tags_);
             if (!cap_provider || !stem_provider || !predicate) {
                 return std::unexpected{make_error(error_code::parse_error,
                                                   "huge mushroom is invalid")};
@@ -1606,7 +1613,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             const auto stem_key = decode_state_key(*stem);
             const auto hat_key = decode_state_key(*hat);
             const auto decor_key = decode_state_key(*decor);
-            auto filter = decode_block_predicate(*replaceable, *states_);
+            auto filter =
+                decode_block_predicate(*replaceable, *states_, &tags_);
             if (!base_key || !stem_key || !hat_key || !decor_key || !filter) {
                 return std::unexpected{make_error(error_code::parse_error,
                                                   "huge fungus is invalid")};
@@ -1726,7 +1734,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                "random neighbor spread is incomplete")};
             }
             auto provider = decode_provider(*block);
-            auto predicate = decode_block_predicate(*can_replace, *states_);
+            auto predicate =
+                decode_block_predicate(*can_replace, *states_, &tags_);
             auto attempts_provider = provider::int_provider::decode(*attempts);
             auto xz_provider = provider::int_provider::decode(*xz_offset);
             auto y_provider = provider::int_provider::decode(*y_offset);
@@ -1900,7 +1909,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                 return std::unexpected{key.error()};
             }
             const auto state = resolve_state(*states_, *key);
-            auto predicate = decode_block_predicate(*predicate_value, *states_);
+            auto predicate =
+                decode_block_predicate(*predicate_value, *states_, &tags_);
             if (!state || !predicate) {
                 return std::unexpected{make_error(error_code::parse_error,
                                                   "block blob is invalid")};
@@ -1963,7 +1973,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                     .height = std::move(*height_provider),
                     .provider = std::move(*layer_provider)});
             }
-            auto allowed = decode_block_predicate(*allowed_value, *states_);
+            auto allowed =
+                decode_block_predicate(*allowed_value, *states_, &tags_);
             const auto prioritize = prioritize_value->as_bool();
             if (!allowed || !prioritize) {
                 return std::unexpected{make_error(error_code::parse_error,
@@ -3018,7 +3029,7 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             std::unique_ptr<block_predicate> can_replace;
             if (const auto *value = document.document.find("can_replace");
                 value != nullptr) {
-                auto decoded = decode_block_predicate(*value, *states_);
+                auto decoded = decode_block_predicate(*value, *states_, &tags_);
                 if (!decoded) {
                     return std::unexpected{decoded.error()};
                 }
@@ -3151,7 +3162,8 @@ auto feature_registry::load(const feature_data_set &data) -> status {
                                "projected random patchy square is incomplete")};
             }
             auto block = decode_provider(*block_value);
-            auto predicate = decode_block_predicate(*predicate_value, *states_);
+            auto predicate =
+                decode_block_predicate(*predicate_value, *states_, &tags_);
             auto size = provider::int_provider::decode(*size_value);
             const auto height = height_value->as_int64();
             if (!block || !predicate || !size || !height) {
@@ -3187,8 +3199,9 @@ auto feature_registry::load(const feature_data_set &data) -> status {
             }
             auto block = decode_provider(*block_value);
             auto continue_through =
-                decode_block_predicate(*continue_value, *states_);
-            auto can_replace = decode_block_predicate(*replace_value, *states_);
+                decode_block_predicate(*continue_value, *states_, &tags_);
+            auto can_replace =
+                decode_block_predicate(*replace_value, *states_, &tags_);
             auto reach = provider::int_provider::decode(*reach_value);
             auto count = provider::int_provider::decode(*count_value);
             auto column_reach =

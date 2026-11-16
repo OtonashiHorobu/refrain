@@ -24,7 +24,8 @@ class value;
 
 namespace refrain::worldgen {
 class block_state_registry;
-}
+class biome_tags;
+} // namespace refrain::worldgen
 
 namespace refrain::worldgen::feature {
 
@@ -60,7 +61,8 @@ using state_provider_resolver =
 [[nodiscard]] auto
 decode_state_provider(const data::json::value &document,
                       block_state_registry &states,
-                      const state_provider_resolver &resolve = {})
+                      const state_provider_resolver &resolve = {},
+                      const biome_tags *tags = nullptr)
     -> result<std::unique_ptr<state_provider>>;
 
 } // namespace refrain::worldgen::feature
