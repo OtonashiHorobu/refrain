@@ -3,6 +3,15 @@ name: dependency-audit
 on:
   schedule:
     - cron: "17 5 * * 1"
+  push:
+    branches:
+      - main
+    paths:
+      - conanfile.py
+      - conan/locks/**
+      - conan/recipes/**
+      - .github/conan-audit-triage.json
+      - tools/conan_audit_sarif.py
   workflow_dispatch:
 
 permissions:
@@ -49,6 +58,9 @@ jobs:
 
       - name: Export the vendored recipes
         run: python3 tools/vendor_export.py --profile "${REFRAIN_CONAN_PROFILE}"
+
+      - name: Validate the report tooling
+        run: python3 tools/conan_audit_sarif.py --self-test
 
       - name: Authenticate the audit provider
         env:
