@@ -286,6 +286,14 @@ so its dependencies are not updated by Dependabot: run
 ones, or enable Renovate if an automated pull request per update is wanted
 (Renovate reads `conanfile.py` and `conan.lock`).
 
+Vulnerability alerts for Conan packages come from the ConanCenter audit and
+appear under Security -> Code scanning, not under Dependabot alerts. The
+`dependency-audit` workflow runs weekly: it authenticates with the repository
+secret `CONAN_AUDIT_TOKEN` (register at <https://conan.io/audit/register>),
+scans the lockfile, and uploads a SARIF report. In-repo recipes under
+`conan/recipes/` are not in ConanCenter and are therefore not covered by that
+audit; review their upstream advisories manually when bumping them.
+
 ## Troubleshooting
 
 A missing preset means Conan has not produced the toolchain for this build
