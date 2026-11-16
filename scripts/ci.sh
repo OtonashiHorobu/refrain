@@ -118,6 +118,18 @@ ABI_CHECK="$(mktemp --suffix=.c)"
 EXTRACT_DIR="$(mktemp -d)"
 CRASH_DIR="$(mktemp -d)"
 trap 'rm -f "$ABI_CHECK"; rm -rf "$EXTRACT_DIR" "$CRASH_DIR"' EXIT
+
+# First-run server fixtures. The smokes that start the tick loop accept the
+# EULA in the scratch directory (never in the checkout) and read a synthetic
+# game data directory, so no smoke touches the network and no Mojang asset is
+# involved. `tools/make_test_world.py` provides the pre-generated world.
+CI_EULA_FILE="$EXTRACT_DIR/eula.toml"
+CI_DATA_DIR="$EXTRACT_DIR/game-data"
+mkdir -p "$CI_DATA_DIR/data/minecraft/worldgen"
+printf '{\n  "schema": "refrain.game-data/1",\n  "game_version": "26.3",\n  "data_version": 5023,\n  "datapack": "data",\n  "source": "ci staged synthetic datapack"\n}\n' \
+    >"$CI_DATA_DIR/MANIFEST.json"
+CI_SERVER_ARGS=(--eula-file "$CI_EULA_FILE" --accept-eula
+    --data-dir "$CI_DATA_DIR" --no-data-download)
 cat > "$ABI_CHECK" <<'ABI_EOF'
 #include <refrain/contracts.h>
 int main(void) { return 0; }
@@ -228,7 +240,7 @@ fi
 grep -q 'already_exists' "$EXTRACT_DIR/case-collision.txt" \
     || die "case-collision diagnostic is missing"
 if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --auto-scan --mods "$ROOT/test/fixtures/abi99" \
+    "${CI_SERVER_ARGS[@]}" --auto-scan --mods "$ROOT/test/fixtures/abi99" \
     --mods-lock "$EXTRACT_DIR/abi99.lock" \
     >"$EXTRACT_DIR/abi99.txt" 2>&1; then
     die "server accepted an auto-scanned mod with a foreign ABI"
@@ -245,7 +257,7 @@ fi
 # never a silent no-op.
 set +e
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --mods "$ROOT/test/fixtures/instance" \
+    "${CI_SERVER_ARGS[@]}" --mods "$ROOT/test/fixtures/instance" \
     >"$EXTRACT_DIR/auto-scan-off.txt" 2>&1
 AUTO_SCAN_OFF_STATUS=$?
 set -e
@@ -985,6 +997,7 @@ cat >"$RUNTIME_SCRIPT" <<'EOF'
 EOF
 for run in 1 2; do
     "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
+        "${CI_SERVER_ARGS[@]}" --config-dir "$WORLD_ROOT/config-run$run" \
         --world "$WORLD_ROOT/rwf" --script "$RUNTIME_SCRIPT" \
         --hash-every 5 --ticks 20 >"$WORLD_ROOT/runtime-$run.log" 2>&1 \
         || die "runtime smoke run $run failed"
@@ -1006,6 +1019,7 @@ cat >"$SCHEDULE_SCRIPT" <<'EOF'
 4 stop
 EOF
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
+    "${CI_SERVER_ARGS[@]}" --config-dir "$WORLD_ROOT/config-schedule" \
     --world "$WORLD_ROOT/rwf" --script "$SCHEDULE_SCRIPT" \
     --autosave-interval-ticks 2 --ticks 10 \
     >"$WORLD_ROOT/schedule.log" 2>&1 \
@@ -1019,6 +1033,97 @@ grep -q '\[schedule\]: schedule runtime.autosave: .*failures 0' "$WORLD_ROOT/sch
     || die "scheduler smoke recorded a spurious autosave failure"
 echo "  runtime: scripted edit + deterministic replay hash OK"
 echo "  scheduler: autosave grid + console stats OK"
+
+# First-run server: EULA gate, cached game data and a start that names no
+# path. The EULA notice must appear without creating a world or opening a
+# port; an accepted start must find the pre-staged data and world through the
+# defaults; a second start must reuse the cache even when the configured
+# manifest endpoint is unreachable.
+FIRST_EULA_DIR="$EXTRACT_DIR/first-eula"
+mkdir -p "$FIRST_EULA_DIR"
+( cd "$FIRST_EULA_DIR" && "$BIN_DIR/refrain-server" ) \
+    >"$FIRST_EULA_DIR/notice.txt" 2>&1 \
+    && die "first run started without an accepted EULA" || true
+grep -q 'https://www.minecraft.net/en-us/eula' "$FIRST_EULA_DIR/notice.txt" \
+    || die "first run: EULA notice does not name the agreement"
+grep -q 'refrain-server --accept-eula' "$FIRST_EULA_DIR/notice.txt" \
+    || die "first run: EULA notice does not name the accept command"
+grep -q 'No world was created and no port was opened' \
+    "$FIRST_EULA_DIR/notice.txt" \
+    || die "first run: EULA notice does not state what did not happen"
+grep -q 'eula = false' "$FIRST_EULA_DIR/eula.toml" \
+    || die "first run: acceptance file was not created with eula = false"
+[[ ! -e "$FIRST_EULA_DIR/world" ]] \
+    || die "first run created a world before the EULA was accepted"
+[[ ! -e "$FIRST_EULA_DIR/config" ]] \
+    || die "first run created configuration before the EULA was accepted"
+[[ ! -e "$FIRST_EULA_DIR/data" ]] \
+    || die "first run created a data directory before the EULA was accepted"
+FIRST_RUN_DIR="$EXTRACT_DIR/first-run"
+mkdir -p "$FIRST_RUN_DIR/config"
+cp -R "$WORLD_ROOT/rwf" "$FIRST_RUN_DIR/world"
+cp -R "$CI_DATA_DIR" "$FIRST_RUN_DIR/data"
+printf 'port = 0\n' >"$FIRST_RUN_DIR/config/network.toml"
+( cd "$FIRST_RUN_DIR" && "$BIN_DIR/refrain-server" --accept-eula --ticks 10 ) \
+    >"$FIRST_RUN_DIR/start1.log" 2>&1 \
+    || die "first run: a start with defaults failed"
+grep -q '\[startup\]: .*serving Minecraft 26.3 with data version 5023' \
+    "$FIRST_RUN_DIR/start1.log" \
+    || die "first run: startup summary is missing the version line"
+grep -q "world 'world' was opened" "$FIRST_RUN_DIR/start1.log" \
+    || die "first run: startup summary is missing the world line"
+grep -q 'game data for Minecraft 26.3 was reused from the local cache' \
+    "$FIRST_RUN_DIR/start1.log" \
+    || die "first run: startup summary is missing the game data origin"
+grep -q 'created default configuration files' "$FIRST_RUN_DIR/start1.log" \
+    || die "first run: default configuration files were not created"
+grep -q 'listening address is 0.0.0.0:0 with online mode on' \
+    "$FIRST_RUN_DIR/start1.log" \
+    || die "first run: startup summary is missing the listening address"
+grep -q 'ready for Minecraft 26.3 clients' "$FIRST_RUN_DIR/start1.log" \
+    || die "first run: ready line is missing"
+# A cache hit must not fetch: the manifest endpoint is unreachable, so a start
+# that succeeded proves the data directory was reused without the network.
+( cd "$FIRST_RUN_DIR" && "$BIN_DIR/refrain-server" \
+    --data-manifest-url "https://127.0.0.1:1/version_manifest_v2.json" \
+    --ticks 5 ) >"$FIRST_RUN_DIR/start2.log" 2>&1 \
+    || die "first run: cache reuse tried to reach the network"
+grep -q 'game data for Minecraft 26.3 was reused from the local cache' \
+    "$FIRST_RUN_DIR/start2.log" \
+    || die "first run: second start did not reuse the cached data"
+grep -q 'ready for Minecraft 26.3 clients' "$FIRST_RUN_DIR/start2.log" \
+    || die "first run: second start did not become ready"
+# Offline with no data must fail closed and name the flag and remedy.
+FIRST_EMPTY_DIR="$EXTRACT_DIR/first-empty"
+mkdir -p "$FIRST_EMPTY_DIR"
+if "$BIN_DIR/refrain-server" --accept-eula \
+    --eula-file "$FIRST_RUN_DIR/eula.toml" --no-data-download \
+    --data-dir "$FIRST_EMPTY_DIR/data" --world "$WORLD_ROOT/rwf" \
+    --config-dir "$FIRST_EMPTY_DIR/config" --ticks 1 \
+    >"$FIRST_EMPTY_DIR/no-data.log" 2>&1; then
+    die "first run: --no-data-download started without any game data"
+fi
+grep -q -- '--no-data-download' "$FIRST_EMPTY_DIR/no-data.log" \
+    || die "first run: missing-data error does not name --no-data-download"
+grep -q 'stage the data directory' "$FIRST_EMPTY_DIR/no-data.log" \
+    || die "first run: missing-data error does not name the remedy"
+# A marker for another game version is stale and fails closed offline.
+FIRST_STALE_DIR="$EXTRACT_DIR/first-stale"
+cp -R "$CI_DATA_DIR" "$FIRST_STALE_DIR"
+printf '{\n  "schema": "refrain.game-data/1",\n  "game_version": "25.0",\n  "data_version": 4700\n}\n' \
+    >"$FIRST_STALE_DIR/MANIFEST.json"
+if "$BIN_DIR/refrain-server" --accept-eula \
+    --eula-file "$FIRST_RUN_DIR/eula.toml" --no-data-download \
+    --data-dir "$FIRST_STALE_DIR" --world "$WORLD_ROOT/rwf" \
+    --config-dir "$FIRST_EMPTY_DIR/config-stale" --ticks 1 \
+    >"$FIRST_EMPTY_DIR/stale.log" 2>&1; then
+    die "first run: a stale game data marker was accepted offline"
+fi
+grep -q 'not usable for Minecraft 26.3' "$FIRST_EMPTY_DIR/stale.log" \
+    || die "first run: stale-marker error does not name the target version"
+grep -q '25.0' "$FIRST_EMPTY_DIR/stale.log" \
+    || die "first run: stale-marker error does not name the recorded version"
+echo "  first-run: EULA gate, cached data, offline start, stale-marker rejection OK"
 
 echo "  world: synthetic Anvil -> RWF -> Anvil, diff=100%, independent verify OK"
 

@@ -31,6 +31,7 @@
 #include <refrain/host/abi_bridge.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/static_mod.hpp>
+#include <refrain/server/game_data.hpp>
 #include <refrain/server/provider_protocol.hpp>
 #include <refrain/server/provider_transport.hpp>
 #include <refrain/server/server_runtime.hpp>
@@ -147,6 +148,19 @@ struct runtime_provider {
         auto options{make_options(*config, provider->network, provider->world,
                                   provider->storage, provider->runtime,
                                   provider->config_store)};
+        // The runtime contract is frozen and carries no game-data fields. The
+        // composition root resolved the data directory before creating the
+        // world and published the paths for this in-process provider; without
+        // a published value the runtime keeps its checkout defaults.
+        if (const auto &game_data{refrain::server::published_game_data_paths()};
+            game_data.has_value()) {
+            options.data_dir = game_data->root;
+            options.datapack_root = game_data->datapack_root;
+            options.templates_root = game_data->templates_root;
+            options.tables_path = game_data->tables_path;
+            options.protocol_registry_path = game_data->protocol_registry_path;
+            options.game_version = game_data->game_version;
+        }
         if (provider->host != nullptr) {
             const auto protocol_instance{
                 provider->network.get_string("protocol_instance", "java_777")};

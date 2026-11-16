@@ -36,6 +36,10 @@
 #include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/startup_content.hpp>
+#include <refrain/net/download.hpp>
+#include <refrain/server/eula.hpp>
+#include <refrain/server/game_data.hpp>
+#include <refrain/server/install_layout.hpp>
 #include <refrain/server/server_properties.hpp>
 #include <refrain/world/create.hpp>
 
@@ -63,6 +67,7 @@ constexpr refrain::log::logger log_discovery{"discovery"};
 constexpr refrain::log::logger log_host{"host"};
 constexpr refrain::log::logger log_world{"world"};
 constexpr refrain::log::logger log_mods{"mods"};
+constexpr refrain::log::logger log_startup{"startup"};
 
 } // namespace
 
@@ -171,18 +176,177 @@ parse_content_trusted_keys(const std::vector<std::string> &specs)
                                     "mods.lock");
 }
 
+/// One configuration file written on a first start.
+struct default_config_file {
+    std::string_view name;
+    std::string_view text;
+};
+
+/// The generated configuration files. Every value is the built-in default the
+/// runtime already falls back to, so writing the files changes no behaviour;
+/// it makes the defaults visible, editable and documented where the operator
+/// looks for them. The keys match what the runtime reads.
+constexpr std::array<default_config_file, 5> k_default_config_files{{
+    {.name = "refrain.toml",
+     .text = "# Refrain host configuration.\n"
+             "\n"
+             "## Console log level: trace, debug, info, warn, error or off.\n"
+             "[logging]\n"
+             "level = \"info\"\n"},
+    {.name = "network.toml",
+     .text = "# Refrain network configuration, named like the vanilla\n"
+             "# server.properties keys it corresponds to.\n"
+             "\n"
+             "# Address to bind; empty binds every interface.\n"
+             "bind_host = \"0.0.0.0\"\n"
+             "port = 25565\n"
+             "online_mode = true\n"
+             "compression_threshold = 256\n"
+             "view_distance = 10\n"
+             "simulation_distance = 10\n"
+             "\n"
+             "[status]\n"
+             "motd = \"A Refrain Server\"\n"
+             "max_players = 20\n"},
+    {.name = "world.toml",
+     .text = "# Refrain world configuration.\n"
+             "\n"
+             "# Directory the world is created in or opened from.\n"
+             "path = \"world\"\n"
+             "level_name = \"world\"\n"
+             "allow_nether = true\n"},
+    {.name = "runtime.toml",
+     .text = "# Refrain tick loop configuration.\n"
+             "\n"
+             "# Warn when one tick stalls longer than this; 0 disables.\n"
+             "watchdog_timeout_ms = 5000\n"},
+    {.name = "storage.toml",
+     .text = "# Refrain world storage configuration.\n"
+             "\n"
+             "# Default zstd level for regions, and the adaptive policy by\n"
+             "# distance.\n"
+             "zstd_level = 3\n"
+             "zstd_near_level = 1\n"
+             "zstd_mid_level = 3\n"
+             "zstd_far_level = 6\n"
+             "zstd_near_radius = 2\n"
+             "zstd_mid_radius = 8\n"
+             "autosave_interval_ticks = 6000\n"
+             "compact_interval_ticks = 0\n"},
+}};
+
+/// Write the default configuration files that do not exist yet. Existing files
+/// are never rewritten, so an operator's edits survive an upgrade. Returns the
+/// names created, in table order.
+[[nodiscard]] auto write_default_config_files(std::string_view config_dir)
+    -> refrain::result<std::vector<std::string>> {
+    if (auto directories{refrain::core::io::create_directories(config_dir)};
+        !directories) {
+        return std::unexpected{directories.error()};
+    }
+    std::vector<std::string> created{};
+    for (const auto &file : k_default_config_files) {
+        const auto path{refrain::data::join_path(config_dir, file.name)};
+        if (refrain::core::io::exists(path)) {
+            continue;
+        }
+        auto written{refrain::core::io::atomic_write_text(path, file.text)};
+        if (!written) {
+            return std::unexpected{written.error()};
+        }
+        created.emplace_back(file.name);
+    }
+    return created;
+}
+
+/// One-screen startup summary: what this process serves and where its state
+/// lives. The individual subsystems log their configuration details; this block
+/// is the operator's index into them.
+struct startup_summary {
+    std::string world_path{};
+    std::int64_t seed{0};
+    bool world_created{false};
+    std::string config_dir{};
+    std::vector<std::string> created_config_files{};
+    std::string game_data_detail{};
+    std::string bind_host{};
+    std::int64_t port{0};
+    bool online_mode{false};
+};
+
+void log_startup_summary(const startup_summary &summary) {
+    log_startup.info("{} serving Minecraft {} with data version {}",
+                     refrain::version::string(),
+                     refrain::server::game_data_version,
+                     refrain::server::game_data_data_version);
+    if (summary.world_created) {
+        log_startup.info("world '{}' was created with seed {}",
+                         summary.world_path, summary.seed);
+    } else {
+        log_startup.info("world '{}' was opened", summary.world_path);
+    }
+    log_startup.info("game data for Minecraft {} was {}",
+                     refrain::server::game_data_version,
+                     summary.game_data_detail);
+    if (!summary.config_dir.empty()) {
+        if (summary.created_config_files.empty()) {
+            log_startup.info("configuration was read from '{}'",
+                             summary.config_dir);
+        } else {
+            std::string names{};
+            for (const auto &name : summary.created_config_files) {
+                if (!names.empty()) {
+                    names += ", ";
+                }
+                names += name;
+            }
+            log_startup.info("created default configuration files {} in '{}'",
+                             names, summary.config_dir);
+        }
+    }
+    log_startup.info("listening address is {}:{} with online mode {}",
+                     summary.bind_host.empty() ? "0.0.0.0" : summary.bind_host,
+                     summary.port, summary.online_mode ? "on" : "off");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
     CLI::App app{"Refrain dedicated server (server-first)", "refrain-server"};
     app.set_version_flag("--version", std::string{refrain::version::string()});
+    app.footer(
+        "Defaults: world './world', configuration './config', game data "
+        "'./data', listening address '0.0.0.0:25565', online mode on, view "
+        "distance 10 and 20 players. Every default is printed at startup and "
+        "can be overridden by the matching flag or TOML file.\n"
+        "\n"
+        "First run: without an accepted EULA the server writes './eula.toml' "
+        "with eula = false, prints the EULA notice and exits without creating "
+        "a world or opening a port. Read https://www.minecraft.net/en-us/eula "
+        "and run 'refrain-server --accept-eula'. The server then downloads the "
+        "official Minecraft " +
+        std::string{refrain::server::game_data_version} +
+        " server archive from Mojang's version manifest, verifies its "
+        "SHA-1 and unpacks the datapack and structure templates into "
+        "'./data'. Later starts reuse that cache; '--no-data-download' "
+        "makes the server offline-only.\n"
+        "\n"
+        "The default composition is 'gamepack/gamepack.toml' in the "
+        "working directory, next to the executable or in the checkout "
+        "root above it; the installed content snapshot is "
+        "'content/vanilla/" +
+        std::string{refrain::server::game_data_version} + "'.");
 
-    std::string gamepack{"gamepack/gamepack.toml"};
-    app.add_option("-g,--gamepack", gamepack, "Path to gamepack.toml");
+    std::string gamepack{};
+    app.add_option("-g,--gamepack", gamepack,
+                   "Path to gamepack.toml (default: gamepack/gamepack.toml in "
+                   "the working directory, next to the executable or in the "
+                   "checkout root above it)");
     std::string config_dir{"config"};
     app.add_option("--config-dir", config_dir,
-                   "Directory with per-namespace TOML configuration files "
-                   "(disabled when empty)");
+                   "Directory with per-namespace TOML configuration files, "
+                   "created with the defaults on first start (disabled when "
+                   "empty; default: config)");
     std::string log_level{"info"};
     app.add_option("--log-level", log_level, "Console log level");
     // Crash reporting is opt-in: without --crash-dir the server never creates a
@@ -208,8 +372,40 @@ int main(int argc, char **argv) {
     seed_option->take_last();
     std::string world_path;
     app.add_option("--world", world_path,
-                   "RWF world directory (overrides world.path; enables the "
-                   "tick loop)");
+                   "RWF world directory (default: world, or world.path from "
+                   "the configuration)");
+    std::string data_dir;
+    app.add_option("--data-dir", data_dir,
+                   "Game data directory holding the datapack, its marker and "
+                   "the structure templates (default: data; the installed "
+                   "content snapshot is used when it already holds the "
+                   "datapack)");
+    bool no_data_download{false};
+    app.add_flag("--no-data-download", no_data_download,
+                 "Never fetch the official server archive; start only from a "
+                 "staged or cached data directory");
+    std::string data_manifest_url{
+        std::string{refrain::server::default_version_manifest_url}};
+    app.add_option("--data-manifest-url", data_manifest_url,
+                   "Version manifest used to locate the official server "
+                   "archive (default: Mojang's launcher manifest)");
+    bool accept_eula{false};
+    app.add_flag("--accept-eula", accept_eula,
+                 "Record acceptance of the Minecraft End User License "
+                 "Agreement (https://www.minecraft.net/en-us/eula) and start");
+    std::string eula_file{"eula.toml"};
+    app.add_option("--eula-file", eula_file,
+                   "EULA acceptance file written and read by the server "
+                   "(default: eula.toml)");
+    std::string bind_host;
+    app.add_option("--bind", bind_host,
+                   "Listening address override (default: bind_host from "
+                   "network.toml, 0.0.0.0)");
+    std::int32_t bind_port{-1};
+    app.add_option("--port", bind_port,
+                   "Listening port override (default: port from network.toml, "
+                   "25565)")
+        ->check(CLI::Range(0, 65535));
     std::string import_properties_path;
     app.add_option("--import-properties", import_properties_path,
                    "Import a Java server.properties file as a fallback layer");
@@ -445,6 +641,45 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    // A run that only inspects the composition (`--check`, `--dump-gamepack`)
+    // never creates a world or opens a port, so it does not need the EULA; a
+    // run that starts the server refuses to do anything before the agreement
+    // is accepted. The notice goes to stdout because logging is not running
+    // yet and the operator must see it whatever the log level is.
+    const bool starts_runtime{!check_only && !dump_gamepack};
+    std::optional<refrain::server::eula_state> eula{};
+    if (starts_runtime) {
+        const auto legacy{refrain::core::io::parent_directory(eula_file) +
+                          "/eula.txt"};
+        auto state{refrain::server::ensure_eula(refrain::server::eula_options{
+            .path = eula_file, .legacy_path = legacy, .accept = accept_eula})};
+        if (!state) {
+            fmt::println(stderr, "refrain-server: {}", state.error().message);
+            return 1;
+        }
+        if (!state->accepted) {
+            fmt::print("{}", refrain::server::format_eula_notice(*state));
+            return 1;
+        }
+        eula = std::move(*state);
+    }
+
+    // Resolve the installed layout before anything logs: the composition file
+    // and the tracked game data live next to the executable in a release
+    // archive and in the checkout root for a build tree, so a zero-argument
+    // start does not depend on the working directory.
+    auto layout{refrain::server::discover_install_layout(
+        refrain::server::install_layout_options{
+            .game_version = std::string{refrain::server::game_data_version},
+            .gamepack = gamepack})};
+    if (!layout) {
+        fmt::println(stderr, "refrain-server: {}", layout.error().message);
+        return 1;
+    }
+    if (gamepack.empty()) {
+        gamepack = layout->gamepack;
+    }
+
     // CLI --log-level wins; otherwise refrain.toml [logging].level is read
     // before the full store exists so early startup logs already honor it.
     std::string effective_log_level{log_level};
@@ -484,6 +719,18 @@ int main(int argc, char **argv) {
     } shutdown_guard_instance{};
 
     log_cli.info("starting {}", refrain::version::string());
+    if (eula) {
+        if (eula->imported_legacy) {
+            log_cli.info("imported the EULA acceptance from '{}'",
+                         eula->legacy_path);
+        } else if (eula->written) {
+            log_cli.info("recorded the EULA acceptance in '{}'", eula->path);
+        }
+    }
+    if (!layout->content_root.empty()) {
+        log_content.debug("found the installed content snapshot '{}'",
+                          layout->content_root);
+    }
 
     // Crash reporting is opt-in. Without --crash-dir no crash
     // database is created (CI smoke runs and the working tree stay clean).
@@ -846,6 +1093,22 @@ int main(int argc, char **argv) {
             !status) {
             return report_error(status.error());
         }
+        if (!bind_host.empty()) {
+            if (auto status{config_store.set_string(
+                    "network", "bind_host", bind_host,
+                    refrain::core::config::layer::override)};
+                !status) {
+                return report_error(status.error());
+            }
+        }
+        if (bind_port >= 0) {
+            if (auto status{config_store.set_int64(
+                    "network", "port", bind_port,
+                    refrain::core::config::layer::override)};
+                !status) {
+                return report_error(status.error());
+            }
+        }
         log_config.info("loaded {} configuration namespaces from '{}'",
                         config_store.names().size(), config_dir);
     }
@@ -1108,8 +1371,53 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    // --- first-run game data ------------------------------------------------
+    // The datapack is not shipped with the server: after the EULA is accepted
+    // the first start fetches the official server archive from Mojang, checks
+    // it against the published SHA-1 and keeps only the unpacked datapack and
+    // structure templates. Later starts reuse the data directory without
+    // touching the network. `--no-data-download` forbids the fetch entirely,
+    // for offline hosts and pre-staged installs.
+    std::unique_ptr<refrain::net::download_transport> downloader{};
+    if (!no_data_download) {
+        auto transport{refrain::net::make_curl_download_transport()};
+        if (transport) {
+            downloader = std::move(*transport);
+        } else {
+            log_cli.warn("HTTPS downloads are unavailable: {}",
+                         transport.error().message);
+        }
+    }
+    auto game_data{refrain::server::ensure_game_data(
+        refrain::server::game_data_options{
+            .data_dir = data_dir,
+            .installed_content_root = layout->content_root,
+            .download_allowed = !no_data_download,
+            .manifest_url = data_manifest_url,
+            .working_directory = {}},
+        downloader.get())};
+    if (!game_data) {
+        return report_fatal(game_data.error());
+    }
+
+    // The generated configuration files make every default visible and
+    // editable. They are written after the `--check` exit so inspection runs
+    // leave the filesystem untouched; this run already uses the same values as
+    // code defaults. `--import-properties` keeps them unwritten: the import is
+    // a fallback layer below the operator's TOML files, and creating files with
+    // the defaults above it would silently shadow the imported values.
+    std::vector<std::string> created_config_files{};
+    if (!config_dir.empty() && import_properties_path.empty()) {
+        auto created{write_default_config_files(config_dir)};
+        if (!created) {
+            return report_fatal(created.error());
+        }
+        created_config_files = std::move(*created);
+    }
+
     // From here on the process owns a world: create it when the directory does
     // not hold one yet, then hand it to the runtime provider.
+    bool world_created{false};
     if (!refrain::core::io::exists(resolved_world_path + "/meta.rfw")) {
         seed_given = seed_option->count() > 0;
         if (!seed_given) {
@@ -1121,6 +1429,7 @@ int main(int argc, char **argv) {
         if (!created) {
             return report_fatal(created.error());
         }
+        world_created = true;
         log_world.info("created world at '{}' with seed {}",
                        resolved_world_path, seed_value);
     }
@@ -1144,6 +1453,32 @@ int main(int argc, char **argv) {
         *static_cast<const refrain_services_runtime_vtable *>(
             runtime_api->vtable),
         runtime_api->self};
+
+    // The frozen `refrain:runtime` contract has no game-data fields. The
+    // first-party runtime provider runs in this process, so the resolved paths
+    // are published for it here; an embedding that never publishes keeps the
+    // runtime's checkout defaults.
+    refrain::server::publish_game_data_paths(*game_data);
+
+    // Effective network values for the startup summary: the same views the
+    // runtime reads, after the CLI overrides installed above.
+    startup_summary summary{};
+    summary.world_path = resolved_world_path;
+    summary.world_created = world_created;
+    summary.seed = world_created ? seed_value : 0;
+    summary.config_dir = config_dir;
+    summary.created_config_files = created_config_files;
+    summary.game_data_detail = game_data->detail;
+    if (auto network_view{config_store.module("network")}) {
+        summary.bind_host = network_view->get_string("bind_host", "0.0.0.0");
+        summary.port = network_view->get_int64("port", 25565);
+        summary.online_mode = network_view->get_bool("online_mode", true);
+    } else {
+        summary.bind_host = "0.0.0.0";
+        summary.port = 25565;
+        summary.online_mode = true;
+    }
+    log_startup_summary(summary);
 
     // Pure data assembly: every string is borrowed from the CLI locals above
     // and stays alive for the whole `run` call.

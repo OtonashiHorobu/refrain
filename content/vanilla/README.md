@@ -18,8 +18,10 @@ content/vanilla/<version>/
   reports/block_defaults/   default property values per block
 ```
 
-The datapack and its `MANIFEST.json` are generated into the same directory from
-the `server.jar` you own and are not tracked by git:
+The datapack and its `MANIFEST.json` are generated from the `server.jar` you
+own and are not tracked by git. The server extracts them into its data directory
+on the first start after the EULA is accepted; to stage the snapshot locally
+instead:
 
 ```bash
 scripts/fetch-content.sh <server.jar>

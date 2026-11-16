@@ -317,7 +317,7 @@ auto zip_reader::find(std::string_view name) const noexcept
     return &impl_->entries[match->second];
 }
 
-auto zip_reader::read(const zip_entry &entry)
+auto zip_reader::read(const zip_entry &entry) const
     -> result<std::vector<std::byte>> {
     if (impl_ == nullptr || impl_->archive == nullptr) {
         return std::unexpected{
@@ -404,7 +404,8 @@ auto zip_reader::read(const zip_entry &entry)
     return data;
 }
 
-auto zip_reader::read(std::string_view name) -> result<std::vector<std::byte>> {
+auto zip_reader::read(std::string_view name) const
+    -> result<std::vector<std::byte>> {
     const auto *entry{find(name)};
     if (entry == nullptr) {
         return std::unexpected{
@@ -414,8 +415,8 @@ auto zip_reader::read(std::string_view name) -> result<std::vector<std::byte>> {
     return read(*entry);
 }
 
-auto zip_reader::extract(const zip_entry &entry, std::string_view output_root)
-    -> status {
+auto zip_reader::extract(const zip_entry &entry,
+                         std::string_view output_root) const -> status {
     if (output_root.empty()) {
         return std::unexpected{fail(error_code::invalid_argument,
                                     "zip: output root must not be empty")};

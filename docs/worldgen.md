@@ -8,8 +8,27 @@ and the structure templates that provide the prebuilt pieces.
 ## Datapack
 
 The datapack documents that drive biomes, features, structures and carvers are
-not part of the repository. Generate the datapack and its manifest from the
-`server.jar` you own:
+not part of the repository and are not shipped with the binary. On the first
+start after the EULA is accepted, the server fetches the official server archive
+of the target version from Mojang's version manifest, verifies its SHA-1 and
+unpacks the worldgen documents, the block and biome tags and the structure
+templates into the data directory (`./data` by default, see
+[Running a server](running.md#first-run)). The used game data is then:
+
+```text
+data/
+  MANIFEST.json   game version, DataVersion, archive SHA-1, content digest
+  data/           the datapack `data` tree the generator reads
+  templates/      structure templates, <namespace>/structure/**.nbt
+  reports/        the tracked reports copied next to the datapack
+```
+
+The server archive is a bundler jar: the outer archive carries metadata and the
+real server jar under `META-INF/versions/<version>/server-<version>.jar`, and the
+`data/` tree lives in that inner jar. `refrain-tools extract` and the first-run
+downloader both unwrap it, so a plain jar whose root holds `data/` also works.
+
+To stage the data offline, generate it from a `server.jar` you own:
 
 ```bash
 scripts/fetch-content.sh /path/to/server.jar
@@ -18,9 +37,12 @@ scripts/fetch-content.sh /path/to/server.jar
 The script extracts the data entries with `refrain-tools extract` and packs the
 worldgen documents and tags with `tools/worldgen/pack_content.py`. It writes
 `content/vanilla/<version>/{data,MANIFEST.json}`; pass `--version` or
-`--data-version` when they differ from the defaults. Both are game-derived data
-covered by the notice in `content/vanilla/`, are not part of the repository
-license and are not tracked by git.
+`--data-version` when they differ from the defaults. Point the server at that
+directory with `--data-dir content/vanilla/<version> --no-data-download`, or let
+it read the snapshot when it is installed next to the binary. Both the snapshot
+and a fetched data directory are game-derived data covered by the notice in
+`content/vanilla/`, are not part of the repository license and are not tracked
+by git.
 
 ## Biome parameter reports
 
