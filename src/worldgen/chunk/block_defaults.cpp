@@ -102,11 +102,7 @@ auto load_block_defaults(std::string_view data_root)
             decoded.push_back(block_default_property{
                 .name = name, .value = std::string{*text}});
         }
-        std::sort(decoded.begin(), decoded.end(),
-                  [](const block_default_property &left,
-                     const block_default_property &right) {
-                      return left.name < right.name;
-                  });
+        std::ranges::sort(decoded, {}, &block_default_property::name);
         defaults.emplace(block, std::move(decoded));
     }
     return defaults;

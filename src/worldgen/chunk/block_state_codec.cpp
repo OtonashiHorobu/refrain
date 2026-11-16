@@ -98,10 +98,8 @@ auto with_state_property(std::string_view key, std::string_view property,
     if (!replaced) {
         return std::string{key};
     }
-    std::sort(properties.begin(), properties.end(),
-              [](const auto &left, const auto &right) {
-                  return left.first < right.first;
-              });
+    std::ranges::sort(properties, {},
+                      [](const auto &entry) { return entry.first; });
     std::string out{key.substr(0, open)};
     out.push_back('[');
     for (std::size_t i = 0; i < properties.size(); ++i) {
@@ -164,10 +162,8 @@ auto decode_state_key(const data::json::value &value) -> result<std::string> {
         }
         sorted.emplace_back(property, std::move(*text));
     }
-    std::sort(sorted.begin(), sorted.end(),
-              [](const auto &left, const auto &right) {
-                  return left.first < right.first;
-              });
+    std::ranges::sort(sorted, {},
+                      [](const auto &entry) { return entry.first; });
     key.push_back('[');
     for (std::size_t i = 0; i < sorted.size(); ++i) {
         if (i != 0) {

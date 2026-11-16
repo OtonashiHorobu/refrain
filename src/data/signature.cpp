@@ -140,11 +140,9 @@ auto parse_secret_key_hex(std::string_view hex) -> result<ed25519_secret_key> {
     if (!derived) {
         return std::unexpected{derived.error()};
     }
-    const auto public_half_offset{key.bytes.size() / 2U};
-    if (!std::equal(derived->public_key.bytes.begin(),
-                    derived->public_key.bytes.end(),
-                    key.bytes.begin() +
-                        static_cast<std::ptrdiff_t>(public_half_offset))) {
+    const auto public_half{std::span<const std::byte>{key.bytes}.subspan(
+        key.bytes.size() / 2U, derived->public_key.bytes.size())};
+    if (!std::ranges::equal(derived->public_key.bytes, public_half)) {
         return std::unexpected{make_error(
             error_code::invalid_argument,
             "Ed25519 secret key public half does not match its seed")};

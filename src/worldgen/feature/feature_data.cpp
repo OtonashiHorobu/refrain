@@ -33,7 +33,7 @@ auto collect_documents(const std::string &directory, const std::string &prefix,
         return std::unexpected{entries.error()};
     }
     std::vector<std::string> sorted{entries->begin(), entries->end()};
-    std::sort(sorted.begin(), sorted.end());
+    std::ranges::sort(sorted);
     for (const auto &entry : sorted) {
         const auto path = directory + "/" + entry;
         const auto id = prefix.empty() ? entry : prefix + "/" + entry;
@@ -102,7 +102,7 @@ auto load_feature_data(std::string_view data_root) -> result<feature_data_set> {
         return std::unexpected{namespaces.error()};
     }
     std::vector<std::string> sorted{namespaces->begin(), namespaces->end()};
-    std::sort(sorted.begin(), sorted.end());
+    std::ranges::sort(sorted);
 
     for (const auto &name : sorted) {
         const auto base = std::string{data_root} + "/" + name;

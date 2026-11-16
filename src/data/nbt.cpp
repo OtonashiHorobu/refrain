@@ -379,9 +379,9 @@ class byte_reader {
             return std::unexpected{chunk.error()};
         }
         byte_array items(count);
-        std::transform(
-            chunk->begin(), chunk->end(), items.begin(),
-            [](std::byte item) { return std::to_integer<std::uint8_t>(item); });
+        std::ranges::transform(*chunk, items.begin(), [](std::byte item) {
+            return std::to_integer<std::uint8_t>(item);
+        });
         return items;
     }
 

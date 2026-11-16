@@ -52,11 +52,10 @@ namespace fs = std::filesystem;
 [[nodiscard]] auto find_entry(std::span<const pack_file_info> entries,
                               std::string_view path) noexcept
     -> const pack_file_info * {
-    const auto match{
-        std::lower_bound(entries.begin(), entries.end(), path,
-                         [](const pack_file_info &entry, std::string_view key) {
-                             return std::string_view{entry.path} < key;
-                         })};
+    const auto match{std::ranges::lower_bound(
+        entries, path, {}, [](const pack_file_info &entry) {
+            return std::string_view{entry.path};
+        })};
     if (match == entries.end() || std::string_view{match->path} != path) {
         return nullptr;
     }
@@ -73,10 +72,7 @@ namespace fs = std::filesystem;
                                         std::to_string(vfs_max_files) +
                                         " entries (refused before indexing)")};
     }
-    std::sort(candidates.begin(), candidates.end(),
-              [](const pack_file_info &lhs, const pack_file_info &rhs) {
-                  return lhs.path < rhs.path;
-              });
+    std::ranges::sort(candidates, {}, &pack_file_info::path);
     for (std::size_t index{0}; index < candidates.size(); ++index) {
         if (!is_safe_relative_path(candidates[index].path)) {
             return std::unexpected{
@@ -624,11 +620,10 @@ auto vfs::find(std::string_view path) const noexcept -> const pack * {
     if (!impl_ || impl_->files.empty()) {
         return nullptr;
     }
-    const auto match{
-        std::lower_bound(impl_->files.begin(), impl_->files.end(), path,
-                         [](const pack_file_info &entry, std::string_view key) {
-                             return std::string_view{entry.path} < key;
-                         })};
+    const auto match{std::ranges::lower_bound(
+        impl_->files, path, {}, [](const pack_file_info &entry) {
+            return std::string_view{entry.path};
+        })};
     if (match == impl_->files.end() || std::string_view{match->path} != path) {
         return nullptr;
     }
@@ -649,11 +644,10 @@ auto vfs::size(std::string_view path) const -> result<std::uint64_t> {
         return std::unexpected{
             fail(error_code::not_initialized, "vfs has no mounted packs")};
     }
-    const auto match{
-        std::lower_bound(impl_->files.begin(), impl_->files.end(), path,
-                         [](const pack_file_info &entry, std::string_view key) {
-                             return std::string_view{entry.path} < key;
-                         })};
+    const auto match{std::ranges::lower_bound(
+        impl_->files, path, {}, [](const pack_file_info &entry) {
+            return std::string_view{entry.path};
+        })};
     if (match == impl_->files.end() || std::string_view{match->path} != path) {
         return std::unexpected{
             fail(error_code::not_found,
@@ -699,11 +693,10 @@ auto vfs::list_prefix(std::string_view prefix) const
     if (!impl_) {
         return result;
     }
-    auto iterator{
-        std::lower_bound(impl_->files.begin(), impl_->files.end(), prefix,
-                         [](const pack_file_info &entry, std::string_view key) {
-                             return std::string_view{entry.path} < key;
-                         })};
+    auto iterator{std::ranges::lower_bound(
+        impl_->files, prefix, {}, [](const pack_file_info &entry) {
+            return std::string_view{entry.path};
+        })};
     for (; iterator != impl_->files.end() &&
            std::string_view{iterator->path}.starts_with(prefix);
          ++iterator) {
@@ -732,11 +725,11 @@ auto vfs::list_directory(std::string_view directory) const
     }
 
     std::vector<std::string> children;
-    auto iterator{std::lower_bound(
-        impl_->files.begin(), impl_->files.end(), std::string_view{prefix},
-        [](const pack_file_info &entry, std::string_view key) {
-            return std::string_view{entry.path} < key;
-        })};
+    auto iterator{
+        std::ranges::lower_bound(impl_->files, std::string_view{prefix}, {},
+                                 [](const pack_file_info &entry) {
+                                     return std::string_view{entry.path};
+                                 })};
     for (; iterator != impl_->files.end() &&
            std::string_view{iterator->path}.starts_with(prefix);
          ++iterator) {
@@ -753,7 +746,7 @@ auto vfs::list_directory(std::string_view directory) const
     }
     // The merged view only yields each direct child once, and iterating a
     // sorted path list already yields them grouped; normalize defensively.
-    std::sort(children.begin(), children.end());
+    std::ranges::sort(children);
     children.erase(std::unique(children.begin(), children.end()),
                    children.end());
     return children;

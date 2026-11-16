@@ -1555,10 +1555,7 @@ auto tree_feature::place_roots(feature_context &context,
     };
     const auto is_muddy = [&](block_state_id state) {
         const auto name = states.name(state);
-        return std::any_of(
-            options_.mangrove_muddy_roots_in.begin(),
-            options_.mangrove_muddy_roots_in.end(),
-            [&](const std::string &entry) { return name == entry; });
+        return std::ranges::contains(options_.mangrove_muddy_roots_in, name);
     };
     const auto waterlogged = [&](const block_pos &pos,
                                  block_state_id state) -> block_state_id {
@@ -2465,11 +2462,8 @@ auto tree_feature::place(feature_context &context, worldgen_random &random,
     if (!decorators_.empty()) {
         auto sorted_logs = logs;
         auto sorted_leaves = leaves;
-        const auto by_y = [](const block_pos &left, const block_pos &right) {
-            return left.y < right.y;
-        };
-        std::stable_sort(sorted_logs.begin(), sorted_logs.end(), by_y);
-        std::stable_sort(sorted_leaves.begin(), sorted_leaves.end(), by_y);
+        std::ranges::stable_sort(sorted_logs, {}, &block_pos::y);
+        std::ranges::stable_sort(sorted_leaves, {}, &block_pos::y);
         tree_decorator_context decorator_context{.context = context,
                                                  .states = *states_,
                                                  .random = random,

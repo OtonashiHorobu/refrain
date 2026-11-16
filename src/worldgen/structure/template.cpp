@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <ranges>
 #include <set>
 #include <string>
 #include <tuple>
@@ -304,13 +305,11 @@ auto load_palette(block_state_registry &states,
             other.push_back(std::move(info));
         }
     }
-    std::stable_sort(full.begin(), full.end(), by_y_x_z);
-    std::stable_sort(other.begin(), other.end(), by_y_x_z);
-    std::stable_sort(block_entities.begin(), block_entities.end(), by_y_x_z);
-    full.insert(full.end(), std::make_move_iterator(other.begin()),
-                std::make_move_iterator(other.end()));
-    full.insert(full.end(), std::make_move_iterator(block_entities.begin()),
-                std::make_move_iterator(block_entities.end()));
+    std::ranges::stable_sort(full, by_y_x_z);
+    std::ranges::stable_sort(other, by_y_x_z);
+    std::ranges::stable_sort(block_entities, by_y_x_z);
+    full.append_range(other | std::views::as_rvalue);
+    full.append_range(block_entities | std::views::as_rvalue);
     return full;
 }
 
@@ -355,9 +354,9 @@ auto find_state(
         }
         bool matches = true;
         for (const auto &[property, value] : properties) {
-            const auto found = std::find_if(
-                parsed.properties.begin(), parsed.properties.end(),
-                [&](const auto &entry) { return entry.first == property; });
+            const auto found = std::ranges::find(
+                parsed.properties, property,
+                [](const auto &entry) { return entry.first; });
             if (found == parsed.properties.end() || found->second != value) {
                 matches = false;
                 break;
@@ -379,9 +378,9 @@ auto state_key_matches(const block_state_registry &states, block_state_id state,
         return false;
     }
     for (const auto &[property, value] : expected.properties) {
-        const auto found = std::find_if(
-            actual.properties.begin(), actual.properties.end(),
-            [&](const auto &entry) { return entry.first == property; });
+        const auto found =
+            std::ranges::find(actual.properties, property,
+                              [](const auto &entry) { return entry.first; });
         if (found == actual.properties.end() || found->second != value) {
             return false;
         }
@@ -397,8 +396,7 @@ auto rule_matches(const rule_test &test, block_state_registry &states,
     case rule_test_type::block_match:
     case rule_test_type::random_block_match: {
         const auto name = state_block_name(states.name(state));
-        if (std::find(test.blocks.begin(), test.blocks.end(), name) ==
-            test.blocks.end()) {
+        if (!std::ranges::contains(test.blocks, name)) {
             return false;
         }
         if (test.type == rule_test_type::random_block_match) {
@@ -1358,8 +1356,7 @@ auto int_provider_minimum(const data::json::value &document, jint &minimum)
         "minecraft:very_biased_to_bottom",
         "minecraft:clamped_normal",
     }};
-    if (std::find(range_providers.begin(), range_providers.end(), *type) !=
-        range_providers.end()) {
+    if (std::ranges::contains(range_providers, *type)) {
         auto value =
             json_int(document.find("min_inclusive"), "provider minimum");
         if (!value) {
@@ -2692,7 +2689,7 @@ auto block_ignore_processor::process(block_state_registry &states,
     (void)reference;
     (void)random;
     const auto name = state_block_name(states.name(info.state));
-    if (std::find(blocks_.begin(), blocks_.end(), name) != blocks_.end()) {
+    if (std::ranges::contains(blocks_, name)) {
         return std::nullopt;
     }
     return info;
@@ -2715,7 +2712,7 @@ auto block_rot_processor::process(block_state_registry &states,
             }
             return entry == name;
         };
-        if (std::none_of(rottable_.begin(), rottable_.end(), matches)) {
+        if (std::ranges::none_of(rottable_, matches)) {
             return info;
         }
     }

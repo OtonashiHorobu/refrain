@@ -335,9 +335,8 @@ struct prepared_block {
     write_u32(file_span, header_block_size_offset, blob_block_size);
     write_u32(file_span, header_block_count_offset, block_count);
     write_u64(file_span, header_logical_size_offset, logical_size);
-    std::copy(digest.begin(), digest.end(),
-              file.begin() +
-                  static_cast<std::ptrdiff_t>(header_file_blake3_offset));
+    std::ranges::copy(digest, file.begin() + static_cast<std::ptrdiff_t>(
+                                                 header_file_blake3_offset));
     write_u32(file_span, header_table_size_offset,
               static_cast<std::uint32_t>(table_size));
 
@@ -352,20 +351,19 @@ struct prepared_block {
         write_u32(table, entry_offset + table_stored_size_offset,
                   block.stored_size);
         write_u32(table, entry_offset + table_raw_size_offset, block.raw_size);
-        std::copy(block.block_blake3.begin(), block.block_blake3.end(),
-                  table.begin() +
-                      static_cast<std::ptrdiff_t>(entry_offset +
-                                                  table_block_blake3_offset));
+        std::ranges::copy(block.block_blake3,
+                          table.begin() +
+                              static_cast<std::ptrdiff_t>(
+                                  entry_offset + table_block_blake3_offset));
     }
 
     for (const auto &block : blocks) {
         auto destination{file_span.subspan(
             static_cast<std::size_t>(block.stored_offset), block.stored_size)};
         if (block.stored_size == block.raw_size) {
-            std::copy(block.raw.begin(), block.raw.end(), destination.begin());
+            std::ranges::copy(block.raw, destination.begin());
         } else {
-            std::copy(block.compressed.begin(), block.compressed.end(),
-                      destination.begin());
+            std::ranges::copy(block.compressed, destination.begin());
         }
     }
 
@@ -656,7 +654,7 @@ class packed_table_cache {
     const auto source{file.subspan(
         static_cast<std::size_t>(block.stored_offset), block.stored_size)};
     if (block.stored_size == block.raw_size) {
-        std::copy(source.begin(), source.end(), target.begin());
+        std::ranges::copy(source, target.begin());
         return status_ok();
     }
     const auto written{ZSTD_decompress(target.data(), target.size(),
@@ -1473,8 +1471,8 @@ struct batch::impl {
         if (seen.contains(digest)) {
             return true;
         }
-        return std::binary_search(existing_digests.begin(),
-                                  existing_digests.end(), digest, digest_less);
+        return std::ranges::binary_search(existing_digests, digest,
+                                          digest_less);
     }
 
     /// Seal the open segment (if any) and stamp its id onto the matching
@@ -1533,8 +1531,7 @@ auto batch::begin(std::string_view store_root, const blob_table_view *existing,
         for (const auto &entry : existing->entries) {
             state->existing_digests.push_back(entry.digest);
         }
-        std::sort(state->existing_digests.begin(),
-                  state->existing_digests.end(), digest_less);
+        std::ranges::sort(state->existing_digests, digest_less);
     }
     return batch{std::move(state)};
 }

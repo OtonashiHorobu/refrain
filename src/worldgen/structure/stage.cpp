@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <ranges>
 
 namespace refrain::worldgen::structure {
 
@@ -535,9 +536,7 @@ auto generate_structure_area(const chunk_pos &target,
             for (jint dz = -radius; dz <= radius; ++dz) {
                 const chunk_pos chunk{.x = target.x + dx, .z = target.z + dz};
                 auto starts = generate_structure_starts(chunk, context);
-                area.starts.insert(area.starts.end(),
-                                   std::make_move_iterator(starts.begin()),
-                                   std::make_move_iterator(starts.end()));
+                area.starts.append_range(starts | std::views::as_rvalue);
             }
         }
     }
@@ -566,8 +565,7 @@ auto generate_structure_starts(const chunk_pos &chunk,
         } else if (set.concentric_rings.has_value()) {
             const auto positions = concentric_ring_positions(
                 context.seed, *set.concentric_rings, context);
-            set_candidate = std::find(positions.begin(), positions.end(),
-                                      chunk) != positions.end();
+            set_candidate = std::ranges::contains(positions, chunk);
         }
         if (!set_candidate) {
             continue;

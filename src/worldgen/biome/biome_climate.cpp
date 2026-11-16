@@ -92,7 +92,7 @@ auto collect_biome_documents(
         if (auto walked = walk(walk, base, ""); !walked) {
             return walked;
         }
-        std::sort(pending.begin(), pending.end());
+        std::ranges::sort(pending);
         for (auto &entry : pending) {
             out.push_back(std::move(entry));
         }

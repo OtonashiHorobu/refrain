@@ -90,9 +90,7 @@ auto lazy_y(material_context &context, std::function<bool()> compute)
 
 auto contains_biome(const std::vector<std::string> &keys, std::string_view key)
     -> bool {
-    return std::any_of(
-        keys.begin(), keys.end(),
-        [key](const std::string &entry) { return entry == key; });
+    return std::ranges::contains(keys, key);
 }
 
 } // namespace
@@ -497,18 +495,17 @@ auto rule_compiler::compile_condition(const condition &value)
         auto keys = value.biome_is;
         const auto *possible = context_.possible_biomes();
         if (possible != nullptr) {
-            const bool can_never = std::none_of(
-                keys.begin(), keys.end(), [possible](const std::string &key) {
+            const bool can_never =
+                std::ranges::none_of(keys, [possible](const std::string &key) {
                     return possible->contains(key);
                 });
             if (can_never) {
                 return condition_evaluator{[]() { return false; }};
             }
             const bool always =
-                std::all_of(possible->begin(), possible->end(),
-                            [&keys](const std::string &key) {
-                                return contains_biome(keys, key);
-                            });
+                std::ranges::all_of(*possible, [&keys](const std::string &key) {
+                    return contains_biome(keys, key);
+                });
             if (always) {
                 return condition_evaluator{[]() { return true; }};
             }
@@ -810,7 +807,7 @@ auto collect_noise_documents(
         if (auto walked = walk(walk, base, ""); !walked) {
             return walked;
         }
-        std::sort(pending.begin(), pending.end());
+        std::ranges::sort(pending);
         for (auto &entry : pending) {
             out.push_back(std::move(entry));
         }

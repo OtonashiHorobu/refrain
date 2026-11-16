@@ -41,8 +41,8 @@ auto heightmap::highest_taken(jint x, jint z) const -> jint {
 }
 
 auto heightmap::empty() const noexcept -> bool {
-    return std::all_of(first_available_.begin(), first_available_.end(),
-                       [this](jint value) { return value <= min_y_; });
+    return std::ranges::all_of(first_available_,
+                               [this](jint value) { return value <= min_y_; });
 }
 
 void heightmap::set_first_available(jint x, jint z, jint value) {

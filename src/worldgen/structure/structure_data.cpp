@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <ranges>
 #include <set>
 #include <string>
 #include <utility>
@@ -43,7 +44,7 @@ auto collect_documents(const std::string &directory, const std::string &prefix,
         return std::unexpected{entries.error()};
     }
     std::vector<std::string> sorted{entries->begin(), entries->end()};
-    std::sort(sorted.begin(), sorted.end());
+    std::ranges::sort(sorted);
     for (const auto &entry : sorted) {
         const auto path = directory + "/" + entry;
         const auto id = prefix.empty() ? entry : prefix + "/" + entry;
@@ -139,8 +140,7 @@ auto generation_step_ordinal(std::string_view step) -> jint {
 
 auto structure_data_set::allows_biome(const structure_document &structure,
                                       std::string_view biome) const -> bool {
-    return std::find(structure.biome_ids.begin(), structure.biome_ids.end(),
-                     biome) != structure.biome_ids.end();
+    return std::ranges::contains(structure.biome_ids, biome);
 }
 
 namespace {
@@ -248,9 +248,8 @@ auto structure_step_index(const structure_data_set &data,
             ids.push_back(id);
         }
     }
-    std::sort(ids.begin(), ids.end());
-    const auto position =
-        std::lower_bound(ids.begin(), ids.end(), found->first);
+    std::ranges::sort(ids);
+    const auto position = std::ranges::lower_bound(ids, found->first);
     if (position == ids.end() || *position != found->first) {
         return std::nullopt;
     }
@@ -270,7 +269,7 @@ auto load_structure_data(std::string_view data_root)
         return std::unexpected{namespaces.error()};
     }
     std::vector<std::string> sorted{namespaces->begin(), namespaces->end()};
-    std::sort(sorted.begin(), sorted.end());
+    std::ranges::sort(sorted);
     for (const auto &name : sorted) {
         const auto base = std::string{data_root} + "/" + name;
         if (!core::io::is_directory(base)) {
@@ -293,9 +292,7 @@ auto load_structure_data(std::string_view data_root)
                                        id + ") " + document.dump())};
                 }
                 auto &values = result.biome_tags[name + ":" + id];
-                values.insert(values.end(),
-                              std::make_move_iterator(ids->begin()),
-                              std::make_move_iterator(ids->end()));
+                values.append_range(*ids | std::views::as_rvalue);
             }
         }
 

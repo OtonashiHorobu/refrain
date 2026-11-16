@@ -87,8 +87,8 @@ auto cook_directory_rfs(std::string_view root, const rfs_write_options &options)
                 }
                 const auto normalized{parsed->dump()};
                 owners.emplace_back(normalized.size());
-                std::transform(
-                    normalized.begin(), normalized.end(), owners.back().begin(),
+                std::ranges::transform(
+                    normalized, owners.back().begin(),
                     [](char value) { return static_cast<std::byte>(value); });
             } else if (key.ends_with(".nbt")) {
                 // Datapack structures are gzip-compressed NBT. Accept raw NBT
@@ -130,10 +130,7 @@ auto cook_directory_rfs(std::string_view root, const rfs_write_options &options)
         }
     }
 
-    std::sort(records.begin(), records.end(),
-              [](const rfs_input &lhs, const rfs_input &rhs) {
-                  return lhs.key < rhs.key;
-              });
+    std::ranges::sort(records, {}, &rfs_input::key);
 
     auto bytes{build_rfs(records, rfs_schema_hash{}, options)};
     if (!bytes) {

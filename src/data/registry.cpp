@@ -49,7 +49,7 @@ auto fingerprint_of(std::string_view type_name,
     for (const auto &location : locations) {
         texts.push_back(location.to_string());
     }
-    std::sort(texts.begin(), texts.end());
+    std::ranges::sort(texts);
 
     std::string encoded;
     encoded.reserve(fingerprint_domain.size() + 1U + 16U + type_name.size() +

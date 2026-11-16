@@ -184,10 +184,7 @@ struct prepared_record {
 
     // Deterministic order: records are stored sorted by key bytes; the writer
     // never depends on the caller's input order.
-    std::sort(prepared.begin(), prepared.end(),
-              [](const prepared_record &lhs, const prepared_record &rhs) {
-                  return lhs.key < rhs.key;
-              });
+    std::ranges::sort(prepared, {}, &prepared_record::key);
     for (std::size_t index{1}; index < prepared.size(); ++index) {
         if (prepared[index - 1U].key == prepared[index].key) {
             return std::unexpected{invalid_argument_error(
@@ -660,10 +657,9 @@ auto rfs_reader::open_file(std::string_view path) -> result<rfs_reader> {
 auto rfs_reader::find(std::string_view key) const noexcept
     -> const rfs_entry * {
     const auto match{
-        std::lower_bound(entries_.begin(), entries_.end(), key,
-                         [](const rfs_entry &entry, std::string_view wanted) {
-                             return std::string_view{entry.key} < wanted;
-                         })};
+        std::ranges::lower_bound(entries_, key, {}, [](const rfs_entry &entry) {
+            return std::string_view{entry.key};
+        })};
     if (match == entries_.end() || std::string_view{match->key} != key) {
         return nullptr;
     }
