@@ -238,10 +238,11 @@ Generated files are not edited by hand. Change the schema or the emitter in
 
 ## Versioning
 
-Before the first public release, incompatible contract changes are made in
-place at the current major version; only the schema hash changes, and no
-migration path or new `v2`/`v3` name is introduced. This keeps pre-release
-builds from accumulating versions with no external readers.
+Contracts and mod manifests carry real versions. A service contract and a mod
+manifest follow SemVer 2.0.0: a breaking change bumps the major, an added
+vtable slot or an appended struct field bumps the minor, and a fix bumps the
+patch. A version never decreases, and a released number is never reused for
+different content.
 
 New services also start at `1.0.0`. The emitted ABI major is the contract
 major, and the mod loader treats a declared ABI major of zero as a legacy
@@ -282,8 +283,12 @@ setting and continues. An error returned through a non-empty slot is a real
 failure, never a way to say the operation does not apply.
 
 The ABI major version must match between a provider and its consumer and only
-changes for an incompatible layout or calling change. After the release freeze,
-contracts switch to SemVer increments with migrations.
+changes for an incompatible layout or calling change; the minor and patch carry
+additive and compatible evolution.
+
+On-disk formats keep a monotonic integer format version. A breaking layout
+change bumps it and either migrates older data or refuses it with the supported
+versions named. The schema hash identifies the build; it is not a version.
 
 ### Version record
 

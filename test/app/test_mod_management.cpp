@@ -207,8 +207,8 @@ struct fixture {
 
 const suite mod_management_service_tests = [] {
     "mod management/list reports the running composition"_test = [] {
-        fixture test{"list"};
-        test.context.loaded.push_back(app::mod_management_mod{
+        fixture env{"list"};
+        env.context.loaded.push_back(app::mod_management_mod{
             .id = "refrain.world.vanilla",
             .version = "1.0.0",
             .loader = "builtin",
@@ -216,64 +216,64 @@ const suite mod_management_service_tests = [] {
             .source = "builtin",
             .services = {"refrain:world"},
         });
-        auto service{test.service()};
-        const auto report{run(service, {"list"}, test.console())};
+        auto service{env.service()};
+        const auto report{run(service, {"list"}, env.console())};
         expect(report.ok) << report.error;
         expect(report.lines.size() == 2U) << report.lines.size();
         expect(contains(report.lines, "refrain.world.vanilla 1.0.0"));
         expect(contains(report.lines, "refrain:world"));
-        expect(test.audit.size() == 1U);
-        expect(test.audit.front().action == "list");
-        expect(test.audit.front().result == "ok");
-        expect(test.audit.front().actor_kind == "console");
+        expect(env.audit.size() == 1U);
+        expect(env.audit.front().action == "list");
+        expect(env.audit.front().result == "ok");
+        expect(env.audit.front().actor_kind == "console");
     };
 
     "mod management/install refuses without confirmation and audits it"_test =
         [] {
-            fixture test{"install-refused"};
+            fixture env{"install-refused"};
             expect(
-                materialise(test.work, "mod", "refrain.test.manager", "1.0.0"));
-            auto archive{pack(test.work, "mod", "out/mod.rfmod")};
+                materialise(env.work, "mod", "refrain.test.manager", "1.0.0"));
+            auto archive{pack(env.work, "mod", "out/mod.rfmod")};
             expect(archive.has_value());
             if (!archive) {
                 return;
             }
-            test.context.store = test.store_path();
-            auto service{test.service()};
+            env.context.store = env.store_path();
+            auto service{env.service()};
             const auto report{
-                run(service, {"install", *archive}, test.console())};
+                run(service, {"install", *archive}, env.console())};
             expect(!report.ok);
             expect(report.outcome == "refused");
             expect(report.error.find("confirm") != std::string::npos)
                 << report.error;
-            expect(test.receipt_count() == 0U);
-            expect(test.audit.size() == 1U);
-            expect(test.audit.front().action == "install");
-            expect(test.audit.front().result == "refused");
-            expect(!test.audit.front().detail.empty());
+            expect(env.receipt_count() == 0U);
+            expect(env.audit.size() == 1U);
+            expect(env.audit.front().action == "install");
+            expect(env.audit.front().result == "refused");
+            expect(!env.audit.front().detail.empty());
         };
 
     "mod management/install with confirm writes a receipt and audits it"_test =
         [] {
-            fixture test{"install-confirm"};
+            fixture env{"install-confirm"};
             expect(
-                materialise(test.work, "mod", "refrain.test.manager", "1.0.0"));
-            auto archive{pack(test.work, "mod", "out/mod.rfmod")};
+                materialise(env.work, "mod", "refrain.test.manager", "1.0.0"));
+            auto archive{pack(env.work, "mod", "out/mod.rfmod")};
             expect(archive.has_value());
             if (!archive) {
                 return;
             }
-            test.context.store = test.store_path();
-            auto service{test.service()};
+            env.context.store = env.store_path();
+            auto service{env.service()};
             const auto report{
-                run(service, {"install", *archive, "confirm"}, test.console())};
+                run(service, {"install", *archive, "confirm"}, env.console())};
             expect(report.ok) << report.error;
             // The store change is durable; with hot install off it lands on
             // the next start.
             expect(report.outcome == "restart-required");
-            expect(test.receipt_count() == 1U);
-            expect(test.audit.size() == 1U);
-            const auto &record{test.audit.front()};
+            expect(env.receipt_count() == 1U);
+            expect(env.audit.size() == 1U);
+            const auto &record{env.audit.front()};
             expect(record.action == "install");
             expect(record.id == "refrain.test.manager");
             expect(record.version == "1.0.0");
@@ -283,133 +283,132 @@ const suite mod_management_service_tests = [] {
         };
 
     "mod management/install --dry-run writes no store state"_test = [] {
-        fixture test{"install-dry-run"};
-        expect(materialise(test.work, "mod", "refrain.test.manager", "1.0.0"));
-        auto archive{pack(test.work, "mod", "out/mod.rfmod")};
+        fixture env{"install-dry-run"};
+        expect(materialise(env.work, "mod", "refrain.test.manager", "1.0.0"));
+        auto archive{pack(env.work, "mod", "out/mod.rfmod")};
         expect(archive.has_value());
         if (!archive) {
             return;
         }
-        test.context.store = test.store_path();
-        auto service{test.service()};
+        env.context.store = env.store_path();
+        auto service{env.service()};
         const auto report{
-            run(service, {"install", *archive, "--dry-run"}, test.console())};
+            run(service, {"install", *archive, "--dry-run"}, env.console())};
         expect(report.ok) << report.error;
         expect(report.outcome == "dry-run");
-        expect(test.receipt_count() == 0U);
+        expect(env.receipt_count() == 0U);
         expect(contains(report.lines, "dry run"));
-        expect(test.audit.size() == 1U);
-        expect(test.audit.front().result == "dry-run");
-        expect(test.audit.front().id == "refrain.test.manager");
+        expect(env.audit.size() == 1U);
+        expect(env.audit.front().result == "dry-run");
+        expect(env.audit.front().id == "refrain.test.manager");
     };
 
     "mod management/install rejects a missing or wrong-suffix path"_test = [] {
-        fixture test{"install-path"};
-        test.context.store = test.store_path();
-        auto service{test.service()};
+        fixture env{"install-path"};
+        env.context.store = env.store_path();
+        auto service{env.service()};
         const auto missing{run(service,
                                {"install", "does-not-exist.rfmod", "confirm"},
-                               test.console())};
+                               env.console())};
         expect(!missing.ok);
         expect(missing.error.find(".rfmod") != std::string::npos)
             << missing.error;
         expect(missing.outcome == "failed");
 
-        expect(test.work.write("not-a-package.txt", "hello"));
-        const auto suffix{
-            run(service,
-                {"install", test.work.path("not-a-package.txt").string(),
-                 "confirm"},
-                test.console())};
+        expect(env.work.write("not-a-package.txt", "hello"));
+        const auto suffix{run(
+            service,
+            {"install", env.work.path("not-a-package.txt").string(), "confirm"},
+            env.console())};
         expect(!suffix.ok);
         expect(suffix.error.find(".rfmod") != std::string::npos)
             << suffix.error;
     };
 
     "mod management/uninstall requires confirmation"_test = [] {
-        fixture test{"uninstall-refused"};
-        expect(materialise(test.work, "mod", "refrain.test.manager", "1.0.0"));
-        auto archive{pack(test.work, "mod", "out/mod.rfmod")};
+        fixture env{"uninstall-refused"};
+        expect(materialise(env.work, "mod", "refrain.test.manager", "1.0.0"));
+        auto archive{pack(env.work, "mod", "out/mod.rfmod")};
         expect(archive.has_value());
         if (!archive) {
             return;
         }
-        test.context.store = test.store_path();
-        auto service{test.service()};
+        env.context.store = env.store_path();
+        auto service{env.service()};
         expect(
-            run(service, {"install", *archive, "confirm"}, test.console()).ok);
-        const auto report{run(service, {"uninstall", "refrain.test.manager"},
-                              test.console())};
+            run(service, {"install", *archive, "confirm"}, env.console()).ok);
+        const auto report{
+            run(service, {"uninstall", "refrain.test.manager"}, env.console())};
         expect(!report.ok);
         expect(report.outcome == "refused");
         expect(report.error.find("confirm") != std::string::npos);
-        expect(test.receipt_count() == 1U);
+        expect(env.receipt_count() == 1U);
     };
 
     "mod management/uninstall removes the receipt and audits it"_test = [] {
-        fixture test{"uninstall-confirm"};
-        expect(materialise(test.work, "mod", "refrain.test.manager", "1.0.0"));
-        auto archive{pack(test.work, "mod", "out/mod.rfmod")};
+        fixture env{"uninstall-confirm"};
+        expect(materialise(env.work, "mod", "refrain.test.manager", "1.0.0"));
+        auto archive{pack(env.work, "mod", "out/mod.rfmod")};
         expect(archive.has_value());
         if (!archive) {
             return;
         }
-        test.context.store = test.store_path();
-        auto service{test.service()};
+        env.context.store = env.store_path();
+        auto service{env.service()};
         expect(
-            run(service, {"install", *archive, "confirm"}, test.console()).ok);
-        test.audit.clear();
+            run(service, {"install", *archive, "confirm"}, env.console()).ok);
+        env.audit.clear();
         const auto report{
             run(service, {"uninstall", "refrain.test.manager@1.0.0", "confirm"},
-                test.console())};
+                env.console())};
         expect(report.ok) << report.error;
-        expect(test.receipt_count() == 0U);
+        expect(env.receipt_count() == 0U);
         expect(
             contains(report.lines, "uninstalled refrain.test.manager 1.0.0"));
-        expect(test.audit.size() == 1U);
-        expect(test.audit.front().action == "uninstall");
-        expect(test.audit.front().id == "refrain.test.manager");
-        expect(test.audit.front().version == "1.0.0");
+        expect(env.audit.size() == 1U);
+        expect(env.audit.front().action == "uninstall");
+        expect(env.audit.front().id == "refrain.test.manager");
+        expect(env.audit.front().version == "1.0.0");
     };
 
     "mod management/installed lists receipts of the target store"_test = [] {
-        fixture test{"installed"};
-        expect(materialise(test.work, "mod", "refrain.test.manager", "1.0.0"));
-        auto archive{pack(test.work, "mod", "out/mod.rfmod")};
+        fixture env{"installed"};
+        expect(materialise(env.work, "mod", "refrain.test.manager", "1.0.0"));
+        auto archive{pack(env.work, "mod", "out/mod.rfmod")};
         expect(archive.has_value());
         if (!archive) {
             return;
         }
-        test.context.store = test.store_path();
-        auto service{test.service()};
-        const auto empty{run(service, {"installed"}, test.console())};
+        env.context.store = env.store_path();
+        auto service{env.service()};
+        const auto empty{run(service, {"installed"}, env.console())};
         expect(empty.ok);
         expect(contains(empty.lines, "no mods are installed"));
         expect(
-            run(service, {"install", *archive, "confirm"}, test.console()).ok);
-        const auto listed{run(service, {"installed"}, test.console())};
+            run(service, {"install", *archive, "confirm"}, env.console()).ok);
+        const auto listed{run(service, {"installed"}, env.console())};
         expect(listed.ok);
         expect(contains(listed.lines, "refrain.test.manager 1.0.0"));
     };
 
     "mod management/installed without a content store reports the gap"_test =
         [] {
-            fixture test{"no-store"};
-            auto service{test.service()};
-            const auto report{run(service, {"installed"}, test.console())};
+            fixture env{"no-store"};
+            auto service{env.service()};
+            const auto report{run(service, {"installed"}, env.console())};
             expect(!report.ok);
             expect(report.error.find("--content-store") != std::string::npos)
                 << report.error;
-            expect(test.audit.size() == 1U);
-            expect(test.audit.front().result == "failed");
+            expect(env.audit.size() == 1U);
+            expect(env.audit.front().result == "failed");
         };
 
     "mod management/verify reports a signed package and its trust"_test = [] {
-        fixture test{"verify"};
-        expect(materialise(test.work, "mod", "refrain.test.manager", "1.0.0"));
+        fixture env{"verify"};
+        expect(materialise(env.work, "mod", "refrain.test.manager", "1.0.0"));
         const auto keypair{signed_keypair()};
         auto archive{
-            pack(test.work, "mod", "out/mod.rfmod",
+            pack(env.work, "mod", "out/mod.rfmod",
                  mod::rfmod_write_options{.signing = mod::rfmod_signing_options{
                                               .secret_key = keypair.secret_key,
                                               .key_id = std::string{key_a}}})};
@@ -417,79 +416,79 @@ const suite mod_management_service_tests = [] {
         if (!archive) {
             return;
         }
-        test.context.policy.require_signature = true;
-        test.context.policy.trusted_keys.push_back(mod::rfmod_trusted_key{
+        env.context.policy.require_signature = true;
+        env.context.policy.trusted_keys.push_back(mod::rfmod_trusted_key{
             .key_id = std::string{key_a}, .public_key = keypair.public_key});
-        auto service{test.service()};
-        const auto report{run(service, {"verify", *archive}, test.player())};
+        auto service{env.service()};
+        const auto report{run(service, {"verify", *archive}, env.player())};
         expect(report.ok) << report.error;
         expect(report.lines.size() == 4U);
         expect(contains(report.lines, "trusted"));
-        expect(test.audit.size() == 1U);
-        expect(test.audit.front().key_id == key_a);
-        expect(test.audit.front().digest.size() == 64U);
-        expect(test.audit.front().actor_kind == "player");
-        expect(test.audit.front().actor_uuid ==
+        expect(env.audit.size() == 1U);
+        expect(env.audit.front().key_id == key_a);
+        expect(env.audit.front().digest.size() == 64U);
+        expect(env.audit.front().actor_kind == "player");
+        expect(env.audit.front().actor_uuid ==
                "11111111-1111-1111-1111-111111111111");
     };
 
     "mod management/reload is refused when hot reload is disabled"_test = [] {
-        fixture test{"reload-gate"};
-        test.context.loaded.push_back(app::mod_management_mod{
+        fixture env{"reload-gate"};
+        env.context.loaded.push_back(app::mod_management_mod{
             .id = "refrain.test.manager",
             .version = "1.0.0",
             .loader = "native",
             .has_code = true,
             .source = "installed",
         });
-        test.context.hot_reload = false;
-        auto service{test.service()};
+        env.context.hot_reload = false;
+        auto service{env.service()};
         const auto report{
-            run(service, {"reload", "refrain.test.manager"}, test.console())};
+            run(service, {"reload", "refrain.test.manager"}, env.console())};
         expect(!report.ok);
         expect(report.outcome == "refused");
         expect(report.error.find("hot reload is disabled") != std::string::npos)
             << report.error;
-        expect(test.audit.size() == 1U);
-        expect(test.audit.front().action == "reload");
-        expect(test.audit.front().result == "refused");
+        expect(env.audit.size() == 1U);
+        expect(env.audit.front().action == "reload");
+        expect(env.audit.front().result == "refused");
     };
 
     "mod management/reload is unsupported without a lifecycle port"_test = [] {
-        fixture test{"reload-unsupported"};
-        test.context.loaded.push_back(app::mod_management_mod{
+        fixture env{"reload-unsupported"};
+        env.context.loaded.push_back(app::mod_management_mod{
             .id = "refrain.test.manager",
             .version = "1.0.0",
             .loader = "native",
             .has_code = true,
             .source = "installed",
         });
-        test.context.hot_reload = true;
-        test.context.lifecycle.unavailable_reason =
+        env.context.hot_reload = true;
+        env.context.lifecycle.unavailable_reason =
             "the hot lifecycle registry is not available in this build";
-        auto service{test.service()};
+        auto service{env.service()};
         const auto report{
-            run(service, {"reload", "refrain.test.manager"}, test.console())};
+            run(service, {"reload", "refrain.test.manager"}, env.console())};
         expect(!report.ok);
         expect(report.outcome == "unsupported");
         expect(report.error.find("hot lifecycle registry") != std::string::npos)
             << report.error;
-        expect(test.audit.size() == 1U);
-        expect(test.audit.front().result == "unsupported");
+        expect(env.audit.size() == 1U);
+        expect(env.audit.front().result == "unsupported");
     };
 
     "mod management/reload hands the request to the lifecycle port"_test = [] {
-        fixture test{"reload-port"};
-        test.context.loaded.push_back(app::mod_management_mod{
+        fixture env{"reload-port"};
+        env.context.loaded.push_back(app::mod_management_mod{
             .id = "refrain.test.manager",
             .version = "1.0.0",
             .loader = "native",
             .has_code = true,
             .source = "installed",
         });
-        test.context.hot_reload = true;
+        env.context.hot_reload = true;
         std::vector<app::mod_lifecycle_request> requests{};
-        test.context.lifecycle.apply =
+        env.context.lifecycle.apply =
             [&requests](const app::mod_lifecycle_request &request)
             -> refrain::result<app::mod_lifecycle_outcome> {
             requests.push_back(request);
@@ -497,9 +496,9 @@ const suite mod_management_service_tests = [] {
                 .lines = {
                     "reloaded refrain.test.manager 1.0.0 as generation 2"}};
         };
-        auto service{test.service()};
+        auto service{env.service()};
         const auto report{
-            run(service, {"reload", "refrain.test.manager"}, test.console())};
+            run(service, {"reload", "refrain.test.manager"}, env.console())};
         expect(report.ok) << report.error;
         expect(report.outcome == "ok");
         expect(requests.size() == 1U);
@@ -511,61 +510,61 @@ const suite mod_management_service_tests = [] {
 
     "mod management/install with hot install disabled requires a restart"_test =
         [] {
-            fixture test{"install-restart"};
+            fixture env{"install-restart"};
             expect(
-                materialise(test.work, "mod", "refrain.test.manager", "1.0.0"));
-            auto archive{pack(test.work, "mod", "out/mod.rfmod")};
+                materialise(env.work, "mod", "refrain.test.manager", "1.0.0"));
+            auto archive{pack(env.work, "mod", "out/mod.rfmod")};
             expect(archive.has_value());
             if (!archive) {
                 return;
             }
-            test.context.store = test.store_path();
-            test.context.hot_install = false;
-            auto service{test.service()};
+            env.context.store = env.store_path();
+            env.context.hot_install = false;
+            auto service{env.service()};
             const auto report{
-                run(service, {"install", *archive, "confirm"}, test.console())};
+                run(service, {"install", *archive, "confirm"}, env.console())};
             expect(report.ok) << report.error;
             expect(report.outcome == "restart-required");
             expect(contains(report.lines, "restart required"));
-            expect(test.receipt_count() == 1U);
-            expect(test.audit.front().result == "restart-required");
+            expect(env.receipt_count() == 1U);
+            expect(env.audit.front().result == "restart-required");
         };
 
     "mod management/install with hot install but no lifecycle port is "
     "unsupported"_test = [] {
-        fixture test{"install-unsupported"};
-        expect(materialise(test.work, "mod", "refrain.test.manager", "1.0.0"));
-        auto archive{pack(test.work, "mod", "out/mod.rfmod")};
+        fixture env{"install-unsupported"};
+        expect(materialise(env.work, "mod", "refrain.test.manager", "1.0.0"));
+        auto archive{pack(env.work, "mod", "out/mod.rfmod")};
         expect(archive.has_value());
         if (!archive) {
             return;
         }
-        test.context.store = test.store_path();
-        test.context.hot_install = true;
-        test.context.lifecycle.unavailable_reason =
+        env.context.store = env.store_path();
+        env.context.hot_install = true;
+        env.context.lifecycle.unavailable_reason =
             "the hot lifecycle registry is not available in this build";
-        auto service{test.service()};
+        auto service{env.service()};
         const auto report{
-            run(service, {"install", *archive, "confirm"}, test.console())};
+            run(service, {"install", *archive, "confirm"}, env.console())};
         expect(!report.ok);
         expect(report.outcome == "unsupported");
         expect(report.error.find("hot lifecycle registry") != std::string::npos)
             << report.error;
         // The store change is durable even though activation failed.
-        expect(test.receipt_count() == 1U);
+        expect(env.receipt_count() == 1U);
     };
 
     "mod management/trust lists the policy and the signer pins"_test = [] {
-        fixture test{"trust-list"};
-        test.context.policy.require_signature = true;
-        test.context.policy.signature_policy =
+        fixture env{"trust-list"};
+        env.context.policy.require_signature = true;
+        env.context.policy.signature_policy =
             mod::rfmod_signature_policy::strict;
         const auto keypair{signed_keypair()};
-        test.context.policy.trusted_keys.push_back(mod::rfmod_trusted_key{
+        env.context.policy.trusted_keys.push_back(mod::rfmod_trusted_key{
             .key_id = std::string{key_a}, .public_key = keypair.public_key});
-        expect(materialise(test.work, "mod", "refrain.test.manager", "1.0.0"));
+        expect(materialise(env.work, "mod", "refrain.test.manager", "1.0.0"));
         auto archive{
-            pack(test.work, "mod", "out/mod.rfmod",
+            pack(env.work, "mod", "out/mod.rfmod",
                  mod::rfmod_write_options{.signing = mod::rfmod_signing_options{
                                               .secret_key = keypair.secret_key,
                                               .key_id = std::string{key_a}}})};
@@ -573,31 +572,31 @@ const suite mod_management_service_tests = [] {
         if (!archive) {
             return;
         }
-        test.context.store = test.store_path();
-        auto service{test.service()};
+        env.context.store = env.store_path();
+        auto service{env.service()};
         expect(
-            run(service, {"install", *archive, "confirm"}, test.console()).ok);
-        test.audit.clear();
-        const auto report{run(service, {"trust"}, test.console())};
+            run(service, {"install", *archive, "confirm"}, env.console()).ok);
+        env.audit.clear();
+        const auto report{run(service, {"trust"}, env.console())};
         expect(report.ok) << report.error;
         expect(contains(report.lines, "trust anchor 'test-key-a'"));
         expect(contains(report.lines, "signer pin for refrain.test.manager"));
-        expect(test.audit.size() == 1U);
-        expect(test.audit.front().action == "trust-list");
+        expect(env.audit.size() == 1U);
+        expect(env.audit.front().action == "trust-list");
     };
 
     "mod management/trust pin requires confirmation and writes the pin"_test =
         [] {
-            fixture test{"trust-pin"};
+            fixture env{"trust-pin"};
             const auto keypair{signed_keypair()};
-            test.context.policy.require_signature = true;
-            test.context.policy.trusted_keys.push_back(
+            env.context.policy.require_signature = true;
+            env.context.policy.trusted_keys.push_back(
                 mod::rfmod_trusted_key{.key_id = std::string{key_a},
                                        .public_key = keypair.public_key});
             expect(
-                materialise(test.work, "mod", "refrain.test.manager", "1.0.0"));
+                materialise(env.work, "mod", "refrain.test.manager", "1.0.0"));
             auto archive{pack(
-                test.work, "mod", "out/mod.rfmod",
+                env.work, "mod", "out/mod.rfmod",
                 mod::rfmod_write_options{.signing = mod::rfmod_signing_options{
                                              .secret_key = keypair.secret_key,
                                              .key_id = std::string{key_a}}})};
@@ -605,53 +604,51 @@ const suite mod_management_service_tests = [] {
             if (!archive) {
                 return;
             }
-            test.context.store = test.store_path();
-            auto service{test.service()};
+            env.context.store = env.store_path();
+            auto service{env.service()};
+            expect(run(service, {"install", *archive, "confirm"}, env.console())
+                       .ok);
             expect(
-                run(service, {"install", *archive, "confirm"}, test.console())
-                    .ok);
-            expect(
-                mod::clear_signer_pin(test.store_path(), "refrain.test.manager")
+                mod::clear_signer_pin(env.store_path(), "refrain.test.manager")
                     .has_value());
-            test.audit.clear();
+            env.audit.clear();
             const auto refused{run(service,
                                    {"trust", "pin", "refrain.test.manager"},
-                                   test.console())};
+                                   env.console())};
             expect(!refused.ok);
             expect(refused.outcome == "refused");
             const auto pinned{run(
                 service, {"trust", "pin", "refrain.test.manager", "confirm"},
-                test.console())};
+                env.console())};
             expect(pinned.ok) << pinned.error;
-            auto pin{mod::read_signer_pin(test.store_path(),
-                                          "refrain.test.manager")};
+            auto pin{
+                mod::read_signer_pin(env.store_path(), "refrain.test.manager")};
             expect(static_cast<bool>(pin));
             if (pin && pin->has_value()) {
                 expect((*pin)->key_id == key_a);
                 expect((*pin)->source == "admin");
             }
-            expect(test.audit.size() == 2U);
-            expect(test.audit.back().result == "ok");
-            expect(test.audit.back().key_id == key_a);
+            expect(env.audit.size() == 2U);
+            expect(env.audit.back().result == "ok");
+            expect(env.audit.back().key_id == key_a);
         };
 
     "mod management/unknown command and bad usage fail cleanly"_test = [] {
-        fixture test{"usage"};
-        auto service{test.service()};
-        const auto unknown{run(service, {"frobnicate"}, test.console())};
+        fixture env{"usage"};
+        auto service{env.service()};
+        const auto unknown{run(service, {"frobnicate"}, env.console())};
         expect(!unknown.ok);
         expect(unknown.error.find("available mod commands") !=
                std::string::npos);
-        const auto bad_option{
-            run(service, {"list", "--force"}, test.console())};
+        const auto bad_option{run(service, {"list", "--force"}, env.console())};
         expect(!bad_option.ok);
         expect(bad_option.error.find("unknown option") != std::string::npos);
         const auto no_store{
-            run(service, {"reload", "missing.mod"}, test.console())};
+            run(service, {"reload", "missing.mod"}, env.console())};
         expect(!no_store.ok);
         expect(no_store.error.find("running composition") != std::string::npos);
         // Every line, including a usage failure, is audited.
-        expect(test.audit.size() == 3U);
+        expect(env.audit.size() == 3U);
     };
 
     "mod management/audit line names actor, action, package and result"_test =
