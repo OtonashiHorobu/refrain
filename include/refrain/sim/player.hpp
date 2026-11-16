@@ -34,6 +34,58 @@ inline constexpr std::uint64_t synthetic_connection = 0;
 /// Profile uuid size in wire byte order.
 inline constexpr std::size_t profile_uuid_size = 16;
 
+/// Player movement input bits. A client reports the keys it holds once per
+/// tick (`player_input` report); the simulation consumes the same bits for the
+/// console-driven player and for the server-side movement prediction, so the
+/// two paths share one representation. The values match the wire bit layout.
+enum class player_input : std::uint8_t {
+    none = 0,
+    forward = 1U << 0,
+    backward = 1U << 1,
+    left = 1U << 2,
+    right = 1U << 3,
+    jump = 1U << 4,
+    shift = 1U << 5,
+    sprint = 1U << 6,
+};
+
+[[nodiscard]] constexpr auto operator|(player_input left, player_input right)
+    -> player_input {
+    return static_cast<player_input>(static_cast<std::uint8_t>(left) |
+                                     static_cast<std::uint8_t>(right));
+}
+
+[[nodiscard]] constexpr auto operator&(player_input left, player_input right)
+    -> player_input {
+    return static_cast<player_input>(static_cast<std::uint8_t>(left) &
+                                     static_cast<std::uint8_t>(right));
+}
+
+[[nodiscard]] constexpr auto has_input(player_input value, player_input flag)
+    -> bool {
+    return (value & flag) != player_input::none;
+}
+
+/// How the last damage that killed (or hurt) a player was dealt. The
+/// simulation records the source so the runtime can choose the death message
+/// and the client's damage feedback without guessing from the health drop.
+enum class damage_source : std::uint8_t {
+    generic = 0,
+    fall,
+    drown,
+    starve,
+    out_of_world,
+    in_wall,
+    player_attack,
+    mob_attack,
+};
+
+/// Player game mode, as the protocol numbers it.
+inline constexpr std::uint32_t game_mode_survival = 0;
+inline constexpr std::uint32_t game_mode_creative = 1;
+inline constexpr std::uint32_t game_mode_adventure = 2;
+inline constexpr std::uint32_t game_mode_spectator = 3;
+
 /// The one authoritative record of a player. The simulation owns the table of
 /// these records; the session layer only projects a record onto the fields the
 /// protocol needs. Every mutable gameplay field lives here, so the console and
@@ -58,9 +110,74 @@ struct player_state {
     float pitch{0.0F};
     bool on_ground{false};
     std::uint32_t game_mode{0};
-    float health{20.0F};
     std::int32_t view_distance{10};
     std::vector<item_stack> inventory{};
+
+    // --- movement input and prediction -------------------------------------
+
+    /// Keys held this tick. The simulation reads them in `tick()`; a client
+    /// report overwrites them once per tick.
+    player_input input{player_input::none};
+    /// Creative or spectator flight. The client toggles it with the abilities
+    /// packet; the server only honours the toggle while the mode allows it.
+    bool flying{false};
+    /// Feet position of the last accepted ground contact. Jump validation uses
+    /// it as the ceiling a player may reach without flight or fluid.
+    double ground_y{0.0};
+
+    // --- survival state ----------------------------------------------------
+
+    /// Health points, 0..20. A record at 0 is dead until respawned.
+    float health{20.0F};
+    /// Hunger points, 0..20.
+    std::int32_t food_level{20};
+    /// Saturation points, 0..food_level.
+    float saturation{5.0F};
+    /// Food exhaustion, 0..40. Movement and damage add to it and the food tick
+    /// consumes 4 points per reduction.
+    float exhaustion{0.0F};
+    /// Ticks the natural-regeneration/starvation timer has accumulated.
+    std::int32_t food_timer{0};
+    /// Air supply, 300 at the surface and negative while drowning.
+    std::int32_t air_supply{300};
+    /// Distance fallen since the last ground contact, in blocks.
+    double fall_distance{0.0};
+    /// Ticks of damage immunity left; a second hit inside the window only
+    /// counts when it is stronger than the first.
+    std::int32_t invulnerable_time{0};
+    /// Damage of the hit that opened the current immunity window.
+    float last_hurt{0.0F};
+    /// Experience state, matching the `set_experience` packet fields.
+    float experience_progress{0.0F};
+    std::int32_t experience_level{0};
+    std::int32_t total_experience{0};
+    /// True once health reaches zero. The record keeps its position and
+    /// inventory until the respawn request arrives.
+    bool dead{false};
+    /// Ticks spent dead; the runtime sends the death screen once and the
+    /// simulation keeps the record for the death animation window.
+    std::int32_t death_time{0};
+    /// Damage source of the last hit, kept for the death message.
+    damage_source last_damage{damage_source::generic};
+    /// Connection of the player that dealt the last damaging hit, or zero for
+    /// environmental damage. The death message and the kill experience read
+    /// it, and identity fields are not part of the state hash.
+    std::uint64_t last_attacker{0};
+    /// Ticks this record has existed; periodic survival effects (peaceful
+    /// regeneration) key off it so the result does not depend on wall time.
+    std::int32_t age{0};
+
+    // --- pending validated movement ---------------------------------------
+
+    /// A movement request the validation accepted for the next `tick()`. The
+    /// position is the authoritative target; `tick()` applies it after the
+    /// prediction step so fall distance and ground contact see one movement
+    /// per tick.
+    bool has_move_request{false};
+    double move_x{0.0};
+    double move_y{0.0};
+    double move_z{0.0};
+    bool move_on_ground{false};
 };
 
 /// Table of player records, keyed and addressed by entity id.

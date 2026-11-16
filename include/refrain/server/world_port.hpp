@@ -171,6 +171,18 @@ class world_port {
     [[nodiscard]] virtual auto entities() const noexcept
         -> const std::map<sim::entity_id, sim::entity_state> * = 0;
 
+    /// In-process simulation the runtime may drive directly (player physics,
+    /// survival state and game-mode rules). Null for a port whose provider
+    /// keeps the simulation elsewhere; the runtime then leaves those systems
+    /// to the provider.
+    [[nodiscard]] virtual auto sim_world() noexcept -> sim::world * {
+        return nullptr;
+    }
+    [[nodiscard]] virtual auto sim_world() const noexcept
+        -> const sim::world * {
+        return nullptr;
+    }
+
     // --- chunk tickets -----------------------------------------------------
 
     [[nodiscard]] virtual auto add_ticket(sim::chunk_pos pos,

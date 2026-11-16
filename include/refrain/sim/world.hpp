@@ -12,6 +12,7 @@
 #include <refrain/data/checksum.hpp>
 #include <refrain/sim/light.hpp>
 #include <refrain/sim/player.hpp>
+#include <refrain/sim/player_physics.hpp>
 #include <refrain/sim/rng.hpp>
 #include <refrain/sim/world_clock.hpp>
 #include <refrain/world/maintenance.hpp>
@@ -119,9 +120,6 @@ struct entity_state {
     double vz{0.0};
     bool on_ground{false};
 };
-
-/// Minimal player state. Collision/physics is not implemented yet; the scripted
-/// driver only needs a deterministic position and orientation.
 
 /// One runtime section. Uniform sections (air/stone/water columns) do not
 /// allocate the 4096-entry block array; the storage-record base keeps biome
@@ -485,12 +483,91 @@ class world {
                              double z) noexcept;
 
     /// Collision-aware displacement of the player's feet. Returns true when at
-    /// least one axis moved. Y is resolved first, then X/Z (vanilla order).
+    /// least one axis moved. Y is resolved first, then X/Z (vanilla order),
+    /// with step-up over collision shapes up to the player step height.
     [[nodiscard]] auto move_player(player_state &player, double dx, double dy,
                                    double dz) -> bool;
 
+    /// Resolve a movement delta without changing the record. This is the
+    /// movement validator's sweep: a client request is only accepted when the
+    /// world can actually carry the player to the reported position.
+    [[nodiscard]] auto resolve_player_move(const player_state &player,
+                                           double dx, double dy,
+                                           double dz) const noexcept
+        -> player_collision_result;
+
+    /// Validate one client movement request; see `player_physics.hpp`.
+    [[nodiscard]] auto submit_player_move(player_state &player,
+                                          const player_move_request &request)
+        -> player_move_verdict;
+
+    /// Apply one damage hit; see `player_physics.hpp`.
+    auto damage_player(player_state &player, damage_source source, float amount,
+                       std::uint64_t attacker = 0) -> bool;
+
+    /// Reset a player at a spawn position after death.
+    void respawn_player(player_state &player, double x, double y, double z,
+                        float yaw, float pitch) noexcept;
+
     void jump(player_state &player) noexcept;
     [[nodiscard]] auto block_solid(block_state_id id) const noexcept -> bool;
+
+    /// True when the player's bounding box overlaps a non-passable block
+    /// collision box. Suffocation damage and the debug view read it.
+    [[nodiscard]] auto
+    player_overlaps_solid(const player_state &player) const noexcept -> bool;
+
+    /// Fluid a block state holds, if any. Player movement reads it for
+    /// swimming, sinking and fall resets.
+    enum class fluid_kind : std::uint8_t { none = 0, water, lava };
+    [[nodiscard]] auto block_fluid(block_state_id id) const noexcept
+        -> fluid_kind;
+
+    /// True when the block can be climbed (ladders, vines).
+    [[nodiscard]] auto block_climbable(block_state_id id) const noexcept
+        -> bool;
+
+    /// Slipperiness the block below a walking player applies.
+    [[nodiscard]] auto block_friction(block_state_id id) const noexcept
+        -> double;
+
+    /// The world spawn point the runtime fills from the level record. It is
+    /// where a respawn returns a player and where the runtime sends a joining
+    /// player before the client reports a position.
+    struct spawn_point {
+        double x{0.0};
+        double y{64.0};
+        double z{0.0};
+        float yaw{0.0F};
+        float pitch{0.0F};
+    };
+
+    void set_spawn_point(spawn_point value) noexcept;
+    [[nodiscard]] auto spawn_point_value() const noexcept
+        -> const spawn_point & {
+        return spawn_;
+    }
+
+    /// Difficulty (0 peaceful, 1 easy, 2 normal, 3 hard) and hardcore flag.
+    /// They decide whether hunger can starve and how hard damage scales; the
+    /// server sets them from the level record at boot.
+    void set_difficulty(std::uint32_t value) noexcept;
+    [[nodiscard]] auto difficulty() const noexcept -> std::uint32_t {
+        return difficulty_;
+    }
+    void set_hardcore(bool value) noexcept;
+    [[nodiscard]] auto hardcore() const noexcept -> bool { return hardcore_; }
+
+    /// Vertical build bounds of the runtime world, derived from the storage
+    /// model's section range.
+    [[nodiscard]] static constexpr auto build_min_y() noexcept -> std::int32_t {
+        return ::refrain::world::min_section_y * ::refrain::world::section_edge;
+    }
+    [[nodiscard]] static constexpr auto build_max_y() noexcept -> std::int32_t {
+        return (::refrain::world::max_section_y + 1) *
+                   ::refrain::world::section_edge -
+               1;
+    }
 
     /// Install the per-item stack sizes and max damage read from the item
     /// registry data. The table is copied; without one the inventory falls
@@ -543,11 +620,12 @@ class world {
     /// Deterministic BLAKE3 over the loaded chunks (sorted by position), every
     /// section's block ids, every player record in ascending entity id order
     /// and the tick counter. The player record fields hashed are the entity id,
-    /// position/velocity, rotation, ground flag, game mode, health and
-    /// inventory; identity fields (connection, profile uuid, name, world) are
-    /// not simulation state. Replay compares this value across runs and thread
-    /// counts; the canonical byte order is part of the test contract, not a
-    /// saved format.
+    /// position/velocity, rotation, ground flag, game mode, health, hunger,
+    /// saturation, exhaustion, air, experience, death flag, fall distance,
+    /// movement input, flight flag, age and inventory; identity fields
+    /// (connection, profile uuid, name, world) are not simulation state. Replay
+    /// compares this value across runs and thread counts; the canonical byte
+    /// order is part of the test contract, not a saved format.
     [[nodiscard]] auto state_hash() const -> data::digest32;
     [[nodiscard]] auto loaded_chunks() const noexcept -> std::size_t {
         return chunks_.size();
@@ -625,9 +703,68 @@ class world {
     [[nodiscard]] static auto local_index(std::int32_t y, std::int32_t z,
                                           std::int32_t x) noexcept
         -> std::size_t;
-    /// One player's gravity/vertical collision step; `tick()` applies it to
-    /// every record in ascending entity id order.
+    /// One player's physics/survival step; `tick()` applies it to every record
+    /// in ascending entity id order.
     void tick_player(player_state &player) noexcept;
+
+    /// Runtime collision description of one block state, derived from its
+    /// registry key and cached per id. The storage model carries no
+    /// `VoxelShape` table, so the classification is a documented
+    /// approximation: full cubes for solid blocks, plus the common partial
+    /// shapes (slabs, snow layers, carpets) that step-up exists for.
+    struct block_collision {
+        /// Classification cache is filled on first use.
+        bool resolved{false};
+        /// No collision box at all (air, plants, fluids).
+        bool passable{true};
+        /// Relative Y range of the collision box inside the block cell.
+        double box_min_y{0.0};
+        double box_max_y{1.0};
+        fluid_kind fluid{fluid_kind::none};
+        bool climbable{false};
+        double friction{0.6};
+    };
+
+    [[nodiscard]] auto collision_of(block_state_id id) const noexcept
+        -> const block_collision &;
+
+    /// Player bounding box in world coordinates, used by the collision sweep
+    /// and the movement validator.
+    struct player_aabb {
+        double min_x{0.0};
+        double min_y{0.0};
+        double min_z{0.0};
+        double max_x{0.0};
+        double max_y{0.0};
+        double max_z{0.0};
+    };
+
+    [[nodiscard]] static auto player_box(double x, double y, double z) noexcept
+        -> player_aabb;
+    /// True when the box overlaps any non-passable block collision box.
+    [[nodiscard]] auto
+    player_box_collides(const player_aabb &box) const noexcept -> bool;
+    /// True when a solid collision box sits directly under the box.
+    [[nodiscard]] auto
+    player_box_grounded(const player_aabb &box) const noexcept -> bool;
+
+    struct movement_resolution {
+        double x{0.0};
+        double y{0.0};
+        double z{0.0};
+        bool blocked_x{false};
+        bool blocked_y{false};
+        bool blocked_z{false};
+        bool grounded{false};
+    };
+
+    /// Collision-resolved displacement of the player's feet from `x,y,z`. Y is
+    /// resolved first, then X/Z, then step-up is attempted when a horizontal
+    /// axis was blocked on the ground.
+    [[nodiscard]] auto resolve_movement(double x, double y, double z, double dx,
+                                        double dy, double dz,
+                                        bool was_on_ground) const noexcept
+        -> movement_resolution;
 
     store_type store_;
     /// Non-null when the view borrows a store it does not own; `store_` is
@@ -635,12 +772,19 @@ class world {
     store_type *borrowed_{nullptr};
     mutable std::mutex store_mutex_{};
     block_registry registry_{};
+    /// Lazily built classification per runtime block id. Mutable because block
+    /// reads are `const`; the cache only grows and is written on the
+    /// simulation thread.
+    mutable std::vector<block_collision> collisions_{};
     std::map<chunk_pos, chunk, chunk_order> chunks_{};
     std::map<chunk_pos, std::uint32_t, chunk_order> tickets_{};
     player_table players_{};
     item_table items_{};
     zstd_policy zstd_policy_{};
     std::map<entity_id, entity_state> entities_{};
+    spawn_point spawn_{};
+    std::uint32_t difficulty_{2};
+    bool hardcore_{false};
     struct scheduled_task {
         std::int64_t due{0};
         timer_id id{0};

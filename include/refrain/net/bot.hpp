@@ -53,6 +53,9 @@ struct bot_options {
     /// the kernel receive buffer fills, then the server's socket stops
     /// accepting, and the tick sees the backlog a slow client produces.
     std::chrono::milliseconds read_delay{0};
+    /// Ask the server to respawn the player once the play login is done. The
+    /// server accepts the request only while the player is dead.
+    bool request_respawn{false};
     /// Record decoded packet bodies for capture tooling.
     bool capture{false};
 };

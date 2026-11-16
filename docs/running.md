@@ -327,6 +327,11 @@ The server announces a small command tree after joining:
 | `move <dx> <dy> <dz>` | move the player by a delta |
 | `walk <dx> <dz>` | move the player on the horizontal plane |
 | `jump` | apply a jump impulse |
+| `gamemode <mode> [player]` | change a player's game mode immediately |
+| `heal [player]` | restore the player to full health |
+| `food [player] <0-20>` | set the food level |
+| `damage [player] <amount>` | apply one damage hit |
+| `xp [player] <points>` | add experience points |
 | `dig <x> <y> <z>` | remove a block and wear the first damageable inventory stack |
 | `place <x> <y> <z> <block>` | place a block state |
 | `give <item> <count>` | add items to the inventory |
@@ -342,6 +347,23 @@ The server announces a small command tree after joining:
 | `palette-gc` | rebuild the world palette while the world is quiesced |
 | `schedules` | list periodic maintenance tasks and their counters |
 | `help` | list commands |
+
+## Player state
+
+The server owns its players' positions, health, hunger, experience and death
+state; a client's movement packets are validated against the world and rejected
+when they walk through a block, report a speed a walking or jumping player
+cannot reach, or jump higher than the game allows. A rejected request is
+answered with the authoritative position, so the client snaps back instead of
+keeping the impossible position.
+
+Falling hurts, drowning and the void hurt, hunger drains while sprinting and
+regenerates health while saturation and food are high, and zero health shows the
+death screen. The respawn request is accepted only from a dead player and
+returns it to the world spawn point with full health and food. `/gamemode`
+switches the rules on the next tick: creative takes no damage and may fly,
+spectator passes through blocks, adventure and spectator cannot break or place
+blocks.
 
 A replay script exercises a deterministic path:
 

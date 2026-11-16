@@ -36,6 +36,7 @@ auto player_table::add(registration record) -> result<entity_id> {
     value.x = record.x;
     value.y = record.y;
     value.z = record.z;
+    value.ground_y = record.y;
     value.game_mode = record.game_mode;
     value.inventory.resize(record.inventory_slots);
     players_.emplace(*id, std::move(value));

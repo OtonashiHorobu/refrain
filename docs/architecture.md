@@ -99,6 +99,8 @@ facade; only protocol providers and client tooling name a concrete version.
 
 - `play_session`: connection-scoped player records, entity id allocation,
   movement/health/game-mode updates, per-player inventory slots, visibility.
+  Movement is a request: the runtime validates it against the simulation's
+  authoritative record and sends the position back when it is rejected.
 - `chunk_tracker`: viewport changes and pending chunk subscription requests.
 
 Player records live where the active world port keeps them. The first-party
@@ -113,9 +115,11 @@ per packet, and the runtime never holds a pointer into a provider's table
 across calls.
 
 The network shell reports neutral events (`player_join`, `player_leave`,
-`movement`, `attack`, `animation`, `play_ready`, `view_distance`) and provides a
-raw packet sink. It does not decide which entities exist, who can see them, how
-much health a player has, or when a chunk view changes.
+`movement`, `player_input`, `flight`, `teleport_confirm`, `attack`,
+`animation`, `play_ready`, `view_distance`) and provides a raw packet sink plus
+the gameplay packet senders (teleport, health, experience, death screen, entity
+events). It does not decide which entities exist, who can see them, how much
+health a player has, or when a chunk view changes.
 
 ## World storage
 
@@ -153,6 +157,40 @@ world contents and simulation state.
 Determinism is a contract: the same world and the same command sequence produce
 the same hash at the same tick. Timers are ordered by due tick and insertion
 id. The event bus is single-threaded and preserves subscription order.
+
+### Player physics and survival
+
+The simulation owns each player's authoritative position, velocity, health,
+hunger, air, experience and death state; the session projection and the
+console read that one record. A client movement packet is a request, not a
+position: `world::submit_player_move()` accepts it only when it is finite,
+within the speed envelope, reachable through the block collision sweep (Y,
+then X, then Z, with step-up over partial shapes) and not higher than a jump
+can reach above the last ground contact. The runtime answers a rejected
+request with a teleport back to the authoritative position, and the client's
+acknowledgement of that teleport is adopted without a second validation. A
+provider-owned simulation keeps its own movement rules; the runtime then only
+projects the reported position for visibility and chunk streaming.
+
+Each tick advances the record the same way on the ground, in air, in water and
+in lava: input-driven acceleration, gravity, friction, a collision sweep, fall
+distance tracking, and the landing damage. Survival state then ticks in a fixed
+order: fall damage, movement exhaustion, drowning, void and suffocation damage,
+hunger and natural regeneration or starvation. Creative and spectator players
+take no damage, spectators ignore collision, and creative and spectator flight
+is honoured only while the game mode allows it. Damage opens a short immunity
+window, records its source and the attacking connection, and at zero health
+moves the record into the dead state: the runtime sends the death screen and
+the system chat message, and a respawn request is accepted only while the
+record is dead. Respawning restores health, hunger, air and position at the
+world spawn point; the level record supplies the spawn point, difficulty and
+hardcore flag at boot.
+
+Block collision is derived from the block-state key rather than a full
+`VoxelShape` table, so the sweep understands full cubes, slabs, snow layers and
+carpets; fences, walls and stairs collide as full blocks. That approximation
+can over-restrict a move but never lets a player through a solid block, and it
+is the one place where collision differs from the reference implementation.
 
 ### Lighting
 

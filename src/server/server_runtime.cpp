@@ -38,8 +38,10 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -63,6 +65,43 @@ namespace refrain::server {
 using app::report_error;
 namespace {
 constexpr std::uint64_t max_console_file_bytes = 1ULL * 1024ULL * 1024ULL;
+
+/// Human-readable death message. The wording follows the vanilla death keys
+/// closely enough for the system chat and the death screen; a translation
+/// layer owns localisation later.
+[[nodiscard]] auto death_message(const refrain::sim::world &level,
+                                 const refrain::sim::player_state &record)
+    -> std::string {
+    const auto name{record.name.empty() ? std::string{"A player"}
+                                        : record.name};
+    using source = refrain::sim::damage_source;
+    switch (record.last_damage) {
+    case source::fall:
+        return name + " fell from a high place";
+    case source::drown:
+        return name + " drowned";
+    case source::starve:
+        return name + " starved to death";
+    case source::out_of_world:
+        return name + " fell out of the world";
+    case source::in_wall:
+        return name + " suffocated in a wall";
+    case source::player_attack: {
+        const auto *killer{
+            record.last_attacker == 0
+                ? nullptr
+                : level.players().find_by_connection(record.last_attacker)};
+        return killer == nullptr || killer->name.empty()
+                   ? name + " was slain"
+                   : name + " was slain by " + killer->name;
+    }
+    case source::mob_attack:
+        return name + " was slain by a mob";
+    case source::generic:
+        break;
+    }
+    return name + " died";
+}
 
 /// Process-wide lifecycle flags shared with the console and watchdog threads.
 struct runtime_state {
@@ -252,6 +291,28 @@ auto run_server(const server_run_options &options,
             ? static_cast<refrain::net::game_mode>(projection->level.game_mode)
             : refrain::net::game_mode::creative};
     world.seed(static_cast<std::uint64_t>(projection->level.seed));
+    // Survival and physics state live in the simulation. The level record is
+    // the authority for the spawn point, difficulty and hardcore flag; a
+    // provider-owned simulation has no in-process world to configure and
+    // keeps them itself.
+    const auto spawn_x{static_cast<double>(projection->level.spawn_x) + 0.5};
+    const auto spawn_y{static_cast<double>(projection->level.spawn_y)};
+    const auto spawn_z{static_cast<double>(projection->level.spawn_z) + 0.5};
+    if (auto *sim_level{world.sim_world()}; sim_level != nullptr) {
+        sim_level->set_spawn_point(refrain::sim::world::spawn_point{
+            .x = spawn_x,
+            .y = spawn_y,
+            .z = spawn_z,
+            .yaw = 0.0F,
+            .pitch = 0.0F,
+        });
+        sim_level->set_difficulty(
+            projection->level.difficulty >= 0 &&
+                    projection->level.difficulty <= 3
+                ? static_cast<std::uint32_t>(projection->level.difficulty)
+                : 2U);
+        sim_level->set_hardcore(projection->level.hardcore);
+    }
     // The console and replay scripts drive one synthetic player; it is created
     // before the listener starts, so it is always the first player by entity id
     // and commands that omit a name keep addressing it.
@@ -381,6 +442,33 @@ auto run_server(const server_run_options &options,
     refrain::server::server_gateway gateway{};
     refrain::server::entity_broadcaster broadcaster{gateway, tracking_chunks,
                                                     broadcast_limits};
+    /// Last survival values sent to each connection, keyed by connection so
+    /// the emission order is deterministic. The health, food and experience
+    /// packets are only sent when a value changed, which is why the runtime
+    /// keeps this mirror instead of resending every tick.
+    struct survival_sent {
+        float health{20.0F};
+        std::int32_t food{20};
+        float saturation{5.0F};
+        float progress{0.0F};
+        std::int32_t level{0};
+        std::int32_t total{0};
+        bool death_sent{false};
+    };
+    std::map<std::uint64_t, survival_sent> survival_sent{};
+    broadcaster.set_damage_handler(
+        [&world](std::uint64_t attacker, std::uint64_t target, float damage) {
+            auto *sim_level{world.sim_world()};
+            if (sim_level == nullptr) {
+                return false;
+            }
+            auto *record{sim_level->players().find_by_connection(target)};
+            if (record == nullptr || record->dead) {
+                return false;
+            }
+            return sim_level->damage_player(
+                *record, sim::damage_source::player_attack, damage, attacker);
+        });
     refrain::net::server *active_listener{nullptr};
     const auto external_join{options.player_join};
     const auto external_leave{options.player_leave};
@@ -428,12 +516,15 @@ auto run_server(const server_run_options &options,
     // The network shell queues this event from its I/O thread and delivers it
     // from `listener->tick()`, so the session table stays simulation-owned.
     network_inputs.player_join =
-        [&players, &views, &broadcaster, external_join, spawn_chunk_x,
-         spawn_chunk_z,
+        [&players, &views, &broadcaster, &command_environment, external_join,
+         spawn_chunk_x, spawn_chunk_z, spawn_x, spawn_y, spawn_z,
          view_distance](const refrain::net::player_identity &identity) {
+            const auto mode{
+                command_environment->join_state(identity.connection).mode};
             const auto added{players.add_player(
                 identity.connection, identity.id, std::string{identity.name},
-                std::string{identity.world}, 0.0, 64.0, 0.0, 1)};
+                std::string{identity.world}, spawn_x, spawn_y, spawn_z,
+                static_cast<std::uint32_t>(mode))};
             if (added) {
                 static_cast<void>(views.update(identity.connection,
                                                spawn_chunk_x, spawn_chunk_z,
@@ -445,7 +536,7 @@ auto run_server(const server_run_options &options,
             }
         };
     network_inputs.player_leave =
-        [&players, &views, &broadcaster,
+        [&players, &views, &broadcaster, &survival_sent,
          external_leave](const refrain::net::player_identity &identity) {
             const auto leaving{players.player_of(identity.connection)};
             const auto copy{
@@ -454,6 +545,7 @@ auto run_server(const server_run_options &options,
                     : std::optional<refrain::session::player>{*leaving}};
             static_cast<void>(players.remove_player(identity.connection));
             static_cast<void>(views.remove(identity.connection));
+            survival_sent.erase(identity.connection);
             if (copy) {
                 broadcaster.left(*copy);
             }
@@ -461,13 +553,54 @@ auto run_server(const server_run_options &options,
                 external_leave(identity);
             }
         };
-    network_inputs.movement = [&players, &views, view_distance](
+    network_inputs.movement = [&players, &views, view_distance, &world,
+                               &active_listener](
                                   const refrain::net::movement_event &event) {
+        const auto update_view =
+            [&views, view_distance](std::uint64_t connection,
+                                    const sim::player_state &record) {
+                static_cast<void>(views.update(
+                    connection,
+                    static_cast<std::int32_t>(std::floor(record.x / 16.0)),
+                    static_cast<std::int32_t>(std::floor(record.z / 16.0)),
+                    std::min(record.view_distance, view_distance)));
+            };
+        if (auto *sim_level{world.sim_world()}; sim_level != nullptr) {
+            auto *record{
+                sim_level->players().find_by_connection(event.connection)};
+            if (record == nullptr) {
+                return;
+            }
+            const auto verdict{sim_level->submit_player_move(
+                *record, sim::player_move_request{
+                             .x = event.x,
+                             .y = event.y,
+                             .z = event.z,
+                             .yaw = event.yaw,
+                             .pitch = event.pitch,
+                             .on_ground = event.on_ground,
+                         })};
+            if (verdict == sim::player_move_verdict::corrected &&
+                active_listener != nullptr) {
+                // The client reported a position the world does not
+                // allow. Send the authoritative position and keep the
+                // teleport confirmation handshake, so the client's next
+                // packets are not validated against the stale position.
+                active_listener->teleport_player(event.connection, record->x,
+                                                 record->y, record->z,
+                                                 record->yaw, record->pitch);
+            }
+            update_view(event.connection, *record);
+            return;
+        }
+        // A provider-owned simulation decides movement itself; the
+        // runtime only applies the projection so visibility and chunk
+        // streaming keep following the player.
         static_cast<void>(players.update_position(event.connection, event.x,
                                                   event.y, event.z, event.yaw,
                                                   event.pitch));
-        const auto player{players.player_of(event.connection)};
-        if (player != nullptr) {
+        if (const auto *player{players.player_of(event.connection)};
+            player != nullptr) {
             static_cast<void>(views.update(
                 event.connection,
                 static_cast<std::int32_t>(std::floor(player->x / 16.0)),
@@ -475,6 +608,73 @@ auto run_server(const server_run_options &options,
                 std::min(player->view_distance, view_distance)));
         }
     };
+    network_inputs.input =
+        [&world](const refrain::net::player_input_event &event) {
+            auto *sim_level{world.sim_world()};
+            if (sim_level == nullptr) {
+                return;
+            }
+            if (auto *record{
+                    sim_level->players().find_by_connection(event.connection)};
+                record != nullptr) {
+                record->input = static_cast<sim::player_input>(event.flags);
+            }
+        };
+    network_inputs.flight = [&world, &active_listener](
+                                const refrain::net::flight_event &event) {
+        auto *sim_level{world.sim_world()};
+        if (sim_level == nullptr) {
+            return;
+        }
+        auto *record{sim_level->players().find_by_connection(event.connection)};
+        if (record == nullptr) {
+            return;
+        }
+        const auto may_fly{record->game_mode == sim::game_mode_creative ||
+                           record->game_mode == sim::game_mode_spectator};
+        if (event.flying && may_fly) {
+            record->flying = true;
+        } else if (!event.flying) {
+            record->flying = false;
+        } else if (active_listener != nullptr) {
+            // A survival client asked to fly: re-send the abilities for
+            // its mode, which also clears the client-side flight flag.
+            active_listener->set_player_game_mode(
+                event.connection,
+                static_cast<refrain::net::game_mode>(record->game_mode));
+        }
+    };
+    network_inputs.teleport_confirm =
+        [&players, &views, view_distance,
+         &world](const refrain::net::teleport_confirm_event &event) {
+            if (auto *sim_level{world.sim_world()}; sim_level != nullptr) {
+                if (auto *record{sim_level->players().find_by_connection(
+                        event.connection)};
+                    record != nullptr) {
+                    record->x = event.x;
+                    record->y = event.y;
+                    record->z = event.z;
+                    record->yaw = event.yaw;
+                    record->pitch = event.pitch;
+                    record->vx = 0.0;
+                    record->vy = 0.0;
+                    record->vz = 0.0;
+                    record->on_ground = false;
+                    record->has_move_request = false;
+                    record->fall_distance = 0.0;
+                    record->ground_y = event.y;
+                    static_cast<void>(views.update(
+                        event.connection,
+                        static_cast<std::int32_t>(std::floor(record->x / 16.0)),
+                        static_cast<std::int32_t>(std::floor(record->z / 16.0)),
+                        std::min(record->view_distance, view_distance)));
+                }
+                return;
+            }
+            static_cast<void>(players.update_position(event.connection, event.x,
+                                                      event.y, event.z,
+                                                      event.yaw, event.pitch));
+        };
     network_inputs.view_distance =
         [&players, &views,
          view_distance](const refrain::net::view_distance_event &event) {
@@ -494,11 +694,30 @@ auto run_server(const server_run_options &options,
                     clamped_distance));
             }
         };
-    network_inputs.attack = [&players, &broadcaster, &active_listener](
-                                const refrain::net::attack_event &event) {
-        if (active_listener != nullptr) {
-            broadcaster.attack(players, event);
+    network_inputs.attack = [&players, &broadcaster, &active_listener,
+                             &world](const refrain::net::attack_event &event) {
+        if (active_listener == nullptr) {
+            return;
         }
+        if (auto *sim_level{world.sim_world()}; sim_level != nullptr) {
+            const auto *attacker{
+                sim_level->players().find_by_connection(event.connection)};
+            const auto *target{sim_level->players().find(
+                static_cast<sim::entity_id>(event.target_entity))};
+            if (attacker == nullptr || target == nullptr ||
+                target->id == attacker->id || target->dead ||
+                attacker->game_mode == sim::game_mode_spectator) {
+                return;
+            }
+            // Vanilla's player attack reach is three blocks from the eye.
+            const auto dx{target->x - attacker->x};
+            const auto dy{target->y + 0.9 - (attacker->y + 1.62)};
+            const auto dz{target->z - attacker->z};
+            if (dx * dx + dy * dy + dz * dz > 9.0) {
+                return;
+            }
+        }
+        broadcaster.attack(players, event);
     };
     network_inputs.animation = [&players, &broadcaster,
                                 &active_listener](std::uint64_t connection,
@@ -514,8 +733,26 @@ auto run_server(const server_run_options &options,
                 broadcaster.play_ready(players, identity.connection);
             }
         };
-    network_inputs.respawn = [&players,
-                              &broadcaster](std::uint64_t connection) {
+    network_inputs.respawn_request = [&world](std::uint64_t connection) {
+        auto *sim_level{world.sim_world()};
+        if (sim_level == nullptr) {
+            // A provider-owned simulation keeps the death state; the runtime
+            // cannot verify it, so the request is left to the provider path.
+            return true;
+        }
+        const auto *record{sim_level->players().find_by_connection(connection)};
+        return record != nullptr && record->dead;
+    };
+    network_inputs.respawn = [&players, &broadcaster, &world, spawn_x, spawn_y,
+                              spawn_z](std::uint64_t connection) {
+        if (auto *sim_level{world.sim_world()}; sim_level != nullptr) {
+            if (auto *record{
+                    sim_level->players().find_by_connection(connection)};
+                record != nullptr) {
+                sim_level->respawn_player(*record, spawn_x, spawn_y, spawn_z,
+                                          0.0F, 0.0F);
+            }
+        }
         broadcaster.respawn(players, connection);
     };
     network_inputs.verify_session = options.verify_session;
@@ -538,25 +775,53 @@ auto run_server(const server_run_options &options,
                     .pos = pos, .old_state = before, .new_state = value}})};
         return applied.has_value();
     };
-    // TODO: breaking ignores block hardness, the held tool, drops and
+    // The game-mode rules and the interaction reach are enforced before the
+    // world changes: adventure and spectator cannot edit, and an edit must be
+    // close to the player's eye. Survival break progress, tool tiers and drops
+    // are not modelled yet.
+    // TODO: breaking ignores block hardness, the held tool, break progress and
     // neighbour updates; every block becomes air immediately.
-    network_inputs.break_block = [apply_block](std::int32_t x, std::int32_t y,
-                                               std::int32_t z) {
-        if (y < std::numeric_limits<std::int16_t>::min() ||
-            y > std::numeric_limits<std::int16_t>::max()) {
+    const auto may_edit = [&world](std::uint64_t connection, std::int32_t x,
+                                   std::int32_t y, std::int32_t z) {
+        auto *sim_level{world.sim_world()};
+        if (sim_level == nullptr) {
+            return true;
+        }
+        const auto *record{sim_level->players().find_by_connection(connection)};
+        if (record == nullptr || record->dead) {
             return false;
         }
-        return apply_block(
-            refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z},
-            refrain::sim::air_block);
+        if (record->game_mode == sim::game_mode_spectator ||
+            record->game_mode == sim::game_mode_adventure) {
+            return false;
+        }
+        const auto reach{record->game_mode == sim::game_mode_creative ? 6.0
+                                                                      : 5.0};
+        const auto dx{static_cast<double>(x) + 0.5 - record->x};
+        const auto dy{static_cast<double>(y) + 0.5 - (record->y + 1.62)};
+        const auto dz{static_cast<double>(z) + 0.5 - record->z};
+        return dx * dx + dy * dy + dz * dz <= reach * reach;
     };
+    network_inputs.break_block =
+        [apply_block, may_edit](std::uint64_t connection, std::int32_t x,
+                                std::int32_t y, std::int32_t z) {
+            if (y < std::numeric_limits<std::int16_t>::min() ||
+                y > std::numeric_limits<std::int16_t>::max() ||
+                !may_edit(connection, x, y, z)) {
+                return false;
+            }
+            return apply_block(
+                refrain::sim::block_pos{x, static_cast<std::int16_t>(y), z},
+                refrain::sim::air_block);
+        };
     // TODO: placing ignores the held item, placement rules and orientation;
     // every placement writes minecraft:stone.
-    network_inputs.place_block = [&world, apply_block](std::int32_t x,
-                                                       std::int32_t y,
-                                                       std::int32_t z) {
+    network_inputs.place_block = [&world, apply_block, may_edit](
+                                     std::uint64_t connection, std::int32_t x,
+                                     std::int32_t y, std::int32_t z) {
         if (y < std::numeric_limits<std::int16_t>::min() ||
-            y > std::numeric_limits<std::int16_t>::max()) {
+            y > std::numeric_limits<std::int16_t>::max() ||
+            !may_edit(connection, x, y, z)) {
             return false;
         }
         const auto stone{world.intern_block(std::string{"minecraft:stone"})};
@@ -778,6 +1043,84 @@ auto run_server(const server_run_options &options,
         chunks.broadcast_updates(world);
         inventory.tick(players);
         world.tick();
+        // Survival packets follow the simulation tick: death, health, hunger
+        // and experience are simulation state and the client only sees them
+        // through these updates.
+        if (auto *sim_level{world.sim_world()}; sim_level != nullptr) {
+            sim_level->players().for_each(
+                [&sim_level, &survival_sent,
+                 &active_listener](refrain::sim::player_state &record) {
+                    if (record.connection ==
+                        refrain::sim::synthetic_connection) {
+                        return;
+                    }
+                    auto &sent{survival_sent[record.connection]};
+                    if (record.dead) {
+                        if (sent.death_sent) {
+                            return;
+                        }
+                        sent.death_sent = true;
+                        // Kill experience goes to the player that dealt the
+                        // final hit, capped like the vanilla player reward.
+                        if (record.last_attacker != 0 &&
+                            record.last_attacker != record.connection) {
+                            auto *killer{
+                                sim_level->players().find_by_connection(
+                                    record.last_attacker)};
+                            if (killer != nullptr && !killer->dead) {
+                                refrain::sim::add_experience(
+                                    *killer, std::min(sent.level * 7, 100));
+                            }
+                        }
+                        const auto message{death_message(*sim_level, record)};
+                        if (active_listener != nullptr) {
+                            active_listener->send_player_combat_kill(
+                                record.connection,
+                                static_cast<std::int32_t>(record.id), message);
+                            active_listener->broadcast_system_chat(message);
+                            for (const auto &[other_id, other] :
+                                 sim_level->players().records()) {
+                                if (other.connection !=
+                                        refrain::sim::synthetic_connection &&
+                                    other.connection != record.connection) {
+                                    active_listener->send_entity_event(
+                                        other.connection,
+                                        static_cast<std::int32_t>(record.id),
+                                        3); // death animation
+                                }
+                            }
+                        }
+                        return;
+                    }
+                    const auto respawned{sent.death_sent};
+                    sent.death_sent = false;
+                    if (respawned || record.health != sent.health ||
+                        record.food_level != sent.food ||
+                        record.saturation != sent.saturation) {
+                        if (active_listener != nullptr) {
+                            active_listener->send_player_health(
+                                record.connection, record.health,
+                                record.food_level, record.saturation);
+                        }
+                        sent.health = record.health;
+                        sent.food = record.food_level;
+                        sent.saturation = record.saturation;
+                    }
+                    if (respawned || record.experience_level != sent.level ||
+                        record.total_experience != sent.total ||
+                        record.experience_progress != sent.progress) {
+                        if (active_listener != nullptr) {
+                            active_listener->send_player_experience(
+                                record.connection, record.experience_progress,
+                                record.experience_level,
+                                record.total_experience);
+                        }
+                        sent.progress = record.experience_progress;
+                        sent.level = record.experience_level;
+                        sent.total = record.total_experience;
+                    }
+                });
+        }
         publish_world_state();
         // The reference re-synchronises the world clock once per second; the
         // client interpolates the clock in between from the game time it

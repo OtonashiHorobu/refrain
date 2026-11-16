@@ -43,6 +43,8 @@ void print_console_help() {
     log_server.info(
         "available commands are stop, save, tps, hash, pos [name], "
         "move [name] <dx> <dy> <dz>, walk [name] <dx> <dz>, jump [name], "
+        "gamemode <mode> [name], heal [name], food [name] <level>, "
+        "damage [name] <amount>, xp [name] <points>, "
         "dig <x> <y> <z>, place <x> <y> <z> <block>, "
         "give [name] <item> <count>, inv [name], "
         "spawn <type> <x> <y> <z>, entities, kill <entity-id>, palette-gc, "
@@ -639,6 +641,137 @@ void console_commands::execute(std::string_view line,
         log_server.info("{} jumped and is {}", player->name,
                         after && after->on_ground ? "on the ground"
                                                   : "in the air");
+        return;
+    }
+    const auto selected_record =
+        [&world](std::string_view name) -> refrain::sim::player_state * {
+        const auto selected{select_player(world, std::string{name})};
+        if (!selected) {
+            return nullptr;
+        }
+        auto *sim_level{world.sim_world()};
+        if (sim_level == nullptr) {
+            return nullptr;
+        }
+        return sim_level->players().find_by_connection(selected->connection);
+    };
+    if ((tokens.size() == 2 || tokens.size() == 3) && tokens[0] == "gamemode") {
+        const auto named{tokens.size() == 3};
+        static constexpr std::array<std::string_view, 4> names{
+            "survival", "creative", "adventure", "spectator"};
+        std::uint32_t mode{0};
+        const auto requested{tokens[1]};
+        bool known{false};
+        for (std::uint32_t index{0}; index < names.size(); ++index) {
+            if (requested == names[index]) {
+                mode = index;
+                known = true;
+                break;
+            }
+        }
+        if (!known) {
+            std::uint32_t numeric{0};
+            if (parse_number(requested, numeric) && numeric <= 3) {
+                mode = numeric;
+                known = true;
+            }
+        }
+        if (!known) {
+            log_server.warn("gamemode expects survival, creative, adventure or "
+                            "spectator");
+            return;
+        }
+        auto *record{selected_record(named ? tokens[2] : "")};
+        if (record == nullptr) {
+            log_server.warn("no player is connected");
+            return;
+        }
+        auto *sim_level{world.sim_world()};
+        if (sim_level == nullptr) {
+            log_server.warn("the active world provider keeps no in-process "
+                            "player state");
+            return;
+        }
+        refrain::sim::set_player_game_mode(*sim_level, *record, mode);
+        if (dependencies_.listener != nullptr &&
+            record->connection != refrain::sim::synthetic_connection) {
+            dependencies_.listener->set_player_game_mode(
+                record->connection, static_cast<refrain::net::game_mode>(mode));
+        }
+        log_server.info("{} now plays in game mode {}", record->name,
+                        names[mode]);
+        return;
+    }
+    if ((tokens.size() == 1 || tokens.size() == 2) && tokens[0] == "heal") {
+        auto *record{selected_record(tokens.size() == 2 ? tokens[1] : "")};
+        auto *sim_level{world.sim_world()};
+        if (record == nullptr || sim_level == nullptr) {
+            log_server.warn("no player is connected");
+            return;
+        }
+        if (record->dead) {
+            log_server.warn("{} is dead; respawn before healing", record->name);
+            return;
+        }
+        record->health = 20.0F;
+        log_server.info("{} is at full health", record->name);
+        return;
+    }
+    if ((tokens.size() == 2 || tokens.size() == 3) && tokens[0] == "food") {
+        const auto named{tokens.size() == 3};
+        std::int32_t level{0};
+        if (!parse_number(tokens[named ? 2 : 1], level) || level < 0 ||
+            level > 20) {
+            log_server.warn("food expects a level between 0 and 20");
+            return;
+        }
+        auto *record{selected_record(named ? tokens[1] : "")};
+        if (record == nullptr) {
+            log_server.warn("no player is connected");
+            return;
+        }
+        record->food_level = level;
+        record->saturation =
+            std::min(record->saturation, static_cast<float>(level));
+        log_server.info("{} now has {} food", record->name, level);
+        return;
+    }
+    if ((tokens.size() == 2 || tokens.size() == 3) && tokens[0] == "damage") {
+        const auto named{tokens.size() == 3};
+        double amount{0.0};
+        if (!parse_number(tokens[named ? 2 : 1], amount) || amount <= 0.0) {
+            log_server.warn("damage expects a positive amount");
+            return;
+        }
+        auto *record{selected_record(named ? tokens[1] : "")};
+        auto *sim_level{world.sim_world()};
+        if (record == nullptr || sim_level == nullptr) {
+            log_server.warn("no player is connected");
+            return;
+        }
+        static_cast<void>(sim_level->damage_player(
+            *record, refrain::sim::damage_source::generic,
+            static_cast<float>(amount)));
+        log_server.info("{} took {} damage and is at {} health", record->name,
+                        amount, record->health);
+        return;
+    }
+    if ((tokens.size() == 2 || tokens.size() == 3) && tokens[0] == "xp") {
+        const auto named{tokens.size() == 3};
+        std::int32_t points{0};
+        if (!parse_number(tokens[named ? 2 : 1], points) || points <= 0) {
+            log_server.warn("xp expects a positive amount");
+            return;
+        }
+        auto *record{selected_record(named ? tokens[1] : "")};
+        auto *sim_level{world.sim_world()};
+        if (record == nullptr || sim_level == nullptr) {
+            log_server.warn("no player is connected");
+            return;
+        }
+        refrain::sim::add_experience(*record, points);
+        log_server.info("{} gained {} experience and is at level {}",
+                        record->name, points, record->experience_level);
         return;
     }
     if ((tokens.size() == 3 || tokens.size() == 4) && tokens[0] == "give") {

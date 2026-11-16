@@ -545,8 +545,22 @@ void bot_slot::handle_play(std::uint32_t packet_id, reader &in) {
             finish("malformed player_position", true);
             return;
         }
-        const std::lock_guard lock{mutex_};
-        spawn_y_ = packet.y;
+        {
+            const std::lock_guard lock{mutex_};
+            spawn_y_ = packet.y;
+        }
+        // Acknowledge the server teleport so its movement validator accepts
+        // the walk packets again; without the acknowledgement the server
+        // drops them by design.
+        play_sb::accept_teleportation ack{};
+        ack.id = packet.id;
+        ack.x = packet.x;
+        ack.y = packet.y;
+        ack.z = packet.z;
+        ack.y_rot = packet.y_rot;
+        ack.x_rot = packet.x_rot;
+        send_packet(play_sb::accept_teleportation::packet_id, ack,
+                    play_sb::encode_accept_teleportation);
         return;
     }
     if (packet_id == play_cb::login::packet_id) {

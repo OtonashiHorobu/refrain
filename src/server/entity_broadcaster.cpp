@@ -117,9 +117,10 @@ encode_remove_entities_body(std::span<const std::uint32_t> entity_ids)
 }
 
 void send_session_health(play_gateway &gateway, std::uint64_t connection,
-                         float health) {
+                         float health, std::int32_t food = 20,
+                         float saturation = 5.0F) {
     refrain::protocol::current::play::clientbound::set_health packet{
-        .health = health, .food = 20, .saturation = 5.0F};
+        .health = health, .food = food, .saturation = saturation};
     auto body{encode_play_body(
         refrain::protocol::current::play::clientbound::set_health::packet_id,
         packet,
@@ -129,11 +130,13 @@ void send_session_health(play_gateway &gateway, std::uint64_t connection,
     }
 }
 
-void send_session_experience(play_gateway &gateway, std::uint64_t connection) {
+void send_session_experience(play_gateway &gateway, std::uint64_t connection,
+                             float progress = 0.0F, std::int32_t level = 0,
+                             std::int32_t total = 0) {
     refrain::protocol::current::play::clientbound::set_experience packet{
-        .experience_progress = 0.0F,
-        .experience_level = 0,
-        .total_experience = 0,
+        .experience_progress = progress,
+        .experience_level = level,
+        .total_experience = total,
     };
     auto body{encode_play_body(
         refrain::protocol::current::play::clientbound::set_experience::
@@ -181,17 +184,31 @@ void send_session_hurt(play_gateway &gateway,
     }
 }
 
-void handle_session_attack(play_gateway &gateway,
-                           refrain::session::play_session &players,
-                           const refrain::net::attack_event &event) {
+void handle_session_attack(
+    play_gateway &gateway, refrain::session::play_session &players,
+    const refrain::net::attack_event &event,
+    const std::function<bool(std::uint64_t, std::uint64_t, float)>
+        &damage_handler) {
     const auto target{players.player_by_entity(
         static_cast<std::uint32_t>(event.target_entity))};
     if (target == nullptr || target->connection == event.connection) {
         return;
     }
     const auto player_id{target->connection};
-    const auto health{std::max(0.0F, target->health - 1.0F)};
-    static_cast<void>(players.set_health(player_id, health));
+    // TODO: a player attack applies damage and the hurt animation but no
+    // knockback and no attack cooldown; both belong to the combat model.
+    float health{target->health};
+    if (damage_handler) {
+        if (!damage_handler(event.connection, player_id, 1.0F)) {
+            return;
+        }
+        if (const auto *after{players.player_of(player_id)}; after != nullptr) {
+            health = after->health;
+        }
+    } else {
+        health = std::max(0.0F, target->health - 1.0F);
+        static_cast<void>(players.set_health(player_id, health));
+    }
     send_session_health(gateway, player_id, health);
     send_session_hurt(gateway, *target);
     for (const auto &other : players.all()) {
@@ -881,7 +898,12 @@ void entity_broadcaster::flush_lifecycle(
 
 void entity_broadcaster::attack(refrain::session::play_session &players,
                                 const refrain::net::attack_event &event) {
-    handle_session_attack(gateway_, players, event);
+    handle_session_attack(gateway_, players, event, damage_handler_);
+}
+
+void entity_broadcaster::set_damage_handler(
+    std::function<bool(std::uint64_t, std::uint64_t, float)> handler) {
+    damage_handler_ = std::move(handler);
 }
 
 void entity_broadcaster::animation(
@@ -893,15 +915,24 @@ void entity_broadcaster::animation(
 void entity_broadcaster::play_ready(
     const refrain::session::play_session &players, std::uint64_t connection) {
     const auto value{players.player_of(connection)};
-    send_session_health(gateway_, connection,
-                        value == nullptr ? 20.0F : value->health);
-    send_session_experience(gateway_, connection);
+    if (value == nullptr) {
+        send_session_health(gateway_, connection, 20.0F);
+        send_session_experience(gateway_, connection);
+        return;
+    }
+    send_session_health(gateway_, connection, value->health, value->food_level,
+                        value->saturation);
+    send_session_experience(gateway_, connection, value->experience_progress,
+                            value->experience_level, value->total_experience);
 }
 
 void entity_broadcaster::respawn(refrain::session::play_session &players,
                                  std::uint64_t connection) {
-    static_cast<void>(players.set_health(connection, 20.0F));
-    send_session_health(gateway_, connection, 20.0F);
+    const auto value{players.player_of(connection)};
+    send_session_health(gateway_, connection,
+                        value == nullptr ? 20.0F : value->health,
+                        value == nullptr ? 20 : value->food_level,
+                        value == nullptr ? 5.0F : value->saturation);
 }
 
 } // namespace refrain::server
