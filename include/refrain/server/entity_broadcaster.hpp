@@ -153,6 +153,15 @@ class entity_broadcaster {
     void attack(refrain::session::play_session &players,
                 const refrain::net::attack_event &event);
 
+    /// Route player damage through the gameplay layer. When set, `attack()`
+    /// asks this hook for the damage result instead of editing the session
+    /// health directly, so immunity, game-mode rules and death stay in one
+    /// place. Empty keeps the session-local behaviour tests rely on.
+    void
+    set_damage_handler(std::function<bool(std::uint64_t attacker,
+                                          std::uint64_t target, float damage)>
+                           handler);
+
     void animation(const refrain::session::play_session &players,
                    std::uint64_t source, std::int8_t action);
 
@@ -171,6 +180,10 @@ class entity_broadcaster {
     static constexpr std::int64_t full_reconcile_interval{600};
 
   private:
+    std::function<bool(std::uint64_t attacker, std::uint64_t target,
+                       float damage)>
+        damage_handler_{};
+
     /// One encoded player-list body and the connections that have not
     /// received it yet.
     struct pending_info {

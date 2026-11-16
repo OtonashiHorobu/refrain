@@ -83,6 +83,33 @@ struct movement_event {
     bool on_ground{false};
 };
 
+/// Keys a client holds this tick, in the wire bit layout of the vanilla input
+/// record: forward, backward, left, right, jump, shift, sprint.
+struct player_input_event {
+    std::uint64_t connection{0};
+    std::uint8_t flags{0};
+};
+
+/// Flight toggle reported by a client that may fly. The gameplay layer accepts
+/// it only while the game mode allows flight and pushes the resulting abilities
+/// back.
+struct flight_event {
+    std::uint64_t connection{0};
+    bool flying{false};
+};
+
+/// A client acknowledged a teleport with its new position. The gameplay layer
+/// adopts the position without running the movement validator again: the
+/// server chose it.
+struct teleport_confirm_event {
+    std::uint64_t connection{0};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    float yaw{0.0F};
+    float pitch{0.0F};
+};
+
 /// State the gameplay layer assigns to a joining player.
 struct join_state {
     game_mode mode{game_mode::creative};
@@ -113,6 +140,10 @@ using tab_provider = std::function<tab_view(const player_identity &)>;
 /// changed, so a callback may touch simulation-owned state without a lock.
 using player_event = std::function<void(const player_identity &)>;
 using movement_handler = std::function<void(const movement_event &)>;
+using player_input_handler = std::function<void(const player_input_event &)>;
+using flight_handler = std::function<void(const flight_event &)>;
+using teleport_confirm_handler =
+    std::function<void(const teleport_confirm_event &)>;
 
 struct attack_event {
     std::uint64_t connection{0};
@@ -247,6 +278,9 @@ struct server_inputs {
     /// `player_join`, after the join of the same connection.
     player_event play_ready{};
     respawn_handler respawn{};
+    /// Decide whether a client's respawn request is legal (the player must be
+    /// dead). Unset keeps the historical unconditional respawn behaviour.
+    std::function<bool(std::uint64_t)> respawn_request{};
     std::function<void(const view_distance_event &)> view_distance{};
     /// Optional transport provider. Empty uses the built-in Asio TCP
     /// transport.
@@ -269,10 +303,21 @@ struct server_inputs {
     std::string registry_catalog_path{};
     /// Pre-encoded `level_chunk_with_light` bodies around the spawn point.
     std::shared_ptr<const std::vector<std::vector<std::byte>>> spawn_chunks{};
-    /// Called on the simulation thread when a player destroys a block.
-    std::function<bool(std::int32_t, std::int32_t, std::int32_t)> break_block{};
+    /// Keys the client holds this tick, delivered on the simulation thread.
+    player_input_handler input{};
+    /// Flight toggle the client requested; the gameplay layer decides whether
+    /// the mode allows it.
+    flight_handler flight{};
+    /// Position a client confirmed after a server teleport.
+    teleport_confirm_handler teleport_confirm{};
+    /// Called on the simulation thread when a player destroys a block. The
+    /// connection is the actor; the gameplay layer enforces the game-mode and
+    /// reach rules before the world changes.
+    std::function<bool(std::uint64_t, std::int32_t, std::int32_t, std::int32_t)>
+        break_block{};
     /// Called on the simulation thread for a block placement.
-    std::function<bool(std::int32_t, std::int32_t, std::int32_t)> place_block{};
+    std::function<bool(std::uint64_t, std::int32_t, std::int32_t, std::int32_t)>
+        place_block{};
     /// Optional online-mode session verifier. When set, the server does not
     /// create the HTTP session client, which makes online login testable
     /// without the Mojang service.
@@ -416,6 +461,29 @@ class server {
     /// cached value, sends abilities to the target and broadcasts the player
     /// info entry. No configuration is read or written.
     void set_player_game_mode(std::uint64_t connection, game_mode mode);
+
+    /// Teleport one client to a server-chosen position. Sends the
+    /// `player_position` packet with a fresh teleport id and marks the
+    /// connection as awaiting the client's acknowledgement.
+    void teleport_player(std::uint64_t connection, double x, double y, double z,
+                         float yaw, float pitch);
+
+    /// Send one `set_health` update (health, food level, saturation).
+    void send_player_health(std::uint64_t connection, float health,
+                            std::int32_t food, float saturation);
+
+    /// Send one `set_experience` update (progress, level, total points).
+    void send_player_experience(std::uint64_t connection, float progress,
+                                std::int32_t level, std::int32_t total);
+
+    /// Send one `player_combat_kill` packet: the death screen and its message.
+    void send_player_combat_kill(std::uint64_t connection,
+                                 std::int32_t entity_id,
+                                 std::string_view message);
+
+    /// Send one entity event (hurt, death, permission level) for an entity.
+    void send_entity_event(std::uint64_t connection, std::int32_t entity_id,
+                           std::uint8_t event);
 
     /// Send a full container snapshot (player inventory uses container 0).
     void send_container_content(std::uint64_t connection,

@@ -37,6 +37,11 @@ struct player {
     bool on_ground{false};
     std::uint32_t game_mode{0};
     float health{20.0F};
+    std::int32_t food_level{20};
+    float saturation{5.0F};
+    float experience_progress{0.0F};
+    std::int32_t experience_level{0};
+    std::int32_t total_experience{0};
     std::int32_t view_distance{10};
     std::vector<sim::item_stack> inventory{};
 };

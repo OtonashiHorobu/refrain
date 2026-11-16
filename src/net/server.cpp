@@ -176,8 +176,10 @@ struct server_settings {
     std::int64_t seed{0};
     std::string registry_catalog_path{};
     std::shared_ptr<const std::vector<std::vector<std::byte>>> spawn_chunks{};
-    std::function<bool(std::int32_t, std::int32_t, std::int32_t)> break_block{};
-    std::function<bool(std::int32_t, std::int32_t, std::int32_t)> place_block{};
+    std::function<bool(std::uint64_t, std::int32_t, std::int32_t, std::int32_t)>
+        break_block{};
+    std::function<bool(std::uint64_t, std::int32_t, std::int32_t, std::int32_t)>
+        place_block{};
     std::string session_server{"https://sessionserver.mojang.com"};
     std::int32_t auth_timeout_ms{5000};
     std::int32_t rate_limit{0};
@@ -208,6 +210,11 @@ struct server::impl {
         float pitch{0.0F};
         bool on_ground{false};
         bool awaiting_teleport{true};
+        /// Monotonic id the client echoes back in `accept_teleportation`.
+        std::uint32_t next_teleport_id{2U};
+        /// Keys the client last reported; kept for the connection's flight
+        /// validation and diagnostics.
+        std::uint8_t last_input{0};
         bool client_loaded{false};
         bool knows_core_pack{false};
         bool registries_sent{false};
@@ -324,10 +331,14 @@ struct server::impl {
     player_event player_join_hook{};
     player_event player_leave_hook{};
     movement_handler movement_hook{};
+    player_input_handler input_hook{};
+    flight_handler flight_hook{};
+    teleport_confirm_handler teleport_confirm_hook{};
     attack_handler attack_hook{};
     animation_handler animation_hook{};
     player_event play_ready_hook{};
     respawn_handler respawn_hook{};
+    std::function<bool(std::uint64_t)> respawn_request_hook{};
     std::function<void(const view_distance_event &)> view_distance_hook{};
     transport_factory make_transport{};
     std::shared_ptr<protocol_codec> protocol{};
@@ -417,6 +428,16 @@ struct server::impl {
     void send_commands(std::uint64_t id);
     void send_tab_list(std::uint64_t id);
     void set_game_mode(std::uint64_t id, game_mode mode);
+    void teleport_player(std::uint64_t id, double x, double y, double z,
+                         float yaw, float pitch);
+    void send_player_health(std::uint64_t id, float health, std::int32_t food,
+                            float saturation);
+    void send_player_experience(std::uint64_t id, float progress,
+                                std::int32_t level, std::int32_t total);
+    void send_player_combat_kill(std::uint64_t id, std::int32_t entity_id,
+                                 std::string_view message);
+    void send_entity_event(std::uint64_t id, std::int32_t entity_id,
+                           std::uint8_t event);
     void send_system_chat(std::uint64_t id, std::string_view text);
     void execute_chat_command(std::uint64_t id, std::string_view command);
     void broadcast_system_chat(std::string_view text);
@@ -2131,6 +2152,42 @@ void server::set_player_game_mode(std::uint64_t connection, game_mode mode) {
     }
 }
 
+void server::teleport_player(std::uint64_t connection, double x, double y,
+                             double z, float yaw, float pitch) {
+    if (impl_) {
+        impl_->teleport_player(connection, x, y, z, yaw, pitch);
+    }
+}
+
+void server::send_player_health(std::uint64_t connection, float health,
+                                std::int32_t food, float saturation) {
+    if (impl_) {
+        impl_->send_player_health(connection, health, food, saturation);
+    }
+}
+
+void server::send_player_experience(std::uint64_t connection, float progress,
+                                    std::int32_t level, std::int32_t total) {
+    if (impl_) {
+        impl_->send_player_experience(connection, progress, level, total);
+    }
+}
+
+void server::send_player_combat_kill(std::uint64_t connection,
+                                     std::int32_t entity_id,
+                                     std::string_view message) {
+    if (impl_) {
+        impl_->send_player_combat_kill(connection, entity_id, message);
+    }
+}
+
+void server::send_entity_event(std::uint64_t connection, std::int32_t entity_id,
+                               std::uint8_t event) {
+    if (impl_) {
+        impl_->send_entity_event(connection, entity_id, event);
+    }
+}
+
 auto server::player_names() const -> std::vector<player_name> {
     if (!impl_) {
         return {};
@@ -2205,6 +2262,86 @@ void server::impl::set_game_mode(std::uint64_t id, game_mode mode) {
     }
 }
 
+void server::impl::teleport_player(std::uint64_t id, double x, double y,
+                                   double z, float yaw, float pitch) {
+    play_cb::player_position position{};
+    {
+        const auto live{find_connection(id)};
+        if (!live) {
+            return;
+        }
+        const std::lock_guard lock{live->mutex};
+        auto &data{live->data};
+        if (live->closed.load(std::memory_order_relaxed) ||
+            data.state != connection_state::play) {
+            return;
+        }
+        data.awaiting_teleport = true;
+        data.x = x;
+        data.y = y;
+        data.z = z;
+        data.yaw = yaw;
+        data.pitch = pitch;
+        data.next_teleport_id = data.next_teleport_id + 1U;
+        if (data.next_teleport_id == 0U) {
+            data.next_teleport_id = 1U;
+        }
+        position.id = data.next_teleport_id;
+    }
+    position.x = x;
+    position.y = y;
+    position.z = z;
+    position.delta_x = 0.0;
+    position.delta_y = 0.0;
+    position.delta_z = 0.0;
+    position.y_rot = yaw;
+    position.x_rot = pitch;
+    position.relatives = 0;
+    send_packet(id, play_cb::player_position::packet_id, position,
+                play_cb::encode_player_position);
+}
+
+void server::impl::send_player_health(std::uint64_t id, float health,
+                                      std::int32_t food, float saturation) {
+    play_cb::set_health packet{
+        .health = health,
+        .food = food,
+        .saturation = saturation,
+    };
+    send_packet(id, play_cb::set_health::packet_id, packet,
+                play_cb::encode_set_health);
+}
+
+void server::impl::send_player_experience(std::uint64_t id, float progress,
+                                          std::int32_t level,
+                                          std::int32_t total) {
+    play_cb::set_experience packet{
+        .experience_progress = progress,
+        .experience_level = level,
+        .total_experience = total,
+    };
+    send_packet(id, play_cb::set_experience::packet_id, packet,
+                play_cb::encode_set_experience);
+}
+
+void server::impl::send_player_combat_kill(std::uint64_t id,
+                                           std::int32_t entity_id,
+                                           std::string_view message) {
+    play_cb::player_combat_kill packet{
+        .player_id = entity_id,
+        .message = text_component{.text = std::string{message}},
+    };
+    send_packet(id, play_cb::player_combat_kill::packet_id, packet,
+                play_cb::encode_player_combat_kill);
+}
+
+void server::impl::send_entity_event(std::uint64_t id, std::int32_t entity_id,
+                                     std::uint8_t event) {
+    play_cb::entity_event packet{.entity_id = entity_id, .event = event};
+    send_packet(id, play_cb::entity_event::packet_id, packet,
+                play_cb::encode_entity_event);
+}
+
 void server::impl::send_initial_chunks(std::uint64_t id) {
     play_cb::chunk_batch_start start{};
     send_packet(id, play_cb::chunk_batch_start::packet_id, start,
@@ -2252,10 +2389,7 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        if (packet.id != 1) {
-            return;
-        }
-        bool on_ground{false};
+        teleport_confirm_event event{};
         {
             const auto live{find_connection(id)};
             if (!live) {
@@ -2263,25 +2397,27 @@ void server::impl::handle_play(std::uint64_t id,
             }
             const std::lock_guard lock{live->mutex};
             auto &data{live->data};
-            if (live->closed.load(std::memory_order_relaxed)) {
+            if (live->closed.load(std::memory_order_relaxed) ||
+                !data.awaiting_teleport) {
+                // A confirmation without a pending teleport is a stale or
+                // forged packet; only the server starts the handshake.
                 return;
             }
-            on_ground = data.on_ground;
             data.awaiting_teleport = false;
             data.x = packet.x;
             data.y = packet.y;
             data.z = packet.z;
             data.yaw = packet.y_rot;
             data.pitch = packet.x_rot;
+            event = teleport_confirm_event{.connection = id,
+                                           .x = packet.x,
+                                           .y = packet.y,
+                                           .z = packet.z,
+                                           .yaw = packet.y_rot,
+                                           .pitch = packet.x_rot};
         }
-        if (movement_hook) {
-            movement_hook(movement_event{.connection = id,
-                                         .x = packet.x,
-                                         .y = packet.y,
-                                         .z = packet.z,
-                                         .yaw = packet.y_rot,
-                                         .pitch = packet.x_rot,
-                                         .on_ground = on_ground});
+        if (teleport_confirm_hook) {
+            teleport_confirm_hook(event);
         }
         return;
     }
@@ -2317,7 +2453,11 @@ void server::impl::handle_play(std::uint64_t id,
             }
             const std::lock_guard lock{live->mutex};
             auto &data{live->data};
-            if (live->closed.load(std::memory_order_relaxed)) {
+            if (live->closed.load(std::memory_order_relaxed) ||
+                data.awaiting_teleport) {
+                // Movement is not accepted until the client acknowledges the
+                // server's teleport; the position it reports in between was
+                // computed from a position the server replaced.
                 return;
             }
             data.x = packet.x;
@@ -2346,15 +2486,23 @@ void server::impl::handle_play(std::uint64_t id,
             reject(id, "malformed or unexpected packet");
             return;
         }
-        if (!with_connection(id, [&packet](connection_state_data &data) {
-                data.x = packet.x;
-                data.y = packet.y;
-                data.z = packet.z;
-                data.yaw = packet.y_rot;
-                data.pitch = packet.x_rot;
-                data.on_ground = (packet.flags & 1U) != 0;
-            })) {
-            return;
+        {
+            const auto live{find_connection(id)};
+            if (!live) {
+                return;
+            }
+            const std::lock_guard lock{live->mutex};
+            auto &data{live->data};
+            if (live->closed.load(std::memory_order_relaxed) ||
+                data.awaiting_teleport) {
+                return;
+            }
+            data.x = packet.x;
+            data.y = packet.y;
+            data.z = packet.z;
+            data.yaw = packet.y_rot;
+            data.pitch = packet.x_rot;
+            data.on_ground = (packet.flags & 1U) != 0;
         }
         if (movement_hook) {
             movement_hook(
@@ -2444,7 +2592,7 @@ void server::impl::handle_play(std::uint64_t id,
         // Only START_DESTROY_BLOCK changes the world; the other actions
         // stop or abort a prediction that the client resolves locally.
         if (packet.action == 0 && config.break_block &&
-            config.break_block(x, y, z)) {
+            config.break_block(id, x, y, z)) {
             play_cb::block_update update{.position = packet.position,
                                          .state = 0};
             send_packet(id, play_cb::block_update::packet_id, update,
@@ -2485,7 +2633,7 @@ void server::impl::handle_play(std::uint64_t id,
             break;
         }
         if (packet.face <= 5 && config.place_block &&
-            config.place_block(x, y, z)) {
+            config.place_block(id, x, y, z)) {
             play_cb::block_update update{
                 .position = pack_block_position(x, y, z),
                 .state = 1, // minecraft:stone
@@ -2633,7 +2781,15 @@ void server::impl::handle_play(std::uint64_t id,
         if (packet.action != 0) {
             return;
         }
+        // The gameplay layer owns the death state: a client only performs a
+        // respawn while its player is dead (or after the end poem).
+        if (respawn_request_hook && !respawn_request_hook(id)) {
+            return;
+        }
         game_mode mode{game_mode::creative};
+        double spawn_x{config.spawn_x};
+        double spawn_y{config.spawn_y};
+        double spawn_z{config.spawn_z};
         {
             const auto live{find_connection(id)};
             if (!live) {
@@ -2644,9 +2800,10 @@ void server::impl::handle_play(std::uint64_t id,
             if (live->closed.load(std::memory_order_relaxed)) {
                 return;
             }
-            data.x = config.spawn_x;
-            data.y = config.spawn_y;
-            data.z = config.spawn_z;
+            data.x = spawn_x;
+            data.y = spawn_y;
+            data.z = spawn_z;
+            data.awaiting_teleport = true;
             mode = data.mode;
         }
         play_cb::respawn respawn{};
@@ -2664,23 +2821,12 @@ void server::impl::handle_play(std::uint64_t id,
         respawn.data_to_keep = 0;
         send_packet(id, play_cb::respawn::packet_id, respawn,
                     play_cb::encode_respawn);
-        play_cb::player_position position{
-            .id = 1,
-            .x = config.spawn_x,
-            .y = config.spawn_y,
-            .z = config.spawn_z,
-            .delta_x = 0.0,
-            .delta_y = 0.0,
-            .delta_z = 0.0,
-            .y_rot = 0.0F,
-            .x_rot = 0.0F,
-            .relatives = 0,
-        };
-        send_packet(id, play_cb::player_position::packet_id, position,
-                    play_cb::encode_player_position);
         if (respawn_hook) {
             respawn_hook(id);
         }
+        // The spawn position is a server teleport: the client must confirm it
+        // before its movement is validated again.
+        teleport_player(id, spawn_x, spawn_y, spawn_z, 0.0F, 0.0F);
         return;
     }
     case play_sb::container_close::packet_id: {
@@ -2806,6 +2952,11 @@ void server::impl::handle_play(std::uint64_t id,
         if (auto decoded{play_sb::decode_player_abilities(in, packet)};
             !decoded) {
             reject(id, "malformed or unexpected packet");
+            return;
+        }
+        if (flight_hook) {
+            flight_hook(flight_event{.connection = id,
+                                     .flying = packet.is_flying != 0});
         }
         return;
     }
@@ -2821,6 +2972,16 @@ void server::impl::handle_play(std::uint64_t id,
         play_sb::player_input packet{};
         if (auto decoded{play_sb::decode_player_input(in, packet)}; !decoded) {
             reject(id, "malformed or unexpected packet");
+            return;
+        }
+        const auto flags{static_cast<std::uint8_t>(packet.input)};
+        if (!with_connection(id, [flags](connection_state_data &data) {
+                data.last_input = flags;
+            })) {
+            return;
+        }
+        if (input_hook) {
+            input_hook(player_input_event{.connection = id, .flags = flags});
         }
         return;
     }
@@ -3399,10 +3560,14 @@ auto server::start(server_inputs inputs, core::config::view view)
     state->player_join_hook = std::move(inputs.player_join);
     state->player_leave_hook = std::move(inputs.player_leave);
     state->movement_hook = std::move(inputs.movement);
+    state->input_hook = std::move(inputs.input);
+    state->flight_hook = std::move(inputs.flight);
+    state->teleport_confirm_hook = std::move(inputs.teleport_confirm);
     state->attack_hook = std::move(inputs.attack);
     state->animation_hook = std::move(inputs.animation);
     state->play_ready_hook = std::move(inputs.play_ready);
     state->respawn_hook = std::move(inputs.respawn);
+    state->respawn_request_hook = std::move(inputs.respawn_request);
     state->view_distance_hook = std::move(inputs.view_distance);
     state->make_transport = std::move(inputs.make_transport);
     state->protocol = std::move(inputs.protocol);

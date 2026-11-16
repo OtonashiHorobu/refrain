@@ -139,6 +139,9 @@ class bot_session {
         if (move_thread_.joinable()) {
             move_thread_.join();
         }
+        if (respawn_thread_.joinable()) {
+            respawn_thread_.join();
+        }
         transport_->stop();
         transport_.reset();
 
@@ -432,10 +435,23 @@ class bot_session {
                 fail("malformed player_position");
                 return;
             }
-            std::lock_guard lock{mutex_};
-            spawn_x_ = packet.x;
-            spawn_y_ = packet.y;
-            spawn_z_ = packet.z;
+            {
+                std::lock_guard lock{mutex_};
+                spawn_x_ = packet.x;
+                spawn_y_ = packet.y;
+                spawn_z_ = packet.z;
+            }
+            // A client acknowledges a server teleport before it sends another
+            // movement packet; the server drops movement until it sees this.
+            play_sb::accept_teleportation ack{};
+            ack.id = packet.id;
+            ack.x = packet.x;
+            ack.y = packet.y;
+            ack.z = packet.z;
+            ack.y_rot = packet.y_rot;
+            ack.x_rot = packet.x_rot;
+            send_packet(play_sb::accept_teleportation::packet_id, ack,
+                        play_sb::encode_accept_teleportation);
             return;
         }
         if (packet_id == play_cb::login::packet_id) {
@@ -493,6 +509,15 @@ class bot_session {
                     send_move();
                 }};
             }
+            if (options_.request_respawn) {
+                respawn_thread_ = std::thread{[this] {
+                    log::set_thread_name("bot-respawn");
+                    if (options_.command_delay.count() > 0) {
+                        std::this_thread::sleep_for(options_.command_delay);
+                    }
+                    send_respawn();
+                }};
+            }
         }
     }
 
@@ -523,6 +548,13 @@ class bot_session {
         packet.command = std::move(command);
         send_packet(play_sb::chat_command::packet_id, packet,
                     play_sb::encode_chat_command);
+    }
+
+    void send_respawn() {
+        play_sb::client_command packet{};
+        packet.action = 0; // perform respawn
+        send_packet(play_sb::client_command::packet_id, packet,
+                    play_sb::encode_client_command);
     }
 
     void send_move() {
@@ -576,6 +608,7 @@ class bot_session {
     double spawn_z_{0.0};
     std::thread command_thread_{};
     std::thread move_thread_{};
+    std::thread respawn_thread_{};
     std::atomic<bool> running_{true};
     double walk_phase_{0.0};
 };

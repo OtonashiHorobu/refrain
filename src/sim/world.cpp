@@ -1068,6 +1068,9 @@ void world::set_player_position(player_state &player, double x, double y,
     player.vy = 0.0;
     player.vz = 0.0;
     player.on_ground = false;
+    player.ground_y = y;
+    player.fall_distance = 0.0;
+    player.has_move_request = false;
 }
 
 auto world::schedule_after(std::int64_t delay, std::function<void()> fn)
@@ -1305,145 +1308,508 @@ void world::tick_entities() noexcept {
     }
 }
 
-auto world::block_solid(block_state_id id) const noexcept -> bool {
-    const auto key{registry_.key(id)};
-    const auto name{key.substr(0, key.find('['))};
-    // Approximation: air/fluids and the common zero-collision plants are
-    // passable; every other state is solid. Full VoxelShape/collision tables
-    // are not implemented yet and only affect player movement, not storage.
-    for (const auto *passable :
-         {"minecraft:air", "minecraft:cave_air", "minecraft:void_air",
-          "minecraft:water", "minecraft:lava", "minecraft:short_grass",
-          "minecraft:tall_grass", "minecraft:fern", "minecraft:dead_bush",
-          "minecraft:torch"}) {
-        if (name == passable) {
-            return false;
-        }
-    }
-    return true;
-}
-
 namespace {
 constexpr double player_half_width = 0.3;
 constexpr double player_height = 1.8;
 constexpr double collision_epsilon = 1.0e-7;
 
-struct aabb {
-    double min_x;
-    double min_y;
-    double min_z;
-    double max_x;
-    double max_y;
-    double max_z;
-};
+/// Name part of a canonical block-state key (`minecraft:oak_slab[type=top]`
+/// -> `minecraft:oak_slab`).
+[[nodiscard]] auto state_name(std::string_view key) -> std::string_view {
+    return key.substr(0, key.find('['));
+}
 
-[[nodiscard]] auto player_box(double x, double y, double z) noexcept -> aabb {
-    return aabb{x - player_half_width, y,
-                z - player_half_width, x + player_half_width,
-                y + player_height,     z + player_half_width};
+/// State part of a canonical block-state key, brackets included; empty when
+/// the state has no properties.
+[[nodiscard]] auto state_properties(std::string_view key) -> std::string_view {
+    const auto open{key.find('[')};
+    return open == std::string_view::npos ? std::string_view{}
+                                          : key.substr(open);
+}
+
+/// Wrap a rotation into (-180, 180], the range the movement packet reports.
+[[nodiscard]] auto wrap_degrees(float value) noexcept -> float {
+    auto wrapped{std::fmod(value, 360.0F)};
+    if (wrapped > 180.0F) {
+        wrapped -= 360.0F;
+    } else if (wrapped <= -180.0F) {
+        wrapped += 360.0F;
+    }
+    return wrapped;
+}
+
+/// Collision shape heights the runtime understands besides a full cube. The
+/// storage model has no `VoxelShape` table, so the classification is derived
+/// from the block-state key and covers the shapes step-up exists for.
+constexpr double snow_layer_height = 0.125;
+constexpr double carpet_height = 0.0625;
+
+[[nodiscard]] auto is_passable_block(std::string_view name) noexcept -> bool {
+    for (const auto *passable : {"minecraft:air",
+                                 "minecraft:cave_air",
+                                 "minecraft:void_air",
+                                 "minecraft:water",
+                                 "minecraft:lava",
+                                 "minecraft:short_grass",
+                                 "minecraft:tall_grass",
+                                 "minecraft:fern",
+                                 "minecraft:dead_bush",
+                                 "minecraft:torch",
+                                 "minecraft:wall_torch",
+                                 "minecraft:soul_torch",
+                                 "minecraft:sapling",
+                                 "minecraft:oak_sapling",
+                                 "minecraft:birch_sapling",
+                                 "minecraft:spruce_sapling",
+                                 "minecraft:jungle_sapling",
+                                 "minecraft:acacia_sapling",
+                                 "minecraft:dark_oak_sapling",
+                                 "minecraft:red_mushroom",
+                                 "minecraft:brown_mushroom",
+                                 "minecraft:sugar_cane",
+                                 "minecraft:kelp",
+                                 "minecraft:kelp_plant",
+                                 "minecraft:seagrass",
+                                 "minecraft:tall_seagrass",
+                                 "minecraft:lever",
+                                 "minecraft:ladder",
+                                 "minecraft:vine",
+                                 "minecraft:scaffolding",
+                                 "minecraft:cobweb",
+                                 "minecraft:tripwire",
+                                 "minecraft:tripwire_hook",
+                                 "minecraft:rail",
+                                 "minecraft:torchflower",
+                                 "minecraft:dandelion",
+                                 "minecraft:poppy",
+                                 "minecraft:blue_orchid",
+                                 "minecraft:allium",
+                                 "minecraft:azure_bluet",
+                                 "minecraft:oxeye_daisy",
+                                 "minecraft:cornflower",
+                                 "minecraft:lily_of_the_valley"}) {
+        if (name == passable) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] auto is_climbable_block(std::string_view name) noexcept -> bool {
+    for (const auto *climbable :
+         {"minecraft:ladder", "minecraft:vine", "minecraft:scaffolding",
+          "minecraft:twisting_vines", "minecraft:weeping_vines",
+          "minecraft:cave_vines", "minecraft:cave_vines_plant"}) {
+        if (name == climbable) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] auto is_fluid_block(std::string_view name) noexcept
+    -> world::fluid_kind {
+    if (name == "minecraft:water" || name == "minecraft:flowing_water") {
+        return world::fluid_kind::water;
+    }
+    if (name == "minecraft:lava" || name == "minecraft:flowing_lava") {
+        return world::fluid_kind::lava;
+    }
+    return world::fluid_kind::none;
+}
+
+/// Binary-searched single-axis sweep. `collides` answers whether an AABB at a
+/// position overlaps a collision box. Returns true when the axis was blocked.
+template <typename Collides>
+[[nodiscard]] auto sweep_coordinate(double &x, double &y, double &z,
+                                    double delta, int axis, Collides &&collides)
+    -> bool {
+    if (delta == 0.0) {
+        return false;
+    }
+    auto &coordinate{axis == 0 ? x : (axis == 1 ? y : z)};
+    const auto original{coordinate};
+    coordinate += delta;
+    if (!collides(x, y, z)) {
+        return false;
+    }
+    // The residual gap is deterministic and far below a block; 40 iterations
+    // reach double resolution on the 1-block scale the sweep works on.
+    double low{0.0};
+    double high{1.0};
+    for (int iteration{0}; iteration < 40; ++iteration) {
+        const auto middle{(low + high) * 0.5};
+        coordinate = original + delta * middle;
+        if (collides(x, y, z)) {
+            high = middle;
+        } else {
+            low = middle;
+        }
+    }
+    coordinate = original + delta * low;
+    return true;
 }
 } // namespace
 
-auto world::move_player(player_state &player, double dx, double dy, double dz)
+auto world::collision_of(block_state_id id) const noexcept
+    -> const block_collision & {
+    if (id >= collisions_.size()) {
+        collisions_.resize(static_cast<std::size_t>(id) + 1U);
+    }
+    auto &entry{collisions_[id]};
+    if (entry.resolved) {
+        return entry;
+    }
+    entry.resolved = true;
+    entry.passable = true;
+    entry.box_min_y = 0.0;
+    entry.box_max_y = 1.0;
+    entry.fluid = fluid_kind::none;
+    entry.climbable = false;
+    entry.friction = 0.6;
+    const auto key{registry_.key(id)};
+    const auto name{state_name(key)};
+    const auto properties{state_properties(key)};
+    entry.fluid = is_fluid_block(name);
+    entry.climbable = is_climbable_block(name);
+    if (entry.fluid != fluid_kind::none || is_passable_block(name)) {
+        return entry;
+    }
+    if (name == "minecraft:snow") {
+        // Snow layers collide up to the layer height; the state encodes the
+        // layer count in `layers`, which the approximation ignores.
+        entry.passable = false;
+        entry.box_max_y = snow_layer_height;
+        return entry;
+    }
+    const auto slab{name.size() >= 5 &&
+                    name.substr(name.size() - 5) == "_slab"};
+    if (slab) {
+        entry.passable = false;
+        entry.box_min_y = 0.0;
+        entry.box_max_y = 0.5;
+        if (properties.find("type=top") != std::string_view::npos) {
+            entry.box_min_y = 0.5;
+            entry.box_max_y = 1.0;
+        }
+        return entry;
+    }
+    const auto carpet{name.size() >= 7 &&
+                      name.substr(name.size() - 7) == "_carpet"};
+    if (carpet) {
+        entry.passable = false;
+        entry.box_max_y = carpet_height;
+        return entry;
+    }
+    if (name == "minecraft:ice" || name == "minecraft:packed_ice" ||
+        name == "minecraft:blue_ice" || name == "minecraft:frosted_ice") {
+        entry.passable = false;
+        entry.friction = 0.98;
+        return entry;
+    }
+    // Everything else is a full collision cube.
+    // TODO: derive the collision boxes from the block-state table; the
+    // approximation only over-restricts movement (fences, walls and stairs
+    // collide as full blocks) and never lets a player through a solid block.
+    entry.passable = false;
+    return entry;
+}
+
+auto world::block_solid(block_state_id id) const noexcept -> bool {
+    return !collision_of(id).passable;
+}
+
+auto world::player_overlaps_solid(const player_state &player) const noexcept
     -> bool {
-    bool moved{false};
-    const auto collides = [this](const aabb &box) {
-        const auto min_x{static_cast<std::int32_t>(std::floor(box.min_x))};
-        const auto max_x{static_cast<std::int32_t>(
-            std::floor(box.max_x - collision_epsilon))};
-        const auto min_y{static_cast<std::int32_t>(std::floor(box.min_y))};
-        const auto max_y{static_cast<std::int32_t>(
-            std::floor(box.max_y - collision_epsilon))};
-        const auto min_z{static_cast<std::int32_t>(std::floor(box.min_z))};
-        const auto max_z{static_cast<std::int32_t>(
-            std::floor(box.max_z - collision_epsilon))};
-        for (std::int32_t y{min_y}; y <= max_y; ++y) {
-            for (std::int32_t z{min_z}; z <= max_z; ++z) {
-                for (std::int32_t x{min_x}; x <= max_x; ++x) {
-                    if (block_solid(block_at(
-                            block_pos{x, static_cast<std::int16_t>(y), z}))) {
-                        return true;
-                    }
+    return player_box_collides(player_box(player.x, player.y, player.z));
+}
+
+auto world::block_fluid(block_state_id id) const noexcept -> fluid_kind {
+    return collision_of(id).fluid;
+}
+
+auto world::block_climbable(block_state_id id) const noexcept -> bool {
+    return collision_of(id).climbable;
+}
+
+auto world::block_friction(block_state_id id) const noexcept -> double {
+    return collision_of(id).friction;
+}
+
+auto world::player_box(double x, double y, double z) noexcept -> player_aabb {
+    return player_aabb{.min_x = x - player_half_width,
+                       .min_y = y,
+                       .min_z = z - player_half_width,
+                       .max_x = x + player_half_width,
+                       .max_y = y + player_height,
+                       .max_z = z + player_half_width};
+}
+
+auto world::player_box_collides(const player_aabb &box) const noexcept -> bool {
+    const auto min_x{static_cast<std::int32_t>(std::floor(box.min_x))};
+    const auto max_x{
+        static_cast<std::int32_t>(std::floor(box.max_x - collision_epsilon))};
+    const auto min_y{static_cast<std::int32_t>(std::floor(box.min_y))};
+    const auto max_y{
+        static_cast<std::int32_t>(std::floor(box.max_y - collision_epsilon))};
+    const auto min_z{static_cast<std::int32_t>(std::floor(box.min_z))};
+    const auto max_z{
+        static_cast<std::int32_t>(std::floor(box.max_z - collision_epsilon))};
+    for (std::int32_t y{min_y}; y <= max_y; ++y) {
+        if (y < std::numeric_limits<std::int16_t>::min() ||
+            y > std::numeric_limits<std::int16_t>::max()) {
+            continue;
+        }
+        for (std::int32_t z{min_z}; z <= max_z; ++z) {
+            for (std::int32_t x{min_x}; x <= max_x; ++x) {
+                const auto &shape{collision_of(
+                    block_at(block_pos{x, static_cast<std::int16_t>(y), z}))};
+                if (shape.passable) {
+                    continue;
+                }
+                if (box.min_x < static_cast<double>(x) + 1.0 &&
+                    box.max_x > static_cast<double>(x) &&
+                    box.min_y < static_cast<double>(y) + shape.box_max_y &&
+                    box.max_y > static_cast<double>(y) + shape.box_min_y &&
+                    box.min_z < static_cast<double>(z) + 1.0 &&
+                    box.max_z > static_cast<double>(z)) {
+                    return true;
                 }
             }
         }
-        return false;
-    };
-    enum class axis { y, x, z };
-    const auto move_axis = [this, &collides, &moved, &player](
-                               double &position, double delta, axis which) {
-        if (delta == 0.0) {
-            return;
-        }
-        const auto original{position};
-        position += delta;
-        auto box{player_box(player.x, player.y, player.z)};
-        if (!collides(box)) {
-            moved = moved || position != original;
-            return;
-        }
-        // Binary search for the furthest collision-free fraction. The small
-        // residual gap is deterministic and well below a block.
-        double low{0.0};
-        double high{1.0};
-        for (int iteration{0}; iteration < 32; ++iteration) {
-            const auto middle{(low + high) * 0.5};
-            position = original + delta * middle;
-            box = player_box(player.x, player.y, player.z);
-            if (collides(box)) {
-                high = middle;
-            } else {
-                low = middle;
-            }
-        }
-        position = original + delta * low;
-        if (which == axis::y) {
-            player.vy = 0.0;
-            if (delta < 0.0) {
-                player.on_ground = true;
-            }
-        } else if (which == axis::x) {
-            player.vx = 0.0;
-        } else {
-            player.vz = 0.0;
-        }
-        moved = moved || position != original;
-    };
-
-    move_axis(player.y, dy, axis::y);
-    move_axis(player.x, dx, axis::x);
-    move_axis(player.z, dz, axis::z);
-    return moved;
+    }
+    return false;
 }
 
-void world::tick_player(player_state &player) noexcept {
-    // Gravity: vanilla-shaped enough for a deterministic player walk, not
-    // a full LivingEntity/fluid model. The RNG draw in tick() is unrelated.
-    constexpr double gravity{0.08};
-    constexpr double vertical_drag{0.98};
-    // Always probe downward: standing on a block is represented by the
-    // collision clamp, so walking off an edge starts falling without an extra
-    // "supported" flag.
-    player.vy = (player.vy - gravity) * vertical_drag;
-    const auto before{player.y};
-    (void)move_player(player, 0.0, player.vy, 0.0);
-    if (player.vy <= 0.0 && player.y == before) {
+auto world::player_box_grounded(const player_aabb &box) const noexcept -> bool {
+    const auto min_x{static_cast<std::int32_t>(std::floor(box.min_x))};
+    const auto max_x{
+        static_cast<std::int32_t>(std::floor(box.max_x - collision_epsilon))};
+    const auto min_z{static_cast<std::int32_t>(std::floor(box.min_z))};
+    const auto max_z{
+        static_cast<std::int32_t>(std::floor(box.max_z - collision_epsilon))};
+    const auto support_y{
+        static_cast<std::int32_t>(std::floor(box.min_y - collision_epsilon))};
+    if (support_y < std::numeric_limits<std::int16_t>::min() ||
+        support_y > std::numeric_limits<std::int16_t>::max()) {
+        return false;
+    }
+    const auto top{static_cast<double>(support_y)};
+    for (std::int32_t z{min_z}; z <= max_z; ++z) {
+        for (std::int32_t x{min_x}; x <= max_x; ++x) {
+            const auto &shape{collision_of(block_at(
+                block_pos{x, static_cast<std::int16_t>(support_y), z}))};
+            if (shape.passable) {
+                continue;
+            }
+            const auto block_top{top + shape.box_max_y};
+            if (block_top > box.min_y - 1.0e-4 &&
+                block_top <= box.min_y + 1.0e-4) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+auto world::resolve_movement(double x, double y, double z, double dx, double dy,
+                             double dz, bool was_on_ground) const noexcept
+    -> movement_resolution {
+    movement_resolution out{.x = x, .y = y, .z = z};
+    const auto collides = [this](double box_x, double box_y, double box_z) {
+        return player_box_collides(player_box(box_x, box_y, box_z));
+    };
+    out.blocked_y = sweep_coordinate(out.x, out.y, out.z, dy, 1, collides);
+    out.blocked_x = sweep_coordinate(out.x, out.y, out.z, dx, 0, collides);
+    out.blocked_z = sweep_coordinate(out.x, out.y, out.z, dz, 2, collides);
+
+    // Step-up: a blocked horizontal move retries from a raised position when
+    // the player stands on the ground (or just landed). The candidate heights
+    // are the partial collision shapes the block classification knows.
+    const auto on_ground_after{was_on_ground || (out.blocked_y && dy <= 0.0)};
+    if (on_ground_after && (out.blocked_x || out.blocked_z)) {
+        const auto base_progress{std::hypot(out.x - x, out.z - z)};
+        const auto remaining_x{dx - (out.x - x)};
+        const auto remaining_z{dz - (out.z - z)};
+        for (const auto lift :
+             {player_step_height, snow_layer_height, carpet_height}) {
+            double lifted_x{out.x};
+            double lifted_y{out.y + lift};
+            double lifted_z{out.z};
+            if (collides(lifted_x, lifted_y, lifted_z)) {
+                continue;
+            }
+            const auto lifted_blocked_x{sweep_coordinate(
+                lifted_x, lifted_y, lifted_z, remaining_x, 0, collides)};
+            const auto lifted_blocked_z{sweep_coordinate(
+                lifted_x, lifted_y, lifted_z, remaining_z, 2, collides)};
+            static_cast<void>(lifted_blocked_x);
+            static_cast<void>(lifted_blocked_z);
+            const auto progress{std::hypot(lifted_x - out.x, lifted_z - out.z)};
+            if (progress <= base_progress + 1.0e-4) {
+                continue;
+            }
+            // Settle down onto whatever the raised move found, so stepping
+            // onto a slab leaves the feet on its top and not above it.
+            static_cast<void>(sweep_coordinate(lifted_x, lifted_y, lifted_z,
+                                               -lift, 1, collides));
+            out.x = lifted_x;
+            out.y = lifted_y;
+            out.z = lifted_z;
+            out.blocked_x = false;
+            out.blocked_z = false;
+            break;
+        }
+    }
+    out.grounded = player_box_grounded(player_box(out.x, out.y, out.z));
+    return out;
+}
+
+auto world::resolve_player_move(const player_state &player, double dx,
+                                double dy, double dz) const noexcept
+    -> player_collision_result {
+    const auto resolved{resolve_movement(player.x, player.y, player.z, dx, dy,
+                                         dz, player.on_ground)};
+    return player_collision_result{
+        .x = resolved.x,
+        .y = resolved.y,
+        .z = resolved.z,
+        .collided = resolved.blocked_x || resolved.blocked_y ||
+                    resolved.blocked_z || resolved.grounded,
+    };
+}
+
+auto world::move_player(player_state &player, double dx, double dy, double dz)
+    -> bool {
+    const auto start_x{player.x};
+    const auto start_y{player.y};
+    const auto start_z{player.z};
+    const auto resolved{resolve_movement(player.x, player.y, player.z, dx, dy,
+                                         dz, player.on_ground)};
+    player.x = resolved.x;
+    player.y = resolved.y;
+    player.z = resolved.z;
+    if (resolved.blocked_y) {
+        player.vy = 0.0;
+        if (dy < 0.0) {
+            player.on_ground = true;
+        }
+    }
+    if (resolved.blocked_x) {
+        player.vx = 0.0;
+    }
+    if (resolved.blocked_z) {
+        player.vz = 0.0;
+    }
+    if (resolved.grounded) {
         player.on_ground = true;
-    } else if (player.vy != 0.0) {
+    } else if (dy > 0.0 || resolved.blocked_y) {
+        player.on_ground = false;
+    } else if (dy != 0.0) {
         player.on_ground = false;
     }
-    player.vx *= 0.91;
-    player.vz *= 0.91;
-    if (player.vx != 0.0 || player.vz != 0.0) {
-        (void)move_player(player, player.vx, 0.0, player.vz);
+    return player.x != start_x || player.y != start_y || player.z != start_z;
+}
+
+auto world::submit_player_move(player_state &player,
+                               const player_move_request &request)
+    -> player_move_verdict {
+    if (player.dead) {
+        // A dead client keeps sending movement while the death screen is up;
+        // the record stays where it died, so the request is dropped without a
+        // correction packet.
+        return player_move_verdict::accepted;
     }
+    if (!std::isfinite(request.x) || !std::isfinite(request.y) ||
+        !std::isfinite(request.z) || !std::isfinite(request.yaw) ||
+        !std::isfinite(request.pitch)) {
+        return player_move_verdict::corrected;
+    }
+    const auto dx{request.x - player.x};
+    const auto dy{request.y - player.y};
+    const auto dz{request.z - player.z};
+    const auto distance{std::sqrt(dx * dx + dy * dy + dz * dz)};
+    if (distance > player_max_move_distance) {
+        return player_move_verdict::corrected;
+    }
+    const auto spectator{player.game_mode == game_mode_spectator};
+    if (!spectator) {
+        const auto feet{block_at(
+            block_pos{static_cast<std::int32_t>(std::floor(player.x)),
+                      static_cast<std::int16_t>(std::floor(player.y + 0.1)),
+                      static_cast<std::int32_t>(std::floor(player.z))})};
+        const auto body{block_at(
+            block_pos{static_cast<std::int32_t>(std::floor(player.x)),
+                      static_cast<std::int16_t>(std::floor(player.y + 0.9)),
+                      static_cast<std::int32_t>(std::floor(player.z))})};
+        const auto in_fluid{block_fluid(feet) != fluid_kind::none ||
+                            block_fluid(body) != fluid_kind::none};
+        const auto climbing{block_climbable(feet) || block_climbable(body)};
+        if (!player.flying && !in_fluid) {
+            if (std::hypot(dx, dz) > player_max_horizontal_per_tick) {
+                return player_move_verdict::corrected;
+            }
+        }
+        if (!player.flying && !in_fluid && !climbing &&
+            dy > player_max_upward_per_tick) {
+            return player_move_verdict::corrected;
+        }
+        if (!player.flying && !in_fluid && !climbing && dy > 0.0 &&
+            request.y > player.ground_y + player_max_jump_height) {
+            return player_move_verdict::corrected;
+        }
+        // The collision sweep must be able to carry the player to the
+        // reported position. A request that ends inside a wall or past the
+        // step height is a modified client, not movement.
+        const auto resolved{resolve_movement(player.x, player.y, player.z, dx,
+                                             dy, dz, player.on_ground)};
+        const auto miss_x{resolved.x - request.x};
+        const auto miss_y{resolved.y - request.y};
+        const auto miss_z{resolved.z - request.z};
+        if (std::sqrt(miss_x * miss_x + miss_y * miss_y + miss_z * miss_z) >
+            player_move_tolerance) {
+            return player_move_verdict::corrected;
+        }
+    }
+    player.has_move_request = true;
+    player.move_x = request.x;
+    player.move_y = request.y;
+    player.move_z = request.z;
+    player.move_on_ground = request.on_ground;
+    player.yaw = wrap_degrees(request.yaw);
+    player.pitch = std::clamp(request.pitch, -90.0F, 90.0F);
+    return player_move_verdict::accepted;
+}
+
+auto world::damage_player(player_state &player, damage_source source,
+                          float amount, std::uint64_t attacker) -> bool {
+    return sim::damage_player(*this, player, source, amount, attacker);
+}
+
+void world::respawn_player(player_state &player, double x, double y, double z,
+                           float yaw, float pitch) noexcept {
+    sim::respawn_player(*this, player, x, y, z, yaw, pitch);
+}
+
+void world::set_spawn_point(spawn_point value) noexcept { spawn_ = value; }
+
+void world::set_difficulty(std::uint32_t value) noexcept {
+    difficulty_ = std::min<std::uint32_t>(value, 3U);
+}
+
+void world::set_hardcore(bool value) noexcept { hardcore_ = value; }
+
+void world::tick_player(player_state &player) noexcept {
+    sim::tick_player(*this, player);
 }
 
 void world::jump(player_state &player) noexcept {
-    if (player.on_ground) {
-        player.vy = 0.42;
-        player.on_ground = false;
+    if (!player.on_ground) {
+        return;
     }
+    player.vy = player_jump_velocity;
+    player.on_ground = false;
+    player.exhaustion = std::min(player.exhaustion + 0.05F, 40.0F);
 }
 
 auto world::state_hash() const -> data::digest32 {
@@ -1489,6 +1855,17 @@ auto world::state_hash() const -> data::digest32 {
         append_u32(player.on_ground ? 1U : 0U);
         append_u32(player.game_mode);
         append_u32(std::bit_cast<std::uint32_t>(player.health));
+        append_u32(static_cast<std::uint32_t>(player.food_level));
+        append_u32(std::bit_cast<std::uint32_t>(player.saturation));
+        append_u32(std::bit_cast<std::uint32_t>(player.exhaustion));
+        append_u32(static_cast<std::uint32_t>(player.air_supply));
+        append_u32(static_cast<std::uint32_t>(player.experience_level));
+        append_u32(static_cast<std::uint32_t>(player.total_experience));
+        append_u32(player.dead ? 1U : 0U);
+        append_u64(std::bit_cast<std::uint64_t>(player.fall_distance));
+        append_u32(static_cast<std::uint32_t>(player.input));
+        append_u32(player.flying ? 1U : 0U);
+        append_u32(static_cast<std::uint32_t>(player.age));
         append_u32(static_cast<std::uint32_t>(player.inventory.size()));
         for (const auto &stack : player.inventory) {
             append_u32(static_cast<std::uint32_t>(stack.item.size()));

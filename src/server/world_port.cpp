@@ -193,6 +193,11 @@ class direct_world_port final : public world_port {
         return world_ == nullptr ? nullptr : &world().entities();
     }
 
+    auto sim_world() noexcept -> sim::world * override { return world_; }
+    auto sim_world() const noexcept -> const sim::world * override {
+        return world_;
+    }
+
     auto add_ticket(sim::chunk_pos pos, sim::ticket_kind kind)
         -> status override {
         return world().add_ticket(pos, kind);

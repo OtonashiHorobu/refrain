@@ -244,6 +244,22 @@ void register_runtime_commands(
                 const std::lock_guard lock{environment->mode_mutex};
                 environment->modes[*connection] = *mode;
             }
+            // The simulation owns the game-mode rules; the network push only
+            // tells the client what changed. Applying both in the same command
+            // keeps damage, flight and collision rules effective on the next
+            // tick.
+            if (environment->world != nullptr) {
+                if (auto *sim_level{environment->world->sim_world()};
+                    sim_level != nullptr) {
+                    if (auto *record{sim_level->players().find_by_connection(
+                            *connection)};
+                        record != nullptr) {
+                        refrain::sim::set_player_game_mode(
+                            *sim_level, *record,
+                            static_cast<std::uint32_t>(*mode));
+                    }
+                }
+            }
             if (environment->listener != nullptr) {
                 environment->listener->set_player_game_mode(*connection, *mode);
             }

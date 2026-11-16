@@ -235,6 +235,11 @@ auto play_session::project(const sim::player_state &record) -> player {
         .on_ground = record.on_ground,
         .game_mode = record.game_mode,
         .health = record.health,
+        .food_level = record.food_level,
+        .saturation = record.saturation,
+        .experience_progress = record.experience_progress,
+        .experience_level = record.experience_level,
+        .total_experience = record.total_experience,
         .view_distance = record.view_distance,
         .inventory = record.inventory,
     };
