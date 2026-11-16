@@ -8,6 +8,7 @@
 
 #include <refrain/data/nbt.hpp>
 
+#include <refrain/core/byte_order.hpp>
 #include <refrain/core/io.hpp>
 
 #include <zlib.h>
@@ -306,9 +307,7 @@ class byte_reader {
         if (!chunk) {
             return std::unexpected{chunk.error()};
         }
-        return static_cast<std::uint16_t>(
-            (std::to_integer<std::uint16_t>((*chunk)[0]) << 8U) |
-            std::to_integer<std::uint16_t>((*chunk)[1]));
+        return core::byte_order::load_be16(*chunk);
     }
 
     [[nodiscard]] auto u32() -> result<std::uint32_t> {
@@ -316,11 +315,7 @@ class byte_reader {
         if (!chunk) {
             return std::unexpected{chunk.error()};
         }
-        std::uint32_t value{0};
-        for (const auto item : *chunk) {
-            value = (value << 8U) | std::to_integer<std::uint32_t>(item);
-        }
-        return value;
+        return core::byte_order::load_be32(*chunk);
     }
 
     [[nodiscard]] auto u64() -> result<std::uint64_t> {
@@ -328,11 +323,7 @@ class byte_reader {
         if (!chunk) {
             return std::unexpected{chunk.error()};
         }
-        std::uint64_t value{0};
-        for (const auto item : *chunk) {
-            value = (value << 8U) | std::to_integer<std::uint64_t>(item);
-        }
-        return value;
+        return core::byte_order::load_be64(*chunk);
     }
 
     [[nodiscard]] auto i32() -> result<std::int32_t> {
@@ -758,28 +749,11 @@ class byte_writer {
   public:
     void u8(std::uint8_t item) { out_.push_back(static_cast<std::byte>(item)); }
 
-    void u16(std::uint16_t item) {
-        u8(static_cast<std::uint8_t>(item >> 8U));
-        u8(static_cast<std::uint8_t>(item & 0xFFU));
-    }
+    void u16(std::uint16_t item) { append_be(item); }
 
-    void u32(std::uint32_t item) {
-        u8(static_cast<std::uint8_t>(item >> 24U));
-        u8(static_cast<std::uint8_t>((item >> 16U) & 0xFFU));
-        u8(static_cast<std::uint8_t>((item >> 8U) & 0xFFU));
-        u8(static_cast<std::uint8_t>(item & 0xFFU));
-    }
+    void u32(std::uint32_t item) { append_be(item); }
 
-    void u64(std::uint64_t item) {
-        u8(static_cast<std::uint8_t>(item >> 56U));
-        u8(static_cast<std::uint8_t>((item >> 48U) & 0xFFU));
-        u8(static_cast<std::uint8_t>((item >> 40U) & 0xFFU));
-        u8(static_cast<std::uint8_t>((item >> 32U) & 0xFFU));
-        u8(static_cast<std::uint8_t>((item >> 24U) & 0xFFU));
-        u8(static_cast<std::uint8_t>((item >> 16U) & 0xFFU));
-        u8(static_cast<std::uint8_t>((item >> 8U) & 0xFFU));
-        u8(static_cast<std::uint8_t>(item & 0xFFU));
-    }
+    void u64(std::uint64_t item) { append_be(item); }
 
     void bytes(std::span<const std::byte> data) {
         out_.insert(out_.end(), data.begin(), data.end());
@@ -803,6 +777,12 @@ class byte_writer {
     }
 
   private:
+    template <core::byte_order::fixed_width_integer T> void append_be(T item) {
+        std::array<std::byte, sizeof(T)> raw{};
+        core::byte_order::store_be(raw, 0, item);
+        out_.insert(out_.end(), raw.begin(), raw.end());
+    }
+
     std::vector<std::byte> out_;
 };
 
