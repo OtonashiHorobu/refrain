@@ -293,6 +293,12 @@ scans the lockfile, and uploads a SARIF report. In-repo recipes under
 `conan/recipes/` are not in ConanCenter and are therefore not covered by that
 audit; review their upstream advisories manually when bumping them.
 
+Findings that were checked against the vendored implementation are recorded in
+`.github/conan-audit-triage.json`: `not-applicable` and `accepted-risk` entries
+are left out of the alert stream and listed in the job summary, while
+`pending-fix` entries stay visible with their note. Do not dismiss an alert
+without recording the reason there, so the next run does not recreate it.
+
 ## Troubleshooting
 
 A missing preset means Conan has not produced the toolchain for this build
