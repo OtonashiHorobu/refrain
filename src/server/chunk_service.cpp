@@ -85,6 +85,14 @@ auto chunk_service::start_generation(chunk_generation::config settings)
     return status_ok();
 }
 
+void chunk_service::set_entity_source(
+    chunk_streamer::chunk_entity_source source) {
+    entity_source_ = std::move(source);
+    if (streamer_) {
+        streamer_->set_entity_source(entity_source_);
+    }
+}
+
 void chunk_service::attach(play_gateway &gateway, chunk_packet_source source,
                            chunk_streamer::backlog_limits backlog) {
     gateway_ = &gateway;
@@ -95,6 +103,9 @@ void chunk_service::attach(play_gateway &gateway, chunk_packet_source source,
         return generation_ != nullptr &&
                generation_->request(refrain::world::chunk_pos{x, z});
     });
+    if (entity_source_) {
+        streamer_->set_entity_source(entity_source_);
+    }
 }
 
 void chunk_service::tick(world_port &world,

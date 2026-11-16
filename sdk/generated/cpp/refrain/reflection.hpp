@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 05a109909008d815
+// Schema hash: 9bfa84cb449b5a93
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -3301,6 +3301,20 @@ template <> struct custom_traits<::refrain::storage::saved_tick> {
         refrain::reflect::custom_field{"remaining_ticks", &::refrain::storage::saved_tick::remaining_ticks});
 };
 
+/// Generated RSC struct 'refrain::storage::entity_record'.
+template <> struct custom_traits<::refrain::storage::entity_record> {
+    static constexpr std::string_view type_name = "refrain::storage::entity_record";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"id", &::refrain::storage::entity_record::id},
+        refrain::reflect::custom_field{"x", &::refrain::storage::entity_record::x},
+        refrain::reflect::custom_field{"y", &::refrain::storage::entity_record::y},
+        refrain::reflect::custom_field{"z", &::refrain::storage::entity_record::z},
+        refrain::reflect::custom_field{"yaw", &::refrain::storage::entity_record::yaw},
+        refrain::reflect::custom_field{"pitch", &::refrain::storage::entity_record::pitch},
+        refrain::reflect::custom_field{"pos", &::refrain::storage::entity_record::pos},
+        refrain::reflect::custom_field{"data", &::refrain::storage::entity_record::data});
+};
+
 /// Generated RSC record 'refrain::storage::chunk'.
 template <> struct custom_traits<::refrain::storage::chunk> {
     static constexpr std::string_view type_name = "refrain::storage::chunk";
@@ -3320,7 +3334,8 @@ template <> struct custom_traits<::refrain::storage::chunk> {
         refrain::reflect::custom_field{"extra", &::refrain::storage::chunk::extra},
         refrain::reflect::custom_field{"extensions", &::refrain::storage::chunk::extensions},
         refrain::reflect::custom_field{"y_pos", &::refrain::storage::chunk::y_pos},
-        refrain::reflect::custom_field{"light_sections", &::refrain::storage::chunk::light_sections});
+        refrain::reflect::custom_field{"light_sections", &::refrain::storage::chunk::light_sections},
+        refrain::reflect::custom_field{"entities", &::refrain::storage::chunk::entities});
 };
 
 /// Generated RIDL extension 'refrain:net.protocol/tab_codec'.

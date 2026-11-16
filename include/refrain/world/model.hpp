@@ -40,6 +40,7 @@ namespace refrain::world {
 using storage::block_pos;
 using storage::chunk;
 using storage::chunk_status;
+using storage::entity_record;
 using storage::heightmap_record;
 using storage::light_section;
 using storage::palette_entry;
@@ -68,6 +69,10 @@ inline constexpr std::size_t heightmap_columns = 256;
 /// and either migrates older chunks or refuses them with the supported
 /// versions named. It never resets or decreases; the schema hash identifies
 /// the build independently.
+///
+/// The entity list was appended as a new RWF field, so a record written before
+/// it existed still decodes with an empty list and this build keeps reading
+/// every older record: the change is additive and does not bump the version.
 inline constexpr std::uint16_t chunk_format_version = 1;
 
 /// Section Y bounds accepted by the model. Vanilla 26.3 overworld uses
@@ -85,6 +90,7 @@ inline constexpr std::size_t max_palette_entries = 4096;
 inline constexpr std::size_t max_heightmaps = 32;
 inline constexpr std::size_t max_ticks = 65535;
 inline constexpr std::size_t max_block_entities = 65535;
+inline constexpr std::size_t max_entities_per_chunk = 65535;
 inline constexpr std::size_t max_post_processing_entries = 4096;
 inline constexpr std::size_t max_extension_count = 1024;
 
@@ -167,9 +173,21 @@ unpack_palette_indices(std::span<const std::uint64_t> words,
 /// Structural validation of a chunk column (no world/registry semantics).
 ///
 /// Checks the field-set version, section ordering/uniqueness, palette/bits
-/// consistency, light array sizes, heightmap lengths and every collection
-/// bound. Returns the first problem with the offending section in the message.
+/// consistency, light array sizes, heightmap lengths, entity record bounds and
+/// ordering, and every collection bound. Returns the first problem with the
+/// offending section in the message.
 [[nodiscard]] auto validate(const chunk &value) -> status;
+
+/// Canonical entity order: position, then type key, then the stored
+/// components. Every producer (generation bridge, Anvil import) and the RWF
+/// codec sort with this one comparator, so the same entities always serialize
+/// in the same order and the semantic hash does not depend on placement or
+/// file order.
+[[nodiscard]] auto entity_order(const entity_record &left,
+                                const entity_record &right) -> bool;
+
+/// Sort `entities` into canonical order.
+void canonicalize_entities(std::vector<entity_record> &entities);
 
 /// Block/biome section with the given section Y, or nullptr.
 [[nodiscard]] auto section_at(const chunk &value, std::int32_t section_y)

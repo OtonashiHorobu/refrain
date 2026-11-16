@@ -4,6 +4,8 @@
 
 #include <refrain/world/anvil.hpp>
 
+#include <refrain/world/entity_nbt.hpp>
+
 #include <refrain/core/io.hpp>
 #include <refrain/core/jobs.hpp>
 #include <refrain/data/nbt.hpp>
@@ -601,6 +603,28 @@ void set_child(value &parent, std::string key, value child) {
     return status_ok();
 }
 
+[[nodiscard]] auto read_chunk_entities(const value &root, chunk &out)
+    -> status {
+    const auto *list{list_of(root, "entities")};
+    if (list == nullptr) {
+        return status_ok();
+    }
+    out.entities.reserve(list->items.size());
+    for (const auto &item : list->items) {
+        const auto *compound{item.as_compound()};
+        if (compound == nullptr) {
+            return parse_failure("chunk entity is not a compound");
+        }
+        auto record{entity_from_nbt(*compound)};
+        if (!record) {
+            return std::unexpected{std::move(record.error())};
+        }
+        out.entities.push_back(std::move(*record));
+    }
+    canonicalize_entities(out.entities);
+    return status_ok();
+}
+
 [[nodiscard]] auto read_post_processing(const value &root, chunk &out)
     -> status {
     const auto *list{list_of(root, "PostProcessing")};
@@ -651,13 +675,17 @@ void set_child(value &parent, std::string key, value child) {
         }
         out.blending = std::move(*bytes);
     }
-    static constexpr std::array<std::string_view, 18> known{
-        "xPos",           "zPos",           "yPos",
-        "Status",         "LastUpdate",     "InhabitedTime",
-        "sections",       "Heightmaps",     "block_ticks",
-        "fluid_ticks",    "block_entities", "structures",
-        "PostProcessing", "blending_data",  "below_zero_retrogen",
-        "isLightOn",      "DataVersion",    "UpgradeData"};
+    static constexpr std::array<std::string_view, 19> known{
+        "xPos",           "zPos",
+        "yPos",           "Status",
+        "LastUpdate",     "InhabitedTime",
+        "sections",       "Heightmaps",
+        "block_ticks",    "fluid_ticks",
+        "block_entities", "entities",
+        "structures",     "PostProcessing",
+        "blending_data",  "below_zero_retrogen",
+        "isLightOn",      "DataVersion",
+        "UpgradeData"};
     value extra{nbt::make_compound()};
     for (const auto &[name, item] : *root.as_compound()) {
         const auto known_key{std::find(known.begin(), known.end(), name) !=
@@ -800,6 +828,9 @@ struct staged_section {
         return std::unexpected{status.error()};
     }
     if (auto status{read_block_entities(root, out)}; !status) {
+        return std::unexpected{status.error()};
+    }
+    if (auto status{read_chunk_entities(root, out)}; !status) {
         return std::unexpected{status.error()};
     }
     if (auto status{read_post_processing(root, out)}; !status) {
@@ -1079,6 +1110,27 @@ void append_light(value &target, const light_section &light) {
         }
     }
     set_child(root, "block_entities", std::move(entities));
+
+    // The reference keeps the generated entities of a column in this list. A
+    // level chunk normally stores them in the separate entity region, but the
+    // RWF model keeps them with the column, so the export writes the list for
+    // every status: an entity-free column stays unchanged and an RWF ->
+    // Anvil -> RWF round trip preserves the entities.
+    if (!state.entities.empty()) {
+        value generated{nbt::make_list(tag_type::compound)};
+        for (const auto &record : state.entities) {
+            auto compound{entity_to_nbt(record)};
+            if (!compound) {
+                return std::unexpected{std::move(compound.error())};
+            }
+            if (auto pushed{
+                    generated.push(nbt::make_compound(std::move(*compound)))};
+                !pushed) {
+                return std::unexpected{pushed.error()};
+            }
+        }
+        set_child(root, "entities", std::move(generated));
+    }
 
     if (!state.structures.empty()) {
         const auto document{nbt::read(state.structures)};

@@ -174,11 +174,9 @@ class proto_chunk {
 
     /// Appends a generated entity. The tag carries the reference entity
     /// fields (`id`, `Pos`, `Rotation`, ...); placement strips the UUID and
-    /// writes the world position. Entities stay in placement order.
-    ///
-    /// TODO: the storage bridge does not persist generated entities yet
-    /// because the chunk model has no entity records; they must be written to
-    /// the level's entity store rather than dropped.
+    /// writes the world position. Entities stay in placement order here; the
+    /// storage bridge converts them into the canonical position order of the
+    /// chunk record.
     void add_entity(data::nbt::compound entity);
     [[nodiscard]] auto entities() const
         -> const std::vector<data::nbt::compound> & {

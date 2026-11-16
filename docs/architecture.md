@@ -155,9 +155,18 @@ auxiliary object stores.
 
 Region files use a 4 KiB header, two 36 KiB index pages written alternately, and
 an append-only data area of compressed records. A record holds the chunk
-sections, block entities, biomes and light. The world palette maps canonical
-block-state keys to compact identifiers; it is append-only and compacted only
-by an offline rebuild.
+sections, block entities, generated entities, biomes and light. The world
+palette maps canonical block-state keys to compact identifiers; it is
+append-only and compacted only by an offline rebuild.
+
+A generated entity record keeps the fields the reference chunk entity compound
+carries — the type, the world position, the body rotation, the block position —
+apart from the remaining template data components, which stay opaque NBT. The
+list is sorted by position, and a column without entities omits the record
+field, so an entity-free column keeps the record bytes (and the semantic hash)
+it had before the field existed and an older world stays readable. The Anvil
+conversion writes the list back as the chunk `entities` compound and reads it
+from there, so RWF to Anvil and back preserves the generated entities.
 
 Anvil import and export convert between RWF and the vanilla region layout,
 including zstd and LZ4 compressed regions, block palette keys, block entities,
@@ -236,6 +245,40 @@ the engine: the shipped content tables carry block states but no light
 properties. The table matches the reference for solid terrain, fluids, leaves
 and the common sources; blocks outside it are opaque and emit nothing, so a
 scene can only be darker than the reference, never brighter.
+
+### Generated entities
+
+World generation places the entities a structure template carries, and the
+storage bridge persists them with the column that contains them. A column owns
+its generated entities: loading or adopting the column spawns them in the
+entity table with fresh runtime ids exactly once, and unloading the column
+removes them. There is no second entity store to keep in sync, so a save, a
+reload or a chunk reload cannot duplicate or lose an entity.
+
+A generated entity is pinned: this build has no entity AI or living-entity
+physics, so applying the point-entity gravity would drag a shulker or an item
+frame off its structure. The entity is in the entity table, its pinned
+position is covered by `state_hash()`, and the position the structure wrote is
+what the records keep.
+
+The chunk streamer delivers the entities with the column. When it sends a
+column's chunk packet it follows with the `add_entity` packets for the column's
+entities, resolving the protocol entity type from the tracked vanilla tables and
+deriving a stable uuid from the record; when the column leaves the viewport it
+sends one `remove_entities` for the announced ids before telling the client to
+forget the chunk. The per-connection known-column set is the interest
+management, so a second pass or a second viewer announces the same entity once
+per client, and a client that walks back receives it again with its column. The
+spawn packet carries the type, position and rotation, and the reference `data`
+field for an item frame's hanging direction; per-type synchronized data
+components (an item frame's item, a shulker's colour) are not modelled yet
+because the build has no entity metadata model. The records keep those
+components, so a later entity model can send them without a format change.
+
+A world port whose provider keeps its columns in another process exposes no
+in-process column entity table, so that composition streams chunks without the
+entity announcements. The first-party in-process composition is the one the
+runtime binds.
 
 ### Time and weather
 

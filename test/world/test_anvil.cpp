@@ -2421,3 +2421,147 @@ suite world_storage = [] {
         }
     };
 };
+
+/// The reference chunk entity compound a generated column carries: the type,
+/// the world position, the body rotation, the block position and the template
+/// components.
+[[nodiscard]] auto generated_entity() -> value {
+    value entity{make_compound()};
+    set(entity, "id", make_string("minecraft:shulker"));
+    value pos{new_list(tag_type::double_)};
+    push(pos, nbt::make_double(0.5));
+    push(pos, nbt::make_double(65.0));
+    push(pos, nbt::make_double(0.5));
+    set(entity, "Pos", std::move(pos));
+    value rotation{new_list(tag_type::float_)};
+    push(rotation, nbt::make_float(180.0F));
+    push(rotation, nbt::make_float(0.0F));
+    set(entity, "Rotation", std::move(rotation));
+    set(entity, "block_pos", nbt::make_int_array({0, 65, 0}));
+    set(entity, "Color", make_int(3));
+    return entity;
+}
+
+suite world_storage_entities = [] {
+    "anvil import and export preserve the column entities"_test = [] {
+        const temp_directory directory;
+        const auto root{directory.sub("source-entities")};
+        const auto overworld{root + "/dimensions/minecraft/overworld"};
+        expect(
+            static_cast<bool>(io::create_directories(overworld + "/region")));
+        write_level_dat(root + "/level.dat");
+        auto chunk{make_chunk_nbt({.x = 0, .z = 0})};
+        value entities{new_list(tag_type::compound)};
+        push(entities, generated_entity());
+        set(chunk, "entities", std::move(entities));
+        write_region_file(overworld + "/region/r.0.0.mca",
+                          {{0, document_bytes(chunk)}});
+
+        const auto rwf{directory.sub("rwf-entities")};
+        auto imported{anvil::import_world(root, rwf, false)};
+        expect(static_cast<bool>(imported));
+        if (!imported) {
+            return;
+        }
+        std::string baseline{};
+        std::vector<std::byte> baseline_components{};
+        {
+            auto store{world::world_store::open(rwf)};
+            expect(static_cast<bool>(store));
+            if (!store) {
+                return;
+            }
+            const auto read{store->read_chunk({.x = 0, .z = 0})};
+            expect(static_cast<bool>(read));
+            if (!read) {
+                return;
+            }
+            expect(read->entities.size() == 1U);
+            if (read->entities.size() != 1U) {
+                return;
+            }
+            const auto &entity{read->entities.front()};
+            expect(entity.id == "minecraft:shulker");
+            expect(entity.x == 0.5);
+            expect(entity.y == 65.0);
+            expect(entity.z == 0.5);
+            expect(entity.yaw == 180.0F);
+            expect(entity.pitch == 0.0F);
+            expect(entity.pos.x == 0);
+            expect(entity.pos.y == 65);
+            expect(entity.pos.z == 0);
+            // The modelled fields moved into the record, so the components keep
+            // only what the reference entity serialization adds on top of them.
+            const auto components{nbt::read(entity.data)};
+            expect(components.has_value());
+            if (components) {
+                expect(components->get("id") == nullptr);
+                expect(components->get("Pos") == nullptr);
+                expect(components->get("Rotation") == nullptr);
+                expect(components->get("block_pos") == nullptr);
+                const auto *colour{components->get("Color")};
+                expect(colour != nullptr &&
+                       colour->as_int() == std::optional<std::int32_t>{3});
+            }
+            auto hash{world::semantic_hash(*read)};
+            expect(static_cast<bool>(hash));
+            if (!hash) {
+                return;
+            }
+            baseline = *hash;
+            baseline_components = read->entities.front().data;
+            expect(static_cast<bool>(store->commit()));
+        }
+
+        const auto exported{directory.sub("exported-entities")};
+        auto result{anvil::export_world(rwf, exported, false)};
+        expect(static_cast<bool>(result));
+        if (!result) {
+            return;
+        }
+        const auto reimported{directory.sub("rwf-entities-2")};
+        auto again{anvil::import_world(exported, reimported, false)};
+        expect(static_cast<bool>(again));
+        if (!again) {
+            return;
+        }
+        auto second{world::world_store::open(reimported)};
+        expect(static_cast<bool>(second));
+        if (!second) {
+            return;
+        }
+        const auto copy{second->read_chunk({.x = 0, .z = 0})};
+        expect(static_cast<bool>(copy));
+        if (!copy) {
+            return;
+        }
+        expect(copy->entities.size() == 1U);
+        if (copy->entities.size() == 1U) {
+            expect(copy->entities.front().id == "minecraft:shulker");
+            expect(copy->entities.front().x == 0.5);
+            expect(copy->entities.front().yaw == 180.0F);
+            expect(copy->entities.front().data == baseline_components);
+        }
+        expect(world::semantic_hash(*copy).value_or("") == baseline);
+    };
+
+    "an imported malformed entity record fails the import"_test = [] {
+        const temp_directory directory;
+        const auto root{directory.sub("source-bad-entity")};
+        const auto overworld{root + "/dimensions/minecraft/overworld"};
+        expect(
+            static_cast<bool>(io::create_directories(overworld + "/region")));
+        write_level_dat(root + "/level.dat");
+        auto chunk{make_chunk_nbt({.x = 0, .z = 0})};
+        value entities{new_list(tag_type::compound)};
+        value broken{make_compound()};
+        set(broken, "id", make_string("minecraft:shulker"));
+        set(broken, "Pos", make_string("not-a-position"));
+        push(entities, std::move(broken));
+        set(chunk, "entities", std::move(entities));
+        write_region_file(overworld + "/region/r.0.0.mca",
+                          {{0, document_bytes(chunk)}});
+        expect(
+            !anvil::import_world(root, directory.sub("rwf-bad-entity"), false));
+    };
+};

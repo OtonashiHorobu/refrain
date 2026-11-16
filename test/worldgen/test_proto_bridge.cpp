@@ -115,6 +115,28 @@ auto same_heightmap(const chunk &left, const chunk &right,
     return true;
 }
 
+[[nodiscard]] auto entity_tag(std::string id, std::vector<double> pos,
+                              std::vector<float> rotation)
+    -> data::nbt::compound {
+    data::nbt::compound tag{};
+    tag["id"] = data::nbt::value{std::move(id)};
+    std::vector<data::nbt::value> coordinates{};
+    coordinates.reserve(pos.size());
+    for (const auto value : pos) {
+        coordinates.push_back(data::nbt::value{value});
+    }
+    tag["Pos"] = data::nbt::make_list(data::nbt::tag_type::double_,
+                                      std::move(coordinates));
+    std::vector<data::nbt::value> angles{};
+    angles.reserve(rotation.size());
+    for (const auto value : rotation) {
+        angles.push_back(data::nbt::value{value});
+    }
+    tag["Rotation"] =
+        data::nbt::make_list(data::nbt::tag_type::float_, std::move(angles));
+    return tag;
+}
+
 } // namespace
 
 suite<"worldgen/proto-bridge"> proto_bridge_tests = [] {
@@ -260,6 +282,160 @@ suite<"worldgen/proto-bridge"> proto_bridge_tests = [] {
                     }
                 }
             }
+        }
+    };
+
+    "a generated column carries its template entities as entity records"_test =
+        [] {
+            auto states = make_registry();
+            worldgen::proto_chunk source{states, 0, 0, -64, 384};
+            source.set_status(worldgen::chunk_status::terrain);
+            source.set_biome(0, 0, 0, 0);
+            // The placement writes these tags: the entity type, the world
+            // position, the rotated body angles and (when the template named
+            // one) the block position, plus the template components.
+            auto pig{
+                entity_tag("minecraft:pig", {0.5, 65.0, 0.5}, {90.0F, 0.0F})};
+            pig["CustomName"] = data::nbt::value{std::string{"Bob"}};
+            source.add_entity(std::move(pig));
+            auto shulker{entity_tag("minecraft:shulker", {2.5, 66.0, 3.5},
+                                    {180.0F, 10.0F})};
+            shulker["Color"] = data::nbt::value{std::int32_t{3}};
+            shulker["block_pos"] = data::nbt::make_list(
+                data::nbt::tag_type::int_, {data::nbt::value{std::int32_t{2}},
+                                            data::nbt::value{std::int32_t{66}},
+                                            data::nbt::value{std::int32_t{3}}});
+            source.add_entity(std::move(shulker));
+
+            const auto converted =
+                from_proto_chunk(source, {"minecraft:plains"});
+            expect(converted.has_value());
+            if (!converted) {
+                return;
+            }
+            expect(converted->entities.size() == 2U);
+            if (converted->entities.size() != 2U) {
+                return;
+            }
+            // Canonical order is position order: the pig sits west of the
+            // shulker, so it comes first regardless of placement order.
+            expect(converted->entities[0].id == "minecraft:pig");
+            expect(converted->entities[0].x == 0.5);
+            expect(converted->entities[0].y == 65.0);
+            expect(converted->entities[0].z == 0.5);
+            expect(converted->entities[0].yaw == 90.0F);
+            expect(converted->entities[0].pos.x == 0);
+            expect(converted->entities[0].pos.y == 65);
+            expect(converted->entities[0].pos.z == 0);
+            const auto pig_components{
+                data::nbt::read(converted->entities[0].data)};
+            expect(pig_components.has_value());
+            if (pig_components) {
+                const auto *name{pig_components->get("CustomName")};
+                expect(name != nullptr &&
+                       name->as_string() ==
+                           std::optional<std::string_view>{"Bob"});
+                expect(pig_components->get("id") == nullptr);
+                expect(pig_components->get("Pos") == nullptr);
+            }
+            expect(converted->entities[1].id == "minecraft:shulker");
+            expect(converted->entities[1].pitch == 10.0F);
+            expect(converted->entities[1].pos.x == 2);
+            expect(converted->entities[1].pos.z == 3);
+            const auto shulker_components{
+                data::nbt::read(converted->entities[1].data)};
+            expect(shulker_components.has_value());
+            if (shulker_components) {
+                expect(shulker_components->get("block_pos") == nullptr);
+                const auto *colour{shulker_components->get("Color")};
+                expect(colour != nullptr &&
+                       colour->as_int() == std::optional<std::int32_t>{3});
+            }
+
+            // Two generation runs that place the same entities in a
+            // different order store the same bytes: the bridge canonises the
+            // order, so a saved-and-reloaded column hashes identically.
+            auto reversed_states = make_registry();
+            worldgen::proto_chunk reversed{reversed_states, 0, 0, -64, 384};
+            reversed.set_status(worldgen::chunk_status::terrain);
+            reversed.set_biome(0, 0, 0, 0);
+            auto reversed_shulker{entity_tag(
+                "minecraft:shulker", {2.5, 66.0, 3.5}, {180.0F, 10.0F})};
+            reversed_shulker["Color"] = data::nbt::value{std::int32_t{3}};
+            reversed_shulker["block_pos"] = data::nbt::make_list(
+                data::nbt::tag_type::int_, {data::nbt::value{std::int32_t{2}},
+                                            data::nbt::value{std::int32_t{66}},
+                                            data::nbt::value{std::int32_t{3}}});
+            reversed.add_entity(std::move(reversed_shulker));
+            auto reversed_pig{
+                entity_tag("minecraft:pig", {0.5, 65.0, 0.5}, {90.0F, 0.0F})};
+            reversed_pig["CustomName"] = data::nbt::value{std::string{"Bob"}};
+            reversed.add_entity(std::move(reversed_pig));
+            const auto reversed_converted =
+                from_proto_chunk(reversed, {"minecraft:plains"});
+            expect(reversed_converted.has_value());
+            if (reversed_converted) {
+                expect(semantic_hash(*converted).value_or("") ==
+                       semantic_hash(*reversed_converted).value_or(""));
+            }
+
+            // The records survive the RWF codec.
+            const auto payload = encode_chunk(*converted, nullptr, true,
+                                              chunk_palette_mode::inline_keys);
+            expect(payload.has_value());
+            if (!payload) {
+                return;
+            }
+            const auto decoded = decode_chunk(*payload);
+            expect(decoded.has_value());
+            if (decoded) {
+                expect(decoded->entities.size() == 2U);
+                expect(decoded->entities[0].id == "minecraft:pig");
+                expect(decoded->entities[0].data ==
+                       converted->entities[0].data);
+            }
+        };
+
+    "a malformed template entity record fails the conversion"_test = [] {
+        auto states = make_registry();
+        const auto convert = [&states](data::nbt::compound entity) {
+            worldgen::proto_chunk source{states, 0, 0, -64, 384};
+            source.set_status(worldgen::chunk_status::terrain);
+            source.add_entity(std::move(entity));
+            return from_proto_chunk(source, {"minecraft:plains"});
+        };
+        // No type id: the record cannot become a persisted entity.
+        auto missing{convert(data::nbt::compound{
+            {"Pos", data::nbt::make_list(data::nbt::tag_type::double_,
+                                         {data::nbt::value{0.5},
+                                          data::nbt::value{65.0},
+                                          data::nbt::value{0.5}})}})};
+        expect(!missing);
+        if (!missing) {
+            expect(missing.error().code == refrain::error_code::parse_error);
+        }
+        // A non-numeric position is equally unrepresentable.
+        data::nbt::compound bad_pos{};
+        bad_pos["id"] = data::nbt::value{std::string{"minecraft:pig"}};
+        bad_pos["Pos"] = data::nbt::value{std::string{"not-a-position"}};
+        auto malformed{convert(std::move(bad_pos))};
+        expect(!malformed);
+        if (!malformed) {
+            expect(malformed.error().code == refrain::error_code::parse_error);
+        }
+        // A short rotation list is a malformed record, not a default.
+        data::nbt::compound bad_rotation{
+            {"id", data::nbt::value{std::string{"minecraft:pig"}}},
+            {"Pos", data::nbt::make_list(data::nbt::tag_type::double_,
+                                         {data::nbt::value{0.5},
+                                          data::nbt::value{65.0},
+                                          data::nbt::value{0.5}})},
+            {"Rotation", data::nbt::make_list(data::nbt::tag_type::float_,
+                                              {data::nbt::value{90.0F}})}};
+        auto bad_angles{convert(std::move(bad_rotation))};
+        expect(!bad_angles);
+        if (!bad_angles) {
+            expect(bad_angles.error().code == refrain::error_code::parse_error);
         }
     };
 };
