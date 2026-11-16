@@ -1,0 +1,122 @@
+// SPDX-License-Identifier: MIT
+//
+// SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+//
+// `refrain:world.migration` service contract v1.
+//
+// The contract starts at 1.0.0 like every other service: the emitted ABI major
+// is the contract major, and the host treats a declared ABI major of zero as a
+// legacy provider that predates the vtable header check. A 0.x contract would
+// therefore silently disable that check for its provider.
+//
+// A world directory records the game data version its contents were written
+// with. This build understands one data version; opening a world recorded with
+// an older one needs an upgrade before the store can interpret the records.
+//
+// The upgrade is deliberately not part of `refrain:world` or
+// `refrain:storage`: those contracts describe reading and writing the current
+// format and stay unaware of older ones. A composition that omits a migration
+// provider therefore refuses an older world instead of reading it with the
+// wrong interpretation, and swapping the provider (built-in, external or a
+// no-op one) changes the upgrade policy without touching the storage layer.
+//
+// The provider reads the world directory itself: it runs before a store is
+// opened and must finish before the storage provider opens the same directory.
+
+module refrain::services::world_migration;
+version 1.0.0;
+
+/// Failure classes the caller can act on. Every value starts at 1 so that a
+/// zero status is success on the ABI.
+enum world_migration_error : u32 {
+    /// The source or target version lies outside the provider's window.
+    unsupported_version = 1,
+    /// The request is malformed (empty path, inverted range, ...).
+    invalid_request = 2,
+    /// Reading or writing the world failed.
+    io_error = 3,
+    /// The world is not a readable save of the requested version.
+    corrupt_world = 4,
+    /// A migration step failed after the world was validated.
+    migration_failed = 5,
+}
+
+/// Source versions one provider accepts and the version it upgrades them to.
+struct world_migration_capabilities {
+    /// Oldest source `DataVersion` accepted; older worlds fail closed.
+    i32 min_version;
+    /// `DataVersion` every accepted migration ends at.
+    i32 target_version;
+}
+
+/// What a migration from `from_version` to `to_version` runs. The count covers
+/// every upgrade step plus the version stamp; zero means the world already
+/// records `to_version`.
+struct world_migration_plan {
+    i32 from_version;
+    i32 to_version;
+    u32 steps;
+}
+
+/// One migration request. `dry_run` validates the world and reports the work
+/// that would be done without writing anything.
+struct world_migration_request {
+    /// World directory to upgrade. Read and written directly by the provider.
+    string world_path;
+    /// Version the caller read from the world; the migration fails closed when
+    /// the record disagrees instead of rewriting a different world.
+    i32 from_version;
+    /// Version to write; must equal the provider's target version.
+    i32 to_version;
+    bool dry_run;
+}
+
+/// Outcome of one successful migration (or of its dry run).
+struct world_migration_report {
+    i32 from_version;
+    i32 to_version;
+    /// Upgrade steps run, including the version stamp.
+    u32 steps;
+    /// Chunk records inspected and rewritten.
+    u64 chunks_scanned;
+    u64 chunks_migrated;
+    /// Player records inspected and rewritten.
+    u64 player_records_scanned;
+    u64 player_records_migrated;
+    /// True when every rewritten record was already at `to_version`, so no
+    /// file changed.
+    bool no_op;
+    /// True when this was a dry run: the counts describe the work a real run
+    /// would do and nothing was written.
+    bool dry_run;
+}
+
+service world_migration : 1.0.0 {
+    side = server;
+    thread = any;
+    provides = [ "refrain:world.migration" ];
+    requires = [ "refrain:core>=1.0.0" ];
+    capabilities = [ "data-version", "chunk-nbt", "player-data" ];
+
+    /// Versions this provider upgrades from and to. Callers plan only inside
+    /// the returned window; a wider window needs a provider upgrade.
+    #[thread(any)] #[can_fail]
+    fn capabilities() -> result<world_migration_capabilities, world_migration_error>;
+
+    /// Validate that `from_version` can be upgraded to `to_version` and return
+    /// the step count. Fails with `unsupported_version` when either version
+    /// lies outside the window, and with `invalid_request` when `from_version`
+    /// is newer than `to_version`.
+    #[thread(any)] #[can_fail]
+    fn plan(in i32 from_version, in i32 to_version)
+        -> result<world_migration_plan, world_migration_error>;
+
+    /// Upgrade the world, or report the work without writing when `dry_run` is
+    /// set. A world already at `to_version` succeeds as a no-op. Each rewritten
+    /// record is written through a temporary file and renamed into place, and
+    /// the version stamp is written last, so a failed migration leaves the
+    /// world recorded at its original version.
+    #[thread(any)] #[can_fail]
+    fn migrate(in world_migration_request request)
+        -> result<world_migration_report, world_migration_error>;
+}

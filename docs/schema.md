@@ -243,6 +243,11 @@ place at the current major version; only the schema hash changes, and no
 migration path or new `v2`/`v3` name is introduced. This keeps pre-release
 builds from accumulating versions with no external readers.
 
+New services also start at `1.0.0`. The emitted ABI major is the contract
+major, and the mod loader treats a declared ABI major of zero as a legacy
+provider that predates the vtable header check, so a new contract starting at
+`0.x` would silently disable that check for its provider.
+
 An additive method appends one slot to the vtable and bumps the service minor
 version: `refrain:world` moved from `1.0.0` to `1.1.0` when it gained the
 read-only `level()` projection, and to `1.2.0` when it gained the storage

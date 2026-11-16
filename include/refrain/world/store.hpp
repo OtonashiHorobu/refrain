@@ -32,6 +32,16 @@ namespace refrain::world {
 /// `refrain.world-meta/1` format marker inside `meta.rfw`.
 inline constexpr std::string_view meta_format = "refrain.world-meta/1";
 
+/// Read the `DataVersion` recorded by a world directory's level record without
+/// opening the store. The open path uses it to decide whether the world is
+/// current, needs an upgrade, or comes from a version this build cannot read.
+///
+/// Fails with `not_found` when `root/meta.rfw` is absent (the directory is not
+/// an RWF world), and with `parse_error` when the record exists but carries no
+/// integer `DataVersion`.
+[[nodiscard]] auto read_world_data_version(std::string_view root)
+    -> result<std::int32_t>;
+
 /// Projection of `meta.level` (the vanilla `level.dat` `Data` compound).
 struct level_info {
     std::int32_t data_version{0};

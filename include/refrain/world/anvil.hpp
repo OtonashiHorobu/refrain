@@ -19,6 +19,7 @@
 #include <refrain/core/error.hpp>
 #include <refrain/world/model.hpp>
 #include <refrain/world/rwf.hpp>
+#include <refrain/world/version.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -29,7 +30,7 @@
 namespace refrain::world::anvil {
 
 /// DataVersion written on export and required on import.
-inline constexpr std::int32_t supported_data_version = 5023;
+inline constexpr std::int32_t supported_data_version = target_data_version;
 
 /// Automatic zstd dictionary training scope. `dimension` trains one dictionary
 /// per dimension (stored under that dimension); `world` trains one dictionary

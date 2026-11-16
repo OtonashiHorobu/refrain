@@ -1284,6 +1284,14 @@ auto value::as_compound() const noexcept -> const compound * {
     return std::get_if<compound>(&data_);
 }
 
+auto value::as_list() noexcept -> list_value * {
+    return std::get_if<list_value>(&data_);
+}
+
+auto value::as_compound() noexcept -> compound * {
+    return std::get_if<compound>(&data_);
+}
+
 auto value::list_element_type() const noexcept -> std::optional<tag_type> {
     if (const auto *stored{std::get_if<list_value>(&data_)};
         stored != nullptr) {
