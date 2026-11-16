@@ -6,6 +6,7 @@
 
 #include <refrain/core/error.hpp>
 #include <refrain/mod/manifest.hpp>
+#include <refrain/platform/export.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -116,7 +117,29 @@ class static_mod_registry {
     bool frozen_{false};
 };
 
-/// Register one statically linked mod during static initialization.
+/// Descriptor exported by a first-party mod built as a shared module.
+///
+/// A module is compiled from the same sources as its static counterpart, but
+/// with `REFR_MOD_DYNAMIC_BUILD` defined; the registration macro then exports
+/// `refrain_first_party_module` instead of registering during static
+/// initialization. The host opens the module, reads this descriptor and adds it
+/// to the static registry, after which the normal composition load calls the
+/// factory exactly as it does for statically linked code.
+struct dynamic_module_descriptor {
+    std::string_view id{};
+    std::string_view version{};
+    std::uint32_t abi{0};
+    static_mod_factory factory{nullptr};
+};
+
+/// Entry symbol every dynamically built first-party module exports.
+inline constexpr std::string_view dynamic_module_entry_symbol{
+    "refrain_first_party_module"};
+
+/// Signature of the exported entry point.
+using dynamic_module_entry_fn = auto (*)() -> const dynamic_module_descriptor *;
+
+/// Register one first-party mod.
 ///
 ///   REFR_MOD_STATIC("refrain.data.vanilla", "1.0.0", 1, make_data_vanilla)
 ///
@@ -125,6 +148,22 @@ class static_mod_registry {
 /// supported. Registration failures are deferred to static_mod_registry::
 /// freeze(), so a bad descriptor surfaces at host startup instead of during
 /// static initialization.
+///
+/// With `REFR_MOD_DYNAMIC_BUILD` defined (a shared module target) the same call
+/// site exports the module descriptor; the host registers it before loading the
+/// composition, so one mod source supports both link shapes.
+#if defined(REFR_MOD_DYNAMIC_BUILD)
+#define REFR_MOD_STATIC(id_literal, version_literal, abi_value, factory_fn)    \
+    extern "C" REFRAIN_EXPORT auto refrain_first_party_module()                \
+        -> const ::refrain::mod::dynamic_module_descriptor * {                 \
+        static const ::refrain::mod::dynamic_module_descriptor descriptor{     \
+            .id = (id_literal),                                                \
+            .version = (version_literal),                                      \
+            .abi = static_cast<std::uint32_t>(abi_value),                      \
+            .factory = (factory_fn)};                                          \
+        return &descriptor;                                                    \
+    }
+#else
 #define REFR_MOD_STATIC_CONCAT_(lhs, rhs) lhs##rhs
 #define REFR_MOD_STATIC_CONCAT(lhs, rhs) REFR_MOD_STATIC_CONCAT_(lhs, rhs)
 #define REFR_MOD_STATIC(id_literal, version_literal, abi_value, factory_fn)    \
@@ -141,5 +180,6 @@ class static_mod_registry {
         }                                                                      \
     } REFR_MOD_STATIC_CONCAT(refr_static_mod_registrar_instance_, __LINE__);   \
     }
+#endif
 
 } // namespace refrain::mod

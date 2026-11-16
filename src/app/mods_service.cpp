@@ -3,6 +3,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
 #include <refrain/app/composition.hpp>
+#include <refrain/app/dynamic_modules.hpp>
+#include <refrain/app/mod_profile.hpp>
 #include <refrain/app/services.hpp>
 
 #include <algorithm>
@@ -120,6 +122,95 @@ auto run_mods_check(const mods_check_options &options) -> int {
               << options.mods_dir << '\n';
     for (const auto &candidate : *mods) {
         std::cout << "  " << mod::format_candidate(candidate);
+    }
+
+    // Profile mode: validate the profile the build used (or an explicit one)
+    // against the mod tree, the gamepack, the built-in image and the binary.
+    // This is the check that runs before a build and in CI; the legacy path
+    // below keeps its manifest-tree semantics.
+    if (!options.profile.empty() || options.built || !options.image.empty()) {
+        const std::string profile_name{options.profile.empty()
+                                           ? std::string{version::mod_profile}
+                                           : options.profile};
+        auto profile{
+            load_mod_profile_named(profile_name, options.profiles_dir)};
+        if (!profile) {
+            return report_error(profile.error());
+        }
+        const std::string gamepack_path{options.gamepack.empty()
+                                            ? profile->gamepack_path
+                                            : options.gamepack};
+        auto tree{check_profile_mods_tree(*profile, options.mods_dir)};
+        auto gamepack{check_profile_gamepack(*profile, gamepack_path)};
+        profile_check_result report{};
+        report.errors = std::move(tree.errors);
+        report.warnings = std::move(tree.warnings);
+        report.errors.insert(report.errors.end(),
+                             std::make_move_iterator(gamepack.errors.begin()),
+                             std::make_move_iterator(gamepack.errors.end()));
+        report.warnings.insert(
+            report.warnings.end(),
+            std::make_move_iterator(gamepack.warnings.begin()),
+            std::make_move_iterator(gamepack.warnings.end()));
+
+        // A gamepack pin must name the manifest version exactly, not only a
+        // mod id the tree happens to contain.
+        auto spec{mod::load_gamepack_spec(gamepack_path, "server")};
+        if (spec) {
+            for (const auto &entry : spec->mods) {
+                const auto found{
+                    std::find_if(mods->begin(), mods->end(),
+                                 [&entry](const mod::candidate &candidate) {
+                                     return candidate.id == entry.ref.id;
+                                 })};
+                if (found != mods->end() &&
+                    found->version != entry.ref.version) {
+                    report.error(fmt::format(
+                        "gamepack '{}' pins {} but mods/{} declares version {}",
+                        gamepack_path, entry.ref.text(), found->id,
+                        found->version));
+                }
+            }
+        }
+        if (options.built) {
+            auto binary{check_profile_against_binary(*profile)};
+            report.errors.insert(report.errors.end(),
+                                 std::make_move_iterator(binary.errors.begin()),
+                                 std::make_move_iterator(binary.errors.end()));
+            report.warnings.insert(
+                report.warnings.end(),
+                std::make_move_iterator(binary.warnings.begin()),
+                std::make_move_iterator(binary.warnings.end()));
+        }
+        if (!options.image.empty()) {
+            auto image{check_profile_image(*profile, options.image)};
+            report.errors.insert(report.errors.end(),
+                                 std::make_move_iterator(image.errors.begin()),
+                                 std::make_move_iterator(image.errors.end()));
+            report.warnings.insert(
+                report.warnings.end(),
+                std::make_move_iterator(image.warnings.begin()),
+                std::make_move_iterator(image.warnings.end()));
+        }
+        for (const auto &warning : report.warnings) {
+            std::cout << "warning: " << warning << '\n';
+        }
+        for (const auto &failure : report.errors) {
+            std::cout << "error: " << failure << '\n';
+        }
+        if (!report.ok()) {
+            log_mods.error("failed with {} profile error(s) for profile '{}' "
+                           "build {}",
+                           report.errors.size(), profile->name,
+                           profile->build_id.empty() ? std::string{"<source>"}
+                                                     : profile->build_id);
+            return 1;
+        }
+        std::cout << "profile: " << format_profile_identity(*profile) << '\n';
+        std::cout << "mods check: profile '" << profile->name << "' OK ("
+                  << profile->mods.size() << " mods, gamepack " << gamepack_path
+                  << ")\n";
+        return 0;
     }
 
     if (options.gamepack.empty()) {
@@ -308,6 +399,9 @@ auto run_mods_list(const mods_list_options &options) -> int {
     auto lock{mod::read_mod_lock(options.check_lock)};
     if (!lock) {
         return report_error(lock.error());
+    }
+    if (auto build{check_lock_profile(*lock)}; !build) {
+        return report_error(build.error());
     }
     const auto verified{mod::verify_mod_lock(
         *lock, std::span<const mod::discovered_mod>{discovered})};

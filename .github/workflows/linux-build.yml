@@ -254,6 +254,22 @@ jobs:
           # The build must carry [branch@commit] metadata.
           ./build/Release/bin/refrain-tools version | grep -Eq '\[[^]@]+@[0-9a-f]+\]' \
             || { echo "version string is missing branch@commit metadata" >&2; exit 1; }
+          # Build-time mod profile: profile name, build id, image and default
+          # gamepack all describe the same mod set.
+          ./build/Release/bin/refrain-tools version | grep -q '^  profile: vanilla$' \
+            || { echo "version output is missing the build profile" >&2; exit 1; }
+          ./build/Release/bin/refrain-tools mods check --profile vanilla --built \
+            --image build/Release/generated/builtin.image \
+            | grep -q "mods check: profile 'vanilla' OK" \
+            || { echo "mods check --profile vanilla failed" >&2; exit 1; }
+          ./build/Release/bin/refrain-tools gamepack check --profile vanilla --built \
+            | grep -q 'binary: vanilla build ' \
+            || { echo "gamepack check --profile vanilla failed" >&2; exit 1; }
+          if ./build/Release/bin/refrain-server \
+            --gamepack gamepack/presets/minimal-flat.toml --check >/dev/null 2>&1; then
+            echo "server accepted a gamepack pinning unbuilt mods" >&2; exit 1
+          fi
+          echo "mod profile: vanilla image/source/gamepack consistent"
           ./build/Release/bin/refrain-tools gamepack check -f gamepack/gamepack.toml
           ./build/Release/bin/refrain-tools gamepack check -f gamepack/presets/minimal-flat.toml
           ./build/Release/bin/refrain-tools gamepack dump -f gamepack/gamepack.toml >/dev/null
@@ -371,6 +387,100 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
+  # Build-time mod profile matrix: the default `vanilla` job above builds and
+  # tests the full first-party set. This job builds one non-default profile per
+  # matrix entry and runs that profile's smoke checks:
+  #   * minimal: content + data layer only, starts the data-only composition;
+  #   * dynamic: the vanilla composition with the data-layer mod built as a
+  #     shared module and loaded through the native loader.
+  # The profile selects the compiled sources, the built-in image and the default
+  # gamepack from one list; the smoke checks prove the three agree.
+  # ---------------------------------------------------------------------------
+  mod-profiles:
+    name: profile ${{ matrix.profile }}
+    runs-on: ubuntu-24.04
+    container:
+      image: gcc:16
+    timeout-minutes: 60
+    needs: vendor-guard
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [minimal, dynamic]
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Mark the workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install toolchain
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ninja-build ccache python3 python3-pip git ca-certificates
+          python3 -m pip install --break-system-packages \
+            "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
+          gcc --version | head -1
+          conan --version
+          cmake --version | head -1
+          ninja --version
+
+      - name: Restore Conan cache
+        id: conan-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.conan2
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/locks/**') }}
+          restore-keys: |
+            conan-${{ runner.os }}-
+
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-linux-profile-${{ matrix.profile }}-${{ github.sha }}
+          restore-keys: |
+            ccache-linux-profile-${{ matrix.profile }}-
+            ccache-linux-build-
+
+      - name: Create Conan profile
+        run: bash scripts/bootstrap.sh --profile-only
+
+      - name: Build vendor recipes
+        run: python3 tools/vendor_export.py --build --profile "${REFRAIN_CONAN_PROFILE}"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          conan install . -pr "${REFRAIN_CONAN_PROFILE}" --build=missing \
+            -o "&:lto=False" -o "&:mod_profile=${{ matrix.profile }}" \
+            -of build/profile-deps --lockfile=conan/locks/vendor.lock
+
+      - name: Build and smoke-test the profile
+        env:
+          REFRAIN_MOD_DEPS_DIR: build/profile-deps/build/Release/generators
+        run: |
+          set -euo pipefail
+          source build/profile-deps/build/Release/generators/conanrun.sh
+          REFRAIN_MOD_DEPS_DIR="$PWD/$REFRAIN_MOD_DEPS_DIR" \
+            JOBS="$(nproc)" \
+            scripts/mod-profile-smoke.sh "${{ matrix.profile }}" \
+            "build/profile-${{ matrix.profile }}"
+
+      - name: Save ccache
+        if: github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-linux-profile-${{ matrix.profile }}-${{ github.sha }}
+
+    # ---------------------------------------------------------------------------
   # Unoptimised build. The standard library checks its preconditions only when
   # optimisation is off: reading the error of a successful std::expected, an
   # out-of-range subscript and a disabled-iterator access abort here and return

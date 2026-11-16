@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+# Dynamic build profile: the vanilla composition with one mod built as a
+# shared module.
+#
+# `dynamic` mods are compiled from the same sources and use the same manifest
+# as their static counterparts, but the code is linked into a shared object
+# under <bin>/modules and registered with the host by the native loader at
+# startup. The rest of the profile stays statically linked; this is the
+# `mixed` link mode. CI uses this profile for the dynamic load smoke.
+name = "dynamic"
+description = "Vanilla composition with the data layer built as a shared module."
+gamepack = "gamepack/gamepack.toml"
+
+mods = [
+    "refrain.admin.vanilla",
+    "refrain.content.vanilla",
+    "refrain.data.vanilla",
+    "refrain.proto.vanilla",
+    "refrain.server.vanilla",
+    "refrain.session.vanilla",
+    "refrain.sim.vanilla",
+    "refrain.storage.rwf",
+    "refrain.transport.asio.tcp",
+    "refrain.world.datafix",
+    "refrain.world.vanilla",
+    "refrain.worldgen.vanilla",
+]
+
+dynamic = [
+    "refrain.data.vanilla",
+]

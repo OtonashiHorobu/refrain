@@ -1,4 +1,4 @@
-mods.lock: gamepack refrain.vanilla@26.3.0, 13 mod(s), fingerprint 39fb6b9bedadd65c6b022c8a425e146689e400d2ce10760560254483458ad578
+mods.lock: gamepack refrain.vanilla@26.3.0, profile <none> build <none>, 13 mod(s), fingerprint 39fb6b9bedadd65c6b022c8a425e146689e400d2ce10760560254483458ad578
   refrain.admin.vanilla@1.0.0 (abi 1, origin=builtin, hash=93931ce7f459acf4dc72ef0186ee1b773ce47e3c5de9400e7b66227dd4916dda)
     path: <root>/mods/refrain.admin.vanilla/manifest.toml
   refrain.content.vanilla@1.0.0 (abi 1, origin=builtin, hash=0663cd0f746dba480ab86b1cce47d8c820b28d0dc551a7fb6696a38577b42ac1)

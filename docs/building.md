@@ -70,6 +70,92 @@ cmake --preset conan-release -DREFRAIN_WITH_CRASHPAD=OFF -DREFRAIN_BUILD_BENCH=O
 `REFRAIN_BUILD_BENCH_VARIANTS` builds the optional library-comparison benchmark
 targets and stays off unless those sources are present.
 
+## Mod profiles
+
+A build profile selects which first-party mods exist in the binary. It is a
+build-time choice: the compiled mod code, the built-in content image and the
+default gamepack all derive from one list in `profiles/<name>.toml`, so the
+three cannot drift apart. The gamepack remains the runtime choice of which
+providers are active inside that set; it can never select a mod the binary was
+not built with.
+
+| Profile | Mods | Default gamepack | Purpose |
+|---|---|---|---|
+| `vanilla` | all 12 bundled vanilla mods | `gamepack/gamepack.toml` | default build and release |
+| `minimal` | content + data layer only | `gamepack/presets/data-only.toml` | content tooling and mod-host smoke |
+| `dynamic` | vanilla set, data layer as shared module | `gamepack/gamepack.toml` | native-loader smoke |
+| `1.17` | content + data layer (example) | `gamepack/presets/data-only.toml` | template for a version-specific set |
+
+Select a profile through the Conan option, which seeds the CMake cache:
+
+```bash
+conan install . -pr gcc-release --build=missing \
+    -o "&:mod_profile=minimal" --lockfile=conan/locks/vendor.lock
+cmake --preset conan-release
+cmake --build --preset conan-release
+```
+
+An explicit `-DREFRAIN_MOD_PROFILE=<name>` on the configure line wins over the
+Conan option, so an existing build directory can switch profiles without
+re-running Conan:
+
+```bash
+cmake --preset conan-release -DREFRAIN_MOD_PROFILE=minimal
+```
+
+The remaining cache variables narrow the selection:
+
+| Variable | Effect |
+|---|---|
+| `REFRAIN_MOD_PROFILE` | profile file to read (`profiles/<name>.toml`), default `vanilla` |
+| `REFRAIN_MODS` | comma-separated mod ids overriding the profile's list; `REFRAIN_MOD_GAMEPACK` must then name a matching gamepack |
+| `REFRAIN_MOD_DYNAMIC` | comma-separated ids to build as shared modules, overriding the profile's `dynamic` list |
+| `REFRAIN_MOD_GAMEPACK` | default gamepack override (empty: the profile's gamepack) |
+| `REFRAIN_MOD_LINK` | `auto`, `static`, `mixed` or `dynamic`; `auto` is static unless the profile lists dynamic mods |
+
+A profile is validated at configure time: a listed mod must have a directory and
+manifest under `mods/`, and the default gamepack must pin exactly the profile's
+mod set. A profile that lists an unknown mod, or a gamepack that pins a mod the
+profile does not build, fails the configure step with both names instead of
+producing a binary that cannot start.
+
+`scripts/mod-profile-smoke.sh <profile>` builds one profile and runs its checks:
+profile/build identity from `refrain-tools version`, `mods check --profile
+<name> --built`, the gamepack check, an independently regenerated built-in image
+compared byte-for-byte, and a composition start. CI runs it for `minimal` and
+`dynamic`; the default `vanilla` job builds and tests the full suite.
+
+Dynamic profiles build the selected mods as shared modules under
+`<build>/bin/modules`. Only ELF targets are supported; the module links against
+no project library and resolves the host runtime from the executable, which is
+linked with `-rdynamic`. On startup the loader opens every module this binary
+was built with, validates its descriptor and registers its factory before the
+composition loads, so the mod behaves like a statically linked one.
+
+The runtime objects the module calls must be part of the host executable. A
+module that references a runtime function no host code pulls in fails to load
+with an undefined-symbol diagnostic; a shared runtime library that removes that
+restriction is not built yet. `REFRAIN_MOD_LINK=dynamic` (build every mod as a
+module) therefore fails at configure time; select the modules explicitly with a
+profile's `dynamic` list instead. The deprecated `REFRAIN_MONOLITHIC` option
+maps to that unsupported all-module mode.
+
+The resolved profile is written to `<build>/generated/mod_profile.toml` with the
+profile name, link mode, mod list and a build id. The build id and the profile
+name are embedded in the binary (`refrain-tools version` prints them, the server
+startup log names them), recorded in `mods.lock` and copied into a release
+archive as `profile.toml`. A `mods.lock` written by a different profile or build
+is refused instead of being silently compared against this binary.
+
+Release packaging follows the profile. `REFRAIN_DIST_MOD_PROFILE` selects it:
+
+```bash
+REFRAIN_DIST_MOD_PROFILE=minimal scripts/dist.sh linux
+```
+
+The archive contains the profile's default gamepack, `profile.toml` and, for a
+dynamic profile, the module directory next to the server binary.
+
 ## Hardening and optimization
 
 Optimized builds use `-O3 -DNDEBUG`. Link-time optimization is on for those
