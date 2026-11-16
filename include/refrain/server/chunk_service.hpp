@@ -66,6 +66,13 @@ class chunk_service {
         attach(gateway, source, chunk_streamer::backlog_limits{});
     }
 
+    /// Bind the source of the entities a streamed column carries. The streamer
+    /// announces them after the column packet and removes them when the column
+    /// leaves a viewport. A service without a source announces nothing; the
+    /// runtime binds the simulation column table when the port has an
+    /// in-process world.
+    void set_entity_source(chunk_streamer::chunk_entity_source source);
+
     /// Apply the generated columns, stream one tick of the trackers'
     /// viewports, rank the wanted columns by the player positions and admit
     /// what the credit level and the tick's remaining headroom allow.
@@ -170,6 +177,9 @@ class chunk_service {
     /// messages stay at debug so a broken generator cannot flood the log.
     std::string logged_failure_message_{};
     std::function<void()> unload_barrier_{};
+    /// Entity source bound before `attach()`; applied to the streamer when it
+    /// is created.
+    chunk_streamer::chunk_entity_source entity_source_{};
     std::array<std::uint64_t, controller_window_ticks> tick_samples_{};
     std::size_t tick_sample_next_{0};
     std::uint32_t ticks_since_update_{0};

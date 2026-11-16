@@ -132,6 +132,36 @@ struct saved_tick {
     #[varint] remaining_ticks: u32;
 }
 
+/// One entity carried by a generated column.
+///
+/// World generation places the entities a structure template carries (end city
+/// shulkers, item frames and the animal markers of village pieces) into the
+/// generation chunk. The reference keeps them in the chunk's `entities` NBT
+/// list, one compound per entity; this record keeps the fields the engine
+/// interprets apart from the remaining template data components, which stay
+/// opaque NBT so an import/export round trip does not lose them.
+struct entity_record {
+    /// Entity type key (`minecraft:shulker`), the reference `id` tag.
+    id: string;
+
+    /// Absolute world position in blocks (the reference `Pos` list).
+    x: f64;
+    y: f64;
+    z: f64;
+
+    /// Body rotation in degrees: yaw then pitch (the reference `Rotation`
+    /// list).
+    yaw: f32;
+    pitch: f32;
+
+    /// Block position of the entity (the reference `block_pos` tag).
+    pos: block_pos;
+
+    /// Remaining template data components as one opaque NBT compound, without
+    /// `id`, `Pos`, `Rotation` and `block_pos`.
+    data: bytes;
+}
+
 /// One persisted chunk column. Field order is the chunk field-set ABI: append
 /// new fields at the end. `format_version` stays 1 until the pre-release format
 /// freeze; a schema-hash change is not a format-version bump.
@@ -178,4 +208,10 @@ record chunk {
     /// Light layers sorted by `y`; includes vanilla's one-section padding
     /// below `y_pos` and above the build limit. Empty arrays are omitted.
     light_sections: array<light_section>;
+
+    /// Entities the column carries, in canonical order (position, then type,
+    /// then components). Empty for a column without generated entities; the
+    /// RWF record omits the TLV field in that case so an entity-free column
+    /// keeps its canonical hash.
+    entities: array<entity_record>;
 }

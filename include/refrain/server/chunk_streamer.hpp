@@ -7,6 +7,7 @@
 #include <refrain/server/chunk_packet.hpp>
 #include <refrain/server/play_gateway.hpp>
 #include <refrain/session/chunk_tracker.hpp>
+#include <refrain/sim/world.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -25,6 +26,13 @@ namespace refrain::server {
 /// The simulation thread owns the streamer: viewport requests come from the
 /// session chunk tracker, chunks are encoded on demand and the encoded bodies
 /// are shared by every connection.
+///
+/// A column's generated entities follow its chunk packet: when a column is sent
+/// to a connection the streamer announces every entity the column carries with
+/// the normal `add_entity` packet, and when the column leaves the viewport it
+/// removes those ids before the client forgets the chunk. The entity source is
+/// the simulation's column entity table, so the announced ids are the ids the
+/// world spawned and a connation can never receive the same entity twice.
 ///
 /// A column the world does not hold is requested from the generator once and
 /// stays out of the encoded queue until the generator answers. When a task
@@ -143,6 +151,14 @@ class chunk_streamer {
     /// world-backed encoder.
     void set_encoder(chunk_encoder encoder);
 
+    /// Bind the source of the entities a column carries. The runtime binds the
+    /// simulation column table; a streamer without a source announces no
+    /// entities, which is also the contract-world-port case (its provider keeps
+    /// the columns and hands out no entity records).
+    using chunk_entity_source =
+        std::function<std::vector<sim::chunk_entity>(sim::chunk_pos)>;
+    void set_entity_source(chunk_entity_source source);
+
     /// A requested column is now in the world: enqueue it for every viewer
     /// whose viewport contains it.
     void chunk_ready(std::int32_t x, std::int32_t z);
@@ -188,6 +204,12 @@ class chunk_streamer {
         bool reported{false};
         std::size_t sent{0};
         std::set<std::pair<std::int32_t, std::int32_t>> known{};
+        /// Entity ids announced to this client, keyed by the column that owns
+        /// them. The entry is what a viewport change removes, so a client never
+        /// keeps a stale copy of an entity whose chunk it dropped.
+        std::map<std::pair<std::int32_t, std::int32_t>,
+                 std::vector<std::uint32_t>>
+            entity_ids{};
         std::set<std::pair<std::int32_t, std::int32_t>> queued{};
         /// Columns already handed to the generator; they stay out of the
         /// queue until `chunk_ready` reports them.
@@ -243,6 +265,17 @@ class chunk_streamer {
     [[nodiscard]] auto encode(refrain::sim::chunk_pos pos)
         -> result<std::vector<std::byte>>;
 
+    /// Encode the spawn packets of one column's entities, in the column's
+    /// canonical order, and record their ids on the connection's stream. A
+    /// type the protocol registry does not know is skipped; the storage record
+    /// stays intact, so a later build with the type table can serve it.
+    void encode_column_entities(std::uint64_t connection, stream_state &stream,
+                                std::int32_t x, std::int32_t z);
+
+    /// Encode one `remove_entities` body for the ids and send it.
+    void remove_column_entities(std::uint64_t connection, stream_state &stream,
+                                std::int32_t x, std::int32_t z);
+
     play_gateway &gateway_;
     chunk_packet_source source_{};
     chunk_encoder encoder_{};
@@ -254,6 +287,7 @@ class chunk_streamer {
     std::uint64_t cache_misses_{0};
     std::uint64_t clock_{0};
     chunk_requester requester_{};
+    chunk_entity_source entity_source_{};
 };
 
 } // namespace refrain::server

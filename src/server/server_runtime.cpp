@@ -1120,6 +1120,17 @@ auto run_server(const server_run_options &options,
                       chunk_limits);
     }
 
+    // Generated entities follow the column that carries them: the streamer
+    // announces them with the normal entity packets when the column is sent and
+    // removes them when it leaves the viewport. A port whose provider keeps its
+    // columns in another process has no in-process world and therefore no
+    // entity records to announce.
+    if (auto *sim_level{world.sim_world()}; sim_level != nullptr) {
+        chunks.set_entity_source([sim_level](refrain::sim::chunk_pos pos) {
+            return sim_level->chunk_entities(pos);
+        });
+    }
+
     // Publish the world clock and weather the login burst reads. The clock
     // lives in the simulation thread; the listener copies the values under its
     // own lock.

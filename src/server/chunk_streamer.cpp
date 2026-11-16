@@ -6,12 +6,22 @@
 
 #include <refrain/core/log.hpp>
 #include <refrain/core/time.hpp>
+#include <refrain/data/checksum.hpp>
+#include <refrain/data/nbt.hpp>
+#include <refrain/data/vanilla.hpp>
+#include <refrain/protocol/current.hpp>
 #include <refrain/server/chunk_view.hpp>
 #include <refrain/sim/world.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
+#include <optional>
 #include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -20,6 +30,103 @@ constexpr refrain::log::logger log_net{"net"};
 /// Chunk packets one wire batch may carry. This bounds one batch, not the
 /// tick's work: the drain keeps batching until the time budget expires.
 constexpr std::size_t max_batch_packets{8};
+
+namespace play_cb = refrain::protocol::current::play::clientbound;
+
+/// The static entity-type registry of the protocol. Unlike the registries the
+/// server sends during configuration, entity type ids are built into the
+/// client, so they come from the tracked vanilla tables.
+[[nodiscard]] auto entity_type_id(const refrain::data::vanilla_tables *tables,
+                                  std::string_view key)
+    -> std::optional<std::uint32_t> {
+    if (tables == nullptr) {
+        return std::nullopt;
+    }
+    const auto registry{tables->find_registry("minecraft:entity_type")};
+    if (!registry.has_value()) {
+        return std::nullopt;
+    }
+    const auto count{tables->registry_entry_count(*registry)};
+    for (std::uint32_t index{0}; index < count; ++index) {
+        const auto entry{tables->registry_entry(*registry, index)};
+        if (entry.name == key) {
+            return static_cast<std::uint32_t>(entry.protocol_id);
+        }
+    }
+    return std::nullopt;
+}
+
+/// Packet body with the leading packet-id varint.
+template <typename Packet, typename Encoder>
+[[nodiscard]] auto encode_play_body(std::uint16_t packet_id,
+                                    const Packet &packet, Encoder encode)
+    -> std::vector<std::byte> {
+    std::vector<std::byte> body;
+    refrain::net::writer writer{body};
+    writer.write_varint(packet_id);
+    if (auto encoded{encode(writer, packet)}; !encoded) {
+        body.clear();
+    }
+    return body;
+}
+
+/// The reference entity rotation encoding: degrees scaled into a signed byte.
+[[nodiscard]] auto pack_degrees(float degrees) -> std::int8_t {
+    const auto scaled{static_cast<std::int32_t>(degrees * 256.0F / 360.0F)};
+    return static_cast<std::int8_t>(static_cast<std::uint8_t>(scaled & 0xFF));
+}
+
+/// The `data` field of the spawn packet. The reference derives it from the
+/// entity type: an item frame carries the direction it hangs from, which its
+/// template NBT keeps as `Facing`. Other types carried by world generation
+/// leave it at zero.
+[[nodiscard]] auto
+entity_spawn_data(const refrain::world::entity_record &record) -> std::int32_t {
+    if (record.id != "minecraft:item_frame" &&
+        record.id != "minecraft:glow_item_frame") {
+        return 0;
+    }
+    const auto document{refrain::data::nbt::read(record.data)};
+    if (!document) {
+        return 0;
+    }
+    const auto *facing{document->get("Facing")};
+    if (facing == nullptr) {
+        return 0;
+    }
+    const auto value{facing->as_byte()};
+    if (!value.has_value() || *value < 0 || *value > 5) {
+        return 0;
+    }
+    return static_cast<std::int32_t>(*value);
+}
+
+/// A stable, data-derived uuid for a generated entity: the same record in the
+/// same column always announces the same uuid, so a client that re-receives a
+/// column after a server restart sees the same entity identity.
+[[nodiscard]] auto entity_uuid(const refrain::sim::chunk_entity &entity,
+                               std::int32_t chunk_x, std::int32_t chunk_z,
+                               std::size_t index) -> refrain::net::uuid {
+    std::string key;
+    key.reserve(80);
+    key.append(entity.record.id);
+    key.push_back('\0');
+    key.append(std::to_string(chunk_x));
+    key.push_back(',');
+    key.append(std::to_string(chunk_z));
+    key.push_back(',');
+    key.append(std::to_string(index));
+    const auto digest{refrain::data::blake3(std::as_bytes(std::span{key}))};
+    refrain::net::uuid out{};
+    for (std::size_t byte{0}; byte < out.bytes.size(); ++byte) {
+        out.bytes[byte] = static_cast<std::uint8_t>(
+            std::to_integer<std::uint8_t>(digest[byte]));
+    }
+    // RFC 4122 version 4 shape; the value stays deterministic for the record.
+    out.bytes[6] = static_cast<std::uint8_t>((out.bytes[6] & 0x0FU) | 0x40U);
+    out.bytes[8] = static_cast<std::uint8_t>((out.bytes[8] & 0x3FU) | 0x80U);
+    return out;
+}
 
 } // namespace
 
@@ -44,6 +151,82 @@ void chunk_streamer::set_chunk_requester(chunk_requester requester) {
 
 void chunk_streamer::set_encoder(chunk_encoder encoder) {
     encoder_ = std::move(encoder);
+}
+
+void chunk_streamer::set_entity_source(chunk_entity_source source) {
+    entity_source_ = std::move(source);
+}
+
+void chunk_streamer::encode_column_entities(std::uint64_t connection,
+                                            stream_state &stream,
+                                            std::int32_t x, std::int32_t z) {
+    if (!entity_source_) {
+        return;
+    }
+    const auto entities{entity_source_(refrain::sim::chunk_pos{x, z})};
+    if (entities.empty()) {
+        return;
+    }
+    std::vector<std::uint32_t> announced;
+    announced.reserve(entities.size());
+    for (std::size_t index{0}; index < entities.size(); ++index) {
+        const auto &entity{entities[index]};
+        const auto type{entity_type_id(source_.tables, entity.record.id)};
+        if (!type.has_value()) {
+            log_net.debug("skipping entity '{}' in chunk ({}, {}): the entity "
+                          "type registry has no id for it",
+                          entity.record.id, x, z);
+            continue;
+        }
+        play_cb::add_entity packet{
+            .id = static_cast<std::int32_t>(entity.id),
+            .uuid = entity_uuid(entity, x, z, index),
+            .type_ = *type,
+            .x = entity.record.x,
+            .y = entity.record.y,
+            .z = entity.record.z,
+            .movement = {},
+            .x_rot = pack_degrees(entity.record.pitch),
+            .y_rot = pack_degrees(entity.record.yaw),
+            .y_head_rot = pack_degrees(entity.record.yaw),
+            .data = entity_spawn_data(entity.record),
+        };
+        // TODO: the spawn packet carries the type, position, rotation and the
+        // reference object `data`; per-type synchronized data components (an
+        // item frame's item, a shulker's colour, a sheep's colour) need an
+        // entity metadata model this build does not have yet. The column
+        // record keeps the components, so adding that model later does not
+        // change the format.
+        auto body{encode_play_body(play_cb::add_entity::packet_id, packet,
+                                   play_cb::encode_add_entity)};
+        if (body.empty()) {
+            continue;
+        }
+        gateway_.send_raw(connection, body);
+        announced.push_back(static_cast<std::uint32_t>(entity.id));
+    }
+    if (!announced.empty()) {
+        stream.entity_ids[{x, z}] = std::move(announced);
+    }
+}
+
+void chunk_streamer::remove_column_entities(std::uint64_t connection,
+                                            stream_state &stream,
+                                            std::int32_t x, std::int32_t z) {
+    const auto found{stream.entity_ids.find({x, z})};
+    if (found == stream.entity_ids.end()) {
+        return;
+    }
+    auto ids{std::move(found->second)};
+    stream.entity_ids.erase(found);
+    std::sort(ids.begin(), ids.end());
+    play_cb::remove_entities packet{};
+    packet.entity_ids = std::move(ids);
+    auto body{encode_play_body(play_cb::remove_entities::packet_id, packet,
+                               play_cb::encode_remove_entities)};
+    if (!body.empty()) {
+        gateway_.send_raw(connection, body);
+    }
 }
 
 auto chunk_streamer::encode(refrain::sim::chunk_pos pos)
@@ -156,6 +339,11 @@ auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
     bool expired{false};
     std::vector<std::vector<std::byte>> packets;
     packets.reserve(max_batch_packets);
+    /// Columns whose chunk packet this batch carries. Their entities are
+    /// announced after the batch, so the client holds the column before it
+    /// receives the entity.
+    std::vector<std::pair<std::int32_t, std::int32_t>> sent_columns;
+    sent_columns.reserve(max_batch_packets);
     while (packets.size() < max_batch_packets) {
         // Entries the world delivered on its own cost nothing to skip.
         while (!stream.pending.empty() &&
@@ -217,6 +405,7 @@ auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
         stream.queued.erase({x, z});
         packets.push_back(cached->second.body);
         stream.known.emplace(x, z);
+        sent_columns.emplace_back(x, z);
         // The body came from the world, so no generator answer is outstanding
         // for this connection even if a request is still in flight elsewhere.
         stream.requested.erase({x, z});
@@ -226,6 +415,11 @@ auto chunk_streamer::drain(std::uint64_t connection, stream_state &stream,
         gateway_.send_chunk_batch(connection, stream.center_x, stream.center_z,
                                   packets, stream.center_dirty);
         stream.center_dirty = false;
+    }
+    // The entity packets follow the batch: the client applies the column first
+    // and then spawns what it carries.
+    for (const auto &[x, z] : sent_columns) {
+        encode_column_entities(connection, stream, x, z);
     }
     return expired;
 }
@@ -260,6 +454,10 @@ void chunk_streamer::tick(refrain::session::chunk_tracker &views) {
             for (const auto &position : refrain::server::chunks_outside_view(
                      tracked, {stream.center_x, stream.center_z},
                      stream.radius)) {
+                // Entities leave before the client forgets their column, so no
+                // id outlives the chunk it was announced for.
+                remove_column_entities(request.connection, stream, position.x,
+                                       position.z);
                 gateway_.send_forget_chunk(request.connection, position.x,
                                            position.z);
                 stream.known.erase({position.x, position.z});

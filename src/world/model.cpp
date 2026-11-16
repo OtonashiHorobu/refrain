@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <ranges>
 #include <set>
@@ -682,6 +683,48 @@ auto validate(const chunk &value) -> status {
                                     blob->size(), max_payload_bytes));
         }
     }
+    if (value.entities.size() > max_entities_per_chunk) {
+        return fail(error_code::parse_error,
+                    fmt::format("chunk has {} entities (limit {})",
+                                value.entities.size(), max_entities_per_chunk));
+    }
+    // The entity list is canonical: a record that is out of order was either
+    // written by a producer that skipped the canonical sort or corrupted, and
+    // a decode failure at the storage boundary is preferable to a chunk whose
+    // hash depends on placement order.
+    for (std::size_t index{0}; index < value.entities.size(); ++index) {
+        const auto &entity{value.entities[index]};
+        if (entity.id.empty()) {
+            return fail(error_code::parse_error,
+                        fmt::format("entity {} has an empty type id", index));
+        }
+        if (entity.id.size() > 65535) {
+            return fail(error_code::parse_error,
+                        fmt::format("entity {} type id is {} bytes (limit "
+                                    "65535)",
+                                    index, entity.id.size()));
+        }
+        if (!std::isfinite(entity.x) || !std::isfinite(entity.y) ||
+            !std::isfinite(entity.z) || !std::isfinite(entity.yaw) ||
+            !std::isfinite(entity.pitch)) {
+            return fail(error_code::parse_error,
+                        fmt::format("entity {} at ({}, {}, {}) has a "
+                                    "non-finite field",
+                                    index, entity.x, entity.y, entity.z));
+        }
+        if (entity.data.size() > max_payload_bytes) {
+            return fail(error_code::parse_error,
+                        fmt::format("entity {} payload is {} bytes (limit "
+                                    "{})",
+                                    index, entity.data.size(),
+                                    max_payload_bytes));
+        }
+        if (index > 0 && entity_order(entity, value.entities[index - 1])) {
+            return fail(
+                error_code::parse_error,
+                fmt::format("entity {} is out of canonical order", index));
+        }
+    }
     if (value.extensions.size() > max_extension_count) {
         return fail(error_code::parse_error,
                     fmt::format("chunk has {} extensions (limit {})",
@@ -696,6 +739,27 @@ auto validate(const chunk &value) -> status {
         }
     }
     return status_ok();
+}
+
+auto entity_order(const entity_record &left, const entity_record &right)
+    -> bool {
+    if (left.x != right.x) {
+        return left.x < right.x;
+    }
+    if (left.y != right.y) {
+        return left.y < right.y;
+    }
+    if (left.z != right.z) {
+        return left.z < right.z;
+    }
+    if (left.id != right.id) {
+        return left.id < right.id;
+    }
+    return left.data < right.data;
+}
+
+void canonicalize_entities(std::vector<entity_record> &entities) {
+    std::ranges::stable_sort(entities, entity_order);
 }
 
 auto section_at(const chunk &value, std::int32_t section_y)

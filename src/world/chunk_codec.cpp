@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -24,7 +25,7 @@ namespace {
 
 constexpr std::size_t field_header_bytes = 16;
 constexpr std::uint16_t highest_field_id =
-    static_cast<std::uint16_t>(chunk_field::sections_inline);
+    static_cast<std::uint16_t>(chunk_field::entities);
 
 /// 4096 entries at 32 bits per entry (the maximum supported width).
 constexpr std::size_t max_packed_words = 2048;
@@ -71,6 +72,8 @@ class cursor {
     [[nodiscard]] auto i32() -> std::int32_t {
         return static_cast<std::int32_t>(u32());
     }
+    [[nodiscard]] auto f32() -> float { return std::bit_cast<float>(u32()); }
+    [[nodiscard]] auto f64() -> double { return std::bit_cast<double>(u64()); }
     [[nodiscard]] auto string() -> std::string {
         const auto length{u16()};
         const auto bytes{take(length)};
@@ -405,6 +408,45 @@ class cursor {
     return payload;
 }
 
+[[nodiscard]] auto encode_entities(const chunk &value)
+    -> std::vector<std::byte> {
+    std::vector<std::byte> payload(4, std::byte{0});
+    rwf::detail::put_u32(payload, 0,
+                         static_cast<std::uint32_t>(value.entities.size()));
+    for (const auto &entity : value.entities) {
+        const auto head{payload.size()};
+        payload.resize(head + 2, std::byte{0});
+        rwf::detail::put_u16(payload, head,
+                             static_cast<std::uint16_t>(entity.id.size()));
+        payload.insert(payload.end(),
+                       reinterpret_cast<const std::byte *>(entity.id.data()),
+                       reinterpret_cast<const std::byte *>(entity.id.data()) +
+                           entity.id.size());
+        const auto transform{payload.size()};
+        payload.resize(transform + 42, std::byte{0});
+        rwf::detail::put_u64(payload, transform,
+                             std::bit_cast<std::uint64_t>(entity.x));
+        rwf::detail::put_u64(payload, transform + 8,
+                             std::bit_cast<std::uint64_t>(entity.y));
+        rwf::detail::put_u64(payload, transform + 16,
+                             std::bit_cast<std::uint64_t>(entity.z));
+        rwf::detail::put_u32(payload, transform + 24,
+                             std::bit_cast<std::uint32_t>(entity.yaw));
+        rwf::detail::put_u32(payload, transform + 28,
+                             std::bit_cast<std::uint32_t>(entity.pitch));
+        rwf::detail::put_i32(payload, transform + 32, entity.pos.x);
+        rwf::detail::put_u16(payload, transform + 36,
+                             static_cast<std::uint16_t>(entity.pos.y));
+        rwf::detail::put_i32(payload, transform + 38, entity.pos.z);
+        const auto data_base{payload.size()};
+        payload.resize(data_base + 4, std::byte{0});
+        rwf::detail::put_u32(payload, data_base,
+                             static_cast<std::uint32_t>(entity.data.size()));
+        payload.append_range(entity.data);
+    }
+    return payload;
+}
+
 [[nodiscard]] auto
 encode_post_processing(const std::vector<std::vector<std::int16_t>> &lists)
     -> std::vector<std::byte> {
@@ -690,6 +732,46 @@ auto decode_block_entities(cursor &in, chunk &out, bool &ok) -> void {
     }
 }
 
+auto decode_entities(cursor &in, chunk &out, bool &ok) -> void {
+    const auto count{in.u32()};
+    if (in.failed() || count > max_entities_per_chunk) {
+        ok = false;
+        return;
+    }
+    out.entities.reserve(count);
+    for (std::uint32_t index{0}; index < count; ++index) {
+        entity_record entity{};
+        const auto id_length{in.u16()};
+        const auto id_bytes{in.bytes(id_length)};
+        if (in.failed()) {
+            ok = false;
+            return;
+        }
+        entity.id.assign(reinterpret_cast<const char *>(id_bytes.data()),
+                         id_bytes.size());
+        entity.x = in.f64();
+        entity.y = in.f64();
+        entity.z = in.f64();
+        entity.yaw = in.f32();
+        entity.pitch = in.f32();
+        entity.pos.x = in.i32();
+        entity.pos.y = in.i16();
+        entity.pos.z = in.i32();
+        const auto data_length{in.u32()};
+        if (in.failed() || data_length > max_payload_bytes) {
+            ok = false;
+            return;
+        }
+        const auto data_bytes{in.bytes(data_length)};
+        if (in.failed()) {
+            ok = false;
+            return;
+        }
+        entity.data.assign(data_bytes.begin(), data_bytes.end());
+        out.entities.push_back(std::move(entity));
+    }
+}
+
 auto decode_post_processing(cursor &in, chunk &out, bool &ok) -> void {
     const auto count{in.u16()};
     if (in.failed() || count > max_sections_per_chunk) {
@@ -730,6 +812,7 @@ auto encode_chunk(const chunk &value, palette_table *palette,
     std::ranges::stable_sort(canonical.sections, {}, &section_record::y);
     std::ranges::stable_sort(canonical.light_sections, {}, &light_section::y);
     std::ranges::stable_sort(canonical.heightmaps, {}, &heightmap_record::name);
+    canonicalize_entities(canonical.entities);
     // Validate the canonical form (sorted sections are what decode produces).
     if (auto valid{validate(canonical)}; !valid) {
         return std::unexpected{valid.error()};
@@ -755,8 +838,14 @@ auto encode_chunk(const chunk &value, palette_table *palette,
     const auto heightmaps{encode_heightmaps(canonical)};
     const auto ticks{
         encode_ticks(canonical.block_ticks, canonical.fluid_ticks)};
-    const auto entities{encode_block_entities(canonical)};
+    const auto block_entities{encode_block_entities(canonical)};
     const auto post{encode_post_processing(canonical.post_processing)};
+    // A column without generated entities is the common case: leaving the
+    // field out keeps the payload (and therefore the semantic hash) of an
+    // entity-free record identical to a writer that predates the field.
+    const auto entities{canonical.entities.empty()
+                            ? std::vector<std::byte>{}
+                            : encode_entities(canonical)};
 
     std::vector<std::byte> out;
     if (!append_field(out, chunk_field::status, 1, encode_status(canonical)) ||
@@ -767,14 +856,16 @@ auto encode_chunk(const chunk &value, palette_table *palette,
                       7, *sections) ||
         !append_field(out, chunk_field::heightmaps, 7, heightmaps) ||
         !append_field(out, chunk_field::ticks, 7, ticks) ||
-        !append_field(out, chunk_field::block_entities, 7, entities) ||
+        !append_field(out, chunk_field::block_entities, 7, block_entities) ||
         !append_field(out, chunk_field::structures, 0, canonical.structures) ||
         !append_field(out, chunk_field::post_processing, 7, post) ||
         !append_field(out, chunk_field::blending, 0, canonical.blending) ||
         !append_field(out, chunk_field::extra, 0, canonical.extra) ||
         !append_field(out, chunk_field::y_pos, 0, encode_y_pos(canonical)) ||
         !append_field(out, chunk_field::light_sections, 7,
-                      encode_light_sections(canonical))) {
+                      encode_light_sections(canonical)) ||
+        (!entities.empty() &&
+         !append_field(out, chunk_field::entities, 7, entities))) {
         return std::unexpected{make_error(
             error_code::invalid_argument,
             fmt::format("chunk payload exceeds the {} byte record limit",
@@ -939,6 +1030,13 @@ auto decode_chunk(std::span<const std::byte> payload,
         decode_light_sections(field, out, ok);
         if (!ok || field.failed() || field.remaining() != 0) {
             return parse_failure("light section field is malformed");
+        }
+    }
+    if (present[static_cast<std::size_t>(chunk_field::entities)]) {
+        cursor field{fields[static_cast<std::size_t>(chunk_field::entities)]};
+        decode_entities(field, out, ok);
+        if (!ok || field.failed() || field.remaining() != 0) {
+            return parse_failure("entity field is malformed");
         }
     }
     if (auto valid{validate(out)}; !valid) {

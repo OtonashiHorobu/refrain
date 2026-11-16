@@ -7,10 +7,15 @@
 // The payload is a list of TLV fields (`id u16, type u8, flags u8, size u32,
 // crc32c u32, reserved u32` + payload padded to 8 bytes). `encode_chunk`
 // produces the canonical form (sections sorted by Y, heightmaps sorted by
-// name, post-processing permuted with its sections) so the BLAKE3 hash of the
-// payload is the semantic chunk identity used by `world diff` and the worldgen
-// harness. `decode_chunk` rejects anything `world::validate` rejects, so a
-// corrupt world fails at the storage boundary instead of inside the engine.
+// name, post-processing permuted with its sections, entities in canonical
+// position order) so the BLAKE3 hash of the payload is the semantic chunk
+// identity used by `world diff` and the worldgen harness. `decode_chunk`
+// rejects anything `world::validate` rejects, so a corrupt world fails at the
+// storage boundary instead of inside the engine.
+//
+// The entity field is appended to the contract: a record written before it
+// existed decodes with an empty entity list, and a writer omits the field for
+// a column without entities so an entity-free record keeps its canonical hash.
 
 #pragma once
 
@@ -40,6 +45,7 @@ enum class chunk_field : std::uint16_t {
     y_pos = 10,           ///< i32 lowest section Y (vanilla `yPos`)
     light_sections = 11,  ///< light layers keyed by section Y (incl. padding)
     sections_inline = 12, ///< self-contained sections with palette keys inline
+    entities = 13,        ///< generated entities (type, transform, components)
 };
 
 /// How a chunk payload references block/biome states.

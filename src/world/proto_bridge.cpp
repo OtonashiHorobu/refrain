@@ -5,17 +5,17 @@
 #include <refrain/world/proto_bridge.hpp>
 
 #include <refrain/data/nbt.hpp>
+#include <refrain/world/entity_nbt.hpp>
 #include <refrain/worldgen/chunk/heightmap.hpp>
 #include <refrain/worldgen/chunk/status.hpp>
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <map>
 #include <string>
-#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace refrain::world {
 namespace {
@@ -198,6 +198,18 @@ auto from_proto_chunk(const worldgen::proto_chunk &source,
         (void)pos;
         out.block_entities.push_back(std::move(*encoded));
     }
+
+    // Generated entities are part of the column: keep them in canonical
+    // position order so the stored record, its semantic hash and a reload do
+    // not depend on the order the placement stages visited the pieces.
+    for (const auto &tag : source.entities()) {
+        auto entity{entity_from_nbt(tag)};
+        if (!entity) {
+            return std::unexpected{std::move(entity.error())};
+        }
+        out.entities.push_back(std::move(*entity));
+    }
+    canonicalize_entities(out.entities);
     return out;
 }
 
