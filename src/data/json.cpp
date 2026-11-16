@@ -109,7 +109,7 @@ const value null_value{};
 /// Append one object key to a diagnostic JSON path (`$.foo`, `$["a b"]`).
 void append_path_key(std::string &path, std::string_view key) {
     const bool simple =
-        !key.empty() && std::all_of(key.begin(), key.end(), [](char character) {
+        !key.empty() && std::ranges::all_of(key, [](char character) {
             const auto byte = static_cast<unsigned char>(character);
             return byte >= 0x20U && character != '.' && character != '"' &&
                    character != '\\' && character != '[' && character != ']' &&
@@ -355,9 +355,7 @@ void append_path_key(std::string &path, std::string_view key) {
 
     // Stable sort keeps equal keys in document order, so the last occurrence
     // of a key is the last element of its equal-key run.
-    std::stable_sort(
-        fields.begin(), fields.end(),
-        [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
+    std::ranges::stable_sort(fields, {}, &std::pair<std::string, value>::first);
 
     // Collapse every equal-key run to its last element: the documented
     // last-wins rule. Compacting in place keeps the vector key-ascending.

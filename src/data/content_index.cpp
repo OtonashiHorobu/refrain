@@ -536,11 +536,8 @@ struct wire_resolution {
 [[nodiscard]] auto find_blob_index(const blob_table_view &blob_table,
                                    const digest32 &digest)
     -> result<std::uint32_t> {
-    const auto found{std::lower_bound(
-        blob_table.entries.begin(), blob_table.entries.end(), digest,
-        [](const blob_table_entry &entry, const digest32 &value) {
-            return digest_less(entry.digest, value);
-        })};
+    const auto found{std::ranges::lower_bound(
+        blob_table.entries, digest, digest_less, &blob_table_entry::digest)};
     if (found == blob_table.entries.end() || found->digest != digest) {
         return std::unexpected{
             invalid_argument_error("resolution index: blob " + to_hex(digest) +
@@ -570,10 +567,7 @@ auto build_blob_table(std::span<const blob_table_entry> entries)
                                        to_hex(entry.digest) + ")")};
         }
     }
-    std::sort(sorted.begin(), sorted.end(),
-              [](const blob_table_entry &lhs, const blob_table_entry &rhs) {
-                  return digest_less(lhs.digest, rhs.digest);
-              });
+    std::ranges::sort(sorted, digest_less, &blob_table_entry::digest);
     for (std::size_t index{1}; index < sorted.size(); ++index) {
         if (sorted[index - 1].digest == sorted[index].digest) {
             return std::unexpected{
@@ -606,8 +600,8 @@ auto build_blob_table(std::span<const blob_table_entry> entries)
         const auto base{blob_table_header_bytes +
                         index * blob_table_entry_bytes};
         const auto digest{digest_bytes(entry.digest)};
-        std::copy(digest.begin(), digest.end(),
-                  view.begin() + static_cast<std::ptrdiff_t>(base));
+        std::ranges::copy(digest,
+                          view.begin() + static_cast<std::ptrdiff_t>(base));
         write_u64(view, base + rfbt_entry_logical_size_offset,
                   entry.logical_size);
         write_u32(view, base + rfbt_entry_flags_offset, entry.flags);
@@ -627,9 +621,8 @@ auto build_blob_table(std::span<const blob_table_entry> entries)
     const auto file_digest{blake3(
         std::span<const std::byte>{view}.subspan(blob_table_header_bytes))};
     const auto digest{digest_bytes(file_digest)};
-    std::copy(digest.begin(), digest.end(),
-              view.begin() +
-                  static_cast<std::ptrdiff_t>(rfbt_file_blake3_offset));
+    std::ranges::copy(digest, view.begin() + static_cast<std::ptrdiff_t>(
+                                                 rfbt_file_blake3_offset));
     write_u32(view, rfbt_header_crc32c_offset,
               crc32c(std::span<const std::byte>{view}.first(
                   rfbt_header_crc32c_offset)));
@@ -693,21 +686,20 @@ auto build_resolution_index(std::span<const resolution_input> entries,
     for (std::size_t index{0}; index < entries.size(); ++index) {
         order[index] = index;
     }
-    std::sort(order.begin(), order.end(),
-              [&entries](std::size_t lhs, std::size_t rhs) {
-                  const auto &left{entries[lhs]};
-                  const auto &right{entries[rhs]};
-                  if (left.location != right.location) {
-                      return left.location < right.location;
-                  }
-                  if (left.priority != right.priority) {
-                      return left.priority < right.priority;
-                  }
-                  if (left.source != right.source) {
-                      return left.source < right.source;
-                  }
-                  return digest_less(left.blob, right.blob);
-              });
+    std::ranges::sort(order, [&entries](std::size_t lhs, std::size_t rhs) {
+        const auto &left{entries[lhs]};
+        const auto &right{entries[rhs]};
+        if (left.location != right.location) {
+            return left.location < right.location;
+        }
+        if (left.priority != right.priority) {
+            return left.priority < right.priority;
+        }
+        if (left.source != right.source) {
+            return left.source < right.source;
+        }
+        return digest_less(left.blob, right.blob);
+    });
     for (std::size_t index{1}; index < order.size(); ++index) {
         const auto &previous{entries[order[index - 1]]};
         const auto &current{entries[order[index]]};
@@ -727,7 +719,7 @@ auto build_resolution_index(std::span<const resolution_input> entries,
     for (const auto &entry : entries) {
         sources.push_back(entry.source);
     }
-    std::sort(sources.begin(), sources.end());
+    std::ranges::sort(sources);
     sources.erase(std::unique(sources.begin(), sources.end()), sources.end());
     if (sources.size() > max_resolution_sources) {
         return std::unexpected{invalid_argument_error(
@@ -742,7 +734,7 @@ auto build_resolution_index(std::span<const resolution_input> entries,
     for (const auto &entry : entries) {
         locations.push_back(entry.location);
     }
-    std::sort(locations.begin(), locations.end());
+    std::ranges::sort(locations);
     locations.erase(std::unique(locations.begin(), locations.end()),
                     locations.end());
 
@@ -788,9 +780,9 @@ auto build_resolution_index(std::span<const resolution_input> entries,
             return std::unexpected{std::move(blob_index.error())};
         }
         const auto source_position{
-            std::lower_bound(sources.begin(), sources.end(), entry.source)};
-        const auto location_position{std::lower_bound(
-            locations.begin(), locations.end(), entry.location)};
+            std::ranges::lower_bound(sources, entry.source)};
+        const auto location_position{
+            std::ranges::lower_bound(locations, entry.location)};
         wire.push_back(wire_resolution{
             .location_hash = compute_location_hash(entry.location),
             .priority = entry.priority,
@@ -803,7 +795,7 @@ auto build_resolution_index(std::span<const resolution_input> entries,
             .location = entry.location,
         });
     }
-    std::sort(wire.begin(), wire.end(), wire_before);
+    std::ranges::sort(wire, wire_before);
 
     const auto entry_count{static_cast<std::uint32_t>(wire.size())};
     const auto entry_bytes{
@@ -831,10 +823,9 @@ auto build_resolution_index(std::span<const resolution_input> entries,
     write_u64(view, rfrx_arena_offset_offset, arena_offset);
     write_u64(view, rfrx_arena_bytes_offset,
               static_cast<std::uint64_t>(arena.size()));
-    std::copy(blob_table.blob_table_blake3_prefix.begin(),
-              blob_table.blob_table_blake3_prefix.end(),
-              view.begin() +
-                  static_cast<std::ptrdiff_t>(rfrx_blob_table_prefix_offset));
+    std::ranges::copy(blob_table.blob_table_blake3_prefix,
+                      view.begin() + static_cast<std::ptrdiff_t>(
+                                         rfrx_blob_table_prefix_offset));
 
     for (std::size_t index{0}; index < wire.size(); ++index) {
         const auto &entry{wire[index]};
@@ -851,15 +842,14 @@ auto build_resolution_index(std::span<const resolution_input> entries,
                   entry.path_offset);
         write_u16(view, base + rfrx_entry_path_len_offset, entry.path_len);
     }
-    std::copy(arena.begin(), arena.end(),
-              view.begin() + static_cast<std::ptrdiff_t>(arena_offset));
+    std::ranges::copy(arena,
+                      view.begin() + static_cast<std::ptrdiff_t>(arena_offset));
 
     const auto file_digest{blake3(std::span<const std::byte>{view}.subspan(
         resolution_index_header_bytes))};
     const auto digest{digest_bytes(file_digest)};
-    std::copy(digest.begin(), digest.end(),
-              view.begin() +
-                  static_cast<std::ptrdiff_t>(rfrx_file_blake3_offset));
+    std::ranges::copy(digest, view.begin() + static_cast<std::ptrdiff_t>(
+                                                 rfrx_file_blake3_offset));
     write_u32(view, rfrx_header_crc32c_offset,
               crc32c(std::span<const std::byte>{view}.first(
                   rfrx_header_crc32c_offset)));
@@ -1070,11 +1060,8 @@ validate_rfrx_layout(std::span<const std::byte> bytes,
                 "resolution index entry references a missing blob table "
                 "record")};
         }
-        const auto location{std::lower_bound(
-            locations.begin(), locations.end(), record.path_offset,
-            [](const location_span &candidate, std::uint32_t offset) {
-                return candidate.offset < offset;
-            })};
+        const auto location{std::ranges::lower_bound(
+            locations, record.path_offset, {}, &location_span::offset)};
         if (location == locations.end() ||
             location->offset != record.path_offset ||
             location->length != record.path_len) {
@@ -1177,10 +1164,10 @@ auto resolve(const resolution_index_view &index, std::string_view location)
             error_code::not_found, "resolution index has no entry for '" +
                                        std::string{location} + "'")};
     }
-    std::sort(matches.begin(), matches.end(),
-              [](const resolution_entry *lhs, const resolution_entry *rhs) {
-                  return resolution_precedes(*lhs, *rhs);
-              });
+    std::ranges::sort(
+        matches, [](const resolution_entry *lhs, const resolution_entry *rhs) {
+            return resolution_precedes(*lhs, *rhs);
+        });
     resolution resolved;
     resolved.winner = matches.front();
     resolved.fallback.assign(matches.begin() + 1, matches.end());
@@ -1436,10 +1423,10 @@ auto mapped_resolution_index::find(std::string_view location) const
     std::erase_if(matches, [location](const resolution_entry &entry) {
         return entry.location != location;
     });
-    std::sort(matches.begin(), matches.end(),
-              [](const resolution_entry &lhs, const resolution_entry &rhs) {
-                  return resolution_precedes(lhs, rhs);
-              });
+    std::ranges::sort(
+        matches, [](const resolution_entry &lhs, const resolution_entry &rhs) {
+            return resolution_precedes(lhs, rhs);
+        });
     return matches;
 }
 

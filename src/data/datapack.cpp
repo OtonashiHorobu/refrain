@@ -163,9 +163,7 @@ constexpr std::array<std::string_view, 7> dispatch_worldgen_subkinds{
 
 [[nodiscard]] auto
 is_dispatch_worldgen_subkind(std::string_view subkind) noexcept -> bool {
-    return std::find(dispatch_worldgen_subkinds.begin(),
-                     dispatch_worldgen_subkinds.end(),
-                     subkind) != dispatch_worldgen_subkinds.end();
+    return std::ranges::contains(dispatch_worldgen_subkinds, subkind);
 }
 
 /// Longest known multi-segment tag registry prefix of `segments`, if any.
@@ -1349,10 +1347,7 @@ auto datapack_set::validate() const -> validation_report {
                 references.push_back(target);
             }
         }
-        std::sort(references.begin(), references.end(),
-                  [](const tag_record *lhs, const tag_record *rhs) {
-                      return lhs->id < rhs->id;
-                  });
+        std::ranges::sort(references, {}, &tag_record::id);
         const auto describe = [](const tag_record &record) {
             return tag_identity(record.tag_type, record.id);
         };
@@ -1369,7 +1364,7 @@ auto datapack_set::validate() const -> validation_report {
                 continue;
             }
             // Back edge: stack[pos..] + target forms a cycle.
-            const auto begin{std::find(stack.begin(), stack.end(), target)};
+            const auto begin{std::ranges::find(stack, target)};
             std::string text;
             for (auto current = begin; current != stack.end(); ++current) {
                 if (!text.empty()) {

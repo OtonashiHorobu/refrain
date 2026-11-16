@@ -73,11 +73,10 @@ namespace {
 [[nodiscard]] auto find_entry(std::span<const pack_file_info> entries,
                               std::string_view path) noexcept
     -> const pack_file_info * {
-    const auto match{
-        std::lower_bound(entries.begin(), entries.end(), path,
-                         [](const pack_file_info &entry, std::string_view key) {
-                             return std::string_view{entry.path} < key;
-                         })};
+    const auto match{std::ranges::lower_bound(
+        entries, path, {}, [](const pack_file_info &entry) {
+            return std::string_view{entry.path};
+        })};
     if (match == entries.end() || std::string_view{match->path} != path) {
         return nullptr;
     }

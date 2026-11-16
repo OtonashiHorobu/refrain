@@ -228,8 +228,8 @@ serialize_image(std::span<const std::byte> table_bytes,
     const auto copy_into = [&target](std::uint64_t offset,
                                      std::span<const std::byte> bytes) {
         if (!bytes.empty()) {
-            std::copy(bytes.begin(), bytes.end(),
-                      target.begin() + static_cast<std::ptrdiff_t>(offset));
+            std::ranges::copy(bytes, target.begin() +
+                                         static_cast<std::ptrdiff_t>(offset));
         }
     };
 
@@ -262,8 +262,8 @@ serialize_image(std::span<const std::byte> table_bytes,
     for (std::size_t index{0}; index < blobs.size(); ++index) {
         const auto base{static_cast<std::size_t>(blob_dir_offset) +
                         index * builtin_image_blob_directory_entry_bytes};
-        std::copy(blobs[index].digest.begin(), blobs[index].digest.end(),
-                  target.begin() + static_cast<std::ptrdiff_t>(base));
+        std::ranges::copy(blobs[index].digest,
+                          target.begin() + static_cast<std::ptrdiff_t>(base));
         if (blobs[index].bytes.size() >
             std::numeric_limits<std::uint32_t>::max()) {
             return std::unexpected{fail(
@@ -290,7 +290,7 @@ serialize_image(std::span<const std::byte> table_bytes,
     // [0, 104), i.e. the magic through file_blake3.
     const auto file_digest{blake3(
         std::span<const std::byte>{image}.subspan(builtin_image_header_bytes))};
-    std::copy(file_digest.begin(), file_digest.end(), image.begin() + 72);
+    std::ranges::copy(file_digest, image.begin() + 72);
     write_u32(target, 104,
               crc32c(std::span<const std::byte>{image}.first(104)));
     return image;
@@ -440,10 +440,7 @@ auto builtin_image::open(std::span<const std::byte> bytes)
         }
         segment_entries.push_back(entry);
     }
-    std::sort(segment_entries.begin(), segment_entries.end(),
-              [](const segment_entry &lhs, const segment_entry &rhs) {
-                  return lhs.id < rhs.id;
-              });
+    std::ranges::sort(segment_entries, {}, &segment_entry::id);
     for (std::size_t index{1}; index < segment_entries.size(); ++index) {
         if (segment_entries[index - 1U].id == segment_entries[index].id) {
             return std::unexpected{
@@ -479,10 +476,7 @@ auto builtin_image::open(std::span<const std::byte> bytes)
         }
         blob_entries.push_back(entry);
     }
-    std::sort(blob_entries.begin(), blob_entries.end(),
-              [](const blob_entry &lhs, const blob_entry &rhs) {
-                  return lhs.digest < rhs.digest;
-              });
+    std::ranges::sort(blob_entries, {}, &blob_entry::digest);
     for (std::size_t index{1}; index < blob_entries.size(); ++index) {
         if (blob_entries[index - 1U].digest == blob_entries[index].digest) {
             return std::unexpected{
@@ -492,10 +486,7 @@ auto builtin_image::open(std::span<const std::byte> bytes)
     }
 
     // Regions are non-overlapping and sorted by offset.
-    std::sort(regions.begin(), regions.end(),
-              [](const image_region &lhs, const image_region &rhs) {
-                  return lhs.offset < rhs.offset;
-              });
+    std::ranges::sort(regions, {}, &image_region::offset);
     for (std::size_t index{1}; index < regions.size(); ++index) {
         const auto &previous{regions[index - 1U]};
         const auto &current{regions[index]};
@@ -618,11 +609,11 @@ auto builtin_image::open(std::span<const std::byte> bytes)
                 to_hex(entry.digest) + "' does not match the blob table")};
         }
     }
-    std::sort(spans.begin(), spans.end(),
-              [](const segment_span &lhs, const segment_span &rhs) {
-                  return lhs.segment != rhs.segment ? lhs.segment < rhs.segment
-                                                    : lhs.offset < rhs.offset;
-              });
+    std::ranges::sort(
+        spans, [](const segment_span &lhs, const segment_span &rhs) {
+            return lhs.segment != rhs.segment ? lhs.segment < rhs.segment
+                                              : lhs.offset < rhs.offset;
+        });
     // A zero-byte raw blob occupies no bytes and may share an aligned offset
     // with the next blob (the batch writer appends it first), so it can never
     // overlap anything and does not extend the previous end.
@@ -698,11 +689,10 @@ auto builtin_image::entries() const noexcept
 
 auto builtin_image::find(std::string_view path) const noexcept
     -> const pack_file_info * {
-    const auto match{
-        std::lower_bound(entries_.begin(), entries_.end(), path,
-                         [](const pack_file_info &entry, std::string_view key) {
-                             return std::string_view{entry.path} < key;
-                         })};
+    const auto match{std::ranges::lower_bound(
+        entries_, path, {}, [](const pack_file_info &entry) {
+            return std::string_view{entry.path};
+        })};
     if (match == entries_.end() || std::string_view{match->path} != path) {
         return nullptr;
     }
@@ -764,10 +754,7 @@ auto builtin_image::digest() const noexcept -> const digest32 & {
 auto builtin_image::find_segment(std::uint64_t id) const noexcept
     -> const segment_record * {
     const auto match{
-        std::lower_bound(segments_.begin(), segments_.end(), id,
-                         [](const segment_record &record, std::uint64_t key) {
-                             return record.id < key;
-                         })};
+        std::ranges::lower_bound(segments_, id, {}, &segment_record::id)};
     if (match == segments_.end() || match->id != id) {
         return nullptr;
     }
@@ -777,10 +764,7 @@ auto builtin_image::find_segment(std::uint64_t id) const noexcept
 auto builtin_image::find_blob(const digest32 &digest) const noexcept
     -> const blob_record * {
     const auto match{
-        std::lower_bound(blobs_.begin(), blobs_.end(), digest,
-                         [](const blob_record &record, const digest32 &key) {
-                             return record.digest < key;
-                         })};
+        std::ranges::lower_bound(blobs_, digest, {}, &blob_record::digest)};
     if (match == blobs_.end() || match->digest != digest) {
         return nullptr;
     }
@@ -895,11 +879,7 @@ auto build_builtin_image(std::span<const builtin_image_input> files)
         }
         ordered.push_back(&file);
     }
-    std::sort(
-        ordered.begin(), ordered.end(),
-        [](const builtin_image_input *lhs, const builtin_image_input *rhs) {
-            return lhs->path < rhs->path;
-        });
+    std::ranges::sort(ordered, {}, &builtin_image_input::path);
     for (std::size_t index{1}; index < ordered.size(); ++index) {
         if (ordered[index - 1U]->path == ordered[index]->path) {
             return std::unexpected{

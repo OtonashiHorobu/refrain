@@ -477,10 +477,7 @@ struct physical_blob {
             });
         }
     }
-    std::sort(blobs.begin(), blobs.end(),
-              [](const physical_blob &lhs, const physical_blob &rhs) {
-                  return lhs.digest < rhs.digest;
-              });
+    std::ranges::sort(blobs, {}, &physical_blob::digest);
     return blobs;
 }
 
@@ -541,10 +538,7 @@ struct physical_blob {
             continue;
         }
         auto ordered{found->second};
-        std::sort(ordered.begin(), ordered.end(),
-                  [](const blob_table_entry *lhs, const blob_table_entry *rhs) {
-                      return lhs->segment_offset < rhs->segment_offset;
-                  });
+        std::ranges::sort(ordered, {}, &blob_table_entry::segment_offset);
         for (const auto *entry : ordered) {
             if ((entry->flags & blob_flags_packed) != 0U) {
                 return std::unexpected{make_error(
@@ -632,7 +626,7 @@ auto list_resolution_paths(std::string_view store_root)
         }
         paths.push_back(join_path(directory, name));
     }
-    std::sort(paths.begin(), paths.end());
+    std::ranges::sort(paths);
     return paths;
 }
 
@@ -724,9 +718,7 @@ auto scan_content_segments(std::string_view store_root)
         }
         segments.push_back(std::move(segment));
     }
-    std::sort(segments.begin(), segments.end(),
-              [](const content_segment_file &lhs,
-                 const content_segment_file &rhs) { return lhs.id < rhs.id; });
+    std::ranges::sort(segments, {}, &content_segment_file::id);
     return segments;
 }
 

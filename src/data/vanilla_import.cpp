@@ -231,9 +231,8 @@ auto parse_blocks(std::string_view json, std::vector<block_spec> &blocks)
                 }
                 for (const auto value_field : state_properties) {
                     const auto position =
-                        std::find(block.property_names.begin(),
-                                  block.property_names.end(),
-                                  std::string_view{value_field.key});
+                        std::ranges::find(block.property_names,
+                                          std::string_view{value_field.key});
                     if (position == block.property_names.end()) {
                         return std::unexpected{
                             parse_fail("blocks.json",

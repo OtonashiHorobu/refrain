@@ -524,9 +524,9 @@ auto segment_writer::seal() -> result<segment_header> {
     write_u32(view, segment_blob_count_offset, header.blob_count);
     write_u32(view, segment_reserved32_offset, 0);
     write_u64(view, segment_data_bytes_offset, header.data_bytes);
-    std::copy(header.body_hash.begin(), header.body_hash.end(),
-              view.begin() +
-                  static_cast<std::ptrdiff_t>(segment_body_hash_offset));
+    std::ranges::copy(
+        header.body_hash,
+        view.begin() + static_cast<std::ptrdiff_t>(segment_body_hash_offset));
     write_u32(
         view, segment_crc32c_offset,
         crc32c(std::span<const std::byte>{view}.first(segment_crc32c_bytes)));

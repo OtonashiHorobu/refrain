@@ -233,10 +233,7 @@ auto build_vanilla_tables(const vanilla_spec &spec)
         }
         blocks.push_back(&block);
     }
-    std::sort(blocks.begin(), blocks.end(),
-              [](const block_spec *left, const block_spec *right) {
-                  return left->name < right->name;
-              });
+    std::ranges::sort(blocks, {}, &block_spec::name);
     for (std::size_t i = 1; i < blocks.size(); ++i) {
         if (blocks[i - 1]->name == blocks[i]->name) {
             return std::unexpected{
@@ -269,11 +266,10 @@ auto build_vanilla_tables(const vanilla_spec &spec)
         for (std::size_t i = 0; i < property_count; ++i) {
             order[i] = i;
         }
-        std::sort(order.begin(), order.end(),
-                  [&](std::size_t left, std::size_t right) {
-                      return block.property_names[left] <
-                             block.property_names[right];
-                  });
+        std::ranges::sort(order, {},
+                          [&block](std::size_t index) -> const std::string & {
+                              return block.property_names[index];
+                          });
 
         std::vector<std::string> names;
         std::vector<std::vector<std::string>> values;
@@ -282,7 +278,7 @@ auto build_vanilla_tables(const vanilla_spec &spec)
         for (const auto index : order) {
             names.push_back(block.property_names[index]);
             values.push_back(block.property_values[index]);
-            std::sort(values.back().begin(), values.back().end());
+            std::ranges::sort(values.back());
             if (values.back().empty()) {
                 return std::unexpected{
                     fail("property without values in " + block.name)};
@@ -354,8 +350,8 @@ auto build_vanilla_tables(const vanilla_spec &spec)
             for (std::size_t i = 0; i < property_count; ++i) {
                 const auto &property_values = values[i];
                 const auto &value = state.values[order[i]];
-                const auto position = std::lower_bound(
-                    property_values.begin(), property_values.end(), value);
+                const auto position =
+                    std::ranges::lower_bound(property_values, value);
                 if (position == property_values.end() || *position != value) {
                     return std::unexpected{fail("state value '" + value +
                                                 "' is not declared by " +
@@ -370,10 +366,7 @@ auto build_vanilla_tables(const vanilla_spec &spec)
             built.is_default = state.is_default;
             block_states.push_back(built);
         }
-        std::sort(block_states.begin(), block_states.end(),
-                  [&](const built_state &left, const built_state &right) {
-                      return left.key < right.key;
-                  });
+        std::ranges::sort(block_states, {}, &built_state::key);
         for (std::size_t i = 1; i < block_states.size(); ++i) {
             if (block_states[i - 1].key == block_states[i].key) {
                 return std::unexpected{
@@ -415,11 +408,7 @@ auto build_vanilla_tables(const vanilla_spec &spec)
     for (const auto &preset : spec.biome_presets) {
         presets.push_back(&preset);
     }
-    std::sort(
-        presets.begin(), presets.end(),
-        [](const biome_preset_spec *left, const biome_preset_spec *right) {
-            return left->name < right->name;
-        });
+    std::ranges::sort(presets, {}, &biome_preset_spec::name);
     for (std::size_t i = 1; i < presets.size(); ++i) {
         if (presets[i - 1]->name == presets[i]->name) {
             return std::unexpected{
@@ -451,10 +440,7 @@ auto build_vanilla_tables(const vanilla_spec &spec)
     for (const auto &registry : spec.registries) {
         registries.push_back(&registry);
     }
-    std::sort(registries.begin(), registries.end(),
-              [](const registry_spec *left, const registry_spec *right) {
-                  return left->name < right->name;
-              });
+    std::ranges::sort(registries, {}, &registry_spec::name);
     for (std::size_t i = 1; i < registries.size(); ++i) {
         if (registries[i - 1]->name == registries[i]->name) {
             return std::unexpected{
@@ -475,11 +461,7 @@ auto build_vanilla_tables(const vanilla_spec &spec)
         for (const auto &entry : registry->entries) {
             entries.push_back(&entry);
         }
-        std::sort(entries.begin(), entries.end(),
-                  [](const registry_entry_spec *left,
-                     const registry_entry_spec *right) {
-                      return left->name < right->name;
-                  });
+        std::ranges::sort(entries, {}, &registry_entry_spec::name);
         for (std::size_t i = 1; i < entries.size(); ++i) {
             if (entries[i - 1]->name == entries[i]->name) {
                 return std::unexpected{
@@ -507,10 +489,7 @@ auto build_vanilla_tables(const vanilla_spec &spec)
         }
         items.push_back(&item);
     }
-    std::sort(items.begin(), items.end(),
-              [](const item_spec *left, const item_spec *right) {
-                  return left->name < right->name;
-              });
+    std::ranges::sort(items, {}, &item_spec::name);
     for (std::size_t i = 1; i < items.size(); ++i) {
         if (items[i - 1]->name == items[i]->name) {
             return std::unexpected{fail("duplicate item: " + items[i]->name)};
@@ -717,8 +696,8 @@ auto build_vanilla_tables(const vanilla_spec &spec)
 
     const auto digest =
         blake3(std::span<const std::byte>{out}.subspan(header_size));
-    std::copy(digest.begin(), digest.end(),
-              out.begin() + static_cast<std::ptrdiff_t>(digest_position));
+    std::ranges::copy(digest, out.begin() +
+                                  static_cast<std::ptrdiff_t>(digest_position));
     return out;
 }
 
@@ -1039,7 +1018,7 @@ auto vanilla_tables::open(std::span<const std::byte> bytes, bool verify)
         table.state_index_[slot] = i + 1;
         table.vanilla_index_.emplace_back(state.vanilla_id, i);
     }
-    std::sort(table.vanilla_index_.begin(), table.vanilla_index_.end());
+    std::ranges::sort(table.vanilla_index_);
 
     return table;
 }
@@ -1119,10 +1098,9 @@ auto vanilla_tables::find_state(std::string_view key) const
 
 auto vanilla_tables::state_by_vanilla_id(std::uint16_t vanilla_id) const
     -> std::optional<std::uint32_t> {
-    const auto found = std::lower_bound(
-        vanilla_index_.begin(), vanilla_index_.end(), vanilla_id,
-        [](const std::pair<std::uint16_t, std::uint32_t> &entry,
-           std::uint16_t value) { return entry.first < value; });
+    const auto found = std::ranges::lower_bound(
+        vanilla_index_, vanilla_id, {},
+        &std::pair<std::uint16_t, std::uint32_t>::first);
     if (found == vanilla_index_.end() || found->first != vanilla_id) {
         return std::nullopt;
     }
