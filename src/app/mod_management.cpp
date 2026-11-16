@@ -930,9 +930,6 @@ class command_runner {
         if (installed.same_version_override) {
             lines.push_back("the same version was replaced for this run");
         }
-        if (installed.unpinned_confirmed) {
-            lines.push_back("a legacy signer was confirmed for this run");
-        }
         if (installed.already_installed) {
             lines.push_back(
                 "the package was already installed, so nothing changed");

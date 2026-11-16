@@ -222,10 +222,8 @@ struct rfmod_key_rotation {
 ///
 /// The pin is written by the first successful signed install and checked on
 /// every later update; `uninstall` clears it when the last installed version is
-/// removed unless the caller keeps it. A receipt v2 also carries the signer, so
-/// a missing pin file is derived from the highest installed receipt; a v1
-/// receipt has no fingerprint and counts as *unpinned* (legacy) until an
-/// administrator confirms the signer.
+/// removed unless the caller keeps it. An install receipt also carries the
+/// signer, so a missing pin file is derived from the highest installed receipt.
 struct mod_signer_pin {
     std::string id{};
     std::string key_id{};
@@ -233,7 +231,8 @@ struct mod_signer_pin {
     /// by a key with no configured trust anchor (only the key id is known).
     std::string public_key_fingerprint{};
     rfmod_signature_policy policy{rfmod_signature_policy::strict};
-    /// RFC 3339 UTC timestamp, empty for pins migrated from an older store.
+    /// RFC 3339 UTC timestamp of the pin write; empty when the writer did not
+    /// record one.
     std::string pinned_at{};
     /// `install`, `rotation`, `admin` or `uninstall` (audit only).
     std::string source{};
@@ -475,17 +474,12 @@ struct rfmod_install_options {
     bool allow_downgrade{false};
     /// Accept the same `(id, version)` with a different archive digest.
     bool replace_same_version{false};
-    /// Confirm a legacy (receipt v1 / unpinned) install so the next update may
-    /// establish the signer pin. Without it, updating a store installed before
-    /// signer pinning is rejected until an administrator confirms.
-    bool accept_unpinned{false};
     /// Publish/refresh the signer pin (`<store>/mods/pins/<id>.json`).
     bool write_pin{true};
-    /// Recorded in the receipt v2 (audit). Empty means "unknown" (a receipt
-    /// migrated from v1 has no installer version either).
+    /// Recorded in the install receipt (audit). Empty means "unknown".
     std::string installer_version{};
-    /// Recorded in the receipt v2 as an RFC 3339 UTC timestamp. Empty uses the
-    /// current time; tests pass a fixed value so receipt bytes are stable.
+    /// Recorded in the install receipt as an RFC 3339 UTC timestamp. Empty uses
+    /// the current time; tests pass a fixed value so receipt bytes are stable.
     std::string installed_at{};
     /// Remove stale staging directories left by a crashed install before
     /// starting (a staging directory of a live process is never touched).
@@ -537,13 +531,11 @@ struct rfmod_install_result {
     bool downgrade_override{false};
     /// True when `replace_same_version` was required for this install.
     bool same_version_override{false};
-    /// True when `accept_unpinned` confirmed a legacy install.
-    bool unpinned_confirmed{false};
     /// Stale staging directories removed before this install.
     std::size_t pruned_staging{0};
 };
 
-/// One installed member recorded in a `refrain.mod-receipt/1` or `/2` receipt.
+/// One installed member recorded in an install receipt.
 struct receipt_file {
     std::string path{};
     std::uint64_t size{0};
@@ -551,11 +543,8 @@ struct receipt_file {
     std::uint32_t mode{0644};
 };
 
-/// Receipt schema versions understood by `read_receipt`.
-inline constexpr std::string_view mod_receipt_schema_v1{
-    "refrain.mod-receipt/1"};
-inline constexpr std::string_view mod_receipt_schema_v2{
-    "refrain.mod-receipt/2"};
+/// Install receipt schema (`<store>/mods/<id>/<version>.json`).
+inline constexpr std::string_view mod_receipt_schema{"refrain.mod-receipt/1"};
 /// Signer pin schema (`<store>/mods/pins/<id>.json`).
 inline constexpr std::string_view mod_signer_pin_schema{
     "refrain.mod-signer-pin/1"};
@@ -567,13 +556,13 @@ inline constexpr std::string_view mod_signer_pin_schema{
 /// `files[].blake3` digests keep the installed blobs alive before any
 /// resolution index exists, so `content gc` must keep those blobs/segments.
 ///
-/// Schema v2 adds the signer identity (`public_key_fingerprint`), the policy
-/// that accepted the install, and the audit fields `installed_at` /
-/// `installer_version`. A v1 receipt parses into the same struct with
-/// `schema_version == 1`, `policy == "legacy"` and an empty fingerprint; it
-/// counts as unpinned until the signer is confirmed.
+/// One schema carries the signer identity (`key_id`,
+/// `public_key_fingerprint`), the policy that accepted the install, the audit
+/// fields `installed_at`/`installer_version`, the host-observed `origin` and
+/// the per-file records. A receipt from an older development build is not
+/// migrated: its schema is unknown, so parsing fails closed and the packages
+/// are reinstalled.
 struct mod_receipt {
-    std::uint32_t schema_version{2};
     std::string id{};
     std::string version{};
     std::uint32_t abi{0};
@@ -582,37 +571,35 @@ struct mod_receipt {
     bool signed_package{false};
     bool trusted{false};
     std::string key_id{};
-    /// Hex64 fingerprint of the signing key (v2, empty when unknown).
+    /// Hex64 fingerprint of the signing key, empty when unknown.
     std::string public_key_fingerprint{};
-    /// `strict` | `trusted-any` | `unsigned` | `legacy` (v2; see
-    /// `rfmod_signature_policy` and the receipt format comment).
+    /// `strict` | `trusted-any` | `unsigned` (see `rfmod_signature_policy` and
+    /// the receipt format comment).
     std::string policy{};
-    /// RFC 3339 UTC install timestamp (v2; empty for a migrated v1 receipt).
+    /// RFC 3339 UTC install timestamp.
     std::string installed_at{};
-    /// Installer version string (v2; empty for a migrated v1 receipt).
+    /// Installer version string.
     std::string installer_version{};
-    /// Host-observed install tier (missing field in an older receipt = user).
+    /// Host-observed install tier.
     mod_origin origin{mod_origin::user};
     std::vector<receipt_file> files{};
 
-    /// True when this receipt pins a signer: schema v2, signed package, a key
-    /// id and a policy that confirmed the signer. A receipt migrated from v1
-    /// keeps `policy == "legacy"` and is therefore *not* pinned: migrating the
-    /// document does not confirm who signed the installed archive.
+    /// True when this receipt pins a signer: a signed package with a key id.
     [[nodiscard]] auto pinned() const noexcept -> bool {
-        return schema_version >= 2U && signed_package && !key_id.empty() &&
-               policy != "legacy";
+        return signed_package && !key_id.empty();
     }
 };
 
 /// Parse and strictly validate one install receipt.
 ///
-/// Checks the JSON object, a known schema (`refrain.mod-receipt/1` or `/2`),
+/// Checks the JSON object, the single known schema (`refrain.mod-receipt/1`),
 /// every required top-level field/type, SemVer `version`, integer `abi`, 64-hex
-/// `archive_blake3`/`manifest_blake3`, the v2 signer fields, and every
-/// `files[]` entry's safe relative UTF-8 `path`, non-negative `size`, 64-hex
-/// `blake3` and (when present) 0..0777 `mode`. A corrupt/foreign receipt is
-/// `parse_error` (the message names `path`), never silently skipped.
+/// `archive_blake3`/`manifest_blake3`, the signer fields
+/// (`public_key_fingerprint`, `policy`), the audit fields (`installed_at`,
+/// `installer_version`, `origin`), and every `files[]` entry's safe relative
+/// UTF-8 `path`, non-negative `size`, 64-hex `blake3` and 0..0777 `mode`. A
+/// corrupt/foreign receipt is `parse_error` (the message names `path` and the
+/// rejected schema), never silently skipped or migrated.
 [[nodiscard]] auto read_receipt(std::string_view path) -> result<mod_receipt>;
 
 /// Sorted `<store>/mods/<id>/<version>.json` receipt paths.
@@ -650,7 +637,7 @@ struct mod_receipt {
 
 /// Atomically write `<store>/mods/pins/<id>.json` (schema
 /// `refrain.mod-signer-pin/1`). Used by install, uninstall (`keep_signer_pin`)
-/// and the administrative `mods pin` command.
+/// and the administrative `mods trust pin` command.
 [[nodiscard]] auto write_signer_pin(std::string_view store_root,
                                     const mod_signer_pin &pin) -> status;
 
@@ -688,8 +675,8 @@ struct mod_receipt {
 ///     digest;
 ///  4. ingest every member through one CAS batch and commit it;
 ///  5. publish the merged blob table and re-encoded resolution indexes;
-///  6. publish the receipt v2 (the commit point: an install "exists" exactly
-///     when its receipt exists);
+///  6. publish the install receipt (the commit point: an install "exists"
+///     exactly when its receipt exists);
 ///  7. publish the signer pin;
 ///  8. delete the staging directory.
 ///
@@ -707,7 +694,7 @@ struct mod_receipt {
 /// the batch committed, a deterministic JSON record is atomically written to
 /// `<store>/mods/<id>/<version>.json`:
 ///
-///   `schema` = "refrain.mod-receipt/2", `id`, `version`, `abi`,
+///   `schema` = "refrain.mod-receipt/1", `id`, `version`, `abi`,
 ///   `archive_blake3`, `manifest_blake3`, `signed`, `trusted`, `key_id`,
 ///   `public_key_fingerprint`, `policy` (`strict`, `trusted-any`, `unsigned`),
 ///   `installed_at`, `installer_version`, `origin` (`builtin`|`first_party`|
@@ -774,30 +761,5 @@ struct rfmod_uninstall_result {
                                    std::optional<std::string_view> version = {},
                                    const rfmod_uninstall_options &options = {})
     -> result<rfmod_uninstall_result>;
-
-/// One `migrate_receipts()` outcome.
-struct receipt_migration_report {
-    std::size_t scanned{0};
-    std::size_t migrated{0};
-    std::size_t current{0}; ///< already schema v2, untouched
-    std::size_t failed{0};
-};
-
-/// Rewrite every receipt v1 under `<store>/mods` as schema v2.
-///
-/// A migrated receipt keeps every recorded value and gains
-/// `policy = "legacy"`, an empty `public_key_fingerprint`, `installed_at` and
-/// `installer_version`: the signer is *not* confirmed by a migration. The
-/// runtime keeps accepting v1 receipts, so the migration is not required for a
-/// working store; it makes the on-disk format uniform and marks the signer as
-/// unconfirmed. The first update of an unpinned install is rejected unless the
-/// administrator confirms the signer (`rfmod_install_options::accept_unpinned`
-/// or `mods pin`). `apply == false` is a dry-run that only reports.
-///
-/// A corrupt receipt fails the report (`parse_error`) instead of being
-/// rewritten; a failure while writing one receipt is reported per receipt in
-/// `failed` and does not abort the pass.
-[[nodiscard]] auto migrate_receipts(std::string_view store_root, bool apply)
-    -> result<receipt_migration_report>;
 
 } // namespace refrain::mod

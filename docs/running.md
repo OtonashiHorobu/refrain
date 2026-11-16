@@ -190,7 +190,6 @@ CI smoke wants. A run that only inspects the composition does not need the EULA.
 | `--mods <dir>` | content store root whose install receipts are part of the mod catalog, repeatable |
 | `--allow-downgrade` | accept a mod version lower than the installed highest (one run) |
 | `--replace-same-version` | accept the same mod `(id, version)` with a different archive digest (one run) |
-| `--accept-unpinned-signer` | confirm the signer of a mod installed before signer pinning so it may be updated |
 | `--keep-signer-pin` | keep a mod's signer pin after uninstalling its last version |
 | `--signature-policy <mode>` | override the install signature policy: `strict` or `trusted-any` |
 | `--content-trusted-key <id>:<hex>` | add a trusted signing key (repeatable) |
