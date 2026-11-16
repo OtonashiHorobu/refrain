@@ -314,6 +314,12 @@ void register_mod_commands(
     reload.then(reload_id);
     mods.then(reload);
 
+    auto reload_data{dispatcher.literal("reload-data")};
+    auto reload_data_node{leaf(reload_data, {"reload-data"}, {})};
+    reload_data_node.then(leaf(dispatcher.literal("--dry-run"), {"reload-data"},
+                               {}, {"--dry-run"}));
+    mods.then(reload_data_node);
+
     auto trust{dispatcher.literal("trust")};
     trust.executes(
         [environment](command::context &context) -> refrain::result<int> {

@@ -103,6 +103,24 @@ struct mod_lifecycle_port {
     std::string unavailable_reason{};
 };
 
+/// Result of a content reload request: the operator-facing lines that describe
+/// which generation is live and when the rebuilt view publishes.
+struct content_reload_outcome {
+    std::vector<std::string> lines{};
+};
+
+/// Replacement point for the content view epoch.
+///
+/// The implementation owns the background rebuild, the validation and the
+/// tick-boundary swap of the datapack view. `request` empty means the running
+/// server has no content view to rebuild (the composition root never published
+/// one); `unavailable_reason` then says why, and the command reports
+/// `unsupported` instead of pretending the reload happened.
+struct content_reload_port {
+    std::function<result<content_reload_outcome>()> request{};
+    std::string unavailable_reason{};
+};
+
 /// One structured audit record. Every operation appends one, whatever its
 /// result; the default sink writes it through the `mod-audit` logger.
 struct mod_audit_record {
@@ -145,12 +163,17 @@ struct mod_management_context {
     /// Mod administration file (`config/mods_admin.toml`) the hot gates were
     /// read from; empty means the built-in default. Diagnostics only.
     std::string admin_source{};
-    /// Hot gates read from `config/mods_admin.toml`; both default off.
+    /// Hot gates read from `config/mods_admin.toml`; all default off.
     bool hot_install{false};
     bool hot_reload{false};
+    /// `[lifecycle] hot_reload_data`: rebuild the datapack content view at
+    /// runtime.
+    bool hot_reload_data{false};
     /// Running composition snapshot, in load order.
     std::vector<mod_management_mod> loaded{};
     mod_lifecycle_port lifecycle{};
+    /// Content view epoch (datapack content, not mod code).
+    content_reload_port content_reload{};
     /// Audit sink. Empty writes the formatted record through the module
     /// logger; tests pass a capturing sink.
     std::function<void(const mod_audit_record &)> audit{};

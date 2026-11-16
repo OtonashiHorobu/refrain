@@ -25,6 +25,7 @@ namespace refrain::server {
 //     [lifecycle]
 //     hot_install = false      # apply install/uninstall while running
 //     hot_reload = false       # rebuild a loaded mod in place
+//     hot_reload_data = false  # rebuild the datapack content view
 //
 //     [admin]
 //     operators = ["<uuid>"]   # players allowed to run /mods (console is
@@ -42,6 +43,9 @@ struct mod_management_settings {
     std::string admin_source{};
     bool hot_install{false};
     bool hot_reload{false};
+    /// `[lifecycle] hot_reload_data`: rebuild the datapack content view
+    /// (recipes, loot tables, advancements, worldgen documents) in place.
+    bool hot_reload_data{false};
     /// Canonical lowercase player uuids allowed to run the in-game command,
     /// in configuration order.
     std::vector<std::string> operators{};

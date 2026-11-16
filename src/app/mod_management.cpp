@@ -165,9 +165,10 @@ struct parsed_line {
 constexpr std::string_view usage_text{
     "the available mod commands are: list, installed, verify <package>, "
     "install <package> [confirm], uninstall <id>[@<version>] [confirm], "
-    "reload <id>[@<version>], trust [list], trust pin <id> [confirm], "
-    "trust clear <id> [confirm]; destructive commands need 'confirm' and "
-    "install, uninstall and trust accept '--dry-run'"};
+    "reload <id>[@<version>], reload-data, trust [list], trust pin <id> "
+    "[confirm], trust clear <id> [confirm]; destructive commands need "
+    "'confirm' and install, uninstall, reload-data and trust accept "
+    "'--dry-run'"};
 
 [[nodiscard]] auto usage_report() -> refrain::app::mod_management_report {
     return success({std::string{usage_text}});
@@ -371,6 +372,9 @@ class command_runner {
         }
         if (line->verb == "reload") {
             return reload(*line);
+        }
+        if (line->verb == "reload-data") {
+            return reload_data(*line);
         }
         if (line->verb == "trust") {
             return trust(*line);
@@ -691,6 +695,44 @@ class command_runner {
                             loaded->id, version));
         }
         return success(std::move(lines));
+    }
+
+    /// Rebuild the datapack content view (recipes, loot tables, advancements,
+    /// worldgen documents, assets) without touching the mod composition. The
+    /// build and validation run off the tick; the new view publishes at the
+    /// next tick boundary and a failed build leaves the live view in place.
+    [[nodiscard]] auto reload_data(const parsed_line &line)
+        -> mod_management_report {
+        if (!line.positional.empty()) {
+            return refusal("reload-data takes no arguments");
+        }
+        if (!context_.hot_reload_data) {
+            return refusal(
+                fmt::format(
+                    "hot content reload is disabled ([lifecycle] "
+                    "hot_reload_data = false in '{}'); set it to true and "
+                    "restart the server to reload content at runtime",
+                    admin_source()),
+                "refused");
+        }
+        if (!context_.content_reload.request) {
+            return refusal(fmt::format("cannot reload content at runtime: {}",
+                                       content_reload_reason()),
+                           "unsupported");
+        }
+        if (line.dry_run) {
+            auto report{success({std::string{
+                "dry run: would rebuild the content view from its layer list "
+                "and validate it off the tick; the running view is "
+                "unchanged"}})};
+            report.outcome = "dry-run";
+            return report;
+        }
+        auto applied{context_.content_reload.request()};
+        if (!applied) {
+            return refusal(applied.error().message);
+        }
+        return success(std::move(applied->lines));
     }
 
     [[nodiscard]] auto trust(const parsed_line &line) -> mod_management_report {
@@ -1039,6 +1081,13 @@ class command_runner {
                    ? std::string{"the hot lifecycle registry is not available "
                                  "in this build"}
                    : context_.lifecycle.unavailable_reason;
+    }
+
+    [[nodiscard]] auto content_reload_reason() const -> std::string {
+        return context_.content_reload.unavailable_reason.empty()
+                   ? std::string{"the server did not publish a content view to "
+                                 "rebuild"}
+                   : context_.content_reload.unavailable_reason;
     }
 
     const mod_management_context &context_;

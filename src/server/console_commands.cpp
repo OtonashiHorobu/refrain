@@ -56,9 +56,9 @@ void print_console_help() {
         "config save|reload [namespace], config names, "
         "mods list|installed|verify <package>|install <package> "
         "[confirm]|uninstall <id>[@version] [confirm]|reload "
-        "<id>[@version]|trust [list|pin <id>|clear <id>]; install, uninstall "
-        "and trust changes need confirm, --dry-run reports without changing "
-        "state");
+        "<id>[@version]|reload-data|trust [list|pin <id>|clear <id>]; install, "
+        "uninstall and trust changes need confirm, --dry-run reports without "
+        "changing state");
 }
 
 [[nodiscard]] auto split_console_line(std::string_view line)

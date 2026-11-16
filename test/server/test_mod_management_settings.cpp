@@ -56,6 +56,7 @@ const suite mod_management_settings_tests = [] {
                    refrain::mod::rfmod_signature_policy::strict);
             expect(!settings->hot_install);
             expect(!settings->hot_reload);
+            expect(!settings->hot_reload_data);
             expect(settings->operators.empty());
             expect(settings->policy_source.empty());
             expect(settings->admin_source.empty());
@@ -75,6 +76,7 @@ const suite mod_management_settings_tests = [] {
                           "[lifecycle]\n"
                           "hot_install = true\n"
                           "hot_reload = true\n"
+                          "hot_reload_data = true\n"
                           "\n[admin]\n"
                           "operators = [\n"
                           "  \"11111111-1111-1111-1111-111111111111\",\n"
@@ -89,6 +91,7 @@ const suite mod_management_settings_tests = [] {
             expect(settings->policy.allow_downgrade);
             expect(settings->hot_install);
             expect(settings->hot_reload);
+            expect(settings->hot_reload_data);
             expect(settings->operators.size() == 2U);
             // Canonical lowercase form, independent of how the operator wrote
             // it.
@@ -120,6 +123,25 @@ const suite mod_management_settings_tests = [] {
         std::error_code error;
         fs::remove_all(directory, error);
     };
+
+    "mod settings/the content reload gate of the wrong type is an error"_test =
+        [] {
+            const auto directory{scratch_directory("data-gate-type")};
+            expect(write_file(directory, "mods_admin.toml",
+                              "[lifecycle]\nhot_reload_data = 1\n"));
+            auto settings{
+                server::load_mod_management_settings(directory.string())};
+            expect(!settings);
+            if (!settings) {
+                expect(settings.error().code ==
+                       refrain::error_code::parse_error);
+                expect(settings.error().message.find("hot_reload_data") !=
+                       std::string::npos)
+                    << settings.error().message;
+            }
+            std::error_code error;
+            fs::remove_all(directory, error);
+        };
 
     "mod settings/an operator entry that is not a uuid is an error"_test = [] {
         const auto directory{scratch_directory("operator")};
@@ -167,6 +189,7 @@ const suite mod_management_settings_tests = [] {
         if (settings) {
             expect(settings->policy.require_signature);
             expect(!settings->hot_install);
+            expect(!settings->hot_reload_data);
             expect(settings->operators.empty());
         }
     };

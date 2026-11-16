@@ -24,6 +24,7 @@
 #include <refrain/data/checksum.hpp>
 #include <refrain/data/content_maintenance.hpp>
 #include <refrain/data/content_pack.hpp>
+#include <refrain/data/content_view.hpp>
 #include <refrain/data/datapack.hpp>
 #include <refrain/data/path.hpp>
 #include <refrain/data/signature.hpp>
@@ -40,6 +41,7 @@
 #include <refrain/mod/rfmod.hpp>
 #include <refrain/mod/startup_content.hpp>
 #include <refrain/net/download.hpp>
+#include <refrain/server/content_reload_inputs.hpp>
 #include <refrain/server/eula.hpp>
 #include <refrain/server/game_data.hpp>
 #include <refrain/server/install_layout.hpp>
@@ -1398,75 +1400,54 @@ int main(int argc, char **argv) {
     // or semantically invalid content aborts startup. The builtin RFSI image
     // is deliberately not mounted here: its paths live under `mods/<id>/...`,
     // not at a datapack root.
-    refrain::data::vfs runtime_vfs{};
+    std::vector<refrain::data::content_source> content_layers{};
     if (!content_store.empty()) {
-        auto opened{refrain::data::open_content_pack(content_store,
-                                                     content_composition_name)};
-        if (!opened) {
-            if (opened.error().code == refrain::error_code::not_found) {
-                log_content.warn("found no composition '{}' in '{}'",
-                                 content_composition_name, content_store);
-            } else {
-                return report_fatal(opened.error());
-            }
-        } else {
-            auto mounted{runtime_vfs.mount(std::move(*opened))};
-            if (!mounted) {
-                return report_fatal(mounted.error());
-            }
-        }
+        content_layers.push_back(refrain::data::content_source{
+            .kind = refrain::data::content_source_kind::composition,
+            .path = content_store,
+            .composition = content_composition_name,
+        });
     }
     std::vector<std::string> runtime_datapacks{datapack_dirs};
     runtime_datapacks.insert(runtime_datapacks.end(), dev_dirs.begin(),
                              dev_dirs.end());
     for (const auto &datapack_dir : runtime_datapacks) {
-        auto opened{refrain::data::open_dir_pack(datapack_dir, datapack_dir)};
-        if (!opened) {
-            return report_fatal(opened.error());
-        }
-        auto mounted{runtime_vfs.mount(std::move(*opened))};
-        if (!mounted) {
-            return report_fatal(mounted.error());
-        }
+        content_layers.push_back(refrain::data::content_source{
+            .kind = refrain::data::content_source_kind::directory,
+            .path = datapack_dir,
+            .label = datapack_dir,
+        });
     }
-
-    if (runtime_vfs.pack_count() == 0) {
+    auto built_view{refrain::data::content_view::build(
+        content_layers,
+        refrain::data::content_view_build_options{.expected_pack_format = 0,
+                                                  .parse_structures = true})};
+    if (!built_view) {
+        return report_fatal(built_view.error());
+    }
+    auto runtime_view{std::make_shared<const refrain::data::content_view>(
+        std::move(*built_view))};
+    constexpr std::size_t max_reported_diagnostics{5};
+    const auto shown_warnings{
+        std::min(runtime_view->warnings().size(), max_reported_diagnostics)};
+    for (std::size_t index{0}; index < shown_warnings; ++index) {
+        log_content.warn("{}", runtime_view->warnings()[index]);
+    }
+    if (runtime_view->warnings().size() > shown_warnings) {
+        log_content.warn("{} more warnings were suppressed",
+                         runtime_view->warnings().size() - shown_warnings);
+    }
+    if (runtime_view->empty()) {
         log_content.info("found no external content packages");
     } else {
-        runtime_vfs.freeze();
-        auto loaded{refrain::data::datapack_set::load(
-            runtime_vfs,
-            refrain::data::datapack_load_options{.expected_pack_format = 0,
-                                                 .parse_structures = true})};
-        if (!loaded) {
-            return report_fatal(loaded.error());
-        }
-        const auto validation{loaded->validate()};
-        constexpr std::size_t max_reported_diagnostics{5};
-        if (!validation.ok()) {
-            const auto shown_errors{
-                std::min(validation.errors.size(), max_reported_diagnostics)};
-            for (std::size_t index{0}; index < shown_errors; ++index) {
-                log_content.error("{}", validation.errors[index]);
-            }
-            return report_fatal(refrain::make_error(
-                refrain::error_code::parse_error,
-                fmt::format("runtime-content: {} errors, first {} shown",
-                            validation.errors.size(), shown_errors)));
-        }
-        const auto shown_warnings{
-            std::min(validation.warnings.size(), max_reported_diagnostics)};
-        for (std::size_t index{0}; index < shown_warnings; ++index) {
-            log_content.warn("{}", validation.warnings[index]);
-        }
-        if (validation.warnings.size() > shown_warnings) {
-            log_content.warn("{} more warnings were suppressed",
-                             validation.warnings.size() - shown_warnings);
-        }
-        log_content.info("loaded {} content layers and {} files with {} "
-                         "errors and {} warnings",
-                         runtime_vfs.pack_count(), runtime_vfs.file_count(),
-                         validation.errors.size(), validation.warnings.size());
+        // The build fails closed on validation errors, so the merged view that
+        // reaches this line has none; the warning count still belongs in the
+        // summary an operator reads at startup.
+        log_content.info(
+            "loaded {} content layers and {} files with 0 errors and {} "
+            "warnings",
+            runtime_view->layer_count(), runtime_view->file_count(),
+            runtime_view->warnings().size());
     }
 
     // Runtime content and the mod host are live; auto_scan/mods.lock is the
@@ -1694,6 +1675,14 @@ int main(int argc, char **argv) {
         refrain::server::mod_lifecycle_inputs{
             .store_roots = installed_stores,
             .auto_scan = effective_auto_scan,
+        });
+    // The content view the server starts with and the re-openable layer list it
+    // was built from. The runtime rebuilds the same stack for a hot content
+    // reload and publishes each committed view for the tick.
+    refrain::server::publish_content_reload_inputs(
+        refrain::server::content_reload_inputs{
+            .sources = content_layers,
+            .initial = runtime_view,
         });
 
     // Effective network values for the startup summary: the same views the
