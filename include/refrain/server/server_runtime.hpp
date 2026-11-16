@@ -77,8 +77,11 @@ struct server_run_options {
     /// policy and the hot gates from it. Empty keeps the built-in defaults.
     std::string config_dir{};
     /// Loaded mod host (the running composition). Null leaves `/mods list`
-    /// with an empty composition; the runtime only reads it.
-    const refrain::mod::host *mod_host{nullptr};
+    /// with an empty composition and the hot lifecycle unavailable. The
+    /// runtime reads the composition snapshot from it and stages a running
+    /// composition change through it; the host belongs to the caller and
+    /// outlives this call.
+    refrain::mod::host *mod_host{nullptr};
     /// Run exactly this many ticks, then stop. 0 = until `stop`/EOF.
     std::int64_t ticks{0};
     /// Optional batch command file (one console command per line, all at tick

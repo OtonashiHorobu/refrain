@@ -43,6 +43,7 @@
 #include <refrain/server/eula.hpp>
 #include <refrain/server/game_data.hpp>
 #include <refrain/server/install_layout.hpp>
+#include <refrain/server/mod_lifecycle_inputs.hpp>
 #include <refrain/server/server_properties.hpp>
 #include <refrain/world/create.hpp>
 
@@ -287,10 +288,12 @@ constexpr std::array<default_config_file, 7> k_default_config_files{{
              "\n"
              "[lifecycle]\n"
              "# Apply an install or uninstall to the running composition.\n"
-             "# Requires the hot lifecycle registry; off in production.\n"
+             "# Off stores the change for the next start instead. A mod that\n"
+             "# cannot be replaced while the server runs refuses with the\n"
+             "# reason and stays restart-required.\n"
              "hot_install = false\n"
-             "# Rebuild a loaded mod in place. Requires the hot lifecycle\n"
-             "# registry; off in production.\n"
+             "# Rebuild a loaded mod as the next composition generation at\n"
+             "# the next tick boundary. Off refuses the reload command.\n"
              "hot_reload = false\n"
              "\n"
              "[admin]\n"
@@ -1683,6 +1686,15 @@ int main(int argc, char **argv) {
     // are published for it here; an embedding that never publishes keeps the
     // runtime's checkout defaults.
     refrain::server::publish_game_data_paths(*game_data);
+    // A staged hot change re-resolves the installed catalog, so the runtime
+    // must use the same roots and effective auto-scan policy this composition
+    // was resolved with. The contract carries only the content store path
+    // (the periodic GC target); the rest is handed over the same way.
+    refrain::server::publish_mod_lifecycle_inputs(
+        refrain::server::mod_lifecycle_inputs{
+            .store_roots = installed_stores,
+            .auto_scan = effective_auto_scan,
+        });
 
     // Effective network values for the startup summary: the same views the
     // runtime reads, after the CLI overrides installed above.

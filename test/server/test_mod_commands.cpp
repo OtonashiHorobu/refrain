@@ -504,4 +504,51 @@ const suite mod_game_bridge_tests = [] {
                "11111111-1111-1111-1111-111111111111");
         expect(fixture.audit.front().action == "list");
     };
+
+    "mod game bridge/an operator reload reaches the lifecycle port"_test = [] {
+        management_fixture fixture{};
+        std::vector<app::mod_lifecycle_request> requests{};
+        fixture.context.lifecycle.apply =
+            [&requests](const app::mod_lifecycle_request &request)
+            -> refrain::result<app::mod_lifecycle_outcome> {
+            requests.push_back(request);
+            return app::mod_lifecycle_outcome{
+                .lines = {"staged the reload for the next tick"}};
+        };
+        auto service{fixture.service()};
+        const net::player_identity operator_identity{
+            .connection = 1,
+            .id = sample_uuid("11111111-1111-1111-1111-111111111111"),
+            .name = "Alice",
+            .world = {},
+        };
+        const auto operator_key{
+            server::player_identity_key(operator_identity.id)};
+        auto environment{std::make_shared<server::command_environment>()};
+        environment->mods = &service;
+        environment->mod_admin = [operator_key](const command::source &source) {
+            return !source.identity().player ||
+                   source.identity().key == operator_key;
+        };
+        auto bridge{server::make_command_bridge(environment)};
+        const auto feedback{bridge.execute(operator_identity,
+                                           "mods reload refrain.test.manager")};
+        expect(feedback.handled);
+        expect(feedback.success) << feedback.message;
+        expect(requests.size() == 1U);
+        if (!requests.empty()) {
+            expect(requests.front().action ==
+                   app::mod_lifecycle_action::reload);
+            expect(requests.front().id == "refrain.test.manager");
+            expect(requests.front().version == "1.0.0");
+        }
+        // The same operation is audited with the player identity, so the
+        // console and the in-game frontends leave the same trace.
+        expect(fixture.audit.size() == 1U);
+        expect(fixture.audit.front().actor_kind == "player");
+        expect(fixture.audit.front().actor_uuid ==
+               "11111111-1111-1111-1111-111111111111");
+        expect(fixture.audit.front().action == "reload");
+        expect(fixture.audit.front().result == "ok");
+    };
 };
