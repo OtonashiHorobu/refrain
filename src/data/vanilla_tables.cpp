@@ -69,7 +69,7 @@ void put_i32(std::vector<std::byte> &out, std::int32_t value) {
 }
 
 void put_bytes(std::vector<std::byte> &out, std::span<const std::byte> bytes) {
-    out.insert(out.end(), bytes.begin(), bytes.end());
+    out.append_range(bytes);
 }
 
 using core::byte_order::load_le;

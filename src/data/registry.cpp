@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -44,11 +45,11 @@ auto fingerprint_of(std::string_view type_name,
                     std::span<const resource_location> locations) -> digest32 {
     // Canonical order is the ascending canonical `namespace:path` text, not the
     // registration order: equal location sets always fingerprint identically.
-    std::vector<std::string> texts;
-    texts.reserve(locations.size());
-    for (const auto &location : locations) {
-        texts.push_back(location.to_string());
-    }
+    auto texts{locations |
+               std::views::transform([](const resource_location &location) {
+                   return location.to_string();
+               }) |
+               std::ranges::to<std::vector<std::string>>()};
     std::ranges::sort(texts);
 
     std::string encoded;
