@@ -107,6 +107,14 @@ struct config_import_options {
 struct mods_check_options {
     std::string mods_dir{"mods"};
     std::string gamepack{};
+    /// Build profile to validate; empty means the profile embedded in this
+    /// binary (`version::mod_profile`).
+    std::string profile{};
+    std::string profiles_dir{"profiles"};
+    /// Also verify the profile against the profile embedded in this binary.
+    bool built{false};
+    /// Also verify the built-in image contains exactly the profile's mods.
+    std::string image{};
     bool strict{false};
 };
 
@@ -243,17 +251,35 @@ struct content_gc_options {
     bool allow_empty_roots{false};
 };
 
+struct gamepack_check_options {
+    /// Gamepack path; empty means the selected profile's default gamepack.
+    std::string file{};
+    std::string side{"server"};
+    /// `[providers]` keys the host cannot start without.
+    std::vector<std::string> required{};
+    /// Build profile to validate against; empty means the embedded profile.
+    std::string profile{};
+    std::string profiles_dir{"profiles"};
+    /// Also verify the profile against the profile embedded in this binary.
+    bool built{false};
+};
+
 struct builtin_image_options {
     std::string mods_dir{"mods"};
     std::string out{};
     std::string emit_cpp{};
+    /// Explicit mod ids (repeatable); when set the image contains only these.
+    std::vector<std::string> mods{};
+    /// Profile file (same schema as profiles/<name>.toml) selecting the mods.
+    std::string mod_list{};
+    /// Profile name under `profiles_dir` selecting the mods.
+    std::string profile{};
+    std::string profiles_dir{"profiles"};
 };
 
 [[nodiscard]] auto run_gamepack_dump(const std::string &path,
                                      std::string_view side) -> int;
-[[nodiscard]] auto run_gamepack_check(const std::string &path,
-                                      std::string_view side,
-                                      const std::vector<std::string> &required)
+[[nodiscard]] auto run_gamepack_check(const gamepack_check_options &options)
     -> int;
 [[nodiscard]] auto run_extract(const extract_options &options) -> int;
 [[nodiscard]] auto run_vanilla_import(const vanilla_import_options &options)

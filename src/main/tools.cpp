@@ -83,6 +83,11 @@ auto run_version() -> int {
     std::cout << "  branch:  " << refrain::version::branch_name << '\n';
     std::cout << "  commit:  " << refrain::version::commit_hash << '\n';
     std::cout << "  build:   " << app_services::build_features() << '\n';
+    std::cout << "  profile: " << refrain::version::mod_profile << '\n';
+    std::cout << "  mods:    " << refrain::version::mod_ids().size()
+              << " built-in, " << refrain::version::dynamic_modules().size()
+              << " dynamic (build " << refrain::version::mod_build_id << ")\n";
+    std::cout << "  gamepack: " << refrain::version::mod_gamepack << '\n';
     return 0;
 }
 
@@ -109,20 +114,27 @@ int main(int argc, char **argv) {
     dump_cmd->add_option("--side", gamepack_side,
                          "Host side used for the side compatibility check");
 
-    std::string check_path{"gamepack/gamepack.toml"};
-    std::string check_side{"server"};
-    std::vector<std::string> required_services;
+    gamepack_check_options gamepack_check{};
     auto *check_cmd = gamepack_cmd->add_subcommand(
         "check", "Validate a gamepack (deps, providers, load order)");
-    check_cmd->add_option("-f,--file", check_path, "gamepack.toml path");
-    check_cmd->add_option("--side", check_side,
+    check_cmd->add_option("-f,--file", gamepack_check.file,
+                          "gamepack.toml path (default: the profile's "
+                          "default gamepack)");
+    check_cmd->add_option("--side", gamepack_check.side,
                           "Host side used for the side compatibility check");
     check_cmd
         ->add_option(
-            "--require", required_services,
+            "--require", gamepack_check.required,
             "Service keys the host cannot start without (repeatable, comma "
             "separated)")
         ->delimiter(',');
+    check_cmd->add_option("--profile", gamepack_check.profile,
+                          "Build profile to validate the gamepack against "
+                          "(default: none)");
+    check_cmd->add_option("--profiles", gamepack_check.profiles_dir,
+                          "Profile directory (default: profiles)");
+    check_cmd->add_flag("--built", gamepack_check.built,
+                        "Also verify the profile matches this binary");
 
     auto *schema_cmd =
         app.add_subcommand("schema", "RSC/RIDL schema toolchain");
@@ -213,11 +225,23 @@ int main(int argc, char **argv) {
     auto *mods_cmd = app.add_subcommand("mods", "Mod manifest tooling");
     auto *mods_check_cmd = mods_cmd->add_subcommand(
         "check", "Validate the mods/<id>/manifest.toml tree (optionally "
-                 "against a gamepack)");
+                 "against a gamepack or a build profile)");
     mods_check_cmd->add_option("--mods", mods_check.mods_dir,
                                "Mod tree root (default: mods)");
     mods_check_cmd->add_option("-g,--gamepack", mods_check.gamepack,
                                "Gamepack manifest to cross-check (optional)");
+    mods_check_cmd->add_option(
+        "--profile", mods_check.profile,
+        "Build profile to validate (default: the binary's profile when "
+        "--built/--image is used)");
+    mods_check_cmd->add_option("--profiles", mods_check.profiles_dir,
+                               "Profile directory (default: profiles)");
+    mods_check_cmd->add_flag(
+        "--built", mods_check.built,
+        "Also verify the profile matches the mods built into this binary");
+    mods_check_cmd->add_option(
+        "--image", mods_check.image,
+        "Built-in image to verify against the profile's mod list");
     mods_check_cmd->add_flag("--strict", mods_check.strict,
                              "Fail when a gamepack-declared mod has no "
                              "manifest yet");
@@ -527,6 +551,18 @@ int main(int argc, char **argv) {
         ->required();
     builtin_image_cmd->add_option("--emit-cpp", builtin_image.emit_cpp,
                                   "Emit a C++ std::array source for embedding");
+    builtin_image_cmd->add_option(
+        "--mod", builtin_image.mods,
+        "Include only this mod id (repeatable; default: every "
+        "manifest in the tree)");
+    builtin_image_cmd->add_option(
+        "--mod-list", builtin_image.mod_list,
+        "Resolved profile file listing the mods to pack (same schema as "
+        "profiles/<name>.toml)");
+    builtin_image_cmd->add_option("--profile", builtin_image.profile,
+                                  "Pack the mods of this build profile");
+    builtin_image_cmd->add_option("--profiles", builtin_image.profiles_dir,
+                                  "Profile directory (default: profiles)");
 
     std::string crash_out{"build/crash"};
     std::string crash_handler{};
@@ -786,8 +822,7 @@ int main(int argc, char **argv) {
         return app_services::run_gamepack_dump(gamepack_path, gamepack_side);
     }
     if (check_cmd->parsed()) {
-        return app_services::run_gamepack_check(check_path, check_side,
-                                                required_services);
+        return app_services::run_gamepack_check(gamepack_check);
     }
     if (gen_cmd->parsed()) {
         if (schema_roots.empty()) {

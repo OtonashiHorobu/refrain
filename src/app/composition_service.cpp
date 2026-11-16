@@ -4,6 +4,8 @@
 
 #include <refrain/app/composition.hpp>
 
+#include <refrain/app/dynamic_modules.hpp>
+
 #include <utility>
 
 namespace refrain::app {
@@ -22,6 +24,13 @@ auto resolve_server_mods(const mod::gamepack_spec &spec,
 
 auto activate_server_mods(mod::host &host, const mod::composition &composition,
                           std::span<const std::byte> image) -> status {
+    // Mods the build profile selected as dynamic are not linked in: load their
+    // modules and register the factories before the composition loader asks the
+    // static registry for each mod. Idempotent, so repeated activations (tests,
+    // tooling) stay correct.
+    if (auto registered{register_dynamic_modules()}; !registered) {
+        return registered;
+    }
     return host.load(composition, image);
 }
 

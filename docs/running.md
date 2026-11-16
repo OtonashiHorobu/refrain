@@ -203,6 +203,17 @@ a load path. The install/trust policy is `mods.toml` in the configuration
 directory; the flags above override individual values for one run. See
 [Mods and gamepacks](modding.md#installing-mods).
 
+The server logs the build's mod profile and build id at startup:
+
+```
+[main/info] [cli]: starting Refrain 0.1.0-alpha [main@abc1234] with mod profile vanilla (build 0123456789abcdef)
+```
+
+A gamepack or `mods.lock` that pins a mod this binary was not built with fails
+before any world is opened, naming the profile and the missing mod. Rebuild
+with a profile that contains the mod or start with a composition that does not
+pin it; see [Mods and gamepacks](modding.md#build-profiles).
+
 ## Configuration
 
 Configuration lives in one TOML file per namespace under `--config-dir`:

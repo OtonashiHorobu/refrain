@@ -2,6 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/app/mod_profile.hpp>
 #include <refrain/app/services.hpp>
 
 #include <algorithm>
@@ -1152,6 +1153,46 @@ auto run_content_gc(const content_gc_options &options) -> int {
 
 // --- builtin content image (RFSI v1) ---------------------------------------
 
+namespace {
+
+/// Resolve the mod selection requested on the command line. Returns an empty
+/// vector when no selection was requested (every manifest in the tree).
+[[nodiscard]] auto
+resolve_image_mod_selection(const builtin_image_options &options)
+    -> result<std::vector<std::string>> {
+    const int explicit_count{options.mods.empty() ? 0 : 1};
+    const int list_count{options.mod_list.empty() ? 0 : 1};
+    const int profile_count{options.profile.empty() ? 0 : 1};
+    if (explicit_count + list_count + profile_count > 1) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument,
+            "builtin image: --mod, --mod-list and --profile are alternatives; "
+            "pass only one of them")};
+    }
+    std::vector<std::string> ids{};
+    if (explicit_count != 0) {
+        ids = options.mods;
+    } else if (list_count != 0) {
+        auto profile{load_mod_profile(options.mod_list)};
+        if (!profile) {
+            return std::unexpected{std::move(profile.error())};
+        }
+        ids = profile->mods;
+    } else if (profile_count != 0) {
+        auto profile{
+            load_mod_profile_named(options.profile, options.profiles_dir)};
+        if (!profile) {
+            return std::unexpected{std::move(profile.error())};
+        }
+        ids = profile->mods;
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    return ids;
+}
+
+} // namespace
+
 /// Index of every mod in the image (`mods.index.toml`), written from the same
 /// `mod::scan_mods_tree()` catalog the host/discovery use (no second parser).
 [[nodiscard]] auto build_builtin_index(std::span<const mod::candidate> mods)
@@ -1240,6 +1281,35 @@ auto run_builtin_image(const builtin_image_options &options) -> int {
     auto manifests{mod::scan_mods_tree(options.mods_dir)};
     if (!manifests) {
         return report_error(manifests.error());
+    }
+
+    // The image contents come from the same mod list as the compiled sources:
+    // `--mod` ids, a `--mod-list` profile file or a `--profile` name. Without a
+    // selection every manifest in the tree is packed (the historical
+    // behaviour used by ad-hoc tooling and fixtures).
+    auto selected{resolve_image_mod_selection(options)};
+    if (!selected) {
+        return report_error(selected.error());
+    }
+    if (!selected->empty()) {
+        std::vector<mod::candidate> filtered{};
+        filtered.reserve(selected->size());
+        for (const auto &id : *selected) {
+            const auto found{
+                std::find_if(manifests->begin(), manifests->end(),
+                             [&id](const mod::candidate &candidate) {
+                                 return candidate.id == id;
+                             })};
+            if (found == manifests->end()) {
+                return report_error(refrain::make_error(
+                    refrain::error_code::not_found,
+                    fmt::format("builtin image: mod '{}' has no manifest under "
+                                "'{}' (profile mod list and mod tree disagree)",
+                                id, options.mods_dir)));
+            }
+            filtered.push_back(*found);
+        }
+        *manifests = std::move(filtered);
     }
 
     // Mod tree plus mods.index.toml. The file walker is the one collector

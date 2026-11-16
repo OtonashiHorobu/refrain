@@ -148,8 +148,9 @@ using detail::toml_string;
         return std::unexpected{
             parse_error_context(path, "missing or malformed [lock] table")};
     }
-    constexpr std::array<std::string_view, 4> allowed_lock_keys{
-        "format_version", "gamepack_id", "gamepack_version", "fingerprint"};
+    constexpr std::array<std::string_view, 6> allowed_lock_keys{
+        "format_version", "gamepack_id", "gamepack_version",
+        "fingerprint",    "profile",     "build_id"};
     if (auto keys{reject_unknown_keys(*doc, lock_path, allowed_lock_keys, path,
                                       "[lock]")};
         !keys) {
@@ -186,6 +187,22 @@ using detail::toml_string;
         path)};
     if (!gamepack_version) {
         return std::unexpected{std::move(gamepack_version.error())};
+    }
+    // Optional build identity: set by servers built with build-time profiles;
+    // absent in older locks, where it simply means "no identity to compare".
+    for (auto [key, target] :
+         {std::pair<std::string_view, std::string *>{"profile", &lock.profile},
+          std::pair<std::string_view, std::string *>{"build_id",
+                                                     &lock.build_id}}) {
+        const std::array<std::string_view, 2> key_path{"lock", key};
+        if (!doc->contains_at(key_path)) {
+            continue;
+        }
+        auto value{require_string(*doc, key_path, path)};
+        if (!value) {
+            return std::unexpected{std::move(value.error())};
+        }
+        *target = std::move(*value);
     }
     if (!core::semver::parse(*gamepack_version).has_value()) {
         return std::unexpected{parse_error_context(
@@ -457,6 +474,12 @@ auto mod_lock::to_toml() const -> std::string {
     out += "format_version = " + std::to_string(format_version) + "\n";
     out += "gamepack_id = " + toml_string(gamepack_id) + "\n";
     out += "gamepack_version = " + toml_string(gamepack_version) + "\n";
+    if (!profile.empty()) {
+        out += "profile = " + toml_string(profile) + "\n";
+    }
+    if (!build_id.empty()) {
+        out += "build_id = " + toml_string(build_id) + "\n";
+    }
     out += "fingerprint = " + toml_string(fingerprint()) + "\n";
     for (const auto &mod : ordered) {
         out += "\n[mods." + toml_string(mod.id) + "]\n";
@@ -485,10 +508,13 @@ auto verify_mod_lock(const mod_lock &lock,
 }
 
 auto format_mod_lock(const mod_lock &lock) -> std::string {
-    std::string out{
-        fmt::format("mods.lock: gamepack {}@{}, {} mod(s), fingerprint {}\n",
-                    lock.gamepack_id, lock.gamepack_version, lock.mods.size(),
-                    lock.fingerprint())};
+    std::string out{fmt::format(
+        "mods.lock: gamepack {}@{}, profile {} build {}, {} mod(s), "
+        "fingerprint {}\n",
+        lock.gamepack_id, lock.gamepack_version,
+        lock.profile.empty() ? std::string{"<none>"} : lock.profile,
+        lock.build_id.empty() ? std::string{"<none>"} : lock.build_id,
+        lock.mods.size(), lock.fingerprint())};
     auto warnings_sorted{lock.warnings};
     std::sort(warnings_sorted.begin(), warnings_sorted.end());
     for (const auto &warning : warnings_sorted) {

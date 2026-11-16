@@ -43,3 +43,8 @@ world-fsck-missing     | stderr | nonzero | is not a directory | refrain-tools w
 worldgen-harness-help  | stdout | 0       | Compare a candidate world against an oracle world | refrain-tools worldgen harness --help
 vanilla-help            | stdout | 0       | Vanilla report import and inspection | refrain-tools vanilla --help
 vanilla-import-help     | stdout | 0       | Convert datagen reports into an RVTB table container | refrain-tools vanilla import --help
+version-profile         | stdout | 0       | profile: vanilla | refrain-tools version
+version-mod-build       | stdout | 0       | built-in | refrain-tools version
+gamepack-check-profile  | stdout | 0       | binary: vanilla build | refrain-tools gamepack check --profile vanilla --built
+mods-check-profile      | stdout | 0       | mods check: profile 'vanilla' OK | refrain-tools mods check --profile vanilla --built --image {build}/generated/builtin.image
+unbuilt-mod-profile     | stderr | nonzero | not built into this binary (profile=vanilla | refrain-server --gamepack {root}/gamepack/presets/minimal-flat.toml --check

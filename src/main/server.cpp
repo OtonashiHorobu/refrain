@@ -11,6 +11,7 @@
 
 #include <refrain/app/composition.hpp>
 #include <refrain/app/host_context.hpp>
+#include <refrain/app/mod_profile.hpp>
 #include <refrain/app/services.hpp>
 #include <refrain/builtin/image.hpp>
 #include <refrain/contracts/abi.hpp>
@@ -36,6 +37,7 @@
 #include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/install_policy.hpp>
+#include <refrain/mod/rfmod.hpp>
 #include <refrain/mod/startup_content.hpp>
 #include <refrain/net/download.hpp>
 #include <refrain/server/eula.hpp>
@@ -166,6 +168,41 @@ parse_content_trusted_keys(const std::vector<std::string> &specs)
             .key_id = spec.substr(0, separator), .public_key = *public_key});
     }
     return keys;
+}
+
+/// Does any `--mods` content store contain an installed receipt for `id`? Such
+/// a mod is supplied by the operator rather than the binary, so the build-time
+/// profile does not have to contain it. A directory under `mods/` is not an
+/// install and therefore does not satisfy this check.
+[[nodiscard]] auto
+external_mod_available(const std::vector<std::string> &store_roots,
+                       std::string_view id) -> bool {
+    for (const auto &root : store_roots) {
+        auto receipts{
+            refrain::mod::list_receipt_paths_for(root, std::string{id})};
+        if (!receipts) {
+            continue; // an unusable root fails later with the catalog error
+        }
+        if (!receipts->empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Ids the binary is missing and no `--mods` store supplies.
+[[nodiscard]] auto
+missing_composition_mods(std::span<const std::string> ids,
+                         const std::vector<std::string> &store_roots)
+    -> std::vector<std::string> {
+    auto missing{refrain::app::unbuilt_mod_ids(ids)};
+    missing.erase(std::remove_if(missing.begin(), missing.end(),
+                                 [&](const std::string &id) {
+                                     return external_mod_available(store_roots,
+                                                                   id);
+                                 }),
+                  missing.end());
+    return missing;
 }
 
 /// Default `mods.lock` location: next to the gamepack it belongs to. Reuse
@@ -824,7 +861,9 @@ int main(int argc, char **argv) {
         }
     } shutdown_guard_instance{};
 
-    log_cli.info("starting {}", refrain::version::string());
+    log_cli.info("starting {} with mod profile {} (build {})",
+                 refrain::version::string(), refrain::version::mod_profile,
+                 refrain::version::mod_build_id);
     if (eula) {
         if (eula->imported_legacy) {
             log_cli.info("imported the EULA acceptance from '{}'",
@@ -949,6 +988,10 @@ int main(int argc, char **argv) {
                 if (!stored) {
                     return report_fatal(stored.error());
                 }
+                if (auto build{refrain::app::check_lock_profile(*stored)};
+                    !build) {
+                    return report_fatal(build.error());
+                }
                 baseline.emplace(std::move(*stored));
                 for (const auto &pin : gamepack_pins) {
                     const auto found{std::find_if(
@@ -1019,6 +1062,25 @@ int main(int argc, char **argv) {
     // startup bootstrap above are part of the composition.
     std::vector<std::string> installed_stores{};
     installed_stores.reserve(mods_roots.size() + 1);
+    // Preflight: a gamepack that pins a mod this binary was not built with
+    // fails here with the profile diagnostic instead of surfacing later as a
+    // missing service key. `--dump-gamepack` is a manifest inspection command
+    // and has already returned above, so it stays usable for foreign presets.
+    {
+        std::vector<std::string> pinned{};
+        pinned.reserve(gamepack_spec->mods.size());
+        for (const auto &entry : gamepack_spec->mods) {
+            pinned.push_back(entry.ref.id);
+        }
+        auto unbuilt{missing_composition_mods(pinned, installed_stores)};
+        if (!unbuilt.empty()) {
+            return report_error(refrain::make_error(
+                refrain::error_code::not_found,
+                refrain::app::format_unbuilt_mod_error(
+                    fmt::format("gamepack '{}'", gamepack), unbuilt)));
+        }
+    }
+
     for (const auto &root : mods_roots) {
         if (!refrain::core::io::is_directory(root)) {
             fmt::println(stderr,
@@ -1053,6 +1115,8 @@ int main(int argc, char **argv) {
     if (!plan) {
         return report_error(plan.error());
     }
+    plan->profile = refrain::version::mod_profile;
+    plan->build_id = refrain::version::mod_build_id;
     log_host.info("resolved gamepack {} {} with ABI {}, {} mods and {} "
                   "providers",
                   plan->spec.id, plan->spec.version, plan->spec.abi,
@@ -1434,6 +1498,29 @@ int main(int argc, char **argv) {
             auto stored{refrain::mod::read_mod_lock(lock_path)};
             if (!stored) {
                 return report_fatal(stored.error());
+            }
+            if (auto build{refrain::app::check_lock_profile(*stored)}; !build) {
+                return report_fatal(build.error());
+            }
+            {
+                std::vector<std::string> locked{};
+                locked.reserve(stored->mods.size());
+                for (const auto &entry : stored->mods) {
+                    // Only bundled mods are the build profile's business; a
+                    // user/on-disk mod in the lock lives in the instance.
+                    if (entry.origin == refrain::mod::mod_origin::builtin) {
+                        locked.push_back(entry.id);
+                    }
+                }
+                auto unbuilt{
+                    missing_composition_mods(locked, installed_stores)};
+                if (!unbuilt.empty()) {
+                    return report_fatal(refrain::make_error(
+                        refrain::error_code::not_found,
+                        refrain::app::format_unbuilt_mod_error(
+                            fmt::format("mods.lock '{}'", lock_path),
+                            unbuilt)));
+                }
             }
             auto verified{
                 refrain::mod::verify_mod_lock(*stored, plan->load_order)};

@@ -160,6 +160,42 @@ grep -Eq '^builtin image: 13 file\(s\), [0-9]+ byte\(s\), BLAKE3 [0-9a-f]{64} ->
     || die "builtin image: unexpected summary line"
 cmp "$EXTRACT_DIR/builtin-a.image" "$EXTRACT_DIR/builtin-b.image" \
     || die "builtin image is not deterministic"
+# Build-time mod profile: the compiled set, profiles/vanilla.toml and the
+# embedded image must describe the same mods, and the default gamepack must
+# match the profile. The image is regenerated from the profile file through the
+# tools and compared byte-for-byte with the build's image.
+"$BIN_DIR/refrain-tools" version >"$EXTRACT_DIR/version-profile.txt"
+grep -q '^  profile: vanilla$' "$EXTRACT_DIR/version-profile.txt" \
+    || die "version output does not name the build profile"
+grep -Eq '^  mods: +12 built-in, 0 dynamic \(build [0-9a-f]{16}\)$' \
+    "$EXTRACT_DIR/version-profile.txt" \
+    || die "version output is missing the mod build id"
+"$BIN_DIR/refrain-tools" mods check --profile vanilla --built \
+    --image "$BIN_DIR/../generated/builtin.image" \
+    >"$EXTRACT_DIR/profile-mods-check.txt" \
+    || die "mods check --profile vanilla --built failed"
+grep -q "mods check: profile 'vanilla' OK" "$EXTRACT_DIR/profile-mods-check.txt" \
+    || die "mods check did not confirm profile vanilla"
+"$BIN_DIR/refrain-tools" gamepack check --profile vanilla --built \
+    >"$EXTRACT_DIR/profile-gamepack-check.txt" \
+    || die "gamepack check --profile vanilla --built failed"
+grep -q 'binary: vanilla build ' "$EXTRACT_DIR/profile-gamepack-check.txt" \
+    || die "gamepack check did not name the built profile"
+"$BIN_DIR/refrain-tools" builtin image --mods "$ROOT/mods" --profile vanilla \
+    -o "$EXTRACT_DIR/builtin-profile.image" >/dev/null
+cmp "$EXTRACT_DIR/builtin-profile.image" "$BIN_DIR/../generated/builtin.image" \
+    || die "built-in image and profile vanilla mod lists disagree"
+# A gamepack that pins mods the build profile does not contain fails before
+# startup with the profile diagnostic (no missing service key later).
+if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/presets/minimal-flat.toml" \
+    --check >"$EXTRACT_DIR/unbuilt-pin.txt" 2>&1; then
+    die "server accepted a gamepack pinning mods outside the build profile"
+fi
+grep -q 'not built into this binary (profile=vanilla' \
+    "$EXTRACT_DIR/unbuilt-pin.txt" \
+    || die "unbuilt-mod failure does not name the build profile"
+grep -q 'refrain.worldgen.flat' "$EXTRACT_DIR/unbuilt-pin.txt" \
+    || die "unbuilt-mod failure does not name the missing mod"
 # Mod host: build an image of two synthetic data-only mods and load them
 # through a test gamepack (end-to-end smoke; CI-safe content).
 "$BIN_DIR/refrain-tools" builtin image --mods "$ROOT/test/fixtures/mods" \
@@ -231,6 +267,22 @@ grep -q 'refrain.test.extra' "$EXTRACT_DIR/auto-scan-bypass.txt" \
     && die "auto_scan: directory side-loading loaded a mod"
 grep -q '\[mods\]: wrote lockfile' "$EXTRACT_DIR/auto-scan-bypass.txt" \
     || die "auto_scan: bypass lock was not written"
+# The lock records the build profile and build id; a lock written by another
+# profile is refused instead of being silently compared against this binary.
+grep -q '^profile = "vanilla"$' "$SERVER_LOCK" \
+    || die "auto_scan: lock does not record the build profile"
+grep -Eq '^build_id = "[0-9a-f]{16}"$' "$SERVER_LOCK" \
+    || die "auto_scan: lock does not record the mod build id"
+cp "$SERVER_LOCK" "$EXTRACT_DIR/mods.lock.profile-backup"
+sed -i 's/^profile = "vanilla"$/profile = "minimal"/' "$SERVER_LOCK"
+if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
+    --mods "$MODS_STORE" --auto-scan \
+    --mods-lock "$SERVER_LOCK" --check >"$EXTRACT_DIR/mixed-lock.txt" 2>&1; then
+    die "auto_scan: lock from another build profile was accepted"
+fi
+grep -q "written by build profile 'minimal'" "$EXTRACT_DIR/mixed-lock.txt" \
+    || die "mixed-profile lock error is missing"
+cp "$EXTRACT_DIR/mods.lock.profile-backup" "$SERVER_LOCK"
 # Install-version drift: the store now has 1.0.1 while the lock records
 # 1.0.0. Without --update-lock the server must fail with a version-drift
 # diagnostic; --update-lock then rewrites the lock and `mods list --check-lock`
@@ -920,8 +972,12 @@ echo "  content: 4 file(s) -> 3 blob(s) (2 in segments), deterministic RFRX, whe
     --dump-gamepack 2>&1 | grep -q '\[content\]: loaded 13 content files totaling' \
     || die "server did not load the embedded built-in image"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" --check \
-    2>&1 | grep -q '\[host\]: loaded 12 mods' \
+    >"$EXTRACT_DIR/server-startup.txt" 2>&1 \
+    || die "server did not start the vanilla composition"
+grep -q '\[host\]: loaded 12 mods' "$EXTRACT_DIR/server-startup.txt" \
     || die "server did not load the gamepack mods through the mod host"
+grep -q 'with mod profile vanilla (build ' "$EXTRACT_DIR/server-startup.txt" \
+    || die "server startup log does not name the build profile"
 # Console diagnostics are stderr; stdout carries only the command's data.
 # CI/scripts grep these streams directly (`dump > out.txt`), so a console log
 # line on stdout would corrupt machine-readable output.

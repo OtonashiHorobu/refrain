@@ -2,6 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/app/mod_profile.hpp>
 #include <refrain/app/services.hpp>
 
 #include <algorithm>
@@ -91,15 +92,53 @@ auto run_gamepack_dump(const std::string &path, std::string_view side) -> int {
     return 0;
 }
 
-auto run_gamepack_check(const std::string &path, std::string_view side,
-                        const std::vector<std::string> &required) -> int {
+auto run_gamepack_check(const gamepack_check_options &options) -> int {
+    // A profile check needs the profile's gamepack when --file is omitted; a
+    // plain gamepack check keeps the historical default path.
+    std::optional<mod_profile_spec> profile{};
+    if (!options.profile.empty()) {
+        auto loaded{
+            load_mod_profile_named(options.profile, options.profiles_dir)};
+        if (!loaded) {
+            return report_error(loaded.error());
+        }
+        profile.emplace(std::move(*loaded));
+    } else if (options.built) {
+        return report_error(
+            make_error(error_code::invalid_argument,
+                       "gamepack check: --built needs --profile <name>"));
+    }
+    std::string path{options.file};
+    if (path.empty()) {
+        path = profile ? profile->gamepack_path
+                       : std::string{"gamepack/gamepack.toml"};
+    }
+
+    if (profile) {
+        auto checks{check_profile_gamepack(*profile, path)};
+        for (const auto &warning : checks.warnings) {
+            std::cout << "warning: " << warning << '\n';
+        }
+        for (const auto &failure : checks.errors) {
+            std::cout << "error: " << failure << '\n';
+        }
+        if (!checks.ok()) {
+            return report_error(make_error(
+                error_code::invalid_argument,
+                fmt::format("gamepack '{}' does not match profile '{}': {} "
+                            "error(s)",
+                            path, profile->name, checks.errors.size())));
+        }
+        std::cout << "profile: " << format_profile_identity(*profile) << '\n';
+    }
+
     std::vector<std::string_view> services{};
-    services.reserve(required.size());
-    for (const auto &service : required) {
+    services.reserve(options.required.size());
+    for (const auto &service : options.required) {
         services.push_back(service);
     }
 
-    auto spec = mod::load_gamepack_spec(path, side);
+    auto spec = mod::load_gamepack_spec(path, options.side);
     if (!spec) {
         return report_error(spec.error());
     }
@@ -108,6 +147,23 @@ auto run_gamepack_check(const std::string &path, std::string_view side,
         return report_error(plan.error());
     }
     std::cout << plan->format();
+
+    if (profile && options.built) {
+        auto checks{check_profile_against_binary(*profile)};
+        for (const auto &failure : checks.errors) {
+            std::cout << "error: " << failure << '\n';
+        }
+        if (!checks.ok()) {
+            return report_error(make_error(
+                error_code::invalid_argument,
+                fmt::format("profile '{}' does not match this binary: {} "
+                            "error(s)",
+                            profile->name, checks.errors.size())));
+        }
+        std::cout << "binary: " << version::mod_profile << " build "
+                  << version::mod_build_id << ", " << version::mod_ids().size()
+                  << " mod(s)\n";
+    }
     return 0;
 }
 

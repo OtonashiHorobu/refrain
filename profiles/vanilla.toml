@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+# Vanilla build profile: every first-party vanilla 26.3 server mod.
+#
+# A profile selects which first-party mod code and manifests are part of the
+# binary. It is a build-time choice: a gamepack can only select providers whose
+# mods were built in. The default gamepack below must pin exactly the mods
+# listed here (the build refuses to configure otherwise).
+name = "vanilla"
+description = "All first-party vanilla 26.3 server mods."
+gamepack = "gamepack/gamepack.toml"
+
+mods = [
+    "refrain.admin.vanilla",
+    "refrain.content.vanilla",
+    "refrain.data.vanilla",
+    "refrain.proto.vanilla",
+    "refrain.server.vanilla",
+    "refrain.session.vanilla",
+    "refrain.sim.vanilla",
+    "refrain.storage.rwf",
+    "refrain.transport.asio.tcp",
+    "refrain.world.datafix",
+    "refrain.world.vanilla",
+    "refrain.worldgen.vanilla",
+]
+
+# Mods built as shared modules and loaded through the native loader instead of
+# being linked into the host. Empty for the default static build.
+dynamic = []

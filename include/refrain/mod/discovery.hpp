@@ -274,6 +274,11 @@ struct mod_lock {
     std::uint16_t format_version{mod_lock_format_version};
     std::string gamepack_id{};
     std::string gamepack_version{};
+    /// Build profile and build id that wrote the lock. Empty in locks written
+    /// before build-time profiles existed; a non-empty value that differs from
+    /// the running binary is refused as a mixed-profile lock.
+    std::string profile{};
+    std::string build_id{};
     /// Selected mods, sorted by id.
     std::vector<locked_mod> mods{};
     /// Resolution warnings (shadowed candidates, optional deps), audit only:

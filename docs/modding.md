@@ -75,6 +75,81 @@ receipt-based native mod fails startup with the loader's diagnostic instead of
 loading from an uninstalled directory. External WASM mods (`[entry].wasm`) are
 rejected until the script runtime lands.
 
+## Build profiles
+
+Two layers decide what runs:
+
+| Layer | Decides | Where |
+|---|---|---|
+| Build profile | which first-party mods exist in the binary | `profiles/<name>.toml` |
+| Gamepack | which providers of that set are active and how they compose | `gamepack/*.toml` |
+
+A gamepack can only select mods the binary was built with. The default build
+profile is `vanilla`, which contains every bundled mod. A profile lists mod ids
+without versions; the build resolves the manifests under `mods/`:
+
+```toml
+name = "minimal"
+description = "Content and data layer only."
+gamepack = "gamepack/presets/data-only.toml"
+mods = ["refrain.content.vanilla", "refrain.data.vanilla"]
+dynamic = []
+```
+
+The build uses that one list to compile the mod sources, to pack the built-in
+image and to validate the default gamepack, then records the profile name, the
+resolved mod list and a build id in the binary and in `mods.lock`. The `dynamic`
+list names mods compiled as shared modules loaded through the native loader
+instead of being linked in; the mod code and manifest are the same. The loader
+resolves the module's runtime calls from the host executable, so a module may
+only use runtime functions the host already links; the shared runtime library
+that lifts this restriction is future work.
+
+Check a profile before building (this reads the profile and the mod tree, so it
+works with any `refrain-tools` binary):
+
+```bash
+refrain-tools mods check --profile minimal
+refrain-tools gamepack check --profile minimal
+```
+
+Add `--built` to compare the profile file with the mod set compiled into the
+binary you are running, and `--image <builtin.image>` to verify the built-in
+image contains exactly that set:
+
+```bash
+refrain-tools mods check --profile vanilla --built \
+    --image build/Release/generated/builtin.image
+```
+
+A composition that asks for a mod the binary does not contain fails before the
+server starts, naming the profile and the mod:
+
+```
+mod 'refrain.world.vanilla' is not built into this binary (profile=minimal,
+build 0123456789abcdef); gamepack 'gamepack/gamepack.toml' pins it. Rebuild
+with a profile that includes it or use a composition without it
+```
+
+The same check applies to a `mods.lock` written by a different build: a lock is
+refused when its profile or build id does not match the running binary, because
+the two binaries do not contain the same mods.
+
+### Adding a bundled mod
+
+1. Add `mods/<id>/manifest.toml` (and `src/` when the mod has code).
+2. Add the id to the profiles that should contain it. `vanilla` lists every
+   bundled mod; a new optional feature belongs in a dedicated profile
+   (`profiles/1.17.toml` is the template for a version-specific set).
+3. Pin it in the default gamepack of each profile that contains it, and add a
+   `[providers]` binding when it provides a service.
+4. If the mod is a provider whose code should be hot-reloadable, add the id to
+   the profile's `dynamic` list. Dynamic modules are built from the same sources
+   and manifest; there is no second source tree.
+
+The build validates the profile/gamepack pair at configure time and the CI
+profile matrix runs the same checks for `minimal` and `dynamic`.
+
 ## Gamepack
 
 ```toml
@@ -129,9 +204,12 @@ through a generated C++ wrapper; every struct carries its size and the ABI
 version is checked on load.
 
 Provider implementations live in `mods/<id>/src/` for first-party mods. Their
-code is compiled into the server and registered through the static registry.
-A provider that the gamepack selects but the binary does not link fails at
-startup with the missing service key.
+code is compiled into the server and registered through the static registry (or
+loaded from a shared module when the profile lists the mod as dynamic). The
+build profile decides which first-party providers exist; a provider the
+gamepack selects from outside that set fails before startup with the profile
+diagnostic described under [Build profiles](#build-profiles), not with a
+missing service key.
 
 ### Session features
 
@@ -343,14 +421,19 @@ files.
 
 ## Built-in image
 
-The build packs every bundled mod into a single deterministic image:
+The build packs the mods selected by the build profile into a single
+deterministic image:
 
 ```bash
-refrain-tools builtin image --mods mods -o build/Release/generated/builtin.image
+refrain-tools builtin image --mods mods --mod refrain.data.vanilla \
+    -o build/Release/generated/builtin.image
 ```
 
-The image is embedded in the server binary. A deterministic build produces the
-same image bytes, which the test suite relies on.
+`--mod <id>` (repeatable), `--mod-list <profile.toml>` and `--profile <name>`
+select the included mods; without a selection every manifest in the tree is
+packed, which the tooling fixtures use. The image is embedded in the server
+binary. A deterministic build produces the same image bytes, which the test
+suite and the profile consistency check rely on.
 
 ## See also
 
