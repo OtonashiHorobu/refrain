@@ -10,8 +10,6 @@ on:
       - conanfile.py
       - conan/locks/**
       - conan/recipes/**
-      - .github/conan-audit-triage.json
-      - tools/conan_audit_sarif.py
   workflow_dispatch:
 
 permissions:
