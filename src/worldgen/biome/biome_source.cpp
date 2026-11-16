@@ -18,7 +18,7 @@ auto intern(std::vector<biome_parameter> &parameters,
     std::vector<climate::parameter_list::entry> entries;
     entries.reserve(parameters.size());
     for (auto &parameter : parameters) {
-        auto found = std::find(biomes.begin(), biomes.end(), parameter.biome);
+        auto found = std::ranges::find(biomes, parameter.biome);
         std::uint16_t id = 0;
         if (found == biomes.end()) {
             id = static_cast<std::uint16_t>(biomes.size());

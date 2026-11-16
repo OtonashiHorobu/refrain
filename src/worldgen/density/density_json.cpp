@@ -221,9 +221,9 @@ class decoder {
         if (active_.contains(key)) {
             return std::unexpected{fail("density function reference cycle")};
         }
-        const auto found = std::find_if(
-            documents_.functions.begin(), documents_.functions.end(),
-            [&](const auto &entry) { return entry.first == key; });
+        const auto found =
+            std::ranges::find(documents_.functions, key,
+                              [](const auto &entry) { return entry.first; });
         if (found == documents_.functions.end()) {
             return std::unexpected{fail("unknown density function reference")};
         }
@@ -366,8 +366,8 @@ class decoder {
     auto make_noise_stack(std::string_view id) -> result<noise_stack> {
         const std::string key{id};
         const auto found =
-            std::find_if(documents_.noises.begin(), documents_.noises.end(),
-                         [&](const auto &entry) { return entry.first == key; });
+            std::ranges::find(documents_.noises, key,
+                              [](const auto &entry) { return entry.first; });
         if (found == documents_.noises.end()) {
             return std::unexpected{fail("unknown noise reference")};
         }

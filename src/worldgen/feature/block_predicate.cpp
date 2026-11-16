@@ -15,6 +15,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -140,7 +141,7 @@ class matching_blocks final : public block_predicate {
         -> bool override {
         const auto name = context.states->name(context.region->state_at(
             context.pos->x, context.pos->y, context.pos->z));
-        return std::find(blocks_.begin(), blocks_.end(), name) != blocks_.end();
+        return std::ranges::contains(blocks_, name);
     }
 
   private:
@@ -187,9 +188,8 @@ class any_of final : public block_predicate {
   protected:
     [[nodiscard]] auto test_impl(const block_predicate_context &context) const
         -> bool override {
-        return std::any_of(rules_.begin(), rules_.end(), [&](const auto &rule) {
-            return rule->evaluate(context);
-        });
+        return std::ranges::any_of(
+            rules_, [&](const auto &rule) { return rule->evaluate(context); });
     }
 
   private:
@@ -427,8 +427,7 @@ auto append_biome_entry(const data::json::value &entry, const biome_tags *tags,
                                std::string{*name} + "'")};
         }
         auto expanded = tags->expand(name->substr(1));
-        out.insert(out.end(), std::make_move_iterator(expanded.begin()),
-                   std::make_move_iterator(expanded.end()));
+        out.append_range(expanded | std::views::as_rvalue);
         return {};
     }
     out.emplace_back(*name);
@@ -447,8 +446,7 @@ class matching_biomes_predicate final : public block_predicate {
             return false;
         }
         const auto biome = context.biome(*context.pos);
-        return std::find(biomes_.begin(), biomes_.end(), biome) !=
-               biomes_.end();
+        return std::ranges::contains(biomes_, biome);
     }
 
   private:
@@ -495,9 +493,8 @@ class all_of final : public block_predicate {
   protected:
     [[nodiscard]] auto test_impl(const block_predicate_context &context) const
         -> bool override {
-        return std::all_of(rules_.begin(), rules_.end(), [&](const auto &rule) {
-            return rule->evaluate(context);
-        });
+        return std::ranges::all_of(
+            rules_, [&](const auto &rule) { return rule->evaluate(context); });
     }
 
   private:

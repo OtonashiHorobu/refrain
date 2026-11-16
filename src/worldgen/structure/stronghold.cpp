@@ -228,10 +228,9 @@ struct stronghold_layout {
     }
 
     [[nodiscard]] auto collides(const structure_bbox &box) const -> bool {
-        return std::any_of(pieces.begin(), pieces.end(),
-                           [&](const structure_piece &piece) {
-                               return piece.bounds.intersects(box);
-                           });
+        return std::ranges::any_of(pieces, [&](const structure_piece &piece) {
+            return piece.bounds.intersects(box);
+        });
     }
 
     void append(created_piece piece, bool pending_child) {
@@ -645,9 +644,7 @@ auto preferred_biome_match(const structure_start_context &context,
         return context.data->biome_matches_tag(placement.preferred_biomes_tag,
                                                biome);
     }
-    return std::find(placement.preferred_biomes_ids.begin(),
-                     placement.preferred_biomes_ids.end(),
-                     biome) != placement.preferred_biomes_ids.end();
+    return std::ranges::contains(placement.preferred_biomes_ids, biome);
 }
 
 auto fixed_ring_position(const structure_start_context &context,

@@ -119,9 +119,8 @@ auto simple_block_feature::place(feature_context &context,
                           "half=upper");
     } else if (state_name.find('[') == std::string_view::npos) {
         const auto defaults = states.default_properties(state);
-        const auto lower = std::find_if(
-            defaults.begin(), defaults.end(),
-            [](const block_default_property &property) {
+        const auto lower = std::ranges::find_if(
+            defaults, [](const block_default_property &property) {
                 return property.name == "half" && property.value == "lower";
             });
         if (lower != defaults.end()) {
@@ -426,8 +425,7 @@ auto spring_feature::valid(feature_context &context, const block_pos &pos) const
     -> bool {
     const auto name = state_block_name(context.placement.states->name(
         context.placement.region->state_at(pos.x, pos.y, pos.z)));
-    return std::find(valid_blocks_.begin(), valid_blocks_.end(), name) !=
-           valid_blocks_.end();
+    return std::ranges::contains(valid_blocks_, name);
 }
 
 auto scattered_ore_feature::adjacent_to_air(feature_context &context,
@@ -1720,10 +1718,8 @@ auto multiface_key(std::string_view block_name,
         properties[i] = {multiface_names[i], faces[i]};
     }
     properties[6] = {"waterlogged", waterlogged};
-    std::sort(properties.begin(), properties.end(),
-              [](const auto &left, const auto &right) {
-                  return left.first < right.first;
-              });
+    std::ranges::sort(properties, {},
+                      [](const auto &entry) { return entry.first; });
     std::string key{block_name};
     key.push_back('[');
     for (std::size_t i = 0; i < properties.size(); ++i) {
@@ -1764,8 +1760,7 @@ auto multiface_growth_feature::place(feature_context &context,
         return state_block_name(states.name(state)) == block_name_;
     };
     const auto in_place_set = [&](std::string_view name) {
-        return std::find(can_be_placed_on_.begin(), can_be_placed_on_.end(),
-                         name) != can_be_placed_on_.end();
+        return std::ranges::contains(can_be_placed_on_, name);
     };
     const auto can_attach = [&](const block_pos &pos, std::size_t face) {
         const auto offset = face_offset(face);
@@ -3984,34 +3979,32 @@ auto hash_set_iteration_order(const std::vector<block_pos> &positions)
     for (std::size_t i = 0; i < order.size(); ++i) {
         order[i] = i;
     }
-    std::sort(order.begin(), order.end(),
-              [&](std::size_t left, std::size_t right) {
-                  if (buckets[left] != buckets[right]) {
-                      return buckets[left] < buckets[right];
-                  }
-                  const auto &left_pos = positions[left];
-                  const auto &right_pos = positions[right];
-                  const bool tree =
-                      capacity >= 64U &&
-                      per_bucket[static_cast<std::size_t>(buckets[left])] >= 8U;
-                  if (tree) {
-                      const auto left_hash =
-                          static_cast<jint>(spread(hash_of(left_pos)));
-                      const auto right_hash =
-                          static_cast<jint>(spread(hash_of(right_pos)));
-                      if (left_hash != right_hash) {
-                          return left_hash < right_hash;
-                      }
-                      if (left_pos.y != right_pos.y) {
-                          return left_pos.y < right_pos.y;
-                      }
-                      if (left_pos.z != right_pos.z) {
-                          return left_pos.z < right_pos.z;
-                      }
-                      return left_pos.x < right_pos.x;
-                  }
-                  return left < right;
-              });
+    std::ranges::sort(order, [&](std::size_t left, std::size_t right) {
+        if (buckets[left] != buckets[right]) {
+            return buckets[left] < buckets[right];
+        }
+        const auto &left_pos = positions[left];
+        const auto &right_pos = positions[right];
+        const bool tree =
+            capacity >= 64U &&
+            per_bucket[static_cast<std::size_t>(buckets[left])] >= 8U;
+        if (tree) {
+            const auto left_hash = static_cast<jint>(spread(hash_of(left_pos)));
+            const auto right_hash =
+                static_cast<jint>(spread(hash_of(right_pos)));
+            if (left_hash != right_hash) {
+                return left_hash < right_hash;
+            }
+            if (left_pos.y != right_pos.y) {
+                return left_pos.y < right_pos.y;
+            }
+            if (left_pos.z != right_pos.z) {
+                return left_pos.z < right_pos.z;
+            }
+            return left_pos.x < right_pos.x;
+        }
+        return left < right;
+    });
     std::vector<block_pos> sorted;
     sorted.reserve(positions.size());
     for (const auto index : order) {
@@ -5063,8 +5056,7 @@ class sculk_spreader {
     }
     [[nodiscard]] auto has_any_face(const std::array<bool, 6> &faces) const
         -> bool {
-        return std::any_of(faces.begin(), faces.end(),
-                           [](bool value) { return value; });
+        return std::ranges::contains(faces, true);
     }
     [[nodiscard]] auto vein_state(const std::array<bool, 6> &faces,
                                   bool waterlogged) const -> block_state_id {

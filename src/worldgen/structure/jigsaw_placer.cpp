@@ -340,11 +340,8 @@ auto shuffled_jigsaws(const jigsaw_element_info &element,
             static_cast<std::size_t>(random.next_int(static_cast<jint>(i)));
         std::swap(jigsaws[i - 1], jigsaws[swap_to]);
     }
-    std::stable_sort(
-        jigsaws.begin(), jigsaws.end(),
-        [](const runtime_jigsaw &left, const runtime_jigsaw &right) {
-            return left.selection_priority > right.selection_priority;
-        });
+    std::ranges::stable_sort(jigsaws, std::greater{},
+                             &runtime_jigsaw::selection_priority);
     return jigsaws;
 }
 

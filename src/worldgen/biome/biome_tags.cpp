@@ -9,6 +9,7 @@
 #include <refrain/worldgen/content.hpp>
 
 #include <algorithm>
+#include <ranges>
 #include <set>
 #include <utility>
 #include <vector>
@@ -25,7 +26,7 @@ auto collect_documents(const std::string &directory, const std::string &prefix,
         return std::unexpected{entries.error()};
     }
     std::vector<std::string> sorted{entries->begin(), entries->end()};
-    std::sort(sorted.begin(), sorted.end());
+    std::ranges::sort(sorted);
     for (const auto &entry : sorted) {
         const auto path = directory + "/" + entry;
         const auto id = prefix.empty() ? entry : prefix + "/" + entry;
@@ -147,7 +148,7 @@ auto load_biome_tags(std::string_view data_root) -> result<biome_tags> {
         return std::unexpected{namespaces.error()};
     }
     std::vector<std::string> sorted{namespaces->begin(), namespaces->end()};
-    std::sort(sorted.begin(), sorted.end());
+    std::ranges::sort(sorted);
     std::unordered_map<std::string, std::vector<std::string>> entries;
     for (const auto &name : sorted) {
         const auto base = std::string{data_root} + "/" + name;
@@ -171,8 +172,7 @@ auto load_biome_tags(std::string_view data_root) -> result<biome_tags> {
                                                      name + ":" + id + ")")};
             }
             auto &values = entries[name + ":" + id];
-            values.insert(values.end(), std::make_move_iterator(ids->begin()),
-                          std::make_move_iterator(ids->end()));
+            values.append_range(*ids | std::views::as_rvalue);
         }
     }
     return biome_tags{std::move(entries)};

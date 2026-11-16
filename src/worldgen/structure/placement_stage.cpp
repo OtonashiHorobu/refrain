@@ -1620,8 +1620,8 @@ void place_desert_pyramid(const structure_place_context &context,
                                    factory};
         std::vector<block_pos> unique;
         for (const auto &pos : sand_positions) {
-            const bool seen = std::any_of(
-                unique.begin(), unique.end(), [&](const block_pos &value) {
+            const bool seen =
+                std::ranges::any_of(unique, [&](const block_pos &value) {
                     return value.x == pos.x && value.y == pos.y &&
                            value.z == pos.z;
                 });
@@ -1629,11 +1629,11 @@ void place_desert_pyramid(const structure_place_context &context,
                 unique.push_back(pos);
             }
         }
-        std::sort(unique.begin(), unique.end(),
-                  [](const block_pos &left, const block_pos &right) {
-                      return std::tie(left.y, left.z, left.x) <
-                             std::tie(right.y, right.z, right.x);
-                  });
+        std::ranges::sort(unique,
+                          [](const block_pos &left, const block_pos &right) {
+                              return std::tie(left.y, left.z, left.x) <
+                                     std::tie(right.y, right.z, right.x);
+                          });
         for (std::size_t i = unique.size(); i > 1; --i) {
             const auto swap_to =
                 static_cast<std::size_t>(after.next_int(static_cast<jint>(i)));

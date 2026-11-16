@@ -113,7 +113,7 @@ auto feature_sorter::build(const std::vector<std::string> &possible_biomes,
                                               "feature order cycle found")};
         }
     }
-    std::reverse(sorted.begin(), sorted.end());
+    std::ranges::reverse(sorted);
 
     std::vector<step_features> result(static_cast<std::size_t>(max_step));
     for (const auto &feature : sorted) {

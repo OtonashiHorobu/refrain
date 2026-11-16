@@ -14,8 +14,8 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <iterator>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
@@ -139,8 +139,7 @@ auto recursive_children(city_state &state, section_generator generator,
     if (collision) {
         return false;
     }
-    target.insert(target.end(), std::make_move_iterator(children.begin()),
-                  std::make_move_iterator(children.end()));
+    target.append_range(children | std::views::as_rvalue);
     return true;
 }
 

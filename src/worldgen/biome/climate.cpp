@@ -262,18 +262,18 @@ auto parameter_list::build(std::vector<std::size_t> children) -> std::size_t {
         return children.front();
     }
     if (children.size() <= children_per_node) {
-        std::stable_sort(children.begin(), children.end(),
-                         [this](std::size_t left, std::size_t right) {
-                             std::uint64_t left_magnitude = 0;
-                             std::uint64_t right_magnitude = 0;
-                             for (std::size_t d = 0; d < 7; ++d) {
-                                 left_magnitude += static_cast<std::uint64_t>(
-                                     magnitude(center(nodes_[left].space[d])));
-                                 right_magnitude += static_cast<std::uint64_t>(
-                                     magnitude(center(nodes_[right].space[d])));
-                             }
-                             return left_magnitude < right_magnitude;
-                         });
+        std::ranges::stable_sort(
+            children, [this](std::size_t left, std::size_t right) {
+                std::uint64_t left_magnitude = 0;
+                std::uint64_t right_magnitude = 0;
+                for (std::size_t d = 0; d < 7; ++d) {
+                    left_magnitude += static_cast<std::uint64_t>(
+                        magnitude(center(nodes_[left].space[d])));
+                    right_magnitude += static_cast<std::uint64_t>(
+                        magnitude(center(nodes_[right].space[d])));
+                }
+                return left_magnitude < right_magnitude;
+            });
         return make_subtree(std::move(children));
     }
 
@@ -281,9 +281,8 @@ auto parameter_list::build(std::vector<std::size_t> children) -> std::size_t {
     std::size_t min_dimension = 0;
     std::vector<std::vector<std::size_t>> min_buckets;
     for (std::size_t dimension = 0; dimension < 7; ++dimension) {
-        std::stable_sort(
-            children.begin(), children.end(),
-            [this, dimension](std::size_t left, std::size_t right) {
+        std::ranges::stable_sort(
+            children, [this, dimension](std::size_t left, std::size_t right) {
                 for (std::size_t offset = 0; offset < 7; ++offset) {
                     const std::size_t d = (dimension + offset) % 7;
                     const coord left_center = center(nodes_[left].space[d]);
@@ -330,8 +329,8 @@ auto parameter_list::build(std::vector<std::size_t> children) -> std::size_t {
         }
     }
 
-    std::stable_sort(
-        min_buckets.begin(), min_buckets.end(),
+    std::ranges::stable_sort(
+        min_buckets,
         [this, min_dimension](const auto &left, const auto &right) {
             const auto left_space = space_of(left);
             const auto right_space = space_of(right);

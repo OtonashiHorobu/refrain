@@ -616,9 +616,8 @@ auto normal_noise::build_legacy_nether_layers(
             ++non_zero;
         }
     }
-    const std::size_t created = static_cast<std::size_t>(
-        std::count_if(levels.begin(), levels.end(),
-                      [](const auto &level) { return level != nullptr; }));
+    const std::size_t created = static_cast<std::size_t>(std::ranges::count_if(
+        levels, [](const auto &level) { return level != nullptr; }));
     if (created != non_zero) {
         return std::unexpected{
             make_error(error_code::invalid_argument,

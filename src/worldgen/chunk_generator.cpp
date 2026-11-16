@@ -27,6 +27,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -153,7 +154,7 @@ auto square_offsets(jint radius) -> std::vector<chunk_pos> {
 /// keeps the target first so the returned chunk is `chunks[0]`.
 auto center_first_positions(std::vector<chunk_pos> positions,
                             const chunk_pos &center) -> std::vector<chunk_pos> {
-    const auto found = std::find(positions.begin(), positions.end(), center);
+    const auto found = std::ranges::find(positions, center);
     if (found != positions.end()) {
         positions.erase(found);
         positions.insert(positions.begin(), center);
@@ -185,7 +186,7 @@ auto chunk_biomes(const proto_chunk &chunk) -> std::vector<std::uint16_t> {
         for (jint z = 0; z < 16; z += 4) {
             for (jint x = 0; x < 16; x += 4) {
                 const auto id = chunk.biome_at(x, y, z);
-                if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
+                if (!std::ranges::contains(ids, id)) {
                     ids.push_back(id);
                 }
             }
@@ -598,8 +599,7 @@ auto chunk_generator::make_start_context(std::optional<error> &error)
     if (!config_.structure_sets.empty()) {
         const auto &allowed = config_.structure_sets;
         context.set_filter = [&allowed](std::string_view id) {
-            return std::find(allowed.begin(), allowed.end(), id) !=
-                   allowed.end();
+            return std::ranges::contains(allowed, id);
         };
     }
     return context;
@@ -1311,9 +1311,7 @@ auto chunk_generator::generate_tile_impl(const chunk_pos &origin)
             for (jint z = scanned.min_z; z <= scanned.max_z; ++z) {
                 auto found = structure::generate_structure_starts(
                     chunk_pos{.x = x, .z = z}, start_context);
-                starts.insert(starts.end(),
-                              std::make_move_iterator(found.begin()),
-                              std::make_move_iterator(found.end()));
+                starts.append_range(found | std::views::as_rvalue);
             }
         }
         if (height_error) {
@@ -1407,8 +1405,8 @@ auto chunk_generator::generate_tile_impl(const chunk_pos &origin)
                             chunk->add_structure_start(
                                 make_start_record(*start));
                         }
-                        const auto duplicate = std::find_if(
-                            references.begin(), references.end(),
+                        const auto duplicate = std::ranges::find_if(
+                            references,
                             [start](const structure_reference &reference) {
                                 return reference.structure ==
                                            start->structure &&

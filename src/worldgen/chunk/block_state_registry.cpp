@@ -28,8 +28,7 @@ constexpr std::array<std::string_view, 3> air_blocks{
 };
 
 auto is_air_block(std::string_view name) -> bool {
-    return std::find(air_blocks.begin(), air_blocks.end(), name) !=
-           air_blocks.end();
+    return std::ranges::contains(air_blocks, name);
 }
 
 auto parse_tag_values(const data::json::value &root)
@@ -89,7 +88,7 @@ auto block_tag_set::resolve(std::string_view tag) const
     if (const auto resolved = resolve_into(tag, out, visiting); !resolved) {
         return std::unexpected{resolved.error()};
     }
-    std::sort(out.begin(), out.end());
+    std::ranges::sort(out);
     out.erase(std::unique(out.begin(), out.end()), out.end());
     resolved_[std::string{tag}] = out;
     return out;
@@ -99,7 +98,7 @@ auto block_tag_set::resolve_into(std::string_view tag,
                                  std::vector<std::string> &out,
                                  std::vector<std::string> &visiting) const
     -> status {
-    if (std::find(visiting.begin(), visiting.end(), tag) != visiting.end()) {
+    if (std::ranges::contains(visiting, tag)) {
         return std::unexpected{make_error(error_code::invalid_argument,
                                           "block tag reference cycle")};
     }
@@ -325,13 +324,13 @@ void block_state_registry::add_tag(std::string_view tag,
                                    std::span<const block_state_id> states) {
     auto &stored = tags_[std::string{tag}];
     stored.assign(states.begin(), states.end());
-    std::sort(stored.begin(), stored.end());
+    std::ranges::sort(stored);
     stored.erase(std::unique(stored.begin(), stored.end()), stored.end());
     auto &ordered = ordered_tags_[std::string{tag}];
     ordered.clear();
     ordered.reserve(stored.size());
     for (const auto id : states) {
-        if (std::find(ordered.begin(), ordered.end(), id) == ordered.end()) {
+        if (!std::ranges::contains(ordered, id)) {
             ordered.push_back(id);
         }
     }
@@ -370,8 +369,7 @@ auto block_state_registry::tag_states(std::string_view tag) const
 auto block_state_registry::in_tag(block_state_id id, std::string_view tag) const
     -> bool {
     const auto found = tags_.find(tag);
-    if (found != tags_.end() &&
-        std::binary_search(found->second.begin(), found->second.end(), id)) {
+    if (found != tags_.end() && std::ranges::binary_search(found->second, id)) {
         return true;
     }
     const auto names = tag_names_.find(tag);

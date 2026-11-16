@@ -103,7 +103,7 @@ class all_of final : public rule_test {
         : rules_{std::move(rules)} {}
     [[nodiscard]] auto test(block_state_id state, const block_pos &pos,
                             worldgen_random &random) const -> bool override {
-        return std::all_of(rules_.begin(), rules_.end(), [&](const auto &rule) {
+        return std::ranges::all_of(rules_, [&](const auto &rule) {
             return rule->test(state, pos, random);
         });
     }
@@ -118,7 +118,7 @@ class any_of final : public rule_test {
         : rules_{std::move(rules)} {}
     [[nodiscard]] auto test(block_state_id state, const block_pos &pos,
                             worldgen_random &random) const -> bool override {
-        return std::any_of(rules_.begin(), rules_.end(), [&](const auto &rule) {
+        return std::ranges::any_of(rules_, [&](const auto &rule) {
             return rule->test(state, pos, random);
         });
     }
