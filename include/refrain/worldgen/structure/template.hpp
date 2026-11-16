@@ -554,6 +554,15 @@ place_template(chunk_region &region, block_state_registry &states,
                const structure_template &templ, const block_pos &origin,
                const template_transform &transform) -> std::size_t;
 
+/// Palette a placement selects: a multi-palette template draws the index from
+/// the caller stream when one is attached, otherwise from the legacy positional
+/// source at `origin`. Data-marker passes must iterate the same palette the
+/// block pass wrote.
+[[nodiscard]] auto select_template_palette(const structure_template &templ,
+                                           const block_pos &origin,
+                                           worldgen_random *random)
+    -> std::size_t;
+
 /// Loads and caches templates from `<root>/<namespace>/structure/<path>.nbt`.
 /// A missing or malformed file yields the empty template, exactly like the
 /// reference manager's cache-on-miss behaviour.

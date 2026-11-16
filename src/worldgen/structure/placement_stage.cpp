@@ -9,6 +9,8 @@
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 
 #include <array>
+#include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <string>
 
@@ -16,6 +18,12 @@ namespace refrain::worldgen::structure {
 
 namespace {
 
+// Container loot tables of the procedural structures are the reference
+// version's built-in loot table constants. The 26.3 structure document and
+// template formats carry no loot-table field for these families: the reference
+// piece class names the id, and the container consumes one seed from the piece
+// random at the position the reference draws it. Keep every id below equal to
+// the built-in constant of the target version.
 struct horizontal_direction {
     jint dx;
     jint dz;
@@ -107,9 +115,6 @@ auto chest_facing(const structure_place_context &context, jint x, jint y,
 
 auto create_chest(const structure_place_context &context, jint x, jint y,
                   jint z, worldgen_random &random) -> bool {
-    // TODO: read the buried treasure loot table from the structure document
-    // instead of naming it here; the reference structure hard-codes the id, so
-    // the structure document has no field for it yet.
     return place_loot_chest(context, x, y, z, random,
                             "minecraft:chests/buried_treasure");
 }
@@ -287,9 +292,6 @@ void place_swamp_hut(const structure_place_context &context,
 void place_igloo_piece(const structure_place_context &context,
                        const structure_piece_record &piece,
                        worldgen_random &random) {
-    // TODO: read the igloo loot table from the structure document instead of
-    // naming it here; the reference structure hard-codes the id, so the copied
-    // structure document has no field for it yet.
     if (context.templates == nullptr || context.registry == nullptr) {
         return;
     }
@@ -336,6 +338,9 @@ void place_igloo_piece(const structure_place_context &context,
         .max_z = context.chunk->chunk_z() * 16 + 15,
     };
     settings.processors = {&ignore};
+    // A template chest tag consumes one seed from the piece random in the
+    // reference placement loop before the data marker replaces it.
+    settings.loot_random = &random;
     (void)place_template(*context.region, *context.registry, templ, shifted,
                          settings);
 
@@ -403,7 +408,7 @@ void place_igloo_piece(const structure_place_context &context,
         compound["y"] = data::nbt::value{chest_y};
         compound["z"] = data::nbt::value{marker.z};
         compound["LootTable"] =
-            data::nbt::value{std::string{"minecraft:chests/igloo"}};
+            data::nbt::value{std::string{"minecraft:chests/igloo_chest"}};
         compound["LootTableSeed"] = data::nbt::value{random.next_long()};
         (void)context.region->set_block_entity(marker.x, chest_y, marker.z,
                                                std::move(compound));
@@ -469,9 +474,6 @@ void place_buried_treasure(const structure_place_context &context,
 void place_jungle_temple(const structure_place_context &context,
                          const structure_piece_record &piece,
                          worldgen_random &random) {
-    // TODO: read the jungle temple loot tables from the structure document
-    // instead of naming them here; the reference temple hard-codes the ids, so
-    // the structure document has no field for them yet.
     if (context.region == nullptr || context.states == nullptr) {
         return;
     }
@@ -866,9 +868,6 @@ void place_jungle_temple(const structure_place_context &context,
 void place_ocean_ruin_piece(const structure_place_context &context,
                             const structure_piece_record &piece,
                             worldgen_random &random) {
-    // TODO: read the ocean ruin loot table from the structure document instead
-    // of naming it here; the reference structure hard-codes the id, so the
-    // copied structure document has no field for it yet.
     if (context.templates == nullptr || context.region == nullptr) {
         return;
     }
@@ -930,71 +929,68 @@ void place_ocean_ruin_piece(const structure_place_context &context,
     };
     settings.processors = {&rot, &ignore, &suspicious};
     settings.level_seed = context.seed;
+    // Template chest tags consume one piece seed before the marker loot write.
+    settings.loot_random = &random;
     (void)place_template(*context.region, *context.registry, templ, origin,
                          settings);
     const std::string loot = piece.large
                                  ? "minecraft:chests/underwater_ruin_big"
                                  : "minecraft:chests/underwater_ruin_small";
-    for (const auto &palette : templ.palettes) {
-        for (const auto &block : palette) {
-            if (block.nbt == nullptr) {
-                continue;
+    const auto marker_palette = select_template_palette(templ, origin, nullptr);
+    for (const auto &block : templ.palettes[marker_palette]) {
+        if (block.nbt == nullptr) {
+            continue;
+        }
+        const auto metadata = block.nbt->find("metadata");
+        if (metadata == block.nbt->end()) {
+            continue;
+        }
+        const auto text = metadata->second.as_string();
+        if (!text) {
+            continue;
+        }
+        const auto relative = transform_position(
+            block_pos{.x = block.x, .y = block.y, .z = block.z},
+            settings.transform);
+        const auto world = block_pos{.x = origin.x + relative.x,
+                                     .y = origin.y + relative.y,
+                                     .z = origin.z + relative.z};
+        if (context.chunk == nullptr ||
+            (world.x >> 4) != context.chunk->chunk_x() ||
+            (world.z >> 4) != context.chunk->chunk_z()) {
+            continue;
+        }
+        if (*text == "chest") {
+            const auto previous = block_name(
+                context, context.region->state_at(world.x, world.y, world.z));
+            const bool water = previous == "minecraft:water" ||
+                               previous.starts_with("minecraft:water[level=0");
+            const std::string key = water ? "minecraft:chest[facing=north,"
+                                            "type=single,waterlogged=true]"
+                                          : "minecraft:chest[facing=north,"
+                                            "type=single,waterlogged=false]";
+            const auto chest =
+                context.state ? context.state(key) : no_block_state;
+            if (chest != no_block_state) {
+                (void)context.region->set_block_state(world.x, world.y, world.z,
+                                                      chest);
             }
-            const auto metadata = block.nbt->find("metadata");
-            if (metadata == block.nbt->end()) {
-                continue;
-            }
-            const auto text = metadata->second.as_string();
-            if (!text) {
-                continue;
-            }
-            const auto relative = transform_position(
-                block_pos{.x = block.x, .y = block.y, .z = block.z},
-                settings.transform);
-            const auto world = block_pos{.x = origin.x + relative.x,
-                                         .y = origin.y + relative.y,
-                                         .z = origin.z + relative.z};
-            if (context.chunk == nullptr ||
-                (world.x >> 4) != context.chunk->chunk_x() ||
-                (world.z >> 4) != context.chunk->chunk_z()) {
-                continue;
-            }
-            if (*text == "chest") {
-                const auto previous = block_name(
-                    context,
-                    context.region->state_at(world.x, world.y, world.z));
-                const bool water =
-                    previous == "minecraft:water" ||
-                    previous.starts_with("minecraft:water[level=0");
-                const std::string key = water
-                                            ? "minecraft:chest[facing=north,"
-                                              "type=single,waterlogged=true]"
-                                            : "minecraft:chest[facing=north,"
-                                              "type=single,waterlogged=false]";
-                const auto chest =
-                    context.state ? context.state(key) : no_block_state;
-                if (chest != no_block_state) {
-                    (void)context.region->set_block_state(world.x, world.y,
-                                                          world.z, chest);
-                }
-                data::nbt::compound entity;
-                entity["id"] = data::nbt::value{std::string{"minecraft:chest"}};
-                entity["x"] = data::nbt::value{world.x};
-                entity["y"] = data::nbt::value{world.y};
-                entity["z"] = data::nbt::value{world.z};
-                entity["LootTable"] = data::nbt::value{std::string{loot}};
-                entity["LootTableSeed"] = data::nbt::value{random.next_long()};
-                (void)context.region->set_block_entity(
-                    world.x, world.y, world.z, std::move(entity));
-            } else if (*text == "drowned") {
-                const auto water = context.state("minecraft:water");
-                const auto air = context.state("minecraft:air");
-                const auto replacement =
-                    world.y > context.sea_level ? air : water;
-                if (replacement != no_block_state) {
-                    (void)context.region->set_block_state(world.x, world.y,
-                                                          world.z, replacement);
-                }
+            data::nbt::compound entity;
+            entity["id"] = data::nbt::value{std::string{"minecraft:chest"}};
+            entity["x"] = data::nbt::value{world.x};
+            entity["y"] = data::nbt::value{world.y};
+            entity["z"] = data::nbt::value{world.z};
+            entity["LootTable"] = data::nbt::value{std::string{loot}};
+            entity["LootTableSeed"] = data::nbt::value{random.next_long()};
+            (void)context.region->set_block_entity(world.x, world.y, world.z,
+                                                   std::move(entity));
+        } else if (*text == "drowned") {
+            const auto water = context.state("minecraft:water");
+            const auto air = context.state("minecraft:air");
+            const auto replacement = world.y > context.sea_level ? air : water;
+            if (replacement != no_block_state) {
+                (void)context.region->set_block_state(world.x, world.y, world.z,
+                                                      replacement);
             }
         }
     }
@@ -1003,9 +999,6 @@ void place_ocean_ruin_piece(const structure_place_context &context,
 void place_shipwreck_piece(const structure_place_context &context,
                            const structure_piece_record &piece,
                            worldgen_random &random) {
-    // TODO: read the shipwreck marker loot tables from the structure document
-    // instead of naming them here; the reference structure hard-codes the ids,
-    // so the structure document has no fields for them yet.
     if (context.templates == nullptr) {
         return;
     }
@@ -1040,6 +1033,9 @@ void place_shipwreck_piece(const structure_place_context &context,
         .max_z = context.chunk->chunk_z() * 16 + 15,
     };
     settings.processors = {&ignore};
+    // Template chest tags consume one piece seed each during placement; the
+    // marker pass then draws the seed the container keeps.
+    settings.loot_random = &random;
     block_pos origin{
         .x = piece.template_x, .y = piece.template_y, .z = piece.template_z};
     const std::string height_key = piece.template_id + ":" +
@@ -1113,52 +1109,50 @@ void place_shipwreck_piece(const structure_place_context &context,
             {"treasure_chest", "minecraft:chests/shipwreck_treasure"},
             {"supply_chest", "minecraft:chests/shipwreck_supply"},
         }};
-    for (const auto &palette : templ.palettes) {
-        for (const auto &block : palette) {
-            if (block.nbt == nullptr) {
+    const auto marker_palette = select_template_palette(templ, origin, nullptr);
+    for (const auto &block : templ.palettes[marker_palette]) {
+        if (block.nbt == nullptr) {
+            continue;
+        }
+        const auto metadata = block.nbt->find("metadata");
+        if (metadata == block.nbt->end()) {
+            continue;
+        }
+        const auto text = metadata->second.as_string();
+        if (!text) {
+            continue;
+        }
+        for (const auto &[marker, loot] : markers) {
+            if (*text != marker) {
                 continue;
             }
-            const auto metadata = block.nbt->find("metadata");
-            if (metadata == block.nbt->end()) {
+            const auto relative = transform_position(
+                block_pos{.x = block.x, .y = block.y, .z = block.z},
+                settings.transform);
+            const block_pos world{.x = origin.x + relative.x,
+                                  .y = origin.y + relative.y,
+                                  .z = origin.z + relative.z};
+            const auto below =
+                block_pos{.x = world.x, .y = world.y - 1, .z = world.z};
+            if (context.chunk == nullptr ||
+                (below.x >> 4) != context.chunk->chunk_x() ||
+                (below.z >> 4) != context.chunk->chunk_z()) {
                 continue;
             }
-            const auto text = metadata->second.as_string();
-            if (!text) {
+            const auto name = block_name(
+                context, context.region->state_at(below.x, below.y, below.z));
+            if (!name.starts_with("minecraft:chest")) {
                 continue;
             }
-            for (const auto &[marker, loot] : markers) {
-                if (*text != marker) {
-                    continue;
-                }
-                const auto relative = transform_position(
-                    block_pos{.x = block.x, .y = block.y, .z = block.z},
-                    settings.transform);
-                const block_pos world{.x = origin.x + relative.x,
-                                      .y = origin.y + relative.y,
-                                      .z = origin.z + relative.z};
-                const auto below =
-                    block_pos{.x = world.x, .y = world.y - 1, .z = world.z};
-                if (context.chunk == nullptr ||
-                    (below.x >> 4) != context.chunk->chunk_x() ||
-                    (below.z >> 4) != context.chunk->chunk_z()) {
-                    continue;
-                }
-                const auto name = block_name(
-                    context,
-                    context.region->state_at(below.x, below.y, below.z));
-                if (!name.starts_with("minecraft:chest")) {
-                    continue;
-                }
-                data::nbt::compound entity;
-                entity["id"] = data::nbt::value{std::string{"minecraft:chest"}};
-                entity["x"] = data::nbt::value{below.x};
-                entity["y"] = data::nbt::value{below.y};
-                entity["z"] = data::nbt::value{below.z};
-                entity["LootTable"] = data::nbt::value{std::string{loot}};
-                entity["LootTableSeed"] = data::nbt::value{random.next_long()};
-                (void)context.region->set_block_entity(
-                    below.x, below.y, below.z, std::move(entity));
-            }
+            data::nbt::compound entity;
+            entity["id"] = data::nbt::value{std::string{"minecraft:chest"}};
+            entity["x"] = data::nbt::value{below.x};
+            entity["y"] = data::nbt::value{below.y};
+            entity["z"] = data::nbt::value{below.z};
+            entity["LootTable"] = data::nbt::value{std::string{loot}};
+            entity["LootTableSeed"] = data::nbt::value{random.next_long()};
+            (void)context.region->set_block_entity(below.x, below.y, below.z,
+                                                   std::move(entity));
         }
     }
 }
@@ -1227,9 +1221,6 @@ auto place_pyramid_chest(const structure_place_context &context, jint x, jint y,
 void place_desert_pyramid(const structure_place_context &context,
                           const structure_piece_record &piece,
                           worldgen_random &random) {
-    // TODO: read the desert pyramid loot table from the structure document
-    // instead of naming it here; the reference structure hard-codes the id, so
-    // the structure document has no field for it yet.
     auto &region = *context.region;
     const auto resolve = [&](std::string_view key) {
         return context.state ? context.state(key) : no_block_state;
@@ -1259,7 +1250,31 @@ void place_desert_pyramid(const structure_place_context &context,
             structure::template_transform{
                 .mirror = mirror, .rotation = rotation, .pivot = block_pos{}});
     };
+    // The reference evaluates `-random.nextInt(3)` as the offset of its height
+    // update before the resolved-height early return, so the draw always
+    // advances the piece stream; an unresolved height uses it to shift the
+    // piece below the lowest ground column.
+    const jint height_offset = -random.next_int(3);
     jint base_y = piece.height_position + piece.height_offset;
+    if (piece.height_position < 0) {
+        jint lowest = context.chunk->min_y() + context.chunk->height();
+        const auto lowest_column = [&](jint x, jint z) {
+            auto *column = context.region->find(x >> 4, z >> 4);
+            if (column == nullptr) {
+                return;
+            }
+            lowest =
+                std::min(lowest, column->first_available(
+                                     heightmap_kind::motion_blocking_no_leaves,
+                                     x & 15, z & 15));
+        };
+        for (jint z = piece.min_z; z <= piece.max_z; ++z) {
+            for (jint x = piece.min_x; x <= piece.max_x; ++x) {
+                lowest_column(x, z);
+            }
+        }
+        base_y = lowest + height_offset + piece.height_offset;
+    }
     const auto local = [&](jint x, jint y, jint z) {
         return piece_local_to_world(piece, base_y, x, y, z);
     };

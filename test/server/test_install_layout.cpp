@@ -11,6 +11,7 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -19,6 +20,17 @@ using refrain::server::discover_install_layout;
 using refrain::server::install_layout_options;
 
 namespace fs = std::filesystem;
+
+/// Compare a returned path string with an expected path independently of the
+/// platform's directory separator: Windows stores `\`, while the layout and
+/// data helpers return the canonical `/` form.
+[[nodiscard]] auto same_path(std::string_view actual,
+                             const std::filesystem::path &expected) -> bool {
+    return std::filesystem::path{std::string{actual}}
+               .lexically_normal()
+               .generic_string() ==
+           expected.lexically_normal().generic_string();
+}
 
 void write_file(const fs::path &path) {
     const auto written =
@@ -55,9 +67,9 @@ suite<"server/layout"> layout_tests = [] {
         if (!layout) {
             return;
         }
-        expect(layout->gamepack ==
-               (working / "gamepack" / "gamepack.toml").string());
-        expect(layout->root == working.string());
+        expect(same_path(layout->gamepack,
+                         working / "gamepack" / "gamepack.toml"));
+        expect(same_path(layout->root, working));
         expect(layout->content_root.empty());
     };
 
@@ -73,10 +85,10 @@ suite<"server/layout"> layout_tests = [] {
         if (!layout) {
             return;
         }
-        expect(layout->gamepack ==
-               (install / "gamepack" / "gamepack.toml").string());
-        expect(layout->content_root ==
-               (install / "content" / "vanilla" / "26.3").string());
+        expect(same_path(layout->gamepack,
+                         install / "gamepack" / "gamepack.toml"));
+        expect(same_path(layout->content_root,
+                         install / "content" / "vanilla" / "26.3"));
         expect(layout->content_source == "above the executable");
     };
 
@@ -95,8 +107,8 @@ suite<"server/layout"> layout_tests = [] {
             if (!layout) {
                 return;
             }
-            expect(layout->gamepack ==
-                   (checkout / "gamepack" / "gamepack.toml").string());
+            expect(same_path(layout->gamepack,
+                             checkout / "gamepack" / "gamepack.toml"));
             expect(!layout->content_root.empty());
         };
 
@@ -111,8 +123,8 @@ suite<"server/layout"> layout_tests = [] {
             .executable = (installation / "bin" / "refrain-server").string()});
         expect(layout.has_value());
         if (layout) {
-            expect(layout->gamepack ==
-                   (instance / "gamepack" / "gamepack.toml").string());
+            expect(same_path(layout->gamepack,
+                             instance / "gamepack" / "gamepack.toml"));
         }
     };
 
@@ -127,10 +139,10 @@ suite<"server/layout"> layout_tests = [] {
             .executable = (installation / "bin" / "refrain-server").string()});
         expect(layout.has_value());
         if (layout) {
-            expect(layout->gamepack ==
-                   (instance / "gamepack" / "gamepack.toml").string());
-            expect(layout->content_root ==
-                   (installation / "content" / "vanilla" / "26.3").string());
+            expect(same_path(layout->gamepack,
+                             instance / "gamepack" / "gamepack.toml"));
+            expect(same_path(layout->content_root,
+                             installation / "content" / "vanilla" / "26.3"));
         }
     };
 
@@ -145,7 +157,7 @@ suite<"server/layout"> layout_tests = [] {
             .gamepack = explicit_path.string()});
         expect(layout.has_value());
         if (layout) {
-            expect(layout->gamepack == explicit_path.string());
+            expect(same_path(layout->gamepack, explicit_path));
             expect(layout->root.empty());
         }
     };
@@ -178,8 +190,8 @@ suite<"server/layout"> layout_tests = [] {
                 .game_version = "27.1"});
             expect(layout.has_value());
             if (layout) {
-                expect(layout->content_root ==
-                       (install / "content" / "vanilla" / "27.1").string());
+                expect(same_path(layout->content_root,
+                                 install / "content" / "vanilla" / "27.1"));
             }
         };
 };

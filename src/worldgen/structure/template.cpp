@@ -23,6 +23,23 @@ namespace refrain::worldgen::structure {
 
 namespace {
 
+/// True when a placed block owns a block entity that the reference treats as
+/// a randomizable container. `StructureTemplate.placeInWorld` draws one loot
+/// seed from the placement random for every such block entity that carries an
+/// NBT tag, and the piece-level loot writes later replace or reuse it. The
+/// check is by block entity type, not by the tag contents, so a template chest
+/// with an empty inventory tag consumes a draw even without a loot table.
+auto is_randomizable_container(std::string_view name) -> bool {
+    const auto open = name.find('[');
+    const auto bare =
+        open == std::string_view::npos ? name : name.substr(0, open);
+    return bare == "minecraft:chest" || bare == "minecraft:trapped_chest" ||
+           bare == "minecraft:barrel" || bare == "minecraft:dispenser" ||
+           bare == "minecraft:dropper" || bare == "minecraft:hopper" ||
+           bare == "minecraft:crafter" || bare == "minecraft:decorated_pot" ||
+           bare.ends_with("_shulker_box");
+}
+
 struct parsed_state {
     std::string_view name{};
     std::vector<std::pair<std::string, std::string>> properties{};
@@ -2441,6 +2458,21 @@ void place_template_entities(chunk_region &region,
 
 } // namespace
 
+auto select_template_palette(const structure_template &templ,
+                             const block_pos &origin, worldgen_random *random)
+    -> std::size_t {
+    if (templ.palettes.size() <= 1) {
+        return 0;
+    }
+    if (random != nullptr) {
+        return static_cast<std::size_t>(
+            random->next_int(static_cast<jint>(templ.palettes.size())));
+    }
+    legacy_random_source source{mth_get_seed(origin.x, origin.y, origin.z)};
+    return static_cast<std::size_t>(
+        source.next_int(static_cast<jint>(templ.palettes.size())));
+}
+
 auto place_template(chunk_region &region, block_state_registry &states,
                     const structure_template &templ, const block_pos &origin,
                     const template_transform &transform) -> std::size_t {
@@ -2455,18 +2487,8 @@ auto place_template(chunk_region &region, block_state_registry &states,
     if (templ.palettes.empty()) {
         return 0;
     }
-    std::size_t palette_index = 0;
-    if (settings.random != nullptr) {
-        palette_index = static_cast<std::size_t>(settings.random->next_int(
-            static_cast<jint>(templ.palettes.size())));
-    } else if (templ.palettes.size() > 1) {
-        {
-            legacy_random_source random{
-                mth_get_seed(origin.x, origin.y, origin.z)};
-            palette_index = static_cast<std::size_t>(
-                random.next_int(static_cast<jint>(templ.palettes.size())));
-        }
-    }
+    const auto palette_index =
+        select_template_palette(templ, origin, settings.random);
     const auto &palette = templ.palettes[palette_index];
     block_state_id barrier = states.air();
     if (const auto found = states.find("minecraft:barrier");
@@ -2587,7 +2609,7 @@ auto place_template(chunk_region &region, block_state_registry &states,
         if (processed.nbt != nullptr) {
             auto entity = *processed.nbt;
             if (!processed.loot_seed_fixed && settings.loot_random != nullptr &&
-                entity.find("LootTable") != entity.end()) {
+                is_randomizable_container(states.name(state))) {
                 entity["LootTableSeed"] = data::nbt::value{
                     static_cast<jlong>(settings.loot_random->next_long())};
             }

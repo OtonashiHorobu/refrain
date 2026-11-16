@@ -346,10 +346,9 @@ struct stronghold_writer {
         }
     }
 
-    // TODO: read the corridor, library and crossing loot tables from the
-    // structure document instead of naming them at the call sites; the
-    // reference structure hard-codes the ids, so the structure document has no
-    // field for them yet.
+    // The corridor, library and crossing ids are the reference version's
+    // built-in loot table constants; the stronghold document and its piece
+    // payload carry no loot-table field.
     void chest(jint x, jint y, jint z, worldgen_random &random,
                std::string_view loot_table) const {
         if (!inside(x, y, z)) {
