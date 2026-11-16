@@ -137,8 +137,7 @@ module that references a runtime function no host code pulls in fails to load
 with an undefined-symbol diagnostic; a shared runtime library that removes that
 restriction is not built yet. `REFRAIN_MOD_LINK=dynamic` (build every mod as a
 module) therefore fails at configure time; select the modules explicitly with a
-profile's `dynamic` list instead. The deprecated `REFRAIN_MONOLITHIC` option
-maps to that unsupported all-module mode.
+profile's `dynamic` list instead.
 
 The resolved profile is written to `<build>/generated/mod_profile.toml` with the
 profile name, link mode, mod list and a build id. The build id and the profile

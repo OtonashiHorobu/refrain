@@ -647,10 +647,9 @@ auto builtin_image::open(std::span<const std::byte> bytes)
 
     // Winner per location via the shared winner order
     // (`resolution_precedes`: priority desc, then blob_index asc, then source
-    // asc), re-sorted by path bytes as the pack entry order. Images generated
-    // by build_resolution_index cannot contain same-priority ties (the builder
-    // rejects them), but a hand-crafted legacy image still reads
-    // deterministically because this comparison ignores the record order.
+    // asc), re-sorted by path bytes as the pack entry order. Neither the
+    // builder nor the parser admits two entries for one location at the same
+    // priority, so the winner is the highest-priority record.
     if (parsed_index->entries.size() > vfs_max_files) {
         return std::unexpected{
             parse_error("builtin image resolution index has more than " +

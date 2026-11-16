@@ -517,11 +517,12 @@ match_tag_registry(std::span<const std::string_view> segments)
                                           error_code::parse_error,
                                           "missing 'pack' object")};
     }
-    const auto *legacy_node{pack_node->find("pack_format")};
+    const auto *pack_format_node{pack_node->find("pack_format")};
     const auto *min_node{pack_node->find("min_format")};
     const auto *max_node{pack_node->find("max_format")};
-    // 26.3 `min_format`/`max_format` are a pair; `pack_format` stays a legacy
-    // fallback (and is still accepted alone).
+    // 26.3 `min_format`/`max_format` are a pair. `pack_format` is the
+    // single-version declaration 26.3 still reads for packs up to the last
+    // pre-minor format, so it is accepted alone or next to the pair.
     if ((min_node == nullptr) != (max_node == nullptr)) {
         return std::unexpected{
             file_error(source.label(), manifest_path, error_code::parse_error,
@@ -552,7 +553,7 @@ match_tag_registry(std::span<const std::string_view> segments)
                 "'pack.min_format' must not exceed 'pack.max_format'")};
         }
     }
-    if (legacy_node != nullptr) {
+    if (pack_format_node != nullptr) {
         if (auto read{read_format_field(*pack_node, "pack_format",
                                         "pack.pack_format",
                                         info.manifest_pack_format)};
@@ -562,7 +563,7 @@ match_tag_registry(std::span<const std::string_view> segments)
                                               read.error().message)};
         }
     }
-    if (!has_range && legacy_node == nullptr) {
+    if (!has_range && pack_format_node == nullptr) {
         return std::unexpected{
             file_error(source.label(), manifest_path, error_code::parse_error,
                        "missing 'pack.pack_format' (or the 26.3 pair "

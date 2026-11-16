@@ -199,10 +199,11 @@ struct layer_info {
     pack_format format{pack_format::directory};
     std::size_t file_count{0};
     bool has_manifest{false};
-    /// Legacy `pack.pack_format`; 0 = absent.
+    /// `pack.pack_format`: the single-version declaration 26.3 still reads for
+    /// packs up to the last pre-minor format; 0 = absent.
     std::uint32_t manifest_pack_format{0};
-    /// 26.3 `pack.min_format` / `pack.max_format` range; 0 = absent. The pair
-    /// is authoritative when present (`pack_format` stays a legacy fallback).
+    /// 26.3 `pack.min_format` / `pack.max_format` pair; 0 = absent. The pair is
+    /// authoritative when present.
     std::uint32_t manifest_min_format{0};
     std::uint32_t manifest_max_format{0};
     /// Jar-root `version.json` (`pack_version.data_major`) was used to satisfy
@@ -247,8 +248,10 @@ struct validation_report {
 /// Load options.
 struct datapack_load_options {
     /// 0 = accept any format declaration; otherwise the layer must declare a
-    /// matching format: `pack.mcmeta` legacy `pack_format` or the 26.3
-    /// `pack.min_format`/`pack.max_format` range (target inside the range), or
+    /// matching format: `pack.mcmeta` single-version `pack_format` (the
+    /// declaration 26.3 reads for packs up to the last pre-minor format) or the
+    /// 26.3 `pack.min_format`/`pack.max_format` range (target inside the
+    /// range), or
     /// — when no manifest exists — the jar-root `version.json`
     /// `pack_version.data_major`. A layer that declares nothing fails with
     /// `version_mismatch` instead of silently passing.

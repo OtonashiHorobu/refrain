@@ -15,9 +15,10 @@ namespace refrain::mod {
 //
 // A loader is the execution environment a mod package is loaded through. The
 // host does not branch on manifest fields: it resolves the loader id an
-// external manifest names, or infers it from a legacy entry shape, to an
-// active `refrain:mod.loader` provider instance and dispatches the package
-// through that provider's `validate` and `load`.
+// external manifest names in `[entry].loader` (or the implicit `builtin`
+// loader of a package without an entry section) to an active
+// `refrain:mod.loader` provider instance and dispatches the package through
+// that provider's `validate` and `load`.
 
 /// Contract id of the loader service
 /// (`sdk/idl/refrain/services/mod_loader.ridl`).

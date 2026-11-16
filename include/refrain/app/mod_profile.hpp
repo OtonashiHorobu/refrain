@@ -111,8 +111,9 @@ struct profile_check_result {
                                             std::span<const std::string> ids)
     -> std::string;
 
-/// Reject a `mods.lock` written by a different build profile. A lock without
-/// the fields (older format) is accepted: there is no identity to compare.
+/// Reject a `mods.lock` written by a different build profile or build id.
+/// Both fields are required by the lock format; a lock that does not record
+/// them is refused instead of being compared against the running binary.
 [[nodiscard]] auto check_lock_profile(const mod::mod_lock &lock) -> status;
 
 /// Stable one-line profile identity, e.g.

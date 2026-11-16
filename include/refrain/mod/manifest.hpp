@@ -38,10 +38,9 @@ namespace refrain::mod {
 // static mod registry (`mod/static_mod.hpp`). External mods name the loader
 // that executes the package in `[entry].loader` and carry that loader's
 // private payload; the manifest parser only understands the shared entry
-// fields, while the loader validates the shape it owns. A legacy external
-// manifest without `[entry].loader` keeps loading through the loader inferred
-// from its payload (`[entry].native` -> `native`, `[entry].wasm` -> `wasm`);
-// tooling reports the inference as deprecated.
+// fields, while the loader validates the shape it owns. An external manifest
+// that omits `[entry].loader` is rejected: there is exactly one way to run a
+// package, so the manifest must say which loader it is.
 
 /// Built-in / on-disk mod tree layout shared by every package source.
 inline constexpr std::string_view mod_manifest_filename = "manifest.toml";
@@ -120,9 +119,7 @@ struct manifest_parse_options {
 /// External package entry point. Internal/static mods have no entry section
 /// and are loaded by the implicit `builtin` loader.
 struct manifest_entry_point {
-    /// Loader id declared by `[entry].loader`. Empty when the manifest omitted
-    /// it and the parser inferred the loader from the payload shape (legacy
-    /// form, reported by `refrain-tools mods check`).
+    /// Loader id declared by `[entry].loader`; always present.
     std::string loader{};
     /// Native shared library path relative to the package root (payload of the
     /// native loader). Empty when unused.
@@ -157,14 +154,10 @@ struct mod_manifest {
     /// mods whose code is linked into the host.
     std::optional<manifest_entry_point> entry{};
     /// Effective loader id that executes this package: the declared
-    /// `[entry].loader`, the shape-inferred loader of a legacy external
-    /// manifest, or `builtin` for a package without an entry section.
+    /// `[entry].loader`, or `builtin` for a package without an entry section.
     std::string loader{};
-    /// True for a legacy external manifest whose loader was inferred from the
-    /// entry shape (`native`/`wasm` payload). Tooling reports this as a
-    /// deprecation because a new manifest must declare `[entry].loader`. An
-    /// internal package has no entry table to declare it in, so its implicit
-    /// `builtin` loader is canonical and not marked inferred.
+    /// Always false: every effective loader is declared in `[entry].loader` or
+    /// is the implicit `builtin` loader of a package without an entry section.
     bool loader_inferred{false};
 
     [[nodiscard]] auto is_external() const noexcept -> bool {
@@ -178,14 +171,13 @@ struct mod_manifest {
 /// tables `[files] [packaging] [signature]` (contents are validated by the
 /// container layer).
 ///
-/// `[entry].loader` names the loader that executes the package and must be a
-/// valid loader id (`mod/loader.hpp`): a reserved first-party id (`native`,
-/// `wasm`, `lua`, `bukkit`) or a namespaced third-party id such as
-/// `com.example.loader`. `builtin` is implicit for a package without `[entry]`
-/// and cannot be declared. A first-party loader validates its own payload
-/// shape: `native` requires `[entry].native`, `wasm` requires `[entry].wasm`.
-/// An entry without `[entry].loader` keeps loading through the loader inferred
-/// from the payload and sets `loader_inferred`.
+/// `[entry].loader` names the loader that executes the package and is
+/// required for an external manifest; it must be a valid loader id
+/// (`mod/loader.hpp`): a reserved first-party id (`native`, `wasm`, `lua`,
+/// `bukkit`) or a namespaced third-party id such as `com.example.loader`.
+/// `builtin` is implicit for a package without `[entry]` and cannot be
+/// declared. A first-party loader validates its own payload shape: `native`
+/// requires `[entry].native`, `wasm` requires `[entry].wasm`.
 ///
 /// `options.expected_abi`, `require_side` and `require_display_name` are
 /// forwarded to `parse_manifest_common`; `allow_package_tables` only widens the

@@ -31,10 +31,10 @@ namespace refrain::data {
 //    never maps locations to blobs.
 //  * `<composition>.idx` (RFRX) is one resolution index per composition: the
 //    `location -> blob_index` map with source and priority, sorted by
-//    `(location_hash, priority desc, source_index, path)`. `resolve()` picks
-//    the winner deterministically (highest priority, then smallest
-//    `blob_index`, then smallest source), so legacy indexes whose entries tie
-//    on priority still do not depend on file order.
+//    `(location_hash, priority desc, source_index, path)`. A location carries
+//    at most one entry per priority, so `resolve()` picks the unique
+//    highest-priority entry and the winner is a property of the content, not
+//    of the file order.
 //    `blob_index` addresses the digest-sorted RFBT table; the RFRX header also
 //    stores the first 8 bytes of BLAKE3(blobs.idx) so a stale index/table pair
 //    fails closed instead of resolving to the wrong blob.
@@ -257,9 +257,9 @@ struct resolution_index_view {
 };
 
 /// `resolve` result: `winner` is the highest-priority entry for the location
-/// (ties broken by smallest `blob_index`, then smallest source) and `fallback`
-/// the remaining entries in `(priority desc, blob_index asc, source asc)`
-/// order. Both point into the owning `resolution_index_view`.
+/// (the parser rejects two entries for one location at the same priority) and
+/// `fallback` the remaining entries in `resolution_precedes()` order. Both
+/// point into the owning `resolution_index_view`.
 struct resolution {
     const resolution_entry *winner{nullptr};
     std::vector<const resolution_entry *> fallback{};
@@ -274,8 +274,9 @@ struct resolution {
 /// bounds, the `blob_table_blake3_prefix` binding, header CRC32C, file BLAKE3,
 /// sorted unique source and location tables, per-entry reserved bits,
 /// path/source references, recomputed location hashes, in-range `blob_index`
-/// values and the canonical entry order (legacy same-primary-key ties allowed,
-/// exact duplicates rejected). Nothing is skipped or deferred to access time.
+/// values and the canonical, strictly increasing entry order (a pair that
+/// shares a location and a priority is a duplicate and rejected). Nothing is
+/// skipped or deferred to access time.
 ///
 /// Records are decoded on demand and returned by value; location/source strings
 /// are copied out of the mapped arena, so `at()`/`find()` never expose a
@@ -356,8 +357,10 @@ class mapped_resolution_index {
 
 /// True when `candidate` outranks `current` for the same location: higher
 /// priority, then smaller blob_index, then lexicographically smaller source.
-/// Single winner order shared by resolve(), content_pack, content_stream and
-/// the builtin image.
+/// A parsed index carries at most one entry per location and priority, so the
+/// priority decides; the remaining keys keep the comparison total for raw
+/// records. Single winner order shared by resolve(), content_pack,
+/// content_stream and the builtin image.
 [[nodiscard]] auto resolution_precedes(const resolution_entry &candidate,
                                        const resolution_entry &current) noexcept
     -> bool;
@@ -382,21 +385,20 @@ build_resolution_index(std::span<const resolution_input> entries,
 /// magic/version/flags/reserved fields, the `blob_table_blake3_prefix` binding,
 /// CRC32C, file BLAKE3, offsets/counts/arena bounds, sorted unique source and
 /// location tables, per-entry reserved bits, path/source references,
-/// recomputed location hashes, in-range `blob_index` values and the canonical
-/// entry order. Entries that tie on the documented sort key may carry
-/// different blobs and are accepted in either relative order: such indexes are
-/// legacy/manual (`build_resolution_index` no longer creates them and
-/// `resolve()` ignores their file order). An exact duplicate record is
-/// `parse_error`.
+/// recomputed location hashes, in-range `blob_index` values and the canonical,
+/// strictly increasing entry order. The builder refuses two entries for one
+/// location at the same priority, and the parser treats such a pair as a
+/// duplicate: there is no defined winner between them, so an index that
+/// carries one is `parse_error` instead of being resolved by record order.
 [[nodiscard]] auto parse_resolution_index(std::span<const std::byte> bytes,
                                           const blob_table_view &blob_table)
     -> result<resolution_index_view>;
 
-/// Resolve `location` against a parsed index. The winner is the highest
-/// priority entry; ties are broken by smallest `blob_index`, then
-/// lexicographically smallest `source` (independent of the on-disk order).
-/// The remaining entries are fallbacks, sorted by
-/// `(priority desc, blob_index asc, source asc)`. Returns `not_found` when the
+/// Resolve `location` against a parsed index. The winner is the unique
+/// highest-priority entry; the parser rejects two entries for one location at
+/// the same priority, so the result does not depend on the on-disk order.
+/// The remaining entries are fallbacks in `resolution_precedes()` order
+/// (`priority desc, blob_index asc, source asc`). Returns `not_found` when the
 /// location is absent.
 [[nodiscard]] auto resolve(const resolution_index_view &index,
                            std::string_view location) -> result<resolution>;

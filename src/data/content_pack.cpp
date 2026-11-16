@@ -230,13 +230,11 @@ auto open_content_pack(std::string_view store_root,
     // The pack exposes the resolved runtime view: exactly one winner per
     // location, selected by `resolution_precedes()` (the same order as
     // `resolve()`: higher priority, then smaller `blob_index`, then
-    // lexicographically smaller source). RFRX is sorted by (location_hash,
-    // priority desc, source_index, path), whose key does not include the blob,
-    // so legacy/manual same-priority ties may list any blob first; this
-    // comparison makes the pack winner independent of that record order.
-    // `std::map` keeps the winners keyed by location, which also yields
-    // byte-lexicographic path order for the pack entries (unlike
-    // location_hash order).
+    // lexicographically smaller source). The RFRX parser rejects two entries
+    // for one location at the same priority, so the winner never depends on
+    // the record order inside the index. `std::map` keeps the winners keyed by
+    // location, which also yields byte-lexicographic path order for the pack
+    // entries (unlike location_hash order).
     std::map<std::string, winner_entry> winners;
     for (std::size_t position{0}; position < index->size(); ++position) {
         auto record{index->at(position)};

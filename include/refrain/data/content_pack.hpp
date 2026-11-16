@@ -27,12 +27,12 @@ namespace refrain::data {
 //  - entries are re-sorted by path bytes (RFRX is ordered by `location_hash`,
 //    which is not a path order and cannot be exposed as the pack entry list);
 //  - the pack exposes one winner per location, i.e. the runtime resolved view:
-//    highest `priority`, then smallest `blob_index`, then lexicographically
-//    smallest `source` (the same order as `resolve()`). A legacy/manual index
-//    whose entries tie on priority therefore has a winner independent of the
-//    on-disk record order. The remaining records are the fallback chain and
-//    are not visible through the pack; `content where` still shows the full
-//    layered chain from the on-disk index.
+//    the highest `priority` in `resolution_precedes()` order (`resolve()` uses
+//    the same order). The RFRX parser rejects two entries for one location at
+//    the same priority, so the winner never depends on the on-disk record
+//    order. The remaining records are the fallback chain and are not visible
+//    through the pack; `content where` still shows the full layered chain from
+//    the on-disk index.
 //
 // `read()` resolves the path to its blob digest and asks the pack's own
 // `content_store` for the logical bytes (raw or packed, digest-verified). The

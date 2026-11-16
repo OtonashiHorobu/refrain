@@ -497,10 +497,10 @@ const suite mod_loader_tests = [] {
             expect(!host.loaded());
         };
 
-    "mod_loader/parses legacy and explicit loader declarations"_test = [] {
+    "mod_loader/parses an explicit loader declaration"_test = [] {
         const auto parse{[&](std::string_view entry) {
             auto doc{config::document::parse_text(
-                fmt::format("[mod]\nid = \"refrain.test.legacy\"\n"
+                fmt::format("[mod]\nid = \"refrain.test.entry\"\n"
                             "version = \"1.0.0\"\n"
                             "abi = 1\n\n[entry]\n{}",
                             entry),
@@ -513,12 +513,15 @@ const suite mod_loader_tests = [] {
             return mod::parse_mod_manifest(*doc);
         }};
 
-        auto legacy{parse("native = \"lib/libold.so\"\n")};
-        expect(static_cast<bool>(legacy));
-        if (legacy) {
-            expect(legacy->loader == "native");
-            expect(legacy->loader_inferred);
-            expect(legacy->entry->loader.empty());
+        // An entry table without `[entry].loader` is not a manifest form any
+        // more: the load declares its execution environment or it is refused,
+        // and the diagnostic names the field.
+        auto missing_loader{parse("native = \"lib/libold.so\"\n")};
+        expect(!missing_loader);
+        if (!missing_loader) {
+            expect(missing_loader.error().code == error_code::parse_error);
+            expect(missing_loader.error().message.find("entry.loader") !=
+                   std::string::npos);
         }
         auto explicit_native{
             parse("loader = \"native\"\nnative = \"lib/libnew.so\"\n")};

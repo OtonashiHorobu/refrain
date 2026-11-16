@@ -485,15 +485,6 @@ struct rfrx_layout {
     std::vector<location_span> locations{};
 };
 
-[[nodiscard]] auto same_primary_key(const rfrx_record &lhs,
-                                    const rfrx_record &rhs,
-                                    std::span<const std::byte> arena) -> bool {
-    return lhs.hash == rhs.hash && lhs.priority == rhs.priority &&
-           lhs.source_index == rhs.source_index &&
-           arena_text(arena, lhs.path_offset, lhs.path_len) ==
-               arena_text(arena, rhs.path_offset, rhs.path_len);
-}
-
 [[nodiscard]] auto ordered_before(const rfrx_record &lhs,
                                   const rfrx_record &rhs,
                                   std::span<const std::byte> arena) -> bool {
@@ -1098,23 +1089,13 @@ validate_rfrx_layout(std::span<const std::byte> bytes,
     }
 
     // Entries must be in canonical `(hash, priority desc, source_index, path)`
-    // order. Entries that tie on that key are legacy/manual data: the builder
-    // rejects every same-(location, priority) pair, but a previously published
-    // index may still carry different blobs at the same priority. Such records
-    // are accepted in either relative order (the documented key does not
-    // include the blob) and `resolve()` applies a deterministic tie-break that
-    // ignores file order. An exact duplicate (same location, priority, source
-    // and blob) is rejected. The whole tie group is checked, not just adjacent
-    // records. The check runs after every record has been structurally
-    // validated so the first reported error matches `parse_resolution_index()`.
+    // order. That key is total: the builder rejects every pair that shares a
+    // location and a priority, and two records that compare equal here are
+    // exact duplicates. Groups of records that tie on the key are therefore
+    // rejected as duplicates instead of being accepted in either order. The
+    // check runs after every record has been structurally validated so the
+    // first reported error matches `parse_resolution_index()`.
     std::optional<rfrx_record> previous{};
-    std::vector<std::uint32_t> group_blobs;
-    bool group_open{false};
-    const auto finish_group = [&group_blobs]() -> bool {
-        std::sort(group_blobs.begin(), group_blobs.end());
-        return std::adjacent_find(group_blobs.begin(), group_blobs.end()) ==
-               group_blobs.end();
-    };
     for (std::size_t index{0}; index < entry_count; ++index) {
         const auto record{decode_rfrx_record(
             entries.subspan(index * resolution_index_entry_bytes,
@@ -1123,32 +1104,12 @@ validate_rfrx_layout(std::span<const std::byte> bytes,
             previous = record;
             continue;
         }
-        if (!same_primary_key(*previous, record, arena)) {
-            if (group_open) {
-                if (!finish_group()) {
-                    return std::unexpected{parse_error(
-                        "resolution index contains a duplicate entry")};
-                }
-                group_open = false;
-            }
-            if (!ordered_before(*previous, record, arena)) {
-                return std::unexpected{parse_error(
-                    "resolution index entries are not sorted or contain "
-                    "duplicates")};
-            }
-        } else {
-            if (!group_open) {
-                group_open = true;
-                group_blobs.clear();
-                group_blobs.push_back(previous->blob_index);
-            }
-            group_blobs.push_back(record.blob_index);
+        if (!ordered_before(*previous, record, arena)) {
+            return std::unexpected{parse_error(
+                "resolution index entries are not sorted or contain "
+                "duplicates")};
         }
         previous = record;
-    }
-    if (group_open && !finish_group()) {
-        return std::unexpected{
-            parse_error("resolution index contains a duplicate entry")};
     }
 
     rfrx_layout layout;

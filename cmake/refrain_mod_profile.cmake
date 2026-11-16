@@ -325,14 +325,6 @@ function(refrain_resolve_mod_profile)
     # Resolve the link mode. `auto` keeps the historical behaviour for
     # profiles without a dynamic list: everything is linked statically.
     set(link_mode "${REFRAIN_MOD_LINK}")
-    if(NOT REFRAIN_MONOLITHIC)
-        # Deprecated option from before profiles existed: OFF asked for a
-        # non-monolithic (module) build.
-        set(link_mode "dynamic")
-        message(DEPRECATION
-                "[Refrain] REFRAIN_MONOLITHIC is deprecated; it maps to "
-                "REFRAIN_MOD_LINK=dynamic. Set REFRAIN_MOD_LINK instead.")
-    endif()
     if(link_mode STREQUAL "auto")
         if("${dynamic}" STREQUAL "")
             set(link_mode "static")
@@ -360,8 +352,7 @@ function(refrain_resolve_mod_profile)
                 "[Refrain] REFRAIN_MOD_LINK=dynamic (every mod as a shared "
                 "module) needs the shared runtime library, which does not "
                 "exist yet. Select the modules explicitly with a profile's "
-                "`dynamic` list (mixed mode). REFRAIN_MONOLITHIC=OFF maps to "
-                "this unsupported mode.")
+                "`dynamic` list (mixed mode).")
     endif()
     if(NOT "${dynamic}" STREQUAL "" AND NOT (UNIX AND NOT APPLE))
         message(FATAL_ERROR
