@@ -74,10 +74,11 @@ package, and carries that loader's payload. External native mods use
 `loader = "native"` with `[entry].native` and implement the C entry ABI in
 `include/refrain/mod/entry.h`; the native loader reads the member from the
 installed package, calls `refrain_mod_main`, validates the descriptor ABI, and
-invokes `on_load` with the sealed host core table. External WASM mods
-(`loader = "wasm"` with `[entry].wasm`) are rejected until the script runtime
-lands. [Mod loaders](#mod-loaders) describes the contract and the dispatch
-rules.
+invokes `on_load` with the sealed host core table. External WASM mods use
+`loader = "wasm"` with `[entry].wasm` and are executed by the sandboxed wasm
+loader when the build links the WebAssembly runtime; [WASM mods](#wasm-mods)
+describes the guest ABI, the budgets and the build switch. [Mod
+loaders](#mod-loaders) describes the contract and the dispatch rules.
 
 ## Mod loaders
 
@@ -115,8 +116,10 @@ The dispatch refuses to guess:
 
 - a loader id with no active instance fails the load, naming the id and the
   active loader ids; an unknown namespaced id is `not_found`, a first-party
-  loader that is not built into this host (`wasm`, `lua`, ...) is
-  `unsupported`;
+  loader that is not built into this host is `unsupported`;
+- a manifest naming `wasm` in a build without the WebAssembly runtime, and a
+  manifest naming `lua` in every build, are refused by the registered provider
+  with `unsupported` and a message naming the disabled or missing runtime;
 - a loader whose capabilities change after registration fails the next load
   instead of silently reconfiguring;
 - a sandboxed loader cannot register providers on behalf of its guest: the
@@ -130,8 +133,8 @@ The dispatch refuses to guess:
 |---|---|---|---|
 | `builtin` | host-owned: pairs the built-in image manifests with the statically linked code and calls the factory of every selected provider | `restart_required` | shipped |
 | `native` | host-owned: materialises the installed `[entry].native` member out of the content store, checks the entry ABI, opens the shared library and calls the entry point | `retire` | shipped |
-| `wasm` | script runtime with sandboxing and budgets | `clean` | reserved |
-| `lua` | script runtime with sandboxing and budgets | `clean` | reserved |
+| `wasm` | host bootstrap: materialises the installed `[entry].wasm` member from the receipt-checked content store, validates the guest ABI, instantiates the module in a fresh store with size/memory/instruction budgets and calls its `on_load` hook | `clean` | shipped when built (`REFRAIN_WITH_WASM`) |
+| `lua` | fail-closed placeholder: no Lua runtime ships, so every package naming `lua` is refused with the missing runtime named | `clean` | fail-closed |
 | `bukkit` | optional standalone mod that embeds a JVM and manages its own plugin directory | declared by that mod | future ecosystem |
 
 The `builtin` and `native` loaders are host bootstrap code: they wrap the
@@ -153,6 +156,51 @@ loader releases the guest completely, a `retire` loader keeps its resources
 mapped and only stops dispatching, and a `restart_required` loader cannot be
 unloaded while the process runs. The hot lifecycle below honours exactly the
 declared guarantee.
+
+### WASM mods
+
+A WASM mod is an installed `.rfmod` package whose manifest names the wasm
+loader and declares the module member:
+
+```toml
+[entry]
+loader = "wasm"
+wasm = "scripts/example.wasm"
+```
+
+The wasm loader reads the member back from the content store through the
+install receipt, so the bytes it compiles are exactly the installed bytes; a
+missing, oversized or corrupt member fails the load before any guest code
+runs. The guest ABI is deliberately narrow:
+
+- the module has **no host imports**. A module that declares one is refused as
+  a sandbox violation, and there is no path from a guest to a loader table, the
+  service registry or a host provider. Host imports will be added only through
+  a restricted script API, never as a raw provider table;
+- it must export `on_load: () -> i32`, called before the mod becomes active,
+  and may export `on_unload: () -> i32`, called on unload. A return value of
+  zero reports success; a non-zero `on_load` return fails the load;
+- all guest state lives in the module's own linear memory, which is released
+  when the instance is destroyed.
+
+Each load gets a fresh store with explicit budgets: a maximum module member
+size, a linear-memory ceiling, an instruction budget for the load path and a
+wall-clock load deadline. A guest that exhausts a budget is stopped and the
+load fails closed instead of leaving a half-loaded mod behind. A `clean`
+unload destroys the store and releases the module, memory and instruction
+budget; a reload builds the replacement generation first and unloads the old
+instance after the composition epoch commits, so a staged change never frees
+code the running composition still calls. Module code only runs during
+instantiation, `on_load` and `on_unload` in this slice; per-call execution
+budgets arrive with the script host API and the call dispatch path it needs.
+
+The wasm loader ships with the server composition when the build links the
+WebAssembly runtime (`with_wasm=True`, the default). A build configured with
+`-o with_wasm=False` registers the loader as an explicit fail-closed provider:
+every manifest naming `wasm` is refused with `unsupported` and a message
+naming the disabled build. The `lua` loader is registered the same way as an
+explicit fail-closed provider: it names the missing Lua runtime, and no Lua
+runtime ships with the server.
 
 `refrain-tools mods load` prints the registered loaders and, for every loaded
 mod, the loader that executed it and the recorded unload semantics.
@@ -527,10 +575,11 @@ never calls it again, and refuses to install or reload that id until the process
 restarts. A drain timeout quarantines instead of silently continuing to call an
 implementation whose lifetime can no longer be proven.
 
-Script loaders (`wasm`, `lua`) declare `clean` unload: tearing down the runtime
-releases their state completely, so they never accumulate retired mappings. No
-script loader is built into this host yet; a manifest naming one fails closed
-until the loader ships.
+Script loaders declare `clean` unload: destroying the guest runtime releases
+its state completely, so they never accumulate retired mappings. The `wasm`
+loader is hot-swappable when built and refuses packages in a build without the
+runtime; the `lua` loader is an explicit fail-closed provider because no Lua
+runtime ships with the server.
 
 ### Registry epochs and stale handles
 

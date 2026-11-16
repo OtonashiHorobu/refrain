@@ -1409,13 +1409,17 @@ auto host::validate_with_loader(const loader_binding &binding,
         package_root = parent.string();
     }
     const auto entry{make_loader_entry(manifest, activate_code, package_root)};
+    clear_loader_diagnostic();
     try {
         const loader_abi::provider provider{
             *static_cast<const loader_vtable *>(binding.api.vtable),
             binding.api.self};
         const auto validated{provider.validate(entry)};
         if (!validated) {
-            const auto detail{take_loader_dispatch_error()};
+            auto detail{take_loader_dispatch_error()};
+            if (detail.empty()) {
+                detail = take_loader_diagnostic();
+            }
             return std::unexpected{
                 fail(loader_error_to(validated.error()),
                      detail.empty()
@@ -1452,13 +1456,17 @@ auto host::load_with_loader(const loader_binding &binding,
     loader_abi::mod_load_request request{};
     request.struct_size = REFRAIN_SERVICES_MOD_LOADER_MOD_LOAD_REQUEST_SIZE;
     request.manifest = make_loader_entry(manifest, activate_code, package_root);
+    clear_loader_diagnostic();
     try {
         const loader_abi::provider provider{
             *static_cast<const loader_vtable *>(binding.api.vtable),
             binding.api.self};
         const auto loaded{provider.load(request)};
         if (!loaded) {
-            const auto detail{take_loader_dispatch_error()};
+            auto detail{take_loader_dispatch_error()};
+            if (detail.empty()) {
+                detail = take_loader_diagnostic();
+            }
             const auto code{loader_error_to(loaded.error())};
             // A sandbox refusal is the loader's policy, not a package defect:
             // say so instead of leaving the operator with a bare permission
@@ -1513,6 +1521,7 @@ auto host::reload_with_loader(const loader_binding &binding,
     loader_abi::mod_load_request request{};
     request.struct_size = REFRAIN_SERVICES_MOD_LOADER_MOD_LOAD_REQUEST_SIZE;
     request.manifest = make_loader_entry(manifest, activate_code, package_root);
+    clear_loader_diagnostic();
     try {
         const loader_abi::provider provider{
             *static_cast<const loader_vtable *>(binding.api.vtable),
@@ -1520,7 +1529,10 @@ auto host::reload_with_loader(const loader_binding &binding,
         const auto rebuilt{
             provider.reload(loader_abi::mod_instance{old_handle}, request)};
         if (!rebuilt) {
-            const auto detail{take_loader_dispatch_error()};
+            auto detail{take_loader_dispatch_error()};
+            if (detail.empty()) {
+                detail = take_loader_diagnostic();
+            }
             return std::unexpected{fail(
                 loader_error_to(rebuilt.error()),
                 detail.empty()
@@ -1557,6 +1569,7 @@ auto host::dispatch_loader_unload(const loaded_mod &mod, unload_reason reason)
             annotate(std::move(binding.error()),
                      fmt::format("mod '{}' unload", mod.id))};
     }
+    clear_loader_diagnostic();
     try {
         const loader_abi::provider provider{
             *static_cast<const loader_vtable *>(binding->api.vtable),
@@ -1565,7 +1578,10 @@ auto host::dispatch_loader_unload(const loaded_mod &mod, unload_reason reason)
             provider.unload(loader_abi::mod_instance{mod.instance_handle},
                             to_abi_unload_reason(reason))};
         if (!unloaded) {
-            const auto detail{take_loader_dispatch_error()};
+            auto detail{take_loader_dispatch_error()};
+            if (detail.empty()) {
+                detail = take_loader_diagnostic();
+            }
             return std::unexpected{fail(
                 loader_error_to(unloaded.error()),
                 detail.empty()

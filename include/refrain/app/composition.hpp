@@ -59,6 +59,14 @@ struct server_mods {
                                         std::span<const std::byte> image)
     -> status;
 
+/// Register the first-party script loader providers on `host` before
+/// activation: `wasm` (the sandboxed WebAssembly loader) and `lua` (an
+/// explicit fail-closed provider while no Lua runtime is linked). Idempotent
+/// per loader id: an id that already has a provider registered, for example one
+/// an embedder or a test installed, is left alone. Failures are the host's
+/// registration errors.
+[[nodiscard]] auto register_script_loaders(mod::host &host) -> status;
+
 /// Resolve + activate (the `mods load` / test path).
 [[nodiscard]] auto load_server_mods(const mod::gamepack_spec &spec,
                                     const server_mods_options &options)
