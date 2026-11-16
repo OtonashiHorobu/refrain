@@ -667,6 +667,49 @@ auto world_store::open(std::string_view root) -> result<world_store> {
     return world_store{std::move(state)};
 }
 
+auto read_world_data_version(std::string_view root) -> result<std::int32_t> {
+    if (root.empty()) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument, "world path is empty")};
+    }
+    const std::string base{root};
+    const auto path{join_path(base, "meta.rfw")};
+    if (!core::io::exists(path)) {
+        return std::unexpected{
+            make_error(error_code::not_found,
+                       fmt::format("world '{}' has no meta.rfw", base))};
+    }
+    auto payload{rwf::read_record_file(path)};
+    if (!payload) {
+        return std::unexpected{payload.error()};
+    }
+    const auto document{data::nbt::read(*payload)};
+    if (!document) {
+        return std::unexpected{document.error()};
+    }
+    const auto *level{document->get("level")};
+    if (level == nullptr || level->as_compound() == nullptr) {
+        return std::unexpected{make_error(
+            error_code::parse_error,
+            fmt::format("world '{}': meta.rfw has no 'level' compound", base))};
+    }
+    const auto *version{level->get("DataVersion")};
+    if (version == nullptr) {
+        return std::unexpected{make_error(
+            error_code::parse_error,
+            fmt::format("world '{}': level record has no DataVersion", base))};
+    }
+    const auto value{version->as_int()};
+    if (!value) {
+        return std::unexpected{make_error(
+            error_code::parse_error,
+            fmt::format(
+                "world '{}': level record DataVersion is not an integer",
+                base))};
+    }
+    return *value;
+}
+
 auto world_store::valid() const noexcept -> bool { return impl_ != nullptr; }
 
 auto world_store::root() const -> const std::string & {

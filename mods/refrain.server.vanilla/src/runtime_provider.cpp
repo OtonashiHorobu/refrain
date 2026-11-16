@@ -26,6 +26,7 @@
 #include <refrain/contracts/services/session_status.hpp>
 #include <refrain/contracts/services/session_tab.hpp>
 #include <refrain/contracts/services/transport.hpp>
+#include <refrain/contracts/services/world_migration_abi.h>
 #include <refrain/core/config.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/host/abi_bridge.hpp>
@@ -125,6 +126,8 @@ void collect_service(const refrain::mod::host &host, std::string_view service,
                     services.sim_provider);
     collect_service(host, "refrain:storage", services.storage,
                     services.storage_self, services.storage_provider);
+    collect_service(host, "refrain:world.migration", services.migration,
+                    services.migration_self, services.migration_provider);
     return services;
 }
 

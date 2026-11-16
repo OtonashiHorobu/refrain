@@ -29,6 +29,7 @@
 #include <refrain/server/play_gateway.hpp>
 #include <refrain/server/player_store.hpp>
 #include <refrain/server/world_bootstrap.hpp>
+#include <refrain/server/world_preflight.hpp>
 #include <refrain/sim/replay.hpp>
 #include <refrain/sim/world.hpp>
 #include <refrain/world/store.hpp>
@@ -121,6 +122,18 @@ auto run_server(const server_run_options &options,
         return report_error(refrain::make_error(
             refrain::error_code::invalid_argument,
             "refrain-server: --world is required to start the tick loop"));
+    }
+    // The world is opened below; upgrade a save recorded with an older data
+    // version first, or refuse it when no migration provider is active. A
+    // current world is untouched by this call.
+    if (auto prepared{refrain::server::prepare_world_open(
+            options.world_path,
+            refrain::server::world_migration_handle{
+                .vtable = services.migration,
+                .self = services.migration_self,
+                .provider = services.migration_provider})};
+        !prepared) {
+        return report_error(prepared.error());
     }
 
     const auto level_name{options.world.get_string("level_name", "world")};

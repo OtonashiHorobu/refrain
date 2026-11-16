@@ -456,6 +456,40 @@ suite world_store_gameplay = [] {
         }
     };
 
+    "read_world_data_version reads the level record without opening"_test = [] {
+        const temp_directory directory;
+        auto store{world::world_store::create(directory.sub("world-version"))};
+        expect(static_cast<bool>(store));
+        if (!store) {
+            return;
+        }
+        expect(write_meta(*store, make_meta(make_level())));
+        auto version{world::read_world_data_version(store->root())};
+        expect(static_cast<bool>(version));
+        if (version) {
+            expect(*version == 5023);
+        }
+
+        // A directory without a level record is not an RWF world: the
+        // open path uses that to leave foreign formats to their port.
+        auto missing{world::read_world_data_version(directory.sub("no-world"))};
+        expect(!missing);
+        if (!missing) {
+            expect(missing.error().code == refrain::error_code::not_found);
+        }
+
+        // An RWF world whose level record has no integer DataVersion is
+        // corrupt, not foreign: the read fails closed.
+        value corrupt_level{nbt::make_compound()};
+        set(corrupt_level, "LevelName", nbt::make_string("No Version"));
+        expect(write_meta(*store, make_meta(std::move(corrupt_level))));
+        auto corrupt{world::read_world_data_version(store->root())};
+        expect(!corrupt);
+        if (!corrupt) {
+            expect(corrupt.error().code == refrain::error_code::parse_error);
+        }
+    };
+
     "missing_meta_is_an_error"_test = [] {
         const temp_directory directory;
         auto store{world::world_store::create(directory.sub("world-missing"))};

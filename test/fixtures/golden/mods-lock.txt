@@ -1,4 +1,4 @@
-mods.lock: gamepack refrain.vanilla@26.3.0, 12 mod(s), fingerprint 8634c6df8a2b2fa93284c5f33ec5e1e9444f68ebcade6c437160c4f365dd2270
+mods.lock: gamepack refrain.vanilla@26.3.0, 13 mod(s), fingerprint 39fb6b9bedadd65c6b022c8a425e146689e400d2ce10760560254483458ad578
   refrain.admin.vanilla@1.0.0 (abi 1, origin=builtin, hash=93931ce7f459acf4dc72ef0186ee1b773ce47e3c5de9400e7b66227dd4916dda)
     path: <root>/mods/refrain.admin.vanilla/manifest.toml
   refrain.content.vanilla@1.0.0 (abi 1, origin=builtin, hash=0663cd0f746dba480ab86b1cce47d8c820b28d0dc551a7fb6696a38577b42ac1)
@@ -19,6 +19,8 @@ mods.lock: gamepack refrain.vanilla@26.3.0, 12 mod(s), fingerprint 8634c6df8a2b2
     path: <root>/test/fixtures/instance/mods/refrain.test.extra/manifest.toml
   refrain.transport.asio.tcp@1.0.0 (abi 1, origin=builtin, hash=c1c9e258e63d6e98f04cd082f841682a3b4aae5d80b559bf071ee8d37d86f316)
     path: <root>/mods/refrain.transport.asio.tcp/manifest.toml
+  refrain.world.datafix@1.0.0 (abi 1, origin=builtin, hash=9e3efbce566e3bbeccbff101c6ba0bd20a3a2313a87df373d077f48889f833bc)
+    path: <root>/mods/refrain.world.datafix/manifest.toml
   refrain.world.vanilla@1.0.0 (abi 1, origin=builtin, hash=6e7bcb061250a6003d8dd4784360f0cb1c6b420f91ebfaf695251d0f8b932967)
     path: <root>/mods/refrain.world.vanilla/manifest.toml
   refrain.worldgen.vanilla@1.0.0 (abi 1, origin=builtin, hash=43229e2c9f195f348164211fd8fe40405892badd1bdfc8c91d61cbfe216beb21)

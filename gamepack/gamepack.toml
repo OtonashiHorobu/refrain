@@ -24,6 +24,7 @@ list = [
     "refrain.content.vanilla@1.0.0",
     "refrain.data.vanilla@1.0.0",
     "refrain.world.vanilla@1.0.0",
+    "refrain.world.datafix@1.0.0",
     "refrain.worldgen.vanilla@1.0.0",
     "refrain.sim.vanilla@1.0.0",
     "refrain.storage.rwf@1.0.0",
@@ -42,6 +43,9 @@ requires = ["refrain.content.vanilla@^1.0.0"]
 
 [providers]
 world = "refrain.world.vanilla@^1.0.0"
+# The `world_migration` key maps to the `refrain:world.migration` service; a
+# composition that omits it refuses older worlds instead of upgrading them.
+world_migration = "refrain.world.datafix@^1.0.0"
 worldgen = "refrain.worldgen.vanilla@^1.0.0"
 sim = "refrain.sim.vanilla@^1.0.0"
 storage = "refrain.storage.rwf@^1.0.0"

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 629b46053b1e88ca
+// Schema hash: 27adb7195e7523ba
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -3131,6 +3131,48 @@ template <> struct custom_traits<::refrain::services::world::zstd_policy> {
         refrain::reflect::custom_field{"far_level", &::refrain::services::world::zstd_policy::far_level},
         refrain::reflect::custom_field{"near_radius", &::refrain::services::world::zstd_policy::near_radius},
         refrain::reflect::custom_field{"mid_radius", &::refrain::services::world::zstd_policy::mid_radius});
+};
+
+/// Generated RIDL struct 'refrain::services::world_migration::world_migration_capabilities'.
+template <> struct custom_traits<::refrain::services::world_migration::world_migration_capabilities> {
+    static constexpr std::string_view type_name = "refrain::services::world_migration::world_migration_capabilities";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"min_version", &::refrain::services::world_migration::world_migration_capabilities::min_version},
+        refrain::reflect::custom_field{"target_version", &::refrain::services::world_migration::world_migration_capabilities::target_version});
+};
+
+/// Generated RIDL struct 'refrain::services::world_migration::world_migration_plan'.
+template <> struct custom_traits<::refrain::services::world_migration::world_migration_plan> {
+    static constexpr std::string_view type_name = "refrain::services::world_migration::world_migration_plan";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"from_version", &::refrain::services::world_migration::world_migration_plan::from_version},
+        refrain::reflect::custom_field{"to_version", &::refrain::services::world_migration::world_migration_plan::to_version},
+        refrain::reflect::custom_field{"steps", &::refrain::services::world_migration::world_migration_plan::steps});
+};
+
+/// Generated RIDL struct 'refrain::services::world_migration::world_migration_request'.
+template <> struct custom_traits<::refrain::services::world_migration::world_migration_request> {
+    static constexpr std::string_view type_name = "refrain::services::world_migration::world_migration_request";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"world_path", &::refrain::services::world_migration::world_migration_request::world_path},
+        refrain::reflect::custom_field{"from_version", &::refrain::services::world_migration::world_migration_request::from_version},
+        refrain::reflect::custom_field{"to_version", &::refrain::services::world_migration::world_migration_request::to_version},
+        refrain::reflect::custom_field{"dry_run", &::refrain::services::world_migration::world_migration_request::dry_run});
+};
+
+/// Generated RIDL struct 'refrain::services::world_migration::world_migration_report'.
+template <> struct custom_traits<::refrain::services::world_migration::world_migration_report> {
+    static constexpr std::string_view type_name = "refrain::services::world_migration::world_migration_report";
+    static constexpr auto fields = std::make_tuple(
+        refrain::reflect::custom_field{"from_version", &::refrain::services::world_migration::world_migration_report::from_version},
+        refrain::reflect::custom_field{"to_version", &::refrain::services::world_migration::world_migration_report::to_version},
+        refrain::reflect::custom_field{"steps", &::refrain::services::world_migration::world_migration_report::steps},
+        refrain::reflect::custom_field{"chunks_scanned", &::refrain::services::world_migration::world_migration_report::chunks_scanned},
+        refrain::reflect::custom_field{"chunks_migrated", &::refrain::services::world_migration::world_migration_report::chunks_migrated},
+        refrain::reflect::custom_field{"player_records_scanned", &::refrain::services::world_migration::world_migration_report::player_records_scanned},
+        refrain::reflect::custom_field{"player_records_migrated", &::refrain::services::world_migration::world_migration_report::player_records_migrated},
+        refrain::reflect::custom_field{"no_op", &::refrain::services::world_migration::world_migration_report::no_op},
+        refrain::reflect::custom_field{"dry_run", &::refrain::services::world_migration::world_migration_report::dry_run});
 };
 
 /// Generated RIDL struct 'refrain::services::worldgen::worldgen_config'.

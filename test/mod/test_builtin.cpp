@@ -70,11 +70,11 @@ const suite builtin_image_tests = [] {
         expect(vfs.exists("mods.index.toml"));
         expect(!vfs.exists("mods/refrain.does.not.exist/manifest.toml"));
 
-        // All first-party internal mod manifests (eleven mods) live in the
+        // All first-party internal mod manifests (twelve mods) live in the
         // builtin image under mods/refrain.*.
         const auto prefixed{vfs.list_prefix("mods/refrain.")};
-        expect(prefixed.size() == 11U);
-        if (prefixed.size() == 11U) {
+        expect(prefixed.size() == 12U);
+        if (prefixed.size() == 12U) {
             expect(prefixed[1].path ==
                    "mods/refrain.content.vanilla/manifest.toml");
             expect(prefixed[2].path == k_data_manifest_path);

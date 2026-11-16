@@ -7,6 +7,7 @@
 #include <refrain/contracts/services/sim_abi.h>
 #include <refrain/contracts/services/storage_abi.h>
 #include <refrain/contracts/services/world_abi.h>
+#include <refrain/contracts/services/world_migration_abi.h>
 #include <refrain/core/error.hpp>
 #include <refrain/core/event.hpp>
 #include <refrain/data/checksum.hpp>
@@ -63,6 +64,14 @@ struct server_service_handles {
     std::string world_provider{};
     std::string sim_provider{};
     std::string storage_provider{};
+    /// Optional `refrain:world.migration` provider. Null when the composition
+    /// selects none: the open path then refuses a world recorded with a data
+    /// version this build does not read, instead of interpreting it with the
+    /// wrong schema. The vtable and `self` stay valid for the lifetime of the
+    /// mod host.
+    const refrain_services_world_migration_vtable *migration{nullptr};
+    void *migration_self{nullptr};
+    std::string migration_provider{};
 };
 
 /// Which implementation of `world_port` the runtime uses.
