@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: ba0b7f4fa5ba5492
+// Schema hash: 77d3b54f96579605
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_METADATA_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_METADATA_HPP
@@ -252,10 +252,11 @@ inline constexpr std::array<enum_value_entry, 9> refrain_services_mod_loader_mod
     enum_value_entry{"sandbox_violation" , 8},
     enum_value_entry{"internal" , 9},
 };
-inline constexpr std::array<enum_value_entry, 3> refrain_services_mod_loader_mod_unload_reason_values{
+inline constexpr std::array<enum_value_entry, 4> refrain_services_mod_loader_mod_unload_reason_values{
     enum_value_entry{"shutdown" , 0},
     enum_value_entry{"explicit_request" , 1},
     enum_value_entry{"reload" , 2},
+    enum_value_entry{"uninstall" , 3},
 };
 inline constexpr std::array<field_entry, 5> refrain_services_mod_loader_mod_loader_capabilities_fields{
     field_entry{"loader_id" , "string", 8, 16, 0},
@@ -737,28 +738,28 @@ inline constexpr std::array<type_entry, 86> types{
 };
 
 inline constexpr std::array<contract_entry, 19> contracts{
-    contract_entry{"refrain:host.core", 1, 0, 0, "ba0b7f4fa5ba5492", 12},
-    contract_entry{"refrain:host.kernel", 1, 0, 0, "ba0b7f4fa5ba5492", 6},
-    contract_entry{"refrain:host.metadata", 1, 0, 0, "ba0b7f4fa5ba5492", 8},
-    contract_entry{"refrain:host.platform", 1, 0, 0, "ba0b7f4fa5ba5492", 12},
-    contract_entry{"refrain:data.packs", 1, 0, 0, "ba0b7f4fa5ba5492", 4},
-    contract_entry{"refrain:mod.loader", 1, 0, 0, "ba0b7f4fa5ba5492", 5},
-    contract_entry{"refrain:net.protocol", 2, 1, 0, "ba0b7f4fa5ba5492", 14},
-    contract_entry{"refrain:net.session", 1, 0, 0, "ba0b7f4fa5ba5492", 6},
-    contract_entry{"refrain:net.translator", 1, 0, 0, "ba0b7f4fa5ba5492", 2},
-    contract_entry{"refrain:runtime", 2, 0, 0, "ba0b7f4fa5ba5492", 1},
-    contract_entry{"refrain:session.lifecycle", 1, 0, 0, "ba0b7f4fa5ba5492", 3},
-    contract_entry{"refrain:session.status", 1, 0, 0, "ba0b7f4fa5ba5492", 1},
-    contract_entry{"refrain:session.tab", 1, 0, 0, "ba0b7f4fa5ba5492", 1},
-    contract_entry{"refrain:sim", 1, 1, 0, "ba0b7f4fa5ba5492", 18},
-    contract_entry{"refrain:storage", 1, 0, 0, "ba0b7f4fa5ba5492", 6},
-    contract_entry{"refrain:transport", 1, 0, 0, "ba0b7f4fa5ba5492", 9},
-    contract_entry{"refrain:world", 1, 2, 0, "ba0b7f4fa5ba5492", 12},
-    contract_entry{"refrain:world.migration", 1, 0, 0, "ba0b7f4fa5ba5492", 3},
-    contract_entry{"refrain:worldgen", 1, 0, 0, "ba0b7f4fa5ba5492", 4},
+    contract_entry{"refrain:host.core", 1, 0, 0, "77d3b54f96579605", 12},
+    contract_entry{"refrain:host.kernel", 1, 0, 0, "77d3b54f96579605", 6},
+    contract_entry{"refrain:host.metadata", 1, 0, 0, "77d3b54f96579605", 8},
+    contract_entry{"refrain:host.platform", 1, 0, 0, "77d3b54f96579605", 12},
+    contract_entry{"refrain:data.packs", 1, 0, 0, "77d3b54f96579605", 4},
+    contract_entry{"refrain:mod.loader", 1, 0, 0, "77d3b54f96579605", 5},
+    contract_entry{"refrain:net.protocol", 2, 1, 0, "77d3b54f96579605", 14},
+    contract_entry{"refrain:net.session", 1, 0, 0, "77d3b54f96579605", 6},
+    contract_entry{"refrain:net.translator", 1, 0, 0, "77d3b54f96579605", 2},
+    contract_entry{"refrain:runtime", 2, 0, 0, "77d3b54f96579605", 1},
+    contract_entry{"refrain:session.lifecycle", 1, 0, 0, "77d3b54f96579605", 3},
+    contract_entry{"refrain:session.status", 1, 0, 0, "77d3b54f96579605", 1},
+    contract_entry{"refrain:session.tab", 1, 0, 0, "77d3b54f96579605", 1},
+    contract_entry{"refrain:sim", 1, 1, 0, "77d3b54f96579605", 18},
+    contract_entry{"refrain:storage", 1, 0, 0, "77d3b54f96579605", 6},
+    contract_entry{"refrain:transport", 1, 0, 0, "77d3b54f96579605", 9},
+    contract_entry{"refrain:world", 1, 2, 0, "77d3b54f96579605", 12},
+    contract_entry{"refrain:world.migration", 1, 0, 0, "77d3b54f96579605", 3},
+    contract_entry{"refrain:worldgen", 1, 0, 0, "77d3b54f96579605", 4},
 };
 
-inline constexpr std::string_view schema_hash = "ba0b7f4fa5ba5492";
+inline constexpr std::string_view schema_hash = "77d3b54f96579605";
 
 } // namespace refrain::metadata
 

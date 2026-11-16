@@ -61,6 +61,29 @@ static mod registry. Their data, assets and scripts travel in a deterministic
 RFSI image embedded in the binary. External packages use the same manifest
 model and are installed into the content store.
 
+### Composition epochs
+
+The active composition is not frozen for the process lifetime. Sealed services
+(`refrain:host.*` and the mod loader bootstrap) are sealed permanently, while an
+ordinary service can be replaced in epochs: a new provider generation is staged
+as a candidate, activated without publishing it, and then committed atomically
+at the next tick boundary. Each `(service, instance)` slot carries a
+monotonically increasing generation; callers cache a generation-stamped handle
+for the tick and a handle from a retired generation fails with `stale` instead
+of reaching code that is being unloaded.
+
+Staging is the IO half (read and verify the package, open a shared library,
+build the provider table) and runs on the command/installation thread. The
+commit is the tick half: it swaps the staged slots, advances the epoch, drains
+in-flight calls with a bounded wait and runs the old generations' unload hooks.
+A failed staging attempt rolls back to the previous epoch. Native libraries are
+never unloaded from the process; retired mappings are counted per mod and
+capped, after which a reload requires a restart.
+
+The composition epoch and a digest over its mod/provider generations are part
+of the audit record, so a run with hot changes can be distinguished from a
+static composition with the same mods.
+
 ## Network
 
 The network stack is split along three contracts:

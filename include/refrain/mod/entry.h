@@ -16,6 +16,7 @@
 #include <refrain/contracts/abi.h>
 #include <refrain/contracts/host/core_abi.h>
 #include <refrain/platform/export.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -57,16 +58,45 @@ typedef struct refrain_mod_context {
 typedef refrain_status (*refrain_mod_on_load)(
     const refrain_mod_context *context, void **user);
 
+/// Why the host is unloading one instance. This mirrors the loader contract's
+/// reason enum so the two surfaces stay consistent.
+typedef enum refrain_mod_unload_reason {
+    REFRAIN_MOD_UNLOAD_SHUTDOWN = 0,
+    REFRAIN_MOD_UNLOAD_RELOAD = 1,
+    REFRAIN_MOD_UNLOAD_UNINSTALL = 2,
+} refrain_mod_unload_reason;
+
 /// Called at host shutdown, after the service registry is no longer used.
 /// Optional; the library stays loaded until after this callback returns.
 typedef void (*refrain_mod_on_unload)(void *user);
+
+/// Reason-aware unload hook. Called instead of `on_unload` when the descriptor
+/// advertises it. A non-zero status reports that the mod could not release its
+/// resources; the host then quarantines the instance instead of calling it
+/// again.
+typedef refrain_status (*refrain_mod_on_unload_ex)(void *user, uint32_t reason);
 
 typedef struct refrain_mod_desc {
     uint32_t struct_size;
     uint32_t abi_major;
     refrain_mod_on_load on_load;
     refrain_mod_on_unload on_unload;
+    /// Optional; present when `struct_size` covers this field (the host accepts
+    /// a descriptor written before the field existed and calls `on_unload`
+    /// instead).
+    refrain_mod_on_unload_ex on_unload_ex;
 } refrain_mod_desc;
+
+/// Smallest accepted `refrain_mod_desc::struct_size`: a descriptor written
+/// before `on_unload_ex` existed ends here.
+#define REFRAIN_MOD_DESC_V1_SIZE (offsetof(refrain_mod_desc, on_unload_ex))
+#ifdef __cplusplus
+static_assert(REFRAIN_MOD_DESC_V1_SIZE >= 4u,
+              "refrain_mod_desc layout changed");
+#else
+_Static_assert(REFRAIN_MOD_DESC_V1_SIZE >= 4u,
+               "refrain_mod_desc layout changed");
+#endif
 
 typedef const refrain_mod_desc *(*refrain_mod_main_fn)(
     const refrain_mod_init *init);

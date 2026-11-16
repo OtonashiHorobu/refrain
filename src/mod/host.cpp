@@ -430,6 +430,7 @@ static_assert(alignof(vtable_header) == alignof(std::uint32_t));
     case error_code::cancelled:
     case error_code::out_of_memory:
     case error_code::mod_error:
+    case error_code::stale:
         return loader_abi::mod_loader_error::internal;
     }
     return loader_abi::mod_loader_error::internal;
@@ -618,6 +619,37 @@ validate_loader_capabilities(std::string_view expected_id,
                                               : loader.version);
 }
 
+/// `unload_reason` to the loader contract's reason enum.
+[[nodiscard]] auto to_abi_unload_reason(unload_reason reason) noexcept
+    -> loader_abi::mod_unload_reason {
+    switch (reason) {
+    case unload_reason::shutdown:
+        return loader_abi::mod_unload_reason::shutdown;
+    case unload_reason::reload:
+        return loader_abi::mod_unload_reason::reload;
+    case unload_reason::uninstall:
+        return loader_abi::mod_unload_reason::uninstall;
+    }
+    return loader_abi::mod_unload_reason::uninstall;
+}
+
+/// Decode the loader contract's reason enum. An unknown value is treated as an
+/// administrative removal.
+[[nodiscard]] auto
+from_abi_unload_reason(loader_abi::mod_unload_reason reason) noexcept
+    -> unload_reason {
+    switch (reason) {
+    case loader_abi::mod_unload_reason::shutdown:
+        return unload_reason::shutdown;
+    case loader_abi::mod_unload_reason::reload:
+        return unload_reason::reload;
+    case loader_abi::mod_unload_reason::explicit_request:
+    case loader_abi::mod_unload_reason::uninstall:
+        return unload_reason::uninstall;
+    }
+    return unload_reason::uninstall;
+}
+
 } // namespace
 
 namespace loader_detail {
@@ -739,8 +771,8 @@ auto bridge::load(void *self, const loader_abi::mod_load_request *request,
 auto bridge::unload(void *self,
                     refrain_services_mod_loader_handle_mod_instance instance,
                     loader_unload_reason reason) -> refrain_status {
-    static_cast<void>(reason);
-    if (self == nullptr || instance == REFRAIN_HANDLE_INVALID) {
+    if (self == nullptr ||
+        instance == REFRAIN_SERVICES_MOD_LOADER_HANDLE_MOD_INSTANCE_INVALID) {
         return static_cast<refrain_status>(
             loader_error_from(error_code::invalid_argument));
     }
@@ -749,15 +781,25 @@ auto bridge::unload(void *self,
         return static_cast<refrain_status>(
             loader_error_from(error_code::unknown));
     }
-    // TODO: dispatch instance unload to the lifecycle layer once it exists.
-    // The host records the declared semantics only, so a loader must not
-    // pretend it released an instance while its resources are still live.
-    state->owner->set_loader_dispatch_error(fmt::format(
-        "loader '{}' cannot unload instance {} before process shutdown; its "
-        "declared removal semantics are '{}'",
-        state->loader_id, instance, to_string(state->unload)));
-    return static_cast<refrain_status>(
-        loader_abi::mod_loader_error::unsupported);
+    auto &owner{*state->owner};
+    const auto requested{from_abi_unload_reason(
+        static_cast<loader_abi::mod_unload_reason>(reason))};
+    if (state->loader_id == builtin_loader_id) {
+        // Static code cannot stop executing inside the process. The lifecycle
+        // layer gates this earlier through the declared semantics; refuse here
+        // rather than pretend the factory-provided objects were released.
+        owner.set_loader_dispatch_error(fmt::format(
+            "builtin loader cannot unload instance {}: statically linked code "
+            "requires a process restart",
+            instance));
+        return static_cast<refrain_status>(
+            loader_abi::mod_loader_error::unsupported);
+    }
+    auto released{owner.release_loader_instance(instance, requested)};
+    if (!released) {
+        return fail_with(owner, released.error());
+    }
+    return REFRAIN_STATUS_OK;
 }
 
 auto bridge::reload(void *self,
@@ -765,14 +807,48 @@ auto bridge::reload(void *self,
                     const loader_abi::mod_load_request *request,
                     refrain_services_mod_loader_handle_mod_instance *out)
     -> refrain_status {
-    static_cast<void>(self);
-    static_cast<void>(instance);
-    static_cast<void>(request);
-    static_cast<void>(out);
-    // TODO: implement reload through the lifecycle layer. Until then the host
-    // must not replace an instance it cannot release.
-    return static_cast<refrain_status>(
-        loader_abi::mod_loader_error::unsupported);
+    if (self == nullptr || request == nullptr || out == nullptr ||
+        instance == REFRAIN_SERVICES_MOD_LOADER_HANDLE_MOD_INSTANCE_INVALID) {
+        return static_cast<refrain_status>(
+            loader_error_from(error_code::invalid_argument));
+    }
+    *out = REFRAIN_SERVICES_MOD_LOADER_HANDLE_MOD_INSTANCE_INVALID;
+    const auto *state{static_cast<const host::loader_provider_state *>(self)};
+    if (state->owner == nullptr) {
+        return static_cast<refrain_status>(
+            loader_error_from(error_code::unknown));
+    }
+    auto &owner{*state->owner};
+    const auto loader{
+        refrain::contracts::as_string_view(request->manifest.loader)};
+    if (loader != state->loader_id) {
+        owner.set_loader_dispatch_error(fmt::format(
+            "loader provider for instance '{}' was asked to reload loader "
+            "'{}'",
+            state->loader_id, std::string{loader}));
+        return static_cast<refrain_status>(
+            loader_abi::mod_loader_error::version_mismatch);
+    }
+    if (request->manifest.activate_code == 0) {
+        // Data-only reload: no code generation exists to rebuild.
+        *out = instance;
+        return REFRAIN_STATUS_OK;
+    }
+    if (state->loader_id == builtin_loader_id) {
+        owner.set_loader_dispatch_error(fmt::format(
+            "builtin loader cannot rebuild instance {}: statically linked code "
+            "requires a process restart",
+            instance));
+        return static_cast<refrain_status>(
+            loader_abi::mod_loader_error::unsupported);
+    }
+    std::uint64_t replacement{0};
+    auto rebuilt{owner.native_reload_instance(instance, replacement)};
+    if (!rebuilt) {
+        return fail_with(owner, rebuilt.error());
+    }
+    *out = replacement;
+    return REFRAIN_STATUS_OK;
 }
 
 } // namespace loader_detail
@@ -931,6 +1007,7 @@ auto host::load_one(const composition &plan, const package_source &package,
     current_static_descriptor_ = nullptr;
     current_mod_selected_provider_ = selected_provider;
     current_load_has_code_ = false;
+    current_mod_registered_slots_.clear();
     clear_loader_dispatch_error();
 
     struct dispatch_scope {
@@ -968,13 +1045,32 @@ auto host::load_one(const composition &plan, const package_source &package,
     }
 
     std::uint64_t instance_handle{0};
-    if (auto loaded_with{load_with_loader(*loader, *manifest, activate_code,
-                                          instance_handle)};
-        !loaded_with) {
+    const auto can_reload_code{current_replaced_handle_.has_value() &&
+                               activate_code &&
+                               current_loader_id_ == current_replaced_loader_};
+    if (can_reload_code) {
+        // The diff decided this id is a new generation of an already active
+        // mod: ask the loader to build the replacement next to the running
+        // instance. The old instance is unloaded after the commit, never
+        // before, because the committed registry still hands it out until the
+        // epoch switches.
+        const auto replaced{*current_replaced_handle_};
+        if (auto rebuilt{reload_with_loader(*loader, *manifest, activate_code,
+                                            replaced, instance_handle)};
+            !rebuilt) {
+            return std::unexpected{
+                annotate(std::move(rebuilt.error()), entry.path)};
+        }
+    } else if (auto loaded_with{load_with_loader(
+                   *loader, *manifest, activate_code, instance_handle)};
+               !loaded_with) {
         return std::unexpected{
             annotate(std::move(loaded_with.error()), entry.path)};
     }
 
+    const auto generation{current_replaced_generation_ != 0
+                              ? current_replaced_generation_ + 1
+                              : std::uint64_t{1}};
     return loaded_mod{.id = manifest->common.id,
                       .version = manifest->common.version,
                       .abi = manifest->common.abi,
@@ -988,7 +1084,11 @@ auto host::load_one(const composition &plan, const package_source &package,
                       .loader_inferred = manifest->loader_inferred,
                       .loader_unload = loader->record->unload,
                       .loader_sandboxed = loader->record->sandboxed,
-                      .instance_handle = instance_handle};
+                      .instance_handle = instance_handle,
+                      .state = staging_ ? mod_lifecycle_state::staged
+                                        : mod_lifecycle_state::active,
+                      .generation = generation,
+                      .provided_slots = current_mod_registered_slots_};
 }
 
 host::~host() {
@@ -999,15 +1099,26 @@ host::~host() {
 void host::unload_external_mods() noexcept {
     for (auto entry{external_mods_.rbegin()}; entry != external_mods_.rend();
          ++entry) {
-        if (entry->on_unload != nullptr) {
-            try {
-                entry->on_unload(entry->user);
-            } catch (...) {
-                // A mod must not terminate the host during shutdown.
-            }
+        if (entry->released) {
+            continue;
         }
+        try {
+            if (entry->on_unload_ex != nullptr) {
+                static_cast<void>(entry->on_unload_ex(
+                    entry->user,
+                    static_cast<std::uint32_t>(unload_reason::shutdown)));
+            } else if (entry->on_unload != nullptr) {
+                entry->on_unload(entry->user);
+            }
+        } catch (...) {
+            // A mod must not terminate the host during shutdown.
+        }
+        entry->released = true;
     }
+    // Process/host teardown: the mappings are only unmapped here, never while
+    // the server is running.
     external_mods_.clear();
+    retired_native_libraries_.clear();
 }
 
 void host::remove_materialized_entries() noexcept {
@@ -1032,7 +1143,11 @@ auto host::take_loader_dispatch_error() -> std::string {
 }
 
 auto host::register_bootstrap_loaders() -> status {
-    if (!loaders_.empty()) {
+    // Embedders/tests may register their own loader before the host bootstrap
+    // runs; the engine-owned loaders are still part of every host, so only the
+    // missing ones are registered.
+    if (find_loader(builtin_loader_id) != nullptr &&
+        find_loader(native_loader_id) != nullptr) {
         return status_ok();
     }
     builtin_loader_state_ = std::make_unique<loader_provider_state>();
@@ -1364,11 +1479,106 @@ auto host::load_with_loader(const loader_binding &binding,
                                   sandbox_reason, detail))};
         }
         handle = loaded->raw();
+        // A loader that returned an instance handle executed mod code; the
+        // lifecycle layer uses this to decide whether an unload hook must run.
+        if (activate_code && handle != 0) {
+            current_load_has_code_ = true;
+        }
     } catch (...) {
         return std::unexpected{
             fail(error_code::unknown,
                  fmt::format("mod loader '{}' load threw an exception",
                              binding.record->id))};
+    }
+    return status_ok();
+}
+
+auto host::reload_with_loader(const loader_binding &binding,
+                              const mod_manifest &manifest, bool activate_code,
+                              std::uint64_t old_handle,
+                              std::uint64_t &new_handle) -> status {
+    new_handle = 0;
+    if (current_candidate_ == nullptr) {
+        return std::unexpected{
+            fail(error_code::unknown,
+                 "mod loader dispatch has no candidate context")};
+    }
+    auto package_root{std::string{}};
+    if (const auto parent{
+            std::filesystem::path{current_candidate_->path}.parent_path()};
+        !parent.empty()) {
+        package_root = parent.string();
+    }
+    loader_abi::mod_load_request request{};
+    request.struct_size = REFRAIN_SERVICES_MOD_LOADER_MOD_LOAD_REQUEST_SIZE;
+    request.manifest = make_loader_entry(manifest, activate_code, package_root);
+    try {
+        const loader_abi::provider provider{
+            *static_cast<const loader_vtable *>(binding.api.vtable),
+            binding.api.self};
+        const auto rebuilt{
+            provider.reload(loader_abi::mod_instance{old_handle}, request)};
+        if (!rebuilt) {
+            const auto detail{take_loader_dispatch_error()};
+            return std::unexpected{fail(
+                loader_error_to(rebuilt.error()),
+                detail.empty()
+                    ? fmt::format("mod loader '{}' failed to reload mod '{}'",
+                                  binding.record->id, manifest.common.id)
+                    : fmt::format("mod loader '{}' failed to reload mod '{}': "
+                                  "{}",
+                                  binding.record->id, manifest.common.id,
+                                  detail))};
+        }
+        new_handle = rebuilt->raw();
+        if (activate_code && new_handle != 0) {
+            current_load_has_code_ = true;
+        }
+    } catch (...) {
+        return std::unexpected{
+            fail(error_code::unknown,
+                 fmt::format("mod loader '{}' reload threw an exception",
+                             binding.record->id))};
+    }
+    return status_ok();
+}
+
+auto host::dispatch_loader_unload(const loaded_mod &mod, unload_reason reason)
+    -> status {
+    if (!mod.has_code || mod.instance_handle == 0) {
+        // A data-only mod runs no code; removing its composition record is the
+        // unload.
+        return status_ok();
+    }
+    auto binding{resolve_loader(mod.loader)};
+    if (!binding) {
+        return std::unexpected{
+            annotate(std::move(binding.error()),
+                     fmt::format("mod '{}' unload", mod.id))};
+    }
+    try {
+        const loader_abi::provider provider{
+            *static_cast<const loader_vtable *>(binding->api.vtable),
+            binding->api.self};
+        const auto unloaded{
+            provider.unload(loader_abi::mod_instance{mod.instance_handle},
+                            to_abi_unload_reason(reason))};
+        if (!unloaded) {
+            const auto detail{take_loader_dispatch_error()};
+            return std::unexpected{fail(
+                loader_error_to(unloaded.error()),
+                detail.empty()
+                    ? fmt::format("mod loader '{}' failed to unload mod '{}'",
+                                  binding->record->id, mod.id)
+                    : fmt::format("mod loader '{}' failed to unload mod '{}': "
+                                  "{}",
+                                  binding->record->id, mod.id, detail))};
+        }
+    } catch (...) {
+        return std::unexpected{
+            fail(error_code::unknown,
+                 fmt::format("mod loader '{}' unload threw an exception",
+                             binding->record->id))};
     }
     return status_ok();
 }
@@ -1477,7 +1687,16 @@ auto host::native_validate(std::string_view native_path,
     return status_ok();
 }
 
-auto host::native_load(std::uint64_t &handle) -> status {
+auto host::find_external_mod(std::uint64_t handle) -> external_mod_state * {
+    for (auto &state : external_mods_) {
+        if (state.handle == handle) {
+            return &state;
+        }
+    }
+    return nullptr;
+}
+
+auto host::open_native_instance(std::uint64_t &handle) -> status {
     handle = 0;
     if (current_manifest_ == nullptr || current_candidate_ == nullptr ||
         current_package_ == nullptr) {
@@ -1511,22 +1730,22 @@ auto host::native_load(std::uint64_t &handle) -> status {
         }
         materialized_dir_ = std::move(*created);
     }
-    // Name the copy after its content: two packages that ship the same library
-    // share one file, and a retry never opens a half-written entry.
+    // Name the copy after its content and a per-load sequence: a reload writes
+    // a new file even when the package bytes are identical, so the dynamic
+    // loader can never resolve the new generation to an earlier mapping by
+    // path identity.
     const auto digest_hex{data::to_hex(data::blake3(*library_bytes))};
     // Keep the packaged member's extension; the dynamic loader opens the file
     // by path and infers nothing from it.
     const auto extension{std::filesystem::path{member}.extension().string()};
-    const auto library_path{
-        data::join_path(materialized_dir_, digest_hex + extension)};
-    if (!io::exists(library_path)) {
-        if (auto written{io::write_file(library_path, *library_bytes)};
-            !written) {
-            return std::unexpected{
-                annotate(std::move(written.error()),
-                         fmt::format("mod '{}' native entry copy {}",
-                                     manifest.common.id, library_path))};
-        }
+    const auto library_path{data::join_path(
+        materialized_dir_, fmt::format("{}-{}{}", digest_hex,
+                                       ++materialized_sequence_, extension))};
+    if (auto written{io::write_file(library_path, *library_bytes)}; !written) {
+        return std::unexpected{
+            annotate(std::move(written.error()),
+                     fmt::format("mod '{}' native entry copy {}",
+                                 manifest.common.id, library_path))};
     }
 
     auto loaded_library{platform::dynamic_library::load(library_path)};
@@ -1589,7 +1808,10 @@ auto host::native_load(std::uint64_t &handle) -> status {
             fail(error_code::parse_error,
                  fmt::format("'{}' returned a null descriptor", symbol_name))};
     }
-    if (desc->struct_size < sizeof(refrain_mod_desc)) {
+    // The unload hook was added after the first descriptors were written: a
+    // smaller struct is a valid v1 descriptor and is accepted with the legacy
+    // hook, a larger one must cover exactly the fields this host knows.
+    if (desc->struct_size < REFRAIN_MOD_DESC_V1_SIZE) {
         return std::unexpected{
             fail(error_code::version_mismatch,
                  fmt::format("'{}' descriptor struct_size {} is too small",
@@ -1634,14 +1856,115 @@ auto host::native_load(std::uint64_t &handle) -> status {
                      entry.path)};
     }
 
-    handle = next_instance_handle_++;
-    current_load_has_code_ = true;
+    const auto new_handle{next_instance_handle_++};
     external_mods_.push_back(external_mod_state{
         .library = std::move(library),
+        .on_unload_ex =
+            desc->struct_size >= offsetof(refrain_mod_desc, on_unload_ex) +
+                                     sizeof(refrain_mod_on_unload_ex)
+                ? desc->on_unload_ex
+                : nullptr,
         .on_unload = desc->on_unload,
         .user = user,
-        .handle = handle,
+        .handle = new_handle,
+        .id = manifest.common.id,
+        .version = manifest.common.version,
     });
+    handle = new_handle;
+    current_load_has_code_ = true;
+    return status_ok();
+}
+
+auto host::native_load(std::uint64_t &handle) -> status {
+    return open_native_instance(handle);
+}
+
+auto host::native_reload_instance(std::uint64_t instance,
+                                  std::uint64_t &out_new) -> status {
+    out_new = 0;
+    const auto *old{find_external_mod(instance)};
+    if (old == nullptr || old->released) {
+        return std::unexpected{
+            fail(error_code::not_found,
+                 fmt::format("the native loader has no live instance {}",
+                             instance))};
+    }
+    if (current_manifest_ == nullptr) {
+        return std::unexpected{
+            fail(error_code::unknown,
+                 "native loader reload has no manifest context")};
+    }
+    const auto &id{current_manifest_->common.id};
+    if (old->id != id) {
+        return std::unexpected{fail(
+            error_code::version_mismatch,
+            fmt::format("native reload instance {} belongs to mod '{}' and "
+                        "cannot be replaced by '{}'",
+                        instance, old->id, id))};
+    }
+    const auto retired{native_retired_generations_[id]};
+    if (retired >= native_retire_limit_) {
+        return std::unexpected{
+            fail(error_code::unsupported,
+                 fmt::format(
+                     "mod '{}' already keeps {} retired native generation(s) "
+                     "mapped and the limit is {}; a reload would leak "
+                     "another shared library mapping, so the server must be "
+                     "restarted",
+                     id, retired, native_retire_limit_))};
+    }
+    return open_native_instance(out_new);
+}
+
+auto host::release_loader_instance(std::uint64_t instance, unload_reason reason)
+    -> status {
+    auto *state{find_external_mod(instance)};
+    if (state == nullptr) {
+        return std::unexpected{
+            fail(error_code::not_found,
+                 fmt::format("the native loader does not own instance {}",
+                             instance))};
+    }
+    if (state->released) {
+        return status_ok();
+    }
+    refrain_status callback_status{REFRAIN_STATUS_OK};
+    try {
+        if (state->on_unload_ex != nullptr) {
+            callback_status = state->on_unload_ex(
+                state->user, static_cast<std::uint32_t>(reason));
+        } else if (state->on_unload != nullptr) {
+            state->on_unload(state->user);
+        }
+    } catch (...) {
+        // A mod callback must never unwind into the host; an exception is a
+        // failed unload and quarantines the instance like a non-zero status.
+        callback_status = static_cast<refrain_status>(REFRAIN_HANDLE_INVALID);
+    }
+    state->released = true;
+    if (callback_status != REFRAIN_STATUS_OK) {
+        state->quarantined = true;
+        ++native_retired_generations_[state->id];
+        record_quarantine(
+            state->id,
+            fmt::format("on_unload failed for {}@{} with reason '{}' (status "
+                        "{}); the instance is quarantined and never called "
+                        "again",
+                        state->id, state->version, to_string(reason),
+                        callback_status));
+        return std::unexpected{
+            fail(error_code::mod_error,
+                 fmt::format("mod '{}' on_unload failed with status {}; the "
+                             "instance is quarantined and the server must be "
+                             "restarted to load it again",
+                             state->id, callback_status))};
+    }
+    if (state->library != nullptr) {
+        // Retire, never dlclose: a call that started before the commit may
+        // still be inside this mapping.
+        retired_native_libraries_.push_back(std::move(state->library));
+        ++native_retired_generations_[state->id];
+    }
     return status_ok();
 }
 
@@ -1692,35 +2015,7 @@ auto host::load(const composition &plan, const package_resolver &resolve)
 
         // The resolved plan is the only authority on which mods may
         // activate provider code, so project it once before any factory runs.
-        // Every exclusive provider, chain base/wrapper and instanced provider
-        // contributes its mod id and the `[providers]` short slots it serves.
-        planned_providers planned{};
-        for (const auto &resolved : plan.providers) {
-            const auto add_provider_ref{
-                [&planned, &resolved](std::string_view ref,
-                                      std::string_view instance) {
-                    const auto id{std::string{split_provider_ref(ref).id}};
-                    if (id.empty()) {
-                        return;
-                    }
-                    planned.mods.insert(id);
-                    if (resolved.service.empty()) {
-                        return;
-                    }
-                    planned.slots[id].insert(resolved.service);
-                    if (!instance.empty()) {
-                        planned.instances[id][resolved.service].insert(
-                            std::string{instance});
-                    }
-                }};
-            add_provider_ref(resolved.provider, {});
-            for (const auto &instance : resolved.instances) {
-                add_provider_ref(instance.provider, instance.name);
-            }
-            for (const auto &wrapper : resolved.wrappers) {
-                add_provider_ref(wrapper, {});
-            }
-        }
+        planned_providers planned{plan_providers(plan)};
 
         std::vector<loaded_mod> mods{};
         mods.reserve(plan.load_order.size());
@@ -1781,8 +2076,26 @@ auto host::load(const composition &plan, const package_resolver &resolve)
         }
 
         loaded_flag_ = true;
-        // Composition is complete: providers can no longer be added.
-        services_.freeze();
+        // Publish the boot composition as epoch 1: every immediate
+        // `select_active()` above becomes generation 1 of its slot in one
+        // commit. From here on the registry stays open for hot epochs while the
+        // host-owned surfaces are sealed permanently.
+        if (auto committed{services_.commit_epoch()}; !committed) {
+            return std::unexpected{std::move(committed.error())};
+        }
+        plan_ = plan;
+        epoch_ = 1;
+        for (const auto &mod : mods_) {
+            mod_generations_[mod.id] = mod.generation;
+        }
+        for (const auto &service : sealed_services_) {
+            if (auto sealed{services_.seal(service)}; !sealed) {
+                return std::unexpected{std::move(sealed.error())};
+            }
+        }
+        if (auto sealed{services_.seal(mod_loader_service_id)}; !sealed) {
+            return std::unexpected{std::move(sealed.error())};
+        }
         return status_ok();
     }};
 
@@ -1795,14 +2108,72 @@ auto host::load(const composition &plan, const package_resolver &resolve)
     return result;
 }
 
-auto host::verify_plan_activation(const composition &plan) const -> status {
-    const auto verify_active{[this](std::string_view slot, std::string_view ref,
-                                    std::string_view instance) -> status {
+auto host::plan_providers(const composition &plan) -> planned_providers {
+    planned_providers planned{};
+    for (const auto &resolved : plan.providers) {
+        const auto add_provider_ref{
+            [&planned, &resolved](std::string_view ref,
+                                  std::string_view instance) {
+                const auto id{std::string{split_provider_ref(ref).id}};
+                if (id.empty()) {
+                    return;
+                }
+                planned.mods.insert(id);
+                if (resolved.service.empty()) {
+                    return;
+                }
+                planned.slots[id].insert(resolved.service);
+                if (!instance.empty()) {
+                    planned.instances[id][resolved.service].insert(
+                        std::string{instance});
+                }
+            }};
+        add_provider_ref(resolved.provider, {});
+        for (const auto &instance : resolved.instances) {
+            add_provider_ref(instance.provider, instance.name);
+        }
+        for (const auto &wrapper : resolved.wrappers) {
+            add_provider_ref(wrapper, {});
+        }
+    }
+    return planned;
+}
+
+auto host::verify_plan_activation(const composition &plan, bool staged) const
+    -> status {
+    const auto find_mod{[this,
+                         staged](std::string_view id) -> const loaded_mod * {
+        const auto match{
+            std::find_if(mods_.begin(), mods_.end(),
+                         [id](const loaded_mod &mod) { return mod.id == id; })};
+        if (match != mods_.end()) {
+            return &*match;
+        }
+        if (!staged) {
+            return nullptr;
+        }
+        const auto staged_match{
+            std::find_if(staged_mods_.begin(), staged_mods_.end(),
+                         [id](const loaded_mod &mod) { return mod.id == id; })};
+        return staged_match == staged_mods_.end() ? nullptr : &*staged_match;
+    }};
+    const auto active_view{
+        [this,
+         staged](std::string_view service,
+                 std::string_view instance) -> std::optional<provider_info> {
+            if (staged) {
+                return services_.staged_active_provider(service, instance);
+            }
+            return services_.active_provider(service, instance);
+        }};
+    const auto verify_active{[this, &find_mod, &active_view](
+                                 std::string_view slot, std::string_view ref,
+                                 std::string_view instance) -> status {
         const auto [id, version] = split_provider_ref(ref);
         if (id.empty()) {
             return status_ok();
         }
-        const auto *mod{find(id)};
+        const auto *mod{find_mod(id)};
         if (mod == nullptr) {
             return std::unexpected{
                 fail(error_code::not_found,
@@ -1815,11 +2186,11 @@ auto host::verify_plan_activation(const composition &plan) const -> status {
             // contract, so there is no provider instance to activate.
             return status_ok();
         }
-        for (const auto &service : services_.active_services()) {
+        for (const auto &service : services_.services()) {
             if (!matches_slot(service, slot)) {
                 continue;
             }
-            const auto active{services_.active_provider(service, instance)};
+            const auto active{active_view(service, instance)};
             if (!active || active->id != id) {
                 continue;
             }
@@ -1922,9 +2293,640 @@ void host::enter_failed_state() {
     current_loader_id_.clear();
     current_loader_sandboxed_ = false;
     current_load_has_code_ = false;
+    current_mod_registered_slots_.clear();
+    current_replaced_handle_.reset();
+    current_replaced_generation_ = 0;
+    current_replaced_loader_.clear();
     loader_dispatch_error_.clear();
+    plan_ = composition{};
+    epoch_ = 0;
+    mod_generations_.clear();
+    staged_change_.reset();
+    staged_next_composition_.reset();
+    staged_mods_.clear();
+    staged_retire_mods_.clear();
+    staged_retire_reasons_.clear();
+
+    staging_ = false;
+    quarantined_mods_.clear();
     loaded_flag_ = false;
     failed_ = true;
+}
+
+// ---------------------------------------------------------------------------
+// hot lifecycle: staged composition epochs
+// ---------------------------------------------------------------------------
+
+auto host::restart_required_reason_for(const loaded_mod &mod) const
+    -> std::string {
+    for (const auto &quarantined : quarantined_mods_) {
+        if (quarantined == mod.id) {
+            return fmt::format(
+                "mod '{}' is quarantined and needs a process restart before it "
+                "can be installed again",
+                mod.id);
+        }
+    }
+    if (mod.has_code &&
+        mod.loader_unload == mod_unload_semantics::restart_required) {
+        return fmt::format(
+            "mod '{}' was loaded by '{}' with restart-required unload "
+            "semantics; statically linked code cannot be removed while the "
+            "server runs",
+            mod.id, mod.loader);
+    }
+    for (const auto &slot : mod.provided_slots) {
+        if (is_restart_required_service(slot.service)) {
+            return fmt::format("mod '{}' provides {}; the server must be "
+                               "restarted to replace it",
+                               mod.id, restart_required_reason(slot.service));
+        }
+    }
+    return {};
+}
+
+void host::record_quarantine(std::string_view id, std::string_view reason) {
+    if (std::find(quarantined_mods_.begin(), quarantined_mods_.end(), id) ==
+        quarantined_mods_.end()) {
+        quarantined_mods_.emplace_back(id);
+    }
+    log_mod.error("quarantined mod {}: {}", id, reason);
+}
+
+auto host::lifecycle_records() const -> std::vector<mod_lifecycle_record> {
+    std::vector<mod_lifecycle_record> records;
+    records.reserve(mods_.size() + quarantined_mods_.size());
+    for (const auto &mod : mods_) {
+        records.push_back(mod_lifecycle_record{
+            .id = mod.id,
+            .version = mod.version,
+            .loader = mod.loader,
+            .state = mod.state,
+            .generation = mod.generation,
+            .unload_semantics = mod.loader_unload,
+            .quarantined =
+                std::find(quarantined_mods_.begin(), quarantined_mods_.end(),
+                          mod.id) != quarantined_mods_.end(),
+        });
+    }
+    for (const auto &id : quarantined_mods_) {
+        if (std::any_of(records.begin(), records.end(),
+                        [&id](const mod_lifecycle_record &record) {
+                            return record.id == id;
+                        })) {
+            continue;
+        }
+        records.push_back(mod_lifecycle_record{
+            .id = id,
+            .state = mod_lifecycle_state::retired,
+            .quarantined = true,
+        });
+    }
+    std::sort(records.begin(), records.end(),
+              [](const mod_lifecycle_record &lhs,
+                 const mod_lifecycle_record &rhs) { return lhs.id < rhs.id; });
+    return records;
+}
+
+auto host::lifecycle_record(std::string_view id) const
+    -> std::optional<mod_lifecycle_record> {
+    for (const auto &record : lifecycle_records()) {
+        if (record.id == id) {
+            return record;
+        }
+    }
+    return std::nullopt;
+}
+
+auto host::retired_native_generations(std::string_view id) const
+    -> std::size_t {
+    const auto found{native_retired_generations_.find(std::string{id})};
+    return found == native_retired_generations_.end() ? 0 : found->second;
+}
+
+void host::set_native_retire_limit(std::size_t limit) noexcept {
+    native_retire_limit_ = limit;
+}
+
+auto host::composition_digest_text() const -> std::string {
+    std::string text{
+        fmt::format("refrain-mod-composition/1\nepoch {}\ngamepack "
+                    "{} {}\n",
+                    epoch_, plan_.spec.id, plan_.spec.version)};
+    std::vector<const loaded_mod *> ordered;
+    ordered.reserve(mods_.size());
+    for (const auto &mod : mods_) {
+        ordered.push_back(&mod);
+    }
+    std::sort(ordered.begin(), ordered.end(),
+              [](const loaded_mod *lhs, const loaded_mod *rhs) {
+                  return lhs->id < rhs->id;
+              });
+    for (const auto *mod : ordered) {
+        text += fmt::format("mod {} {} {} {} generation {}\n", mod->id,
+                            mod->version, mod->loader, to_string(mod->state),
+                            mod->generation);
+    }
+    for (const auto &service : services_.active_services()) {
+        for (const auto &instance : services_.active_instances(service)) {
+            const auto active{services_.active_provider(service, instance)};
+            if (!active) {
+                continue;
+            }
+            text += fmt::format("service {} {} {} {} generation {}\n", service,
+                                instance, active->id, active->version,
+                                active->generation);
+        }
+    }
+    return text;
+}
+
+auto host::composition_digest() const -> std::string {
+    const auto text{composition_digest_text()};
+    const auto bytes{std::span<const std::byte>{
+        reinterpret_cast<const std::byte *>(text.data()), text.size()}};
+    return data::to_hex(data::blake3(bytes));
+}
+
+namespace {
+
+/// True when `ids` contains `id`.
+[[nodiscard]] auto contains_id(const std::vector<std::string> &ids,
+                               std::string_view id) -> bool {
+    return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+
+} // namespace
+
+auto host::stage_composition(const composition &next,
+                             const package_resolver &resolve,
+                             const stage_options &options)
+    -> result<staged_composition_change> {
+    const std::lock_guard lifecycle_lock{lifecycle_mutex_};
+    return stage_composition_locked(next, resolve, options);
+}
+
+auto host::stage_composition_locked(const composition &next,
+                                    const package_resolver &resolve,
+                                    const stage_options &options)
+    -> result<staged_composition_change> {
+    if (failed_) {
+        return std::unexpected{
+            fail(error_code::not_initialized,
+                 "mod host failed a previous load and cannot stage changes; "
+                 "recreate the host")};
+    }
+    if (!loaded_flag_) {
+        return std::unexpected{
+            fail(error_code::not_initialized,
+                 "mod host is not loaded; stage changes after a successful "
+                 "load()")};
+    }
+    if (staged_change_.has_value()) {
+        return std::unexpected{
+            fail(error_code::already_exists,
+                 "a composition change is already staged; commit or abort it "
+                 "before staging another one")};
+    }
+    if (next.spec.id != plan_.spec.id ||
+        next.spec.version != plan_.spec.version ||
+        next.spec.abi != plan_.spec.abi) {
+        return std::unexpected{fail(
+            error_code::version_mismatch,
+            fmt::format("staged composition is gamepack {} {} (abi {}) but the "
+                        "running composition is {} {} (abi {})",
+                        next.spec.id, next.spec.version, next.spec.abi,
+                        plan_.spec.id, plan_.spec.version, plan_.spec.abi))};
+    }
+
+    const auto planned{plan_providers(next)};
+    const auto is_reload{[&options](std::string_view id) {
+        return contains_id(options.reload, id);
+    }};
+
+    std::vector<const candidate *> additions{};
+    std::vector<loaded_mod> retiring{};
+    std::vector<std::pair<std::string, unload_reason>> retire_reasons{};
+    for (const auto &entry : next.load_order) {
+        const auto *current{find(entry.id)};
+        if (current == nullptr) {
+            additions.push_back(&entry);
+            continue;
+        }
+        const auto changed{current->version != entry.version ||
+                           current->manifest_hash_hex !=
+                               data::to_hex(entry.manifest_hash)};
+        if (!changed && !is_reload(entry.id)) {
+            continue;
+        }
+        retiring.push_back(*current);
+        retire_reasons.emplace_back(entry.id, unload_reason::reload);
+        additions.push_back(&entry);
+    }
+    for (const auto &mod : mods_) {
+        if (next.find(mod.id) != nullptr) {
+            continue;
+        }
+        retiring.push_back(mod);
+        retire_reasons.emplace_back(mod.id, unload_reason::uninstall);
+    }
+
+    // Restart-required and quarantine gates. A refusal happens before any
+    // package is opened or any slot is quiesced.
+    for (const auto &mod : retiring) {
+        if (auto reason{restart_required_reason_for(mod)}; !reason.empty()) {
+            return std::unexpected{
+                fail(error_code::unsupported, std::move(reason))};
+        }
+    }
+    for (const auto *entry : additions) {
+        if (contains_id(quarantined_mods_, entry->id)) {
+            return std::unexpected{
+                fail(error_code::unsupported,
+                     fmt::format("mod '{}' is quarantined and needs a process "
+                                 "restart before it can be installed again",
+                                 entry->id))};
+        }
+        const auto slots{planned.slots.find(entry->id)};
+        if (slots == planned.slots.end()) {
+            continue;
+        }
+        for (const auto &slot : slots->second) {
+            if (is_restart_required_service(slot)) {
+                return std::unexpected{fail(
+                    error_code::unsupported,
+                    fmt::format("hot install of '{}' targets {}; the server "
+                                "must be restarted to replace it",
+                                entry->id, restart_required_reason(slot)))};
+            }
+        }
+    }
+    // A mod that stays active must keep every dependency; removing one would
+    // leave the running composition referencing a package that is gone.
+    for (const auto &mod : mods_) {
+        if (std::any_of(retiring.begin(), retiring.end(),
+                        [&mod](const loaded_mod &retired) {
+                            return retired.id == mod.id;
+                        })) {
+            continue;
+        }
+        for (const auto &requirement : mod.required) {
+            if (next.find(requirement.id) == nullptr) {
+                return std::unexpected{
+                    fail(error_code::unsupported,
+                         fmt::format("cannot uninstall '{}': mod '{}' still "
+                                     "requires it",
+                                     requirement.id, mod.id))};
+            }
+        }
+    }
+
+    // Build the new generations. The loads are outside the tick (this call is
+    // the command/IO half of the epoch), the publish below is the tick half.
+    staging_ = true;
+    staged_mods_.clear();
+    for (const auto *entry : additions) {
+        auto package{resolve(*entry)};
+        if (!package) {
+            abort_staged_internals();
+            return std::unexpected{
+                annotate(std::move(package.error()),
+                         fmt::format("mod '{}' package", entry->id))};
+        }
+        current_mod_ = entry->id;
+        current_mod_version_ = entry->version;
+        current_replaced_handle_.reset();
+        current_replaced_generation_ = 0;
+        current_replaced_loader_.clear();
+        if (const auto *current{find(entry->id)}; current != nullptr) {
+            current_replaced_generation_ = current->generation;
+            current_replaced_loader_ = current->loader;
+            if (current->has_code && current->instance_handle != 0) {
+                current_replaced_handle_ = current->instance_handle;
+            }
+        }
+        auto loaded{load_one(next, **package, *entry, planned)};
+        if (!loaded) {
+            abort_staged_internals();
+            return std::unexpected{std::move(loaded.error())};
+        }
+        staged_mods_.push_back(std::move(*loaded));
+    }
+    current_mod_.clear();
+    current_mod_version_.clear();
+    current_mod_provides_.clear();
+    current_mod_planned_slots_.clear();
+    current_mod_planned_instances_.clear();
+    current_mod_selected_provider_ = false;
+    current_replaced_handle_.reset();
+    current_replaced_generation_ = 0;
+    current_replaced_loader_.clear();
+
+    // Retire the slots of a replaced/removed generation that the new
+    // generation does not re-activate: the staged activation is what replaces
+    // a slot, anything else must disappear from the committed registry.
+    for (const auto &mod : retiring) {
+        for (const auto &slot : mod.provided_slots) {
+            if (services_.staged_decision(slot.service, slot.instance)
+                    .value_or(false)) {
+                continue;
+            }
+            if (auto staged{
+                    services_.stage_retire(slot.service, slot.instance)};
+                !staged && staged.error().code != error_code::not_found) {
+                abort_staged_internals();
+                return std::unexpected{std::move(staged.error())};
+            }
+        }
+    }
+
+    if (auto verified{verify_plan_activation(next, true)}; !verified) {
+        const auto failure{std::move(verified.error())};
+        abort_staged_internals();
+        return std::unexpected{failure};
+    }
+
+    staged_retire_mods_ = std::move(retiring);
+    staged_retire_reasons_ = std::move(retire_reasons);
+    staged_drain_timeout_ = options.drain_timeout;
+    staged_next_composition_ = next;
+    staging_ = false;
+
+    staged_change_ = staged_composition_change{
+        .base_epoch = epoch_,
+        .added = {},
+        .reloaded = {},
+        .removed = {},
+        .retired_native_generations = retired_native_libraries_.size(),
+    };
+    for (const auto &mod : staged_mods_) {
+        const auto replacing{std::any_of(staged_retire_mods_.begin(),
+                                         staged_retire_mods_.end(),
+                                         [&mod](const loaded_mod &retired) {
+                                             return retired.id == mod.id;
+                                         })};
+        if (replacing) {
+            staged_change_->reloaded.push_back(mod.id);
+        } else {
+            staged_change_->added.push_back(mod.id);
+        }
+    }
+    for (const auto &[id, reason] : staged_retire_reasons_) {
+        if (!std::any_of(staged_mods_.begin(), staged_mods_.end(),
+                         [&id = id](const loaded_mod &staged) {
+                             return staged.id == id;
+                         })) {
+            staged_change_->removed.push_back(id);
+        }
+    }
+    std::sort(staged_change_->added.begin(), staged_change_->added.end());
+    std::sort(staged_change_->reloaded.begin(), staged_change_->reloaded.end());
+    std::sort(staged_change_->removed.begin(), staged_change_->removed.end());
+    return *staged_change_;
+}
+
+auto host::stage_uninstall(std::string_view id, const stage_options &options)
+    -> result<staged_composition_change> {
+    const std::lock_guard lifecycle_lock{lifecycle_mutex_};
+    if (!loaded_flag_) {
+        return std::unexpected{
+            fail(error_code::not_initialized,
+                 "mod host is not loaded; there is no composition to remove "
+                 "a mod from")};
+    }
+    const auto *mod{find(id)};
+    if (mod == nullptr) {
+        return std::unexpected{
+            fail(error_code::not_found,
+                 fmt::format("mod '{}' is not part of the running composition",
+                             id))};
+    }
+    composition next{plan_};
+    std::erase_if(next.load_order,
+                  [id](const candidate &entry) { return entry.id == id; });
+    std::erase_if(next.mods,
+                  [id](const locked_mod &entry) { return entry.id == id; });
+    for (auto &resolved : next.providers) {
+        if (split_provider_ref(resolved.provider).id == id) {
+            resolved.provider.clear();
+        }
+        std::erase_if(resolved.instances, [id](const resolved_instance &entry) {
+            return split_provider_ref(entry.provider).id == id;
+        });
+        std::erase_if(resolved.wrappers, [id](const std::string &wrapper) {
+            return split_provider_ref(wrapper).id == id;
+        });
+    }
+    return stage_composition_locked(next, {}, options);
+}
+
+void host::abort_staged_internals() noexcept {
+    try {
+        for (auto &mod : staged_mods_) {
+            if (mod.has_code && mod.instance_handle != 0) {
+                auto unloaded{
+                    dispatch_loader_unload(mod, unload_reason::shutdown)};
+                if (!unloaded) {
+                    record_quarantine(mod.id, unloaded.error().message);
+                }
+            }
+            for (const auto &slot : mod.provided_slots) {
+                if (slot.serial != 0) {
+                    static_cast<void>(services_.remove_provider(slot.serial));
+                }
+            }
+        }
+        staged_mods_.clear();
+        staged_retire_mods_.clear();
+        staged_retire_reasons_.clear();
+        staged_drain_timeout_ = default_drain_timeout;
+        staged_next_composition_.reset();
+        staged_change_.reset();
+        staging_ = false;
+        current_replaced_handle_.reset();
+        current_replaced_generation_ = 0;
+        current_replaced_loader_.clear();
+        current_mod_.clear();
+        current_mod_version_.clear();
+        current_mod_provides_.clear();
+        current_mod_planned_slots_.clear();
+        current_mod_planned_instances_.clear();
+        current_mod_selected_provider_ = false;
+        current_loader_id_.clear();
+        current_loader_sandboxed_ = false;
+        current_load_has_code_ = false;
+        current_mod_registered_slots_.clear();
+        services_.abort_staging();
+    } catch (...) {
+        // A rollback path must not throw out of a noexcept function; the
+        // registry staging is dropped below even if a log/alloc failed.
+        services_.abort_staging();
+    }
+}
+
+void host::abort_staged() noexcept {
+    try {
+        const std::lock_guard lifecycle_lock{lifecycle_mutex_};
+        if (!staging_ && !staged_change_.has_value()) {
+            return;
+        }
+        abort_staged_internals();
+    } catch (...) {
+        // Aborting must not throw out of the lifecycle layer.
+    }
+}
+
+auto host::commit_epoch() -> result<composition_commit> {
+    // The tick never waits for a package installation: if the command thread
+    // is still staging, this tick keeps the committed composition and the next
+    // tick boundary publishes the change.
+    std::unique_lock lifecycle_lock{lifecycle_mutex_, std::try_to_lock};
+    if (!lifecycle_lock.owns_lock()) {
+        return composition_commit{.epoch = epoch_,
+                                  .digest = composition_digest()};
+    }
+    if (!loaded_flag_) {
+        return std::unexpected{
+            fail(error_code::not_initialized, "mod host is not loaded")};
+    }
+    if (!staged_change_.has_value()) {
+        return composition_commit{.epoch = epoch_,
+                                  .digest = composition_digest()};
+    }
+
+    // Quiesce the slots of every retiring generation and wait a bounded time
+    // for calls that are already inside them. This happens at the tick
+    // boundary, immediately before the atomic switch, so the staging window
+    // (which can be seconds of package IO) never refuses a running tick's
+    // calls. A timeout is not a reason to call a retired implementation again:
+    // the mod is quarantined and its unload hook is skipped.
+    std::map<std::string, std::string> forced_quarantine{};
+    std::vector<std::pair<std::string, std::string>> quiesced{};
+    for (const auto &mod : staged_retire_mods_) {
+        for (const auto &slot : mod.provided_slots) {
+            auto quiesced_slot{services_.quiesce(slot.service, slot.instance)};
+            if (!quiesced_slot &&
+                quiesced_slot.error().code != error_code::not_found) {
+                for (const auto &[service, instance] : quiesced) {
+                    static_cast<void>(services_.resume(service, instance));
+                }
+                abort_staged_internals();
+                return std::unexpected{std::move(quiesced_slot.error())};
+            }
+            if (!quiesced_slot) {
+                continue;
+            }
+            quiesced.emplace_back(slot.service, slot.instance);
+            auto drained{services_.drain(slot.service, slot.instance,
+                                         staged_drain_timeout_)};
+            if (!drained) {
+                forced_quarantine[mod.id] = drained.error().message;
+            }
+        }
+    }
+
+    // The registry commit is the atomic switch: every staged slot changes at
+    // once and the old generations become stale before their code is unloaded.
+    if (auto committed{services_.commit_epoch()}; !committed) {
+        for (const auto &[service, instance] : quiesced) {
+            static_cast<void>(services_.resume(service, instance));
+        }
+        abort_staged_internals();
+        return std::unexpected{std::move(committed.error())};
+    }
+
+    const auto change{*staged_change_};
+    composition_commit committed{.epoch = epoch_ + 1, .digest = {}};
+    // Retire the old generations: the loader's unload hook runs with the
+    // reason, native mappings move to the retired list (never dlclose).
+    for (const auto &mod : staged_retire_mods_) {
+        const auto forced{forced_quarantine.find(mod.id)};
+        unload_reason reason{unload_reason::uninstall};
+        for (const auto &[retire_id, retire_reason] : staged_retire_reasons_) {
+            if (retire_id == mod.id) {
+                reason = retire_reason;
+            }
+        }
+        if (forced != forced_quarantine.end()) {
+            record_quarantine(mod.id, forced->second);
+            committed.quarantined.push_back(mod.id);
+        } else {
+            auto unloaded{dispatch_loader_unload(mod, reason)};
+            if (!unloaded) {
+                record_quarantine(mod.id, unloaded.error().message);
+                committed.quarantined.push_back(mod.id);
+            }
+        }
+        // The retired candidates are no longer referenced by any committed
+        // slot; dropping them keeps the candidate table from growing with
+        // every reload.
+        for (const auto &slot : mod.provided_slots) {
+            if (slot.serial != 0) {
+                static_cast<void>(services_.remove_provider(slot.serial));
+            }
+        }
+    }
+    // Publish the new mod records, then drop the retired ones.
+    for (auto &mod : staged_mods_) {
+        mod.state = mod_lifecycle_state::active;
+        mod_generations_[mod.id] = mod.generation;
+        const auto replacing{std::any_of(staged_retire_mods_.begin(),
+                                         staged_retire_mods_.end(),
+                                         [&mod](const loaded_mod &retired) {
+                                             return retired.id == mod.id;
+                                         })};
+        if (replacing) {
+            committed.reloaded.push_back(mod.id);
+        } else {
+            committed.added.push_back(mod.id);
+        }
+    }
+    // Drop the retired generations before publishing the replacements: the
+    // same mod id appears in both lists and must survive as the new record.
+    std::set<std::string> retired_ids{};
+    for (const auto &mod : staged_retire_mods_) {
+        retired_ids.insert(mod.id);
+    }
+    std::erase_if(mods_, [&retired_ids](const loaded_mod &mod) {
+        return retired_ids.contains(mod.id);
+    });
+    mods_.insert(mods_.end(), staged_mods_.begin(), staged_mods_.end());
+    committed.removed = change.removed;
+    committed.quarantined.erase(
+        std::unique(committed.quarantined.begin(), committed.quarantined.end()),
+        committed.quarantined.end());
+    std::sort(committed.added.begin(), committed.added.end());
+    std::sort(committed.reloaded.begin(), committed.reloaded.end());
+    std::sort(committed.quarantined.begin(), committed.quarantined.end());
+    committed.retired_native_generations = retired_native_libraries_.size();
+
+    staged_mods_.clear();
+    staged_retire_mods_.clear();
+    staged_retire_reasons_.clear();
+    staged_drain_timeout_ = default_drain_timeout;
+    staged_change_.reset();
+    staging_ = false;
+    services_.abort_staging();
+
+    epoch_ = committed.epoch;
+    if (staged_next_composition_.has_value()) {
+        plan_ = std::move(*staged_next_composition_);
+    }
+    staged_next_composition_.reset();
+
+    committed.digest = composition_digest();
+    log_mod.info(
+        "committed composition epoch {} with {} added, {} reloaded and {} "
+        "removed mod(s), digest {}",
+        committed.epoch, committed.added.size(), committed.reloaded.size(),
+        committed.removed.size(), committed.digest);
+    for (const auto &id : committed.quarantined) {
+        log_mod.error(
+            "mod {} is quarantined after the composition commit; the server "
+            "must be restarted to load it again",
+            id);
+    }
+    return committed;
 }
 
 auto host::register_provider(std::string_view service, const provider_api &api,
@@ -1999,11 +3001,11 @@ auto host::register_provider(std::string_view service,
                              std::string_view instance, const provider_api &api,
                              std::string_view version,
                              kernel::capability_bits capabilities) -> status {
-    if (failed_ || loaded_flag_ || current_mod_.empty()) {
+    if (failed_ || current_mod_.empty() || (loaded_flag_ && !staging_)) {
         return std::unexpected{fail(
             error_code::not_initialized,
-            "register_provider() is only legal from a static mod factory while "
-            "the host is loading")};
+            "register_provider() is only legal from a mod factory while the "
+            "host is loading a composition")};
     }
     if (current_loader_sandboxed_) {
         return std::unexpected{fail(
@@ -2090,6 +3092,10 @@ auto host::register_provider(std::string_view service,
 
     const auto effective_version{version.empty() ? current_mod_version_
                                                  : version};
+    const auto resolved_instance{
+        instance.empty()
+            ? std::string{kernel::service_registry::default_instance}
+            : std::string{instance}};
     provider_apis_.push_back(std::make_unique<provider_api>(api));
     provider_info info{};
     info.service = std::string{service};
@@ -2098,12 +3104,41 @@ auto host::register_provider(std::string_view service,
     info.capabilities = capabilities;
     info.instance = provider_apis_.back().get();
     info.source = "builtin";
-    auto added{services_.add_provider(std::move(info))};
-    if (!added) {
-        return added;
+    if (staging_) {
+        // A staged generation coexists with the running one: the candidate may
+        // share its id/version text with the committed candidate, and the
+        // activation is not visible until the tick-boundary commit.
+        auto serial{services_.add_staged_provider(std::move(info))};
+        if (!serial) {
+            return std::unexpected{std::move(serial.error())};
+        }
+        if (auto staged{
+                services_.stage_active(*serial, service, resolved_instance)};
+            !staged) {
+            static_cast<void>(services_.remove_provider(*serial));
+            return std::unexpected{std::move(staged.error())};
+        }
+        current_mod_registered_slots_.push_back(
+            provided_slot{.service = std::string{service},
+                          .instance = resolved_instance,
+                          .serial = *serial});
+        return status_ok();
     }
-    return services_.select_active(service, current_mod_, effective_version,
-                                   instance);
+    auto serial{services_.add_provider_serial(std::move(info))};
+    if (!serial) {
+        return std::unexpected{std::move(serial.error())};
+    }
+    if (auto selected{services_.select_active(
+            service, current_mod_, effective_version, resolved_instance)};
+        !selected) {
+        static_cast<void>(services_.remove_provider(*serial));
+        return std::unexpected{std::move(selected.error())};
+    }
+    current_mod_registered_slots_.push_back(
+        provided_slot{.service = std::string{service},
+                      .instance = resolved_instance,
+                      .serial = *serial});
+    return status_ok();
 }
 
 auto host::find(std::string_view id) const noexcept -> const loaded_mod * {
@@ -2117,9 +3152,11 @@ auto host::format() const -> std::string {
     if (!loaded_flag_) {
         return "mod host: not loaded\n";
     }
-    auto out{fmt::format("mod host: {} mod(s) loaded, built-in image BLAKE3 "
-                         "{}\n",
-                         mods_.size(), builtin_image_digest_hex_)};
+    auto out{fmt::format(
+        "mod host: {} mod(s) loaded at composition epoch {} (digest {}), "
+        "{} retired native mapping(s), built-in image BLAKE3 {}\n",
+        mods_.size(), epoch_, composition_digest(),
+        retired_native_libraries_.size(), builtin_image_digest_hex_)};
     out += "  loaders:";
     if (loaders_.empty()) {
         out += " none";
@@ -2136,13 +3173,14 @@ auto host::format() const -> std::string {
         // state, provides) and append the loader record, so log greps keep
         // matching while the loader stays visible.
         out += fmt::format(
-            "  {}@{} (abi {}, {}{}, loader {}{}{}, unload {})", mod.id,
-            mod.version, mod.abi, mod.has_code ? "code" : "data-only",
+            "  {}@{} (abi {}, {}{}, loader {}{}{}, unload {}, generation {}, "
+            "state {})",
+            mod.id, mod.version, mod.abi, mod.has_code ? "code" : "data-only",
             mod.provides_summary.empty() ? ""
                                          : ", provides " + mod.provides_summary,
             mod.loader, mod.loader_inferred ? " inferred" : "",
             mod.loader_sandboxed ? " sandboxed" : "",
-            to_string(mod.loader_unload));
+            to_string(mod.loader_unload), mod.generation, to_string(mod.state));
         out += '\n';
     }
     return out;

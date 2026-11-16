@@ -8,8 +8,10 @@
 
 #include <refrain/mod/entry.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 
 namespace {
 
@@ -55,16 +57,46 @@ auto on_load(const refrain_mod_context *context, void **user)
     return REFRAIN_STATUS_OK;
 }
 
+std::atomic<std::uint32_t> g_unload_count{0};
+std::atomic<std::uint32_t> g_last_unload_reason{0};
+
 void on_unload(void *user) { static_cast<void>(user); }
+
+auto on_unload_ex(void *user, std::uint32_t reason) -> refrain_status {
+    static_cast<void>(user);
+    g_unload_count.fetch_add(1, std::memory_order_relaxed);
+    g_last_unload_reason.store(reason, std::memory_order_relaxed);
+    // The lifecycle test flips this to prove a failing on_unload quarantines
+    // the instance instead of being called again.
+    if (const char *fail{std::getenv("REFRAIN_TEST_EXTERNAL_MOD_FAIL_UNLOAD")};
+        fail != nullptr && fail[0] == '1') {
+        return 1;
+    }
+    return REFRAIN_STATUS_OK;
+}
 
 const refrain_mod_desc g_desc{
     .struct_size = static_cast<std::uint32_t>(sizeof(refrain_mod_desc)),
     .abi_major = REFRAIN_MOD_ABI_MAJOR,
     .on_load = &on_load,
     .on_unload = &on_unload,
+    .on_unload_ex = &on_unload_ex,
 };
 
 } // namespace
+
+/// Observation points for the host lifecycle test: the loaded module and the
+/// test binary are separate link units, so the counters cross the boundary
+/// through exported functions.
+extern "C" {
+REFRAIN_EXPORT auto refrain_test_external_unload_count() -> std::uint32_t {
+    return g_unload_count.load(std::memory_order_relaxed);
+}
+REFRAIN_EXPORT auto refrain_test_external_last_unload_reason()
+    -> std::uint32_t {
+    return g_last_unload_reason.load(std::memory_order_relaxed);
+}
+}
 
 REFRAIN_MOD_MAIN(refrain_mod_main) {
     static_cast<void>(init);

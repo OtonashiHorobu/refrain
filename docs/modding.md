@@ -144,13 +144,16 @@ mechanism lands, a manifest naming one fails closed.
 The native loader copies the entry library into a private host-owned directory
 before opening it: an installed package keeps its members in the content store,
 so the manifest path is a package member and never a filesystem path next to a
-manifest. The copy is named after the member digest and removed with the host;
-the bytes are the installed, receipt-checked bytes.
+manifest. Each load materialises a new private copy under a unique path (the
+member digest plus a per-load sequence), so a reload can never resolve to a
+mapping of an earlier generation; the bytes are the installed,
+receipt-checked bytes.
 
-The loader's unload semantics are recorded for the lifecycle layer: the host
-never assumes a stronger guarantee than the loader declared. Actual instance
-unload and reload are refused by the builtin and native loaders until the
-lifecycle layer can honour their declared semantics.
+The loader's unload semantics bound what the host may release: a `clean`
+loader releases the guest completely, a `retire` loader keeps its resources
+mapped and only stops dispatching, and a `restart_required` loader cannot be
+unloaded while the process runs. The hot lifecycle below honours exactly the
+declared guarantee.
 
 `refrain-tools mods load` prints the registered loaders and, for every loaded
 mod, the loader that executed it and the recorded unload semantics.
@@ -421,6 +424,101 @@ untouched and the next install prunes a staging directory whose owner process is
 gone. Reinstalling the exact archive digest of an installed `(id, version)` is a
 no-op.
 
+## Hot lifecycle
+
+A running server can install, uninstall and reload a mod while the composition
+keeps ticking. The unit of change is a composition **epoch**: a complete
+provider-generation set that is built while the server runs and switched in one
+atomic step at a tick boundary.
+
+```text
+staged -> active -> quiescing -> retired -> removed
+```
+
+- `staged`: the package is resolved and its loader instance is built, but the
+  running composition does not call it yet. A failure here is rolled back and
+  leaves the committed epoch untouched.
+- `active`: the mod's providers belong to the committed registry generation;
+  callers hold generation-stamped handles.
+- `quiescing`: the generation stops accepting new calls. The lifecycle waits a
+  bounded time (five seconds) for calls that are already inside it.
+- `retired`: the loader's unload hook ran (or the mod was quarantined) and the
+  generation's handles fail as `stale`. Native code may still be mapped.
+- `removed`: the composition record and the install receipt are gone; content
+  garbage collection may reclaim the package blobs.
+
+Staging does the slow work outside the tick: reading the package, verifying a
+receipt, opening a shared library, building the replacement provider table.
+The publish is one call at the next tick boundary (the server runtime commits
+before the tick body). It swaps every staged provider slot at once, advances
+the composition epoch, retires the old generations and runs their unload hooks.
+No package or store I/O happens inside the tick.
+
+### Restart-required mods
+
+Not every mod can be hot-switched. A change is refused with a message naming the
+reason when the mod
+
+- runs statically linked code (the `builtin` loader declares
+  `restart_required`), or
+- provides a core service the running process owns: `refrain:sim`,
+  `refrain:world`, `refrain:storage`, `refrain:net.protocol` or
+  `refrain:runtime`.
+
+Leaf services, data-only mods and providers behind a `clean` or `retire` loader
+are hot-swappable. A mod that other active mods still require cannot be
+uninstalled; uninstall or reload the dependency first.
+
+### Native retire and quarantine
+
+A shared library is never `dlclose`d while the server runs: a call that started
+before the epoch switch may still be inside the old mapping. A reload
+materialises the replacement `.so` from its install receipt into a new unique
+path, opens it, and retires the old mapping after the commit. Retired
+generations stay mapped and are counted per mod; after eight generations a
+further reload is refused and the operator must restart the server. The limit
+is configurable by the embedding (`host::set_native_retire_limit`).
+
+A mod whose `on_unload` reports a failure, or whose in-flight calls do not drain
+within the bounded wait, is **quarantined**: the host skips its unload hook,
+never calls it again, and refuses to install or reload that id until the process
+restarts. A drain timeout quarantines instead of silently continuing to call an
+implementation whose lifetime can no longer be proven.
+
+Script loaders (`wasm`, `lua`) declare `clean` unload: tearing down the runtime
+releases their state completely, so they never accumulate retired mappings. No
+script loader is built into this host yet; a manifest naming one fails closed
+until the loader ships.
+
+### Registry epochs and stale handles
+
+The service registry keeps `(service, instance) -> provider generation`.
+Sealed host services stay frozen forever; ordinary services accept a staged
+activation, a staged retirement or a replacement candidate. Callers read a
+handle with its generation and re-check it (`service_registry::validate`) when
+crossing a composition boundary; a handle from a retired generation returns
+`stale` instead of reaching freed code. Normal tick-path calls are direct
+vtable calls; the generation check is a per-boundary check, not a per-call
+lookup.
+
+The composition epoch and a BLAKE3 digest over the committed mod generations,
+provider generations and gamepack identity are part of the audit record, so a
+run with hot changes can be told apart from an identical static composition.
+
+### Application API
+
+`app::mod_lifecycle` is the shared service the command surfaces call. It offers
+`install(path)`, `uninstall(id[, version])`, `reload(id)` and `commit()`:
+
+- `install` runs the content-store install transaction, re-resolves the
+  catalog and stages the new composition. A refused staging step leaves the
+  package installed, so the next server start loads it;
+- `uninstall` stages the removal first and deletes the install receipt only
+  after the staging step accepted it;
+- `reload` rebuilds the active generation from its installed package;
+- `commit` is what the tick loop calls; the command layer never publishes an
+  epoch by itself.
+
 ## Trust, signatures and updates
 
 Install-time policy lives in server configuration, not in command-line flags:
@@ -489,6 +587,13 @@ refrain-tools mods uninstall my.mod --store /path/to/store
 # Reclaim the now-unreferenced blobs.
 refrain-tools content gc --store /path/to/store --apply --allow-empty-roots
 ```
+
+The commands above operate on an offline store. The same operations are
+available against a running server through `app::mod_lifecycle` (the command
+surface calls it): the package is installed or the receipt removed immediately,
+and the composition change is published at the next tick boundary. Native code
+reloaded at runtime accumulates retired mappings as described in
+[Hot lifecycle](#hot-lifecycle).
 
 Uninstall removes the receipts and, for the last installed version, the signer
 pin (`--keep-signer-pin` keeps it so a reinstall must use the same signer). The
