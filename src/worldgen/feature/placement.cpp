@@ -918,4 +918,58 @@ auto decode_placement(const data::json::value &document,
                                                 std::string{*type} + "'")};
 }
 
+auto make_should_freeze(const chunk_region &region,
+                        const block_state_table &states,
+                        block_temperature temperature)
+    -> std::function<bool(const block_pos &)> {
+    return [&region, &states,
+            temperature = std::move(temperature)](const block_pos &block) {
+        if (!temperature) {
+            return false;
+        }
+        const auto value = temperature(
+            block_pos{.x = block.x, .y = block.y + 1, .z = block.z});
+        if (!value || *value >= 0.15F) {
+            return false;
+        }
+        return states.traits(region.state_at(block.x, block.y, block.z)).water;
+    };
+}
+
+auto make_should_snow(const chunk_region &region,
+                      const block_state_table &states,
+                      block_temperature temperature)
+    -> std::function<bool(const block_pos &)> {
+    return [&region, &states,
+            temperature = std::move(temperature)](const block_pos &block) {
+        if (!temperature) {
+            return false;
+        }
+        const auto value = temperature(block);
+        if (!value || *value >= 0.15F) {
+            return false;
+        }
+        const auto state = region.state_at(block.x, block.y, block.z);
+        const auto name = states.name(state);
+        if (!states.traits(state).air && !name.starts_with("minecraft:snow")) {
+            return false;
+        }
+        const auto below = region.state_at(block.x, block.y - 1, block.z);
+        if (states.in_tag(below, "minecraft:cannot_support_snow_layer")) {
+            return false;
+        }
+        if (states.in_tag(below, "minecraft:support_override_snow_layer")) {
+            return true;
+        }
+        const auto below_name = states.name(below);
+        if (below_name.ends_with("_leaves") ||
+            below_name.starts_with("minecraft:bamboo") ||
+            below_name.starts_with("minecraft:vine") ||
+            below_name.starts_with("minecraft:snow")) {
+            return false;
+        }
+        return states.traits(below).blocks_motion;
+    };
+}
+
 } // namespace refrain::worldgen::feature

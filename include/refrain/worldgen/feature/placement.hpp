@@ -17,6 +17,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -55,6 +56,26 @@ struct placement_context {
     /// not inherit the enclosing feature's membership.
     std::string_view top_feature{};
 };
+
+/// The position's biome temperature, in the reference's scale. A caller
+/// without a climate source leaves the probe unset, and the snow and freeze
+/// features then write nothing at that position.
+using block_temperature =
+    std::function<std::optional<float>(const block_pos &)>;
+
+/// Builds the freeze probe: the block is water and the air above it is below
+/// the reference's 0.15 freezing threshold.
+[[nodiscard]] auto make_should_freeze(const chunk_region &region,
+                                      const block_state_table &states,
+                                      block_temperature temperature)
+    -> std::function<bool(const block_pos &)>;
+
+/// Builds the snow probe: the position is below the freezing threshold, is air
+/// or an existing snow layer, and its substrate can hold the layer.
+[[nodiscard]] auto make_should_snow(const chunk_region &region,
+                                    const block_state_table &states,
+                                    block_temperature temperature)
+    -> std::function<bool(const block_pos &)>;
 
 class placement_modifier {
   public:

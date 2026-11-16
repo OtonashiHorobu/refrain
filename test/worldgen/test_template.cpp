@@ -1922,6 +1922,141 @@ suite<"worldgen/template"> template_tests = [] {
         expect(replaced == expected);
     };
 
+    "every 26.3 limit provider type drives a capped processor"_test = [] {
+        using namespace refrain::worldgen;
+        struct case_definition {
+            std::string_view limit;
+        };
+        const std::array cases{
+            case_definition{
+                .limit =
+                    R"({"type":"minecraft:biased_to_bottom","min_inclusive":1,"max_inclusive":6})"},
+            case_definition{
+                .limit =
+                    R"({"type":"minecraft:very_biased_to_bottom","min_inclusive":2,"max_inclusive":7})"},
+            case_definition{
+                .limit =
+                    R"({"type":"minecraft:clamped","min_inclusive":2,"max_inclusive":4,
+                        "source":{"type":"minecraft:uniform","min_inclusive":5,"max_inclusive":10}})"},
+            case_definition{
+                .limit =
+                    R"({"type":"minecraft:weighted_list","distribution":[
+                        {"data":1,"weight":1},
+                        {"data":{"type":"minecraft:uniform","min_inclusive":2,"max_inclusive":5},"weight":2}]})"},
+            case_definition{
+                .limit =
+                    R"({"type":"minecraft:clamped_normal","mean":3.5,"deviation":1.5,
+                        "min_inclusive":2,"max_inclusive":5})"},
+            case_definition{
+                .limit =
+                    R"({"type":"minecraft:trapezoid","min":1,"max":6,"plateau":2})"},
+        };
+        for (const auto &definition : cases) {
+            block_state_registry states;
+            const auto stone = states.intern(
+                "minecraft:stone", {.air = false, .blocks_motion = true});
+            const auto dirt = states.intern(
+                "minecraft:dirt", {.air = false, .blocks_motion = true});
+            expect(stone && dirt);
+            if (!stone || !dirt) {
+                continue;
+            }
+            const std::string json =
+                std::string{
+                    R"({"processors":[{"processor_type":"minecraft:capped","limit":)"} +
+                std::string{definition.limit} +
+                R"(,"delegate":{"processor_type":"minecraft:rule","rules":[{"input_predicate":{"predicate_type":"minecraft:always_true"},"location_predicate":{"predicate_type":"minecraft:always_true"},"output_state":"minecraft:dirt"}]}}]})";
+            const auto document = data::json::value::parse(json);
+            expect(document.has_value()) << std::string{definition.limit};
+            if (!document) {
+                continue;
+            }
+            const auto list = decode_processor_list(states, *document);
+            expect(list.has_value())
+                << (list ? std::string{} : std::string{list.error().message});
+            if (!list) {
+                continue;
+            }
+            structure::structure_template templ{};
+            templ.size_x = 8;
+            templ.size_y = 1;
+            templ.size_z = 1;
+            templ.palettes.emplace_back();
+            for (jint x = 0; x < 8; ++x) {
+                templ.palettes.front().push_back(structure::template_block_info{
+                    .x = x, .y = 0, .z = 0, .state = *stone});
+            }
+            const block_pos origin{.x = 0, .y = 10, .z = 0};
+            // The cap draws its limit from the positional stream at the piece
+            // origin before the index shuffle.
+            legacy_random_source base{77};
+            worldgen_random capped{std::make_unique<legacy_random_source>(
+                mth_get_seed(origin.x, origin.y, origin.z) ^ base.next_long())};
+            const auto limit_document =
+                data::json::value::parse(definition.limit);
+            expect(limit_document.has_value());
+            if (!limit_document) {
+                continue;
+            }
+            const auto decoded_limit =
+                provider::int_provider::decode(*limit_document);
+            expect(decoded_limit.has_value());
+            if (!decoded_limit) {
+                continue;
+            }
+            const auto expected =
+                std::min<jint>((*decoded_limit)->sample(capped), 8);
+            structure::template_place_settings settings{};
+            settings.processors = list->get()->processors;
+            settings.level_seed = 77;
+            proto_chunk chunk{states, 0, 0, 0, 32};
+            chunk_region region{chunk, 0};
+            (void)structure::place_template(region, states, templ, origin,
+                                            settings);
+            jint replaced = 0;
+            for (jint x = 0; x < 8; ++x) {
+                if (chunk.state_at(x, 10, 0) == *dirt) {
+                    ++replaced;
+                }
+            }
+            expect(replaced == expected) << std::string{definition.limit};
+        }
+    };
+
+    "an unknown limit provider type is rejected with its name"_test = [] {
+        using namespace refrain::worldgen;
+        block_state_registry states;
+        for (
+            const auto *limit : {
+                R"({"type":"minecraft:oracle_unknown","min_inclusive":1,"max_inclusive":2})",
+                R"({"type":"minecraft:constant","value":0})",
+            }) {
+            const std::string json =
+                std::string{
+                    R"({"processors":[{"processor_type":"minecraft:capped","limit":)"} +
+                limit + R"(,"delegate":{"processor_type":"minecraft:nop"}}]})";
+            const auto document = data::json::value::parse(json);
+            expect(document.has_value());
+            if (!document) {
+                continue;
+            }
+            const auto list = decode_processor_list(states, *document);
+            expect(!list.has_value()) << limit;
+            if (!list) {
+                const std::string message{list.error().message};
+                if (std::string_view{limit}.find("oracle_unknown") !=
+                    std::string_view::npos) {
+                    expect(list.error().code == error_code::unsupported);
+                    expect(message.find("minecraft:oracle_unknown") !=
+                           std::string::npos)
+                        << message;
+                } else {
+                    expect(list.error().code == error_code::parse_error);
+                }
+            }
+        }
+    };
+
     "rule block entity modifiers rewrite the processed tag"_test = [] {
         using namespace refrain::worldgen;
         struct case_definition {
@@ -2116,4 +2251,212 @@ suite<"worldgen/template"> template_tests = [] {
         expect(!decode_processor_list(registry, *unknown_provider).has_value());
         expect(!decode_processor_list(registry, *zero_limit).has_value());
     };
+
+    "a placed template entity gets the world position and rotated yaw"_test =
+        [] {
+            block_state_registry registry;
+            const auto stone = registry.intern(
+                "minecraft:stone", {.air = false,
+                                    .blocks_motion = true,
+                                    .blocks_motion_no_leaves = true});
+            expect(stone.has_value());
+            if (!stone) {
+                return;
+            }
+            data::nbt::compound root;
+            root["size"] = ints({1, 1, 1});
+            auto palette = data::nbt::make_list(data::nbt::tag_type::compound);
+            (void)palette.push(
+                data::nbt::value{palette_entry("minecraft:stone")});
+            root["palette"] = std::move(palette);
+            auto blocks = data::nbt::make_list(data::nbt::tag_type::compound);
+            (void)blocks.push(data::nbt::value{block_entry({0, 0, 0}, 0)});
+            root["blocks"] = std::move(blocks);
+            data::nbt::compound entity;
+            entity["nbt"] = data::nbt::value{data::nbt::compound{
+                {"id", data::nbt::value{std::string{"minecraft:pig"}}},
+                {"Rotation",
+                 [] {
+                     auto list =
+                         data::nbt::make_list(data::nbt::tag_type::float_);
+                     (void)list.push(data::nbt::value{90.0F});
+                     (void)list.push(data::nbt::value{0.0F});
+                     return list;
+                 }()},
+                {"UUID", ints({1, 2, 3, 4})},
+                {"Pos", doubles({0.0, 0.0, 0.0})},
+                {"block_pos", ints({5, 5, 5})},
+            }};
+            entity["pos"] = doubles({0.5, 0.0, 0.5});
+            entity["blockPos"] = ints({0, 0, 0});
+            auto entities = data::nbt::make_list(data::nbt::tag_type::compound);
+            (void)entities.push(data::nbt::value{std::move(entity)});
+            root["entities"] = std::move(entities);
+            const auto loaded =
+                load_structure_template(registry, data::nbt::value{root});
+            expect(loaded.has_value());
+            if (!loaded) {
+                return;
+            }
+            structure::structure_template templ = *loaded;
+            proto_chunk chunk{registry, 0, 0, 0, 32};
+            chunk_region region{chunk, 0};
+            template_place_settings settings{};
+            settings.transform = template_transform{
+                .mirror = template_mirror::none,
+                .rotation = template_rotation::clockwise_90,
+                .pivot = block_pos{},
+            };
+            settings.bounds = template_bounds{.min_x = 0,
+                                              .min_y = 0,
+                                              .min_z = 0,
+                                              .max_x = 15,
+                                              .max_y = 31,
+                                              .max_z = 15};
+            settings.level_seed = 1234;
+            // Without the entity flag the template list stays untouched.
+            (void)place_template(region, registry, templ,
+                                 block_pos{.x = 10, .y = 10, .z = 10},
+                                 settings);
+            expect(chunk.entities().empty());
+            settings.place_entities = true;
+            (void)place_template(region, registry, templ,
+                                 block_pos{.x = 10, .y = 10, .z = 10},
+                                 settings);
+            expect(chunk.entities().size() == 1U);
+            if (chunk.entities().empty()) {
+                return;
+            }
+            const auto &tag = chunk.entities().front();
+            const auto id = tag.find("id");
+            expect(id != tag.end() &&
+                   id->second.as_string() == "minecraft:pig");
+            expect(tag.find("UUID") == tag.end());
+            const auto pos = tag.find("Pos");
+            expect(pos != tag.end());
+            if (const auto *list = pos->second.as_list(); list != nullptr) {
+                expect(list->items[0].as_double().value_or(0.0) == 10.5);
+                expect(list->items[1].as_double().value_or(0.0) == 10.0);
+                expect(list->items[2].as_double().value_or(0.0) == 10.5);
+            }
+            const auto block_pos_tag = tag.find("block_pos");
+            expect(block_pos_tag != tag.end());
+            if (const auto *list = block_pos_tag->second.as_list();
+                list != nullptr) {
+                expect(list->items[0].as_int().value_or(0) == 10);
+                expect(list->items[2].as_int().value_or(0) == 10);
+            }
+            const auto rotation = tag.find("Rotation");
+            expect(rotation != tag.end());
+            if (const auto *list = rotation->second.as_list();
+                list != nullptr) {
+                expect(list->items[0].as_float().value_or(0.0F) == 180.0F);
+            }
+        };
+
+    "an end city data marker adds a shulker sentry and an elytra item frame"_test =
+        [] {
+            block_state_registry registry;
+            const auto air = registry.intern("minecraft:air", {.air = true});
+            const auto structure_block =
+                registry.intern("minecraft:structure_block",
+                                {.air = false, .blocks_motion = true});
+            expect(air.has_value() && structure_block.has_value());
+            if (!air || !structure_block) {
+                return;
+            }
+            const refrain::test_support::scratch_directory scratch;
+            const auto directory = scratch.path();
+            std::filesystem::create_directories(directory / "minecraft" /
+                                                "structure");
+            const auto write_city = [&](std::string_view name,
+                                        std::string_view metadata) {
+                data::nbt::compound marker;
+                marker["id"] =
+                    data::nbt::value{std::string{"minecraft:structure_block"}};
+                marker["mode"] = data::nbt::value{std::string{"DATA"}};
+                marker["metadata"] = data::nbt::value{std::string{metadata}};
+                data::nbt::compound root;
+                root["size"] = ints({1, 1, 1});
+                auto palette =
+                    data::nbt::make_list(data::nbt::tag_type::compound);
+                (void)palette.push(data::nbt::value{
+                    palette_entry("minecraft:structure_block")});
+                root["palette"] = std::move(palette);
+                auto blocks =
+                    data::nbt::make_list(data::nbt::tag_type::compound);
+                (void)blocks.push(data::nbt::value{
+                    block_entry({0, 0, 0}, 0, std::move(marker))});
+                root["blocks"] = std::move(blocks);
+                return data::nbt::write_file(
+                    (directory / "minecraft" / "structure" /
+                     (std::string{name} + ".nbt"))
+                        .string(),
+                    data::nbt::value{root}, "", data::nbt::compression::gzip);
+            };
+            expect(write_city("sentry", "Sentry").has_value());
+            expect(write_city("elytra", "Elytra").has_value());
+            structure_template_manager manager{directory.string(), registry};
+            proto_chunk chunk{registry, 0, 0, 0, 32};
+            chunk_region region{chunk, 0};
+            structure_place_context context{
+                .region = &region,
+                .chunk = &chunk,
+                .states = &registry,
+                .state =
+                    [&registry](std::string_view key) {
+                        return registry.find(key).value_or(no_block_state);
+                    },
+                .templates = &manager,
+                .registry = &registry,
+                .seed = 1,
+            };
+            const auto place = [&](std::string_view template_path) {
+                structure_piece_record piece{};
+                piece.template_id = std::string{template_path};
+                piece.template_x = 4;
+                piece.template_y = 10;
+                piece.template_z = 4;
+                piece.overwrite = true;
+                worldgen_random piece_random{
+                    std::make_unique<legacy_random_source>(7)};
+                place_end_city_piece(context, piece, piece_random);
+            };
+            place("minecraft:sentry");
+            expect(chunk.entities().size() == 1U);
+            if (!chunk.entities().empty()) {
+                const auto &shulker = chunk.entities().front();
+                const auto id = shulker.find("id");
+                expect(id != shulker.end() &&
+                       id->second.as_string() == "minecraft:shulker");
+                const auto pos = shulker.find("Pos");
+                expect(pos != shulker.end());
+                if (const auto *list = pos->second.as_list(); list != nullptr) {
+                    expect(list->items[0].as_double().value_or(0.0) == 4.5);
+                    expect(list->items[1].as_double().value_or(0.0) == 10.0);
+                    expect(list->items[2].as_double().value_or(0.0) == 4.5);
+                }
+            }
+            place("minecraft:elytra");
+            expect(chunk.entities().size() == 2U);
+            if (chunk.entities().size() >= 2U) {
+                const auto &frame = chunk.entities().back();
+                const auto id = frame.find("id");
+                expect(id != frame.end() &&
+                       id->second.as_string() == "minecraft:item_frame");
+                const auto facing = frame.find("Facing");
+                expect(facing != frame.end());
+                if (facing != frame.end()) {
+                    expect(facing->second.as_byte().value_or(0) == 3);
+                }
+                const auto item = frame.find("Item");
+                expect(item != frame.end());
+                if (const auto *compound = item->second.as_compound();
+                    compound != nullptr) {
+                    const auto found = compound->find("id");
+                    expect(found != compound->end() &&
+                           found->second.as_string() == "minecraft:elytra");
+                }
+            }
+        };
 };

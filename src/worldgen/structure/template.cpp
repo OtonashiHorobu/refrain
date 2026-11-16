@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cmath>
+#include <cstdio>
 #include <limits>
 #include <set>
 #include <string>
@@ -766,17 +768,6 @@ auto zero_position_with_transform(const structure_template &templ,
                      .z = zero.z + mirror_delta_z};
 }
 
-auto int_provider::sample(worldgen_random &random) const -> jint {
-    switch (type) {
-    case kind::constant:
-        return min_inclusive;
-    case kind::uniform:
-        return random.next_int(max_inclusive - min_inclusive + 1) +
-               min_inclusive;
-    }
-    return min_inclusive;
-}
-
 namespace {
 
 void merge_compound(data::nbt::compound &target,
@@ -861,13 +852,16 @@ auto same_processed(const template_block_info &left,
     return *left.nbt == *right.nbt;
 }
 
+void apply_capped(const template_block_processor &delegate, jint max_to_replace,
+                  worldgen_random &random, template_finalize_context &context);
+
 /// Applies `delegate` to the whole-piece block lists. The shuffle and the
 /// limit share one positional stream at the piece origin; each selected block
 /// then replaces the entry only when the delegate changes it.
 void apply_capped(const template_block_processor &delegate,
-                  const int_provider &limit,
+                  const provider::int_provider &limit,
                   template_finalize_context &context) {
-    if (limit.max_inclusive == 0 || context.blocks.empty() ||
+    if (context.blocks.empty() ||
         context.originals.size() != context.blocks.size()) {
         return;
     }
@@ -876,11 +870,19 @@ void apply_capped(const template_block_processor &delegate,
     auto factory = base.fork_positional();
     worldgen_random random{
         factory->at(context.origin.x, context.origin.y, context.origin.z)};
-    const auto max_to_replace = std::min(
-        limit.sample(random), static_cast<jint>(context.blocks.size()));
-    if (max_to_replace < 1) {
+    apply_capped(delegate, limit.sample(random), random, context);
+}
+
+/// The procedural capped processors name a count instead of a provider, and
+/// draw nothing for it.
+void apply_capped(const template_block_processor &delegate, jint max_to_replace,
+                  worldgen_random &random, template_finalize_context &context) {
+    if (max_to_replace < 1 || context.blocks.empty() ||
+        context.originals.size() != context.blocks.size()) {
         return;
     }
+    max_to_replace =
+        std::min(max_to_replace, static_cast<jint>(context.blocks.size()));
     std::vector<std::size_t> indices(context.blocks.size());
     for (std::size_t index = 0; index < indices.size(); ++index) {
         indices[index] = index;
@@ -917,7 +919,7 @@ void apply_capped(const template_block_processor &delegate,
 
 void capped_processor::finalize_processing(
     template_finalize_context &context) const {
-    apply_capped(*delegate_, limit_, context);
+    apply_capped(*delegate_, *limit_, context);
 }
 
 void capped_rule_processor::finalize_processing(
@@ -938,7 +940,12 @@ void capped_rule_processor::finalize_processing(
     std::vector<template_rule> rules;
     rules.push_back(std::move(rule));
     const rule_processor delegate{std::move(rules)};
-    apply_capped(delegate, limit_, context);
+    worldgen_random base{
+        std::make_unique<legacy_random_source>(context.level_seed)};
+    auto factory = base.fork_positional();
+    worldgen_random random{
+        factory->at(context.origin.x, context.origin.y, context.origin.z)};
+    apply_capped(delegate, limit_, random, context);
 }
 
 namespace {
@@ -1246,18 +1253,19 @@ auto json_array(const data::json::value *document, std::string_view name)
     return *array;
 }
 
-auto decode_int_provider(const data::json::value &document)
-    -> result<int_provider> {
+/// The smallest value the provider can sample, as the reference computes it
+/// from `IntProvider.minInclusive`. The capped limit is validated against
+/// `IntProviders.POSITIVE_CODEC`, so a provider whose minimum is below one is
+/// a data error rather than a silently clamped limit.
+auto int_provider_minimum(const data::json::value &document, jint &minimum)
+    -> status {
     if (document.is_integer()) {
         auto value = json_int(&document, "limit");
         if (!value) {
             return std::unexpected{value.error()};
         }
-        if (*value < 1) {
-            return std::unexpected{
-                make_error(error_code::parse_error, "limit must be positive")};
-        }
-        return int_provider::constant(*value);
+        minimum = *value;
+        return {};
     }
     if (!document.is_object()) {
         return std::unexpected{
@@ -1272,31 +1280,97 @@ auto decode_int_provider(const data::json::value &document)
         if (!value) {
             return std::unexpected{value.error()};
         }
-        if (*value < 1) {
-            return std::unexpected{
-                make_error(error_code::parse_error, "limit must be positive")};
-        }
-        return int_provider::constant(*value);
+        minimum = *value;
+        return {};
     }
-    if (*type == "minecraft:uniform") {
-        auto minimum =
-            json_int(document.find("min_inclusive"), "uniform minimum");
-        if (!minimum) {
-            return std::unexpected{minimum.error()};
+    if (*type == "minecraft:trapezoid") {
+        auto value = json_int(document.find("min"), "trapezoid minimum");
+        if (!value) {
+            return std::unexpected{value.error()};
         }
-        auto maximum =
-            json_int(document.find("max_inclusive"), "uniform maximum");
-        if (!maximum) {
-            return std::unexpected{maximum.error()};
+        minimum = *value;
+        return {};
+    }
+    if (*type == "minecraft:clamped") {
+        const auto *source = document.find("source");
+        if (source == nullptr) {
+            return std::unexpected{make_error(error_code::parse_error,
+                                              "clamped limit has no source")};
         }
-        if (*minimum < 1 || *maximum < *minimum) {
+        auto value =
+            json_int(document.find("min_inclusive"), "clamped minimum");
+        if (!value) {
+            return std::unexpected{value.error()};
+        }
+        jint source_minimum = 0;
+        if (const auto read = int_provider_minimum(*source, source_minimum);
+            !read) {
+            return std::unexpected{read.error()};
+        }
+        minimum = std::max(*value, source_minimum);
+        return {};
+    }
+    if (*type == "minecraft:weighted_list") {
+        const auto *distribution = document.find("distribution");
+        if (distribution == nullptr || !distribution->is_array() ||
+            distribution->as_array()->empty()) {
             return std::unexpected{make_error(
-                error_code::parse_error, "uniform limit range is invalid")};
+                error_code::parse_error, "weighted limit has no distribution")};
         }
-        return int_provider::uniform(*minimum, *maximum);
+        bool first = true;
+        for (const auto &entry : *distribution->as_array()) {
+            const auto *data = entry.find("data");
+            if (data == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "weighted limit entry has no data")};
+            }
+            jint entry_min = 0;
+            if (const auto read = int_provider_minimum(*data, entry_min);
+                !read) {
+                return std::unexpected{read.error()};
+            }
+            minimum = first ? entry_min : std::min(minimum, entry_min);
+            first = false;
+        }
+        return {};
+    }
+    constexpr std::array<std::string_view, 4> range_providers{{
+        "minecraft:uniform",
+        "minecraft:biased_to_bottom",
+        "minecraft:very_biased_to_bottom",
+        "minecraft:clamped_normal",
+    }};
+    if (std::find(range_providers.begin(), range_providers.end(), *type) !=
+        range_providers.end()) {
+        auto value =
+            json_int(document.find("min_inclusive"), "provider minimum");
+        if (!value) {
+            return std::unexpected{value.error()};
+        }
+        minimum = *value;
+        return {};
     }
     return std::unexpected{
-        make_error(error_code::unsupported, "unsupported limit provider")};
+        make_error(error_code::unsupported,
+                   "unsupported limit provider type '" + *type + "'")};
+}
+
+auto decode_int_provider(const data::json::value &document)
+    -> result<std::shared_ptr<const provider::int_provider>> {
+    jint minimum = 0;
+    if (const auto read = int_provider_minimum(document, minimum); !read) {
+        return std::unexpected{read.error()};
+    }
+    if (minimum < 1) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "limit must be positive")};
+    }
+    auto decoded = provider::int_provider::decode(document);
+    if (!decoded) {
+        return std::unexpected{decoded.error()};
+    }
+    return std::shared_ptr<const provider::int_provider>{std::move(*decoded)};
 }
 
 auto decode_block_entity_modifier(const data::json::value &document)
@@ -2215,6 +2289,158 @@ auto blackstone_replace_processor::process(block_state_registry &states,
     return info;
 }
 
+namespace {
+
+/// Java's `Mth.wrapDegrees`: map an angle into [-180, 180).
+auto wrap_degrees(float angle) -> float {
+    float value = std::fmod(angle, 360.0F);
+    if (value >= 180.0F) {
+        value -= 360.0F;
+    }
+    if (value < -180.0F) {
+        value += 360.0F;
+    }
+    return value;
+}
+
+auto rotation_yaw(template_rotation rotation) -> float {
+    switch (rotation) {
+    case template_rotation::clockwise_90:
+        return 90.0F;
+    case template_rotation::clockwise_180:
+        return 180.0F;
+    case template_rotation::counterclockwise_90:
+        return 270.0F;
+    case template_rotation::none:
+        break;
+    }
+    return 0.0F;
+}
+
+auto mirror_yaw(template_mirror mirror, float wrapped_yaw) -> float {
+    switch (mirror) {
+    case template_mirror::front_back:
+        return -wrapped_yaw;
+    case template_mirror::left_right:
+        return 180.0F - wrapped_yaw;
+    case template_mirror::none:
+        break;
+    }
+    return wrapped_yaw;
+}
+
+/// Mirrors then rotates a template-local entity position, which works on the
+/// half-open block space and therefore shifts by one relative to a block
+/// position.
+auto transform_entity_position(double x, double y, double z,
+                               const template_transform &transform)
+    -> std::array<double, 3> {
+    switch (transform.mirror) {
+    case template_mirror::left_right:
+        z = 1.0 - z;
+        break;
+    case template_mirror::front_back:
+        x = 1.0 - x;
+        break;
+    case template_mirror::none:
+        break;
+    }
+    const auto pivot_x = static_cast<double>(transform.pivot.x);
+    const auto pivot_z = static_cast<double>(transform.pivot.z);
+    switch (transform.rotation) {
+    case template_rotation::counterclockwise_90:
+        return {pivot_x - pivot_z + z, y, pivot_x + pivot_z + 1.0 - x};
+    case template_rotation::clockwise_90:
+        return {pivot_x + pivot_z + 1.0 - z, y, pivot_z - pivot_x + x};
+    case template_rotation::clockwise_180:
+        return {pivot_x + pivot_x + 1.0 - x, y, pivot_z + pivot_z + 1.0 - z};
+    case template_rotation::none:
+        break;
+    }
+    return {x, y, z};
+}
+
+auto chunk_of(double coordinate) -> jint {
+    return static_cast<jint>(std::floor(coordinate / 16.0));
+}
+
+/// Appends the template's entity list, transformed by the placement. The
+/// reference creates each entity from its stored tag, replaces `Pos`, drops
+/// `UUID`, rewrites `block_pos` when the template names one, rotates the
+/// stored yaw and adds it to the chunk that contains its world position.
+void place_template_entities(chunk_region &region,
+                             const structure_template &templ,
+                             const block_pos &origin,
+                             const template_place_settings &settings) {
+    for (const auto &info : templ.entities) {
+        const auto relative_block = transform_position(
+            block_pos{.x = info.block_x, .y = info.block_y, .z = info.block_z},
+            settings.transform);
+        const block_pos world_block{.x = origin.x + relative_block.x,
+                                    .y = origin.y + relative_block.y,
+                                    .z = origin.z + relative_block.z};
+        if (settings.bounds.has_value() &&
+            !settings.bounds->contains(world_block)) {
+            continue;
+        }
+        const auto relative = transform_entity_position(info.x, info.y, info.z,
+                                                        settings.transform);
+        const double world_x = static_cast<double>(origin.x) + relative[0];
+        const double world_y = static_cast<double>(origin.y) + relative[1];
+        const double world_z = static_cast<double>(origin.z) + relative[2];
+        auto tag = info.nbt;
+        tag.erase("UUID");
+        tag.insert_or_assign("Pos",
+                             data::nbt::make_list(data::nbt::tag_type::double_,
+                                                  {data::nbt::value{world_x},
+                                                   data::nbt::value{world_y},
+                                                   data::nbt::value{world_z}}));
+        if (tag.find("block_pos") != tag.end()) {
+            tag.insert_or_assign(
+                "block_pos",
+                data::nbt::make_list(data::nbt::tag_type::int_,
+                                     {data::nbt::value{world_block.x},
+                                      data::nbt::value{world_block.y},
+                                      data::nbt::value{world_block.z}}));
+        }
+        double original_yaw = 0.0;
+        double original_pitch = 0.0;
+        if (const auto rotation = tag.find("Rotation"); rotation != tag.end()) {
+            const auto *list = rotation->second.as_list();
+            if (list != nullptr && list->items.size() >= 2) {
+                const auto number = [](const data::nbt::value &value) {
+                    if (const auto real = value.as_double(); real.has_value()) {
+                        return *real;
+                    }
+                    if (const auto real = value.as_float(); real.has_value()) {
+                        return static_cast<double>(*real);
+                    }
+                    return static_cast<double>(value.as_int().value_or(0));
+                };
+                original_yaw = number(list->items[0]);
+                original_pitch = number(list->items[1]);
+            }
+        }
+        const auto wrapped = wrap_degrees(static_cast<float>(original_yaw));
+        const auto yaw = wrapped + rotation_yaw(settings.transform.rotation) +
+                         mirror_yaw(settings.transform.mirror, wrapped) -
+                         static_cast<float>(original_yaw);
+        tag.insert_or_assign(
+            "Rotation",
+            data::nbt::make_list(
+                data::nbt::tag_type::float_,
+                {data::nbt::value{yaw},
+                 data::nbt::value{static_cast<float>(original_pitch)}}));
+        auto *target = region.find(chunk_of(world_x), chunk_of(world_z));
+        if (target == nullptr) {
+            continue;
+        }
+        target->add_entity(std::move(tag));
+    }
+}
+
+} // namespace
+
 auto place_template(chunk_region &region, block_state_registry &states,
                     const structure_template &templ, const block_pos &origin,
                     const template_transform &transform) -> std::size_t {
@@ -2371,6 +2597,9 @@ auto place_template(chunk_region &region, block_state_registry &states,
             (void)region.set_block_entity(world.x, world.y, world.z,
                                           std::move(entity));
         }
+    }
+    if (settings.place_entities) {
+        place_template_entities(region, templ, origin, settings);
     }
     if (!any_shape) {
         return placed;

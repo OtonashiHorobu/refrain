@@ -185,6 +185,31 @@ server-port={port}
     (root / "eula.txt").write_text("eula=true\n")
 
 
+def forceload_commands(box: tuple[int, int, int, int],
+                       dimension: str) -> list[str]:
+    """Split a block-coordinate box into `forceload add` calls.
+
+    One command accepts at most 256 chunks, so a larger reference area is
+    force-loaded tile by tile: 16x16 chunks per command.
+    """
+    min_x, min_z, max_x, max_z = box
+    tile = 16 * 16 - 1
+    commands: list[str] = []
+    x = min_x
+    while x <= max_x:
+        tile_max_x = min(x + tile, max_x)
+        z = min_z
+        while z <= max_z:
+            tile_max_z = min(z + tile, max_z)
+            commands.append(
+                f"execute in {dimension} run forceload add "
+                f"{x} {z} {tile_max_x} {tile_max_z}\n"
+            )
+            z = tile_max_z + 1
+        x = tile_max_x + 1
+    return commands
+
+
 def run_server(root: pathlib.Path, server_jar: pathlib.Path, settle: float,
                force_load: bool = True,
                force_load_box: tuple[int, int, int, int] | None = None,
@@ -234,10 +259,8 @@ def run_server(root: pathlib.Path, server_jar: pathlib.Path, settle: float,
             box = (-span, -span, span, span)
         else:
             box = force_load_box
-        process.stdin.write(
-            f"execute in {dimension} run "
-            f"forceload add {box[0]} {box[1]} {box[2]} {box[3]}\n"
-        )
+        for command in forceload_commands(box, dimension):
+            process.stdin.write(command)
         process.stdin.flush()
     time.sleep(settle)
     process.stdin.write("save-all flush\n")

@@ -102,7 +102,7 @@ void place_end_city_piece(const structure_place_context &context,
             continue;
         }
         const auto metadata = nbt_string(*block.nbt, "metadata");
-        if (!metadata.has_value() || !metadata->starts_with("Chest")) {
+        if (!metadata.has_value()) {
             continue;
         }
         const auto relative = transform_position(
@@ -110,6 +110,65 @@ void place_end_city_piece(const structure_place_context &context,
         const block_pos marker{.x = origin.x + relative.x,
                                .y = origin.y + relative.y,
                                .z = origin.z + relative.z};
+        if (metadata->starts_with("Sentry")) {
+            if (!inside_chunk(*context.chunk, marker)) {
+                continue;
+            }
+            data::nbt::compound entity;
+            entity.emplace("id",
+                           data::nbt::value{std::string{"minecraft:shulker"}});
+            entity.emplace(
+                "Pos",
+                data::nbt::make_list(
+                    data::nbt::tag_type::double_,
+                    {data::nbt::value{static_cast<double>(marker.x) + 0.5},
+                     data::nbt::value{static_cast<double>(marker.y)},
+                     data::nbt::value{static_cast<double>(marker.z) + 0.5}}));
+            context.chunk->add_entity(std::move(entity));
+            continue;
+        }
+        if (metadata->starts_with("Elytra")) {
+            if (!inside_chunk(*context.chunk, marker)) {
+                continue;
+            }
+            // The reference spawns a south-facing item frame holding an
+            // elytra at the marker, whose entity position is the block centre.
+            data::nbt::compound item;
+            item.emplace("id",
+                         data::nbt::value{std::string{"minecraft:elytra"}});
+            item.emplace("count",
+                         data::nbt::value{static_cast<std::int32_t>(1)});
+            data::nbt::compound entity;
+            entity.emplace(
+                "id", data::nbt::value{std::string{"minecraft:item_frame"}});
+            entity.emplace(
+                "Pos",
+                data::nbt::make_list(
+                    data::nbt::tag_type::double_,
+                    {data::nbt::value{static_cast<double>(marker.x) + 0.5},
+                     data::nbt::value{static_cast<double>(marker.y) + 0.5},
+                     data::nbt::value{static_cast<double>(marker.z) + 0.5}}));
+            entity.emplace("Rotation",
+                           data::nbt::make_list(data::nbt::tag_type::float_,
+                                                {data::nbt::value{0.0F},
+                                                 data::nbt::value{0.0F}}));
+            // Facing SOUTH: the legacy direction id 3.
+            entity.emplace("Facing",
+                           data::nbt::value{static_cast<std::int8_t>(3)});
+            entity.emplace("Item", data::nbt::value{std::move(item)});
+            entity.emplace("ItemRotation",
+                           data::nbt::value{static_cast<std::int8_t>(0)});
+            entity.emplace("ItemDropChance", data::nbt::value{1.0F});
+            entity.emplace("Invisible",
+                           data::nbt::value{static_cast<std::int8_t>(0)});
+            entity.emplace("Fixed",
+                           data::nbt::value{static_cast<std::int8_t>(0)});
+            context.chunk->add_entity(std::move(entity));
+            continue;
+        }
+        if (!metadata->starts_with("Chest")) {
+            continue;
+        }
         const block_pos chest{.x = marker.x, .y = marker.y - 1, .z = marker.z};
         if (!inside_chunk(*context.chunk, chest)) {
             continue;

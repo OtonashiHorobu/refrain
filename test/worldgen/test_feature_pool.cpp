@@ -251,4 +251,99 @@ suite<"worldgen/feature-pool"> feature_pool_tests = [] {
                (second == 0 ? state.stone : state.dirt));
         expect(two.next_int(1000) == expected.next_int(1000));
     };
+
+    "a feature element reads the structure climate for snow and freeze"_test =
+        [] {
+            fixture state;
+            const auto water = state.states.intern(
+                "minecraft:water",
+                {.air = false, .fluid = true, .water = true});
+            const auto ice = state.states.intern(
+                "minecraft:ice", {.air = false, .blocks_motion = true});
+            const auto snow =
+                state.states.intern("minecraft:snow[layers=1]", {.air = false});
+            expect(water && ice && snow);
+            if (!water || !ice || !snow) {
+                return;
+            }
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    (void)state.chunk->set_state(x, 8, z, *water);
+                }
+            }
+            feature::feature_data_set data;
+            data.features.emplace(
+                "oracle:freeze",
+                feature::configured_feature_document{
+                    .id = "oracle:freeze",
+                    .document =
+                        parse(R"({"type":"minecraft:freeze_top_layer"})")});
+            data.placed.emplace(
+                "oracle:freeze",
+                feature::placed_feature_document{.id = "oracle:freeze",
+                                                 .feature = "oracle:freeze",
+                                                 .placement = parse("[]")});
+            const block_pos origin{.x = 0, .y = 9, .z = 0};
+            // A freezing temperature turns the water into ice and tops it
+            // with a snow layer through the same probes the chunk feature
+            // stage uses.
+            state.context.temperature =
+                [](const block_pos &) -> std::optional<float> { return -1.0F; };
+            structure::structure_feature_placer placer{state.context, data};
+            const std::array ids{std::string{"oracle:freeze"}};
+            const auto loaded = placer.load(ids);
+            expect(loaded.has_value());
+            if (!loaded) {
+                return;
+            }
+            state.context.place_feature = [&placer](std::string_view id,
+                                                    worldgen_random &random,
+                                                    const block_pos &position) {
+                return placer.place(id, random, position);
+            };
+            worldgen_random random{
+                std::make_unique<xoroshiro_random_source>(424242)};
+            structure::place_structure_piece(
+                state.context,
+                make_piece(feature_element("oracle:freeze"), origin), random);
+            expect(state.chunk->state_at(3, 8, 4) == *ice);
+            expect(state.chunk->state_at(3, 9, 4) == *snow);
+            expect(state.chunk->state_at(12, 8, 13) == *ice);
+
+            // Without a climate source the probes stay inert, exactly like a
+            // structure placed without a level.
+            fixture warm;
+            for (jint z = 0; z < 16; ++z) {
+                for (jint x = 0; x < 16; ++x) {
+                    (void)warm.chunk->set_state(x, 8, z, *water);
+                }
+            }
+            structure::structure_feature_placer inert{warm.context, data};
+            const auto inert_loaded = inert.load(ids);
+            expect(inert_loaded.has_value());
+            if (!inert_loaded) {
+                return;
+            }
+            warm.context.place_feature = [&inert](std::string_view id,
+                                                  worldgen_random &piece_random,
+                                                  const block_pos &position) {
+                return inert.place(id, piece_random, position);
+            };
+            warm.context.temperature = {};
+            structure::structure_feature_placer inert_again{warm.context, data};
+            expect(inert_again.load(ids).has_value());
+            warm.context.place_feature =
+                [&inert_again](std::string_view id,
+                               worldgen_random &piece_random,
+                               const block_pos &position) {
+                    return inert_again.place(id, piece_random, position);
+                };
+            worldgen_random warm_random{
+                std::make_unique<xoroshiro_random_source>(424242)};
+            structure::place_structure_piece(
+                warm.context,
+                make_piece(feature_element("oracle:freeze"), origin),
+                warm_random);
+            expect(warm.chunk->state_at(3, 8, 4) == *water);
+        };
 };

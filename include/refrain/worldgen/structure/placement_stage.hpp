@@ -16,6 +16,7 @@
 #include <unordered_map>
 
 #include <functional>
+#include <optional>
 #include <string_view>
 
 namespace refrain::worldgen::structure {
@@ -49,6 +50,12 @@ struct structure_place_context {
     /// feature piece.
     std::function<bool(std::string_view, worldgen_random &, const block_pos &)>
         place_feature{};
+    /// Biome and temperature probes for a feature pool element. The reference
+    /// places the element against the same level the chunk generator runs on,
+    /// so its snow, freeze and biome filters read the generation biome and the
+    /// sampled climate. A context without probes leaves those filters inert.
+    std::function<std::string_view(const block_pos &)> biome{};
+    std::function<std::optional<float>(const block_pos &)> temperature{};
 };
 
 /// Places one already generated piece into `context.chunk`. Template and

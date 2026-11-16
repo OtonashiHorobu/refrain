@@ -5,6 +5,7 @@
 #include <refrain/worldgen/feature/state_provider.hpp>
 
 #include <refrain/data/json.hpp>
+#include <refrain/worldgen/biome/biome_tags.hpp>
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/feature/block_predicate.hpp>
@@ -433,7 +434,8 @@ auto simple_state(block_state_id state) -> std::unique_ptr<state_provider> {
 
 auto decode_state_provider(const data::json::value &document,
                            block_state_registry &states,
-                           const state_provider_resolver &resolve)
+                           const state_provider_resolver &resolve,
+                           const biome_tags *tags)
     -> result<std::unique_ptr<state_provider>> {
     if (!document.is_object()) {
         const auto text = document.as_string();
@@ -527,7 +529,7 @@ auto decode_state_provider(const data::json::value &document,
             return std::unexpected{make_error(error_code::parse_error,
                                               "rotated provider has no state")};
         }
-        auto inner = decode_state_provider(*source, states, resolve);
+        auto inner = decode_state_provider(*source, states, resolve, tags);
         if (!inner) {
             return std::unexpected{inner.error()};
         }
@@ -552,7 +554,7 @@ auto decode_state_provider(const data::json::value &document,
             return std::unexpected{make_error(error_code::parse_error,
                                               "randomized_int is incomplete")};
         }
-        auto inner = decode_state_provider(*source, states, resolve);
+        auto inner = decode_state_provider(*source, states, resolve, tags);
         auto property_text = property->as_string();
         auto value_provider = provider::int_provider::decode(*values);
         if (!inner || !property_text || !value_provider) {
@@ -574,7 +576,7 @@ auto decode_state_provider(const data::json::value &document,
         std::unique_ptr<state_provider> fallback;
         if (fallback_value != nullptr) {
             auto decoded =
-                decode_state_provider(*fallback_value, states, resolve);
+                decode_state_provider(*fallback_value, states, resolve, tags);
             if (!decoded) {
                 return std::unexpected{decoded.error()};
             }
@@ -588,8 +590,10 @@ auto decode_state_provider(const data::json::value &document,
                 return std::unexpected{make_error(
                     error_code::parse_error, "rule_based rule is incomplete")};
             }
-            auto predicate = decode_block_predicate(*predicate_value, states);
-            auto provider = decode_state_provider(*then_value, states, resolve);
+            auto predicate =
+                decode_block_predicate(*predicate_value, states, tags);
+            auto provider =
+                decode_state_provider(*then_value, states, resolve, tags);
             if (!predicate || !provider) {
                 return std::unexpected{make_error(
                     error_code::parse_error, "rule_based rule is invalid")};
