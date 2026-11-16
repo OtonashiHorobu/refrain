@@ -10,6 +10,7 @@
 #include <refrain/session/play_session.hpp>
 #include <refrain/session/player_store.hpp>
 
+#include <refrain/app/content_reload.hpp>
 #include <refrain/app/mod_lifecycle.hpp>
 #include <refrain/app/mod_management.hpp>
 #include <refrain/app/services.hpp>
@@ -28,6 +29,7 @@
 #include <refrain/server/command_bridge.hpp>
 #include <refrain/server/console_commands.hpp>
 #include <refrain/server/console_service.hpp>
+#include <refrain/server/content_reload_inputs.hpp>
 #include <refrain/server/entity_broadcaster.hpp>
 #include <refrain/server/inventory_sync.hpp>
 #include <refrain/server/maintenance_service.hpp>
@@ -60,6 +62,7 @@
 namespace {
 
 constexpr refrain::log::logger log_config{"config"};
+constexpr refrain::log::logger log_content{"content"};
 constexpr refrain::log::logger log_mods{"mods"};
 constexpr refrain::log::logger log_net{"net"};
 constexpr refrain::log::logger log_server{"server"};
@@ -528,11 +531,47 @@ auto run_server(const server_run_options &options,
             "running composition cannot be re-resolved from installed "
             "receipts";
     }
+    // Content view epoch: the composition root built and validated the view
+    // the server starts with and published the layer list it was built from.
+    // The service rebuilds the same stack off the tick, validates it and
+    // publishes it at the tick boundary; `publish_content_view()` exposes the
+    // live per-tick snapshot so consumers never hold a view across a tick.
+    std::optional<refrain::app::content_reload> content_reload_service{};
+    std::string content_reload_unavailable_reason{};
+    if (auto content_inputs{refrain::server::take_content_reload_inputs()};
+        content_inputs.has_value()) {
+        refrain::app::content_reload_options reload_options{};
+        reload_options.enabled = management_settings->hot_reload_data;
+        reload_options.gate_source = management_settings->admin_source;
+        auto sources{std::move(content_inputs->sources)};
+        content_reload_service.emplace(
+            refrain::app::content_view_snapshot{
+                .generation = 1,
+                .view = std::move(content_inputs->initial),
+            },
+            std::move(reload_options),
+            [sources = std::move(sources)]()
+                -> refrain::result<
+                    std::shared_ptr<const refrain::data::content_view>> {
+                auto built{refrain::data::content_view::build(sources)};
+                if (!built) {
+                    return std::unexpected{std::move(built.error())};
+                }
+                return std::make_shared<const refrain::data::content_view>(
+                    std::move(*built));
+            });
+        refrain::server::publish_content_view(
+            content_reload_service->snapshot());
+    } else {
+        content_reload_unavailable_reason =
+            "the composition root did not publish the content layers this "
+            "server reads";
+    }
     // One mod management service behind the console `mods ...` command and
     // the in-game `/mods` tree, so both frontends report the same results.
-    // The hot lifecycle port is the only place that may change the running
-    // composition; the command layer keeps its gates, durable store
-    // transactions and audit.
+    // The hot lifecycle and content reload ports are the only places that may
+    // change the running composition or the content view; the command layer
+    // keeps its gates, durable store transactions and audit.
     refrain::app::mod_management_context management{};
     management.store = options.content_store;
     management.policy = management_settings->policy;
@@ -540,12 +579,20 @@ auto run_server(const server_run_options &options,
     management.admin_source = management_settings->admin_source;
     management.hot_install = management_settings->hot_install;
     management.hot_reload = management_settings->hot_reload;
+    management.hot_reload_data = management_settings->hot_reload_data;
     management.loaded = loaded_composition_snapshot(options);
     if (mod_lifecycle_service) {
         management.lifecycle =
             refrain::app::make_mod_lifecycle_port(*mod_lifecycle_service);
     } else {
         management.lifecycle.unavailable_reason = lifecycle_unavailable_reason;
+    }
+    if (content_reload_service) {
+        management.content_reload =
+            refrain::app::make_content_reload_port(*content_reload_service);
+    } else {
+        management.content_reload.unavailable_reason =
+            content_reload_unavailable_reason;
     }
     refrain::app::mod_management mods_management{std::move(management)};
     log_mods.info(
@@ -568,6 +615,17 @@ auto run_server(const server_run_options &options,
     } else {
         log_mods.info("the hot lifecycle is unavailable: {}",
                       lifecycle_unavailable_reason);
+    }
+    if (content_reload_service) {
+        const auto live{content_reload_service->snapshot()};
+        log_content.info(
+            "content reload is {} with generation {} live over {} layer(s)",
+            management_settings->hot_reload_data ? "enabled" : "disabled",
+            live.generation,
+            live.view ? live.view->layer_count() : std::size_t{0});
+    } else {
+        log_content.info("content reload is unavailable: {}",
+                         content_reload_unavailable_reason);
     }
 
     auto command_environment{
@@ -1216,6 +1274,18 @@ auto run_server(const server_run_options &options,
             log_server.error(
                 "failed to commit a staged mod composition change: {}",
                 committed.error().message);
+        }
+        // Publish a finished content view rebuild at the same boundary. The
+        // commit only swaps a shared pointer: the pack IO and the validation
+        // happened on the builder thread, so a slow layer never blocks the
+        // tick. A failed or registry-changing rebuild is dropped and the live
+        // generation stays in place; the service logs the outcome.
+        if (content_reload_service) {
+            const auto committed{content_reload_service->commit()};
+            if (committed.published) {
+                refrain::server::publish_content_view(
+                    content_reload_service->snapshot());
+            }
         }
         // The provider ticks its own player table at the end of the loop body,
         // so the projection is re-read here, before this tick's commands and

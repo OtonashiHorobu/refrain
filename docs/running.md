@@ -338,7 +338,7 @@ The server announces a small command tree after joining:
 | `/defaultgamemode <mode>` | persist the world's default game mode |
 | `/difficulty <0-3>` | persist and broadcast the world difficulty |
 | `/hardcore <on\|off>` | persist hardcore for new logins |
-| `/mods <command>` | list, verify, install, uninstall, reload or manage the trust state of mods (operator only; see [Mod management](#mod-management)) |
+| `/mods <command>` | list, verify, install, uninstall, reload, reload content data or manage the trust state of mods (operator only; see [Mod management](#mod-management)) |
 
 | Command | Effect |
 |---|---|
@@ -373,7 +373,7 @@ The server announces a small command tree after joining:
 | `time add <ticks>` | add ticks to the daylight clock |
 | `time pause` / `time resume` | stop or resume the daylight clock |
 | `weather clear\|rain\|thunder [duration]` | switch the weather for a number of ticks |
-| `mods <command>` | list, verify, install, uninstall, reload or manage the trust state of mods (see [Mod management](#mod-management)) |
+| `mods <command>` | list, verify, install, uninstall, reload, reload content data or manage the trust state of mods (see [Mod management](#mod-management)) |
 | `palette-gc` | rebuild the world palette while the world is quiesced |
 | `schedules` | list periodic maintenance tasks and their counters |
 | `help` | list commands |
@@ -392,6 +392,7 @@ the error text and the audit entry are identical whichever one ran the command.
 | `mods install <package.rfmod> confirm` | install a package into the content store |
 | `mods uninstall <id>[@<version>] confirm` | remove one or every installed version of a mod |
 | `mods reload <id>[@<version>]` | reload a mod that is part of the running composition |
+| `mods reload-data` | rebuild the datapack content view (recipes, loot tables, advancements, worldgen documents, assets) without restarting |
 | `mods trust` | show the install policy, the trust anchors and the recorded signer pins |
 | `mods trust pin <id> confirm` | pin the signer recorded by the highest installed version |
 | `mods trust clear <id> confirm` | clear a signer pin |
@@ -412,6 +413,8 @@ The command surface reads the install/trust policy from the same
 hot_install = false
 # Rebuild a loaded mod in place.
 hot_reload = false
+# Rebuild the datapack content view (data and assets) in place.
+hot_reload_data = false
 
 [admin]
 # Player uuids allowed to run /mods. The server console is always allowed.
@@ -489,6 +492,54 @@ failed operations are audited too:
 
 ```text
 [mod-audit/info] console ran install on example.mod 1.0.0 from archive <blake3> signed by key 'first-party' under the strict policy, the result was ok after 4ms
+```
+
+### Content reload
+
+The datapack content the server reads is one re-buildable content view: the
+published content composition (when `--content-store` is used) with every
+`--datapack` and `--dev` directory layered above it, i.e. the same stack the
+next start would mount. `mods reload-data` rebuilds that stack on a background
+thread, loads and validates it, and publishes the result at the next tick
+boundary. The command returns immediately: it queues the rebuild, reports the
+generation that stays live for the rest of the tick and never makes the tick
+wait for a build.
+
+The gate is `[lifecycle] hot_reload_data` in `config/mods_admin.toml`, off by
+default. With the gate off the command is refused and names the file; with the
+gate on a runtime that has no content view answers `unsupported` and names the
+missing layer.
+
+A reload replaces the content layer: recipes, loot tables, advancements,
+worldgen documents, structure templates, tags and the file/asset layer every
+layer-aware consumer reads. Readers take the live view once per tick and never
+hold it across a tick boundary; the previous view is released when the last
+reader drops its snapshot, so a tick that started on the old view finishes on
+it.
+
+A reload does not replace:
+
+- the block, item and entity registries. The server freezes them when it
+  starts and existing chunks keep the palette generation they were written
+  with. A pack that adds, removes or edits a registry document
+  (`data/<namespace>/block/...`, `data/<namespace>/item/...`,
+  `data/<namespace>/entity_type/...`, or a shipped `tables.rvtb` /
+  `protocol_registry.json`) is refused with `restart required`, naming the
+  changed files, and the live view stays as it is;
+- mod code and the mod composition. That is `mods reload <id>` under
+  `hot_reload`, not `mods reload-data`;
+- the chunk generator's own data snapshot. Chunk generation owns generator
+  workers started from the game-data directory at boot, so changed worldgen
+  documents become generation input after a restart in this build.
+
+A failed rebuild (a malformed document, a missing layer, a validation error) is
+rolled back: the live generation stays and the error names the layer and the
+path. A reload does not disconnect players and does not unload chunks; a player
+standing in generated terrain sees no change. Every successful publish logs one
+line through the `content` logger:
+
+```text
+[content/info] published content view generation 2 with 2 content layers, 412 files, 18 recipes, 9 loot tables, 4 advancements, 121 worldgen documents, 0 structures and 36 tags
 ```
 
 ## Player state
