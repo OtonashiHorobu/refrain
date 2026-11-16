@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+# Minimal build profile: the content and data layer only.
+#
+# The smallest composition that is closed under the mod dependency graph and
+# still runs: content declarations plus the data-layer provider. It has no
+# world, simulation, storage or network providers, so it starts with the
+# data-only gamepack (content tooling, mod-host and startup smokes) rather than
+# a playable server. CI builds this profile to keep the build independent of
+# the full provider set.
+name = "minimal"
+description = "Content and data layer only; no world, simulation or network."
+gamepack = "gamepack/presets/data-only.toml"
+
+mods = [
+    "refrain.content.vanilla",
+    "refrain.data.vanilla",
+]
+
+dynamic = []

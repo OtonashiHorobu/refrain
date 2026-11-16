@@ -26,6 +26,12 @@ class RefrainConan(ConanFile):
         "with_io_uring": [True, False],
         "build_tests": [True, False],
         "build_bench": [True, False],
+        # Build-time mod profile selection. `mods`/`mod_dynamic` are explicit
+        # comma-separated overrides and stay empty by default.
+        "mod_profile": ["ANY"],
+        "mods": ["ANY"],
+        "mod_dynamic": ["ANY"],
+        "mod_link": ["auto", "static", "mixed", "dynamic"],
     }
     default_options = {
         "lto": True,
@@ -38,6 +44,10 @@ class RefrainConan(ConanFile):
         "with_io_uring": True,
         "build_tests": True,
         "build_bench": True,
+        "mod_profile": "vanilla",
+        "mods": "",
+        "mod_dynamic": "",
+        "mod_link": "auto",
     }
 
     def requirements(self):
@@ -248,6 +258,14 @@ class RefrainConan(ConanFile):
         tc.variables["REFRAIN_BUILD_BENCH"] = (
             "ON" if self.options.build_bench else "OFF"
         )
+        # Build-time mod profiles. These reach CMake as REFRAIN_CONAN_* and
+        # only seed the cache: an explicit -DREFRAIN_MOD_PROFILE on the
+        # configure line wins, so a build directory can be reconfigured without
+        # re-running conan.
+        tc.variables["REFRAIN_CONAN_MOD_PROFILE"] = str(self.options.mod_profile)
+        tc.variables["REFRAIN_CONAN_MODS"] = str(self.options.mods)
+        tc.variables["REFRAIN_CONAN_MOD_DYNAMIC"] = str(self.options.mod_dynamic)
+        tc.variables["REFRAIN_CONAN_MOD_LINK"] = str(self.options.mod_link)
 
         # Conan 2's Git.run() expects a *string* command. Passing a list runs
         # `git ['symbolic-ref', ...]`, which fails; the ConanException must be

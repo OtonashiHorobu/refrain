@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
+
+# Example profile for an opt-in older-version worldgen/net set ("1.17").
+#
+# A profile is the place where a version-specific feature set is selected at
+# build time instead of being branched at runtime. The 1.17 worldgen and
+# network mods are not part of this tree yet, so this profile currently builds
+# the same content + data layer as the minimal profile. When those mods land,
+# add their ids to `mods`, pin them in the profile's gamepack and (optionally)
+# list them in `dynamic`.
+name = "1.17"
+description = "Example profile for a 1.17 opt-in worldgen/network set."
+gamepack = "gamepack/presets/data-only.toml"
+
+mods = [
+    "refrain.content.vanilla",
+    "refrain.data.vanilla",
+    # "refrain.worldgen.vanilla_1_17",
+    # "refrain.proto.1_17",
+]
+
+dynamic = []

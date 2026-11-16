@@ -20,6 +20,7 @@
 #   scripts/dist.sh [linux|mingw|msvc]
 #
 # Environment:
+#   REFRAIN_DIST_MOD_PROFILE  build-time mod profile (default: vanilla)
 #   REFRAIN_DIST_WORK         working directory (default: build/dist/<target>)
 #   REFRAIN_DIST_CONAN_HOME   isolated Conan home (default: <work>/conan-home)
 #   REFRAIN_DIST_HOST_CONAN_HOME  Conan home for host tools (default: ~/.conan2)
@@ -58,6 +59,13 @@ fail() {
 }
 
 [[ -f "$ROOT/conanfile.py" ]] || fail "run this script from a Refrain checkout"
+
+DIST_MOD_PROFILE="${REFRAIN_DIST_MOD_PROFILE:-vanilla}"
+[[ "$DIST_MOD_PROFILE" =~ ^[a-z0-9][a-z0-9._-]*$ ]] \
+    || fail "invalid REFRAIN_DIST_MOD_PROFILE: $DIST_MOD_PROFILE"
+case "$DIST_MOD_PROFILE" in
+    *..*) fail "invalid REFRAIN_DIST_MOD_PROFILE: $DIST_MOD_PROFILE" ;;
+esac
 
 VERSION="${REFRAIN_DIST_VERSION:-}"
 if [[ -z "$VERSION" ]]; then
@@ -236,6 +244,7 @@ common_install=(
     -of "$WORK/conan" --build=missing
     -o "&:with_crashpad=False" -o "&:with_wasm=False"
     -o "&:build_tests=False" -o "&:build_bench=False"
+    -o "&:mod_profile=$DIST_MOD_PROFILE"
     --lockfile=conan/locks/vendor.lock
 )
 
@@ -269,7 +278,8 @@ if [[ "$build_host_tools" == 1 ]]; then
         -DREFRAIN_COMMIT="$COMMIT" \
         -DREFRAIN_WITH_CRASHPAD=OFF -DREFRAIN_WITH_WASM=OFF \
         -DREFRAIN_BUILD_SERVER=OFF -DREFRAIN_BUILD_TESTS=OFF \
-        -DREFRAIN_BUILD_BENCH=OFF >/dev/null
+        -DREFRAIN_BUILD_BENCH=OFF \
+        -DREFRAIN_MOD_PROFILE="$DIST_MOD_PROFILE" >/dev/null
     cmake --build "$WORK/host/build" -j "$JOBS" --target refrain-tools
     host_tools_path="$WORK/host/build/bin/refrain-tools"
 fi
@@ -307,6 +317,7 @@ cmake_flags=(
     -DREFRAIN_BUILD_SERVER=ON
     -DREFRAIN_BUILD_TESTS=OFF
     -DREFRAIN_BUILD_BENCH=OFF
+    -DREFRAIN_MOD_PROFILE="$DIST_MOD_PROFILE"
 )
 case "$TARGET" in
     linux)
@@ -324,13 +335,39 @@ if [[ -n "$host_tools_path" ]]; then
     cmake_flags+=(-DREFRAIN_HOST_TOOLS="$host_tools_path")
 fi
 
-log "configuring and building"
+log "configuring and building profile $DIST_MOD_PROFILE"
 cmake -S . -B "$BUILD" "${cmake_flags[@]}"
 cmake --build "$BUILD" -j "$JOBS" --target refrain-server refrain-tools
+
+PROFILE_FILE="$BUILD/generated/mod_profile.toml"
+[[ -f "$PROFILE_FILE" ]] || fail "build did not write $PROFILE_FILE"
+eval "$(python3 - "$PROFILE_FILE" <<'PY'
+import re
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+keys = ("name", "gamepack", "link", "build_id")
+for key in keys:
+    match = re.search(rf'^{key} = "([^"]*)"$', text, re.MULTILINE)
+    if match is None:
+        raise SystemExit(f"profile is missing '{key}'")
+    value = match.group(1)
+    if any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789./_-" for ch in value):
+        raise SystemExit(f"profile field '{key}' has unexpected characters")
+    print(f"PROFILE_{key.upper()}={value}")
+PY
+)"
+[[ "$PROFILE_NAME" == "$DIST_MOD_PROFILE" ]] \
+    || fail "build profile '$PROFILE_NAME' does not match REFRAIN_DIST_MOD_PROFILE '$DIST_MOD_PROFILE'"
+PROFILE_GAMEPACK_win="$(printf '%s' "$PROFILE_GAMEPACK" | sed 's|/|\\|g')"
+log "profile $PROFILE_NAME build $PROFILE_BUILD_ID link $PROFILE_LINK, gamepack $PROFILE_GAMEPACK"
 
 case "$TARGET" in
     linux)
         version_line="$("$BUILD/bin/refrain-tools" version 2>/dev/null | head -n 1 || true)"
+        profile_line="$("$BUILD/bin/refrain-tools" version 2>/dev/null | sed -n 's/^  profile: //p' || true)"
+        [[ "$profile_line" == "$DIST_MOD_PROFILE" ]] \
+            || fail "unexpected build profile in version output: ${profile_line:-<missing>}"
         ;;
     mingw)
         if command -v wine >/dev/null 2>&1; then
@@ -364,6 +401,12 @@ cp "$BUILD/bin/refrain-server$exe_suffix" "$STAGE/$name/bin/"
 cp "$BUILD/bin/refrain-tools$exe_suffix" "$STAGE/$name/bin/"
 cp gamepack/gamepack.toml "$STAGE/$name/gamepack/"
 cp -r gamepack/presets "$STAGE/$name/gamepack/"
+# The resolved profile (name, mod list, default gamepack, build id) ships with
+# the archive: the gamepack and mods.lock in this release belong to it.
+cp "$PROFILE_FILE" "$STAGE/$name/profile.toml"
+if [[ -d "$BUILD/bin/modules" ]]; then
+    cp -r "$BUILD/bin/modules" "$STAGE/$name/bin/modules"
+fi
 # The installed layout carries the tracked game-derived tables and reports;
 # the datapack is not shipped and is fetched from the operator's own copy of
 # the game on the first accepted start (or staged into `data/` offline).
@@ -381,10 +424,10 @@ case "$TARGET" in
     linux)
         strip --strip-all "$STAGE/$name/bin/refrain-server" \
             "$STAGE/$name/bin/refrain-tools"
-        cat > "$STAGE/$name/run-server.sh" <<'RUN'
+        cat > "$STAGE/$name/run-server.sh" <<RUN
 #!/bin/sh
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$here/bin/refrain-server" --gamepack "$here/gamepack/gamepack.toml" "$@"
+here=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
+exec "\$here/bin/refrain-server" --gamepack "\$here/$PROFILE_GAMEPACK" "\$@"
 RUN
         chmod +x "$STAGE/$name/run-server.sh"
         ;;
@@ -392,17 +435,17 @@ RUN
         x86_64-w64-mingw32-strip --strip-all \
             "$STAGE/$name/bin/refrain-server.exe" \
             "$STAGE/$name/bin/refrain-tools.exe"
-        cat > "$STAGE/$name/run-server.cmd" <<'RUN'
+        cat > "$STAGE/$name/run-server.cmd" <<RUN
 @echo off
-"%~dp0bin\refrain-server.exe" --gamepack "%~dp0gamepack\gamepack.toml" %*
+"%~dp0bin\refrain-server.exe" --gamepack "%~dp0$PROFILE_GAMEPACK_win" %*
 RUN
         cp -r "$ROOT/licenses/GCC-Runtime" "$ROOT/licenses/MinGW-w64" \
             "$STAGE/$name/licenses/"
         ;;
     msvc)
-        cat > "$STAGE/$name/run-server.cmd" <<'RUN'
+        cat > "$STAGE/$name/run-server.cmd" <<RUN
 @echo off
-"%~dp0bin\refrain-server.exe" --gamepack "%~dp0gamepack\gamepack.toml" %*
+"%~dp0bin\refrain-server.exe" --gamepack "%~dp0$PROFILE_GAMEPACK_win" %*
 RUN
         msvc_redist=""
         if [[ -n "${VCToolsRedistDir:-}" ]]; then

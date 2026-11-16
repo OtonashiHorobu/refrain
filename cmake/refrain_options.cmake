@@ -26,9 +26,9 @@ option(REFRAIN_BUILD_FUZZ "Build libFuzzer harnesses (Clang only)" OFF)
 option(REFRAIN_BUILD_BENCH_VARIANTS
        "Build the optional library-comparison benchmarks" OFF)
 option(REFRAIN_BUILD_SERVER "Build refrain-server" ON)
-# REFRAIN_BUILD_CLIENT and REFRAIN_MONOLITHIC are accepted but not wired yet:
-# the client stack and static mod linkage are future work. They are kept so the
-# option surface (conanfile.py + CMake) stays stable.
+# REFRAIN_BUILD_CLIENT is accepted but not wired yet: the client stack is
+# future work. It is kept so the option surface (conanfile.py + CMake) stays
+# stable.
 option(REFRAIN_BUILD_CLIENT "Build the client stack (not wired yet)" OFF)
 option(REFRAIN_USE_REFLECTION "Enable refl-cpp based refrain::reflect glue" ON)
 option(REFRAIN_WITH_CRASHPAD "Enable Crashpad crash reporting" ON)
@@ -52,7 +52,61 @@ endif()
 option(REFRAIN_WITH_IO_URING
        "Enable Asio's io_uring file backend (Linux + liburing)"
        ${REFRAIN_WITH_IO_URING_DEFAULT})
-option(REFRAIN_MONOLITHIC "Link first-party mods statically (not wired)" ON)
+# Deprecated alias from before build-time mod profiles: OFF asked for a
+# non-monolithic build, which is now REFRAIN_MOD_LINK=dynamic. Kept so an
+# existing configure line keeps working; new code reads REFRAIN_MOD_LINK.
+option(REFRAIN_MONOLITHIC
+       "Deprecated: OFF selects the unsupported all-module link mode" ON)
+# --- build-time mod profile -------------------------------------------------
+# The profile is the source of truth for which first-party mods are compiled
+# into the binary (see docs/building.md). The default matches the vanilla
+# composition. An explicit REFRAIN_MODS list overrides the profile's mod list
+# for experiments; REFRAIN_MOD_GAMEPACK then has to name a gamepack that pins
+# exactly that list.
+# Conan options travel as REFRAIN_CONAN_* normal variables through the
+# toolchain file. They seed the cache default only: a -D on the configure line
+# takes precedence, and a later configure keeps the cached selection.
+set(_REFRAIN_MOD_PROFILE_DEFAULT "vanilla")
+if(DEFINED REFRAIN_CONAN_MOD_PROFILE AND NOT REFRAIN_CONAN_MOD_PROFILE STREQUAL "")
+    set(_REFRAIN_MOD_PROFILE_DEFAULT "${REFRAIN_CONAN_MOD_PROFILE}")
+endif()
+set(REFRAIN_MOD_PROFILE
+    "${_REFRAIN_MOD_PROFILE_DEFAULT}"
+    CACHE STRING
+          "Build-time mod profile name (profiles/<name>.toml)")
+set(_REFRAIN_MODS_DEFAULT "")
+if(DEFINED REFRAIN_CONAN_MODS AND NOT REFRAIN_CONAN_MODS STREQUAL "")
+    set(_REFRAIN_MODS_DEFAULT "${REFRAIN_CONAN_MODS}")
+endif()
+set(REFRAIN_MODS
+    "${_REFRAIN_MODS_DEFAULT}"
+    CACHE STRING
+          "Explicit comma-separated mod ids overriding the profile's mod list")
+set(_REFRAIN_MOD_DYNAMIC_DEFAULT "")
+if(DEFINED REFRAIN_CONAN_MOD_DYNAMIC AND NOT REFRAIN_CONAN_MOD_DYNAMIC STREQUAL "")
+    set(_REFRAIN_MOD_DYNAMIC_DEFAULT "${REFRAIN_CONAN_MOD_DYNAMIC}")
+endif()
+set(REFRAIN_MOD_DYNAMIC
+    "${_REFRAIN_MOD_DYNAMIC_DEFAULT}"
+    CACHE STRING
+          "Explicit comma-separated ids to build as shared modules")
+set(REFRAIN_MOD_GAMEPACK
+    ""
+    CACHE STRING
+          "Default gamepack override (empty: the profile's gamepack)")
+set(REFRAIN_MOD_PROFILES_DIR
+    ""
+    CACHE STRING "Profile directory override (empty: profiles/)")
+set(_REFRAIN_MOD_LINK_DEFAULT "auto")
+if(DEFINED REFRAIN_CONAN_MOD_LINK AND NOT REFRAIN_CONAN_MOD_LINK STREQUAL "")
+    set(_REFRAIN_MOD_LINK_DEFAULT "${REFRAIN_CONAN_MOD_LINK}")
+endif()
+set(REFRAIN_MOD_LINK
+    "${_REFRAIN_MOD_LINK_DEFAULT}"
+    CACHE STRING
+          "First-party mod link mode: auto, static, mixed or dynamic")
+set_property(CACHE REFRAIN_MOD_LINK PROPERTY STRINGS auto static mixed dynamic)
+
 # Comma-separated sanitizer list ("address,undefined" or "thread"); empty =
 # disabled. CI has dedicated ASan/UBSan and TSan jobs.
 set(REFRAIN_SANITIZE "" CACHE STRING "Comma-separated -fsanitize list")

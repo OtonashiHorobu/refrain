@@ -8,7 +8,10 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
+#include <array>
 #include <string>
+#include <string_view>
 
 namespace refrain::version {
 
@@ -17,6 +20,19 @@ const char *release_version{"@REFRAIN_VERSION@"};
 const char *branch_name{"@REFRAIN_BRANCH@"};
 
 const char *commit_hash{"@REFRAIN_COMMIT@"};
+
+const char *mod_profile{"@REFRAIN_MOD_PROFILE_NAME@"};
+
+const char *mod_build_id{"@REFRAIN_MOD_BUILD_ID@"};
+
+const char *mod_gamepack{"@REFRAIN_MOD_GAMEPACK_RESOLVED@"};
+
+const char *mod_link_mode{"@REFRAIN_MOD_LINK_MODE@"};
+
+namespace {
+
+@REFRAIN_MOD_ARRAYS@
+} // namespace
 
 auto string() noexcept -> std::string_view {
     static const std::string value = [] {
@@ -35,6 +51,17 @@ auto string() noexcept -> std::string_view {
         return result;
     }();
     return value;
+}
+
+auto mod_ids() noexcept -> std::span<const std::string_view> { return k_mods; }
+
+auto dynamic_modules() noexcept
+    -> std::span<const dynamic_module_record> {
+    return k_dynamic_modules;
+}
+
+auto is_mod_built(std::string_view id) noexcept -> bool {
+    return std::binary_search(k_mods.begin(), k_mods.end(), id);
 }
 
 } // namespace refrain::version
