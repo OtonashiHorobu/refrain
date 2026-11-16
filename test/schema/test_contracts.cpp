@@ -11,6 +11,7 @@
 
 #include <boost/ut.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -135,6 +136,160 @@ fake_world_level_missing(void *, refrain_services_world_level_projection *) {
     return REFRAIN_SERVICES_WORLD_WORLD_ERROR_NOT_IMPLEMENTED;
 }
 
+/// Fake `refrain:sim` player surface. The strings and the profile uuid live in
+/// the fake state, which outlives every call, so the generated wrappers see the
+/// same borrowed views a real provider returns.
+struct fake_sim_players {
+    std::string name{"Alice"};
+    std::string world{"overworld"};
+    std::array<std::uint8_t, 16> profile{1, 2,  3,  4,  5,  6,  7,  8,
+                                         9, 10, 11, 12, 13, 14, 15, 16};
+    int counts{0};
+    int reads{0};
+    int lookups{0};
+    int adds{0};
+    int removals{0};
+    int transforms{0};
+    int positions{0};
+    int view_distances{0};
+    int moves{0};
+    int jumps{0};
+    std::uint64_t added_connection{0};
+    std::string added_name{};
+    std::size_t added_profile_size{0};
+    std::uint32_t added_slots{0};
+};
+
+void fill_fake_player(const fake_sim_players &state,
+                      refrain_services_sim_player_info &out) {
+    out.struct_size = REFRAIN_SERVICES_SIM_PLAYER_INFO_SIZE;
+    out.connection = 7;
+    out.profile_id =
+        refrain::contracts::to_borrowed(std::span<const std::uint8_t>{
+            state.profile.data(), state.profile.size()});
+    out.name = refrain::contracts::to_borrowed(std::string_view{state.name});
+    out.world = refrain::contracts::to_borrowed(std::string_view{state.world});
+    out.entity_id = 3;
+    out.x = 1.5;
+    out.y = 64.0;
+    out.z = -2.5;
+    out.yaw = 90.0F;
+    out.pitch = -10.0F;
+    out.on_ground = 1;
+    out.game_mode = 1;
+    out.health = 18.0F;
+    out.view_distance = 12;
+}
+
+std::uint32_t fake_sim_player_count(void *self,
+                                    refrain_services_sim_handle_sim_world) {
+    ++static_cast<fake_sim_players *>(self)->counts;
+    return 1;
+}
+
+refrain_status fake_sim_player_at(void *self,
+                                  refrain_services_sim_handle_sim_world,
+                                  std::uint32_t index,
+                                  refrain_services_sim_player_info *out) {
+    auto &state{*static_cast<fake_sim_players *>(self)};
+    ++state.reads;
+    if (out == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+    }
+    if (index != 0) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_OUT_OF_BOUNDS;
+    }
+    fill_fake_player(state, *out);
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status
+fake_sim_player_by_connection(void *self, refrain_services_sim_handle_sim_world,
+                              std::uint64_t connection,
+                              refrain_services_sim_player_info *out) {
+    auto &state{*static_cast<fake_sim_players *>(self)};
+    ++state.lookups;
+    if (out == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+    }
+    if (connection != 7) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_NOT_FOUND;
+    }
+    fill_fake_player(state, *out);
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status fake_sim_add_player(
+    void *self, refrain_services_sim_handle_sim_world,
+    const refrain_services_sim_player_registration *registration,
+    std::uint64_t *out_value) {
+    auto &state{*static_cast<fake_sim_players *>(self)};
+    ++state.adds;
+    if (registration == nullptr || out_value == nullptr ||
+        registration->struct_size !=
+            REFRAIN_SERVICES_SIM_PLAYER_REGISTRATION_SIZE) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+    }
+    state.added_connection = registration->connection;
+    state.added_name =
+        std::string{refrain::contracts::as_string_view(registration->name)};
+    state.added_profile_size =
+        refrain::contracts::as_bytes(registration->profile_id).size();
+    state.added_slots = registration->inventory_slots;
+    *out_value = 12;
+    return REFRAIN_STATUS_OK;
+}
+
+std::uint8_t fake_sim_remove_player(void *self,
+                                    refrain_services_sim_handle_sim_world,
+                                    std::uint64_t connection) {
+    auto &state{*static_cast<fake_sim_players *>(self)};
+    ++state.removals;
+    return connection == 7 ? 1 : 0;
+}
+
+refrain_status
+fake_sim_set_player_transform(void *self, refrain_services_sim_handle_sim_world,
+                              std::uint64_t, double, double, double, float,
+                              float) {
+    ++static_cast<fake_sim_players *>(self)->transforms;
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status
+fake_sim_set_player_position(void *self, refrain_services_sim_handle_sim_world,
+                             std::uint64_t, double, double, double) {
+    ++static_cast<fake_sim_players *>(self)->positions;
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status
+fake_sim_set_player_view_distance(void *self,
+                                  refrain_services_sim_handle_sim_world,
+                                  std::uint64_t, std::int32_t) {
+    ++static_cast<fake_sim_players *>(self)->view_distances;
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status fake_sim_move_player(void *self,
+                                    refrain_services_sim_handle_sim_world,
+                                    std::uint64_t, double, double, double,
+                                    std::uint8_t *out_value) {
+    auto &state{*static_cast<fake_sim_players *>(self)};
+    ++state.moves;
+    if (out_value == nullptr) {
+        return REFRAIN_SERVICES_SIM_SIM_ERROR_INVALID_ARGUMENT;
+    }
+    *out_value = 1;
+    return REFRAIN_STATUS_OK;
+}
+
+refrain_status fake_sim_jump(void *self, refrain_services_sim_handle_sim_world,
+                             std::uint64_t) {
+    ++static_cast<fake_sim_players *>(self)->jumps;
+    return REFRAIN_STATUS_OK;
+}
+
 // The `event` declared by `sdk/idl/refrain/services/sim.ridl` is an
 // in-process notification (no struct_size) with a stable id and traits.
 using sim_tick_event = refrain::services::sim::tick_event;
@@ -151,6 +306,68 @@ static_assert(std::string_view{refrain::services::sim::tick_event_id} ==
 static_assert(std::string_view{REFRAIN_SERVICES_SIM_EVENT_TICK_EVENT_ID} ==
               "refrain:event/refrain/services/sim/tick_event");
 static_assert(refrain::contracts::contract_event<sim_tick_event>);
+
+// `refrain:sim` 1.1.0 appended the player projection and the
+// connection-addressed player calls after the entity mutations. Every existing
+// slot kept its offset and the table grew by ten pointers; the projection and
+// the registration are the two structs the new calls carry.
+namespace sim_service = refrain::services::sim;
+static_assert(sim_service::abi_major == 1);
+static_assert(sim_service::abi_minor == 1);
+static_assert(REFRAIN_SERVICES_SIM_ABI_MINOR == 1);
+static_assert(std::string_view{sim_service::service_id} == "refrain:sim");
+static_assert(sizeof(sim_service::player_info) == 120);
+static_assert(alignof(sim_service::player_info) == 8);
+static_assert(offsetof(sim_service::player_info, struct_size) == 0);
+static_assert(offsetof(sim_service::player_info, connection) == 8);
+static_assert(offsetof(sim_service::player_info, profile_id) == 16);
+static_assert(offsetof(sim_service::player_info, name) == 32);
+static_assert(offsetof(sim_service::player_info, world) == 48);
+static_assert(offsetof(sim_service::player_info, entity_id) == 64);
+static_assert(offsetof(sim_service::player_info, x) == 72);
+static_assert(offsetof(sim_service::player_info, y) == 80);
+static_assert(offsetof(sim_service::player_info, z) == 88);
+static_assert(offsetof(sim_service::player_info, yaw) == 96);
+static_assert(offsetof(sim_service::player_info, pitch) == 100);
+static_assert(offsetof(sim_service::player_info, on_ground) == 104);
+static_assert(offsetof(sim_service::player_info, game_mode) == 108);
+static_assert(offsetof(sim_service::player_info, health) == 112);
+static_assert(offsetof(sim_service::player_info, view_distance) == 116);
+static_assert(sizeof(sim_service::player_registration) == 96);
+static_assert(alignof(sim_service::player_registration) == 8);
+static_assert(offsetof(sim_service::player_registration, struct_size) == 0);
+static_assert(offsetof(sim_service::player_registration, connection) == 8);
+static_assert(offsetof(sim_service::player_registration, profile_id) == 16);
+static_assert(offsetof(sim_service::player_registration, name) == 32);
+static_assert(offsetof(sim_service::player_registration, world) == 48);
+static_assert(offsetof(sim_service::player_registration, x) == 64);
+static_assert(offsetof(sim_service::player_registration, y) == 72);
+static_assert(offsetof(sim_service::player_registration, z) == 80);
+static_assert(offsetof(sim_service::player_registration, game_mode) == 88);
+static_assert(offsetof(sim_service::player_registration, inventory_slots) ==
+              92);
+static_assert(offsetof(refrain_services_sim_vtable, remove_entity) ==
+              REFRAIN_SERVICES_SIM_VTABLE_SIZE - 11 * sizeof(void *));
+static_assert(offsetof(refrain_services_sim_vtable, player_count) ==
+              REFRAIN_SERVICES_SIM_VTABLE_SIZE - 10 * sizeof(void *));
+static_assert(offsetof(refrain_services_sim_vtable, player_at) ==
+              REFRAIN_SERVICES_SIM_VTABLE_SIZE - 9 * sizeof(void *));
+static_assert(offsetof(refrain_services_sim_vtable, player_by_connection) ==
+              REFRAIN_SERVICES_SIM_VTABLE_SIZE - 8 * sizeof(void *));
+static_assert(offsetof(refrain_services_sim_vtable, add_player) ==
+              REFRAIN_SERVICES_SIM_VTABLE_SIZE - 7 * sizeof(void *));
+static_assert(offsetof(refrain_services_sim_vtable, remove_player) ==
+              REFRAIN_SERVICES_SIM_VTABLE_SIZE - 6 * sizeof(void *));
+static_assert(offsetof(refrain_services_sim_vtable, set_player_transform) ==
+              REFRAIN_SERVICES_SIM_VTABLE_SIZE - 5 * sizeof(void *));
+static_assert(offsetof(refrain_services_sim_vtable, set_player_position) ==
+              REFRAIN_SERVICES_SIM_VTABLE_SIZE - 4 * sizeof(void *));
+static_assert(offsetof(refrain_services_sim_vtable, set_player_view_distance) ==
+              REFRAIN_SERVICES_SIM_VTABLE_SIZE - 3 * sizeof(void *));
+static_assert(offsetof(refrain_services_sim_vtable, move_player) ==
+              REFRAIN_SERVICES_SIM_VTABLE_SIZE - 2 * sizeof(void *));
+static_assert(offsetof(refrain_services_sim_vtable, jump) ==
+              REFRAIN_SERVICES_SIM_VTABLE_SIZE - sizeof(void *));
 
 refrain_status
 fake_configure(void *,
@@ -481,6 +698,125 @@ const suite contracts_tests = [] {
             expect(bare.set_zstd_level == nullptr);
             expect(bare.set_zstd_policy == nullptr);
         };
+
+    "contracts/sim player calls dispatch through the vtable"_test = [] {
+        fake_sim_players state{};
+        refrain_services_sim_vtable table{};
+        table.struct_size = REFRAIN_SERVICES_SIM_VTABLE_SIZE;
+        table.abi_major = REFRAIN_SERVICES_SIM_ABI_MAJOR;
+        table.abi_minor = REFRAIN_SERVICES_SIM_ABI_MINOR;
+        table.abi_patch = REFRAIN_SERVICES_SIM_ABI_PATCH;
+        table.player_count = &fake_sim_player_count;
+        table.player_at = &fake_sim_player_at;
+        table.player_by_connection = &fake_sim_player_by_connection;
+        table.add_player = &fake_sim_add_player;
+        table.remove_player = &fake_sim_remove_player;
+        table.set_player_transform = &fake_sim_set_player_transform;
+        table.set_player_position = &fake_sim_set_player_position;
+        table.set_player_view_distance = &fake_sim_set_player_view_distance;
+        table.move_player = &fake_sim_move_player;
+        table.jump = &fake_sim_jump;
+        const sim_service::provider service{table, &state};
+        const sim_service::sim_world world{};
+
+        expect(service.player_count(world) == 1U);
+        const auto one{service.player_at(world, 0)};
+        expect(one.has_value());
+        if (one) {
+            expect(one->connection == 7U);
+            expect(refrain::contracts::as_string_view(one->name) == "Alice");
+            expect(refrain::contracts::as_string_view(one->world) ==
+                   "overworld");
+            expect(refrain::contracts::as_bytes(one->profile_id).size() == 16U);
+            expect(one->entity_id == 3U);
+            expect(one->x == 1.5);
+            expect(one->y == 64.0);
+            expect(one->z == -2.5);
+            expect(one->yaw == 90.0F);
+            expect(one->pitch == -10.0F);
+            expect(one->on_ground == 1);
+            expect(one->game_mode == 1U);
+            expect(one->health == 18.0F);
+            expect(one->view_distance == 12);
+        }
+        const auto past_end{service.player_at(world, 1)};
+        expect(!past_end.has_value());
+        if (!past_end) {
+            expect(past_end.error() == sim_service::sim_error::out_of_bounds);
+        }
+
+        const auto by_connection{service.player_by_connection(world, 7)};
+        expect(by_connection.has_value());
+        const auto missing{service.player_by_connection(world, 8)};
+        expect(!missing.has_value());
+        if (!missing) {
+            expect(missing.error() == sim_service::sim_error::not_found);
+        }
+
+        // The registration carries borrowed views the generated wrapper does
+        // not convert for struct fields; the provider sees the exact bytes and
+        // the struct_size the wrapper normalises.
+        auto registration{sim_service::make_player_registration()};
+        const std::array<std::uint8_t, 16> profile{9, 9, 9, 9, 9, 9, 9, 9,
+                                                   9, 9, 9, 9, 9, 9, 9, 9};
+        registration.connection = 9;
+        registration.profile_id = refrain::contracts::to_borrowed(
+            std::span<const std::uint8_t>{profile.data(), profile.size()});
+        registration.name = refrain::contracts::to_borrowed("Bob");
+        registration.world = refrain::contracts::to_borrowed("overworld");
+        registration.game_mode = 1;
+        registration.inventory_slots = 36;
+        const auto added{service.add_player(world, registration)};
+        expect(added.has_value());
+        if (added) {
+            expect(*added == 12U);
+        }
+        expect(state.adds == 1);
+        expect(state.added_connection == 9U);
+        expect(state.added_name == "Bob");
+        expect(state.added_profile_size == 16U);
+        expect(state.added_slots == 36U);
+
+        expect(service.remove_player(world, 7));
+        expect(!service.remove_player(world, 8));
+        expect(
+            service.set_player_transform(world, 7, 1.0, 2.0, 3.0, 45.0F, 5.0F)
+                .has_value());
+        expect(
+            service.set_player_position(world, 7, 1.0, 2.0, 3.0).has_value());
+        expect(service.set_player_view_distance(world, 7, 6).has_value());
+        const auto moved{service.move_player(world, 7, 0.5, 0.0, 0.0)};
+        expect(moved.has_value());
+        if (moved) {
+            expect(*moved);
+        }
+        expect(service.jump(world, 7).has_value());
+        expect(state.transforms == 1);
+        expect(state.positions == 1);
+        expect(state.view_distances == 1);
+        expect(state.moves == 1);
+        expect(state.jumps == 1);
+        expect(state.lookups == 2);
+        expect(state.reads == 2);
+
+        // Every player slot is appended, so a table built for the previous
+        // layout leaves them empty and a consumer checks before dispatching.
+        refrain_services_sim_vtable bare{};
+        bare.struct_size = REFRAIN_SERVICES_SIM_VTABLE_SIZE;
+        bare.abi_major = REFRAIN_SERVICES_SIM_ABI_MAJOR;
+        bare.abi_minor = REFRAIN_SERVICES_SIM_ABI_MINOR;
+        bare.abi_patch = REFRAIN_SERVICES_SIM_ABI_PATCH;
+        expect(bare.player_count == nullptr);
+        expect(bare.player_at == nullptr);
+        expect(bare.player_by_connection == nullptr);
+        expect(bare.add_player == nullptr);
+        expect(bare.remove_player == nullptr);
+        expect(bare.set_player_transform == nullptr);
+        expect(bare.set_player_position == nullptr);
+        expect(bare.set_player_view_distance == nullptr);
+        expect(bare.move_player == nullptr);
+        expect(bare.jump == nullptr);
+    };
 
     "contracts/malformed input is reported as a contract error"_test = [] {
         const auto table{make_vtable()};

@@ -693,7 +693,7 @@ if(REFRAIN_BUILD_BENCH)
     target_link_libraries(refrain-bench PRIVATE refrain-kernel
                           refrain-contracts refrain-world refrain-sim
                           refrain-worldgen refrain-data
-                          benchmark::benchmark_main)
+                          refrain-server-runtime benchmark::benchmark_main)
     refrain_apply_warnings(refrain-bench)
 
     # Runtime generator benchmark: a standalone executable because it reports

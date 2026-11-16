@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 9acb7bb41c6b4563
+// Schema hash: 23c7796fb66be5e7
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_SIM_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_SIM_HPP
@@ -120,16 +120,65 @@ using sim_config = ::refrain_services_sim_sim_config;
     ::refrain::contracts::init_struct(value);
     return value;
 }
+/// Read-only projection of one player record. A provider fills it from the
+/// record it owns; the name and the profile uuid are borrowed for the duration
+/// of the call, like the level projection's level name.
+using player_info = ::refrain_services_sim_player_info;
+/// Zero-initialized `player_info` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
+[[nodiscard]] inline auto make_player_info() noexcept -> player_info {
+    player_info value{};
+    ::refrain::contracts::init_struct(value);
+    return value;
+}
+/// Everything needed to register one player. The provider allocates the
+/// entity id and keeps the record; the caller reads it back through the
+/// projection.
+using player_registration = ::refrain_services_sim_player_registration;
+/// Zero-initialized `player_registration` with the mandatory `struct_size` set; fill the fields before passing it across the ABI.
+[[nodiscard]] inline auto make_player_registration() noexcept -> player_registration {
+    player_registration value{};
+    ::refrain::contracts::init_struct(value);
+    return value;
+}
 
 static_assert(sizeof(sim_config) == 72);
 static_assert(alignof(sim_config) == 8);
 static_assert(offsetof(sim_config, struct_size) == 0);
 static_assert(offsetof(sim_config, storage) == 8);
 static_assert(offsetof(sim_config, seed) == 64);
+static_assert(sizeof(player_info) == 120);
+static_assert(alignof(player_info) == 8);
+static_assert(offsetof(player_info, struct_size) == 0);
+static_assert(offsetof(player_info, connection) == 8);
+static_assert(offsetof(player_info, profile_id) == 16);
+static_assert(offsetof(player_info, name) == 32);
+static_assert(offsetof(player_info, world) == 48);
+static_assert(offsetof(player_info, entity_id) == 64);
+static_assert(offsetof(player_info, x) == 72);
+static_assert(offsetof(player_info, y) == 80);
+static_assert(offsetof(player_info, z) == 88);
+static_assert(offsetof(player_info, yaw) == 96);
+static_assert(offsetof(player_info, pitch) == 100);
+static_assert(offsetof(player_info, on_ground) == 104);
+static_assert(offsetof(player_info, game_mode) == 108);
+static_assert(offsetof(player_info, health) == 112);
+static_assert(offsetof(player_info, view_distance) == 116);
+static_assert(sizeof(player_registration) == 96);
+static_assert(alignof(player_registration) == 8);
+static_assert(offsetof(player_registration, struct_size) == 0);
+static_assert(offsetof(player_registration, connection) == 8);
+static_assert(offsetof(player_registration, profile_id) == 16);
+static_assert(offsetof(player_registration, name) == 32);
+static_assert(offsetof(player_registration, world) == 48);
+static_assert(offsetof(player_registration, x) == 64);
+static_assert(offsetof(player_registration, y) == 72);
+static_assert(offsetof(player_registration, z) == 80);
+static_assert(offsetof(player_registration, game_mode) == 88);
+static_assert(offsetof(player_registration, inventory_slots) == 92);
 
 inline constexpr std::string_view service_id = "refrain:sim";
 inline constexpr std::uint32_t abi_major = 1;
-inline constexpr std::uint32_t abi_minor = 0;
+inline constexpr std::uint32_t abi_minor = 1;
 inline constexpr std::uint32_t abi_patch = 0;
 inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::side_kind::server;
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::sim;
@@ -216,6 +265,108 @@ class provider final {
     /// id is unknown.
     [[nodiscard]] auto remove_entity(::refrain::services::sim::sim_world world, std::uint64_t id) const -> bool {
         return (table_->remove_entity(self_, world.raw(), id) != 0);
+    }
+
+    /// Number of player records. `player_at` enumerates them in ascending
+    /// entity id order, which is the order the state hash covers.
+    /// 
+    /// A count plus an indexed accessor is the read shape because every field
+    /// but the name and the profile uuid is a fixed-size value: a packed
+    /// buffer would need either a per-call buffer whose size the consumer must
+    /// guess or an allocation the provider owns, and neither carries a
+    /// borrowed string without a second layout. A provider callback per player
+    /// would put provider code on the runtime's call stack for a read the
+    /// runtime already batches once per tick. The indexed form keeps one
+    /// dispatch per record, lets a caller stop at the count it read, and
+    /// leaves the string lifetime rule identical to the level projection.
+    [[nodiscard]] auto player_count(::refrain::services::sim::sim_world world) const -> std::uint32_t {
+        return static_cast<std::uint32_t>(table_->player_count(self_, world.raw()));
+    }
+
+    /// One player record by index, in ascending entity id order. The name and
+    /// the profile uuid are borrowed for the duration of the call, like the
+    /// level projection's level name.
+    [[nodiscard]] auto player_at(::refrain::services::sim::sim_world world, std::uint32_t index) const -> std::expected<::refrain::services::sim::player_info, ::refrain::services::sim::sim_error> {
+        ::refrain_services_sim_player_info value{};
+        ::refrain::contracts::init_struct(value);
+        if (const auto code = table_->player_at(self_, world.raw(), index, &value); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::sim::sim_error>(code));
+        }
+        return value;
+    }
+
+    /// One player record by connection. The write calls are connection
+    /// addressed because a packet names a connection, not a table index; this
+    /// is the read a caller uses to refresh one record after a write.
+    [[nodiscard]] auto player_by_connection(::refrain::services::sim::sim_world world, std::uint64_t connection) const -> std::expected<::refrain::services::sim::player_info, ::refrain::services::sim::sim_error> {
+        ::refrain_services_sim_player_info value{};
+        ::refrain::contracts::init_struct(value);
+        if (const auto code = table_->player_by_connection(self_, world.raw(), connection, &value); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::sim::sim_error>(code));
+        }
+        return value;
+    }
+
+    /// Register a player record and allocate its entity id. Fails with
+    /// `invalid_argument` for an empty name or a connection that already owns
+    /// a player.
+    [[nodiscard]] auto add_player(::refrain::services::sim::sim_world world, const ::refrain::services::sim::player_registration &record) const -> std::expected<std::uint64_t, ::refrain::services::sim::sim_error> {
+        const auto abi_record = ::refrain::contracts::with_struct_size(record);
+        ::uint64_t value{};
+        if (const auto code = table_->add_player(self_, world.raw(), &abi_record, &value); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::sim::sim_error>(code));
+        }
+        return static_cast<std::uint64_t>(value);
+    }
+
+    /// Remove the player owned by `connection`. Returns false when the
+    /// connection owns no record.
+    [[nodiscard]] auto remove_player(::refrain::services::sim::sim_world world, std::uint64_t connection) const -> bool {
+        return (table_->remove_player(self_, world.raw(), connection) != 0);
+    }
+
+    /// Set position and rotation in one call, the way a movement packet
+    /// updates both at once. Velocity is left untouched.
+    [[nodiscard]] auto set_player_transform(::refrain::services::sim::sim_world world, std::uint64_t connection, double x, double y, double z, float yaw, float pitch) const -> std::expected<void, ::refrain::services::sim::sim_error> {
+        if (const auto code = table_->set_player_transform(self_, world.raw(), connection, x, y, z, yaw, pitch); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::sim::sim_error>(code));
+        }
+        return {};
+    }
+
+    /// Set position and clear velocity and the ground flag, the teleport
+    /// semantics the console move command uses.
+    [[nodiscard]] auto set_player_position(::refrain::services::sim::sim_world world, std::uint64_t connection, double x, double y, double z) const -> std::expected<void, ::refrain::services::sim::sim_error> {
+        if (const auto code = table_->set_player_position(self_, world.raw(), connection, x, y, z); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::sim::sim_error>(code));
+        }
+        return {};
+    }
+
+    /// Replace the view distance the provider keeps for the player.
+    [[nodiscard]] auto set_player_view_distance(::refrain::services::sim::sim_world world, std::uint64_t connection, std::int32_t distance) const -> std::expected<void, ::refrain::services::sim::sim_error> {
+        if (const auto code = table_->set_player_view_distance(self_, world.raw(), connection, distance); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::sim::sim_error>(code));
+        }
+        return {};
+    }
+
+    /// Move by a relative offset with the provider's collision response.
+    /// Returns false when the move was fully blocked.
+    [[nodiscard]] auto move_player(::refrain::services::sim::sim_world world, std::uint64_t connection, double dx, double dy, double dz) const -> std::expected<bool, ::refrain::services::sim::sim_error> {
+        ::uint8_t value{};
+        if (const auto code = table_->move_player(self_, world.raw(), connection, dx, dy, dz, &value); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::sim::sim_error>(code));
+        }
+        return (value != 0);
+    }
+
+    /// Make the player jump when it stands on the ground.
+    [[nodiscard]] auto jump(::refrain::services::sim::sim_world world, std::uint64_t connection) const -> std::expected<void, ::refrain::services::sim::sim_error> {
+        if (const auto code = table_->jump(self_, world.raw(), connection); code != REFRAIN_STATUS_OK) {
+            return std::unexpected(static_cast<::refrain::services::sim::sim_error>(code));
+        }
+        return {};
     }
 
   private:

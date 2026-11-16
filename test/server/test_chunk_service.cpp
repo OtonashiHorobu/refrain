@@ -454,10 +454,11 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
                     requested.push_back({x, z});
                     return false;
                 });
+            session::play_session players{};
             session::chunk_tracker views;
             const auto tick_start{refrain::core::now_ns()};
             const auto tick_once{
-                [&] { service.tick(*port, views, tick_start); }};
+                [&] { service.tick(*port, players, views, tick_start); }};
             const auto streamed_after_walk{
                 [](std::int32_t center_x) -> std::size_t {
                     // A step of one column adds the three columns of the new
@@ -625,12 +626,13 @@ suite<"server/chunk-service"> chunk_service_tests = [] {
                     ++requests;
                     return generation->request({x, z});
                 });
+            session::play_session players{};
             session::chunk_tracker views;
             static_cast<void>(views.update(11, 0, 0, 0));
             const auto tick_start{refrain::core::now_ns()};
             const auto run_ticks{[&](int count) {
                 for (int tick{0}; tick < count; ++tick) {
-                    service.tick(*port, views, tick_start);
+                    service.tick(*port, players, views, tick_start);
                     std::this_thread::sleep_for(std::chrono::milliseconds{1});
                 }
             }};

@@ -8,6 +8,7 @@
 
 #include <refrain/session/chunk_tracker.hpp>
 #include <refrain/session/play_session.hpp>
+#include <refrain/session/player_store.hpp>
 
 #include <refrain/app/services.hpp>
 #include <refrain/core/io.hpp>
@@ -26,6 +27,7 @@
 #include <refrain/server/inventory_sync.hpp>
 #include <refrain/server/maintenance_service.hpp>
 #include <refrain/server/play_gateway.hpp>
+#include <refrain/server/player_store.hpp>
 #include <refrain/server/world_bootstrap.hpp>
 #include <refrain/sim/replay.hpp>
 #include <refrain/sim/world.hpp>
@@ -301,13 +303,24 @@ auto run_server(const server_run_options &options,
         std::make_shared<refrain::server::command_environment>()};
     command_environment->world = &world;
     command_environment->default_mode = initial_mode;
-    auto *player_table{world.players()};
-    if (player_table == nullptr) {
-        return report_error(refrain::make_error(
-            refrain::error_code::unsupported,
-            "the active world provider exposes no player table"));
+    // The first-party port owns the simulation table in this process, so the
+    // session forwards to it without a copy. A contract port owns no such
+    // table: the provider keeps it and hands the runtime a projection, so the
+    // session reads a store that refreshes that projection once per tick.
+    std::unique_ptr<refrain::session::player_store> player_store{};
+    if (auto *table = world.players(); table != nullptr) {
+        player_store =
+            std::make_unique<refrain::session::table_player_store>(*table);
+    } else {
+        player_store = refrain::server::make_world_port_player_store(world);
     }
-    refrain::session::play_session players{*player_table};
+    refrain::session::play_session players{*player_store};
+    // Read the projection once before the listener starts: a provider without
+    // a player table fails the boot here, naming the operation, instead of
+    // ticking over an empty view.
+    if (auto refreshed{players.refresh()}; !refreshed) {
+        return report_error(refreshed.error());
+    }
     refrain::session::chunk_tracker views{};
     const auto tracking_chunks{static_cast<std::int32_t>(std::max<std::int64_t>(
         1, options.network.get_int64("entity_tracking_range", 512) / 16))};
@@ -656,6 +669,7 @@ auto run_server(const server_run_options &options,
     refrain::core::tick_clock clock{};
     clock.start();
     std::int64_t ticks_run{0};
+    bool player_projection_failed{false};
     log_server.info("target tick rate is {} tps",
                     refrain::core::ticks_per_second);
 
@@ -668,6 +682,17 @@ auto run_server(const server_run_options &options,
         const auto tick_start_ns{refrain::core::now_ns()};
         state->heartbeat_ns.store(refrain::core::now_ns(),
                                   std::memory_order_relaxed);
+        // The provider ticks its own player table at the end of the loop body,
+        // so the projection is re-read here, before this tick's commands and
+        // packets read it. A failed read is fatal: every player view below
+        // would be stale.
+        if (auto refreshed{players.refresh()}; !refreshed) {
+            log_server.error("failed to read the player table: {}",
+                             refreshed.error().message);
+            player_projection_failed = true;
+            state->stop->store(true, std::memory_order_release);
+            break;
+        }
         maintenance.collect_completed();
         console.tick(*tick, ticks_run, *state->stop);
         maintenance.pre_tick(ticks_run);
@@ -675,7 +700,7 @@ auto run_server(const server_run_options &options,
             listener->tick();
             broadcaster.tick(players);
         }
-        chunks.tick(world, views, tick_start_ns);
+        chunks.tick(world, players, views, tick_start_ns);
         inventory.tick(players);
         world.tick();
         ++ticks_run;
@@ -753,7 +778,7 @@ auto run_server(const server_run_options &options,
         }
     }
     log_server.info("ran {} ticks", ticks_run);
-    return 0;
+    return player_projection_failed ? 1 : 0;
 }
 
 } // namespace refrain::server

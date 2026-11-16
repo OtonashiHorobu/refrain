@@ -100,6 +100,17 @@ facade; only protocol providers and client tooling name a concrete version.
   movement/health/game-mode updates, per-player inventory slots, visibility.
 - `chunk_tracker`: viewport changes and pending chunk subscription requests.
 
+Player records live where the active world port keeps them. The first-party
+composition runs the simulation in this process, so `play_session` forwards
+every read and write to the simulation's player table without a copy. A
+composition reached through the contracts keeps the table inside the provider:
+the session's store holds a value projection refreshed by one bulk read per
+tick (`player_count()` plus the indexed accessor) and turns the mutation calls
+into the provider's connection-addressed player calls. Either way a packet's
+connection lookup is answered from the session's view, not by a provider call
+per packet, and the runtime never holds a pointer into a provider's table
+across calls.
+
 The network shell reports neutral events (`player_join`, `player_leave`,
 `movement`, `attack`, `animation`, `play_ready`, `view_distance`) and provides a
 raw packet sink. It does not decide which entities exist, who can see them, how

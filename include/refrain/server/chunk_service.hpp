@@ -26,6 +26,7 @@
 #include <refrain/server/play_gateway.hpp>
 #include <refrain/server/world_port.hpp>
 #include <refrain/session/chunk_tracker.hpp>
+#include <refrain/session/play_session.hpp>
 
 #include <array>
 #include <cstddef>
@@ -70,7 +71,8 @@ class chunk_service {
     /// what the credit level and the tick's remaining headroom allow.
     /// `tick_start_ns` is the start of the current tick; the admitted work is
     /// bounded by the part of the budget the tick has not used yet.
-    void tick(world_port &world, refrain::session::chunk_tracker &views,
+    void tick(world_port &world, const refrain::session::play_session &players,
+              refrain::session::chunk_tracker &views,
               std::uint64_t tick_start_ns);
 
     /// Record the work one tick used. Once per second this feeds the

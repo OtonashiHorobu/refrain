@@ -6,10 +6,12 @@
 
 #include <refrain/core/error.hpp>
 #include <refrain/net/base.hpp>
+#include <refrain/session/player_store.hpp>
 #include <refrain/sim/player.hpp>
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -62,12 +64,17 @@ struct listing_entry {
     std::uint32_t game_mode{0};
 };
 
-/// Gameplay-side adapter over the simulation's player table. The network layer
-/// reports connection-scoped events; this object resolves them to the one
-/// authoritative player record and decides which entities a connection can see.
+/// Gameplay-side adapter over the player records the runtime owns.
 ///
-/// It owns no player data: mutations go straight to `sim::player_table`, and
-/// the projection cache only holds the last encoded view of each record. The
+/// The network layer reports connection-scoped events; this object resolves
+/// them to the one authoritative player record and decides which entities a
+/// connection can see. Where that record lives is the store's decision: the
+/// first-party composition forwards to the in-process simulation table, a
+/// composition reached through the contracts refreshes a projection once per
+/// tick and turns mutations into connection-addressed provider calls.
+///
+/// It owns no player data: mutations go straight to the store, and the
+/// projection cache only holds the last encoded view of each record. The
 /// synthetic player that the console and replay scripts drive has no network
 /// connection, so it is excluded from the connection-scoped views.
 ///
@@ -79,19 +86,23 @@ struct listing_entry {
 class play_session {
   public:
     /// Standalone session with its own player table, for callers that are not
-    /// attached to a running simulation (tests and tooling). The server always
-    /// passes the world's table so the console and the protocol share one
-    /// record.
+    /// attached to a running simulation (tests and tooling).
     play_session();
+    /// Session over the world's in-process table: the first-party path, where
+    /// the console and the protocol share the simulation record.
     explicit play_session(sim::player_table &players);
+    /// Session over a store that decides where records live.
+    explicit play_session(player_store &players);
+
     play_session(const play_session &) = delete;
     auto operator=(const play_session &) -> play_session & = delete;
-    play_session(play_session &&other) noexcept;
-    auto operator=(play_session &&other) noexcept -> play_session &;
+    play_session(play_session &&other) = delete;
+    auto operator=(play_session &&other) -> play_session & = delete;
+    ~play_session() = default;
 
     /// Register the player owned by `connection` and allocate its entity id.
-    /// The record lives in the simulation table; this layer only attaches it to
-    /// the connection.
+    /// The record lives in the store; this layer only attaches it to the
+    /// connection.
     [[nodiscard]] auto add_player(std::uint64_t connection, net::uuid id,
                                   std::string name, std::string world, double x,
                                   double y, double z, std::uint32_t game_mode)
@@ -105,8 +116,8 @@ class play_session {
     [[nodiscard]] auto player_by_entity(std::uint32_t entity_id) const
         -> const session::player *;
 
-    /// Mutable inventory owned by one player. The simulation thread is the
-    /// only writer; the pointer is invalidated by `remove_player()`.
+    /// Mutable inventory owned by one player, or null when the store keeps no
+    /// in-process record. The simulation thread is the only writer.
     [[nodiscard]] auto inventory_of(std::uint64_t connection)
         -> std::vector<sim::item_stack> *;
 
@@ -126,6 +137,11 @@ class play_session {
     [[nodiscard]] auto set_game_mode(std::uint64_t connection,
                                      std::uint32_t mode) -> bool;
 
+    /// Re-read the player records from the store. The in-process table needs
+    /// nothing; a store that projects a provider-owned table refreshes its
+    /// cache here, once per tick.
+    [[nodiscard]] auto refresh() -> status;
+
     /// Players within `radius` blocks of `observer`, excluding the observer.
     [[nodiscard]] auto visible_to(std::uint64_t observer, double radius) const
         -> std::vector<visibility_entry>;
@@ -135,7 +151,7 @@ class play_session {
 
     /// Visit every connected player in ascending entity id order with the
     /// fields the player list encodes, without projecting or copying the full
-    /// record. The listing name points into the simulation table.
+    /// record. The listing name points into the store's record.
     template <typename F> void for_each_listing(F &&visit) const {
         for (const auto &[id, record] : players_->records()) {
             static_cast<void>(id);
@@ -174,10 +190,12 @@ class play_session {
     void refresh_if_cached(const sim::player_state &record) const;
     void refresh_all() const;
 
-    /// Table owned by the standalone constructor; unused when the server
-    /// attaches the world's table.
+    /// Table owned by the standalone constructor.
     sim::player_table own_players_{};
-    sim::player_table *players_{nullptr};
+    /// Store owned by the standalone and table constructors; null when the
+    /// caller passed a store it keeps alive.
+    std::unique_ptr<player_store> owned_store_{};
+    player_store *players_{nullptr};
     /// Projection cache keyed by entity id so pointers stay valid while the
     /// network shell holds them for one tick. Only the simulation thread reads
     /// or writes it; the class comment states where the other threads hand

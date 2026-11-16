@@ -19,6 +19,7 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -60,6 +61,54 @@ namespace {
         fmt::format("refrain:world {} failed ({})", call, code))};
 }
 
+/// `refrain:sim` error -> the runtime error. A missing record or handle is a
+/// value the caller distinguishes; every other code is a provider failure. The
+/// call name stays in the message so an operator sees which operation failed.
+[[nodiscard]] auto sim_failure(std::string_view call, std::uint32_t code)
+    -> refrain::error {
+    using sim_error = refrain::services::sim::sim_error;
+    auto mapped{refrain::error_code::io_error};
+    switch (static_cast<sim_error>(code)) {
+    case sim_error::not_found:
+        mapped = refrain::error_code::not_found;
+        break;
+    case sim_error::invalid_argument:
+    case sim_error::out_of_bounds:
+        mapped = refrain::error_code::invalid_argument;
+        break;
+    default:
+        break;
+    }
+    return refrain::make_error(
+        mapped, fmt::format("refrain:sim {} failed ({})", call, code));
+}
+
+/// The player calls are appended slots. A provider that leaves one empty
+/// declares that it does not serve the player table; the port names the
+/// operation instead of calling through a null function pointer or returning
+/// an empty table.
+[[nodiscard]] auto player_gap(std::string_view operation) -> refrain::error {
+    return contract_error(operation,
+                          "the provider does not implement the player calls");
+}
+
+/// A provider table shorter than the layout the runtime calls through cannot
+/// be used: the generated wrapper reads slots past its end. Report the
+/// service and both sizes instead of running a stale table.
+[[nodiscard]] auto vtable_size_error(std::string_view service,
+                                     std::uint32_t declared,
+                                     std::uint32_t required)
+    -> std::optional<refrain::error> {
+    if (declared >= required) {
+        return std::nullopt;
+    }
+    return refrain::make_error(
+        refrain::error_code::version_mismatch,
+        fmt::format("{} provider vtable is {} bytes, the runtime needs the "
+                    "{} byte layout",
+                    service, declared, required));
+}
+
 constexpr refrain::log::logger log_world{"world"};
 
 /// `refrain:world` v1 carries section metadata but no block-array payload, so
@@ -75,6 +124,52 @@ namespace refrain::server {
 namespace abi = refrain::contracts;
 
 namespace {
+
+/// Copy the borrowed provider view into the runtime's player projection. The
+/// provider keeps the backing storage alive for the duration of the call, so
+/// the strings and the profile uuid are copied here.
+[[nodiscard]] auto project_player(const services::sim::player_info &info)
+    -> player_projection {
+    player_projection projected{};
+    projected.connection = info.connection;
+    const auto profile{abi::as_bytes(info.profile_id)};
+    const auto copied{
+        std::min<std::size_t>(profile.size(), projected.profile_id.size())};
+    std::copy_n(profile.begin(), copied, projected.profile_id.begin());
+    projected.name = std::string{abi::as_string_view(info.name)};
+    projected.world = std::string{abi::as_string_view(info.world)};
+    projected.entity_id = info.entity_id;
+    projected.x = info.x;
+    projected.y = info.y;
+    projected.z = info.z;
+    projected.yaw = info.yaw;
+    projected.pitch = info.pitch;
+    projected.on_ground = info.on_ground != 0;
+    projected.game_mode = info.game_mode;
+    projected.health = info.health;
+    projected.view_distance = info.view_distance;
+    return projected;
+}
+
+/// Convert one runtime registration into the contract struct. The strings and
+/// the profile bytes are borrowed from `record` for the duration of the call.
+[[nodiscard]] auto
+make_player_registration(const sim::player_table::registration &record)
+    -> services::sim::player_registration {
+    auto value{services::sim::make_player_registration()};
+    value.connection = record.connection;
+    value.profile_id = abi::to_borrowed(std::span<const std::uint8_t>{
+        record.profile_id.data(), record.profile_id.size()});
+    value.name = abi::to_borrowed(record.name);
+    value.world = abi::to_borrowed(record.world);
+    value.x = record.x;
+    value.y = record.y;
+    value.z = record.z;
+    value.game_mode = record.game_mode;
+    value.inventory_slots = record.inventory_slots;
+    return value;
+}
+
 /// The contract path: every operation is an ABI call on the active
 /// `refrain:world`, `refrain:sim` and `refrain:storage` providers.
 ///
@@ -97,16 +192,23 @@ class contract_world_port final : public world_port {
         // The generated wrapper reads slots past the header without checking
         // the table length, so a provider built against an older layout is
         // rejected here by its declared size instead of running a stale table.
-        if (handles_.world->struct_size < REFRAIN_SERVICES_WORLD_VTABLE_SIZE) {
-            return std::unexpected{make_error(
-                error_code::version_mismatch,
-                fmt::format("refrain:world provider vtable is {} bytes, the "
-                            "runtime needs the {}.{}.{} layout ({} bytes)",
-                            handles_.world->struct_size,
-                            REFRAIN_SERVICES_WORLD_ABI_MAJOR,
-                            REFRAIN_SERVICES_WORLD_ABI_MINOR,
-                            REFRAIN_SERVICES_WORLD_ABI_PATCH,
-                            REFRAIN_SERVICES_WORLD_VTABLE_SIZE))};
+        if (const auto error{
+                vtable_size_error("refrain:world", handles_.world->struct_size,
+                                  REFRAIN_SERVICES_WORLD_VTABLE_SIZE)};
+            error.has_value()) {
+            return std::unexpected{*error};
+        }
+        if (const auto error{
+                vtable_size_error("refrain:sim", handles_.sim->struct_size,
+                                  REFRAIN_SERVICES_SIM_VTABLE_SIZE)};
+            error.has_value()) {
+            return std::unexpected{*error};
+        }
+        if (const auto error{vtable_size_error(
+                "refrain:storage", handles_.storage->struct_size,
+                REFRAIN_SERVICES_STORAGE_VTABLE_SIZE)};
+            error.has_value()) {
+            return std::unexpected{*error};
         }
         if (opened_) {
             return std::unexpected{
@@ -313,23 +415,171 @@ class contract_world_port final : public world_port {
         return 0;
     }
 
-    auto add_player(sim::player_table::registration)
+    auto player_count() -> result<std::uint32_t> override {
+        if (sim_world_ == services::sim::sim_world{}) {
+            return std::unexpected{
+                contract_error("player_count", "the sim world is not open")};
+        }
+        if (sim_provider().table().player_count == nullptr) {
+            return std::unexpected{player_gap("player_count")};
+        }
+        return sim_provider().player_count(sim_world_);
+    }
+
+    auto player_at(std::uint32_t index) -> result<player_projection> override {
+        if (sim_world_ == services::sim::sim_world{}) {
+            return std::unexpected{
+                contract_error("player_at", "the sim world is not open")};
+        }
+        if (sim_provider().table().player_at == nullptr) {
+            return std::unexpected{player_gap("player_at")};
+        }
+        auto projected{sim_provider().player_at(sim_world_, index)};
+        if (!projected) {
+            return std::unexpected{sim_failure(
+                "player_at", static_cast<std::uint32_t>(projected.error()))};
+        }
+        return project_player(*projected);
+    }
+
+    auto player(std::uint64_t connection)
+        -> result<player_projection> override {
+        if (sim_world_ == services::sim::sim_world{}) {
+            return std::unexpected{
+                contract_error("player", "the sim world is not open")};
+        }
+        if (sim_provider().table().player_by_connection == nullptr) {
+            return std::unexpected{player_gap("player")};
+        }
+        auto projected{
+            sim_provider().player_by_connection(sim_world_, connection)};
+        if (!projected) {
+            return std::unexpected{
+                sim_failure("player_by_connection",
+                            static_cast<std::uint32_t>(projected.error()))};
+        }
+        return project_player(*projected);
+    }
+
+    auto add_player(sim::player_table::registration record)
         -> result<sim::entity_id> override {
-        // TODO: `refrain:sim` v1 exposes no player table; a replacement
-        // provider cannot register the console player.
-        return std::unexpected{contract_error(
-            "add_player", "refrain:sim v1 exposes no player table")};
+        if (sim_world_ == services::sim::sim_world{}) {
+            return std::unexpected{
+                contract_error("add_player", "the sim world is not open")};
+        }
+        if (sim_provider().table().add_player == nullptr) {
+            return std::unexpected{player_gap("add_player")};
+        }
+        const auto registration{make_player_registration(record)};
+        auto added{sim_provider().add_player(sim_world_, registration)};
+        if (!added) {
+            return std::unexpected{sim_failure(
+                "add_player", static_cast<std::uint32_t>(added.error()))};
+        }
+        return static_cast<sim::entity_id>(*added);
     }
 
-    void set_player_position(sim::player_state &, double, double,
-                             double) noexcept override {}
-
-    auto move_player(sim::player_state &, double, double, double)
-        -> bool override {
-        return false;
+    auto remove_player(std::uint64_t connection) -> result<bool> override {
+        if (sim_world_ == services::sim::sim_world{}) {
+            return std::unexpected{
+                contract_error("remove_player", "the sim world is not open")};
+        }
+        if (sim_provider().table().remove_player == nullptr) {
+            return std::unexpected{player_gap("remove_player")};
+        }
+        return sim_provider().remove_player(sim_world_, connection) != 0;
     }
 
-    void jump(sim::player_state &) noexcept override {}
+    auto set_player_transform(std::uint64_t connection, double x, double y,
+                              double z, float yaw, float pitch)
+        -> status override {
+        if (sim_world_ == services::sim::sim_world{}) {
+            return contract_status("set_player_transform",
+                                   "the sim world is not open");
+        }
+        if (sim_provider().table().set_player_transform == nullptr) {
+            return std::unexpected{player_gap("set_player_transform")};
+        }
+        auto changed{sim_provider().set_player_transform(sim_world_, connection,
+                                                         x, y, z, yaw, pitch)};
+        if (!changed) {
+            return std::unexpected{
+                sim_failure("set_player_transform",
+                            static_cast<std::uint32_t>(changed.error()))};
+        }
+        return status_ok();
+    }
+
+    auto set_player_position(std::uint64_t connection, double x, double y,
+                             double z) -> status override {
+        if (sim_world_ == services::sim::sim_world{}) {
+            return contract_status("set_player_position",
+                                   "the sim world is not open");
+        }
+        if (sim_provider().table().set_player_position == nullptr) {
+            return std::unexpected{player_gap("set_player_position")};
+        }
+        auto changed{sim_provider().set_player_position(sim_world_, connection,
+                                                        x, y, z)};
+        if (!changed) {
+            return std::unexpected{
+                sim_failure("set_player_position",
+                            static_cast<std::uint32_t>(changed.error()))};
+        }
+        return status_ok();
+    }
+
+    auto set_player_view_distance(std::uint64_t connection,
+                                  std::int32_t distance) -> status override {
+        if (sim_world_ == services::sim::sim_world{}) {
+            return contract_status("set_player_view_distance",
+                                   "the sim world is not open");
+        }
+        if (sim_provider().table().set_player_view_distance == nullptr) {
+            return std::unexpected{player_gap("set_player_view_distance")};
+        }
+        auto changed{sim_provider().set_player_view_distance(
+            sim_world_, connection, distance)};
+        if (!changed) {
+            return std::unexpected{
+                sim_failure("set_player_view_distance",
+                            static_cast<std::uint32_t>(changed.error()))};
+        }
+        return status_ok();
+    }
+
+    auto move_player(std::uint64_t connection, double dx, double dy, double dz)
+        -> result<bool> override {
+        if (sim_world_ == services::sim::sim_world{}) {
+            return std::unexpected{
+                contract_error("move_player", "the sim world is not open")};
+        }
+        if (sim_provider().table().move_player == nullptr) {
+            return std::unexpected{player_gap("move_player")};
+        }
+        auto moved{
+            sim_provider().move_player(sim_world_, connection, dx, dy, dz)};
+        if (!moved) {
+            return std::unexpected{sim_failure(
+                "move_player", static_cast<std::uint32_t>(moved.error()))};
+        }
+        return *moved != 0;
+    }
+
+    auto jump(std::uint64_t connection) -> status override {
+        if (sim_world_ == services::sim::sim_world{}) {
+            return contract_status("jump", "the sim world is not open");
+        }
+        if (sim_provider().table().jump == nullptr) {
+            return std::unexpected{player_gap("jump")};
+        }
+        auto jumped{sim_provider().jump(sim_world_, connection)};
+        if (!jumped) {
+            return std::unexpected{sim_failure(
+                "jump", static_cast<std::uint32_t>(jumped.error()))};
+        }
+        return status_ok();
+    }
 
     auto add_item(sim::player_state &, std::string_view, std::uint32_t)
         -> status override {

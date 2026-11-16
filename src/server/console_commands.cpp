@@ -233,20 +233,64 @@ void execute_config_command(std::span<const std::string_view> tokens,
     log_config.warn("unknown action '{}'", action);
 }
 
+/// Copy one protocol-facing projection into the record shape the console
+/// commands print. The projection carries no inventory or velocity; commands
+/// that need the inventory read the in-process table instead.
+[[nodiscard]] auto player_record(const player_projection &projected)
+    -> refrain::sim::player_state {
+    refrain::sim::player_state record{};
+    record.id = projected.entity_id;
+    record.connection = projected.connection;
+    record.profile_id = projected.profile_id;
+    record.name = projected.name;
+    record.world = projected.world;
+    record.x = projected.x;
+    record.y = projected.y;
+    record.z = projected.z;
+    record.yaw = projected.yaw;
+    record.pitch = projected.pitch;
+    record.on_ground = projected.on_ground;
+    record.game_mode = projected.game_mode;
+    record.health = projected.health;
+    record.view_distance = projected.view_distance;
+    return record;
+}
+
 /// Resolve the player a console command addresses. An empty name selects the
 /// first player by entity id (the console's default); the server registers the
 /// synthetic replay player before any client can connect, so a replay never
 /// changes target when clients join.
+///
+/// The selection is a projection copy: the direct port reads the in-process
+/// table and a contract port reads the provider's projection. The command then
+/// addresses the record by connection, so the copy stays enough for a write.
 [[nodiscard]] auto select_player(world_port &world, std::string_view name)
-    -> refrain::sim::player_state * {
-    auto *players = world.players();
-    if (players == nullptr) {
-        return nullptr;
+    -> std::optional<refrain::sim::player_state> {
+    auto count{world.player_count()};
+    if (!count) {
+        log_server.warn("failed to read the player list: {}",
+                        count.error().message);
+        return std::nullopt;
     }
-    if (name.empty()) {
-        return players->first();
+    for (std::uint32_t index{0}; index < *count; ++index) {
+        auto projected{world.player_at(index)};
+        if (!projected) {
+            log_server.warn("failed to read player {}: {}", index,
+                            projected.error().message);
+            return std::nullopt;
+        }
+        if (name.empty() || projected->name == name) {
+            return player_record(*projected);
+        }
     }
-    return players->find_by_name(name);
+    return std::nullopt;
+}
+
+/// The in-process table, or null when the active provider keeps it. Commands
+/// that touch the inventory need the table and name the gap otherwise.
+[[nodiscard]] auto player_table_of(world_port &world)
+    -> refrain::sim::player_table * {
+    return world.players();
 }
 
 } // namespace
@@ -375,8 +419,19 @@ void console_commands::execute(std::string_view line,
     }
     const auto tokens{split_console_line(line)};
     if ((tokens.size() == 1 || tokens.size() == 2) && tokens[0] == "inv") {
-        const auto *player{
+        const auto selected{
             select_player(world, tokens.size() == 2 ? tokens[1] : "")};
+        if (!selected) {
+            log_server.warn("no player is connected");
+            return;
+        }
+        auto *players{player_table_of(world)};
+        if (players == nullptr) {
+            log_server.warn("the active world provider exposes no player "
+                            "inventory");
+            return;
+        }
+        const auto *player{players->find(selected->id)};
         if (player == nullptr) {
             log_server.warn("no player is connected");
             return;
@@ -392,9 +447,9 @@ void console_commands::execute(std::string_view line,
         return;
     }
     if ((tokens.size() == 1 || tokens.size() == 2) && tokens[0] == "pos") {
-        const auto *player{
+        const auto player{
             select_player(world, tokens.size() == 2 ? tokens[1] : "")};
-        if (player == nullptr) {
+        if (!player) {
             log_server.warn("no player is connected");
             return;
         }
@@ -420,20 +475,28 @@ void console_commands::execute(std::string_view line,
         return;
     }
     if ((tokens.size() == 1 || tokens.size() == 2) && tokens[0] == "jump") {
-        auto *player{select_player(world, tokens.size() == 2 ? tokens[1] : "")};
-        if (player == nullptr) {
+        const auto player{
+            select_player(world, tokens.size() == 2 ? tokens[1] : "")};
+        if (!player) {
             log_server.warn("no player is connected");
             return;
         }
-        world.jump(*player);
+        auto jumped{world.jump(player->connection)};
+        if (!jumped) {
+            log_server.warn("failed to make {} jump: {}", player->name,
+                            jumped.error().message);
+            return;
+        }
+        auto after{world.player(player->connection)};
         log_server.info("{} jumped and is {}", player->name,
-                        player->on_ground ? "on the ground" : "in the air");
+                        after && after->on_ground ? "on the ground"
+                                                  : "in the air");
         return;
     }
     if ((tokens.size() == 3 || tokens.size() == 4) && tokens[0] == "give") {
         const bool named{tokens.size() == 4};
-        auto *player{select_player(world, named ? tokens[1] : "")};
-        if (player == nullptr) {
+        const auto selected{select_player(world, named ? tokens[1] : "")};
+        if (!selected) {
             log_server.warn("no player is connected");
             return;
         }
@@ -443,6 +506,17 @@ void console_commands::execute(std::string_view line,
             return;
         }
         const auto item{tokens[named ? 2 : 1]};
+        auto *players{player_table_of(world)};
+        if (players == nullptr) {
+            log_server.warn("the active world provider exposes no player "
+                            "inventory");
+            return;
+        }
+        auto *player{players->find(selected->id)};
+        if (player == nullptr) {
+            log_server.warn("no player is connected");
+            return;
+        }
         auto added{world.add_item(*player, item, count)};
         if (!added) {
             log_server.warn("failed to give {} to {}: {}", item, player->name,
@@ -485,8 +559,8 @@ void console_commands::execute(std::string_view line,
     }
     if ((tokens.size() == 3 || tokens.size() == 4) && tokens[0] == "walk") {
         const bool named{tokens.size() == 4};
-        auto *player{select_player(world, named ? tokens[1] : "")};
-        if (player == nullptr) {
+        const auto player{select_player(world, named ? tokens[1] : "")};
+        if (!player) {
             log_server.warn("no player is connected");
             return;
         }
@@ -497,16 +571,26 @@ void console_commands::execute(std::string_view line,
             log_server.warn("walk expects two numbers");
             return;
         }
-        const auto moved{world.move_player(*player, dx, 0.0, dz)};
+        const auto moved{world.move_player(player->connection, dx, 0.0, dz)};
+        if (!moved) {
+            log_server.warn("failed to move {}: {}", player->name,
+                            moved.error().message);
+            return;
+        }
+        // Report the committed position, not the requested one: the provider
+        // resolves collision, so the record it returns is the answer.
+        const auto after{world.player(player->connection)};
         log_server.info("{} {} x={:.1f} y={:.1f} z={:.1f}", player->name,
-                        moved ? "moved to" : "was blocked at", player->x,
-                        player->y, player->z);
+                        *moved ? "moved to" : "was blocked at",
+                        after ? after->x : player->x,
+                        after ? after->y : player->y,
+                        after ? after->z : player->z);
         return;
     }
     if ((tokens.size() == 4 || tokens.size() == 5) && tokens[0] == "move") {
         const bool named{tokens.size() == 5};
-        auto *player{select_player(world, named ? tokens[1] : "")};
-        if (player == nullptr) {
+        const auto player{select_player(world, named ? tokens[1] : "")};
+        if (!player) {
             log_server.warn("no player is connected");
             return;
         }
@@ -519,10 +603,18 @@ void console_commands::execute(std::string_view line,
             log_server.warn("move expects three numbers");
             return;
         }
-        world.set_player_position(*player, player->x + dx, player->y + dy,
-                                  player->z + dz);
+        auto moved{world.set_player_position(player->connection, player->x + dx,
+                                             player->y + dy, player->z + dz)};
+        if (!moved) {
+            log_server.warn("failed to move {}: {}", player->name,
+                            moved.error().message);
+            return;
+        }
+        const auto after{world.player(player->connection)};
         log_server.info("{} is now at x={:.1f} y={:.1f} z={:.1f}", player->name,
-                        player->x, player->y, player->z);
+                        after ? after->x : player->x,
+                        after ? after->y : player->y,
+                        after ? after->z : player->z);
         return;
     }
     if ((tokens.size() == 4 && tokens[0] == "dig") ||
@@ -562,7 +654,13 @@ void console_commands::execute(std::string_view line,
                             applied.error().message);
             return;
         }
-        auto *player{select_player(world, "")};
+        // The block change is the contract-served part; the inventory side
+        // effects below need the in-process table.
+        // TODO: item operations are a separate contract surface, so a
+        // provider-backed composition cannot apply the console's inventory
+        // effects of a dig or a place yet.
+        auto *players{player_table_of(world)};
+        auto *player{players != nullptr ? players->first() : nullptr};
         if (gained && player != nullptr) {
             (void)world.add_item(*player, *gained, 1);
         }

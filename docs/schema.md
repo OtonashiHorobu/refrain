@@ -246,10 +246,21 @@ builds from accumulating versions with no external readers.
 An additive method appends one slot to the vtable and bumps the service minor
 version: `refrain:world` moved from `1.0.0` to `1.1.0` when it gained the
 read-only `level()` projection, and to `1.2.0` when it gained the storage
-compression settings, while every existing slot kept its offset. The table
-records its full length in `struct_size`, so a consumer can reject a provider
-built against the older layout with a version error before dispatching the new
-slot.
+compression settings, while every existing slot kept its offset. `refrain:sim`
+moved from `1.0.0` to `1.1.0` when it gained the player projection and the
+connection-addressed player calls. The table records its full length in
+`struct_size`, so a consumer can reject a provider built against the older
+layout with a version error before dispatching the new slot.
+
+A bulk read whose records carry borrowed strings is expressed as a count plus
+an indexed accessor, not as a packed buffer or a per-record provider callback.
+A packed buffer needs either a size the consumer guesses or an allocation the
+provider owns, and it still needs a second layout for the strings; a callback
+puts provider code on the runtime's stack for a read the runtime already
+batches once per tick. `refrain:sim` 1.1.0 exposes the player table that way:
+`player_count()` plus `player_at(index)`, enumerated in ascending entity id
+order, which is the order the state hash covers. Each record's name and profile
+uuid are borrowed for the call, exactly like the level projection's level name.
 
 An appended slot may be optional: a provider that does not implement the
 operation leaves the slot empty (a null function pointer), which declares that
