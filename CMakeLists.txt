@@ -852,7 +852,10 @@ if(REFRAIN_BUILD_TESTS)
                                               refrain-script-wasm libzip::zip
                                               LZ4::lz4_static
                                               xxHash::xxhash Boost::ut glaze::glaze
-                                              EnTT::EnTT zstd::libzstd_static)
+                                              EnTT::EnTT zstd::libzstd_static
+                                              # the vendored-package test calls
+                                              # <zlib.h> directly
+                                              ZLIB::ZLIB)
     target_compile_definitions(refrain-tests PRIVATE
                                REFRAIN_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
                                REFRAIN_MOD_HAS_DYNAMIC=$<BOOL:${REFRAIN_MOD_HAS_DYNAMIC}>
