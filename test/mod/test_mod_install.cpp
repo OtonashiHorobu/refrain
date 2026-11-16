@@ -23,6 +23,7 @@
 #include <boost/ut.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -796,18 +797,18 @@ const suite mod_install_atomicity_tests = [] {
             return;
         }
 
-        std::vector<std::string> errors{};
-        std::vector<bool> installed(2, false);
+        std::array<std::string, 2> errors{};
+        std::array<bool, 2> installed{};
         const auto install_one = [&](std::size_t index,
                                      const std::string &archive) {
             auto opened{content_store::open(store_root)};
             if (!opened) {
-                errors.emplace_back("open failed");
+                errors[index] = "open failed";
                 return;
             }
             auto result{install_archive(*opened, archive)};
             if (!result) {
-                errors.push_back(result.error().message);
+                errors[index] = result.error().message;
                 return;
             }
             installed[index] = true;
@@ -816,14 +817,15 @@ const suite mod_install_atomicity_tests = [] {
         std::thread writer_two{install_one, 1U, *second};
         writer_one.join();
         writer_two.join();
-        expect(errors.empty()) << (errors.empty() ? "" : errors.front());
+        const bool no_errors{errors[0].empty() && errors[1].empty()};
+        expect(no_errors) << (no_errors ? "" : errors[0] + errors[1]);
         expect(installed[0] && installed[1]);
         auto receipts{mod::list_receipt_paths(store_root)};
         expect(receipts.has_value() && receipts->size() == 2U);
 
         // Reinstalling the same archive from two threads is idempotent: both
         // calls succeed and exactly one receipt exists.
-        std::vector<bool> again(2, false);
+        std::array<bool, 2> again{};
         const auto reinstall = [&](std::size_t index) {
             auto opened{content_store::open(store_root)};
             if (!opened) {
