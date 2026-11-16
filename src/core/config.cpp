@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -38,12 +39,7 @@ using config_table = std::map<std::string, config_value, std::less<>>;
 
 [[nodiscard]] auto copy_fallback(std::span<const std::string_view> fallback)
     -> std::vector<std::string> {
-    auto strings{std::vector<std::string>{}};
-    strings.reserve(fallback.size());
-    for (const auto &value : fallback) {
-        strings.emplace_back(value);
-    }
-    return strings;
+    return fallback | std::ranges::to<std::vector<std::string>>();
 }
 
 [[nodiscard]] auto child_of(const config_value &value,
@@ -216,13 +212,9 @@ using config_table = std::map<std::string, config_value, std::less<>>;
     if (object == nullptr) {
         return {};
     }
-    auto keys{std::vector<std::string>{}};
-    keys.reserve(object->size());
-    for (const auto &[key, child] : *object) {
-        static_cast<void>(child);
-        keys.push_back(key);
-    }
-    std::sort(keys.begin(), keys.end());
+    auto keys{*object | std::views::keys |
+              std::ranges::to<std::vector<std::string>>()};
+    std::ranges::sort(keys);
     return keys;
 }
 
@@ -339,13 +331,9 @@ auto flatten_table(const config_table &table, flat_table &out) -> void {
 
 [[nodiscard]] auto config_strings(std::span<const std::string_view> values)
     -> config_value {
-    config_array array;
-    array.reserve(values.size());
-    for (const auto value : values) {
-        array.push_back(config_string(value));
-    }
     config_value result{};
-    result.data = std::move(array);
+    result.data = values | std::views::transform(config_string) |
+                  std::ranges::to<config_array>();
     return result;
 }
 
@@ -813,13 +801,9 @@ auto document::keys(std::string_view table_key) const
         return {};
     }
     if (table_key.empty()) {
-        auto keys{std::vector<std::string>{}};
-        keys.reserve(impl_->table.size());
-        for (const auto &[key, value] : impl_->table) {
-            static_cast<void>(value);
-            keys.push_back(key);
-        }
-        std::sort(keys.begin(), keys.end());
+        auto keys{std::views::keys(impl_->table) |
+                  std::ranges::to<std::vector<std::string>>()};
+        std::ranges::sort(keys);
         return keys;
     }
     const auto *node{node_for_dotted_key(impl_->table, table_key)};
@@ -1057,12 +1041,9 @@ auto store::module(std::string_view name) const -> result<view> {
 }
 
 auto store::names() const -> std::vector<std::string> {
-    auto result{std::vector<std::string>{}};
-    result.reserve(impl_->entries.size());
-    for (const auto &entry : impl_->entries) {
-        result.push_back(entry.name);
-    }
-    return result;
+    return impl_->entries |
+           std::views::transform([](const auto &entry) { return entry.name; }) |
+           std::ranges::to<std::vector<std::string>>();
 }
 
 auto store::impl::set(std::string_view name, std::string_view key,

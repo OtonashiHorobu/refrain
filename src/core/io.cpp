@@ -226,7 +226,7 @@ auto read_file(std::string_view path, const read_options &options)
             const auto count_size = static_cast<std::size_t>(read_count);
             const auto chunk_bytes =
                 std::as_bytes(std::span<const char>{first, count_size});
-            bytes.insert(bytes.end(), chunk_bytes.begin(), chunk_bytes.end());
+            bytes.append_range(chunk_bytes);
         }
     }
     if (!in.eof()) {

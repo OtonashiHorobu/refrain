@@ -15,7 +15,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <numeric>
 #include <string>
 #include <utility>
 #include <vector>
@@ -109,8 +108,8 @@ class cursor {
     rwf::detail::put_u8(header, 2, type);
     rwf::detail::put_u32(header, 4, static_cast<std::uint32_t>(payload.size()));
     rwf::detail::put_u32(header, 8, data::crc32c(payload));
-    out.insert(out.end(), header.begin(), header.end());
-    out.insert(out.end(), payload.begin(), payload.end());
+    out.append_range(header);
+    out.append_range(payload);
     out.resize(static_cast<std::size_t>(out.size() + padded - payload.size()),
                std::byte{0});
     return true;
@@ -319,7 +318,7 @@ class cursor {
         payload.resize(base + 2, std::byte{0});
         rwf::detail::put_u16(payload, base,
                              static_cast<std::uint16_t>(array.size()));
-        payload.insert(payload.end(), array.begin(), array.end());
+        payload.append_range(array);
     };
     for (const auto &light : value.light_sections) {
         payload.push_back(static_cast<std::byte>(light.y));
@@ -401,7 +400,7 @@ class cursor {
         payload.resize(base + 4, std::byte{0});
         rwf::detail::put_u32(payload, base,
                              static_cast<std::uint32_t>(entity.size()));
-        payload.insert(payload.end(), entity.begin(), entity.end());
+        payload.append_range(entity);
     }
     return payload;
 }
@@ -724,46 +723,14 @@ auto encode_chunk(const chunk &value, palette_table *palette,
     -> result<std::vector<std::byte>> {
     chunk canonical = value;
     canonical.format_version = chunk_format_version;
-    std::vector<std::size_t> section_order(canonical.sections.size());
-    std::iota(section_order.begin(), section_order.end(), std::size_t{0});
-    std::stable_sort(section_order.begin(), section_order.end(),
-                     [&canonical](std::size_t left, std::size_t right) {
-                         return canonical.sections[left].y <
-                                canonical.sections[right].y;
-                     });
-    std::vector<std::size_t> light_order(canonical.light_sections.size());
-    std::iota(light_order.begin(), light_order.end(), std::size_t{0});
-    std::stable_sort(light_order.begin(), light_order.end(),
-                     [&canonical](std::size_t left, std::size_t right) {
-                         return canonical.light_sections[left].y <
-                                canonical.light_sections[right].y;
-                     });
-    std::vector<std::size_t> heightmap_order(canonical.heightmaps.size());
-    std::iota(heightmap_order.begin(), heightmap_order.end(), std::size_t{0});
-    std::stable_sort(heightmap_order.begin(), heightmap_order.end(),
-                     [&canonical](std::size_t left, std::size_t right) {
-                         return canonical.heightmaps[left].name <
-                                canonical.heightmaps[right].name;
-                     });
+    // Decode produces sections and light layers sorted by y and heightmaps by
+    // name. Sort the working copy in place: stable order keeps equal keys in
+    // their original relative order, exactly as the index permutation did, and
+    // `canonical` is already a copy so no caller data is touched.
+    std::ranges::stable_sort(canonical.sections, {}, &section_record::y);
+    std::ranges::stable_sort(canonical.light_sections, {}, &light_section::y);
+    std::ranges::stable_sort(canonical.heightmaps, {}, &heightmap_record::name);
     // Validate the canonical form (sorted sections are what decode produces).
-    std::vector<section_record> sorted_sections;
-    sorted_sections.reserve(canonical.sections.size());
-    for (const auto position : section_order) {
-        sorted_sections.push_back(canonical.sections[position]);
-    }
-    canonical.sections = std::move(sorted_sections);
-    std::vector<light_section> sorted_light;
-    sorted_light.reserve(canonical.light_sections.size());
-    for (const auto position : light_order) {
-        sorted_light.push_back(canonical.light_sections[position]);
-    }
-    canonical.light_sections = std::move(sorted_light);
-    std::vector<heightmap_record> sorted_heightmaps;
-    sorted_heightmaps.reserve(canonical.heightmaps.size());
-    for (const auto position : heightmap_order) {
-        sorted_heightmaps.push_back(canonical.heightmaps[position]);
-    }
-    canonical.heightmaps = std::move(sorted_heightmaps);
     if (auto valid{validate(canonical)}; !valid) {
         return std::unexpected{valid.error()};
     }

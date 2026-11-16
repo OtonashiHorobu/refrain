@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <iterator>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -279,11 +280,10 @@ auto check_profile_gamepack(const mod_profile_spec &profile,
                                  spec.error().message));
         return result;
     }
-    std::vector<std::string> pins{};
-    pins.reserve(spec->mods.size());
-    for (const auto &entry : spec->mods) {
-        pins.push_back(entry.ref.id);
-    }
+    auto pins{spec->mods | std::views::transform([](const auto &entry) {
+                  return entry.ref.id;
+              }) |
+              std::ranges::to<std::vector<std::string>>()};
     pins = sorted_unique(std::move(pins));
     for (const auto &id : pins) {
         if (!contains_id(profile.mods, id)) {
@@ -367,11 +367,8 @@ auto check_profile_against_binary(const mod_profile_spec &profile)
             "profile '{}' (build {})",
             profile.name, built_profile, built_build_id));
     }
-    std::vector<std::string> built_mods{};
-    built_mods.reserve(version::mod_ids().size());
-    for (const auto &id : version::mod_ids()) {
-        built_mods.emplace_back(id);
-    }
+    auto built_mods{version::mod_ids() |
+                    std::ranges::to<std::vector<std::string>>()};
     for (const auto &id : profile.mods) {
         if (!contains_id(built_mods, id)) {
             result.error(fmt::format(
@@ -387,11 +384,10 @@ auto check_profile_against_binary(const mod_profile_spec &profile)
                 id, profile.name));
         }
     }
-    std::vector<std::string> built_dynamic{};
-    built_dynamic.reserve(version::dynamic_modules().size());
-    for (const auto &entry : version::dynamic_modules()) {
-        built_dynamic.emplace_back(entry.id);
-    }
+    auto built_dynamic{
+        version::dynamic_modules() |
+        std::views::transform([](const auto &entry) { return entry.id; }) |
+        std::ranges::to<std::vector<std::string>>()};
     for (const auto &id : profile.dynamic) {
         if (!contains_id(built_dynamic, id)) {
             result.error(fmt::format(

@@ -17,12 +17,12 @@
 #include <fmt/format.h>
 #include <fstream>
 #include <iostream>
-#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <ranges>
 #include <refrain/archive/game_jar.hpp>
 #include <refrain/archive/manifest.hpp>
 #include <refrain/archive/zip.hpp>
@@ -331,7 +331,7 @@ auto run_protocol_capture(const protocol_capture_options &options) -> int {
         file.push_back(static_cast<std::byte>(packet.state));
         append_u32(packet.id);
         append_u32(static_cast<std::uint32_t>(packet.body.size()));
-        file.insert(file.end(), packet.body.begin(), packet.body.end());
+        file.append_range(packet.body);
     }
     if (auto written{io::write_file(options.out, file)}; !written) {
         return report_error(written.error());
@@ -662,11 +662,8 @@ auto run_extract(const extract_options &options) -> int {
 
 auto run_schema_gen(const std::string &output_root,
                     const std::vector<std::string> &roots, bool check) -> int {
-    std::vector<std::filesystem::path> schema_roots;
-    schema_roots.reserve(roots.size());
-    for (const auto &root : roots) {
-        schema_roots.emplace_back(root);
-    }
+    auto schema_roots{roots |
+                      std::ranges::to<std::vector<std::filesystem::path>>()};
 
     auto generated{schema::generate_from_roots(std::move(schema_roots))};
     if (!generated) {

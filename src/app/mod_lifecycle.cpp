@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <mutex>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -93,11 +94,8 @@ auto mod_lifecycle::primary_store() -> result<std::string> {
 }
 
 auto mod_lifecycle::resolve_composition() -> result<mod::composition> {
-    std::vector<std::string_view> required;
-    required.reserve(options_.required_services.size());
-    for (const auto &service : options_.required_services) {
-        required.push_back(service);
-    }
+    auto required{options_.required_services |
+                  std::ranges::to<std::vector<std::string_view>>()};
     // A caller may configure only the write store; the same store is then the
     // catalog root, otherwise an install would write a receipt the running
     // composition never resolves.

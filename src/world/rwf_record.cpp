@@ -108,8 +108,8 @@ auto write_record_file(std::string_view path,
     detail::put_u32(header, 24, data::crc32c(header));
     std::vector<std::byte> file;
     file.reserve(record_file_overhead + stored->size());
-    file.insert(file.end(), header.begin(), header.end());
-    file.insert(file.end(), stored->begin(), stored->end());
+    file.append_range(header);
+    file.append_range(*stored);
     file.resize(static_cast<std::size_t>(
         detail::align_up(file.size(), std::uint64_t{8})));
     if (durable) {
