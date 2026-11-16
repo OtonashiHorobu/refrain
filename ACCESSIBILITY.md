@@ -32,15 +32,13 @@ channels.
   diagnostics go to standard error, so redirecting one never mixes the other.
   Command output can be captured with `>out.txt` while messages remain on the
   terminal or in `2>err.txt`.
-- **Decorative colour only.** Console colour marks a log line's level, and the
-  level word (`info`, `warn`, `error`) is part of the line, so the colour never
-  carries information by itself. Colour is emitted only when standard error is
-  an interactive terminal that advertises colour support through `TERM` or
-  `COLORTERM` (the bundled spdlog sink detects this automatically). Redirected
-  output, a pipe, a log file and a non-colour terminal receive plain text. There
-  is currently no `--no-color` option or colour key in the configuration, and
-  the conventional `NO_COLOR` variable is not read; redirecting standard error
-  is the reliable way to get plain text from a colour terminal.
+- **Plain text, no colour escape sequences.** The console sink emits no ANSI
+  escape sequences today: the log pattern defines no colour range, so a pipe, a
+  redirected file and an interactive terminal receive the same text. The level
+  word (`info`, `warn`, `error`) is written into every line, so no information
+  depends on colour. The logger owns a colour-capable sink, but no command-line
+  option or configuration key selects it, and there is no `--no-color` flag to
+  need.
 - **Machine-readable output.** Several commands offer a text form and a
   structured form: `refrain-tools world info --json` prints JSON,
   `--dump-gamepack` prints the resolved composition, and log lines keep a stable
@@ -58,7 +56,7 @@ channels.
 | Windows x86_64 | MinGW and MSVC builds are compiled and tested in CI and ship as the Windows archives; not the primary development environment. |
 | macOS | Not supported. |
 | Display, GPU, audio | Not required. The server is headless and runs over SSH or a plain console. A display is needed only for the optional developer scripts that drive the unmodified client under XWayland. |
-| Terminal | Any terminal that renders plain text; colour output additionally needs a terminal that advertises colour support. |
+| Terminal | Any terminal that renders plain text; no ANSI colour is emitted today. |
 
 ## Known limitations
 
