@@ -152,6 +152,17 @@ class chunk_streamer {
     /// keeps resident.
     [[nodiscard]] auto viewports() const -> std::vector<viewport>;
 
+    /// Connections whose client already received the column, ascending by
+    /// connection id. Used to fan out block and light updates.
+    [[nodiscard]] auto connections_with_chunk(std::int32_t x,
+                                              std::int32_t z) const
+        -> std::vector<std::uint64_t>;
+
+    /// The encoder inputs the streamer was attached with.
+    [[nodiscard]] auto source() const noexcept -> const chunk_packet_source & {
+        return source_;
+    }
+
     /// A generation task for `(x, z)` failed. Clears the in-flight marker of
     /// every connection that asked for the column and queues it again while the
     /// attempt allowance lasts; a column that keeps failing is abandoned for

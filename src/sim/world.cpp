@@ -6,6 +6,7 @@
 
 #include <refrain/data/checksum.hpp>
 #include <refrain/world/model.hpp>
+#include <refrain/world/saved_data.hpp>
 
 #include <fmt/format.h>
 
@@ -125,17 +126,20 @@ auto block_registry::size() const -> std::size_t {
     return keys_.size();
 }
 
-world::world(store_type store) : store_{std::move(store)} {}
+world::world(store_type store) : store_{std::move(store)}, light_{*this} {}
 
-world::world(store_type &store, borrowed_tag) : store_{}, borrowed_{&store} {}
+world::world(store_type &store, borrowed_tag)
+    : store_{}, borrowed_{&store}, light_{*this} {}
 
 world::world(world &&other) noexcept
     : store_{std::move(other.store_)}, borrowed_{other.borrowed_},
       registry_{std::move(other.registry_)}, chunks_{std::move(other.chunks_)},
       tickets_{std::move(other.tickets_)}, players_{std::move(other.players_)},
       entities_{std::move(other.entities_)}, rng_{other.rng_},
-      tick_{other.tick_} {
+      tick_{other.tick_}, pending_edits_{std::move(other.pending_edits_)},
+      light_{*this}, clock_{other.clock_} {
     other.borrowed_ = nullptr;
+    light_.attach(*this);
 }
 
 auto world::operator=(world &&other) noexcept -> world & {
@@ -150,6 +154,10 @@ auto world::operator=(world &&other) noexcept -> world & {
         entities_ = std::move(other.entities_);
         rng_ = other.rng_;
         tick_ = other.tick_;
+        pending_edits_ = std::move(other.pending_edits_);
+        clock_ = other.clock_;
+        light_ = std::move(other.light_);
+        light_.attach(*this);
     }
     return *this;
 }
@@ -161,11 +169,19 @@ auto world::open(std::string_view path) -> result<world> {
     if (!store) {
         return std::unexpected{std::move(store.error())};
     }
-    return world{std::move(*store)};
+    world result{std::move(*store)};
+    if (auto loaded{result.load_clock_state()}; !loaded) {
+        return std::unexpected{std::move(loaded.error())};
+    }
+    return result;
 }
 
 auto world::attach(store_type &store) -> world {
-    return world{store, borrowed_tag{}};
+    world result{store, borrowed_tag{}};
+    // `attach` cannot report an error; malformed clock saved data leaves the
+    // clock at its defaults. `open` is the validating entry point.
+    static_cast<void>(result.load_clock_state());
+    return result;
 }
 
 auto world::store_ref() noexcept -> store_type & {
@@ -272,6 +288,7 @@ auto world::ensure_chunk(const chunk_pos &pos) -> result<chunk *> {
     }
     auto [position, inserted]{chunks_.emplace(pos, std::move(*decoded))};
     static_cast<void>(inserted);
+    light_.column_loaded(position->second);
     return &position->second;
 }
 
@@ -289,6 +306,7 @@ auto world::insert_chunk(const chunk_pos &pos, storage_chunk generated)
     decoded->dirty = true;
     auto [position, inserted]{chunks_.emplace(pos, std::move(*decoded))};
     static_cast<void>(inserted);
+    light_.column_loaded(position->second);
     return &position->second;
 }
 
@@ -383,6 +401,7 @@ auto world::set_block(const block_pos &pos, block_state_id value) -> status {
             [section_y](const section &entry) { return entry.y == section_y; });
     }
     const auto index{block_index(pos.y, pos.z, pos.x)};
+    const auto previous{found->uniform ? found->value : found->blocks[index]};
     if (found->uniform) {
         if (found->value == value) {
             return status_ok();
@@ -401,6 +420,9 @@ auto world::set_block(const block_pos &pos, block_state_id value) -> status {
     found->dirty = true;
     (*column)->dirty = true;
     ++(*column)->revision;
+    light_.block_changed(pos);
+    static_cast<void>(light_.run());
+    record_block_edit(pos, previous, value);
     return status_ok();
 }
 
@@ -625,6 +647,7 @@ auto world::unload_chunk(const chunk_pos &pos, bool commit) -> status {
         }
     }
     chunks_.erase(found);
+    light_.column_unloaded(pos);
     return status_ok();
 }
 
@@ -675,6 +698,7 @@ auto world::unload_chunks(std::span<const chunk_pos> positions, bool commit)
     }
     for (const auto &pos : positions) {
         chunks_.erase(pos);
+        light_.column_unloaded(pos);
     }
     return status_ok();
 }
@@ -882,6 +906,7 @@ auto world::rebuild_palette_in_place(unsigned threads, int zstd_level)
     // Release every region handle before the helper renames the directory.
     store_ = store_type{};
     chunks_.clear();
+    light_ = light_engine{*this};
 
     auto maintenance{::refrain::world::rebuild_palette_in_place(
         root, {.threads = threads, .zstd_level = zstd_level})};
@@ -933,16 +958,14 @@ auto world::flush() -> status {
     if (!snapshot) {
         return std::unexpected{std::move(snapshot.error())};
     }
-    if (snapshot->empty()) {
-        const std::lock_guard lock{store_mutex_};
-        return store_ref().commit();
+    if (!snapshot->empty()) {
+        auto written{write_snapshot(*snapshot)};
+        if (!written) {
+            return written;
+        }
+        mark_clean(*snapshot);
     }
-    auto written{write_snapshot(*snapshot)};
-    if (!written) {
-        return written;
-    }
-    mark_clean(*snapshot);
-    return status_ok();
+    return store_clock_state();
 }
 
 void world::mark_clean(std::span<const snapshot_entry> snapshot) noexcept {
@@ -955,6 +978,63 @@ void world::mark_clean(std::span<const snapshot_entry> snapshot) noexcept {
             }
         }
     }
+}
+
+auto world::take_light_changes() -> std::vector<light_section_change> {
+    return light_.take_changes();
+}
+
+auto world::take_block_edits() -> std::vector<block_change> {
+    auto edits{std::move(pending_edits_)};
+    pending_edits_.clear();
+    return edits;
+}
+
+auto world::record_block_edit(const block_pos &pos, block_state_id old_state,
+                              block_state_id new_state) -> void {
+    if (pending_edits_.size() >= max_pending_edits) {
+        // A scripted fill can produce more edits than one tick should send.
+        // The newest entries win: a client that missed a batch receives the
+        // column again the next time it is streamed.
+        pending_edits_.erase(pending_edits_.begin());
+    }
+    pending_edits_.push_back(block_change{
+        .pos = pos, .old_state = old_state, .new_state = new_state});
+}
+
+auto world::load_clock_state() -> status {
+    if (!store_ref().valid()) {
+        return std::unexpected{
+            make_error(error_code::not_initialized, "world store is closed")};
+    }
+    // A synthetic world (tests, tools) may exist without a level record; the
+    // clock then starts at tick zero. The runtime validates the level
+    // projection itself when it boots.
+    if (auto projection{store_ref().level()}; projection) {
+        clock_.set_game_time(projection->time);
+        clock_.set_total_ticks(projection->time);
+    }
+    return ::refrain::sim::read_world_clock(store_ref().objects(), clock_);
+}
+
+auto world::store_clock_state() -> status {
+    const std::lock_guard lock{store_mutex_};
+    if (!store_ref().valid()) {
+        return std::unexpected{
+            make_error(error_code::not_initialized, "world store is closed")};
+    }
+    // A synthetic world may have no level record; only its chunks and objects
+    // are persisted then.
+    if (auto written{store_ref().write_level_time(clock_.game_time())};
+        !written && written.error().code != error_code::not_found) {
+        return written;
+    }
+    if (auto written{
+            ::refrain::sim::write_world_clock(store_ref().objects(), clock_)};
+        !written) {
+        return written;
+    }
+    return store_ref().commit();
 }
 
 auto world::players() noexcept -> player_table & { return players_; }
@@ -1019,6 +1099,10 @@ void world::tick() noexcept {
     tick_entities();
     ++tick_;
     (void)rng_.next_u64();
+    // A block edit already drained its light update synchronously; this is the
+    // backstop for work queued while the world was not ticking (tests, tools).
+    static_cast<void>(light_.run());
+    clock_.tick();
     // Notification listeners are mod/extension code: a throw must never take
     // down the sim tick, and the bus contract is single-threaded.
     try {
@@ -1483,7 +1567,10 @@ auto world::state_hash() const -> data::digest32 {
     return data::blake3(bytes);
 }
 
-void world::unload_all() noexcept { chunks_.clear(); }
+void world::unload_all() noexcept {
+    chunks_.clear();
+    light_ = light_engine{*this};
+}
 
 auto world::store() noexcept -> store_type & { return store_ref(); }
 

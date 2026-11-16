@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 23c7796fb66be5e7
+// Schema hash: 629b46053b1e88ca
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -555,7 +555,9 @@ template <> struct custom_traits<::refrain::protocol::v777::play::clientbound::c
     static constexpr std::string_view type_name = "refrain::protocol::v777::play::clientbound::clock_update";
     static constexpr auto fields = std::make_tuple(
         refrain::reflect::custom_field{"clock", &::refrain::protocol::v777::play::clientbound::clock_update::clock},
-        refrain::reflect::custom_field{"state", &::refrain::protocol::v777::play::clientbound::clock_update::state});
+        refrain::reflect::custom_field{"total_ticks", &::refrain::protocol::v777::play::clientbound::clock_update::total_ticks},
+        refrain::reflect::custom_field{"partial_tick", &::refrain::protocol::v777::play::clientbound::clock_update::partial_tick},
+        refrain::reflect::custom_field{"rate", &::refrain::protocol::v777::play::clientbound::clock_update::rate});
 };
 
 /// Generated RSC packet 'refrain::protocol::v777::play::clientbound::block_changed_ack'.

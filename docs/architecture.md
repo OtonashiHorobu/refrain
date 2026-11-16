@@ -144,6 +144,38 @@ Determinism is a contract: the same world and the same command sequence produce
 the same hash at the same tick. Timers are ordered by due tick and insertion
 id. The event bus is single-threaded and preserves subscription order.
 
+### Lighting
+
+Chunks carry sky and block light. The simulation owns one light engine over
+the loaded columns: a column is lit when it joins the resident set (loaded from
+the store or adopted from the generator), light propagates across column and
+section borders, and a block edit updates light incrementally before the tick
+that sends the chunk packet and the update packets runs. The light arrays live
+in the column's storage record, so the chunk codec, the background writer and
+the `level_chunk_with_light` encoder read one copy. The engine keeps a
+deterministic order (ascending column position, then ascending section) for
+every propagation and every drained change, and a column's light does not
+depend on the order the generator delivered its neighbours.
+
+Block light emission and sky dampening come from a curated block table inside
+the engine: the shipped content tables carry block states but no light
+properties. The table matches the reference for solid terrain, fluids, leaves
+and the common sources; blocks outside it are opaque and emit nothing, so a
+scene can only be darker than the reference, never brighter.
+
+### Time and weather
+
+The overworld clock advances on the tick grid: the game time counts every
+server tick, the daylight clock follows the clock rate (paused when a command
+stops it) and needs 24000 ticks for one day-night cycle. Once per second the
+runtime broadcasts `set_time` with the game time and the clock state, which is
+what lets the client interpolate the cycle between syncs; a joining client
+receives the same snapshot in its login burst. Weather follows the reference
+state machine: rain and thunder timers resample from the reference's uniform
+ranges, the rain and thunder levels ease by 0.01 per tick and the runtime
+broadcasts the level changes as game events. Clock and weather are persisted
+into the world's saved data on flush and restored on the next open.
+
 ### Chunk residency
 
 The chunk pipeline pins what the players can see. A column is resident while it

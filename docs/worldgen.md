@@ -441,9 +441,11 @@ default state carries from the default-state report. States outside those
 families still fall back to the heightmap motion-blocking tags. The substrate
 checks of a simple-block placement cover the families the 26.3 datapack
 places: a mushroom needs a solid-render block below it or a block that
-overrides its light requirement. Generation carries no light data, so the
-reference's light gate is not modelled; it admits every position in a
-dimension without skylight, which is the case the feature worlds exercise.
+overrides its light requirement. Generation carries no light data; the runtime
+lights a column when it is adopted into the world, which is after feature
+placement, so the reference's light gate for feature placement is still not
+modelled and admits every position in a dimension without skylight. That is
+the case the feature worlds exercise.
 The unobstructed predicate admits every position because generation has no
 entities. The biome membership predicate resolves `#tag` lists through the
 data pack's biome tag tree and compares explicit biome ids directly; a tag the

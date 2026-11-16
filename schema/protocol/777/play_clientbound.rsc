@@ -30,8 +30,15 @@ struct spawn_info {
 }
 
 struct clock_update {
-    clock: identifier;
-    #[varint] state: u32;
+    /// `world_clock` registry entry.
+    #[varint] clock: u32;
+    /// `ClockNetworkState.totalTicks`: the clock's tick count.
+    #[varlong] total_ticks: i64;
+    /// `ClockNetworkState.partialTick`: fractional tick within the current
+    /// tick, from the sender's partial-tick carry.
+    partial_tick: f32;
+    /// `ClockNetworkState.rate`: ticks per game tick; zero means paused.
+    rate: f32;
 }
 
 packet block_changed_ack = 4 {

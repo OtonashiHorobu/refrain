@@ -10,6 +10,7 @@
 #include <refrain/server/world_port.hpp>
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace refrain::server {
@@ -30,6 +31,19 @@ struct chunk_packet_source {
 /// Encode one `level_chunk_with_light` packet body (packet id included).
 [[nodiscard]] auto encode_full_chunk(const chunk_packet_source &source,
                                      sim::chunk_pos pos)
+    -> result<std::vector<std::byte>>;
+
+/// Encode one `light_update` packet body (packet id included) for the given
+/// absolute light section Y values of one column.
+[[nodiscard]] auto encode_light_update(const chunk_packet_source &source,
+                                       sim::chunk_pos pos,
+                                       std::span<const std::int8_t> sections)
+    -> result<std::vector<std::byte>>;
+
+/// Encode one `block_update` packet body (packet id included) for an applied
+/// block mutation.
+[[nodiscard]] auto encode_block_update(const chunk_packet_source &source,
+                                       const sim::block_change &change)
     -> result<std::vector<std::byte>>;
 
 } // namespace refrain::server

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 23c7796fb66be5e7
+// Schema hash: 629b46053b1e88ca
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_PROTOCOL_777_PLAY_CLIENTBOUND_HPP
@@ -53,9 +53,17 @@ struct spawn_info {
 };
 
 struct clock_update {
-    ::refrain::data::resource_location clock;
+    /// `world_clock` registry entry.
     // attributes: #[varint]
-    std::uint32_t state;
+    std::uint32_t clock;
+    /// `ClockNetworkState.totalTicks`: the clock's tick count.
+    // attributes: #[varlong]
+    std::int64_t total_ticks;
+    /// `ClockNetworkState.partialTick`: fractional tick within the current
+    /// tick, from the sender's partial-tick carry.
+    float partial_tick;
+    /// `ClockNetworkState.rate`: ticks per game tick; zero means paused.
+    float rate;
 };
 
 struct block_changed_ack {
@@ -1551,12 +1559,16 @@ struct show_dialog {
   static_cast<void>(out);
   static_cast<void>(value);
   {
-    if (auto written = out.write_identifier(value.clock); !written) {
-      return written;
-    }
+    out.write_varint(static_cast<std::uint32_t>(value.clock));
   }
   {
-    out.write_varint(static_cast<std::uint32_t>(value.state));
+    out.write_varlong(static_cast<std::uint64_t>(value.total_ticks));
+  }
+  {
+    out.write_f32(value.partial_tick);
+  }
+  {
+    out.write_f32(value.rate);
   }
   return ::refrain::status_ok();
 }
@@ -1565,14 +1577,24 @@ struct show_dialog {
   static_cast<void>(in);
   static_cast<void>(value);
   {
-    auto value_0 = in.read_identifier();
-    if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.clock = std::move(*value_0);
-  }
-  {
     auto value_0 = in.read_varint();
     if (!value_0) return std::unexpected{std::move(value_0.error())};
-    value.state = static_cast<decltype(value.state)>(*value_0);
+    value.clock = static_cast<decltype(value.clock)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_varlong();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.total_ticks = static_cast<decltype(value.total_ticks)>(*value_0);
+  }
+  {
+    auto value_0 = in.read_f32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.partial_tick = *value_0;
+  }
+  {
+    auto value_0 = in.read_f32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.rate = *value_0;
   }
   return ::refrain::status_ok();
 }

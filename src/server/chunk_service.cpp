@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -87,6 +88,7 @@ auto chunk_service::start_generation(chunk_generation::config settings)
 void chunk_service::attach(play_gateway &gateway, chunk_packet_source source,
                            chunk_streamer::backlog_limits backlog) {
     gateway_ = &gateway;
+    source_ = source;
     backlog_ = backlog.clamped();
     streamer_.emplace(gateway, source, backlog_);
     streamer_->set_chunk_requester([this](std::int32_t x, std::int32_t z) {
@@ -138,6 +140,53 @@ void chunk_service::tick(world_port &world,
         return;
     }
     generation_->dispatch(refrain::core::now_ns() - tick_start_ns);
+}
+
+void chunk_service::broadcast_updates(world_port &world) {
+    const auto edits{world.take_block_edits()};
+    const auto light{world.take_light_changes()};
+    if (!streamer_ || gateway_ == nullptr) {
+        return;
+    }
+    const auto chunk_of_block = [](std::int32_t block) -> std::int32_t {
+        return block >= 0 ? block / 16 : (block - 15) / 16;
+    };
+    const auto send_to_viewers = [this](std::int32_t x, std::int32_t z,
+                                        std::span<const std::byte> body) {
+        if (body.empty()) {
+            return;
+        }
+        const auto targets{streamer_->connections_with_chunk(x, z)};
+        if (!targets.empty()) {
+            gateway_->send_raw_many(targets, body);
+        }
+    };
+    for (const auto &change : edits) {
+        auto body{encode_block_update(source_, change)};
+        if (!body) {
+            log_chunk_gen.debug("failed to encode a block update: {}",
+                                body.error().message);
+            continue;
+        }
+        send_to_viewers(chunk_of_block(change.pos.x),
+                        chunk_of_block(change.pos.z), *body);
+    }
+    // One light_update per column carries every changed light section of that
+    // column; the section order is the order the engine drained them.
+    std::map<sim::chunk_pos, std::vector<std::int8_t>> by_column{};
+    for (const auto &change : light) {
+        by_column[change.pos].push_back(change.section_y);
+    }
+    for (const auto &[pos, sections] : by_column) {
+        auto body{encode_light_update(source_, pos, sections)};
+        if (!body) {
+            log_chunk_gen.debug(
+                "failed to encode a light update for chunk ({}, {}): {}", pos.x,
+                pos.z, body.error().message);
+            continue;
+        }
+        send_to_viewers(pos.x, pos.z, *body);
+    }
 }
 
 void chunk_service::apply_generation_failures() {
