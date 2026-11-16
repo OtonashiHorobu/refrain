@@ -273,7 +273,31 @@ game update with the data generator's `blocks.json` report:
 --out content/vanilla/<version>/reports/block_defaults`.
 
 `--force-load-box` also applies to the default fixed-biome mode, so a feature
-reference can be generated away from the spawn area.
+reference can be generated away from the spawn area. A box that spans more
+than the 256 chunks one `forceload add` command accepts is force-loaded tile by
+tile, so a reference world can cover the whole generated area of a wide case.
+
+An end feature world with the `minecraft:the_end` biome kept contains the
+obsidian platform that the biome's fixed placement writes at `(100,49,0)`, in
+chunk `(6,0)`. The platform is the only feature in that chunk, so the compared
+chunk exercises the `fixed_placement` modifier and the biome filter of the end
+feature stage without depending on neighbouring decoration:
+
+```bash
+python3 tools/worldgen/oracle/generate.py --dimension the_end \
+    --fixed-biome minecraft:the_end --keep-features \
+    --force-load-box 80 -16 127 31 \
+    --server-jar /path/to/server.jar --seed 1 --output /tmp/t2end-platform
+REFRAIN_VANILLA_WORLDGEN=/path/to/server/data \
+REFRAIN_FEATURE_END_PLATFORM_REGION=/tmp/t2end-platform/world/dimensions/minecraft/the_end/region/r.0.0.mca \
+REFRAIN_FEATURE_END_PLATFORM_CHUNK_X=6 \
+REFRAIN_FEATURE_END_PLATFORM_CHUNK_Z=0 \
+REFRAIN_FEATURE_END_PLATFORM_SEED=1 \
+REFRAIN_FEATURE_END_PLATFORM_BIOME=minecraft:the_end \
+REFRAIN_FEATURE_END_PLATFORM_DIMENSION=the_end \
+    ./build/Release/bin/refrain-tests \
+    "the runtime feature oracle reproduces the end platform chunk"
+```
 
 The biome oracle uses a plain overworld instead: `--plain` skips the data pack,
 so the normal multi-noise biome source writes real biomes (surface rules,

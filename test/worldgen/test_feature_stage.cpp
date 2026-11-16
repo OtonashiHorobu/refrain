@@ -1854,11 +1854,51 @@ suite<"worldgen/block-predicate"> block_predicate_tests = [] {
                 (*predicate)->test(context, block_pos{.x = 1, .y = 2, .z = 3}));
             expect(!(*predicate)
                         ->test(context, block_pos{.x = 1, .y = 4, .z = 3}));
+            // A tag reference resolves through the data pack's biome tags.
+            const refrain::worldgen::biome_tags tags{
+                {{"minecraft:is_forest",
+                  {"minecraft:forest", "minecraft:birch_forest"}}}};
+            auto tagged = decode_block_predicate(
+                parse(R"({"type":"minecraft:matching_biomes",
+                          "biomes":"#minecraft:is_forest"})"),
+                registry, &tags);
+            expect(tagged.has_value());
+            if (tagged) {
+                context.biome = [](const block_pos &pos) -> std::string_view {
+                    return pos.y == 2 ? "minecraft:forest" : "minecraft:plains";
+                };
+                expect((*tagged)->test(context,
+                                       block_pos{.x = 1, .y = 2, .z = 3}));
+                expect(!(*tagged)->test(context,
+                                        block_pos{.x = 1, .y = 4, .z = 3}));
+            }
+            // Without a tag source the reference cannot resolve the tag, so
+            // the document is rejected rather than treated as a biome id.
+            const auto unresolved = decode_block_predicate(
+                parse(R"({"type":"minecraft:matching_biomes",
+                          "biomes":"#minecraft:is_forest"})"),
+                registry);
+            expect(!unresolved.has_value());
+            if (!unresolved) {
+                expect(unresolved.error().code ==
+                       refrain::error_code::unsupported);
+                expect(unresolved.error().message.find(
+                           "#minecraft:is_forest") != std::string::npos)
+                    << unresolved.error().message;
+            }
+            // The reference field is a holder set: one tag or a list of biome
+            // ids, never a single biome id.
             expect(!decode_block_predicate(
                         parse(R"({"type":"minecraft:matching_biomes",
-                                  "biomes":"#minecraft:is_forest"})"),
-                        registry)
+                                  "biomes":"minecraft:forest"})"),
+                        registry, &tags)
                         .has_value());
+            // A list of biome ids stays valid.
+            expect(decode_block_predicate(
+                       parse(R"({"type":"minecraft:matching_biomes",
+                                 "biomes":["minecraft:forest"]})"),
+                       registry, &tags)
+                       .has_value());
         };
 
     "random chance keeps positions by probability"_test = [] {

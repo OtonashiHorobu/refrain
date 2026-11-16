@@ -17,6 +17,7 @@
 #include <refrain/worldgen/chunk/proto_chunk.hpp>
 #include <refrain/worldgen/core/java_compat.hpp>
 #include <refrain/worldgen/core/rng.hpp>
+#include <refrain/worldgen/provider.hpp>
 #include <refrain/worldgen/structure/placement_types.hpp>
 
 #include <cstdint>
@@ -40,33 +41,6 @@ struct template_block_info {
     /// Such a seed belongs to the rule's positional stream, so placement must
     /// not replace it with a seed from the piece stream.
     bool loot_seed_fixed{false};
-};
-
-/// A positive integer provider used by a capped processor's limit.
-/// `constant` consumes no draw; `uniform` consumes one bounded draw.
-struct int_provider {
-    enum class kind : std::uint8_t { constant, uniform };
-
-    kind type{kind::constant};
-    jint min_inclusive{0};
-    jint max_inclusive{0};
-
-    [[nodiscard]] static auto constant(jint value) -> int_provider {
-        return int_provider{
-            .type = kind::constant,
-            .min_inclusive = value,
-            .max_inclusive = value,
-        };
-    }
-    [[nodiscard]] static auto uniform(jint min, jint max) -> int_provider {
-        return int_provider{
-            .type = kind::uniform,
-            .min_inclusive = min,
-            .max_inclusive = max,
-        };
-    }
-
-    [[nodiscard]] auto sample(worldgen_random &random) const -> jint;
 };
 
 /// The block entity tag a matching rule leaves behind.
@@ -227,8 +201,8 @@ class nop_processor final : public template_block_processor {
 class capped_processor final : public template_block_processor {
   public:
     capped_processor(std::unique_ptr<template_block_processor> delegate,
-                     int_provider limit)
-        : delegate_{std::move(delegate)}, limit_{limit} {}
+                     std::shared_ptr<const provider::int_provider> limit)
+        : delegate_{std::move(delegate)}, limit_{std::move(limit)} {}
 
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
@@ -249,7 +223,7 @@ class capped_processor final : public template_block_processor {
 
   private:
     std::unique_ptr<template_block_processor> delegate_{};
-    int_provider limit_{};
+    std::shared_ptr<const provider::int_provider> limit_{};
 };
 
 /// A capped processor over a single state rule, with a loot-table append as
@@ -261,8 +235,7 @@ class capped_rule_processor final : public template_block_processor {
                           std::string loot_table, jint limit)
         : input_block_{std::move(input_block)},
           output_state_{std::move(output_state)},
-          loot_table_{std::move(loot_table)},
-          limit_{int_provider::constant(limit)} {}
+          loot_table_{std::move(loot_table)}, limit_{limit} {}
 
     [[nodiscard]] auto
     process(block_state_registry &states, const chunk_region &region,
@@ -285,7 +258,7 @@ class capped_rule_processor final : public template_block_processor {
     std::string input_block_{};
     std::string output_state_{};
     std::string loot_table_{};
-    int_provider limit_{};
+    jint limit_{1};
 };
 
 /// Drops blocks whose block name is listed.
@@ -540,6 +513,10 @@ struct template_place_settings {
     /// Rule position predicates measure from here; an unset reference means a
     /// placement outside a structure start.
     block_pos reference{};
+    /// Places the template's `entities` list after the blocks. The reference
+    /// keeps entity placement per piece: jigsaw pieces place entities, while
+    /// the end city and woodland mansion pieces ignore them.
+    bool place_entities{false};
 };
 
 /// Transforms a local position: mirroring is applied first, then the rotation;
@@ -562,8 +539,10 @@ struct template_place_settings {
 
 /// Places palette 0 (or the palette chosen from the template position) into
 /// `region`. Blocks are mirrored then rotated, block entities are written after
-/// their block, and writes outside the writable region are dropped. Returns
-/// the number of blocks that were written.
+/// their block, writes outside the writable region are dropped, and a
+/// placement that asks for entities adds the template's entity list to the
+/// chunks their world positions fall into. Returns the number of blocks that
+/// were written.
 [[nodiscard]] auto
 place_template(chunk_region &region, block_state_registry &states,
                const structure_template &templ, const block_pos &origin,

@@ -311,6 +311,17 @@ class chunk_generator {
         std::span<const structure::structure_start *const> starts)
         -> result<std::unique_ptr<structure_placement>>;
 
+    /// The generation biome and climate a structure feature pool element reads
+    /// at a world position. The position's chunk must be attached to `region`;
+    /// outside it the probes report no biome and no temperature and the
+    /// weather features leave the position alone.
+    [[nodiscard]] auto structure_biome_at(const chunk_region &region,
+                                          const block_pos &block) const
+        -> std::string_view;
+    [[nodiscard]] auto structure_temperature_at(const chunk_region &region,
+                                                const block_pos &block) const
+        -> std::optional<float>;
+
     /// One cached unbearded start column: the six heightmap rows the starts
     /// stage reads. The column is filled at `biomes` status, so the four final
     /// heightmaps stay at their empty value, exactly as a freshly generated

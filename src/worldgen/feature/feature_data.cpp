@@ -92,6 +92,11 @@ auto load_feature_data(std::string_view data_root) -> result<feature_data_set> {
     }
     data_root = *materialized;
     feature_data_set result;
+    auto tags = load_biome_tags(*materialized);
+    if (!tags) {
+        return std::unexpected{tags.error()};
+    }
+    result.tags = std::move(*tags);
     const auto namespaces = core::io::list_directory(data_root);
     if (!namespaces) {
         return std::unexpected{namespaces.error()};

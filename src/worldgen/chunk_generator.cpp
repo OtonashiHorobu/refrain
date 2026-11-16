@@ -886,6 +886,13 @@ auto chunk_generator::generate_impl(const chunk_pos &pos)
         .adjusted_heights = &adjusted_heights,
         .data = &shared_->structure_data,
         .place_feature = {},
+        .biome = [this, &region](const block_pos &block) -> std::string_view {
+            return structure_biome_at(region, block);
+        },
+        .temperature =
+            [this, &region](const block_pos &block) -> std::optional<float> {
+            return structure_temperature_at(region, block);
+        },
     };
 
     std::optional<structure::structure_feature_placer> structure_features;
@@ -1101,9 +1108,6 @@ auto chunk_generator::decorate_chunks(
         return dimension_->biome_temperature(biome_of(block), block.x, block.y,
                                              block.z);
     };
-    const auto world_state = [&region](const block_pos &block) {
-        return region.state_at(block.x, block.y, block.z);
-    };
 
     feature::feature_context feature_context{
         .placement =
@@ -1147,42 +1151,9 @@ auto chunk_generator::decorate_chunks(
         return interned.has_value() ? *interned : no_block_state;
     };
     feature_context.placement.should_freeze =
-        [&temperature, &world_state, &states](const block_pos &block) {
-            const auto value = temperature(
-                block_pos{.x = block.x, .y = block.y + 1, .z = block.z});
-            if (!value.has_value() || *value >= 0.15F) {
-                return false;
-            }
-            return states.traits(world_state(block)).water;
-        };
-    feature_context.placement.should_snow = [&temperature, &world_state,
-                                             &states](const block_pos &block) {
-        const auto value = temperature(block);
-        if (!value.has_value() || *value >= 0.15F) {
-            return false;
-        }
-        const auto state = world_state(block);
-        const auto name = states.name(state);
-        if (!states.traits(state).air && !name.starts_with("minecraft:snow")) {
-            return false;
-        }
-        const auto below = world_state(
-            block_pos{.x = block.x, .y = block.y - 1, .z = block.z});
-        if (states.in_tag(below, "minecraft:cannot_support_snow_layer")) {
-            return false;
-        }
-        if (states.in_tag(below, "minecraft:support_override_snow_layer")) {
-            return true;
-        }
-        const auto below_name = states.name(below);
-        if (below_name.ends_with("_leaves") ||
-            below_name.starts_with("minecraft:bamboo") ||
-            below_name.starts_with("minecraft:vine") ||
-            below_name.starts_with("minecraft:snow")) {
-            return false;
-        }
-        return states.traits(below).blocks_motion;
-    };
+        feature::make_should_freeze(region, states, temperature);
+    feature_context.placement.should_snow =
+        feature::make_should_snow(region, states, temperature);
     if (templates_ != nullptr) {
         feature_context.processor_list = [this](std::string_view id)
             -> const structure::structure_processor_list * {
@@ -1216,6 +1187,32 @@ struct chunk_generator::structure_placement {
     std::optional<structure::structure_feature_placer> features{};
 };
 
+auto chunk_generator::structure_biome_at(const chunk_region &region,
+                                         const block_pos &block) const
+    -> std::string_view {
+    if (!config_.fixed_biome.empty()) {
+        return config_.fixed_biome;
+    }
+    const jint chunk_x = block.x >> 4;
+    const jint chunk_z = block.z >> 4;
+    const auto *chunk = region.find(chunk_x, chunk_z);
+    if (chunk == nullptr) {
+        return {};
+    }
+    return dimension_->biome_name(chunk->biome_at(
+        block.x - chunk_x * 16, block.y, block.z - chunk_z * 16));
+}
+
+auto chunk_generator::structure_temperature_at(const chunk_region &region,
+                                               const block_pos &block) const
+    -> std::optional<float> {
+    const auto biome = structure_biome_at(region, block);
+    if (biome.empty()) {
+        return std::nullopt;
+    }
+    return dimension_->biome_temperature(biome, block.x, block.y, block.z);
+}
+
 auto chunk_generator::make_structure_placement(
     chunk_region &region,
     std::span<const structure::structure_start *const> starts)
@@ -1241,6 +1238,13 @@ auto chunk_generator::make_structure_placement(
         .adjusted_heights = &placement->adjusted_heights,
         .data = &shared_->structure_data,
         .place_feature = {},
+        .biome = [this, &region](const block_pos &block) -> std::string_view {
+            return structure_biome_at(region, block);
+        },
+        .temperature =
+            [this, &region](const block_pos &block) -> std::optional<float> {
+            return structure_temperature_at(region, block);
+        },
     };
     std::vector<std::string> feature_ids;
     for (const auto *start : starts) {

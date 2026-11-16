@@ -8,6 +8,7 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
+#include <refrain/worldgen/biome/biome_tags.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
 #include <refrain/worldgen/feature/feature.hpp>
 #include <refrain/worldgen/feature/feature_data.hpp>
@@ -73,6 +74,9 @@ class feature_registry {
         -> result<std::vector<std::unique_ptr<tree_decorator>>>;
 
     block_state_registry *states_{nullptr};
+    /// Biome tag tree of the data set the current load came from; the biome
+    /// membership predicate resolves `#tag` lists through it.
+    biome_tags tags_{};
     std::unordered_map<std::string, state_provider_document>
         provider_documents_{};
     std::unordered_map<std::string, std::unique_ptr<state_provider>>

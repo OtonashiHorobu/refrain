@@ -409,6 +409,32 @@ class unobstructed_predicate final : public block_predicate {
     block_pos offset_{};
 };
 
+/// Expands one biome list entry of the membership predicate. A `#tag` entry
+/// comes from a tag file and resolves to its biome ids; a plain entry is a
+/// biome id. The predicate compares ids, so expansion happens once at decode.
+auto append_biome_entry(const data::json::value &entry, const biome_tags *tags,
+                        std::vector<std::string> &out) -> status {
+    const auto name = entry.as_string();
+    if (!name) {
+        return std::unexpected{
+            make_error(error_code::parse_error, "biome name is not a string")};
+    }
+    if (name->size() > 1 && name->front() == '#') {
+        if (tags == nullptr || !tags->contains(name->substr(1))) {
+            return std::unexpected{
+                make_error(error_code::unsupported,
+                           "matching_biomes cannot resolve biome tag '" +
+                               std::string{*name} + "'")};
+        }
+        auto expanded = tags->expand(name->substr(1));
+        out.insert(out.end(), std::make_move_iterator(expanded.begin()),
+                   std::make_move_iterator(expanded.end()));
+        return {};
+    }
+    out.emplace_back(*name);
+    return {};
+}
+
 class matching_biomes_predicate final : public block_predicate {
   public:
     explicit matching_biomes_predicate(std::vector<std::string> biomes)
@@ -502,7 +528,8 @@ auto block_predicate::test(const placement_context &context,
 }
 
 auto decode_block_predicate(const data::json::value &document,
-                            const block_state_table &states)
+                            const block_state_table &states,
+                            const biome_tags *tags)
     -> result<std::unique_ptr<block_predicate>> {
     const auto type = type_of(document);
     if (!type) {
@@ -706,29 +733,32 @@ auto decode_block_predicate(const data::json::value &document,
             return std::unexpected{make_error(error_code::parse_error,
                                               "matching_biomes has no biomes")};
         }
+        // `HolderSet` decoding: the field is either one tag reference or a
+        // list of biome ids. A single biome id is not a valid holder set, and
+        // a tag inside the list is not one either.
         std::vector<std::string> decoded;
         if (const auto single = field->as_string(); single.has_value()) {
-            decoded.emplace_back(*single);
+            if (single->size() < 2 || single->front() != '#') {
+                return std::unexpected{
+                    make_error(error_code::parse_error,
+                               "matching_biomes string is not a biome tag")};
+            }
+            if (const auto appended = append_biome_entry(*field, tags, decoded);
+                !appended) {
+                return std::unexpected{appended.error()};
+            }
         } else if (field->is_array()) {
             for (const auto &entry : *field->as_array()) {
-                const auto name = entry.as_string();
-                if (!name) {
-                    return std::unexpected{make_error(
-                        error_code::parse_error, "biome name is not a string")};
+                if (const auto appended =
+                        append_biome_entry(entry, tags, decoded);
+                    !appended) {
+                    return std::unexpected{appended.error()};
                 }
-                decoded.emplace_back(*name);
             }
         } else {
             return std::unexpected{
                 make_error(error_code::parse_error,
                            "matching_biomes list is not an array")};
-        }
-        for (const auto &name : decoded) {
-            if (name.starts_with("#")) {
-                return std::unexpected{make_error(
-                    error_code::unsupported,
-                    "matching_biomes cannot resolve biome tag '" + name + "'")};
-            }
         }
         if (decoded.empty()) {
             return std::unexpected{make_error(error_code::parse_error,
@@ -784,7 +814,7 @@ auto decode_block_predicate(const data::json::value &document,
                 error_code::parse_error,
                 "volume_match min bound is larger than the max bound")};
         }
-        auto inner = decode_block_predicate(*match, states);
+        auto inner = decode_block_predicate(*match, states, tags);
         if (!inner) {
             return std::unexpected{inner.error()};
         }
@@ -798,7 +828,7 @@ auto decode_block_predicate(const data::json::value &document,
             return std::unexpected{make_error(
                 error_code::parse_error, "not predicate has no predicate")};
         }
-        auto inner = decode_block_predicate(*predicate, states);
+        auto inner = decode_block_predicate(*predicate, states, tags);
         if (!inner) {
             return std::unexpected{inner.error()};
         }
@@ -813,7 +843,7 @@ auto decode_block_predicate(const data::json::value &document,
         }
         std::vector<std::unique_ptr<block_predicate>> decoded;
         for (const auto &entry : *rules->as_array()) {
-            auto predicate = decode_block_predicate(entry, states);
+            auto predicate = decode_block_predicate(entry, states, tags);
             if (!predicate) {
                 return std::unexpected{predicate.error()};
             }
@@ -833,7 +863,7 @@ auto decode_block_predicate(const data::json::value &document,
         }
         std::vector<std::unique_ptr<block_predicate>> decoded;
         for (const auto &entry : *rules->as_array()) {
-            auto predicate = decode_block_predicate(entry, states);
+            auto predicate = decode_block_predicate(entry, states, tags);
             if (!predicate) {
                 return std::unexpected{predicate.error()};
             }
