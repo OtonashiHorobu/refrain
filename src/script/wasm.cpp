@@ -14,9 +14,11 @@
 
 #include <wasmtime/wat.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -53,6 +55,67 @@ namespace {
     return fail(error_code::mod_error, "wasm trap: " + text);
 }
 
+/// Resolve `module`'s imports through `linker`, instantiate it in `context` and
+/// run its start function. The linker is empty in this slice, so a module that
+/// imports anything fails here instead of reaching host code. Wasmtime writes
+/// `instance`; the caller keeps the value alive.
+[[nodiscard]] auto instantiate_module(wasmtime_linker_t *linker,
+                                      wasmtime_context_t *context,
+                                      const wasmtime_module_t *module,
+                                      wasmtime_instance_t &instance) -> status {
+    wasm_trap_t *trap{nullptr};
+    if (auto *error{wasmtime_linker_instantiate(linker, context, module,
+                                                &instance, &trap)}) {
+        return std::unexpected{take_error(error)};
+    }
+    if (trap != nullptr) {
+        return std::unexpected{take_trap(trap)};
+    }
+    return status_ok();
+}
+
+/// Call an exported `(i32, ...) -> i32` function on an already instantiated
+/// guest.
+[[nodiscard]] auto
+call_export(wasmtime_context_t *context, const wasmtime_instance_t &instance,
+            std::string_view export_name, std::span<const std::int32_t> args)
+    -> result<std::int32_t> {
+    wasmtime_extern_t item{};
+    if (!wasmtime_instance_export_get(context, &instance, export_name.data(),
+                                      export_name.size(), &item)) {
+        return std::unexpected(fail(
+            error_code::not_found,
+            "wasmtime: export '" + std::string{export_name} + "' not found"));
+    }
+    if (item.kind != WASMTIME_EXTERN_FUNC) {
+        return std::unexpected{
+            fail(error_code::invalid_argument, "wasmtime: export '" +
+                                                   std::string{export_name} +
+                                                   "' is not a function")};
+    }
+
+    auto wasm_args{std::vector<wasmtime_val_t>(args.size())};
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        wasm_args[i].kind = WASMTIME_I32;
+        wasm_args[i].of.i32 = args[i];
+    }
+    wasmtime_val_t result{};
+    wasm_trap_t *trap{nullptr};
+    if (auto *error{wasmtime_func_call(context, &item.of.func, wasm_args.data(),
+                                       wasm_args.size(), &result, 1, &trap)}) {
+        return std::unexpected{take_error(error)};
+    }
+    if (trap != nullptr) {
+        return std::unexpected{take_trap(trap)};
+    }
+    if (result.kind != WASMTIME_I32) {
+        return std::unexpected{
+            fail(error_code::mod_error,
+                 "wasmtime: exported function does not return an i32 value")};
+    }
+    return result.of.i32;
+}
+
 } // namespace
 
 struct runtime::impl {
@@ -61,6 +124,9 @@ struct runtime::impl {
     wasmtime_context_t *context{nullptr};
     wasmtime_linker_t *linker{nullptr};
     std::vector<wasmtime_module_t *> modules{};
+    /// The single persistent guest instance, when `instantiate` ran.
+    wasmtime_instance_t instance{};
+    bool instance_live{false};
     engine_config config{};
 
     ~impl() {
@@ -86,6 +152,19 @@ runtime::runtime(runtime &&other) noexcept = default;
 auto runtime::operator=(runtime &&other) noexcept -> runtime & = default;
 
 runtime::~runtime() = default;
+
+auto assemble_wat(std::string_view wat) -> result<std::vector<std::byte>> {
+    wasm_byte_vec_t wasm = WASM_EMPTY_VEC;
+    if (auto *error{wasmtime_wat2wasm(wat.data(), wat.size(), &wasm)}) {
+        return std::unexpected{take_error(error)};
+    }
+    auto bytes{std::vector<std::byte>(wasm.size)};
+    if (wasm.size != 0) {
+        std::memcpy(bytes.data(), wasm.data, wasm.size);
+    }
+    wasm_byte_vec_delete(&wasm);
+    return bytes;
+}
 
 auto runtime::create(engine_config config) -> result<runtime> {
     auto state{std::make_unique<impl>()};
@@ -120,6 +199,17 @@ auto runtime::create(engine_config config) -> result<runtime> {
             fail(error_code::out_of_memory, "wasmtime: cannot create store")};
     }
     state->context = wasmtime_store_context(state->store);
+    if (config.max_memory_bytes != 0) {
+        const auto maximum{
+            std::min(config.max_memory_bytes,
+                     static_cast<std::uint64_t>(
+                         std::numeric_limits<std::int64_t>::max()))};
+        // -1 leaves the other store limits (tables, instances, memories) at
+        // their Wasmtime defaults; the engine uses them only as a coarse
+        // backstop, the loader's own budgets are the contract.
+        wasmtime_store_limiter(state->store, static_cast<std::int64_t>(maximum),
+                               -1, -1, -1, -1);
+    }
     state->linker = wasmtime_linker_new(state->engine);
     if (state->linker == nullptr) {
         return std::unexpected{
@@ -163,13 +253,45 @@ auto runtime::compile_bytes(std::span<const std::byte> wasm)
 }
 
 auto runtime::compile_wat(std::string_view wat) -> result<module_handle> {
-    wasm_byte_vec_t wasm = WASM_EMPTY_VEC;
-    if (auto *error{wasmtime_wat2wasm(wat.data(), wat.size(), &wasm)}) {
-        return std::unexpected{take_error(error)};
+    auto bytes{assemble_wat(wat)};
+    if (!bytes) {
+        return std::unexpected{std::move(bytes.error())};
     }
-    auto handle{compile_bytes(std::as_bytes(std::span{wasm.data, wasm.size}))};
-    wasm_byte_vec_delete(&wasm);
-    return handle;
+    return compile_bytes(*bytes);
+}
+
+auto runtime::instantiate(module_handle module) -> status {
+    if (impl_ == nullptr || impl_->engine == nullptr) {
+        return std::unexpected{
+            fail(error_code::not_initialized, "wasmtime: runtime is not open")};
+    }
+    if (module >= impl_->modules.size()) {
+        return std::unexpected{
+            fail(error_code::not_found, "wasmtime: unknown module handle")};
+    }
+    if (impl_->instance_live) {
+        return std::unexpected{
+            fail(error_code::already_exists,
+                 "wasmtime: runtime already holds an instantiated guest")};
+    }
+    auto instantiated{instantiate_module(impl_->linker, impl_->context,
+                                         impl_->modules[module],
+                                         impl_->instance)};
+    if (!instantiated) {
+        return instantiated;
+    }
+    impl_->instance_live = true;
+    return status_ok();
+}
+
+auto runtime::has_export(std::string_view export_name) const -> bool {
+    if (impl_ == nullptr || !impl_->instance_live) {
+        return false;
+    }
+    wasmtime_extern_t item{};
+    return wasmtime_instance_export_get(impl_->context, &impl_->instance,
+                                        export_name.data(), export_name.size(),
+                                        &item);
 }
 
 auto runtime::call_i32(module_handle module, std::string_view export_name,
@@ -183,53 +305,54 @@ auto runtime::call_i32(module_handle module, std::string_view export_name,
         return std::unexpected{
             fail(error_code::not_found, "wasmtime: unknown module handle")};
     }
-
     wasmtime_instance_t instance{};
-    wasm_trap_t *trap{nullptr};
-    if (auto *error{wasmtime_linker_instantiate(impl_->linker, impl_->context,
-                                                impl_->modules[module],
-                                                &instance, &trap)}) {
-        return std::unexpected{take_error(error)};
+    auto instantiated{instantiate_module(impl_->linker, impl_->context,
+                                         impl_->modules[module], instance)};
+    if (!instantiated) {
+        return std::unexpected{std::move(instantiated.error())};
     }
-    if (trap != nullptr) {
-        return std::unexpected{take_trap(trap)};
-    }
+    return call_export(impl_->context, instance, export_name, args);
+}
 
+auto runtime::call_instance_i32(std::string_view export_name,
+                                std::span<const std::int32_t> args)
+    -> result<std::int32_t> {
+    if (impl_ == nullptr || !impl_->instance_live) {
+        return std::unexpected{
+            fail(error_code::not_initialized,
+                 "wasmtime: runtime has no instantiated guest")};
+    }
+    return call_export(impl_->context, impl_->instance, export_name, args);
+}
+
+auto runtime::fuel_remaining() const noexcept -> std::uint64_t {
+    if (impl_ == nullptr || impl_->context == nullptr ||
+        !impl_->config.consume_fuel) {
+        return 0;
+    }
+    std::uint64_t fuel{0};
+    if (wasmtime_context_get_fuel(impl_->context, &fuel) != nullptr) {
+        return 0;
+    }
+    return fuel;
+}
+
+auto runtime::memory_bytes() const noexcept -> std::uint64_t {
+    if (impl_ == nullptr || !impl_->instance_live) {
+        return 0;
+    }
     wasmtime_extern_t item{};
-    if (!wasmtime_instance_export_get(impl_->context, &instance,
+    constexpr std::string_view export_name{"memory"};
+    if (!wasmtime_instance_export_get(impl_->context, &impl_->instance,
                                       export_name.data(), export_name.size(),
                                       &item)) {
-        return std::unexpected{fail(
-            error_code::not_found,
-            "wasmtime: export '" + std::string{export_name} + "' not found")};
+        return 0;
     }
-    if (item.kind != WASMTIME_EXTERN_FUNC) {
-        return std::unexpected{
-            fail(error_code::invalid_argument, "wasmtime: export '" +
-                                                   std::string{export_name} +
-                                                   "' is not a function")};
+    if (item.kind != WASMTIME_EXTERN_MEMORY) {
+        return 0;
     }
-
-    auto wasm_args{std::vector<wasmtime_val_t>(args.size())};
-    for (std::size_t i = 0; i < args.size(); ++i) {
-        wasm_args[i].kind = WASMTIME_I32;
-        wasm_args[i].of.i32 = args[i];
-    }
-    wasmtime_val_t result{};
-    if (auto *error{wasmtime_func_call(impl_->context, &item.of.func,
-                                       wasm_args.data(), wasm_args.size(),
-                                       &result, 1, &trap)}) {
-        return std::unexpected{take_error(error)};
-    }
-    if (trap != nullptr) {
-        return std::unexpected{take_trap(trap)};
-    }
-    if (result.kind != WASMTIME_I32) {
-        return std::unexpected{
-            fail(error_code::mod_error,
-                 "wasmtime: exported function does not return an i32 value")};
-    }
-    return result.of.i32;
+    return static_cast<std::uint64_t>(
+        wasmtime_memory_data_size(impl_->context, &item.of.memory));
 }
 
 auto runtime::module_count() const noexcept -> std::size_t {
@@ -252,6 +375,12 @@ auto runtime::operator=(runtime &&other) noexcept -> runtime & = default;
 
 runtime::~runtime() = default;
 
+auto assemble_wat(std::string_view /*wat*/) -> result<std::vector<std::byte>> {
+    return std::unexpected{make_error(error_code::unsupported,
+                                      "wasmtime is not enabled in this build "
+                                      "(REFRAIN_WITH_WASM=0)")};
+}
+
 auto runtime::create(engine_config /*config*/) -> result<runtime> {
     return std::unexpected{make_error(error_code::unsupported,
                                       "wasmtime is not enabled in this build "
@@ -269,12 +398,32 @@ auto runtime::compile_bytes(std::span<const std::byte> /*wasm*/)
                                       "wasmtime is not enabled in this build")};
 }
 
+auto runtime::instantiate(module_handle /*module*/) -> status {
+    return std::unexpected{make_error(error_code::unsupported,
+                                      "wasmtime is not enabled in this build")};
+}
+
+auto runtime::has_export(std::string_view /*export_name*/) const -> bool {
+    return false;
+}
+
 auto runtime::call_i32(module_handle /*module*/, std::string_view /*name*/,
                        std::span<const std::int32_t> /*args*/)
     -> result<std::int32_t> {
     return std::unexpected{make_error(error_code::unsupported,
                                       "wasmtime is not enabled in this build")};
 }
+
+auto runtime::call_instance_i32(std::string_view /*name*/,
+                                std::span<const std::int32_t> /*args*/)
+    -> result<std::int32_t> {
+    return std::unexpected{make_error(error_code::unsupported,
+                                      "wasmtime is not enabled in this build")};
+}
+
+auto runtime::fuel_remaining() const noexcept -> std::uint64_t { return 0; }
+
+auto runtime::memory_bytes() const noexcept -> std::uint64_t { return 0; }
 
 auto runtime::module_count() const noexcept -> std::size_t { return 0U; }
 

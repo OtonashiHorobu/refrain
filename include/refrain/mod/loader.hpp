@@ -82,4 +82,21 @@ struct mod_loader_capabilities {
     bool supports_hot_install{false};
 };
 
+/// Detail message a loader provider attaches to its most recent failed
+/// `validate`, `load`, `reload` or `unload` call.
+///
+/// The loader ABI carries an error code only, so a provider that returns only
+/// the code leaves the host reporting the loader id and mod id without the
+/// field or package member that actually failed. A provider sets this
+/// diagnostic before it returns the error code; the host drains it on the
+/// failure path and appends it to the reported error. The channel is
+/// per-thread, which matches the contract's main-thread dispatch, and the host
+/// clears it before every provider call so a stale message is never attributed
+/// to a later failure.
+void set_loader_diagnostic(std::string message);
+void clear_loader_diagnostic() noexcept;
+
+/// Return and clear the current thread's loader diagnostic.
+[[nodiscard]] auto take_loader_diagnostic() -> std::string;
+
 } // namespace refrain::mod

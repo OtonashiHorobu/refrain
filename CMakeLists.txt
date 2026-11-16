@@ -697,6 +697,20 @@ if(REFRAIN_WITH_WASM)
 endif()
 add_library(Refrain::ScriptWasm ALIAS refrain-script-wasm)
 
+# --- first-party script mod loader providers -------------------------------
+# The `wasm` and `lua` mod loader providers implement the instanced
+# `refrain:mod.loader` service. They sit beside the script runtime instead of in
+# the kernel or the mod host, so neither links wasmtime; the composition root
+# registers them on the host before activation. The wasm loader reads guest
+# modules through the installed-package receipt layer, hence the mod-host
+# dependency.
+refrain_add_library(refrain-script-loaders
+    src/script/wasm_loader.cpp
+    src/script/lua_loader.cpp)
+target_link_libraries(refrain-script-loaders
+    PRIVATE refrain-script-wasm refrain-mod-host refrain-contracts)
+add_library(Refrain::ScriptLoaders ALIAS refrain-script-loaders)
+
 # --- application service layer ---------------------------------------------
 # The command bodies shared by refrain-tools and refrain-server. Both mains
 # only parse CLI arguments and call one app::*_service function.
@@ -707,7 +721,8 @@ target_link_libraries(refrain-app PUBLIC refrain-kernel refrain-data
                                              refrain-world refrain-sim
                                              refrain-mod-host refrain-host
                                              refrain-schema refrain-archive
-                                             refrain-script-wasm)
+                                             refrain-script-wasm
+                                             refrain-script-loaders)
 add_library(Refrain::App ALIAS refrain-app)
 
 # --- headless server runtime ------------------------------------------------
@@ -849,7 +864,8 @@ if(REFRAIN_BUILD_TESTS)
                                               refrain-builtin
                                               refrain-mod-host refrain-host
                                               refrain-first-party-mods
-                                              refrain-script-wasm libzip::zip
+                                              refrain-script-wasm
+                                              refrain-script-loaders libzip::zip
                                               LZ4::lz4_static
                                               xxHash::xxhash Boost::ut glaze::glaze
                                               EnTT::EnTT zstd::libzstd_static
