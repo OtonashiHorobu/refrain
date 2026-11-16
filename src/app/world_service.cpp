@@ -152,16 +152,38 @@ auto run_world_import(const world_import_options &options) -> int {
         dictionary = world::rwf::make_zstd_dictionary(*bytes);
         dictionary_ptr = &dictionary;
     }
+    if (options.dry_run) {
+        auto plan{world::anvil::plan_import(options.from)};
+        if (!plan) {
+            return report_error(plan.error());
+        }
+        const auto &expected{plan->expected};
+        fmt::print("world import (dry run): source data version {}, {} fix "
+                   "step(s), {} record(s) scanned, {} changed, would import "
+                   "{} chunks, {} entities, {} poi, {} playerdata, {} datapack "
+                   "files, {} aux files; nothing written\n",
+                   expected.source_data_version, expected.fix_steps,
+                   expected.records_scanned, expected.records_fixed,
+                   expected.chunks, expected.entity_chunks, expected.poi_chunks,
+                   expected.playerdata, expected.datapack_files,
+                   expected.aux_files);
+        return 0;
+    }
     auto result{world::anvil::import_world(
         options.from, options.to, options.force, options.threads, zstd_level,
         dictionary_ptr, dictionary_scope)};
     if (!result) {
         return report_error(result.error());
     }
+    // The summary prefix (chunk and record counts) is a stable CLI contract;
+    // the datafix work is appended to it.
     fmt::print("world import: {} chunks, {} entities, {} poi, {} playerdata, "
-               "{} datapack files, {} aux files\n",
+               "{} datapack files, {} aux files (source data version {}, {} "
+               "fix step(s), {} record(s) changed, result data version {})\n",
                result->chunks, result->entity_chunks, result->poi_chunks,
-               result->playerdata, result->datapack_files, result->aux_files);
+               result->playerdata, result->datapack_files, result->aux_files,
+               result->source_data_version, result->fix_steps,
+               result->records_fixed, result->result_data_version);
     return 0;
 }
 

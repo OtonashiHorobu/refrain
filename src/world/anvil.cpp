@@ -12,6 +12,7 @@
 #include <refrain/platform/process.hpp>
 #include <refrain/platform/random_access_file.hpp>
 #include <refrain/world/chunk_codec.hpp>
+#include <refrain/world/datafix.hpp>
 #include <refrain/world/model.hpp>
 #include <refrain/world/rwf.hpp>
 #include <refrain/world/store.hpp>
@@ -1526,9 +1527,77 @@ write_anvil_region_stream(std::string_view path,
         });
 }
 
+// --- DataFixer wiring ------------------------------------------------------
+
+/// Counters for the records visited by the importer's fixer pass.
+struct fix_counters {
+    std::uint64_t scanned{0};
+    std::uint64_t fixed{0};
+};
+
+/// Fix one record read from the source world through the shared DataFixer and
+/// stamp the target version, mirroring how the runtime upgrades a record it
+/// loaded.
+///
+/// `fallback_version` is the world's data version, used when the record itself
+/// carries no `DataVersion` (the reference loader passes the world version as
+/// the default). A record stamped newer than the target, outside the window or
+/// with a non-integer version fails closed and names `what`.
+[[nodiscard]] auto fix_imported_record(value &document, datafix_type type,
+                                       std::int32_t fallback_version,
+                                       std::string_view what,
+                                       fix_counters &counters) -> status {
+    ++counters.scanned;
+    std::int32_t version{fallback_version};
+    if (const auto *raw{document.get("DataVersion")}; raw != nullptr) {
+        const auto value_version{raw->as_int()};
+        if (!value_version) {
+            return fail(error_code::parse_error,
+                        fmt::format("{} DataVersion is not an integer", what));
+        }
+        version = *value_version;
+    }
+    const auto target{supported_data_version};
+    if (version > target) {
+        return fail(error_code::version_mismatch,
+                    fmt::format("{} records data version {}, newer than the "
+                                "target version {}",
+                                what, version, target));
+    }
+    auto plan{plan_datafix(version, target)};
+    if (!plan) {
+        return fail(plan.error().code,
+                    fmt::format("{}: {}", what, plan.error().message));
+    }
+    auto fixed{fix_document(document, type, version, target)};
+    if (!fixed) {
+        return fail(fixed.error().code,
+                    fmt::format("{}: {}", what, fixed.error().message));
+    }
+    if (fixed->changed) {
+        ++counters.fixed;
+    }
+    if (auto stamped{stamp_data_version(document, target)}; !stamped) {
+        return fail(stamped.error().code,
+                    fmt::format("{}: {}", what, stamped.error().message));
+    }
+    return status_ok();
+}
+
 // --- level.dat / meta ------------------------------------------------------
 
-[[nodiscard]] auto read_level_data(std::string_view source) -> result<value> {
+/// `level.dat` `Data` compound after the shared DataFixer ran over it.
+struct level_data {
+    value document;
+    std::int32_t data_version{0};
+    /// Fix steps this source version needs; reported to the operator.
+    std::uint32_t fix_steps{0};
+    /// True when a fix rewrote the level record itself.
+    bool changed{false};
+};
+
+[[nodiscard]] auto read_level_data(std::string_view source)
+    -> result<level_data> {
     const auto path{join_path(source, "level.dat")};
     auto document{nbt::read_file(path, nbt::compression::gzip)};
     if (!document) {
@@ -1543,13 +1612,36 @@ write_anvil_region_stream(std::string_view path,
     if (!version) {
         return parse_failure("level.dat has no DataVersion");
     }
-    if (*version != supported_data_version) {
-        return unsupported(fmt::format(
-            "level.dat DataVersion is {} (supported: {}); open the world in "
-            "vanilla 26.3 and save it once to upgrade before importing",
-            *version, supported_data_version));
+    const auto target{supported_data_version};
+    if (*version > target) {
+        return fail(error_code::version_mismatch,
+                    fmt::format("level.dat records data version {}, newer "
+                                "than the target version {}",
+                                *version, target));
     }
-    return data;
+    auto plan{plan_datafix(*version, target)};
+    if (!plan) {
+        return fail(
+            plan.error().code,
+            fmt::format("level.dat records data version {}, outside the "
+                        "supported import window [{}, {}]; open the world in "
+                        "Minecraft 26.3 and save it once before importing",
+                        *version, oldest_migratable_data_version, target));
+    }
+    auto fixed{fix_document(data, datafix_type::level, *version, target)};
+    if (!fixed) {
+        return fail(fixed.error().code,
+                    fmt::format("level.dat: {}", fixed.error().message));
+    }
+    if (auto stamped{stamp_data_version(data, target)}; !stamped) {
+        return std::unexpected{stamped.error()};
+    }
+    return level_data{
+        .document = std::move(data),
+        .data_version = *version,
+        .fix_steps = plan->steps,
+        .changed = fixed->changed,
+    };
 }
 
 [[nodiscard]] auto meta_from_level(const value &level) -> value {
@@ -1956,11 +2048,10 @@ auto scan_world(std::string_view root) -> result<std::vector<chunk_digest>> {
 /// Store a directory tree of aux files under `prefix` in the object store.
 /// `nbt_gzip` is true for `data/**` (`.dat` files are gzip NBT, stored as
 /// uncompressed NBT); other trees are stored byte-for-byte.
-[[nodiscard]] auto store_object_tree(object_store &objects,
-                                     const std::string &from,
-                                     const std::string &prefix, bool nbt_gzip,
-                                     std::size_t &files, unsigned depth = 0)
-    -> status {
+[[nodiscard]] auto store_object_tree(
+    object_store &objects, const std::string &from, const std::string &prefix,
+    bool nbt_gzip, std::size_t &files, std::int32_t source_version = 0,
+    fix_counters *counters = nullptr, unsigned depth = 0) -> status {
     if (!core::io::is_directory(from)) {
         return status_ok();
     }
@@ -1983,7 +2074,8 @@ auto scan_world(std::string_view root) -> result<std::vector<chunk_digest>> {
                             : fmt::format("{}/{}", prefix, encoded_name)};
         if (core::io::is_directory(source)) {
             if (auto status{store_object_tree(objects, source, path, nbt_gzip,
-                                              files, depth + 1)};
+                                              files, source_version, counters,
+                                              depth + 1)};
                 !status) {
                 return status;
             }
@@ -1998,6 +2090,14 @@ auto scan_world(std::string_view root) -> result<std::vector<chunk_digest>> {
             auto document{nbt::read_file(source, nbt::compression::gzip)};
             if (!document) {
                 return std::unexpected{document.error()};
+            }
+            if (counters != nullptr) {
+                if (auto fixed{fix_imported_record(
+                        *document, saved_data_type(name), source_version,
+                        fmt::format("saved data '{}'", path), *counters)};
+                    !fixed) {
+                    return std::unexpected{fixed.error()};
+                }
             }
             auto encoded{nbt::write(*document, "", nbt::compression::none)};
             if (!encoded) {
@@ -2018,6 +2118,96 @@ auto scan_world(std::string_view root) -> result<std::vector<chunk_digest>> {
             return written;
         }
         ++files;
+    }
+    return status_ok();
+}
+
+/// Read-only counterpart of `store_object_tree`: read every saved-data record,
+/// run the shared DataFixer over it and validate that it can be encoded again,
+/// without writing anything. Used by the import dry run.
+[[nodiscard]] auto validate_saved_data_tree(const std::string &from,
+                                            std::int32_t source_version,
+                                            fix_counters &counters,
+                                            std::size_t &files,
+                                            unsigned depth = 0) -> status {
+    if (!core::io::is_directory(from)) {
+        return status_ok();
+    }
+    if (depth > 16) {
+        return fail(error_code::invalid_argument,
+                    fmt::format("aux directory '{}' is too deep", from));
+    }
+    auto names{core::io::list_directory(from)};
+    if (!names) {
+        return std::unexpected{names.error()};
+    }
+    for (const auto &name : *names) {
+        const auto source{join_path(from, name)};
+        if (core::io::is_symlink(source)) {
+            continue;
+        }
+        if (core::io::is_directory(source)) {
+            if (auto status{validate_saved_data_tree(
+                    source, source_version, counters, files, depth + 1)};
+                !status) {
+                return status;
+            }
+            continue;
+        }
+        if (!core::io::is_regular_file(source)) {
+            continue;
+        }
+        ++files;
+        if (!name.ends_with(".dat")) {
+            continue;
+        }
+        auto document{nbt::read_file(source, nbt::compression::gzip)};
+        if (!document) {
+            return std::unexpected{document.error()};
+        }
+        if (auto fixed{fix_imported_record(
+                *document, saved_data_type(name), source_version,
+                fmt::format("saved data '{}'", source), counters)};
+            !fixed) {
+            return std::unexpected{fixed.error()};
+        }
+        auto encoded{nbt::write(*document, "", nbt::compression::none)};
+        if (!encoded) {
+            return std::unexpected{encoded.error()};
+        }
+    }
+    return status_ok();
+}
+
+/// Count the regular files of a source tree without reading or writing them.
+[[nodiscard]] auto count_tree_files(const std::string &from, std::size_t &files,
+                                    unsigned depth = 0) -> status {
+    if (!core::io::is_directory(from)) {
+        return status_ok();
+    }
+    if (depth > 16) {
+        return fail(error_code::invalid_argument,
+                    fmt::format("'{}' is too deep", from));
+    }
+    auto names{core::io::list_directory(from)};
+    if (!names) {
+        return std::unexpected{names.error()};
+    }
+    for (const auto &name : *names) {
+        const auto path{join_path(from, name)};
+        if (core::io::is_symlink(path)) {
+            continue;
+        }
+        if (core::io::is_directory(path)) {
+            if (auto status{count_tree_files(path, files, depth + 1)};
+                !status) {
+                return status;
+            }
+            continue;
+        }
+        if (core::io::is_regular_file(path)) {
+            ++files;
+        }
     }
     return status_ok();
 }
@@ -2173,11 +2363,12 @@ auto scan_world(std::string_view root) -> result<std::vector<chunk_digest>> {
     return table;
 }
 
-[[nodiscard]] auto import_dimension(std::string_view source_dim,
-                                    std::string_view target_dim,
-                                    import_result &report, int zstd_level,
-                                    const rwf::zstd_dictionary *dictionary,
-                                    palette_table *palette) -> status {
+[[nodiscard]] auto
+import_dimension(std::string_view source_dim, std::string_view target_dim,
+                 import_result &report, int zstd_level,
+                 const rwf::zstd_dictionary *dictionary, palette_table *palette,
+                 std::int32_t source_version, fix_counters &counters)
+    -> status {
     auto created{
         core::io::create_directories(fmt::format("{}/regions", target_dim))};
     if (!created) {
@@ -2218,7 +2409,14 @@ auto scan_world(std::string_view root) -> result<std::vector<chunk_digest>> {
             if (!file) {
                 return std::unexpected{file.error()};
             }
-            for (const auto &[pos, document] : *chunks) {
+            for (auto &[pos, document] : *chunks) {
+                if (auto fixed{fix_imported_record(
+                        document, datafix_type::chunk, source_version,
+                        fmt::format("chunk {}", format_chunk_pos(pos)),
+                        counters)};
+                    !fixed) {
+                    return std::unexpected{fixed.error()};
+                }
                 auto chunk{chunk_from_nbt(document, pos)};
                 if (!chunk) {
                     return std::unexpected{chunk.error()};
@@ -2260,7 +2458,16 @@ auto scan_world(std::string_view root) -> result<std::vector<chunk_digest>> {
             if (!chunks) {
                 return std::unexpected{chunks.error()};
             }
-            for (const auto &[pos, document] : *chunks) {
+            const auto type{std::string_view{kind} == "entities"
+                                ? datafix_type::entity_chunk
+                                : datafix_type::poi_chunk};
+            for (auto &[pos, document] : *chunks) {
+                if (auto fixed{fix_imported_record(
+                        document, type, source_version,
+                        fmt::format("{} chunk {}", kind, pos.key()), counters)};
+                    !fixed) {
+                    return std::unexpected{fixed.error()};
+                }
                 auto bytes{nbt::write(document, "", nbt::compression::none)};
                 if (!bytes) {
                     return std::unexpected{bytes.error()};
@@ -2279,7 +2486,8 @@ auto scan_world(std::string_view root) -> result<std::vector<chunk_digest>> {
     if (core::io::is_directory(data)) {
         object_store objects{fmt::format("{}/objects", target_dim)};
         std::size_t files{0};
-        if (auto stored{store_object_tree(objects, data, "data", true, files)};
+        if (auto stored{store_object_tree(objects, data, "data", true, files,
+                                          source_version, &counters)};
             !stored) {
             return stored;
         }
@@ -2460,6 +2668,12 @@ train_chunk_dictionary(std::span<const std::string> dimension_roots,
     return rwf::make_zstd_dictionary(dictionary);
 }
 
+// The Anvil reader below understands the current region layout only.
+// TODO: a pre-1.18 world (older section, height and dimension layout) or a
+// pre-1.13 world (`.mcr` region files, numeric block ids) needs its own legacy
+// chunk reader before the supported window can extend below the current lower
+// bound. The shared DataFixer handles NBT semantics after the layout is read;
+// it cannot decode a layout this reader does not understand.
 auto import_world(std::string_view source, std::string_view target,
                   bool overwrite, unsigned threads, int zstd_level,
                   const rwf::zstd_dictionary *dictionary,
@@ -2471,18 +2685,29 @@ auto import_world(std::string_view source, std::string_view target,
     if (auto disjoint{check_disjoint_paths(source, target)}; !disjoint) {
         return std::unexpected{disjoint.error()};
     }
-    if (auto prepared{prepare_target(target, overwrite)}; !prepared) {
-        return std::unexpected{prepared.error()};
-    }
     auto level{read_level_data(source)};
     if (!level) {
         return std::unexpected{level.error()};
+    }
+    // Validate the source before touching the target: a source from outside the
+    // supported window must not delete or replace an existing target world.
+    if (auto prepared{prepare_target(target, overwrite)}; !prepared) {
+        return std::unexpected{prepared.error()};
     }
     auto store{world_store::create(target)};
     if (!store) {
         return std::unexpected{store.error()};
     }
     import_result report{};
+    report.source_data_version = level->data_version;
+    report.result_data_version = supported_data_version;
+    report.fix_steps = level->fix_steps;
+    const auto source_version{level->data_version};
+    fix_counters counters{};
+    ++counters.scanned; // the level record itself
+    if (level->changed) {
+        ++counters.fixed;
+    }
     palette_table palette{build_palette_table(source)};
     if (auto installed{store->install_palette(palette)}; !installed) {
         return std::unexpected{installed.error()};
@@ -2572,6 +2797,7 @@ auto import_world(std::string_view source, std::string_view target,
             sources.size(),
             fail(error_code::io_error, "import worker did not complete"));
         std::vector<std::size_t> counts(sources.size(), 0);
+        std::vector<fix_counters> region_counters(sources.size());
         const auto import_one = [&](std::size_t index) {
             const auto &entry{sources[index]};
             auto chunks{read_anvil_region(join_path(regions, entry.name),
@@ -2596,7 +2822,15 @@ auto import_world(std::string_view source, std::string_view target,
                 outcomes[index] = std::unexpected{file.error()};
                 return;
             }
-            for (const auto &[pos, document] : *chunks) {
+            for (auto &[pos, document] : *chunks) {
+                if (auto fixed{fix_imported_record(
+                        document, datafix_type::chunk, source_version,
+                        fmt::format("chunk {}", format_chunk_pos(pos)),
+                        region_counters[index])};
+                    !fixed) {
+                    outcomes[index] = fixed;
+                    return;
+                }
                 auto chunk{chunk_from_nbt(document, pos)};
                 if (!chunk) {
                     outcomes[index] = std::unexpected{chunk.error()};
@@ -2634,6 +2868,8 @@ auto import_world(std::string_view source, std::string_view target,
             if (!outcomes[index]) {
                 return std::unexpected{outcomes[index].error()};
             }
+            counters.scanned += region_counters[index].scanned;
+            counters.fixed += region_counters[index].fixed;
             if (counts[index] != 0) {
                 ++report.regions;
                 report.chunks += counts[index];
@@ -2643,7 +2879,8 @@ auto import_world(std::string_view source, std::string_view target,
     auto &objects{store->objects()};
     std::size_t object_files{0};
     if (auto stored{store_object_tree(objects, join_path(source, "data"),
-                                      "global/data", true, object_files)};
+                                      "global/data", true, object_files,
+                                      source_version, &counters)};
         !stored) {
         return std::unexpected{stored.error()};
     }
@@ -2651,7 +2888,8 @@ auto import_world(std::string_view source, std::string_view target,
     if (core::io::is_directory(overworld_data)) {
         std::size_t files{0};
         if (auto stored{store_object_tree(objects, overworld_data,
-                                          "overworld/data", true, files)};
+                                          "overworld/data", true, files,
+                                          source_version, &counters)};
             !stored) {
             return std::unexpected{stored.error()};
         }
@@ -2762,7 +3000,16 @@ auto import_world(std::string_view source, std::string_view target,
             if (!chunks) {
                 return std::unexpected{chunks.error()};
             }
-            for (const auto &[pos, document] : *chunks) {
+            const auto type{std::string_view{kind} == "entities"
+                                ? datafix_type::entity_chunk
+                                : datafix_type::poi_chunk};
+            for (auto &[pos, document] : *chunks) {
+                if (auto fixed{fix_imported_record(
+                        document, type, source_version,
+                        fmt::format("{} chunk {}", kind, pos.key()), counters)};
+                    !fixed) {
+                    return std::unexpected{fixed.error()};
+                }
                 auto bytes{nbt::write(document, "", nbt::compression::none)};
                 if (!bytes) {
                     return std::unexpected{bytes.error()};
@@ -2801,6 +3048,12 @@ auto import_world(std::string_view source, std::string_view target,
                                          nbt::compression::gzip)};
             if (!document) {
                 return std::unexpected{document.error()};
+            }
+            if (auto fixed{fix_imported_record(
+                    *document, datafix_type::player, source_version,
+                    fmt::format("player data '{}'", name), counters)};
+                !fixed) {
+                return std::unexpected{fixed.error()};
             }
             auto bytes{nbt::write(*document, "", nbt::compression::none)};
             if (!bytes) {
@@ -2843,7 +3096,7 @@ auto import_world(std::string_view source, std::string_view target,
         }
         if (auto imported{import_dimension(source_dim, target_dim, report,
                                            zstd_level, dimension_dictionary,
-                                           &palette)};
+                                           &palette, source_version, counters)};
             !imported) {
             return std::unexpected{imported.error()};
         }
@@ -2851,9 +3104,11 @@ auto import_world(std::string_view source, std::string_view target,
     if (auto committed{store->commit()}; !committed) {
         return std::unexpected{committed.error()};
     }
+    report.records_scanned = counters.scanned;
+    report.records_fixed = counters.fixed;
     // Meta last: an interrupted import leaves no `meta.rfw`, so a partial
     // target is visibly incomplete instead of silently opening.
-    const auto meta{meta_from_level(*level)};
+    const auto meta{meta_from_level(level->document)};
     auto meta_bytes{nbt::write(meta, "", nbt::compression::none)};
     if (!meta_bytes) {
         return std::unexpected{meta_bytes.error()};
@@ -2872,6 +3127,175 @@ auto import_world(std::string_view source, std::string_view target,
         }
     }
     return report;
+}
+
+auto plan_import(std::string_view source) -> result<import_plan> {
+    if (!core::io::is_directory(source)) {
+        return fail(error_code::not_found,
+                    fmt::format("'{}' is not a world directory", source));
+    }
+    auto level{read_level_data(source)};
+    if (!level) {
+        return std::unexpected{level.error()};
+    }
+    import_plan plan{};
+    auto &expected{plan.expected};
+    expected.source_data_version = level->data_version;
+    expected.result_data_version = supported_data_version;
+    expected.fix_steps = level->fix_steps;
+    const auto source_version{level->data_version};
+    fix_counters counters{};
+    ++counters.scanned; // the level record itself
+    if (level->changed) {
+        ++counters.fixed;
+    }
+
+    const auto overworld{join_path(source, "dimensions/minecraft/overworld")};
+    if (!core::io::is_directory(overworld)) {
+        return fail(error_code::parse_error,
+                    fmt::format("'{}' is not a 26.3 world (missing "
+                                "dimensions/minecraft/overworld)",
+                                source));
+    }
+    auto dimensions{list_dimensions(source)};
+    if (!dimensions) {
+        return std::unexpected{dimensions.error()};
+    }
+    // The world-level `data/` tree is not owned by a dimension.
+    if (auto validated{validate_saved_data_tree(join_path(source, "data"),
+                                                source_version, counters,
+                                                expected.aux_files)};
+        !validated) {
+        return std::unexpected{validated.error()};
+    }
+    for (const auto &dimension : *dimensions) {
+        const auto dim_root{join_path(
+            source, fmt::format("dimensions/{}/{}", dimension.namespace_name,
+                                dimension.path))};
+        const auto regions{join_path(dim_root, "region")};
+        if (core::io::is_directory(regions)) {
+            auto names{core::io::list_directory(regions)};
+            if (!names) {
+                return std::unexpected{names.error()};
+            }
+            for (const auto &name : *names) {
+                const auto coordinates{parse_region_name(name, ".mca")};
+                if (!coordinates) {
+                    continue;
+                }
+                auto chunks{read_anvil_region(join_path(regions, name),
+                                              coordinates->first,
+                                              coordinates->second)};
+                if (!chunks) {
+                    return std::unexpected{chunks.error()};
+                }
+                if (chunks->empty()) {
+                    continue;
+                }
+                ++expected.regions;
+                for (auto &[pos, document] : *chunks) {
+                    if (auto fixed{fix_imported_record(
+                            document, datafix_type::chunk, source_version,
+                            fmt::format("chunk {}", format_chunk_pos(pos)),
+                            counters)};
+                        !fixed) {
+                        return std::unexpected{fixed.error()};
+                    }
+                    auto chunk{chunk_from_nbt(document, pos)};
+                    if (!chunk) {
+                        return std::unexpected{chunk.error()};
+                    }
+                    ++expected.chunks;
+                }
+            }
+        }
+        for (const auto *kind : {"entities", "poi"}) {
+            const auto directory{join_path(dim_root, kind)};
+            if (!core::io::is_directory(directory)) {
+                continue;
+            }
+            auto names{core::io::list_directory(directory)};
+            if (!names) {
+                return std::unexpected{names.error()};
+            }
+            const auto type{std::string_view{kind} == "entities"
+                                ? datafix_type::entity_chunk
+                                : datafix_type::poi_chunk};
+            for (const auto &name : *names) {
+                const auto coordinates{parse_region_name(name, ".mca")};
+                if (!coordinates) {
+                    continue;
+                }
+                auto chunks{read_anvil_region(join_path(directory, name),
+                                              coordinates->first,
+                                              coordinates->second)};
+                if (!chunks) {
+                    return std::unexpected{chunks.error()};
+                }
+                for (auto &[pos, document] : *chunks) {
+                    if (auto fixed{fix_imported_record(
+                            document, type, source_version,
+                            fmt::format("{} chunk {}", kind, pos.key()),
+                            counters)};
+                        !fixed) {
+                        return std::unexpected{fixed.error()};
+                    }
+                    auto bytes{
+                        nbt::write(document, "", nbt::compression::none)};
+                    if (!bytes) {
+                        return std::unexpected{bytes.error()};
+                    }
+                    if (std::string_view{kind} == "entities") {
+                        ++expected.entity_chunks;
+                    } else {
+                        ++expected.poi_chunks;
+                    }
+                }
+            }
+        }
+        if (auto validated{validate_saved_data_tree(join_path(dim_root, "data"),
+                                                    source_version, counters,
+                                                    expected.aux_files)};
+            !validated) {
+            return std::unexpected{validated.error()};
+        }
+    }
+    const auto playerdata{join_path(source, "players/data")};
+    if (core::io::is_directory(playerdata)) {
+        auto names{core::io::list_directory(playerdata)};
+        if (!names) {
+            return std::unexpected{names.error()};
+        }
+        for (const auto &name : *names) {
+            if (!name.ends_with(".dat")) {
+                continue;
+            }
+            auto document{nbt::read_file(join_path(playerdata, name),
+                                         nbt::compression::gzip)};
+            if (!document) {
+                return std::unexpected{document.error()};
+            }
+            if (auto fixed{fix_imported_record(
+                    *document, datafix_type::player, source_version,
+                    fmt::format("player data '{}'", name), counters)};
+                !fixed) {
+                return std::unexpected{fixed.error()};
+            }
+            auto bytes{nbt::write(*document, "", nbt::compression::none)};
+            if (!bytes) {
+                return std::unexpected{bytes.error()};
+            }
+            ++expected.playerdata;
+        }
+    }
+    if (auto counted{count_tree_files(join_path(source, "datapacks"),
+                                      expected.datapack_files)};
+        !counted) {
+        return std::unexpected{counted.error()};
+    }
+    expected.records_scanned = counters.scanned;
+    expected.records_fixed = counters.fixed;
+    return plan;
 }
 
 auto export_world(std::string_view source, std::string_view target,
