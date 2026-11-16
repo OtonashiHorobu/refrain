@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: f6c5a91158b1672c
+// Schema hash: c735c6db25ca24c9
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_MOD_LOADER_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_CONTRACTS_SERVICES_MOD_LOADER_HPP
@@ -61,6 +61,8 @@ enum class mod_unload_reason : std::uint32_t { // enum 'mod_unload_reason'
     explicit_request = 1,
     /// The instance is being replaced by a reload.
     reload = 2,
+    /// The instance is being removed because its package was uninstalled.
+    uninstall = 3,
 };
 
 namespace detail {
@@ -127,7 +129,7 @@ static_assert(offsetof(mod_load_request, manifest) == 8);
 
 inline constexpr std::string_view service_id = "refrain:mod.loader";
 inline constexpr std::uint32_t abi_major = 1;
-inline constexpr std::uint32_t abi_minor = 0;
+inline constexpr std::uint32_t abi_minor = 1;
 inline constexpr std::uint32_t abi_patch = 0;
 inline constexpr ::refrain::contracts::side_kind side = ::refrain::contracts::side_kind::server;
 inline constexpr ::refrain::contracts::thread_kind thread = ::refrain::contracts::thread_kind::main;
@@ -191,8 +193,12 @@ class provider final {
         return {};
     }
 
-    /// Replace one instance with a freshly loaded one. Returns the new handle;
-    /// the old handle is invalid afterwards.
+    /// Build a replacement generation for one instance and return the new
+    /// handle. The old instance must stay alive and callable until the host
+    /// calls `unload` for it after the composition epoch commits: a staged
+    /// replacement cannot release code the running composition still calls.
+    /// A loader that cannot build a replacement without releasing the old
+    /// instance reports `unsupported`.
     [[nodiscard]] auto reload(::refrain::services::mod_loader::mod_instance instance, const ::refrain::services::mod_loader::mod_load_request &request) const -> std::expected<::refrain::services::mod_loader::mod_instance, ::refrain::services::mod_loader::mod_loader_error> {
         const auto abi_request = ::refrain::contracts::with_struct_size(request);
         ::refrain_services_mod_loader_handle_mod_instance value{};

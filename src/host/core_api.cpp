@@ -82,7 +82,11 @@ void set_error(std::string_view message) noexcept {
     case error_code::out_of_memory:
         return core::host_error::out_of_memory;
     case error_code::mod_error:
-        return core::host_error::internal;
+    case error_code::stale:
+        // The host ABI has no stale code and must stay append-only; a stale
+        // handle means the service instance the caller looked up no longer
+        // exists, which the closest stable code is `not_found`.
+        return core::host_error::not_found;
     }
     return core::host_error::internal;
 }

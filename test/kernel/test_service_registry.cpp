@@ -7,6 +7,7 @@
 #include <boost/ut.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -629,6 +630,240 @@ suite<"kernel/service_registry"> service_registry_tests = [] {
         expect(registry.active_provider("refrain:worldgen")->id == "flat@1");
         expect(registry.active_instances("refrain:render").size() ==
                static_cast<std::size_t>(writer_count));
+    };
+
+    // -----------------------------------------------------------------------
+    // hot composition epochs
+    // -----------------------------------------------------------------------
+
+    "registry/commit publishes generations and advances the epoch"_test = [] {
+        refrain::kernel::service_registry registry;
+        expect(registry.epoch() == 0U);
+        expect(registry
+                   .add_provider(
+                       make_provider("refrain:worldgen", "flat@1", "1.0.0"))
+                   .has_value());
+        expect(
+            registry.select_active("refrain:worldgen", "flat@1").has_value());
+        // Nothing is generation-stamped before the first commit.
+        expect(registry.commit_epoch().has_value());
+        expect(registry.epoch() == 1U);
+        expect(registry.generation("refrain:worldgen") == 1U);
+
+        const auto first = registry.query("refrain:worldgen");
+        expect(first.has_value());
+        if (!first) {
+            return;
+        }
+        expect(first->generation == 1U);
+        expect(first->epoch == 1U);
+        expect(registry.validate(*first).has_value());
+
+        // A staged replacement is invisible until the commit.
+        expect(registry
+                   .add_provider(
+                       make_provider("refrain:worldgen", "noise@1", "1.0.0"))
+                   .has_value());
+        expect(
+            registry.stage_active("refrain:worldgen", "noise@1").has_value());
+        expect(registry.has_staged());
+        const auto before = registry.active_provider("refrain:worldgen");
+        expect(before.has_value() && before->id == "flat@1");
+        expect(registry.epoch() == 1U);
+
+        expect(registry.commit_epoch().has_value());
+        expect(registry.epoch() == 2U);
+        expect(registry.generation("refrain:worldgen") == 2U);
+        expect(registry.active_provider("refrain:worldgen")->id == "noise@1");
+        expect(!registry.has_staged());
+
+        // The handle from the previous generation fails closed.
+        const auto stale = registry.validate(*first);
+        expect(!stale.has_value());
+        if (!stale) {
+            expect(stale.error().code == refrain::error_code::stale);
+        }
+        const auto resigned = registry.query("refrain:worldgen");
+        expect(resigned.has_value());
+        if (resigned) {
+            expect(resigned->generation == 2U);
+            expect(resigned->provider.id == "noise@1");
+            expect(registry.validate(*resigned).has_value());
+        }
+    };
+
+    "registry/staged retirement makes the slot unavailable and the handle "
+    "stale"_test = [] {
+        refrain::kernel::service_registry registry;
+        expect(registry
+                   .add_provider(
+                       make_provider("refrain:worldgen", "flat@1", "1.0.0"))
+                   .has_value());
+        expect(
+            registry.select_active("refrain:worldgen", "flat@1").has_value());
+        expect(registry.commit_epoch().has_value());
+        const auto handle = registry.query("refrain:worldgen");
+        expect(handle.has_value());
+
+        expect(registry.stage_retire("refrain:worldgen").has_value());
+        expect(registry.active_provider("refrain:worldgen").has_value());
+        expect(registry.commit_epoch().has_value());
+        expect(!registry.active_provider("refrain:worldgen").has_value());
+        expect(registry.active_instances("refrain:worldgen").empty());
+        const auto missing = registry.query("refrain:worldgen");
+        expect(!missing.has_value());
+        if (!missing) {
+            expect(missing.error().code == refrain::error_code::not_found);
+        }
+        if (handle) {
+            const auto stale = registry.validate(*handle);
+            expect(!stale.has_value());
+            if (!stale) {
+                expect(stale.error().code == refrain::error_code::stale);
+            }
+        }
+
+        // Reactivating never reuses the retired generation number.
+        expect(registry
+                   .add_provider(
+                       make_provider("refrain:worldgen", "flat@2", "1.0.0"))
+                   .has_value());
+        expect(
+            registry.select_active("refrain:worldgen", "flat@2").has_value());
+        expect(registry.commit_epoch().has_value());
+        expect(registry.generation("refrain:worldgen") == 3U);
+        const auto current = registry.query("refrain:worldgen");
+        expect(current.has_value());
+        if (current) {
+            expect(registry.validate(*current).has_value());
+        }
+    };
+
+    "registry/abort_staging leaves the committed epoch untouched"_test = [] {
+        refrain::kernel::service_registry registry;
+        expect(registry
+                   .add_provider(
+                       make_provider("refrain:worldgen", "flat@1", "1.0.0"))
+                   .has_value());
+        expect(
+            registry.select_active("refrain:worldgen", "flat@1").has_value());
+        expect(registry.commit_epoch().has_value());
+        const auto epoch_before = registry.epoch();
+
+        auto serial = registry.add_staged_provider(
+            make_provider("refrain:worldgen", "noise@1", "1.0.0"));
+        expect(serial.has_value());
+        if (!serial) {
+            return;
+        }
+        expect(registry.stage_active(*serial, "refrain:worldgen").has_value());
+        expect(registry.has_staged());
+        registry.abort_staging();
+        expect(!registry.has_staged());
+        expect(registry.epoch() == epoch_before);
+        expect(registry.active_provider("refrain:worldgen")->id == "flat@1");
+        expect(registry.remove_provider(*serial).has_value());
+    };
+
+    "registry/retiring an active candidate needs the slot retired first"_test =
+        [] {
+            refrain::kernel::service_registry registry;
+            auto serial = registry.add_provider_serial(
+                make_provider("refrain:worldgen", "flat@1", "1.0.0"));
+            expect(serial.has_value());
+            if (!serial) {
+                return;
+            }
+            expect(registry.select_active("refrain:worldgen", "flat@1")
+                       .has_value());
+            const auto active_removal = registry.remove_provider(*serial);
+            expect(!active_removal.has_value());
+            if (!active_removal) {
+                expect(active_removal.error().code ==
+                       refrain::error_code::already_exists);
+            }
+            expect(registry.stage_retire("refrain:worldgen").has_value());
+            expect(registry.commit_epoch().has_value());
+            expect(registry.remove_provider(*serial).has_value());
+        };
+
+    "registry/sealed services stay immutable"_test = [] {
+        refrain::kernel::service_registry registry;
+        expect(registry
+                   .add_provider(
+                       make_provider("refrain:host.core", "host", "1.0.0"))
+                   .has_value());
+        expect(registry.select_active("refrain:host.core", "host").has_value());
+        expect(registry.seal("refrain:host.core").has_value());
+        expect(registry.is_sealed("refrain:host.core"));
+
+        expect(!registry
+                    .add_provider(
+                        make_provider("refrain:host.core", "other", "1.0.0"))
+                    .has_value());
+        expect(!registry.stage_retire("refrain:host.core").has_value());
+        auto serial = registry.add_staged_provider(
+            make_provider("refrain:host.core", "other", "1.0.0"));
+        expect(!serial.has_value());
+        expect(
+            registry.select_active("refrain:host.core", "other").has_value() ==
+            false);
+        // The committed provider is still queryable.
+        expect(registry.active_provider("refrain:host.core")->id == "host");
+    };
+
+    "registry/quiesce rejects new leases and drains in-flight calls"_test = [] {
+        refrain::kernel::service_registry registry;
+        expect(registry
+                   .add_provider(
+                       make_provider("refrain:worldgen", "flat@1", "1.0.0"))
+                   .has_value());
+        expect(
+            registry.select_active("refrain:worldgen", "flat@1").has_value());
+        expect(registry.commit_epoch().has_value());
+        const auto handle = registry.query("refrain:worldgen");
+        expect(handle.has_value());
+        if (!handle) {
+            return;
+        }
+
+        auto lease = registry.acquire(*handle);
+        expect(lease.has_value());
+        expect(registry.in_flight("refrain:worldgen") == 1U);
+        expect(registry.quiesce("refrain:worldgen").has_value());
+        // New calls are refused while the old one is still inside.
+        const auto late = registry.acquire("refrain:worldgen");
+        expect(!late.has_value());
+        if (!late) {
+            expect(late.error().code == refrain::error_code::stale);
+        }
+        expect(registry.query("refrain:worldgen").has_value() == false);
+        const auto timeout =
+            registry.drain("refrain:worldgen", std::chrono::milliseconds{10});
+        expect(!timeout.has_value());
+        if (!timeout) {
+            expect(timeout.error().code == refrain::error_code::timeout);
+        }
+        lease->release();
+        expect(
+            registry.drain("refrain:worldgen", std::chrono::milliseconds{100})
+                .has_value());
+        expect(registry.in_flight("refrain:worldgen") == 0U);
+        expect(registry.resume("refrain:worldgen").has_value());
+        expect(registry.query("refrain:worldgen").has_value());
+        registry.abort_staging();
+    };
+
+    "registry/dump reports the committed epoch"_test = [] {
+        refrain::kernel::service_registry registry;
+        expect(registry
+                   .add_provider(
+                       make_provider("refrain:worldgen", "flat@1", "1.0.0"))
+                   .has_value());
+        expect(
+            registry.select_active("refrain:worldgen", "flat@1").has_value());
+        expect(registry.commit_epoch().has_value());
+        expect(registry.dump().find("epoch 1") != std::string::npos);
     };
 };
 

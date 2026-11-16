@@ -9,16 +9,19 @@
 #include <refrain/kernel/service_registry.hpp>
 #include <refrain/mod/discovery.hpp>
 #include <refrain/mod/entry.h>
+#include <refrain/mod/lifecycle.hpp>
 #include <refrain/mod/loader.hpp>
 #include <refrain/mod/manifest.hpp>
 #include <refrain/mod/package.hpp>
 #include <refrain/mod/static_mod.hpp>
 #include <refrain/platform/dynamic_library.hpp>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <span>
 #include <string>
@@ -70,10 +73,12 @@ namespace kernel = refrain::kernel;
 //
 // The loader's declared unload semantics (`clean`/`retire`/`restart_required`)
 // and sandbox flag are recorded on every `loaded_mod` for the lifecycle layer.
-// A sandboxed loader cannot register providers on behalf of its guest. The host
-// is single-use: a failed load clears everything it assembled and a later
-// `load()` returns `unsupported` (recreate the host; no partial activation is
-// exposed).
+// A sandboxed loader cannot register providers on behalf of its guest. A failed
+// initial load clears everything it assembled and a later `load()` returns
+// `unsupported` (recreate the host; no partial activation is exposed). After a
+// successful load the composition is changed through the hot lifecycle
+// (`stage_composition()`/`stage_uninstall()` + `commit_epoch()`), not through a
+// second `load()`.
 //
 // The built-in image is passed as borrowed bytes so the same host code works
 // with the embedded `builtin.image` (server/tests) and with a file read by
@@ -86,20 +91,33 @@ namespace kernel = refrain::kernel;
 struct provider_api {
     const void *vtable{nullptr};
     void *self{nullptr};
-    /// ABI major the vtable was built against. `0` skips the header check
-    /// (factories written before the field existed); any other value makes
-    /// `register_provider()` verify that `vtable` starts with the generated
-    /// 4 x `uint32_t` header (`struct_size`, `abi_major`, `abi_minor`,
-    /// `abi_patch`) and that the header's major equals this value.
+    /// ABI major the vtable was built against. `register_provider()`,
+    /// `register_sealed_provider()` and `register_mod_loader()` verify that
+    /// `vtable` starts with the generated 4 x `uint32_t` header
+    /// (`struct_size`, `abi_major`, `abi_minor`, `abi_patch`) and that the
+    /// header's major equals this value; zero is refused.
     std::uint32_t abi_major{0};
+};
+
+/// One service slot a loaded mod's provider occupies in the registry.
+///
+/// `serial` identifies the exact registry candidate: a reloaded generation of
+/// the same provider has the same service/id/version text but a different
+/// serial, so the host removes only the retired candidate after a commit.
+struct provided_slot {
+    std::string service{};
+    /// Registry instance the provider was activated on; empty is the reserved
+    /// default instance.
+    std::string instance{};
+    std::uint64_t serial{0};
 };
 
 /// One successfully loaded mod.
 ///
 /// Besides the identity/gate results, this carries the manifest metadata the
-/// `auto_scan` runtime wiring needs to build a `mod::discovered_mod`
-/// for the builtin composition without the mod headers depending on the
-/// data layer: the manifest bytes are hashed at load time and exposed as hex.
+/// `auto_scan` runtime wiring needs to build a `mod::candidate` for the builtin
+/// composition without the mod headers depending on the data layer: the
+/// manifest bytes are hashed at load time and exposed as hex.
 struct loaded_mod {
     std::string id{};
     std::string version{};
@@ -109,8 +127,8 @@ struct loaded_mod {
     std::string provides_summary{};
     /// Lowercase BLAKE3 hex (64 chars) of the raw `manifest.toml` bytes read
     /// from the builtin image. Discovery re-hashes the on-disk manifests, so
-    /// this is the reference value for `discovered_mod.manifest_hash`; parse
-    /// it with `refrain::data::parse_digest()`.
+    /// this is the reference value for `candidate.manifest_hash`; parse it
+    /// with `refrain::data::parse_digest()`.
     std::string manifest_hash_hex{};
     /// Manifest `[requires]` hard dependencies (actual composition inputs,
     /// not just diagnostics; copied by the `auto_scan` wiring).
@@ -119,9 +137,6 @@ struct loaded_mod {
     std::vector<mod::mod_requirement> optional{};
     /// Effective loader id that loaded this package (`builtin`, `native`, ...).
     std::string loader{};
-    /// True when the manifest omitted `[entry].loader` and the parser inferred
-    /// the loader from the entry shape or from the absence of an entry table.
-    bool loader_inferred{false};
     /// Removal guarantee the active loader declared when the mod was loaded.
     /// The lifecycle layer must not assume a stronger one.
     mod_unload_semantics loader_unload{mod_unload_semantics::restart_required};
@@ -130,6 +145,17 @@ struct loaded_mod {
     /// Handle the loader returned for this instance; 0 for a package that runs
     /// no code (data-only).
     std::uint64_t instance_handle{0};
+    /// Lifecycle state in the committed composition. A freshly loaded mod is
+    /// `active`; the record is `retired`/`removed` only on the lifecycle layer,
+    /// which keeps the tombstone instead of a `loaded_mod`.
+    mod_lifecycle_state state{mod_lifecycle_state::active};
+    /// Monotonic generation of this mod id in the process; 1 for the initial
+    /// install and incremented on every hot reload. Callers use the service
+    /// registry generation for stale detection; this one names the mod version
+    /// instance in the audit record.
+    std::uint64_t generation{1};
+    /// Registry slots this generation activated; retired together with it.
+    std::vector<provided_slot> provided_slots{};
 };
 
 /// One loader the host bootstrap registered on the instanced
@@ -151,6 +177,16 @@ class host;
 namespace loader_detail {
 struct bridge;
 } // namespace loader_detail
+
+/// Options for one hot composition change staged by
+/// `host::stage_composition()` / `host::stage_uninstall()`.
+struct stage_options {
+    /// Mod ids to rebuild even when the next composition resolves them to the
+    /// same version and manifest hash (a development reload).
+    std::vector<std::string> reload{};
+    /// Bounded wait for calls that are still inside the retired generation.
+    std::chrono::milliseconds drain_timeout{default_drain_timeout};
+};
 
 class host {
   public:
@@ -203,6 +239,122 @@ class host {
     /// still read from disk; builtin candidates from `image`.
     auto load(const composition &plan, std::span<const std::byte> image)
         -> status;
+
+    // --- hot lifecycle -----------------------------------------------------
+    //
+    // After a successful `load()` the composition can be changed while the
+    // server runs. Every change is staged first and published by
+    // `commit_epoch()` at a tick boundary: a tick that is already running keeps
+    // calling the committed generation, and the switch is one atomic registry
+    // epoch. Staging does the IO (reading packages, opening libraries) and is
+    // therefore never called from inside the tick; committing only swaps maps
+    // and calls unload hooks.
+    //
+    // Restart-required mods (static linked code, or any provider of a core
+    // sim/world/storage/protocol/runtime service) refuse the change with a
+    // message naming the reason. A mod whose `on_unload` fails, or whose
+    // in-flight calls do not drain within the bounded wait, is quarantined: it
+    // is never called again and needs a process restart to be re-installed.
+
+    /// Composition committed by the last `load()`/`commit_epoch()`.
+    [[nodiscard]] auto active_composition() const noexcept
+        -> const refrain::mod::composition & {
+        return plan_;
+    }
+
+    /// Committed composition epoch (1 after a successful load, +1 per commit).
+    [[nodiscard]] auto epoch() const noexcept -> std::uint64_t {
+        return epoch_;
+    }
+
+    /// BLAKE3 hex digest over the committed epoch, the gamepack identity, every
+    /// active mod generation and every active provider generation. Two commits
+    /// that publish the same composition epoch-level state produce the same
+    /// digest; it is the audit/replay identity of the hot composition.
+    [[nodiscard]] auto composition_digest() const -> std::string;
+
+    /// Lifecycle snapshot per loaded mod, sorted by id.
+    [[nodiscard]] auto lifecycle_records() const
+        -> std::vector<mod_lifecycle_record>;
+    [[nodiscard]] auto lifecycle_record(std::string_view id) const
+        -> std::optional<mod_lifecycle_record>;
+
+    /// Mods the lifecycle layer quarantined (failed unload or drain timeout).
+    [[nodiscard]] auto quarantined_mods() const noexcept
+        -> std::span<const std::string> {
+        return quarantined_mods_;
+    }
+
+    /// Retired native mappings kept alive (never dlclose'd): total and per mod.
+    [[nodiscard]] auto retired_native_generations() const noexcept
+        -> std::size_t {
+        return retired_native_libraries_.size();
+    }
+    [[nodiscard]] auto retired_native_generations(std::string_view id) const
+        -> std::size_t;
+    /// Native reload cap per mod id (default 8 generations).
+    [[nodiscard]] auto native_retire_limit() const noexcept -> std::size_t {
+        return native_retire_limit_;
+    }
+    void set_native_retire_limit(std::size_t limit) noexcept;
+
+    /// Staged change waiting for `commit_epoch()`, if any.
+    [[nodiscard]] auto staged_change() const
+        -> const std::optional<staged_composition_change> & {
+        return staged_change_;
+    }
+
+    /// Stage a full composition replacement against the running one.
+    ///
+    /// `next` is a complete resolved composition that shares the gamepack
+    /// identity with the running one. The host diffs the mod lists:
+    ///  * ids only in `next` are loaded through their loaders (staged);
+    ///  * ids whose version/manifest hash changed, or that are named by
+    ///    `options.reload`, are rebuilt through their loader's `reload` slot;
+    ///  * ids only in the running composition are quiesced and drained, and
+    ///    their loader instance is retired after the commit;
+    ///  * every other mod is left untouched.
+    ///
+    /// Only changes requested at the tick boundary are published: the registry
+    /// is still calling the committed generation when this returns. Failure
+    /// rolls the registry staging back and releases every instance loaded by
+    /// the failed attempt; the committed epoch and the running composition do
+    /// not change. `resolve` is only needed when the diff adds or replaces a
+    /// mod.
+    ///
+    /// Errors: `not_initialized` before a successful load, `already_exists`
+    /// when a change is already staged, `unsupported` for a restart-required or
+    /// quarantined mod (the message names the reason), `version_mismatch` for a
+    /// different gamepack identity, `not_found` for a dependency the running
+    /// composition would lose, and whatever the package/loader returns.
+    [[nodiscard]] auto stage_composition(const refrain::mod::composition &next,
+                                         const package_resolver &resolve,
+                                         const stage_options &options = {})
+        -> result<staged_composition_change>;
+
+    /// Stage the removal of the active version of `id` (uninstall). The caller
+    /// removes the install receipt after this returns and before/after the
+    /// commit; the running composition no longer references the mod once the
+    /// commit succeeds. Same restart-required/dependency gates as
+    /// `stage_composition()`.
+    [[nodiscard]] auto stage_uninstall(std::string_view id,
+                                       const stage_options &options = {})
+        -> result<staged_composition_change>;
+
+    /// Drop the staged change without publishing it. The running epoch is
+    /// untouched; instances loaded for the aborted change are released.
+    void abort_staged() noexcept;
+
+    /// Publish the staged change atomically. Called at a tick boundary only.
+    ///
+    /// The registry commit switches every provider slot at once; the retired
+    /// generations then run their loader `unload` hook with the reason
+    /// (`reload`/`uninstall`), native mappings are moved to the retired list
+    /// and the candidate records of the old generation are dropped. A mod whose
+    /// unload fails is quarantined and reported, but the commit itself still
+    /// succeeds (the new generation is already safe to call). With nothing
+    /// staged the committed epoch is returned unchanged.
+    [[nodiscard]] auto commit_epoch() -> result<composition_commit>;
 
     /// Register a service provider during a static mod factory. The provider is
     /// recorded as a candidate and activated on the default instance (all
@@ -349,20 +501,38 @@ class host {
             instances{};
     };
 
+    /// Project a composition's provider selection onto the per-mod slot map
+    /// the factory permission checks and the plan verification use.
+    [[nodiscard]] static auto
+    plan_providers(const refrain::mod::composition &plan) -> planned_providers;
+
     /// Read + gate one mod and (when the plan selected it as provider) call its
     /// static factory.
-    auto load_one(const composition &plan, const package_source &package,
-                  const candidate &entry, const planned_providers &planned)
-        -> result<loaded_mod>;
+    auto load_one(const refrain::mod::composition &plan,
+                  const package_source &package, const candidate &entry,
+                  const planned_providers &planned) -> result<loaded_mod>;
 
-    /// One external native mod: the shared library stays loaded for the
-    /// process lifetime; `on_unload` runs at host destruction.
+    /// One external native mod instance. The shared library is never
+    /// `dlclose`d while the process runs: retiring an instance calls
+    /// `on_unload` and moves the mapping to the host's retired list.
     struct external_mod_state {
         std::unique_ptr<platform::dynamic_library> library{};
+        refrain_mod_on_unload_ex on_unload_ex{nullptr};
         refrain_mod_on_unload on_unload{nullptr};
         void *user{nullptr};
         std::uint64_t handle{0};
+        std::string id{};
+        std::string version{};
+        /// `on_unload` already ran (or the instance is quarantined): the state
+        /// is a tombstone the destructor must not unload a second time.
+        bool released{false};
+        bool quarantined{false};
     };
+
+    /// State of one yielded in-flight generation; a staged load appends to
+    /// `external_mods_` so a commit/abort can find the instance by handle.
+    [[nodiscard]] auto find_external_mod(std::uint64_t handle)
+        -> external_mod_state *;
 
     /// ABI `self` object of one host-internal loader provider. The bridge in
     /// `host.cpp` casts the opaque ABI pointer back to this type.
@@ -408,6 +578,34 @@ class host {
                           const mod_manifest &manifest, bool activate_code,
                           std::uint64_t &handle) -> status;
 
+    /// Dispatch a staged replacement through the loader's `reload` slot. The
+    /// old handle stays valid until the host unloads it after the commit.
+    auto reload_with_loader(const loader_binding &binding,
+                            const mod_manifest &manifest, bool activate_code,
+                            std::uint64_t old_handle, std::uint64_t &new_handle)
+        -> status;
+
+    /// Run a loader's `unload` slot for one loaded generation.
+    auto dispatch_loader_unload(const loaded_mod &mod, unload_reason reason)
+        -> status;
+
+    /// Host-owned implementation behind the `native` loader's `unload` slot:
+    /// call `on_unload` (with the reason when the descriptor advertises it),
+    /// then retire the mapping. A failed callback quarantines the instance.
+    auto release_loader_instance(std::uint64_t instance, unload_reason reason)
+        -> status;
+
+    /// Host-owned implementation behind the `native` loader's `reload` slot:
+    /// open the replacement library from the current package context and call
+    /// its `on_load`, without touching the old instance.
+    auto native_reload_instance(std::uint64_t instance, std::uint64_t &out_new)
+        -> status;
+
+    /// Load one native instance from the current dispatch context. Used both
+    /// by the first load and by a staged reload (the old instance is not
+    /// touched here; the host retires it after the commit).
+    auto open_native_instance(std::uint64_t &handle) -> status;
+
     /// Implementations behind the builtin loader's ABI slots. They run with
     /// `current_manifest_` / `current_candidate_` set by `load_one`.
     auto builtin_validate() -> status;
@@ -437,10 +635,33 @@ class host {
     /// the library handles. Safe to call more than once.
     void unload_external_mods() noexcept;
 
-    /// Fail-closed check that every provider the plan selected became active
-    /// before the registry is frozen.
-    [[nodiscard]] auto verify_plan_activation(const composition &plan) const
-        -> status;
+    /// Fail-closed check that every provider the plan selected became active.
+    /// `staged` verifies the staged view (a pending registry change plus the
+    /// staged mod list) instead of the committed composition.
+    [[nodiscard]] auto
+    verify_plan_activation(const refrain::mod::composition &plan,
+                           bool staged = false) const -> status;
+
+    /// `stage_composition()` body; the caller holds `lifecycle_mutex_`.
+    [[nodiscard]] auto stage_composition_locked(
+        const refrain::mod::composition &next, const package_resolver &resolve,
+        const stage_options &options) -> result<staged_composition_change>;
+
+    /// Drop everything a failed staging attempt assembled and restore the
+    /// registry to its committed state. Safe to call more than once.
+    void abort_staged_internals() noexcept;
+
+    /// Refusal message when `mod` cannot be reloaded or uninstalled without a
+    /// restart; empty when it can.
+    [[nodiscard]] auto restart_required_reason_for(const loaded_mod &mod) const
+        -> std::string;
+
+    /// Canonical BLAKE3 text of the committed composition (see
+    /// `composition_digest()`); exposed for tests that want the input.
+    [[nodiscard]] auto composition_digest_text() const -> std::string;
+
+    /// Record a quarantined mod id and log why. Idempotent.
+    void record_quarantine(std::string_view id, std::string_view reason);
 
     /// Drop everything a failed `load()` assembled and mark the host
     /// permanently unusable (`services()` is left empty, not frozen).
@@ -492,12 +713,55 @@ class host {
     std::string loader_dispatch_error_{};
     /// Next loader-owned instance handle.
     std::uint64_t next_instance_handle_{1};
+    /// Sequence for the unique materialised path of each native generation.
+    /// Every reload writes a new file so the dynamic loader never returns a
+    /// mapping of an earlier generation by path identity.
+    std::uint64_t materialized_sequence_{0};
     /// Private directory holding materialised native entry libraries read from
     /// an installed package. Empty until the first external native load.
     std::string materialized_dir_{};
     core::config::store *config_{nullptr};
     /// External native mods in load order (libraries + unload hooks).
     std::vector<external_mod_state> external_mods_{};
+    /// Retired native mappings, kept mapped until process exit. Never
+    /// `dlclose`d: a replaced generation may still be executing a call that
+    /// started before the commit.
+    std::vector<std::unique_ptr<platform::dynamic_library>>
+        retired_native_libraries_{};
+    std::map<std::string, std::size_t> native_retired_generations_{};
+    std::size_t native_retire_limit_{default_native_retire_limit};
+    /// Committed composition and its epoch (1 after a successful load).
+    composition plan_{};
+    std::uint64_t epoch_{0};
+    /// Last generation handed out per mod id; kept after removal so a
+    /// reinstall continues the sequence instead of reusing generation 1.
+    std::map<std::string, std::uint64_t> mod_generations_{};
+    /// Staged change waiting for the tick-boundary commit.
+    std::optional<staged_composition_change> staged_change_{};
+    /// The complete plan the staged change will publish on commit.
+    std::optional<composition> staged_next_composition_{};
+    std::vector<loaded_mod> staged_mods_{};
+    bool staging_{false};
+    /// Handle and generation of the instance a staged `load_one()` replaces,
+    /// when the diff asked the loader to rebuild the mod.
+    std::optional<std::uint64_t> current_replaced_handle_{};
+    std::uint64_t current_replaced_generation_{0};
+    std::string current_replaced_loader_{};
+    /// Committed generations a staged change retires (replaced or removed),
+    /// with the reason to report to the loader after the commit.
+    std::vector<loaded_mod> staged_retire_mods_{};
+    std::vector<std::pair<std::string, unload_reason>> staged_retire_reasons_{};
+    /// Bounded drain wait the staged change requested.
+    std::chrono::milliseconds staged_drain_timeout_{default_drain_timeout};
+    /// Registry slots the current mod factory activated.
+    std::vector<provided_slot> current_mod_registered_slots_{};
+    /// Mods quarantined by a failed unload or drain timeout; a quarantined id
+    /// can never be installed or reloaded again in this process.
+    std::vector<std::string> quarantined_mods_{};
+    /// Serialises staging against the tick-boundary commit. Staging is the
+    /// long IO half and runs on the command thread; the commit only tries the
+    /// lock, so a tick never waits for a package installation.
+    mutable std::mutex lifecycle_mutex_{};
     bool loaded_flag_{false};
     bool failed_{false};
 };

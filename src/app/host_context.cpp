@@ -167,6 +167,14 @@ auto host_context::config_string(std::string_view ns, std::string_view key)
 auto host_context::query_service(std::string_view service,
                                  std::string_view instance)
     -> refrain::result<refrain::host::core::provider_ref> {
+    // TODO: return a generation-stamped provider ref and validate it before
+    // every cross-tick call. The sealed host ABI carries a raw vtable/self
+    // pair, so an external mod that caches this ref keeps calling a retired
+    // generation after a hot commit. Migrating the contract surface needs an
+    // additive ABI field (generation plus a validation call); until then only
+    // the in-process leaf-service path uses `service_registry::query()` and
+    // leases, and restart-required core providers are refused by the
+    // lifecycle layer.
     auto active{owner_.services().active_provider(service, instance)};
     if (!active) {
         return std::unexpected{refrain::make_error(

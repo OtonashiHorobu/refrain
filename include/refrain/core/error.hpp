@@ -32,6 +32,11 @@ enum class error_code : std::int32_t {
     cancelled,
     out_of_memory,
     mod_error,
+    /// The caller holds a handle to a composition generation that has been
+    /// replaced or retired. The call must not reach the old implementation;
+    /// re-query the current provider instead. Appended so the numeric values
+    /// of the earlier codes stay stable.
+    stale,
 };
 
 [[nodiscard]] auto to_string(error_code code) noexcept -> std::string_view;

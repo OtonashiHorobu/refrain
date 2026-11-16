@@ -10,6 +10,7 @@
 #include <refrain/session/play_session.hpp>
 #include <refrain/session/player_store.hpp>
 
+#include <refrain/app/mod_lifecycle.hpp>
 #include <refrain/app/mod_management.hpp>
 #include <refrain/app/services.hpp>
 #include <refrain/core/io.hpp>
@@ -1138,6 +1139,17 @@ auto run_server(const server_run_options &options,
         const auto tick_start_ns{refrain::core::now_ns()};
         state->heartbeat_ns.store(refrain::core::now_ns(),
                                   std::memory_order_relaxed);
+        // Publish a staged mod composition change at the tick boundary before
+        // anything in this tick can call a provider: the registry switch is
+        // atomic, retired generations are drained outside the tick and the
+        // loaders' unload hooks run here. No package or store IO happens in
+        // the tick, that all happened while the change was staged.
+        if (auto committed{refrain::app::commit_staged_mod_changes()};
+            !committed) {
+            log_server.error(
+                "failed to commit a staged mod composition change: {}",
+                committed.error().message);
+        }
         // The provider ticks its own player table at the end of the loop body,
         // so the projection is re-read here, before this tick's commands and
         // packets read it. A failed read is fatal: every player view below

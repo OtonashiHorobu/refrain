@@ -2,7 +2,7 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 //
-// `refrain:mod.loader` service contract v1.
+// `refrain:mod.loader` service contract v1.1.
 //
 // A loader is the execution environment a mod is loaded through. The host
 // activates one provider instance per loader id it trusts (`builtin`,
@@ -12,7 +12,7 @@
 // register providers on behalf of its guest.
 
 module refrain::services::mod_loader;
-version 1.0.0;
+version 1.1.0;
 
 import refrain::core;
 
@@ -55,6 +55,8 @@ enum mod_unload_reason : u32 {
     explicit_request = 1,
     /// The instance is being replaced by a reload.
     reload = 2,
+    /// The instance is being removed because its package was uninstalled.
+    uninstall = 3,
 }
 
 /// What a loader can do. The host validates the declarations before it
@@ -106,7 +108,7 @@ struct mod_load_request {
     mod_entry_manifest manifest;
 }
 
-service mod_loader : 1.0.0 {
+service mod_loader : 1.1.0 {
     side = server;
     thread = main;
     composition = instanced;
@@ -136,8 +138,12 @@ service mod_loader : 1.0.0 {
     fn unload(mod_instance instance, mod_unload_reason reason)
         -> result<void, mod_loader_error>;
 
-    /// Replace one instance with a freshly loaded one. Returns the new handle;
-    /// the old handle is invalid afterwards.
+    /// Build a replacement generation for one instance and return the new
+    /// handle. The old instance must stay alive and callable until the host
+    /// calls `unload` for it after the composition epoch commits: a staged
+    /// replacement cannot release code the running composition still calls.
+    /// A loader that cannot build a replacement without releasing the old
+    /// instance reports `unsupported`.
     #[thread(main)] #[can_fail]
     fn reload(mod_instance instance, in mod_load_request request)
         -> result<mod_instance, mod_loader_error>;

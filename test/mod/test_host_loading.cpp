@@ -40,7 +40,7 @@ using refrain::error_code;
 int g_factory_calls{0};
 
 /// Minimal 4 x `uint32_t` vtable header (the fake table only needs the ABI
-/// header: this factory registers with `abi_major = 0`, which skips the check).
+/// header: the factory declares the same major the header carries).
 std::uint32_t g_fake_vtable[4]{16, 1, 0, 0};
 int g_fake_self{0};
 
@@ -50,21 +50,21 @@ int g_instanced_self{0};
 auto instanced_factory(refrain::mod::host &host) -> refrain::status {
     ++g_factory_calls;
     const refrain::mod::provider_api api{
-        .vtable = g_fake_vtable, .self = &g_instanced_self, .abi_major = 0};
+        .vtable = g_fake_vtable, .self = &g_instanced_self, .abi_major = 1};
     return host.register_provider("refrain:data.packs", "rw", api);
 }
 
 /// Tries the reserved default instance for an instanced binding: fail-closed.
 auto default_on_instanced_factory(refrain::mod::host &host) -> refrain::status {
     const refrain::mod::provider_api api{
-        .vtable = g_fake_vtable, .self = &g_instanced_self, .abi_major = 0};
+        .vtable = g_fake_vtable, .self = &g_instanced_self, .abi_major = 1};
     return host.register_provider("refrain:data.packs", api);
 }
 
 auto counting_factory(refrain::mod::host &host) -> refrain::status {
     ++g_factory_calls;
     const refrain::mod::provider_api api{
-        .vtable = g_fake_vtable, .self = &g_fake_self, .abi_major = 0};
+        .vtable = g_fake_vtable, .self = &g_fake_self, .abi_major = 1};
     return host.register_provider("refrain:data.packs", api);
 }
 
@@ -656,7 +656,7 @@ native = "libexternal.so"
                                       "server", "refrain:host.core"));
             refrain::mod::host host{registry};
             const mod::provider_api api{
-                .vtable = g_fake_vtable, .self = &g_fake_self, .abi_major = 0};
+                .vtable = g_fake_vtable, .self = &g_fake_self, .abi_major = 1};
             expect(static_cast<bool>(host.register_sealed_provider(
                 "refrain:host.core", api, "1.0.0")));
             auto loaded{host.load(*plan, builder.build())};

@@ -38,6 +38,8 @@ auto to_string(error_code code) noexcept -> std::string_view {
         return "out_of_memory";
     case error_code::mod_error:
         return "mod_error";
+    case error_code::stale:
+        return "stale";
     }
     return "unknown";
 }

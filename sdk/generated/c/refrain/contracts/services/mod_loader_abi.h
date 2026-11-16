@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: f6c5a91158b1672c
+// Schema hash: c735c6db25ca24c9
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_MOD_LOADER_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_MOD_LOADER_ABI_H
@@ -45,6 +45,7 @@ typedef uint32_t refrain_services_mod_loader_mod_unload_reason; // enum 'mod_unl
 #define REFRAIN_SERVICES_MOD_LOADER_MOD_UNLOAD_REASON_SHUTDOWN ((refrain_services_mod_loader_mod_unload_reason)(0))
 #define REFRAIN_SERVICES_MOD_LOADER_MOD_UNLOAD_REASON_EXPLICIT_REQUEST ((refrain_services_mod_loader_mod_unload_reason)(1))
 #define REFRAIN_SERVICES_MOD_LOADER_MOD_UNLOAD_REASON_RELOAD ((refrain_services_mod_loader_mod_unload_reason)(2))
+#define REFRAIN_SERVICES_MOD_LOADER_MOD_UNLOAD_REASON_UNINSTALL ((refrain_services_mod_loader_mod_unload_reason)(3))
 
 // Opaque handle for one mod instance a loader owns. Zero is invalid.
 typedef uint64_t refrain_services_mod_loader_handle_mod_instance;
@@ -112,7 +113,7 @@ struct refrain_services_mod_loader_mod_load_request {
 
 #define REFRAIN_SERVICES_MOD_LOADER_SERVICE_ID "refrain:mod.loader"
 #define REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR 1u
-#define REFRAIN_SERVICES_MOD_LOADER_ABI_MINOR 0u
+#define REFRAIN_SERVICES_MOD_LOADER_ABI_MINOR 1u
 #define REFRAIN_SERVICES_MOD_LOADER_ABI_PATCH 0u
 #define REFRAIN_SERVICES_MOD_LOADER_SIDE REFRAIN_SIDE_SERVER
 #define REFRAIN_SERVICES_MOD_LOADER_THREAD REFRAIN_THREAD_MAIN
@@ -142,8 +143,12 @@ typedef struct refrain_services_mod_loader_vtable {
     // it may actually release.
     // attributes: #[thread(main)] #[can_fail]
     refrain_status (*unload)(void *self, refrain_services_mod_loader_handle_mod_instance instance, refrain_services_mod_loader_mod_unload_reason reason);
-    // Replace one instance with a freshly loaded one. Returns the new handle;
-    // the old handle is invalid afterwards.
+    // Build a replacement generation for one instance and return the new
+    // handle. The old instance must stay alive and callable until the host
+    // calls `unload` for it after the composition epoch commits: a staged
+    // replacement cannot release code the running composition still calls.
+    // A loader that cannot build a replacement without releasing the old
+    // instance reports `unsupported`.
     // attributes: #[thread(main)] #[can_fail]
     refrain_status (*reload)(void *self, refrain_services_mod_loader_handle_mod_instance instance, const refrain_services_mod_loader_mod_load_request *request, refrain_services_mod_loader_handle_mod_instance *out_value);
 } refrain_services_mod_loader_vtable; // service refrain:mod.loader

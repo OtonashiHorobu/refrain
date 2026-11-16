@@ -66,7 +66,7 @@ int g_guest_self{0};
 
 [[nodiscard]] auto guest_provider_api() -> mod::provider_api {
     return mod::provider_api{
-        .vtable = g_guest_vtable, .self = &g_guest_self, .abi_major = 0};
+        .vtable = g_guest_vtable, .self = &g_guest_self, .abi_major = 1};
 }
 
 [[nodiscard]] auto
@@ -415,7 +415,6 @@ const suite mod_loader_tests = [] {
         }
         for (const auto &loaded_mod : host.mods()) {
             expect(loaded_mod.loader == "builtin");
-            expect(!loaded_mod.loader_inferred);
             expect(loaded_mod.loader_unload ==
                    mod::mod_unload_semantics::restart_required);
             expect(!loaded_mod.loader_sandboxed);
@@ -815,7 +814,6 @@ const suite mod_loader_tests = [] {
         }
         const auto &loaded_mod{host.mods().front()};
         expect(loaded_mod.loader == "test.semantics");
-        expect(!loaded_mod.loader_inferred);
         expect(loaded_mod.loader_unload == mod::mod_unload_semantics::clean);
         const auto *record{host.find_loader("test.semantics")};
         expect(record != nullptr);
@@ -892,7 +890,6 @@ const suite mod_loader_installed_tests = [] {
         expect(loaded_mod.external);
         expect(loaded_mod.has_code);
         expect(loaded_mod.loader == "native");
-        expect(!loaded_mod.loader_inferred);
         expect(loaded_mod.loader_unload == mod::mod_unload_semantics::retire);
         expect(loaded_mod.instance_handle != 0U);
         const auto provider{

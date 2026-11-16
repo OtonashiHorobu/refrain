@@ -49,6 +49,7 @@ namespace host_platform = refrain::host::platform;
         return host_platform::platform_error::internal;
     case error_code::out_of_memory:
         return host_platform::platform_error::out_of_memory;
+    case error_code::stale:
     case error_code::mod_error:
         return host_platform::platform_error::internal;
     }
