@@ -1678,6 +1678,96 @@ suite<"worldgen/template"> template_tests = [] {
         }
     };
 
+    "container seeds do not depend on the number of template palettes"_test =
+        [] {
+            using namespace refrain::worldgen;
+            block_state_registry states;
+            const auto air = states.intern("minecraft:air", {.air = true});
+            const auto chest = states.intern("minecraft:chest",
+                                             {.air = false,
+                                              .blocks_motion = true,
+                                              .blocks_motion_no_leaves = true});
+            expect(air && chest);
+            if (!air || !chest) {
+                return;
+            }
+            const auto container = [&](jint x) {
+                structure::template_block_info block{};
+                block.x = x;
+                block.state = *chest;
+                data::nbt::compound chest_nbt{};
+                chest_nbt["id"] =
+                    data::nbt::value{std::string{"minecraft:chest"}};
+                block.nbt = std::make_shared<const data::nbt::compound>(
+                    std::move(chest_nbt));
+                return block;
+            };
+            structure::structure_template single{};
+            single.size_x = 1;
+            single.size_y = 1;
+            single.size_z = 1;
+            single.palettes.push_back({container(0)});
+            structure::structure_template multi{};
+            multi.size_x = 3;
+            multi.size_y = 1;
+            multi.size_z = 1;
+            // The second palette holds three containers; only the selected
+            // palette is placed, so the loot stream must still consume one
+            // seed for the one container of the first palette.
+            multi.palettes.push_back({container(0)});
+            multi.palettes.push_back(
+                {container(0), container(1), container(2)});
+            const auto placed_seed =
+                [&](const structure::structure_template &templ,
+                    const block_pos &origin) {
+                    proto_chunk chunk{states, 0, 0, 0, 32};
+                    chunk_region region{chunk, 0};
+                    worldgen_random loot{
+                        std::make_unique<legacy_random_source>(7)};
+                    structure::template_place_settings settings{};
+                    settings.loot_random = &loot;
+                    (void)structure::place_template(region, states, templ,
+                                                    origin, settings);
+                    const auto *entity = chunk.block_entity_at(origin);
+                    expect(entity != nullptr);
+                    if (entity == nullptr) {
+                        return jlong{0};
+                    }
+                    const auto found = entity->find("LootTableSeed");
+                    expect(found != entity->end());
+                    if (found == entity->end()) {
+                        return jlong{0};
+                    }
+                    // One draw, the first of the shared stream, for every
+                    // template: the palette count chooses blocks, not draws.
+                    for (jint x = 1; x < 3; ++x) {
+                        expect(chunk.block_entity_at(
+                                   block_pos{.x = origin.x + x,
+                                             .y = origin.y,
+                                             .z = origin.z}) == nullptr);
+                    }
+                    return found->second.as_long().value_or(0);
+                };
+            // Find an origin that selects the first palette of `multi`, which
+            // is the palette selected by a positional legacy source.
+            std::optional<block_pos> origin;
+            for (jint x = 0; x < 64 && !origin.has_value(); ++x) {
+                legacy_random_source choice{mth_get_seed(x, 10, 10)};
+                if (choice.next_int(2) == 0) {
+                    origin = block_pos{.x = x, .y = 10, .z = 10};
+                }
+            }
+            expect(origin.has_value());
+            if (!origin) {
+                return;
+            }
+            const jlong expected_seed = legacy_random_source{7}.next_long();
+            const auto single_seed = placed_seed(single, *origin);
+            const auto multi_seed = placed_seed(multi, *origin);
+            expect(single_seed == expected_seed);
+            expect(multi_seed == expected_seed);
+        };
+
     "a placed fence clears a side over a non-sturdy neighbour"_test = [] {
         using namespace refrain::worldgen;
         block_state_registry states;

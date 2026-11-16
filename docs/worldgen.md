@@ -142,13 +142,16 @@ fortresses, bastion remnants and fossils, and the end generates end cities,
 next to the overworld structure types. The loot tables a structure's containers
 carry are built-in constants of the target version rather than datapack fields:
 the 26.3 structure, template and processor documents name none for the buried
-treasure, igloo, jungle temple, ocean ruin, shipwreck, desert pyramid and
-stronghold pieces, so the placers use the same ids the reference piece classes
-name and consume the piece seed at the same point. A template container tag
-takes its seed from the piece stream during placement, while a processor rule
-that appends a loot table draws the seed from the rule's own positional stream.
-Reference chunks store both the table and the seed, so the container oracles
-compare them directly. A structure start reads the
+treasure, igloo, jungle temple, ocean ruin, shipwreck, desert pyramid,
+stronghold, nether fortress and end city pieces, so the placers use the same
+ids the reference piece classes name and consume the piece seed at the same
+point. The feature families work the same way: the bonus chest names the spawn
+bonus chest table and the monster room the simple dungeon table, both built-in
+constants. A template container tag takes its seed from the piece stream during
+placement, a template data-marker pass draws the seed the world keeps, while a
+processor rule that appends a loot table draws the seed from the rule's own
+positional stream. Reference chunks store both the table and the seed, so the
+container oracles compare them directly. A structure start reads the
 dimension's noise settings through the same profile the terrain stages use.
 Height providers sample over the generator's generation depth, which is shorter
 than the level for the nether and the end, while jigsaw padding and distance
@@ -481,10 +484,20 @@ feature stage. The obsidian platform chunk is compared against a reference
 world; the gateway frame, exit block entity and rotation are covered by
 feature-level tests. The fixed-biome end feature worlds the oracle generates
 contain no generated gateway even at several thousand chunks, so no reference
-chunk compares a gateway position yet. Stronghold containers match the
-reference loot table ids, but the reference draws their seeds after a different
-number of piece-placement draws than this server does, so the seed comparison
-for the stronghold family is not asserted yet.
+chunk compares a gateway position yet. Structure containers write the target
+version's built-in loot table ids and consume the reference draw order, so the
+reference-backed container cases compare both the loot table id and the stored
+seed: the piece-placement suite covers the buried treasure, jungle temple,
+desert pyramid, shipwreck, ocean ruin, igloo basement, nether fortress and
+stronghold containers, and generated-chunk cases cover the end city, nether
+fortress and stronghold containers. The stronghold piece-placement case
+generates the pre-structure terrain through the chunk generator because the
+piece selectors read block state before they draw; replaying onto the saved
+chunk would read the finished stronghold instead. The bonus chest and monster
+room containers have synthetic tests that replay the reference draw counts
+before the seed and compare the built-in table id and the seed that order
+produces. A container whose loot table id differs from the reference, or that
+omits it, fails the comparison.
 
 Ruined portal starts place the template at the reference position and
 orientation. A dry reference candidate at chunk (-65, 0) matches block for
@@ -514,10 +527,11 @@ The same comparison runs for the procedural structure families: the buried
 treasure chest, the basement igloo chest, every jungle temple chest and
 dispenser, the four desert pyramid chests, the shipwreck markers and the ocean
 ruin chest and brushable block all match a reference chunk in both fields. The
-stronghold container oracles compare the loot table ids; their seed stream
-still diverges from the reference because the piece placement randomness before
-the container runs on a different draw count, so the two seeds do not yet match
-(see Known gaps).
+procedural container oracles compare both fields as well, including the nether
+fortress and end city containers; the stronghold case builds the pre-structure
+terrain with the chunk generator so its piece selectors read the block states
+the reference placement saw. The bonus chest and monster room containers are
+covered by synthetic draw-order tests.
 The clean chunks are chosen deliberately: reference worlds settle flowing
 water and lava after saving, so a chunk whose pieces place fluids cannot be
 compared block for block, and a feature element that writes into the compared

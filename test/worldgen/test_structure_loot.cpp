@@ -10,6 +10,7 @@
 #include <refrain/data/nbt.hpp>
 #include <refrain/worldgen/chunk/block_state_codec.hpp>
 #include <refrain/worldgen/chunk/block_state_registry.hpp>
+#include <refrain/worldgen/chunk_generator.hpp>
 #include <refrain/worldgen/core/rng.hpp>
 #include <refrain/worldgen/structure/generation.hpp>
 #include <refrain/worldgen/structure/placement_stage.hpp>
@@ -945,115 +946,215 @@ suite<"worldgen/structure-loot"> structure_loot_tests = [] {
         if (region == nullptr || root == nullptr) {
             return;
         }
-        jint chunk_x = 105;
-        jint chunk_z = 51;
-        if (const char *value =
-                std::getenv("REFRAIN_VANILLA_STRONGHOLD_LOOT_CHUNK_X");
-            value != nullptr) {
-            chunk_x = std::atoi(value);
-        }
-        if (const char *value =
-                std::getenv("REFRAIN_VANILLA_STRONGHOLD_LOOT_CHUNK_Z");
-            value != nullptr) {
-            chunk_z = std::atoi(value);
+        // The stronghold-only oracle world keeps one stronghold container per
+        // library and corridor piece: chunk (105, 51) holds a library chest
+        // and chunk (107, 51) a corridor chest. The saved container seed is
+        // part of every comparison.
+        std::vector<chunk_pos> chunks{{.x = 105, .z = 51}, {.x = 107, .z = 51}};
+        const char *chunk_x_env =
+            std::getenv("REFRAIN_VANILLA_STRONGHOLD_LOOT_CHUNK_X");
+        const char *chunk_z_env =
+            std::getenv("REFRAIN_VANILLA_STRONGHOLD_LOOT_CHUNK_Z");
+        if (chunk_x_env != nullptr && chunk_z_env != nullptr) {
+            chunks = {chunk_pos{.x = std::atoi(chunk_x_env),
+                                .z = std::atoi(chunk_z_env)}};
         }
         const jlong seed = 1;
-        const auto reference = read_chunk(region, chunk_x, chunk_z);
-        expect(reference.has_value());
-        if (!reference) {
-            return;
-        }
-        decoded_chunk decoded;
-        expect(decode_chunk(*reference, decoded));
-        if (decoded.blocks.empty()) {
-            return;
-        }
-        // The chunk stores a reference to the start piece's chunk; the start
-        // itself is owned by that chunk and its pieces reach this one.
-        const auto *structures = child(reference->as_compound(), "structures");
-        const auto *references =
-            structures == nullptr
-                ? nullptr
-                : child(structures->as_compound(), "References");
-        const auto *stronghold_reference =
-            references == nullptr
-                ? nullptr
-                : child(references->as_compound(), "minecraft:stronghold");
-        const auto packed = stronghold_reference == nullptr
-                                ? std::nullopt
-                                : stronghold_reference->as_long_array();
-        expect(packed.has_value() && !packed->empty());
-        if (!packed || packed->empty()) {
-            return;
-        }
-        const jint start_x = static_cast<jint>((*packed)[0] & 0xFFFFFFFFLL);
-        const jint start_z = static_cast<jint>((*packed)[0] >> 32);
+        const char *biome_override =
+            std::getenv("REFRAIN_VANILLA_STRONGHOLD_LOOT_BIOME");
+        const std::string biome =
+            biome_override == nullptr ? "minecraft:plains" : biome_override;
         const auto feature = feature_index(root, "minecraft:stronghold");
         expect(feature.has_value());
         if (!feature) {
             return;
         }
-        const auto start = stronghold_start(
-            chunk_pos{.x = start_x, .z = start_z}, seed, -64, 63);
-        expect(!start.pieces.empty());
-        if (start.pieces.empty()) {
+        // The smooth-stone selector and the interior boxes read the block a
+        // position holds before they draw for it, so the seed a container
+        // receives depends on the terrain the reference placement saw. The
+        // saved chunk already holds the finished stronghold, so replaying onto
+        // it would read the wrong states. Generate the pre-structure terrain
+        // instead: the oracle world is a reference-mode fill with a fixed
+        // biome, no surface pass and no carvers.
+        auto generator = chunk_generator::create(chunk_generator_config{
+            .data_root = root,
+            .templates_root = "",
+            .seed = seed,
+            .kind = dimension_kind::overworld,
+            .fixed_biome = biome,
+            .target = generation_target::terrain,
+            .structure_sets = {},
+            .reference_world = true,
+        });
+        expect(generator.has_value()) << "the reference terrain generator";
+        if (!generator) {
             return;
         }
-        proto_chunk chunk{decoded.registry, chunk_x, chunk_z, -64, 384};
-        expect(filler(decoded, chunk, *reference));
-        const auto resolve = resolve_state(decoded.registry);
-        chunk_region region_view{chunk, 0};
-        const structure_place_context context{
-            .region = &region_view,
-            .chunk = &chunk,
-            .states = &decoded.registry,
-            .state = resolve,
-            .registry = &decoded.registry,
-            .seed = seed,
-        };
-        auto random = feature_random(seed, chunk_x, chunk_z, feature->first,
-                                     feature->second);
-        for (const auto &piece : start.pieces) {
-            if (piece.bounds.max_x < chunk_x * 16 ||
-                piece.bounds.min_x > chunk_x * 16 + 15 ||
-                piece.bounds.max_z < chunk_z * 16 ||
-                piece.bounds.min_z > chunk_z * 16 + 15) {
+        for (const auto &target : chunks) {
+            const auto reference = read_chunk(region, target.x, target.z);
+            expect(reference.has_value());
+            if (!reference) {
                 continue;
             }
-            structure_piece_record piece_record{};
-            piece_record.type = piece.type;
-            piece_record.min_x = piece.bounds.min_x;
-            piece_record.min_y = piece.bounds.min_y;
-            piece_record.min_z = piece.bounds.min_z;
-            piece_record.max_x = piece.bounds.max_x;
-            piece_record.max_y = piece.bounds.max_y;
-            piece_record.max_z = piece.bounds.max_z;
-            piece_record.orientation = piece.orientation;
-            piece_record.template_id = piece.template_id;
-            piece_record.template_x = piece.template_origin.x;
-            piece_record.template_y = piece.template_origin.y;
-            piece_record.template_z = piece.template_origin.z;
-            piece_record.template_rotation = piece.template_rotation;
-            piece_record.template_mirror = piece.template_mirror;
-            piece_record.template_pivot_x = piece.template_pivot.x;
-            piece_record.template_pivot_y = piece.template_pivot.y;
-            piece_record.template_pivot_z = piece.template_pivot.z;
-            piece_record.height_position = piece.height_position;
-            piece_record.height_offset = piece.height_offset;
-            piece_record.orientation = piece.orientation;
-            piece_record.stronghold = piece.stronghold;
-            place_structure_piece(context, piece_record, random);
+            // The chunk stores a reference to the start piece's chunk; the
+            // start itself is owned by that chunk and its pieces reach this
+            // one.
+            const auto *structures =
+                child(reference->as_compound(), "structures");
+            const auto *references =
+                structures == nullptr
+                    ? nullptr
+                    : child(structures->as_compound(), "References");
+            const auto *stronghold_reference =
+                references == nullptr
+                    ? nullptr
+                    : child(references->as_compound(), "minecraft:stronghold");
+            const auto packed = stronghold_reference == nullptr
+                                    ? std::nullopt
+                                    : stronghold_reference->as_long_array();
+            expect(packed.has_value() && !packed->empty());
+            if (!packed || packed->empty()) {
+                continue;
+            }
+            const jint start_x = static_cast<jint>((*packed)[0] & 0xFFFFFFFFLL);
+            const jint start_z = static_cast<jint>((*packed)[0] >> 32);
+            const auto start = stronghold_start(
+                chunk_pos{.x = start_x, .z = start_z}, seed, -64, 63);
+            expect(!start.pieces.empty());
+            if (start.pieces.empty()) {
+                continue;
+            }
+            const auto base = (*generator)->generate(target);
+            expect(base.has_value());
+            if (!base) {
+                continue;
+            }
+            auto &chunk = **base;
+            auto &states = (*generator)->states();
+            const auto resolve = resolve_state(states);
+            chunk_region region_view{chunk, 0};
+            const structure_place_context context{
+                .region = &region_view,
+                .chunk = &chunk,
+                .states = &states,
+                .state = resolve,
+                .registry = &states,
+                .seed = seed,
+            };
+            auto random = feature_random(seed, target.x, target.z,
+                                         feature->first, feature->second);
+            for (const auto &piece : start.pieces) {
+                if (piece.bounds.max_x < target.x * 16 ||
+                    piece.bounds.min_x > target.x * 16 + 15 ||
+                    piece.bounds.max_z < target.z * 16 ||
+                    piece.bounds.min_z > target.z * 16 + 15) {
+                    continue;
+                }
+                place_structure_piece(context, to_piece_record(piece), random);
+            }
+            const auto [checked, mismatches] = compare_loot_containers(
+                *reference, chunk, "stronghold", "minecraft:chests/stronghold");
+            expect(checked > 0)
+                << "no stronghold container in the reference chunk";
+            expect(mismatches == 0);
         }
-        // The stronghold piece placement stream still diverges from the
-        // reference before a container is written, so this case pins the table
-        // ids the containers resolve to; the reference seed comparison stays
-        // with the families whose piece stream matches.
-        const auto [checked, mismatches] =
-            compare_loot_containers(*reference, chunk, "stronghold",
-                                    "minecraft:chests/stronghold", false);
-        expect(checked > 0) << "no stronghold container in the reference chunk";
-        expect(mismatches == 0);
     };
+
+    "the nether fortress containers keep the reference tables and seeds"_test =
+        [] {
+            const char *region = std::getenv("REFRAIN_VANILLA_FORTRESS_REGION");
+            const char *root = std::getenv("REFRAIN_VANILLA_WORLDGEN");
+            if (region == nullptr || root == nullptr) {
+                return;
+            }
+            // The nether-complexes oracle world stores a fortress chest in
+            // chunk (17, -8); that piece is owned by the start at (21, -8).
+            jint chunk_x = 17;
+            jint chunk_z = -8;
+            if (const char *value =
+                    std::getenv("REFRAIN_VANILLA_FORTRESS_LOOT_CHUNK_X");
+                value != nullptr) {
+                chunk_x = std::atoi(value);
+            }
+            if (const char *value =
+                    std::getenv("REFRAIN_VANILLA_FORTRESS_LOOT_CHUNK_Z");
+                value != nullptr) {
+                chunk_z = std::atoi(value);
+            }
+            const jlong seed = 1;
+            const auto reference = read_chunk(region, chunk_x, chunk_z);
+            expect(reference.has_value());
+            if (!reference) {
+                return;
+            }
+            decoded_chunk decoded;
+            expect(decode_chunk(*reference, decoded));
+            if (decoded.blocks.empty()) {
+                return;
+            }
+            const auto *structures =
+                child(reference->as_compound(), "structures");
+            const auto *references =
+                structures == nullptr
+                    ? nullptr
+                    : child(structures->as_compound(), "References");
+            const auto *fortress_reference =
+                references == nullptr
+                    ? nullptr
+                    : child(references->as_compound(), "minecraft:fortress");
+            const auto packed = fortress_reference == nullptr
+                                    ? std::nullopt
+                                    : fortress_reference->as_long_array();
+            expect(packed.has_value() && !packed->empty());
+            if (!packed || packed->empty()) {
+                return;
+            }
+            const jint start_x = static_cast<jint>((*packed)[0] & 0xFFFFFFFFLL);
+            const jint start_z = static_cast<jint>((*packed)[0] >> 32);
+            const auto feature = feature_index(root, "minecraft:fortress");
+            expect(feature.has_value());
+            if (!feature) {
+                return;
+            }
+            const auto start =
+                fortress_start(chunk_pos{.x = start_x, .z = start_z}, seed);
+            expect(!start.pieces.empty());
+            if (start.pieces.empty()) {
+                return;
+            }
+            // A fortress piece draws randomness only for its container, after
+            // state-independent boxes, so replaying onto the saved block grid
+            // reproduces the reference placement stream.
+            proto_chunk chunk{decoded.registry, chunk_x, chunk_z, 0, 256};
+            expect(filler(decoded, chunk, *reference));
+            const auto resolve = resolve_state(decoded.registry);
+            chunk_region region_view{chunk, 0};
+            const structure_place_context context{
+                .region = &region_view,
+                .chunk = &chunk,
+                .states = &decoded.registry,
+                .state = resolve,
+                .registry = &decoded.registry,
+                .seed = seed,
+            };
+            auto random = feature_random(seed, chunk_x, chunk_z, feature->first,
+                                         feature->second);
+            for (const auto &piece : start.pieces) {
+                if (piece.bounds.max_x < chunk_x * 16 ||
+                    piece.bounds.min_x > chunk_x * 16 + 15 ||
+                    piece.bounds.max_z < chunk_z * 16 ||
+                    piece.bounds.min_z > chunk_z * 16 + 15) {
+                    continue;
+                }
+                place_structure_piece(context, to_piece_record(piece), random);
+            }
+            const auto [checked, mismatches] =
+                compare_loot_containers(*reference, chunk, "fortress",
+                                        "minecraft:chests/nether_bridge");
+            expect(checked > 0)
+                << "no nether fortress container in the reference chunk";
+            expect(mismatches == 0);
+        };
 
     "the igloo basement chest keeps the reference table and seed"_test = [] {
         if (std::getenv("REFRAIN_VANILLA_IGLOO_BASEMENT_REAL") == nullptr) {
@@ -1186,5 +1287,56 @@ suite<"worldgen/structure-loot"> structure_loot_tests = [] {
             *reference, chunk, "igloo", "minecraft:chests/igloo");
         expect(checked > 0) << "no igloo chest in the reference chunk";
         expect(mismatches == 0);
+    };
+
+    "a wrong or missing container id is reported as a mismatch"_test = [] {
+        // A reference container and a placed chunk that disagree on the loot
+        // table id must fail the comparison; a family that silently names the
+        // wrong, or no, id therefore cannot pass its reference case.
+        block_state_registry registry;
+        const auto chest =
+            registry.intern("minecraft:chest[facing=north]",
+                            {.air = false, .blocks_motion = true});
+        expect(chest.has_value());
+        if (!chest) {
+            return;
+        }
+        const block_pos position{.x = 3, .y = 12, .z = 4};
+        data::nbt::compound expected_entity;
+        expected_entity["id"] =
+            data::nbt::value{std::string{"minecraft:chest"}};
+        expected_entity["x"] = data::nbt::value{static_cast<jint>(3)};
+        expected_entity["y"] = data::nbt::value{static_cast<jint>(12)};
+        expected_entity["z"] = data::nbt::value{static_cast<jint>(4)};
+        expected_entity["LootTable"] = data::nbt::value{
+            std::string{"minecraft:chests/stronghold_corridor"}};
+        expected_entity["LootTableSeed"] =
+            data::nbt::value{static_cast<jlong>(42)};
+        auto entities = data::nbt::make_list(data::nbt::tag_type::compound);
+        (void)entities.push(data::nbt::value{std::move(expected_entity)});
+        data::nbt::compound reference_root;
+        reference_root["block_entities"] =
+            data::nbt::value{std::move(entities)};
+        const data::nbt::value reference{std::move(reference_root)};
+        proto_chunk chunk{registry, 0, 0, -64, 384};
+        const auto place = [&](std::optional<std::string_view> table) {
+            data::nbt::compound entity;
+            entity["id"] = data::nbt::value{std::string{"minecraft:chest"}};
+            entity["LootTableSeed"] = data::nbt::value{static_cast<jlong>(42)};
+            if (table.has_value()) {
+                entity["LootTable"] = data::nbt::value{std::string{*table}};
+            }
+            chunk.set_block_entity(position, entity);
+        };
+        place(std::string_view{"minecraft:chests/stronghold_corridor"});
+        expect(compare_loot_containers(reference, chunk, "matching").second ==
+               0U);
+        place(std::string_view{"minecraft:chests/simple_dungeon"});
+        expect(compare_loot_containers(reference, chunk, "wrong id").second ==
+               1U);
+        place(std::nullopt);
+        expect(compare_loot_containers(reference, chunk, "missing id").second ==
+               1U);
+        (void)chest;
     };
 };

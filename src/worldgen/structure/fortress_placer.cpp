@@ -235,9 +235,10 @@ struct fortress_writer {
         }
     }
 
-    // TODO: read the nether bridge loot table from the structure document
-    // instead of naming it here; the reference structure hard-codes the id, so
-    // the structure document has no field for it yet.
+    // The reference fortress corridor pieces name the built-in
+    // `BuiltInLootTables.NETHER_BRIDGE` constant; no 26.3 structure document
+    // carries a loot-table field for it. The seed is drawn where the reference
+    // draws it, when the corridor turn writes its container.
     void chest(jint x, jint y, jint z, worldgen_random &random) const {
         if (!inside(x, y, z)) {
             return;
