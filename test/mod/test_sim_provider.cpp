@@ -338,12 +338,14 @@ namespace world = refrain::world;
                  .set_player_transform(*handle, 8U, 0.0, 0.0, 0.0, 0.0F, 0.0F)
                  .has_value());
 
-        const auto before_leave{provider.state_hash(*handle)};
+        // The state hash is a view onto the provider's buffer, and the next
+        // call may rebuild it; copy before mutating the player table.
+        const auto before_leave{std::string{provider.state_hash(*handle)}};
         expect(provider.remove_player(*handle, 7U) != 0);
         expect(provider.remove_player(*handle, 7U) == 0);
         expect(provider.player_count(*handle) == 1U);
         expect(provider.player_by_connection(*handle, 7U).has_value() == false);
-        const auto after_leave{provider.state_hash(*handle)};
+        const auto after_leave{std::string{provider.state_hash(*handle)}};
         expect(before_leave != after_leave);
 
         static_cast<void>(provider.close_world(*handle));

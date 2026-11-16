@@ -73,15 +73,15 @@ class zip_reader {
         -> const zip_entry *;
 
     /// Read the full uncompressed content of one entry.
-    [[nodiscard]] auto read(const zip_entry &entry)
+    [[nodiscard]] auto read(const zip_entry &entry) const
         -> result<std::vector<std::byte>>;
-    [[nodiscard]] auto read(std::string_view name)
+    [[nodiscard]] auto read(std::string_view name) const
         -> result<std::vector<std::byte>>;
 
     /// Extract one entry below `output_root`, creating missing directories.
     /// Rejects unsafe names (zip-slip, absolute paths, drive letters, `..`).
     [[nodiscard]] auto extract(const zip_entry &entry,
-                               std::string_view output_root) -> status;
+                               std::string_view output_root) const -> status;
 
   private:
     struct impl;

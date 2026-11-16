@@ -351,7 +351,8 @@ add_library(Refrain::Schema ALIAS refrain-schema)
 # --- archive (zip reader + data manifest) ----------------------------------
 refrain_add_library(refrain-archive
     src/archive/zip.cpp
-    src/archive/manifest.cpp)
+    src/archive/manifest.cpp
+    src/archive/game_jar.cpp)
 target_link_libraries(refrain-archive PRIVATE refrain-kernel libzip::zip
                                             simdjson::simdjson)
 add_library(Refrain::Archive ALIAS refrain-archive)

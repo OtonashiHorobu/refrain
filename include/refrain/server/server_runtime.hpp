@@ -24,9 +24,26 @@ namespace refrain::server {
 struct server_run_options {
     /// RWF world directory the world port opens.
     std::string world_path{};
+    /// Resolved game data directory: it holds `data/`, the cache marker and
+    /// the extracted structure templates. Empty falls back to the checkout
+    /// snapshot at `content/vanilla/<version>`.
+    std::string data_dir{};
     /// Datapack `data` directory the bootstrap generator reads when the world
-    /// has no chunks yet.
+    /// has no chunks yet. Empty is `<data_dir>/data`.
     std::string datapack_root{};
+    /// Extracted structure templates (`<root>/<namespace>/structure/**.nbt`).
+    /// Empty is `<datapack_root>/../templates`; a missing directory still
+    /// generates procedural pieces.
+    std::string templates_root{};
+    /// Tracked block/item table container. Empty is
+    /// `<data_dir>/tables.rvtb`; a missing file leaves the runtime without an
+    /// item table and logs a warning.
+    std::string tables_path{};
+    /// Protocol registry catalog. Empty is
+    /// `<data_dir>/protocol_registry.json`.
+    std::string protocol_registry_path{};
+    /// Game version shown in the ready line and the status ping.
+    std::string game_version{"26.3"};
     /// Per-namespace configuration views supplied by the host. Empty views
     /// fall back to the built-in defaults.
     core::config::view network{};

@@ -2498,6 +2498,9 @@ void place_jigsaw_template(const structure_place_context &context,
     settings.level_seed = context.seed;
     settings.loot_random = &random;
     settings.reference = context.reference;
+    // A jigsaw piece keeps the template's entity list, exactly like the
+    // reference's single pool element settings.
+    settings.place_entities = true;
     (void)place_template(*context.region, *context.registry, templ,
                          block_pos{.x = piece.template_x,
                                    .y = piece.template_y,

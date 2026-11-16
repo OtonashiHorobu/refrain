@@ -23,6 +23,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <refrain/archive/game_jar.hpp>
 #include <refrain/archive/manifest.hpp>
 #include <refrain/archive/zip.hpp>
 #include <refrain/core/config.hpp>
@@ -576,12 +577,13 @@ auto run_extract(const extract_options &options) -> int {
         return report_error(filter.error());
     }
 
-    auto reader{archive::zip_reader::open(options.jar)};
-    if (!reader) {
-        return report_error(reader.error());
+    auto jar{archive::game_jar::open(options.jar)};
+    if (!jar) {
+        return report_error(jar.error());
     }
+    const auto &reader{jar->reader()};
 
-    auto manifest{archive::build_manifest(*reader, *filter)};
+    auto manifest{archive::build_manifest(reader, *filter)};
     if (!manifest) {
         return report_error(manifest.error());
     }
@@ -625,13 +627,13 @@ auto run_extract(const extract_options &options) -> int {
 
     std::size_t extracted{0};
     for (const auto &entry : manifest->entries) {
-        const auto *zip_entry{reader->find(entry.path)};
+        const auto *zip_entry{reader.find(entry.path)};
         if (zip_entry == nullptr) {
             return report_error(refrain::make_error(
                 refrain::error_code::not_found,
                 "extract: entry disappeared from the archive: " + entry.path));
         }
-        auto status{reader->extract(*zip_entry, options.out)};
+        auto status{reader.extract(*zip_entry, options.out)};
         if (!status) {
             return report_error(status.error());
         }
@@ -639,14 +641,15 @@ auto run_extract(const extract_options &options) -> int {
     }
     // A 26.3 jar root has no pack.mcmeta; its data format lives in version.json
     // (`pack_version.data_major`). Keep that metadata next to the extracted
-    // data/ tree so `data check --pack-format` can gate a jar-root pack.
+    // data/ tree so `data check --pack-format` can gate a jar-root pack. A
+    // bundler jar keeps the document in its outer archive, next to the inner
+    // server jar the data tree came from.
     if (*filter == archive::extract_filter::data) {
-        if (const auto *version{reader->find("version.json")};
-            version != nullptr) {
-            auto status{reader->extract(*version, options.out)};
-            if (!status) {
-                return report_error(status.error());
-            }
+        auto version_written{jar->extract_version_json(options.out)};
+        if (!version_written) {
+            return report_error(version_written.error());
+        }
+        if (*version_written) {
             std::cout << "extract: wrote format metadata version.json\n";
         }
     }

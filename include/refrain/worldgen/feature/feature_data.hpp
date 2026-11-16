@@ -9,6 +9,7 @@
 
 #include <refrain/core/error.hpp>
 #include <refrain/data/json.hpp>
+#include <refrain/worldgen/biome/biome_tags.hpp>
 #include <refrain/worldgen/feature/feature_plan.hpp>
 
 #include <string>
@@ -39,10 +40,13 @@ struct feature_data_set {
     std::unordered_map<std::string, state_provider_document> state_providers{};
     std::unordered_map<std::string, placed_feature_document> placed{};
     std::vector<biome_feature_list> biomes{};
+    /// The biome tag tree under `tags/worldgen/biome`; the biome membership
+    /// predicate resolves `#tag` entries through it.
+    biome_tags tags{};
 };
 
-/// Reads `worldgen/feature`, `worldgen/placed_feature` and `worldgen/biome`
-/// under every namespace directory of `data_root`.
+/// Reads `worldgen/feature`, `worldgen/placed_feature`, `worldgen/biome` and
+/// `tags/worldgen/biome` under every namespace directory of `data_root`.
 [[nodiscard]] auto load_feature_data(std::string_view data_root)
     -> result<feature_data_set>;
 

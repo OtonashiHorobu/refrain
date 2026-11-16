@@ -22,10 +22,11 @@ ctest --preset conan-release --output-on-failure
 ```
 
 World generation has data-driven cases that read the datapack from
-`content/vanilla/<version>/data`. The datapack is not distributed; generate it
-from a locally owned `server.jar` with `scripts/fetch-content.sh` as described
-in [World generation data](worldgen.md). When it is absent, those cases are
-skipped with a diagnostic.
+`content/vanilla/<version>/data`. The datapack is not distributed; the server
+and the tests stage it from a locally owned `server.jar` with
+`scripts/fetch-content.sh`, or the server fetches it on the first accepted start
+as described in [World generation data](worldgen.md). CI runs without the
+datapack, so those cases are skipped there with a diagnostic.
 
 ## Configurations
 

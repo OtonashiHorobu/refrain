@@ -99,6 +99,7 @@ EOF
 mkfifo "$WORK/stdin"
 "$BIN/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --world "$WORLD" --config-dir "$WORK/config" \
+    --eula-file "$WORK/eula.toml" --accept-eula \
     <"$WORK/stdin" >"$WORK/server.log" 2>&1 &
 SERVER_PID=$!
 exec 9>"$WORK/stdin"

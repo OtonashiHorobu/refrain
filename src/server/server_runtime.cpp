@@ -90,7 +90,7 @@ auto run_server(const server_run_options &options,
     const auto simulation_distance{static_cast<std::int32_t>(
         options.network.get_int64("simulation_distance", 10))};
     const auto max_players{options.network.get_int64("status.max_players", 20)};
-    const auto online_mode{options.network.get_bool("online_mode", false)};
+    const auto online_mode{options.network.get_bool("online_mode", true)};
     log_config.info(
         "configured level name '{}', view distance {}, simulation distance {}, "
         "{} max players, online mode {}",
@@ -154,9 +154,25 @@ auto run_server(const server_run_options &options,
     if (auto opened{world.open(options.world_path)}; !opened) {
         return report_error(opened.error());
     }
+    // Resolved game data paths. The defaults keep a checkout usable for tests
+    // and embedders that only set `world_path`; the composition root passes the
+    // paths the first-run data directory actually resolved.
+    const std::string data_root{options.data_dir.empty()
+                                    ? std::string{"content/vanilla/26.3"}
+                                    : options.data_dir};
     const std::string datapack_root{options.datapack_root.empty()
-                                        ? "content/vanilla/26.3/data"
+                                        ? data_root + "/data"
                                         : options.datapack_root};
+    const std::string templates_root{options.templates_root.empty()
+                                         ? datapack_root + "/../templates"
+                                         : options.templates_root};
+    const std::string tables_path{options.tables_path.empty()
+                                      ? data_root + "/tables.rvtb"
+                                      : options.tables_path};
+    const std::string protocol_registry_path{
+        options.protocol_registry_path.empty()
+            ? data_root + "/protocol_registry.json"
+            : options.protocol_registry_path};
     auto boot_projection{world.level()};
     if (!boot_projection) {
         return report_error(boot_projection.error());
@@ -170,7 +186,7 @@ auto run_server(const server_run_options &options,
             world,
             refrain::server::world_bootstrap_config{
                 .data_root = datapack_root,
-                .templates_root = datapack_root + "/../templates",
+                .templates_root = templates_root,
                 .seed = seed,
                 .radius = 3,
             },
@@ -186,7 +202,7 @@ auto run_server(const server_run_options &options,
     refrain::server::chunk_service chunks{};
     refrain::server::chunk_generation::config generation_config{
         .data_root = datapack_root,
-        .templates_root = datapack_root + "/../templates",
+        .templates_root = templates_root,
         .seed = boot_projection->level.seed,
     };
     generation_config.admission.min_credits =
@@ -273,8 +289,7 @@ auto run_server(const server_run_options &options,
                    world.loaded_chunks());
 
     std::optional<refrain::data::vanilla_tables> tables{};
-    auto table_bytes{
-        refrain::core::io::read_file("content/vanilla/26.3/tables.rvtb")};
+    auto table_bytes{refrain::core::io::read_file(tables_path)};
     if (!table_bytes) {
         log_net.warn("vanilla tables are unavailable: {}",
                      table_bytes.error().message);
@@ -291,8 +306,8 @@ auto run_server(const server_run_options &options,
         world.set_item_table(refrain::sim::item_table::from_tables(*tables));
     }
     std::optional<refrain::net::registry_catalog> registries{};
-    auto loaded_registries{refrain::net::registry_catalog::load(
-        "content/vanilla/26.3/protocol_registry.json")};
+    auto loaded_registries{
+        refrain::net::registry_catalog::load(protocol_registry_path)};
     if (!loaded_registries) {
         log_net.warn("registry catalog is unavailable: {}",
                      loaded_registries.error().message);
@@ -497,8 +512,7 @@ auto run_server(const server_run_options &options,
     network_inputs.spawn_y = static_cast<double>(projection->level.spawn_y);
     network_inputs.spawn_z =
         static_cast<double>(projection->level.spawn_z) + 0.5;
-    network_inputs.registry_catalog_path =
-        "content/vanilla/26.3/protocol_registry.json";
+    network_inputs.registry_catalog_path = protocol_registry_path;
     // Apply one block mutation and publish it on the contract's event type.
     // The world records the previous state; forwarding the same triple keeps a
     // listener's view identical to the state the world committed.
@@ -552,6 +566,10 @@ auto run_server(const server_run_options &options,
         log_net.info("listening on {}:{}",
                      options.network.get_string("bind_host", "0.0.0.0"),
                      listener->local_port());
+        log_server.info(
+            "ready for Minecraft {} clients, type help for console commands "
+            "and stop to shut down",
+            options.game_version);
     }
 
     // Chunk streaming owns its state (per-connection viewports and the shared

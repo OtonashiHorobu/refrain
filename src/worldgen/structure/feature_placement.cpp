@@ -62,14 +62,20 @@ structure_feature_placer::structure_feature_placer(
         return context_->chunk == nullptr ? 0 : context_->chunk->min_y();
     };
     feature_context_.placement.resolve_state = context.state;
-    // A structure placement context carries no biome source; features that ask
-    // for weather see a non-freezing atmosphere.
-    feature_context_.placement.should_freeze = [](const block_pos &) {
-        return false;
-    };
-    feature_context_.placement.should_snow = [](const block_pos &) {
-        return false;
-    };
+    // The reference places a feature pool element against the same level the
+    // chunk generator fills, so its weather and biome filters read generation
+    // state. A caller without a climate source leaves the probes unset and the
+    // two weather features write nothing.
+    if (context.region != nullptr && context.states != nullptr &&
+        context.temperature) {
+        feature_context_.placement.should_freeze = feature::make_should_freeze(
+            *context.region, *context.states, context.temperature);
+        feature_context_.placement.should_snow = feature::make_should_snow(
+            *context.region, *context.states, context.temperature);
+    }
+    if (context.biome) {
+        feature_context_.placement.biome = context.biome;
+    }
     feature_context_.templates = context.templates;
     feature_context_.registry = context.registry;
     feature_context_.place_by_id = [this](std::string_view id,

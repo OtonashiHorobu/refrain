@@ -9,6 +9,7 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
+#include <refrain/worldgen/biome/biome_tags.hpp>
 #include <refrain/worldgen/chunk/block_state.hpp>
 #include <refrain/worldgen/chunk/chunk_region.hpp>
 #include <refrain/worldgen/provider.hpp>
@@ -65,8 +66,12 @@ class block_predicate {
     test_impl(const block_predicate_context &context) const -> bool = 0;
 };
 
+/// Decodes one predicate. `tags` resolves `#tag` biome lists for the biome
+/// membership predicate; when it is null such a document is rejected because
+/// the reference cannot resolve the tag either.
 [[nodiscard]] auto decode_block_predicate(const data::json::value &document,
-                                          const block_state_table &states)
+                                          const block_state_table &states,
+                                          const biome_tags *tags = nullptr)
     -> result<std::unique_ptr<block_predicate>>;
 
 } // namespace refrain::worldgen::feature

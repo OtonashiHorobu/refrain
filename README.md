@@ -57,7 +57,38 @@ Not implemented yet:
 
 ## Quickstart
 
-Build the project, its dependencies and the test suite from a checkout:
+Extract the release archive for your platform and start the server from the
+archive directory:
+
+```bash
+./run-server.sh
+```
+
+The first start writes `eula.toml` next to the working directory with
+`eula = false`, prints the EULA notice and exits without creating a world or
+opening a port. Read the
+[Minecraft End User License Agreement](https://www.minecraft.net/en-us/eula),
+then accept it and start:
+
+```bash
+./run-server.sh --accept-eula
+```
+
+After acceptance the server fetches the official Minecraft Java Edition 26.3
+server archive from Mojang's version manifest, verifies it against the published
+SHA-1, unpacks the datapack and the structure templates into `./data`, creates
+`./world` and `./config`, generates the spawn area and listens on
+`0.0.0.0:25565`. Nothing from the archive is committed or redistributed; only
+the unpacked data stays on this machine and later starts reuse it without the
+network. `--no-data-download` forbids the fetch for offline hosts with a staged
+`./data` directory.
+
+Join with an unmodified Minecraft Java Edition 26.3 client at `localhost:25565`.
+The default configuration uses online mode and verifies the player's session;
+for a local test set `online_mode = false` in `config/network.toml`, which the
+first start writes with the defaults.
+
+From a source checkout, build the project, its dependencies and the test suite:
 
 ```bash
 git clone https://github.com/OtonashiHorobu/refrain.git
@@ -66,52 +97,38 @@ scripts/bootstrap.sh
 ```
 
 The script checks the toolchain, resolves every dependency through Conan,
-configures the `conan-release` preset, builds, and runs the tests. Re-run the
-tests after a change with:
+configures the `conan-release` preset, builds, and runs the tests. Then start
+the server the same way; it finds the bundled composition and the tracked game
+data next to or above the binary:
 
 ```bash
-./build/Release/bin/refrain-tests
+build/Release/bin/refrain-server
 ```
 
+Re-run the tests after a change with `./build/Release/bin/refrain-tests`.
 `scripts/ci.sh --offline` runs the full local gate: vendor checks, the schema
 drift check, the C ABI compile check, the unit tests, the CLI contract, the
-runtime, extraction and crash-reporter smokes, and the formatting check.
+runtime, first-run, extraction and crash-reporter smokes, and the formatting
+check.
+
+A checkout may stage the game data without the network, for example from a
+`server.jar` you own:
+
+```bash
+scripts/fetch-content.sh /path/to/server.jar
+build/Release/bin/refrain-server --data-dir content/vanilla/26.3 --no-data-download
+```
 
 Import an existing vanilla world into RWF and start the server on it:
 
 ```bash
 build/Release/bin/refrain-tools world import \
     --from /path/to/vanilla-world --to /path/to/rwf-world
-
 build/Release/bin/refrain-server --world /path/to/rwf-world
 ```
 
-Or let the server create a fresh world from a seed. Generating terrain reads the
-datapack of the game version, which is not part of this repository. Generate it
-once from a `server.jar` you own; the jar stays local and nothing from it is
-committed:
-
-```bash
-scripts/fetch-content.sh /path/to/server.jar
-build/Release/bin/refrain-server --seed 12345
-```
-
-An imported world starts without the datapack, but chunk generation outside its
-stored chunks still needs it: without the data, generation fails and the log
-reports `the chunk generator is unavailable`.
-
-Join with an unmodified Minecraft Java Edition 26.3 client at
-`localhost:25565`; the server prints its listening address on startup. The
-default configuration uses online mode and verifies the player's session. For a
-local test, disable the session check in `config/network.toml`:
-
-```toml
-online_mode = false
-```
-
-Both `--world` and `--seed` use the bundled `gamepack/gamepack.toml`. See
-[Running a server](docs/running.md) for the configuration files, the console
-commands and the conversion tools.
+See [Running a server](docs/running.md) for the first-run flow, the defaults,
+the configuration files, the console commands and the conversion tools.
 
 ## Features
 
@@ -120,8 +137,8 @@ commands and the conversion tools.
   features, viewport-based chunk streaming and rate and backlog budgets.
 - **World generation.** Datapack-driven terrain, biome selection, surface
   rules, carvers, features, structures and template pieces for the overworld,
-  the nether and the end. No game assets are distributed; you generate the data
-  locally from the game you own.
+  the nether and the end. No game assets are distributed; the server unpacks the
+  data locally from the game version it targets on the first accepted start.
 - **World format.** RWF v1 region files with A/B index commits and CRC32C
   checksums, lossless Anvil import and export, `world fsck`, compaction and an
   offline palette rebuild.

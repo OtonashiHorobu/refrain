@@ -3,10 +3,12 @@
 #
 # SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 #
-# Regenerate the world generation datapack snapshot from a server jar the user
-# owns. The snapshot is game-derived data: it is never committed, it carries
-# the notice in content/vanilla/NOTICE.md, and world generation tests skip when
-# it is missing.
+# Stage the world generation datapack snapshot from a server jar the user owns,
+# for offline hosts and for the data-driven world generation tests. The server
+# normally extracts the same data itself on the first start after the EULA is
+# accepted; this script produces the snapshot layout without the network. The
+# snapshot is game-derived data: it is never committed, it carries the notice in
+# content/vanilla/NOTICE.md, and world generation tests skip when it is missing.
 #
 #   scripts/fetch-content.sh /path/to/server.jar
 #   scripts/fetch-content.sh /path/to/server.jar --version 26.3 --data-version 5023

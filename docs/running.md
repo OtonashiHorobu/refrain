@@ -4,44 +4,177 @@
 console receives `stop`. It listens for protocol 777 clients using the
 `network.toml` settings.
 
+## First run
+
+A fresh download or build starts like the vanilla server jar: no required
+arguments. The first start writes `eula.toml` next to the working directory with
+`eula = false`, prints the notice below and exits without creating a world or
+opening a port:
+
+```text
+Refrain needs your acceptance of the Minecraft End User License Agreement before it can start.
+Read the agreement at https://www.minecraft.net/en-us/eula.
+Acceptance file: 'eula.toml'.
+The file was created with eula = false.
+To accept the agreement and start the server, run:
+  refrain-server --accept-eula
+No world was created and no port was opened.
+```
+
+A vanilla `eula.txt` present when `eula.toml` does not exist yet is imported
+once, so an existing installation keeps the decision it already recorded. After
+that, `eula.toml` is the only acceptance file the server reads.
+
+Accept the agreement and start:
+
+```bash
+refrain-server --accept-eula
+```
+
+After acceptance the server:
+
+1. fetches the official Minecraft Java Edition 26.3 server archive named by
+   [Mojang's version manifest](https://piston-meta.mojang.com/mc/game/version_manifest_v2.json)
+   over HTTPS;
+2. verifies the archive against the SHA-1 the manifest publishes;
+3. unpacks only the datapack documents and the structure templates into the
+   data directory and writes `data/MANIFEST.json`, which records the game
+   version, the DataVersion, the archive SHA-1 and a content digest;
+4. creates `world` and `config`, generates the spawn area and listens on
+   `0.0.0.0:25565`.
+
+Later starts reuse `data` without touching the network. No game asset is
+committed, redistributed or bundled with the release archive: only the unpacked
+data stays on the machine that fetched it.
+
+The first start prints a one-screen summary at info level: the version it
+serves, the world and seed, where the game data came from, the generated
+configuration files, the listening address and the ready line with the console
+hint.
+
+### Offline and pre-staged starts
+
+`--no-data-download` never touches the network. It starts from an existing data
+directory: the default `./data`, or the directory named by `--data-dir`.
+
+To stage the data directory for an offline host, either copy an existing
+`data` directory, or generate one from a `server.jar` you own:
+
+```bash
+scripts/fetch-content.sh /path/to/server.jar
+refrain-server --data-dir content/vanilla/26.3 --no-data-download
+```
+
+The data directory layout is the content snapshot layout:
+
+```text
+data/
+  MANIFEST.json           game version, DataVersion, archive SHA-1, content digest
+  data/                   the datapack documents world generation reads
+    <namespace>/worldgen/**       biomes, features, structures, carvers, noise
+    <namespace>/tags/block/**     block tags
+    <namespace>/tags/worldgen/**  biome and structure tags
+  templates/              structure templates, <namespace>/structure/**.nbt
+  reports/                the climate and default-state reports, when copied
+  tables.rvtb             tracked block, item and registry tables, when staged
+  protocol_registry.json  tracked protocol registry, when staged
+```
+
+A data directory is accepted when its marker names this game version and the
+datapack is present, or when it is a pre-staged `data/` tree without a marker. A
+marker for another game version is stale: it is replaced when downloads are
+allowed and is a `version_mismatch` error otherwise. A directory with no marker
+that carries the datapack is used as-is and reported as pre-staged.
+
+The tracked tables and reports ship with the release archive under
+`content/vanilla/26.3`; a data directory that only holds the downloaded datapack
+receives the reports from there on first start.
+
+The release archive layout is:
+
+```text
+refrain-<version>-<platform>/
+  bin/refrain-server
+  bin/refrain-tools
+  gamepack/gamepack.toml
+  gamepack/presets/
+  content/vanilla/26.3/      tracked tables, reports and protocol registry
+  content/vanilla/NOTICE.md
+  run-server.sh
+```
+
+The server searches the working directory, the executable's directory and up to
+three parent directories for `gamepack/gamepack.toml` and
+`content/vanilla/<version>`, so it starts the same way from an extracted
+archive, from `build/Release/bin` in a checkout and from an instance directory
+that carries its own composition. The files are not embedded in the binary: the
+composition and the tracked tables already ship as inspectable files with their
+own notice, and embedding them would duplicate several MiB per binary. A
+build-tree or installed start therefore needs those directories next to the
+binary; `--gamepack` and `--data-dir` override the search.
+
+## Defaults
+
+Every default is printed at startup and can be overridden by the matching flag
+or TOML file:
+
+| Setting | Default | Override |
+|---|---|---|
+| World directory | `./world` | `--world`, `world.path` |
+| Configuration directory | `./config` | `--config-dir` |
+| Game data directory | `./data`, or the installed content snapshot when it already holds the datapack | `--data-dir` |
+| Composition | `gamepack/gamepack.toml` in the working directory, next to the executable or in the checkout root above it | `--gamepack` |
+| Listening address | `0.0.0.0:25565` | `--bind`, `--port`, `bind_host` and `port` in `network.toml` |
+| Online mode | on | `online_mode` in `network.toml` |
+| View distance | 10 | `view_distance` in `network.toml` |
+| Simulation distance | 10 | `simulation_distance` in `network.toml` |
+| Maximum players | 20 | `status.max_players` in `network.toml` |
+| MOTD | `A Refrain Server` | `status.motd` in `network.toml` |
+| Game mode, difficulty | the values stored in the world | in-game commands |
+| Compression threshold | 256 | `compression_threshold` in `network.toml` |
+
+The first start writes `config/refrain.toml`, `config/network.toml`,
+`config/world.toml`, `config/runtime.toml` and `config/storage.toml` with these
+defaults; existing files are never rewritten. `--import-properties` skips the
+generated files, because the imported properties are a fallback layer below the
+operator's TOML files.
+
 ## Start
 
-A fresh install starts with no world: the server creates one from a seed,
-generates the spawn area and then listens. Generating a world from a seed needs
-the datapack generated under `content/vanilla/26.3/data`; an existing world
-opens without it. See [World generation data](worldgen.md) for the one-time
-generation step.
+A fresh world is created from a seed, its spawn area is generated and the
+server then listens. `--seed` only applies when the world is created; an
+existing world keeps the seed it was created with.
 
 ```bash
-build/Release/bin/refrain-server --seed 12345
+refrain-server --seed 12345
 ```
 
-`--seed` only applies when the world is created; an existing world keeps the
-seed it was created with. The world directory defaults to `world` (override
-with `--world` or `world.path` in the configuration), and an existing world is
-opened as is.
+Start an existing world from any directory:
 
 ```bash
-build/Release/bin/refrain-server \
-    --gamepack gamepack/gamepack.toml \
-    --world /path/to/world \
-    --config-dir config \
-    --ticks 200
+refrain-server --world /path/to/world --ticks 200
 ```
 
-The server enters the tick loop as soon as it starts: it creates the world
-directory when it does not exist yet. `--check` stops after the composition, the
-mod lock and the content layers have been verified, without creating a world or
-starting the loop, which is what a configuration check or a CI smoke wants.
+The server enters the tick loop as soon as it starts. `--check` stops after the
+composition, the mod lock and the content layers have been verified, without
+creating a world or starting the loop, which is what a configuration check or a
+CI smoke wants. A run that only inspects the composition does not need the EULA.
 `--ticks 0` runs until `stop`, EOF on stdin or a scripted stop command.
 
 ## Inputs
 
 | Option | Meaning |
 |---|---|
-| `--gamepack <file>` | composition file; defaults to the bundled gamepack |
-| `--config-dir <dir>` | host config directory; each `*.toml` becomes a read-only host runtime namespace (`refrain.toml` is `host`, `mods/*.toml` is `mod/<id>`); empty disables |
-| `--world <dir>` | RWF world directory |
+| `--gamepack <file>` | composition file; by default discovered under `gamepack/gamepack.toml` |
+| `--config-dir <dir>` | host config directory, created with the defaults on first start; each `*.toml` becomes a read-only runtime namespace (`refrain.toml` is `host`, `mods/*.toml` is `mod/<id>`); empty disables |
+| `--world <dir>` | RWF world directory (default `world`, or `world.path`) |
+| `--data-dir <dir>` | game data directory (default `data`, or the installed content snapshot) |
+| `--no-data-download` | never fetch the server archive; start only from staged or cached data |
+| `--data-manifest-url <url>` | version manifest used to locate the server archive (default Mojang's launcher manifest); point it at a mirror |
+| `--accept-eula` | record EULA acceptance and start |
+| `--eula-file <file>` | EULA acceptance file (default `eula.toml`) |
+| `--bind <address>` | listening address override (default `0.0.0.0` from `network.toml`) |
+| `--port <n>` | listening port override (default `25565` from `network.toml`) |
 | `--check` | verify configuration, composition and lock, then exit without starting |
 | `--import-properties <file>` | import Java `server.properties` as a fallback layer (not written) |
 | `--ticks <n>` | stop after n ticks, 0 disables the limit |

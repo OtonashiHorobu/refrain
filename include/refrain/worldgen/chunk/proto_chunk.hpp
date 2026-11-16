@@ -172,6 +172,19 @@ class proto_chunk {
     [[nodiscard]] auto biome_at(jint x, jint y, jint z) const -> std::uint16_t;
     void set_biome(jint x, jint y, jint z, std::uint16_t biome);
 
+    /// Appends a generated entity. The tag carries the reference entity
+    /// fields (`id`, `Pos`, `Rotation`, ...); placement strips the UUID and
+    /// writes the world position. Entities stay in placement order.
+    ///
+    /// TODO: the storage bridge does not persist generated entities yet
+    /// because the chunk model has no entity records; they must be written to
+    /// the level's entity store rather than dropped.
+    void add_entity(data::nbt::compound entity);
+    [[nodiscard]] auto entities() const
+        -> const std::vector<data::nbt::compound> & {
+        return entities_;
+    }
+
     void set_block_entity(const block_pos &pos, data::nbt::compound entity);
     [[nodiscard]] auto block_entity_at(const block_pos &pos) const
         -> const data::nbt::compound *;
@@ -208,6 +221,7 @@ class proto_chunk {
     std::vector<std::uint16_t> biomes_{};
     std::array<heightmap, heightmap_kind_count> heightmaps_{};
     std::map<block_pos, data::nbt::compound> block_entities_{};
+    std::vector<data::nbt::compound> entities_{};
     std::vector<std::vector<std::uint16_t>> post_processing_{};
     chunk_status status_{chunk_status::empty};
 };

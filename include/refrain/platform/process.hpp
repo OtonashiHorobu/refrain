@@ -66,6 +66,16 @@ void restore_fault_handlers() noexcept;
 
 [[nodiscard]] auto process_id() noexcept -> std::uint64_t;
 
+/// Absolute path of the running executable, as a UTF-8 string.
+///
+/// The path is resolved by the operating system, not from `argv[0]`: a
+/// launcher may pass a bare name, a relative path or a symlink. First-run
+/// discovery uses it to find the composition and the installed game data next
+/// to the binary, so a server started from an arbitrary working directory keeps
+/// working. Fails with `io_error` when the OS cannot report the path and with
+/// `unsupported` on a POSIX host without `/proc`.
+[[nodiscard]] auto executable_path() -> result<std::string>;
+
 /// Best-effort liveness probe for another process id (stale-lock detection).
 ///
 /// POSIX: `kill(pid, 0)` — false when the process does not exist (ESRCH), true

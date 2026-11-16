@@ -8,8 +8,27 @@ and the structure templates that provide the prebuilt pieces.
 ## Datapack
 
 The datapack documents that drive biomes, features, structures and carvers are
-not part of the repository. Generate the datapack and its manifest from the
-`server.jar` you own:
+not part of the repository and are not shipped with the binary. On the first
+start after the EULA is accepted, the server fetches the official server archive
+of the target version from Mojang's version manifest, verifies its SHA-1 and
+unpacks the worldgen documents, the block and biome tags and the structure
+templates into the data directory (`./data` by default, see
+[Running a server](running.md#first-run)). The used game data is then:
+
+```text
+data/
+  MANIFEST.json   game version, DataVersion, archive SHA-1, content digest
+  data/           the datapack `data` tree the generator reads
+  templates/      structure templates, <namespace>/structure/**.nbt
+  reports/        the tracked reports copied next to the datapack
+```
+
+The server archive is a bundler jar: the outer archive carries metadata and the
+real server jar under `META-INF/versions/<version>/server-<version>.jar`, and the
+`data/` tree lives in that inner jar. `refrain-tools extract` and the first-run
+downloader both unwrap it, so a plain jar whose root holds `data/` also works.
+
+To stage the data offline, generate it from a `server.jar` you own:
 
 ```bash
 scripts/fetch-content.sh /path/to/server.jar
@@ -18,9 +37,12 @@ scripts/fetch-content.sh /path/to/server.jar
 The script extracts the data entries with `refrain-tools extract` and packs the
 worldgen documents and tags with `tools/worldgen/pack_content.py`. It writes
 `content/vanilla/<version>/{data,MANIFEST.json}`; pass `--version` or
-`--data-version` when they differ from the defaults. Both are game-derived data
-covered by the notice in `content/vanilla/`, are not part of the repository
-license and are not tracked by git.
+`--data-version` when they differ from the defaults. Point the server at that
+directory with `--data-dir content/vanilla/<version> --no-data-download`, or let
+it read the snapshot when it is installed next to the binary. Both the snapshot
+and a fetched data directory are game-derived data covered by the notice in
+`content/vanilla/`, are not part of the repository license and are not tracked
+by git.
 
 ## Biome parameter reports
 
@@ -373,6 +395,20 @@ The reference-backed suites currently cover:
   and a mushroom needs a solid-render substrate. The chunk exercises all four
   behaviours, and the command and environment are recorded in
   `tools/worldgen/oracle/README.md`;
+- a fixed-biome end feature world with the `minecraft:the_end` biome kept:
+  chunk `(6,0)` of the seed-1 reference world contains the obsidian platform
+  the fixed placement at `(100,49,0)` writes, and the runtime reproduces it
+  block for block and in all four final heightmaps. The command and the
+  environment variables are recorded in `tools/worldgen/oracle/README.md`;
+- the remaining reference gaps through synthetic tests: the pine and mega
+  pine foliage placers reject a document without their canopy height provider,
+  the biome membership predicate expands data-pack biome tags and rejects a
+  tag the pack does not define, the structure feature pool element reads the
+  generation climate for the snow and freeze features, every positive integer
+  provider type drives a capped processor limit while an unknown type is
+  rejected with its name, and template entities and end city shulker and
+  elytra data markers place their entities with the transformed position and
+  rotation;
 - benchmarks for fill, parallel fill, structure selection, corridor
   placement, template placement, feature freeze and decoration.
 
@@ -380,12 +416,13 @@ Known gaps: the feature registry decodes every configured feature, placement
 modifier, block predicate and state-provider type the 26.3 datapack uses,
 including the cherry, poplar, bending and upwards-branching tree placers, the
 mangrove root placer and the pale moss and creaking heart decorators. The pine
-and mega pine foliage placers read their canopy height provider under the name
-each documents (`height` and `crown_height`); a pine placed feature that lacks
-the provider places nothing instead of falling back to a default height. A biome
-whose plan names an unknown type still fails `chunk_generator::create` with an
-`unsupported` error instead of silently dropping that feature, and the
-content-driven test fails when that happens. Predicates whose reference
+and mega pine foliage placers require the canopy height provider their codecs
+name (`height` and `crown_height`); a document that omits it is rejected at
+load time, exactly like the reference codec, and a negative test covers both
+names. A biome whose plan names an unknown type still fails
+`chunk_generator::create` with an `unsupported` error instead of silently
+dropping that feature, and both the content-driven test and a negative
+configured-feature test fail when that happens. Predicates whose reference
 definition reads collision geometry (sturdy faces and multiface attachment)
 derive a full face from the block tags and the state shape: slabs, stairs,
 trapdoors, doors, walls, fences, fence gates, panes, bars, carpets, snow
@@ -401,14 +438,21 @@ placement, so the reference's light gate for feature placement is still not
 modelled and admits every position in a dimension without skylight. That is
 the case the feature worlds exercise.
 The unobstructed predicate admits every position because generation has no
-entities, and the biome membership predicate accepts explicit biome ids but
-not biome tags. Structure feature placement has no climate source, so snow
-and freeze feature modifiers are inert there. Template entities are not placed;
-end city shulker and elytra data markers, pillager cages and village animal
-markers therefore leave no entities behind. Capped processor lists decode and
-run their delegate over the whole piece, with constant and uniform limits; a
-limit document that names another provider type is rejected instead of being
-approximated. Rule block entity modifiers are decoded for `clear`,
+entities. The biome membership predicate resolves `#tag` lists through the
+data pack's biome tag tree and compares explicit biome ids directly; a tag the
+pack does not define is rejected at decode time. Structure feature placement
+samples the biome and its temperature from the chunk region the piece writes
+into, so snow and freeze feature modifiers run there like they do in the chunk
+feature stage; a feature pool element that reaches outside that region sees no
+climate and leaves the two weather features alone. Template entities are
+placed into the generation chunk that contains their world position, and the
+end city shulker and elytra data markers create their entities; the chunk
+model has no entity records, so the storage bridge drops generated entities
+instead of writing them to a level entity store, which is why they reach no
+saved or served world yet. Capped processor lists decode and run their
+delegate over the whole piece; every positive integer provider type of 26.3
+drives the limit, and an unknown limit type is rejected with its name. Rule
+block entity modifiers are decoded for `clear`,
 `passthrough`, `append_static` and `append_loot`. A rule that names a loot
 table keeps the seed drawn from its own positional stream, while a container
 tag carried by the template still receives the piece stream's seed at
@@ -417,7 +461,12 @@ placement. Processor rule position predicates decode `always_true`,
 world position against the reference position of the structure start (the
 centre of its first piece's box at the box floor), so the template-local
 position does not participate. A missing predicate is `always_true` and draws
-nothing. End gateways and the obsidian end platform are not implemented.
+nothing. End gateways and the obsidian end platform are placed by the end
+feature stage. The obsidian platform chunk is compared against a reference
+world; the gateway frame, exit block entity and rotation are covered by
+feature-level tests. The fixed-biome end feature worlds the oracle generates
+contain no generated gateway even at several thousand chunks, so no reference
+chunk compares a gateway position yet.
 
 Ruined portal starts place the template at the reference position and
 orientation. A dry reference candidate at chunk (-65, 0) matches block for
