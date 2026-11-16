@@ -64,11 +64,10 @@ inline constexpr std::size_t heightmap_columns = 256;
 
 /// Chunk field-set version understood by this build.
 ///
-/// Pre-release policy: the storage format is not frozen before the first
-/// public release, so this stays at 1 and incompatible field changes are made
-/// in place (the schema hash tracks builds). Do not introduce "v2"/"v3"
-/// names or migration scaffolding before the freeze; the version is bumped
-/// exactly once, when the format is frozen.
+/// The version is monotonic: an incompatible field or layout change bumps it
+/// and either migrates older chunks or refuses them with the supported
+/// versions named. It never resets or decreases; the schema hash identifies
+/// the build independently.
 inline constexpr std::uint16_t chunk_format_version = 1;
 
 /// Section Y bounds accepted by the model. Vanilla 26.3 overworld uses
