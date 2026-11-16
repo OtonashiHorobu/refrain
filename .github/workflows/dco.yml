@@ -25,12 +25,22 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      # Dependabot commits are signed by GitHub and do not carry a DCO
+      # trailer. The certificate applies to human contributions, so the
+      # automated update lane is exempt while every other pull request still
+      # goes through the check.
+      - name: Exempt the automated dependency lane
+        if: github.actor == 'dependabot[bot]'
+        run: echo "Dependabot commits are signed by GitHub; the DCO check applies to human contributions."
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.actor != 'dependabot[bot]'
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Check sign-offs
+        if: github.actor != 'dependabot[bot]'
         env:
           COMMIT_RANGE: ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
         run: python3 tools/check_dco.py "$COMMIT_RANGE"
