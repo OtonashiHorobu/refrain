@@ -99,10 +99,9 @@ requires `[entry].native`, `wasm` requires `[entry].wasm`. A third-party loader
 defines its own payload keys; this parser only knows the shared ones and the
 loader validates the rest.
 
-A legacy external manifest without `[entry].loader` keeps loading, with the
-loader inferred from the payload (`native` for `[entry].native`, `wasm` for
-`[entry].wasm`). `refrain-tools mods check` reports the inference as
-deprecated, and new manifests always declare the loader explicitly.
+An external manifest must declare `[entry].loader`; a manifest with an
+`[entry]` table but no loader is rejected and the error names the missing
+field. There is no second way to express an entry point.
 
 ### Dispatch and fail-closed rules
 
@@ -261,9 +260,10 @@ composition also includes every mod installed in the server's content store
 gamepack is the only source of truth and every required version must be listed.
 
 A resolved composition is written to `mods.lock` next to the gamepack. The lock
-records the selected versions, the provider for each service and a fingerprint
-of the resolution. Loading fails when a pinned mod is missing or the
-composition drifts; `refrain-server --update-lock` rewrites the lock for an
+records the selected versions, the provider for each service, a fingerprint of
+the resolution and the build profile and build id that wrote it. Loading fails
+when a pinned mod is missing, the composition drifts or the lock was written by
+a different build; `refrain-server --update-lock` rewrites the lock for an
 intentional change.
 
 Validate and inspect a composition:

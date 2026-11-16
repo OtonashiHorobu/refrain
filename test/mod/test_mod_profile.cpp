@@ -358,12 +358,23 @@ const suite mod_profile_tests = [] {
         stale_build.build_id = "0000000000000000";
         expect(!app::check_lock_profile(stale_build));
 
-        // Older locks carry no identity and stay accepted.
-        mod::mod_lock legacy{};
-        legacy.gamepack_id = "refrain.vanilla";
-        legacy.gamepack_version = "26.3.0";
-        expect(app::check_lock_profile(legacy).has_value());
-        expect(legacy.to_toml().find("profile = ") == std::string::npos);
+        // A lock that cannot name the build that wrote it is refused: the
+        // format records the identity, so there is nothing to compare without
+        // it.
+        mod::mod_lock anonymous{};
+        anonymous.gamepack_id = "refrain.vanilla";
+        anonymous.gamepack_version = "26.3.0";
+        auto refused_anonymous{app::check_lock_profile(anonymous)};
+        expect(!refused_anonymous);
+        if (!refused_anonymous) {
+            expect(refused_anonymous.error().message.find("build profile") !=
+                   std::string::npos);
+        }
+        // The serializer always writes both identity fields, even for a value
+        // built without the app layer.
+        const auto anonymous_text{anonymous.to_toml()};
+        expect(anonymous_text.find("profile = ") != std::string::npos);
+        expect(anonymous_text.find("build_id = ") != std::string::npos);
     };
 
     "profile/dynamic module exports a loadable descriptor"_test = [] {

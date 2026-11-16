@@ -62,9 +62,9 @@ using refrain::data::vfs;
 constexpr std::string_view raw_text = R"({"format":1,"value":"raw"})";
 constexpr std::size_t packed_size{200000};
 
-// RFRX record/header offsets used to forge a legacy tie. The public header has
-// the fixed sizes; the per-entry priority and the header digest/CRC offsets are
-// fixed by the RFRX format.
+// RFRX record/header offsets used to forge a duplicate record pair. The public
+// header has the fixed sizes; the per-entry priority and the header
+// digest/CRC offsets are fixed by the RFRX format.
 constexpr std::size_t rfrx_priority_offset{8};
 constexpr std::size_t rfrx_file_blake3_offset{48};
 constexpr std::size_t rfrx_header_crc32c_offset{80};
@@ -376,8 +376,7 @@ const suite content_pack_tests = [] {
         }
     };
 
-    "content pack legacy tie picks the resolve() winner in either record "
-    "order"_test = [] {
+    "content pack refuses an index with two records at one priority"_test = [] {
         const auto built{build_fixture()};
         expect(built != nullptr);
         if (built == nullptr) {
@@ -395,114 +394,41 @@ const suite content_pack_tests = [] {
         if (!raw_index || !packed_index) {
             return;
         }
-        expect(*raw_index != *packed_index);
-        const auto smaller_index{std::min(*raw_index, *packed_index)};
-        const auto larger_index{std::max(*raw_index, *packed_index)};
-        const bool raw_wins{*raw_index < *packed_index};
-        // Publish the larger blob_index at the higher priority, so the first
-        // RFRX record becomes the loser once the priorities tie: the old
-        // first-record rule would expose it even though resolve() picks the
-        // smaller index.
-        const auto &first_blob{raw_wins ? built->packed_digest
-                                        : built->raw_digest};
-        const auto &second_blob{raw_wins ? built->raw_digest
-                                         : built->packed_digest};
-        const auto &expected_bytes{raw_wins ? built->raw_bytes
-                                            : built->packed_bytes};
-        constexpr std::string_view location{
-            "data/refrain_test/legacy-tie.json"};
+        constexpr std::string_view location{"data/refrain_test/tied.json"};
         const std::vector<resolution_input> inputs{
             resolution_input{.location = std::string{location},
                              .source = "mod:test",
                              .priority = 5,
-                             .blob = first_blob},
+                             .blob = built->raw_digest},
             resolution_input{.location = std::string{location},
                              .source = "mod:test",
                              .priority = 1,
-                             .blob = second_blob},
+                             .blob = built->packed_digest},
         };
         auto built_index{build_resolution_index(inputs, *table)};
         expect(built_index.has_value());
         if (!built_index) {
             return;
         }
-        auto legacy{*built_index};
-        // Equalize both priorities. The records still share source_index, so
-        // the parser accepts the tied pair as one legacy group in either
-        // order.
+        // Equalize both priorities. The records share a location and a
+        // source, so there is no defined winner; the parser rejects the
+        // pair and a pack never exposes a record chosen by file order.
+        auto tied{*built_index};
         constexpr std::uint32_t tied_priority{3};
-        write_u32_le(legacy,
-                     resolution_index_header_bytes + rfrx_priority_offset,
+        write_u32_le(tied, resolution_index_header_bytes + rfrx_priority_offset,
                      tied_priority);
-        write_u32_le(legacy,
+        write_u32_le(tied,
                      resolution_index_header_bytes +
                          resolution_index_entry_bytes + rfrx_priority_offset,
                      tied_priority);
-        refresh_rfrx(legacy);
+        refresh_rfrx(tied);
+        expect(write_index(*built, "tied", tied));
 
-        const auto check_resolve = [&table, location](
-                                       const std::vector<std::byte> &bytes,
-                                       std::uint32_t first_blob_index) {
-            auto parsed{parse_resolution_index(bytes, *table)};
-            expect(parsed.has_value());
-            if (!parsed) {
-                return std::optional<std::uint32_t>{};
-            }
-            expect(parsed->entries.size() == 2U);
-            if (parsed->entries.size() != 2U) {
-                return std::optional<std::uint32_t>{};
-            }
-            expect(parsed->entries[0].blob_index == first_blob_index);
-            auto resolved{resolve(*parsed, location)};
-            expect(resolved.has_value());
-            if (!resolved || resolved->winner == nullptr) {
-                return std::optional<std::uint32_t>{};
-            }
-            expect(resolved->fallback.size() == 1U);
-            return std::optional<std::uint32_t>{resolved->winner->blob_index};
-        };
-        const auto check_pack = [&built, &expected_bytes, location]() {
-            auto opened{open_content_pack(built->root, "legacy")};
-            expect(opened.has_value());
-            if (!opened) {
-                return;
-            }
-            expect((*opened)->file_count() == 1U);
-            expect((*opened)->find(location) != nullptr);
-            const auto bytes{(*opened)->read(location)};
-            expect(bytes.has_value());
-            if (bytes) {
-                expect(*bytes == expected_bytes);
-            }
-        };
-
-        const auto before{check_resolve(legacy, larger_index)};
-        expect(before.has_value());
-        if (before) {
-            expect(*before == smaller_index);
+        const auto opened{open_content_pack(built->root, "tied")};
+        expect(!opened);
+        if (!opened) {
+            expect(opened.error().code == refrain::error_code::parse_error);
         }
-        expect(write_index(*built, "legacy", legacy));
-        check_pack();
-
-        // Swap the two 32-byte records: the on-disk winner changes, the pack
-        // winner (and resolve()'s) must not.
-        const auto first{std::span<std::byte>{legacy}.subspan(
-            resolution_index_header_bytes, resolution_index_entry_bytes)};
-        const auto second{std::span<std::byte>{legacy}.subspan(
-            resolution_index_header_bytes + resolution_index_entry_bytes,
-            resolution_index_entry_bytes)};
-        std::vector<std::byte> saved(first.begin(), first.end());
-        std::copy(second.begin(), second.end(), first.begin());
-        std::copy(saved.begin(), saved.end(), second.begin());
-        refresh_rfrx(legacy);
-
-        const auto after{check_resolve(legacy, smaller_index)};
-        expect(after.has_value());
-        if (after) {
-            expect(*after == smaller_index);
-        }
-        expect(write_index(*built, "legacy", legacy));
-        check_pack();
     };
 
     "content pack missing composition is not_found"_test = [] {

@@ -505,6 +505,7 @@ side = "server"
 services = ["refrain:data.packs"]
 
 [entry]
+loader = "native"
 native = "libexternal.so"
 )";
         auto written{refrain::core::io::write_text(
@@ -527,7 +528,8 @@ native = "libexternal.so"
         entry.provides = {"refrain:data.packs"};
         entry.path = (root / "manifest.toml").string();
         entry.kind = mod::package_kind::directory;
-        entry.entry = mod::manifest_entry_point{.native = "libexternal.so"};
+        entry.entry = mod::manifest_entry_point{.loader = "native",
+                                                .native = "libexternal.so"};
         plan.load_order.push_back(entry);
         plan.providers.push_back(mod::resolved_provider{
             .service = "data",

@@ -52,11 +52,6 @@ endif()
 option(REFRAIN_WITH_IO_URING
        "Enable Asio's io_uring file backend (Linux + liburing)"
        ${REFRAIN_WITH_IO_URING_DEFAULT})
-# Deprecated alias from before build-time mod profiles: OFF asked for a
-# non-monolithic build, which is now REFRAIN_MOD_LINK=dynamic. Kept so an
-# existing configure line keeps working; new code reads REFRAIN_MOD_LINK.
-option(REFRAIN_MONOLITHIC
-       "Deprecated: OFF selects the unsupported all-module link mode" ON)
 # --- build-time mod profile -------------------------------------------------
 # The profile is the source of truth for which first-party mods are compiled
 # into the binary (see docs/building.md). The default matches the vanilla

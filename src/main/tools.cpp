@@ -138,7 +138,6 @@ int main(int argc, char **argv) {
 
     auto *schema_cmd =
         app.add_subcommand("schema", "RSC/RIDL schema toolchain");
-    schema_cmd->alias("idl");
     std::string schema_out{"sdk/generated"};
     bool schema_check{false};
     std::vector<std::string> schema_roots;

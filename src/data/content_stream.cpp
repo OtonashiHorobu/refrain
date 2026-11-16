@@ -308,10 +308,10 @@ auto content_stream::open(std::string_view store_root,
 
     // One winner per location via the shared winner order
     // (`resolution_precedes`: priority desc, then blob_index asc, then source
-    // asc). The RFRX sort key does not include the blob, so a legacy/manual
-    // same-priority tie may list either blob first; this keeps the stream's
-    // winner independent of the record order. `current` holds pointers into
-    // `index`, which outlives the conversion below.
+    // asc). The RFRX parser rejects two entries for one location at the same
+    // priority, so the stream's winner never depends on the record order.
+    // `current` holds pointers into `index`, which outlives the conversion
+    // below.
     std::map<std::string, const resolution_entry *, std::less<>> current;
     for (const auto &entry : index->entries) {
         if (entry.blob_index >= table->entries.size()) {

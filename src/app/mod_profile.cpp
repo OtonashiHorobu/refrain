@@ -445,7 +445,13 @@ auto format_unbuilt_mod_error(std::string_view source,
 }
 
 auto check_lock_profile(const mod::mod_lock &lock) -> status {
-    if (!lock.profile.empty() && lock.profile != version::mod_profile) {
+    if (lock.profile.empty()) {
+        return std::unexpected{make_error(
+            error_code::version_mismatch,
+            "mods.lock does not record the build profile that wrote it; "
+            "rewrite it with --update-lock")};
+    }
+    if (lock.profile != version::mod_profile) {
         return std::unexpected{make_error(
             error_code::version_mismatch,
             fmt::format("mods.lock was written by build profile '{}' but this "
@@ -454,16 +460,20 @@ auto check_lock_profile(const mod::mod_lock &lock) -> status {
                         lock.profile, version::mod_profile,
                         version::mod_build_id))};
     }
-    if (!lock.build_id.empty() && lock.build_id != version::mod_build_id) {
+    if (lock.build_id.empty()) {
+        return std::unexpected{make_error(
+            error_code::version_mismatch,
+            "mods.lock does not record the mod build id that wrote it; "
+            "rewrite it with --update-lock")};
+    }
+    if (lock.build_id != version::mod_build_id) {
         return std::unexpected{make_error(
             error_code::version_mismatch,
             fmt::format("mods.lock was written by build {} of profile '{}' but "
                         "this binary is build {} of profile '{}'; rebuild the "
                         "lock for this binary",
-                        lock.build_id,
-                        lock.profile.empty() ? std::string{"<unknown>"}
-                                             : lock.profile,
-                        version::mod_build_id, version::mod_profile))};
+                        lock.build_id, lock.profile, version::mod_build_id,
+                        version::mod_profile))};
     }
     return status_ok();
 }

@@ -52,9 +52,9 @@ namespace refrain::data {
 // Removing unreferenced blobs lives in `data/content_maintenance` (mark-sweep
 // against the global blob table + resolution indexes).
 //
-// Small blobs written through `put()` still get one raw file each (the legacy
-// CAS behaviour). `batch` instead appends every small raw blob to an immutable
-// content segment (content_segment.hpp). Such a blob is recorded in RFBT as a
+// Small blobs written through `put()` get one raw file each. `batch` instead
+// appends every small raw blob to an immutable content segment
+// (content_segment.hpp). Such a blob is recorded in RFBT as a
 // `(segment_id, segment_offset)` pair and is readable only through
 // `read(const blob_location&)`, never through the digest-only overloads.
 // Packed blobs (> 64 KiB) keep one file per blob.
@@ -223,9 +223,9 @@ class content_store {
 
     /// Load a blob from its own file and verify its logical BLAKE3 digest.
     ///
-    /// This is the legacy "one file per blob" path: raw blobs are returned
-    /// as-is and packed blobs are decoded (all blocks). A blob that lives in a
-    /// content segment has no such file, so this overload reports `not_found`
+    /// This is the one-file-per-blob path: raw blobs are returned as-is and
+    /// packed blobs are decoded (all blocks). A blob that lives in a content
+    /// segment has no such file, so this overload reports `not_found`
     /// with a hint to use `read(const blob_location&)` together with the RFBT
     /// record. A damaged file is `parse_error`.
     [[nodiscard]] auto read(const digest32 &digest) const
@@ -308,8 +308,8 @@ class content_store {
 ///    segment staging file (8-byte aligned, no fsync). When the segment is
 ///    about to exceed `segment_target_bytes` it is sealed and a new one starts,
 ///    so one batch can publish several segments;
-///  * > 64 KiB -> the legacy one-file-per-blob `content_store::put()` path
-///    (packed, atomically published, already durable).
+///  * > 64 KiB -> the one-file-per-blob `content_store::put()` path (packed,
+///    atomically published, already durable).
 ///
 /// Content already present in `existing` (any kind) or seen earlier in this
 /// batch is not written again: the same digest is returned and `new_blobs()`

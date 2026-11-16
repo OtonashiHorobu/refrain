@@ -99,6 +99,7 @@ version = "0.1.0+build.7"
 abi = "1"
 
 [entry]
+loader = "native"
 native = "lib/libexample_rpg.so"
 symbol = "refr_mod_entry"
 )";
@@ -148,11 +149,17 @@ const suite manifest_tests = [] {
             return;
         }
         expect(manifest->is_external());
+        expect(manifest->loader == "native");
+        expect(manifest->entry->loader == "native");
         expect(manifest->entry->native == "lib/libexample_rpg.so");
         expect(manifest->entry->symbol == "refr_mod_entry");
         expect(manifest->entry->wasm.empty());
         expect(manifest->common.version == "0.1.0+build.7");
         expect(manifest->common.side == mod::manifest_side::both);
+        // The audit text leads with the loader that executes the package.
+        const auto formatted{mod::format_mod_manifest(*manifest)};
+        expect(formatted.find("entry: native lib/libexample_rpg.so") !=
+               std::string::npos);
     };
 
     "manifest/mod: wasm entry point"_test = [] {
@@ -163,13 +170,34 @@ version = "1.0.0"
 abi = "1"
 
 [entry]
+loader = "wasm"
 wasm = "scripts/main.wasm"
 )")};
         expect(static_cast<bool>(manifest));
         if (manifest) {
             expect(manifest->is_external());
+            expect(manifest->loader == "wasm");
+            expect(manifest->entry->loader == "wasm");
             expect(manifest->entry->wasm == "scripts/main.wasm");
             expect(manifest->entry->native.empty());
+        }
+    };
+
+    "manifest/mod: rejects an external entry without a loader"_test = [] {
+        auto manifest{parse_mod(R"(
+[mod]
+id = "com.example.missing"
+version = "1.0.0"
+abi = "1"
+
+[entry]
+native = "lib/libmissing.so"
+)")};
+        expect(!manifest);
+        if (!manifest) {
+            expect(manifest.error().code == error_code::parse_error);
+            expect(manifest.error().message.find("entry.loader") !=
+                   std::string::npos);
         }
     };
 
@@ -305,6 +333,7 @@ version = "1.0.0"
 abi = "1"
 
 [entry]
+loader = "native"
 native = "lib/lib.so"
 wasm = "scripts/main.wasm"
 )",
@@ -316,6 +345,7 @@ version = "1.0.0"
 abi = "1"
 
 [entry]
+loader = "native"
 native = "../escape.so"
 )",
                          error_code::invalid_argument);
@@ -326,6 +356,7 @@ version = "1.0.0"
 abi = "1"
 
 [entry]
+loader = "native"
 symbol = "entry"
 )",
                          error_code::invalid_argument);
