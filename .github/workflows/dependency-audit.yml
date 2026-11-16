@@ -10,6 +10,7 @@ permissions:
   security-events: write
 
 env:
+  CONAN_VERSION: "2.31.2"
   REFRAIN_CONAN_PROFILE: gcc-release
 
 concurrency:
@@ -19,16 +20,26 @@ concurrency:
 jobs:
   conan-audit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    container:
+      image: gcc:16
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.12"
+      - name: Mark the workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Install Conan
-        run: pip install "conan==2.31.2"
+      - name: Install the toolchain
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            python3 python3-pip git ca-certificates
+          python3 -m pip install --break-system-packages "conan==${CONAN_VERSION}"
+          conan --version
 
       - name: Create the Conan profiles
         run: bash scripts/bootstrap.sh --profile-only
