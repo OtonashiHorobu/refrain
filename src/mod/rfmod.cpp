@@ -13,6 +13,7 @@
 #include <refrain/data/signature.hpp>
 #include <refrain/data/store_lock.hpp>
 #include <refrain/mod/discovery.hpp>
+#include <refrain/platform/process.hpp>
 
 #include <archive.h>
 #include <archive_entry.h>
@@ -20,9 +21,12 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -30,9 +34,11 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
+#include <fmt/chrono.h>
 #include <fmt/format.h>
 
 namespace refrain::mod {
@@ -1037,6 +1043,8 @@ struct package_manifest {
                             info.key_id, verified.error().message))};
         }
         out.trusted = true;
+        out.public_key_fingerprint =
+            public_key_fingerprint(trusted->public_key);
         return status_ok();
     }
 
@@ -1961,11 +1969,47 @@ namespace {
                        common.version);
 }
 
-/// Serialize the deterministic install receipt (schema
-/// `refrain.mod-receipt/1`). `json::dump()` writes object members in sorted key
-/// order and the file list is sorted by path bytes, so equal installs produce
-/// byte-identical receipts. No timestamps or host paths are recorded.
-[[nodiscard]] auto format_install_receipt(const rfmod_install_result &result)
+/// `<store>/mods/pins/<id>.json`.
+[[nodiscard]] auto signer_pin_path(std::string_view store_root,
+                                   std::string_view id) -> result<std::string> {
+    if (!is_safe_receipt_segment(id)) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument,
+            fmt::format("mod signer pin: '{}' is not a safe single path "
+                        "segment",
+                        id))};
+    }
+    return fmt::format("{}/mods/pins/{}.json", store_root, id);
+}
+
+/// Residency of the receipt's `policy` field. A signed install is accepted
+/// under the continuity policy in force; an unsigned one records `unsigned`;
+/// a migrated v1 receipt records `legacy`.
+[[nodiscard]] auto receipt_policy_text(bool signed_package,
+                                       rfmod_signature_policy policy)
+    -> std::string {
+    if (!signed_package) {
+        return "unsigned";
+    }
+    return std::string{mod::to_string(policy)};
+}
+
+/// Current UTC time as `YYYY-MM-DDTHH:MM:SSZ`.
+[[nodiscard]] auto utc_now_text() -> std::string {
+    const auto now{std::chrono::system_clock::now()};
+    return fmt::format("{:%Y-%m-%dT%H:%M:%SZ}",
+                       fmt::gmtime(std::chrono::system_clock::to_time_t(now)));
+}
+
+/// Serialize the install receipt (schema `refrain.mod-receipt/2`).
+///
+/// `json::dump()` writes object members in sorted key order and the file list
+/// is sorted by path bytes, so the same install with the same `installed_at`
+/// produces byte-identical receipts. `installed_at` and `installer_version` are
+/// the only non-content fields; both are supplied by the caller.
+[[nodiscard]] auto format_install_receipt(const rfmod_install_result &result,
+                                          std::string_view installed_at,
+                                          std::string_view installer_version)
     -> std::string {
     using json_value = data::json::value;
 
@@ -1994,7 +2038,7 @@ namespace {
     }
 
     json_value::object_type receipt;
-    receipt.emplace("schema", json_value{"refrain.mod-receipt/1"});
+    receipt.emplace("schema", json_value{std::string{mod_receipt_schema_v2}});
     receipt.emplace("id", json_value{result.manifest.common.id});
     receipt.emplace("version", json_value{result.manifest.common.version});
     receipt.emplace("abi", json_value{result.manifest.common.abi});
@@ -2005,10 +2049,32 @@ namespace {
     receipt.emplace("signed", json_value{result.signed_package});
     receipt.emplace("trusted", json_value{result.trusted});
     receipt.emplace("key_id", json_value{result.key_id});
+    receipt.emplace("public_key_fingerprint",
+                    json_value{result.public_key_fingerprint});
+    receipt.emplace("policy", json_value{result.receipt_policy});
+    receipt.emplace("installed_at", json_value{std::string{installed_at}});
+    receipt.emplace("installer_version",
+                    json_value{std::string{installer_version}});
     receipt.emplace("origin",
                     json_value{std::string{mod::to_string(result.origin)}});
     receipt.emplace("files", json_value{std::move(files)});
     return json_value{std::move(receipt)}.dump();
+}
+
+/// Serialize a signer pin (schema `refrain.mod-signer-pin/1`).
+[[nodiscard]] auto format_signer_pin(const mod_signer_pin &pin) -> std::string {
+    using json_value = data::json::value;
+    json_value::object_type document;
+    document.emplace("schema", json_value{std::string{mod_signer_pin_schema}});
+    document.emplace("id", json_value{pin.id});
+    document.emplace("key_id", json_value{pin.key_id});
+    document.emplace("public_key_fingerprint",
+                     json_value{pin.public_key_fingerprint});
+    document.emplace("policy",
+                     json_value{std::string{mod::to_string(pin.policy)}});
+    document.emplace("pinned_at", json_value{pin.pinned_at});
+    document.emplace("source", json_value{pin.source});
+    return json_value{std::move(document)}.dump();
 }
 
 /// Soft target size of the single content segment batch opened by one install.
@@ -2208,6 +2274,509 @@ struct rebuilt_resolution_index {
     return rebuilt;
 }
 
+// ---------------------------------------------------------------------------
+// update policy (signature continuity, version monotonicity)
+// ---------------------------------------------------------------------------
+
+/// Effective signer state of one mod id before an install.
+enum class signer_state : std::uint8_t {
+    none,           ///< no installed version and no signer pin: first install
+    pinned,         ///< a signer is pinned (pin file or a v2 receipt)
+    legacy_unpinned ///< only v1 receipts: the signer is unknown until confirmed
+};
+
+/// Everything an update decision needs about the current install of one id.
+struct installed_state {
+    std::vector<mod_receipt> receipts{};
+    std::optional<mod_signer_pin> pin{};
+    signer_state state{signer_state::none};
+};
+
+/// Highest installed version (SemVer precedence; equal precedence is broken by
+/// the raw version text so the choice is deterministic). `nullptr` when empty.
+[[nodiscard]] auto latest_receipt(std::span<const mod_receipt> receipts)
+    -> const mod_receipt * {
+    const mod_receipt *best{nullptr};
+    core::semver best_version{};
+    for (const auto &receipt : receipts) {
+        auto version{core::semver::parse(receipt.version)};
+        if (!version) {
+            continue;
+        }
+        if (best == nullptr) {
+            best = &receipt;
+            best_version = std::move(*version);
+            continue;
+        }
+        const auto order{core::compare(*version, best_version)};
+        if (order == std::strong_ordering::greater ||
+            (order == std::strong_ordering::equal &&
+             receipt.version > best->version)) {
+            best = &receipt;
+            best_version = std::move(*version);
+        }
+    }
+    return best;
+}
+
+/// Load the installed receipts of `id` and resolve the effective signer pin.
+///
+/// The pin file is authoritative. Without one, a v2 signed receipt pins its
+/// signer (key id plus fingerprint when the key bytes were configured); a v1
+/// signed receipt is legacy state, so an update needs explicit administrator
+/// confirmation before it may pin a signer.
+[[nodiscard]] auto load_installed_state(std::string_view store_root,
+                                        std::string_view id)
+    -> result<installed_state> {
+    auto paths{list_receipt_paths_for(store_root, id)};
+    if (!paths) {
+        return std::unexpected{std::move(paths.error())};
+    }
+    installed_state state;
+    state.receipts.reserve(paths->size());
+    for (const auto &path : *paths) {
+        auto receipt{read_receipt(path)};
+        if (!receipt) {
+            return std::unexpected{std::move(receipt.error())};
+        }
+        if (receipt->id != id) {
+            return std::unexpected{make_error(
+                error_code::parse_error,
+                fmt::format("mod install: receipt '{}' records id '{}' but "
+                            "lives under '{}'",
+                            path, receipt->id, id))};
+        }
+        state.receipts.push_back(std::move(*receipt));
+    }
+
+    auto file_pin{read_signer_pin(store_root, id)};
+    if (!file_pin) {
+        return std::unexpected{std::move(file_pin.error())};
+    }
+    if (*file_pin) {
+        state.pin = std::move(**file_pin);
+        state.state = signer_state::pinned;
+        return state;
+    }
+
+    // A v1 receipt and a v2 document migrated from v1 both record a signer
+    // that was never confirmed for continuity purposes.
+    const auto legacy{std::find_if(
+        state.receipts.begin(), state.receipts.end(),
+        [](const mod_receipt &receipt) {
+            const auto legacy_document{receipt.schema_version == 1U ||
+                                       receipt.policy == "legacy"};
+            return legacy_document && receipt.signed_package &&
+                   !receipt.key_id.empty();
+        })};
+    if (legacy != state.receipts.end()) {
+        // The key id is known from the v1 receipt, the fingerprint is not: the
+        // signer is pinned by id only and stays "unconfirmed" until an
+        // administrator accepts it.
+        state.pin = mod_signer_pin{.id = std::string{id},
+                                   .key_id = legacy->key_id,
+                                   .public_key_fingerprint = {},
+                                   .policy = rfmod_signature_policy::strict,
+                                   .pinned_at = {},
+                                   .source = "legacy"};
+        state.state = signer_state::legacy_unpinned;
+        return state;
+    }
+    if (const auto *latest{latest_receipt(state.receipts)};
+        latest != nullptr && latest->pinned()) {
+        state.pin = mod_signer_pin{
+            .id = std::string{id},
+            .key_id = latest->key_id,
+            .public_key_fingerprint = latest->public_key_fingerprint,
+            .policy = parse_rfmod_signature_policy(latest->policy)
+                          .value_or(rfmod_signature_policy::strict),
+            .pinned_at = {},
+            .source = "receipt"};
+        state.state = signer_state::pinned;
+    }
+    return state;
+}
+
+/// New signer identity carried by the package being installed.
+struct package_signer {
+    bool signed_package{false};
+    std::string key_id{};
+    std::string fingerprint{};
+};
+
+/// Result of the pre-write update-policy check.
+struct update_decision {
+    /// Exact archive digest already installed: nothing to do.
+    bool already_installed{false};
+    /// Existing receipt path of the idempotent archive (when
+    /// `already_installed`).
+    std::string existing_receipt{};
+    /// Installed members of the idempotent archive (when `already_installed`).
+    std::vector<receipt_file> existing_files{};
+    /// Pin to publish after a successful install (`nullopt` = keep the current
+    /// state and write nothing).
+    std::optional<mod_signer_pin> next_pin{};
+    bool downgrade_override{false};
+    bool same_version_override{false};
+    bool unpinned_confirmed{false};
+    bool signer_rotated{false};
+};
+
+/// Apply the Android-style update rules for one package.
+///
+/// Returns an error and writes nothing when the update is refused. The checks,
+/// in order: version monotonicity, same-version content identity, signer
+/// continuity (stored signer vs package signer, rotation allowlist, signed to
+/// unsigned).
+[[nodiscard]] auto
+decide_update(std::string_view store_root, std::string_view id,
+              std::string_view version, const data::digest32 &archive_digest,
+              const package_signer &signer, const installed_state &state,
+              const rfmod_install_options &options) -> result<update_decision> {
+    update_decision decision;
+
+    // Exact (id, version) receipt: the archive digest is the content identity.
+    // The receipt file name is the version text, so an exact match is also the
+    // slot the install would overwrite.
+    const auto same_version{std::find_if(state.receipts.begin(),
+                                         state.receipts.end(),
+                                         [version](const mod_receipt &receipt) {
+                                             return receipt.version == version;
+                                         })};
+    if (same_version != state.receipts.end() &&
+        same_version->archive_blake3 == archive_digest) {
+        decision.already_installed = true;
+        decision.existing_receipt =
+            fmt::format("{}/mods/{}/{}.json", store_root, id, version);
+        decision.existing_files = same_version->files;
+        return decision;
+    }
+
+    bool lower_than_installed{false};
+    if (const auto *latest{latest_receipt(state.receipts)}; latest != nullptr) {
+        auto incoming{core::semver::parse(version)};
+        auto installed{core::semver::parse(latest->version)};
+        if (incoming && installed) {
+            lower_than_installed = core::compare(*incoming, *installed) ==
+                                   std::strong_ordering::less;
+        }
+    }
+    if (lower_than_installed) {
+        if (!options.allow_downgrade) {
+            const auto *latest{latest_receipt(state.receipts)};
+            return std::unexpected{make_error(
+                error_code::version_mismatch,
+                fmt::format("mod install: '{}' version {} is lower than the "
+                            "installed {}; pass --allow-downgrade to accept a "
+                            "downgrade",
+                            id, version,
+                            latest == nullptr ? std::string{"?"}
+                                              : latest->version))};
+        }
+        decision.downgrade_override = true;
+    }
+    if (same_version != state.receipts.end()) {
+        if (!options.replace_same_version) {
+            return std::unexpected{make_error(
+                error_code::already_exists,
+                fmt::format("mod install: '{}' version {} is already installed "
+                            "with a different archive digest; bump the version "
+                            "or pass --replace-same-version",
+                            id, version))};
+        }
+        decision.same_version_override = true;
+    }
+
+    const auto make_pin = [&](std::string source,
+                              std::string fingerprint) -> mod_signer_pin {
+        return mod_signer_pin{.id = std::string{id},
+                              .key_id = signer.key_id,
+                              .public_key_fingerprint = std::move(fingerprint),
+                              .policy = options.signature_policy,
+                              .pinned_at = utc_now_text(),
+                              .source = std::move(source)};
+    };
+
+    switch (state.state) {
+    case signer_state::none:
+        if (signer.signed_package) {
+            decision.next_pin = make_pin("install", signer.fingerprint);
+        }
+        return decision;
+
+    case signer_state::legacy_unpinned:
+        if (!options.accept_unpinned) {
+            return std::unexpected{make_error(
+                error_code::permission_denied,
+                fmt::format("mod install: '{}' is installed from an older "
+                            "receipt that does not pin a signer; confirm the "
+                            "signer with --accept-unpinned-signer or "
+                            "`mods pin` before updating",
+                            id))};
+        }
+        decision.unpinned_confirmed = true;
+        if (!signer.signed_package) {
+            return std::unexpected{make_error(
+                error_code::permission_denied,
+                fmt::format("mod install: '{}' is a signed install but the "
+                            "update is unsigned; signed-to-unsigned updates "
+                            "are rejected",
+                            id))};
+        }
+        decision.next_pin = make_pin("install", signer.fingerprint);
+        return decision;
+
+    case signer_state::pinned:
+        break;
+    }
+
+    const auto &pin{*state.pin};
+    if (!signer.signed_package) {
+        return std::unexpected{make_error(
+            error_code::permission_denied,
+            fmt::format("mod install: '{}' is pinned to signer '{}' but the "
+                        "update is unsigned; signed-to-unsigned updates are "
+                        "rejected",
+                        id, pin.key_id))};
+    }
+    if (signer.key_id == pin.key_id) {
+        if (!pin.public_key_fingerprint.empty() &&
+            !signer.fingerprint.empty() &&
+            signer.fingerprint != pin.public_key_fingerprint) {
+            return std::unexpected{make_error(
+                error_code::permission_denied,
+                fmt::format("mod install: '{}' update is signed by key id '{}' "
+                            "but a different key than the pinned fingerprint",
+                            id, signer.key_id))};
+        }
+        decision.next_pin = make_pin("install", signer.fingerprint.empty()
+                                                    ? pin.public_key_fingerprint
+                                                    : signer.fingerprint);
+        return decision;
+    }
+
+    const auto rotation{std::find_if(
+        options.rotations.begin(), options.rotations.end(),
+        [&](const rfmod_key_rotation &entry) {
+            return entry.id == id && entry.old_key_id == pin.key_id &&
+                   entry.new_key_id == signer.key_id;
+        })};
+    if (rotation != options.rotations.end()) {
+        decision.signer_rotated = true;
+        decision.next_pin = make_pin("rotation", signer.fingerprint);
+        return decision;
+    }
+    if (options.signature_policy == rfmod_signature_policy::trusted_any) {
+        decision.signer_rotated = true;
+        decision.next_pin = make_pin("trusted-any", signer.fingerprint);
+        return decision;
+    }
+    return std::unexpected{make_error(
+        error_code::permission_denied,
+        fmt::format("mod install: '{}' is pinned to signer '{}' but the update "
+                    "is signed by '{}'; add a rotation entry for {} -> {} to "
+                    "allow the change",
+                    id, pin.key_id, signer.key_id, pin.key_id, signer.key_id))};
+}
+
+// ---------------------------------------------------------------------------
+// staging
+// ---------------------------------------------------------------------------
+
+/// `<store>/content/.staging` (hidden: content-store transaction debris).
+[[nodiscard]] auto staging_root(std::string_view store_root) -> std::string {
+    return fmt::format("{}/content/.staging", store_root);
+}
+
+/// True when `entry` is a staging directory name (all staging dirs are
+/// prefixed so accidental entries are not deleted).
+[[nodiscard]] auto is_staging_entry(std::string_view name) noexcept -> bool {
+    return name.size() > 0 && name.front() != '.';
+}
+
+/// Remove one directory tree, ignoring "already gone" races.
+void remove_staging_tree(const std::string &path) noexcept {
+    std::error_code error;
+    std::filesystem::remove_all(std::filesystem::path{path}, error);
+}
+
+/// Write `<staging>/owner` (`pid=<n>` / `started=<unix>`) so a later install
+/// can tell a crashed staging directory from one a live process is using.
+[[nodiscard]] auto write_staging_owner(const std::string &directory) -> status {
+    const auto now{std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count()};
+    return io::atomic_write_text(
+        fmt::format("{}/owner", directory),
+        fmt::format("pid={}\nstarted={}\n", platform::process_id(), now));
+}
+
+/// Parse a staging owner record; `nullopt` when it is missing or malformed.
+struct staging_owner {
+    std::uint64_t pid{0};
+    std::int64_t started{0};
+};
+
+[[nodiscard]] auto read_staging_owner(const std::string &directory)
+    -> std::optional<staging_owner> {
+    auto text{io::read_text(fmt::format("{}/owner", directory),
+                            {.max_bytes = 4096, .allow_symlink = false})};
+    if (!text) {
+        return std::nullopt;
+    }
+    staging_owner owner;
+    bool saw_pid{false};
+    bool saw_started{false};
+    std::size_t offset{0};
+    while (offset < text->size()) {
+        auto end{text->find('\n', offset)};
+        if (end == std::string::npos) {
+            end = text->size();
+        }
+        const std::string_view line{text->data() + offset, end - offset};
+        offset = end + 1U;
+        if (line.starts_with("pid=")) {
+            std::uint64_t value{0};
+            const auto [pointer, error]{std::from_chars(
+                line.data() + 4, line.data() + line.size(), value)};
+            if (error != std::errc{} || pointer != line.data() + line.size()) {
+                return std::nullopt;
+            }
+            owner.pid = value;
+            saw_pid = true;
+        } else if (line.starts_with("started=")) {
+            std::int64_t value{0};
+            const auto [pointer, error]{std::from_chars(
+                line.data() + 8, line.data() + line.size(), value)};
+            if (error != std::errc{} || pointer != line.data() + line.size()) {
+                return std::nullopt;
+            }
+            owner.started = value;
+            saw_started = true;
+        }
+    }
+    if (!saw_pid || !saw_started) {
+        return std::nullopt;
+    }
+    return owner;
+}
+
+/// Remove staging directories left behind by a crashed install.
+///
+/// A directory whose owner process is still alive (and whose record is younger
+/// than a day) is left alone; everything else is a crash leftover. Callers hold
+/// the store lock, so no live installer can be between creating its directory
+/// and writing the owner record.
+[[nodiscard]] auto prune_staging(const std::string &root, std::size_t &removed)
+    -> status {
+    if (!io::is_directory(root)) {
+        return status_ok();
+    }
+    auto names{io::list_directory(root)};
+    if (!names) {
+        return std::unexpected{
+            annotate(std::move(names.error()), "rfmod install: staging")};
+    }
+    const auto now{std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count()};
+    for (const auto &name : *names) {
+        if (!is_staging_entry(name)) {
+            continue;
+        }
+        const auto directory{data::join_path(root, name)};
+        if (!io::is_directory(directory)) {
+            continue;
+        }
+        bool stale{true};
+        if (const auto owner{read_staging_owner(directory)}; owner) {
+            constexpr std::int64_t owner_max_age_seconds{24 * 60 * 60};
+            const auto fresh{owner->started > 0 &&
+                             now - owner->started < owner_max_age_seconds};
+            stale = !(fresh && platform::process_alive(owner->pid));
+        }
+        if (!stale) {
+            continue;
+        }
+        remove_staging_tree(directory);
+        ++removed;
+    }
+    return status_ok();
+}
+
+/// RAII cleanup of one staging directory.
+class staging_guard {
+  public:
+    explicit staging_guard(std::string path) : path_{std::move(path)} {}
+    staging_guard(const staging_guard &) = delete;
+    auto operator=(const staging_guard &) -> staging_guard & = delete;
+    staging_guard(staging_guard &&other) noexcept
+        : path_{std::move(other.path_)} {
+        other.path_.clear();
+    }
+    auto operator=(staging_guard &&other) noexcept -> staging_guard & {
+        if (this != &other) {
+            cleanup();
+            path_ = std::move(other.path_);
+            other.path_.clear();
+        }
+        return *this;
+    }
+    ~staging_guard() { cleanup(); }
+
+    [[nodiscard]] auto path() const noexcept -> const std::string & {
+        return path_;
+    }
+    /// Keep the directory after the scope ends (used only by tests via
+    /// `rfmod_install_options::keep_staging`).
+    void release() noexcept { path_.clear(); }
+
+  private:
+    void cleanup() noexcept {
+        if (!path_.empty()) {
+            remove_staging_tree(path_);
+            path_.clear();
+        }
+    }
+
+    std::string path_{};
+};
+
+/// Create one unique staging directory below `<store>/mods/.staging`.
+[[nodiscard]] auto create_staging_directory(const data::content_store &store,
+                                            std::string_view id,
+                                            std::string_view version)
+    -> result<std::string> {
+    const auto root{staging_root(store.root())};
+    if (auto created{io::create_directories(root)}; !created) {
+        return std::unexpected{
+            annotate(std::move(created.error()), "rfmod install: staging")};
+    }
+    const auto base{
+        fmt::format("{}/{}-{}-{}", root, id, version, platform::process_id())};
+    for (std::size_t attempt{0}; attempt < 1000U; ++attempt) {
+        const auto candidate{
+            attempt == 0U ? base : fmt::format("{}-{}", base, attempt)};
+        std::error_code error;
+        if (std::filesystem::create_directory(std::filesystem::path{candidate},
+                                              error)) {
+            return candidate;
+        }
+        if (error && error != std::errc::file_exists) {
+            return std::unexpected{make_error(
+                error_code::io_error,
+                fmt::format("rfmod install: cannot create the staging "
+                            "directory '{}': {}",
+                            candidate, error.message()))};
+        }
+    }
+    return std::unexpected{make_error(
+        error_code::io_error,
+        fmt::format("rfmod install: cannot find a free staging directory "
+                    "below '{}'",
+                    root))};
+}
+
 } // namespace
 
 auto install_rfmod(const rfmod_reader &reader, data::content_store &store,
@@ -2257,12 +2826,91 @@ auto install_rfmod(const rfmod_reader &reader, data::content_store &store,
     result.signed_package = verified->signed_package;
     result.trusted = verified->trusted;
     result.key_id = std::move(verified->key_id);
+    result.public_key_fingerprint = std::move(verified->public_key_fingerprint);
+    result.receipt_policy =
+        receipt_policy_text(result.signed_package, options.signature_policy);
     result.files.reserve(reader.file_count());
+
+    // Build/validate the receipt path before the first CAS write so an
+    // unsafe id/version fails without leaving any blob behind (same guarantee
+    // as a verification failure). The receipt itself is still published only
+    // after the batch commit and the merged blob table.
+    std::optional<std::string> target_receipt;
+    if (options.write_receipt) {
+        auto path{receipt_path_for(store, result.manifest)};
+        if (!path) {
+            return std::unexpected{
+                annotate(std::move(path.error()), "rfmod install")};
+        }
+        target_receipt = std::move(*path);
+    }
+
+    // Remove staging debris of an interrupted install before doing anything
+    // else. The store lock (held above or by the caller) guarantees that no
+    // live installer is between creating its staging directory and writing the
+    // owner record, so anything stale belongs to a crashed process.
+    if (options.prune_staging) {
+        auto pruned{
+            prune_staging(staging_root(store.root()), result.pruned_staging)};
+        if (!pruned) {
+            return std::unexpected{
+                annotate(std::move(pruned.error()), "rfmod install")};
+        }
+    }
+
+    // Android-style update policy. All checks are read-only: a rejected update
+    // leaves the installed state untouched.
+    update_decision decision;
+    if (options.write_receipt) {
+        const auto &common{result.manifest.common};
+        auto state{load_installed_state(store.root(), common.id)};
+        if (!state) {
+            return std::unexpected{
+                annotate(std::move(state.error()), "rfmod install")};
+        }
+        auto decided{decide_update(
+            store.root(), common.id, common.version, result.archive_digest,
+            package_signer{.signed_package = result.signed_package,
+                           .key_id = result.key_id,
+                           .fingerprint = result.public_key_fingerprint},
+            *state, options)};
+        if (!decided) {
+            return std::unexpected{
+                annotate(std::move(decided.error()), "rfmod install")};
+        }
+        decision = std::move(*decided);
+        result.downgrade_override = decision.downgrade_override;
+        result.same_version_override = decision.same_version_override;
+        result.unpinned_confirmed = decision.unpinned_confirmed;
+        result.signer_rotated = decision.signer_rotated;
+        if (decision.already_installed) {
+            // Identical archive already installed: no blob, table, receipt or
+            // pin write. The staging directory was never created. The result
+            // still reports the installed members (from the receipt) so a
+            // caller sees the same shape as a fresh install.
+            for (const auto &file : decision.existing_files) {
+                result.files.push_back(installed_file{
+                    .path = file.path,
+                    .digest = file.blake3,
+                    .size = file.size,
+                    .mode = file.mode,
+                });
+            }
+            result.stored_blobs = result.files.size();
+            result.already_installed = true;
+            result.receipt_path = std::move(decision.existing_receipt);
+            return result;
+        }
+        if (decision.next_pin.has_value()) {
+            result.receipt_policy =
+                std::string{to_string(decision.next_pin->policy)};
+        }
+    }
 
     // Snapshot the previous blob table before the first write: it is both the
     // dedupe source for the batch and the metadata carried forward when the
     // merged table is republished after commit. A damaged/foreign table fails
-    // here, before any segment or blob is published.
+    // here, before any staging directory, segment or blob is published.
     auto existing_table{load_install_blob_table(store)};
     if (!existing_table) {
         return std::unexpected{
@@ -2280,40 +2928,36 @@ auto install_rfmod(const rfmod_reader &reader, data::content_store &store,
             annotate(std::move(existing_indexes.error()), "rfmod install")};
     }
 
-    // Build/validate the receipt path before the first CAS write so an
-    // unsafe id/version fails without leaving any blob behind (same guarantee
-    // as a verification failure). The receipt itself is still published only
-    // after the batch commit and the merged blob table.
-    std::optional<std::string> receipt_path;
-    if (options.write_receipt) {
-        auto path{receipt_path_for(store, result.manifest)};
-        if (!path) {
-            return std::unexpected{
-                annotate(std::move(path.error()), "rfmod install")};
-        }
-        receipt_path = std::move(*path);
-    }
-
-    // One install transaction = one batch: small raw members share immutable
-    // segments, packed members keep one file each.
-    auto staged{data::batch::begin(store.root(),
-                                   existing_table && existing_table->has_value()
-                                       ? &**existing_table
-                                       : nullptr,
-                                   install_segment_target_bytes)};
-    if (!staged) {
+    // Staging unpack: every member is written below one staging directory and
+    // re-hashed there before it may enter the CAS. The guard removes the tree
+    // on every return path, including errors.
+    auto staging_directory{create_staging_directory(
+        store, result.manifest.common.id, result.manifest.common.version)};
+    if (!staging_directory) {
         return std::unexpected{
-            annotate(std::move(staged.error()), "rfmod install")};
+            annotate(std::move(staging_directory.error()), "rfmod install")};
+    }
+    staging_guard staging{std::move(*staging_directory)};
+    if (auto owner{write_staging_owner(staging.path())}; !owner) {
+        return std::unexpected{
+            annotate(std::move(owner.error()), "rfmod install: staging")};
+    }
+    const auto members{fmt::format("{}/members", staging.path())};
+    if (auto created{io::create_directories(members)}; !created) {
+        return std::unexpected{
+            annotate(std::move(created.error()), "rfmod install: staging")};
     }
 
+    std::vector<std::pair<std::string, std::string>> staged_members;
+    staged_members.reserve(reader.file_count());
+    std::size_t staged_index{0};
     for (const auto &entry : reader.entries()) {
         auto bytes{reader.read(entry.path)};
         if (!bytes) {
             return std::unexpected{std::move(bytes.error())};
         }
         // The CAS key is authoritative: it must equal the [files] record (or,
-        // for manifest.toml, the verified manifest digest). Every check below
-        // still runs before the corresponding member is put.
+        // for manifest.toml, the verified manifest digest).
         const auto actual{data::blake3(*bytes)};
         data::digest32 expected{actual};
         std::uint32_t mode{0644};
@@ -2338,23 +2982,54 @@ auto install_rfmod(const rfmod_reader &reader, data::content_store &store,
                             "package manifest",
                             entry.path))};
         }
-        auto digest{staged->put(*bytes)};
+        // Flat staging names: package member paths are tar paths and may be
+        // longer than a filesystem name allows (PAX/GNU long names), so the
+        // staging file is numbered instead of mirroring the member path.
+        const auto staged_path{
+            fmt::format("{}/{:08}", members, staged_index++)};
+        if (auto written{io::atomic_write_file(staged_path, *bytes)};
+            !written) {
+            return std::unexpected{
+                annotate(std::move(written.error()),
+                         fmt::format("rfmod install: staging {}", entry.path))};
+        }
+        result.files.push_back(installed_file{.path = entry.path,
+                                              .digest = expected,
+                                              .size = entry.size,
+                                              .mode = mode});
+        staged_members.emplace_back(entry.path, staged_path);
+    }
+
+    // One install transaction = one batch: small raw members share immutable
+    // segments, packed members keep one file each. Bytes are ingested from the
+    // staging tree, so the CAS never receives anything the staging pass did not
+    // hash.
+    auto staged{data::batch::begin(store.root(),
+                                   existing_table && existing_table->has_value()
+                                       ? &**existing_table
+                                       : nullptr,
+                                   install_segment_target_bytes)};
+    if (!staged) {
+        return std::unexpected{
+            annotate(std::move(staged.error()), "rfmod install")};
+    }
+    for (const auto &[path, staged_path] : staged_members) {
+        auto digest{staged->put_file(staged_path)};
         if (!digest) {
             return std::unexpected{
                 annotate(std::move(digest.error()),
-                         fmt::format("rfmod install: {}", entry.path))};
+                         fmt::format("rfmod install: {}", path))};
         }
-        if (*digest != expected) {
+        const auto found{std::find_if(
+            result.files.begin(), result.files.end(),
+            [&path](const installed_file &file) { return file.path == path; })};
+        if (found == result.files.end() || found->digest != *digest) {
             return std::unexpected{make_error(
                 error_code::parse_error,
                 fmt::format("rfmod install: CAS digest for '{}' differs from "
                             "the package manifest",
-                            entry.path))};
+                            path))};
         }
-        result.files.push_back(installed_file{.path = entry.path,
-                                              .digest = *digest,
-                                              .size = entry.size,
-                                              .mode = mode});
         ++result.stored_blobs;
     }
 
@@ -2417,8 +3092,9 @@ auto install_rfmod(const rfmod_reader &reader, data::content_store &store,
     // Receipt: published only after the batch committed and
     // the blob table is visible. A receipt failure is reported as `io_error`
     // but leaves those blobs in place: the store is append-only and install
-    // has no rollback (GC/reference counting stays deferred).
-    if (receipt_path.has_value()) {
+    // has no rollback (GC/reference counting stays deferred). The previous
+    // install stays intact because its receipt was never touched.
+    if (target_receipt.has_value()) {
         const auto directory{
             fmt::format("{}/mods/{}", store.root(), result.manifest.common.id)};
         if (auto created_directory{io::create_directories(directory)};
@@ -2427,13 +3103,48 @@ auto install_rfmod(const rfmod_reader &reader, data::content_store &store,
                 annotate(std::move(created_directory.error()),
                          "rfmod install: receipt")};
         }
-        const auto receipt{format_install_receipt(result)};
-        if (auto written{io::atomic_write_text(*receipt_path, receipt)};
+        const auto installed_at{options.installed_at.empty()
+                                    ? utc_now_text()
+                                    : options.installed_at};
+        const auto receipt{format_install_receipt(result, installed_at,
+                                                  options.installer_version)};
+        if (auto written{io::atomic_write_text(*target_receipt, receipt)};
             !written) {
             return std::unexpected{
                 annotate(std::move(written.error()), "rfmod install: receipt")};
         }
-        result.receipt_path = std::move(*receipt_path);
+        result.receipt_path = std::move(*target_receipt);
+    }
+
+    // Signer pin: written after the receipt so the pin never describes an
+    // install that does not exist. A pin write failure is reported but the
+    // install itself is committed; the next install derives the same pin from
+    // the receipt v2.
+    if (options.write_receipt && options.write_pin &&
+        decision.next_pin.has_value()) {
+        const auto &signer{*decision.next_pin};
+        auto path{signer_pin_path(store.root(), signer.id)};
+        if (!path) {
+            return std::unexpected{
+                annotate(std::move(path.error()), "rfmod install: signer pin")};
+        }
+        const auto directory{fmt::format("{}/mods/pins", store.root())};
+        if (auto created_directory{io::create_directories(directory)};
+            !created_directory) {
+            return std::unexpected{
+                annotate(std::move(created_directory.error()),
+                         "rfmod install: signer pin")};
+        }
+        if (auto written{
+                io::atomic_write_text(*path, format_signer_pin(signer))};
+            !written) {
+            return std::unexpected{annotate(
+                std::move(written.error()),
+                "rfmod install: the install is committed but the signer pin "
+                "could not be written")};
+        }
+        result.signer_pinned = true;
+        result.signer_pin_path = std::move(*path);
     }
     return result;
 }
@@ -2533,12 +3244,15 @@ namespace {
     if (!schema) {
         return std::unexpected{std::move(schema.error())};
     }
-    if (*schema != "refrain.mod-receipt/1") {
+    mod_receipt out;
+    if (*schema == mod_receipt_schema_v1) {
+        out.schema_version = 1;
+    } else if (*schema == mod_receipt_schema_v2) {
+        out.schema_version = 2;
+    } else {
         return std::unexpected{receipt_error(
             path, fmt::format("unsupported receipt schema '{}'", *schema))};
     }
-
-    mod_receipt out;
     auto id{receipt_string(document, "id", path)};
     if (!id) {
         return std::unexpected{std::move(id.error())};
@@ -2602,6 +3316,50 @@ namespace {
     }
     out.key_id = std::move(*key_id);
 
+    if (out.schema_version >= 2U) {
+        auto fingerprint{
+            receipt_string(document, "public_key_fingerprint", path)};
+        if (!fingerprint) {
+            return std::unexpected{std::move(fingerprint.error())};
+        }
+        if (!fingerprint->empty() && !is_lower_hex(*fingerprint, 64)) {
+            return std::unexpected{receipt_error(
+                path, "field 'public_key_fingerprint' must be empty or 64 "
+                      "lowercase hex characters")};
+        }
+        out.public_key_fingerprint = std::move(*fingerprint);
+
+        auto policy{receipt_string(document, "policy", path)};
+        if (!policy) {
+            return std::unexpected{std::move(policy.error())};
+        }
+        if (*policy != "strict" && *policy != "trusted-any" &&
+            *policy != "unsigned" && *policy != "legacy") {
+            return std::unexpected{receipt_error(
+                path, fmt::format("unknown policy '{}' (expected strict, "
+                                  "trusted-any, unsigned or legacy)",
+                                  *policy))};
+        }
+        out.policy = std::move(*policy);
+
+        auto installed_at{receipt_string(document, "installed_at", path)};
+        if (!installed_at) {
+            return std::unexpected{std::move(installed_at.error())};
+        }
+        out.installed_at = std::move(*installed_at);
+
+        auto installer_version{
+            receipt_string(document, "installer_version", path)};
+        if (!installer_version) {
+            return std::unexpected{std::move(installer_version.error())};
+        }
+        out.installer_version = std::move(*installer_version);
+    } else {
+        // A v1 receipt predates signer pinning and the audit fields; the
+        // runtime treats it as legacy state until the signer is confirmed.
+        out.policy = "legacy";
+    }
+
     if (document.find("origin") != nullptr) {
         auto origin{receipt_string(document, "origin", path)};
         if (!origin) {
@@ -2656,6 +3414,7 @@ namespace {
         if (!blake3) {
             return std::unexpected{std::move(blake3.error())};
         }
+        std::uint32_t file_mode{0644};
         if (entry.find("mode") != nullptr) {
             auto mode{receipt_integer(entry, "mode", path)};
             if (!mode) {
@@ -2666,11 +3425,13 @@ namespace {
                     path,
                     fmt::format("files[{}].mode must be 0..0777", index))};
             }
+            file_mode = static_cast<std::uint32_t>(*mode);
         }
         out.files.push_back(receipt_file{
             .path = std::move(*file_path),
             .size = static_cast<std::uint64_t>(*size),
             .blake3 = *blake3,
+            .mode = file_mode,
         });
     }
     return out;
@@ -2706,6 +3467,11 @@ auto list_receipt_paths(std::string_view store_root)
             annotate(std::move(ids.error()), "mod receipts")};
     }
     for (const auto &id : *ids) {
+        // `pins` is an install-state directory, not a mod id; hidden
+        // directories (`.staging`, `.trash`) are installer debris.
+        if (id.empty() || id.front() == '.' || id == "pins") {
+            continue;
+        }
         const auto directory{data::join_path(mods_root, id)};
         if (!io::is_directory(directory)) {
             continue;
@@ -2728,6 +3494,445 @@ auto list_receipt_paths(std::string_view store_root)
     }
     std::sort(paths.begin(), paths.end());
     return paths;
+}
+
+auto list_receipt_paths_for(std::string_view store_root, std::string_view id)
+    -> result<std::vector<std::string>> {
+    if (!is_safe_receipt_segment(id)) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument,
+            fmt::format("mod receipts: '{}' is not a safe single path segment",
+                        id))};
+    }
+    auto all{list_receipt_paths(store_root)};
+    if (!all) {
+        return std::unexpected{std::move(all.error())};
+    }
+    const auto prefix{fmt::format("{}/mods/{}/", store_root, id)};
+    std::vector<std::string> paths;
+    for (auto &path : *all) {
+        if (path.starts_with(prefix)) {
+            paths.push_back(std::move(path));
+        }
+    }
+    return paths;
+}
+
+auto receipt_path(std::string_view store_root, std::string_view id,
+                  std::string_view version) -> result<std::string> {
+    if (!is_safe_receipt_segment(id) || !is_safe_receipt_segment(version)) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument,
+            fmt::format("mod receipt path: id '{}' or version '{}' is not a "
+                        "safe single path segment",
+                        id, version))};
+    }
+    if (store_root.empty()) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "mod receipt path: empty store root")};
+    }
+    return fmt::format("{}/mods/{}/{}.json", store_root, id, version);
+}
+
+auto public_key_fingerprint(const data::ed25519_public_key &key)
+    -> std::string {
+    return data::to_hex(data::blake3(std::span<const std::byte>{key.bytes}));
+}
+
+auto to_string(rfmod_signature_policy policy) noexcept -> std::string_view {
+    switch (policy) {
+    case rfmod_signature_policy::strict:
+        return "strict";
+    case rfmod_signature_policy::trusted_any:
+        return "trusted-any";
+    }
+    return "strict";
+}
+
+auto parse_rfmod_signature_policy(std::string_view text) noexcept
+    -> std::optional<rfmod_signature_policy> {
+    if (text == "strict") {
+        return rfmod_signature_policy::strict;
+    }
+    if (text == "trusted-any") {
+        return rfmod_signature_policy::trusted_any;
+    }
+    return std::nullopt;
+}
+
+auto read_signer_pin(std::string_view store_root, std::string_view id)
+    -> result<std::optional<mod_signer_pin>> {
+    auto path{signer_pin_path(store_root, id)};
+    if (!path) {
+        return std::unexpected{std::move(path.error())};
+    }
+    if (!io::exists(*path)) {
+        return std::optional<mod_signer_pin>{};
+    }
+    auto document{data::json::value::parse_file(*path)};
+    if (!document) {
+        return std::unexpected{
+            annotate(std::move(document.error()), "mod signer pin")};
+    }
+    if (!document->is_object()) {
+        return std::unexpected{
+            receipt_error(*path, "pin must be a JSON object")};
+    }
+    auto field_string = [&](std::string_view field) {
+        return receipt_string(*document, field, *path);
+    };
+    auto schema{field_string("schema")};
+    if (!schema) {
+        return std::unexpected{std::move(schema.error())};
+    }
+    if (*schema != mod_signer_pin_schema) {
+        return std::unexpected{receipt_error(
+            *path, fmt::format("unsupported pin schema '{}'", *schema))};
+    }
+    mod_signer_pin pin;
+    auto pin_id{field_string("id")};
+    if (!pin_id) {
+        return std::unexpected{std::move(pin_id.error())};
+    }
+    if (*pin_id != id) {
+        return std::unexpected{receipt_error(
+            *path, fmt::format("pin records id '{}' but lives under '{}'",
+                               *pin_id, id))};
+    }
+    pin.id = std::move(*pin_id);
+    auto key_id{field_string("key_id")};
+    if (!key_id) {
+        return std::unexpected{std::move(key_id.error())};
+    }
+    if (key_id->empty()) {
+        return std::unexpected{
+            receipt_error(*path, "field 'key_id' must not be empty")};
+    }
+    pin.key_id = std::move(*key_id);
+    auto fingerprint{field_string("public_key_fingerprint")};
+    if (!fingerprint) {
+        return std::unexpected{std::move(fingerprint.error())};
+    }
+    if (!fingerprint->empty() && !is_lower_hex(*fingerprint, 64)) {
+        return std::unexpected{receipt_error(
+            *path, "field 'public_key_fingerprint' must be empty or 64 "
+                   "lowercase hex characters")};
+    }
+    pin.public_key_fingerprint = std::move(*fingerprint);
+    auto policy{field_string("policy")};
+    if (!policy) {
+        return std::unexpected{std::move(policy.error())};
+    }
+    auto parsed_policy{parse_rfmod_signature_policy(*policy)};
+    if (!parsed_policy) {
+        return std::unexpected{receipt_error(
+            *path, fmt::format("unknown pin policy '{}'", *policy))};
+    }
+    pin.policy = *parsed_policy;
+    auto pinned_at{field_string("pinned_at")};
+    if (!pinned_at) {
+        return std::unexpected{std::move(pinned_at.error())};
+    }
+    pin.pinned_at = std::move(*pinned_at);
+    auto source{field_string("source")};
+    if (!source) {
+        return std::unexpected{std::move(source.error())};
+    }
+    pin.source = std::move(*source);
+    return std::optional<mod_signer_pin>{std::move(pin)};
+}
+
+auto write_signer_pin(std::string_view store_root, const mod_signer_pin &pin)
+    -> status {
+    auto path{signer_pin_path(store_root, pin.id)};
+    if (!path) {
+        return std::unexpected{std::move(path.error())};
+    }
+    if (pin.key_id.empty()) {
+        return std::unexpected{
+            make_error(error_code::invalid_argument,
+                       "mod signer pin: a pin must name a key id")};
+    }
+    if (!pin.public_key_fingerprint.empty() &&
+        !is_lower_hex(pin.public_key_fingerprint, 64)) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument,
+            "mod signer pin: the fingerprint must be empty or 64 lowercase "
+            "hex characters")};
+    }
+    if (auto created{
+            io::create_directories(data::join_path(store_root, "mods/pins"))};
+        !created) {
+        return std::unexpected{
+            annotate(std::move(created.error()), "mod signer pin")};
+    }
+    auto document{pin};
+    if (document.pinned_at.empty()) {
+        document.pinned_at = utc_now_text();
+    }
+    if (document.source.empty()) {
+        document.source = "admin";
+    }
+    return io::atomic_write_text(*path, format_signer_pin(document));
+}
+
+auto clear_signer_pin(std::string_view store_root, std::string_view id)
+    -> status {
+    auto path{signer_pin_path(store_root, id)};
+    if (!path) {
+        return std::unexpected{std::move(path.error())};
+    }
+    if (!io::exists(*path)) {
+        return status_ok();
+    }
+    std::error_code error;
+    std::filesystem::remove(std::filesystem::path{*path}, error);
+    if (error) {
+        return std::unexpected{
+            make_error(error_code::io_error,
+                       fmt::format("mod signer pin: failed to remove '{}': {}",
+                                   *path, error.message()))};
+    }
+    return status_ok();
+}
+
+auto uninstall_rfmod(data::content_store &store, std::string_view id,
+                     std::optional<std::string_view> version,
+                     const rfmod_uninstall_options &options)
+    -> result<rfmod_uninstall_result> {
+    if (!store.valid()) {
+        return std::unexpected{
+            make_error(error_code::not_initialized,
+                       "rfmod uninstall: content store is not open")};
+    }
+    if (!is_safe_receipt_segment(id)) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument,
+            fmt::format("rfmod uninstall: '{}' is not a safe single path "
+                        "segment",
+                        id))};
+    }
+    if (version.has_value() && !is_safe_receipt_segment(*version)) {
+        return std::unexpected{make_error(
+            error_code::invalid_argument,
+            fmt::format("rfmod uninstall: version '{}' is not a safe single "
+                        "path segment",
+                        *version))};
+    }
+    std::optional<data::store_lock> lock;
+    if (options.lock_store) {
+        auto acquired{data::store_lock::acquire(
+            store.root(), 5000, [](std::string_view line) {
+                fmt::println(stderr, "mods uninstall: {}", line);
+            })};
+        if (!acquired) {
+            return std::unexpected{
+                annotate(std::move(acquired.error()), "rfmod uninstall")};
+        }
+        lock.emplace(std::move(*acquired));
+    }
+
+    auto paths{list_receipt_paths_for(store.root(), id)};
+    if (!paths) {
+        return std::unexpected{
+            annotate(std::move(paths.error()), "rfmod uninstall")};
+    }
+    if (paths->empty()) {
+        return std::unexpected{make_error(
+            error_code::not_found,
+            fmt::format("rfmod uninstall: mod '{}' is not installed", id))};
+    }
+
+    // Select the receipts to remove. The version matches the receipt version
+    // text exactly (the receipt file name); a missing version is `not_found`
+    // instead of removing nothing silently.
+    std::vector<std::string> targets;
+    rfmod_uninstall_result result;
+    result.id = std::string{id};
+    if (version.has_value()) {
+        const auto wanted{std::find_if(
+            paths->begin(), paths->end(), [&](const std::string &path) {
+                const auto name{data::filename(path)};
+                return name == fmt::format("{}.json", *version);
+            })};
+        if (wanted == paths->end()) {
+            return std::unexpected{make_error(
+                error_code::not_found,
+                fmt::format("rfmod uninstall: mod '{}' version '{}' is not "
+                            "installed",
+                            id, *version))};
+        }
+        targets.push_back(*wanted);
+    } else {
+        targets = *paths;
+    }
+
+    // Remove every selected receipt. A failure leaves the already-removed
+    // receipts removed: uninstall of several versions is not one transaction
+    // (each receipt is independent), and the store never records partial
+    // versions.
+    for (const auto &path : targets) {
+        auto receipt{read_receipt(path)};
+        if (!receipt) {
+            return std::unexpected{
+                annotate(std::move(receipt.error()), "rfmod uninstall")};
+        }
+        std::error_code error;
+        std::filesystem::remove(std::filesystem::path{path}, error);
+        if (error) {
+            return std::unexpected{annotate(
+                make_error(error_code::io_error,
+                           fmt::format("failed to remove the receipt '{}': {}",
+                                       path, error.message())),
+                "rfmod uninstall")};
+        }
+        result.versions.push_back(std::move(receipt->version));
+    }
+    std::sort(result.versions.begin(), result.versions.end());
+    auto remaining{list_receipt_paths_for(store.root(), id)};
+    if (!remaining) {
+        return std::unexpected{
+            annotate(std::move(remaining.error()), "rfmod uninstall")};
+    }
+    result.last_version = remaining->empty();
+    if (!result.last_version) {
+        return result;
+    }
+
+    // Last installed version: the signer pin goes away unless the caller keeps
+    // it. Keeping it requires a signer to keep; when the removed receipts
+    // carry one, rewrite the pin so it survives the receipt deletion.
+    auto pin_path{signer_pin_path(store.root(), id)};
+    if (!pin_path) {
+        return std::unexpected{std::move(pin_path.error())};
+    }
+    if (options.keep_signer_pin) {
+        result.signer_pin_kept = true;
+        result.signer_pin_path = *pin_path;
+        if (!io::exists(*pin_path)) {
+            // Derive from the removed receipts: the highest signed v2 receipt
+            // names the signer. A store whose receipts predate signing has no
+            // signer to keep.
+            std::optional<mod_signer_pin> derived;
+            std::optional<core::semver> derived_version;
+            for (const auto &path : targets) {
+                auto receipt{read_receipt(path)};
+                if (!receipt || !receipt->pinned()) {
+                    continue;
+                }
+                auto parsed{core::semver::parse(receipt->version)};
+                if (!parsed) {
+                    continue;
+                }
+                if (!derived.has_value() ||
+                    core::compare(*parsed, *derived_version) ==
+                        std::strong_ordering::greater) {
+                    derived = mod_signer_pin{
+                        .id = std::string{id},
+                        .key_id = receipt->key_id,
+                        .public_key_fingerprint =
+                            receipt->public_key_fingerprint,
+                        .policy = parse_rfmod_signature_policy(receipt->policy)
+                                      .value_or(rfmod_signature_policy::strict),
+                        .pinned_at = utc_now_text(),
+                        .source = "uninstall"};
+                    derived_version = std::move(*parsed);
+                }
+            }
+            if (derived.has_value()) {
+                if (auto written{write_signer_pin(store.root(), *derived)};
+                    !written) {
+                    return std::unexpected{
+                        annotate(std::move(written.error()),
+                                 "rfmod uninstall: signer pin")};
+                }
+            } else {
+                result.signer_pin_kept = false;
+                result.signer_pin_path.clear();
+            }
+        }
+        return result;
+    }
+    if (auto cleared{clear_signer_pin(store.root(), id)}; !cleared) {
+        return std::unexpected{
+            annotate(std::move(cleared.error()), "rfmod uninstall")};
+    }
+    if (io::exists(*pin_path)) {
+        result.signer_pin_kept = true;
+        result.signer_pin_path = *pin_path;
+    } else {
+        result.signer_pin_cleared = true;
+    }
+    return result;
+}
+
+auto migrate_receipts(std::string_view store_root, bool apply)
+    -> result<receipt_migration_report> {
+    auto paths{list_receipt_paths(store_root)};
+    if (!paths) {
+        return std::unexpected{
+            annotate(std::move(paths.error()), "mod receipts migration")};
+    }
+    receipt_migration_report report;
+    for (const auto &path : *paths) {
+        ++report.scanned;
+        auto receipt{read_receipt(path)};
+        if (!receipt) {
+            return std::unexpected{
+                annotate(std::move(receipt.error()), "mod receipts migration")};
+        }
+        if (receipt->schema_version >= 2U) {
+            ++report.current;
+            continue;
+        }
+        if (!apply) {
+            ++report.migrated;
+            continue;
+        }
+        using json_value = data::json::value;
+        json_value::array_type files;
+        files.reserve(receipt->files.size());
+        for (const auto &file : receipt->files) {
+            json_value::object_type entry;
+            entry.emplace("path", json_value{file.path});
+            entry.emplace("size",
+                          json_value{static_cast<std::int64_t>(file.size)});
+            entry.emplace("blake3", json_value{data::to_hex(file.blake3)});
+            entry.emplace("mode", json_value{file.mode});
+            files.emplace_back(std::move(entry));
+        }
+        json_value::object_type document;
+        document.emplace("schema",
+                         json_value{std::string{mod_receipt_schema_v2}});
+        document.emplace("id", json_value{receipt->id});
+        document.emplace("version", json_value{receipt->version});
+        document.emplace("abi", json_value{receipt->abi});
+        document.emplace("archive_blake3",
+                         json_value{data::to_hex(receipt->archive_blake3)});
+        document.emplace("manifest_blake3",
+                         json_value{data::to_hex(receipt->manifest_blake3)});
+        document.emplace("signed", json_value{receipt->signed_package});
+        document.emplace("trusted", json_value{receipt->trusted});
+        document.emplace("key_id", json_value{receipt->key_id});
+        // A migration never confirms a signer: the fingerprint is unknown and
+        // the policy records the legacy provenance.
+        document.emplace("public_key_fingerprint", json_value{std::string{}});
+        document.emplace("policy", json_value{"legacy"});
+        document.emplace("installed_at", json_value{std::string{}});
+        document.emplace("installer_version", json_value{std::string{}});
+        document.emplace("origin",
+                         json_value{std::string{to_string(receipt->origin)}});
+        document.emplace("files", json_value{std::move(files)});
+        if (auto written{io::atomic_write_text(
+                path, json_value{std::move(document)}.dump())};
+            !written) {
+            ++report.failed;
+            continue;
+        }
+        ++report.migrated;
+    }
+    return report;
 }
 
 } // namespace refrain::mod

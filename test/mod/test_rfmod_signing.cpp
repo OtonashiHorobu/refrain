@@ -1190,7 +1190,9 @@ const suite rfmod_signing_install_tests = [] {
         }
         const rfmod_install_options install_options{
             .require_signature = true,
-            .trusted_keys = {trusted_for(test_key_id, keys)}};
+            .trusted_keys = {trusted_for(test_key_id, keys)},
+            .installer_version = "test",
+            .installed_at = "2026-01-01T00:00:00Z"};
         auto installed{
             refrain::mod::install_rfmod(*reader, *store, install_options)};
         expect(static_cast<bool>(installed)) << "trusted install failed";
@@ -1352,7 +1354,9 @@ const suite rfmod_signing_receipt_tests = [] {
         }
         const rfmod_install_options install_options{
             .require_signature = true,
-            .trusted_keys = {trusted_for(test_key_id, keys)}};
+            .trusted_keys = {trusted_for(test_key_id, keys)},
+            .installer_version = "test",
+            .installed_at = "2026-01-01T00:00:00Z"};
         auto installed{
             refrain::mod::install_rfmod(*reader, *store, install_options)};
         expect(static_cast<bool>(installed)) << "trusted install failed";
@@ -1372,7 +1376,7 @@ const suite rfmod_signing_receipt_tests = [] {
         }
         const auto &receipt{*document};
         expect(receipt["schema"].as_string().value_or("") ==
-               "refrain.mod-receipt/1");
+               "refrain.mod-receipt/2");
         expect(receipt["id"].as_string().value_or("") == "refrain.test.signed");
         expect(receipt["version"].as_string().value_or("") == "1.0.0");
         expect(receipt["abi"].as_int64().value_or(-1) == 1);
@@ -1384,6 +1388,16 @@ const suite rfmod_signing_receipt_tests = [] {
         expect(receipt["trusted"].as_bool().value_or(false));
         expect(receipt["key_id"].as_string().value_or("") == test_key_id);
         expect(receipt["origin"].as_string().value_or("") == "user");
+        // Signer identity and audit fields of schema v2.
+        expect(receipt["public_key_fingerprint"].as_string().value_or("") ==
+               refrain::mod::public_key_fingerprint(keys.public_key));
+        expect(receipt["policy"].as_string().value_or("") == "strict");
+        expect(receipt["installed_at"].as_string().value_or("") ==
+               "2026-01-01T00:00:00Z");
+        expect(receipt["installer_version"].as_string().value_or("") == "test");
+        expect(installed->signer_pinned);
+        expect(installed->public_key_fingerprint ==
+               refrain::mod::public_key_fingerprint(keys.public_key));
 
         auto files{receipt["files"].as_array()};
         expect(static_cast<bool>(files));
@@ -1421,7 +1435,8 @@ const suite rfmod_signing_receipt_tests = [] {
         expect(std::find(paths.begin(), paths.end(), "manifest.toml") !=
                paths.end());
 
-        // No host paths/timestamps: the receipt is reproducible.
+        // No host paths are recorded, and the caller-supplied install
+        // timestamp keeps the document reproducible.
         auto first_bytes{refrain::core::io::read_text(installed->receipt_path)};
         expect(static_cast<bool>(first_bytes));
         if (!first_bytes) {
@@ -1477,9 +1492,16 @@ const suite rfmod_signing_receipt_tests = [] {
             return;
         }
         const auto &receipt{*document};
+        expect(receipt["schema"].as_string().value_or("") ==
+               "refrain.mod-receipt/2");
         expect(!receipt["signed"].as_bool().value_or(true));
         expect(!receipt["trusted"].as_bool().value_or(true));
         expect(receipt["key_id"].as_string().value_or("<missing>").empty());
+        expect(receipt["policy"].as_string().value_or("") == "unsigned");
+        expect(receipt["public_key_fingerprint"]
+                   .as_string()
+                   .value_or("<missing>")
+                   .empty());
         expect(receipt["archive_blake3"].as_string().value_or("") ==
                digest_hex(installed->archive_digest));
     };
@@ -1683,7 +1705,7 @@ const suite rfmod_signing_receipt_tests = [] {
         expect(corrupt.error().message.find(path.string()) != std::string::npos)
             << "receipt error must name its path";
 
-        expect(work.write(relative, R"({"schema":"refrain.mod-receipt/2"})"));
+        expect(work.write(relative, R"({"schema":"refrain.mod-receipt/3"})"));
         const auto foreign{refrain::mod::read_receipt(path.string())};
         expect(!foreign);
         expect(static_cast<int>(foreign.error().code) ==
@@ -1691,7 +1713,7 @@ const suite rfmod_signing_receipt_tests = [] {
         expect(foreign.error().message.find("schema") != std::string::npos);
 
         // Correct schema but missing required fields: strictly rejected.
-        expect(work.write(relative, R"({"schema":"refrain.mod-receipt/1"})"));
+        expect(work.write(relative, R"({"schema":"refrain.mod-receipt/2"})"));
         expect(!refrain::mod::read_receipt(path.string()));
     };
 };

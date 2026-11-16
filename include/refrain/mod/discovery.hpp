@@ -25,40 +25,46 @@ namespace refrain::mod {
 // never writes outside the lock file itself.
 //
 // Flow (per server/instance start):
-//   1. the host builds one `discovery_root` per installed mod tree, tagging it
-//      with a host-observed origin (never read from a manifest);
-//   2. `scan()` walks `<root>/mods/<id>/manifest.toml`, parses every manifest,
-//      hashes the raw bytes and reports the winning candidate per id plus the
-//      shadowed (lower-priority) ones;
-//   3. `resolve()` combines the gamepack's explicit `[mods].list` pins with the
-//      auto-scanned candidates (only when `gamepack.auto_scan = true`),
+//   1. the host names every content store that contributes installed mods
+//      (`scan_installed()` roots) and the embedded builtin image;
+//   2. `scan_installed()` reads `<store>/mods/<id>/<version>.json` install
+//      receipts, reads the packaged `manifest.toml` back from the content
+//      store, verifies it against the receipt and reports the winning
+//      candidate per id plus the shadowed (lower-priority) ones. A directory
+//      under `mods/` is never a candidate: the receipt is the one and only
+//      external load source;
+//   3. `resolve()` combines the gamepack's explicit `[mods].list` pins with
+//      the installed candidates (only when `gamepack.auto_scan = true`),
 //      enforces version/ABI/dependency/cycle rules and produces a `mod_lock`;
 //   4. `write_mod_lock()`/`read_mod_lock()` persist and re-verify the lock,
-//      `verify_mod_lock()` compares a stored lock against a fresh scan.
+//      `verify_mod_lock()` compares a stored lock against a fresh catalog.
+//
+// `scan()`/`scan_mods_tree()` remain a *manifest-tree inspector* for developer
+// tooling (`refrain-tools mods check`): they read source manifests from disk
+// and never produce a load candidate for the runtime.
 //
 // Determinism and identity: origins are host-observed tiers
-// `builtin < first_party < user`; winners are chosen by that fixed priority,
-// results are sorted by id and the BLAKE3 `fingerprint()` over the canonical
-// lock text (gamepack id@version + per-mod id/version/abi/origin/manifest hash)
-// is the stable composition identity used by world metadata.
-// Paths are host-local audit data and are deliberately not part of the
-// fingerprint (a relocatable instance keeps the same world identity).
+// `builtin < first_party < user` (an install receipt records the tier observed
+// at install time); winners are chosen by that fixed priority, results are
+// sorted by id and the BLAKE3 `fingerprint()` over the canonical lock text
+// (gamepack id@version + per-mod id/version/abi/origin/manifest hash) is the
+// stable composition identity used by world metadata. Paths are host-local
+// audit data and are deliberately not part of the fingerprint (a relocatable
+// instance keeps the same world identity).
 //
-// Disk layout scanned by `scan()` (directory mods only):
-//   <root>/mods/<id>/manifest.toml
-// `.rfmod` archives (tar.zst + signed manifest) are installed by the `.rfmod`
-// installer first and then appear as directory trees; scanning loose `.rfmod`
-// files/other extensions/hidden-temp entries is intentionally out of scope
-// here (unknown entries are skipped, or rejected with `strict_entries`).
+// Install receipt layout (the runtime catalog):
+//   <store>/mods/<id>/<version>.json      receipt (`mod::read_receipt`)
+//   <store>/content/blobs.idx             CAS blob table for the members
 
 /// Where a mod's files come from (the package source the host reads through).
-/// Scanning produces `directory` candidates; the builtin image seeds
-/// `builtin` candidates; `.rfmod` packages are installed as directory trees, so
-/// `rfmod` names a reserved native source that no scanner produces yet.
+/// The builtin image seeds `builtin` candidates; `scan_installed()` produces
+/// `rfmod` candidates resolved through an install receipt and the CAS.
+/// `directory` is the manifest-tree inspector's source: it is produced by
+/// `scan()`/`scan_mods_tree()` only and is not a runtime load path.
 enum class package_kind : std::uint8_t {
     builtin = 0,   ///< manifest/data live in the embedded RFSI image
-    directory = 1, ///< `<root>/mods/<id>/` directory tree
-    rfmod = 2,     ///< reserved: `.rfmod` archive member
+    directory = 1, ///< `<mods_dir>/<id>/` tree (developer inspection only)
+    rfmod = 2,     ///< installed `.rfmod`: receipt + CAS, the runtime source
 };
 
 [[nodiscard]] auto to_string(package_kind kind) noexcept -> std::string_view;
@@ -165,6 +171,29 @@ using discovered_mod = candidate;
 /// mods check` (which goes through `scan()`) keeps its stable output
 /// without re-reading the manifest.
 [[nodiscard]] auto format_candidate(const candidate &mod) -> std::string;
+
+/// Scan install receipts of one or more content stores into the runtime
+/// catalog (the only external mod load source).
+///
+/// Each root is a content store root:
+/// `<root>/mods/<id>/<version>.json` receipts plus `<root>/content/blobs.idx`
+/// for the packaged members. For every receipt the packaged `manifest.toml` is
+/// read back from the CAS and checked against `manifest_blake3` (a receipt that
+/// does not describe the stored bytes is a damaged store, not a mod), then
+/// parsed into a candidate with `kind = package_kind::rfmod` and
+/// `path` = the receipt path. The recorded `origin` (host-observed at install
+/// time) is authoritative. Candidates from all roots are merged by the same
+/// origin/version/shadow rules as `scan()`.
+///
+/// Errors are values: `invalid_argument` for an empty root path or unsafe
+/// ids/versions, `io_error` for a missing/unreadable root (`require_mods_dir`)
+/// or an unreadable CAS member, `parse_error` for a corrupt receipt/manifest,
+/// `not_found` when a receipt has no blob table or its manifest blob is
+/// missing, `already_exists` for two receipts of the same `(id, version)`.
+/// A store without receipts is an empty catalog.
+[[nodiscard]] auto scan_installed(std::span<const std::string> store_roots,
+                                  const discover_options &options = {})
+    -> result<std::vector<candidate>>;
 
 // ---------------------------------------------------------------------------
 // package file collection (single walker for builtin image / `.rfmod` pack)
@@ -359,8 +388,8 @@ struct composition_load_options {
 
 /// Read `gamepack_path`, scan `roots`, seed the builtin candidates from
 /// `options.builtin_image` and resolve everything into one composition. This is
-/// the single composition entry point shared by `refrain-server` and
-/// `refrain-tools` (no caller re-implements the pipeline).
+/// the manifest-tree composition entry point (`refrain-tools` development
+/// flows); the server resolves installed receipts instead.
 [[nodiscard]] auto load_composition(
     std::string_view gamepack_path, std::span<const discovery_root> roots,
     const composition_load_options &options = {}) -> result<composition>;
@@ -369,6 +398,17 @@ struct composition_load_options {
 /// parse when the caller needed `auto_scan` before deciding whether to scan).
 [[nodiscard]] auto resolve_composition(
     const mod::gamepack_spec &spec, std::span<const discovery_root> roots,
+    const composition_load_options &options = {}) -> result<composition>;
+
+/// Resolve the runtime composition from installed receipts.
+///
+/// Catalog = builtin image candidates (`options.builtin_image`) + every
+/// candidate reported by `scan_installed(store_roots)`. Nothing is read from a
+/// `mods/<id>/` directory. The rest of the pipeline is shared with
+/// `resolve_composition()` (pins, dependencies, providers, load order), so the
+/// two entry points cannot drift.
+[[nodiscard]] auto resolve_installed_composition(
+    const mod::gamepack_spec &spec, std::span<const std::string> store_roots,
     const composition_load_options &options = {}) -> result<composition>;
 
 /// Enumerate the builtin image's mod manifests (`mods/<id>/manifest.toml`) as

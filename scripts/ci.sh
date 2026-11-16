@@ -209,24 +209,64 @@ grep -q 'mod host: 2 mod(s) loaded' "$EXTRACT_DIR/mods-load.txt" \
 grep -q 'refrain.test.data@1.0.0 (abi 1, data-only' \
     "$EXTRACT_DIR/mods-load.txt" \
     || die "mods load: data mod line missing"
-# Server auto_scan + mods.lock runtime wiring (directory mods
-# only). States covered: fresh write, verified reuse, manifest version drift
-# (fail, then --update-lock), and a `mods list --check-lock` re-verification of
-# the full builtin+user lock.
+# Mod catalog = content-store install receipts. A directory under `mods/` is a
+# packaging source, never a load path; the runtime composition is resolved from
+# the receipts of the content store(s). States covered: fresh lock write,
+# verified reuse, install-version drift (fail, then --update-lock),
+# `mods list --check-lock`, the directory side-load negative, and a
+# foreign-ABI receipt (single resolver pipeline).
+MODS_STORE="$EXTRACT_DIR/mods-store"
+MODS_SRC="$EXTRACT_DIR/mods-src"
+mkdir -p "$MODS_SRC"
+cp -R "$ROOT/test/fixtures/instance/mods/refrain.test.extra" \
+    "$MODS_SRC/extra-1.0.0"
+"$BIN_DIR/refrain-tools" mods pack "$MODS_SRC/extra-1.0.0" \
+    -o "$MODS_SRC/extra-1.0.0.rfmod" >"$MODS_SRC/pack-1.txt"
+"$BIN_DIR/refrain-tools" mods install "$MODS_SRC/extra-1.0.0.rfmod" \
+    --store "$MODS_STORE" >"$MODS_SRC/install-1.txt"
+grep -q '^install: OK' "$MODS_SRC/install-1.txt" \
+    || die "mods install: fixture mod install failed"
+[[ -f "$MODS_STORE/mods/refrain.test.extra/1.0.0.json" ]] \
+    || die "mods install: receipt missing"
+grep -q 'signer pin:' "$MODS_SRC/install-1.txt" \
+    && die "mods install: unsigned fixture mod must not pin a signer"
 SERVER_LOCK="$EXTRACT_DIR/mods.lock"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --mods "$ROOT/test/fixtures/instance" --auto-scan \
+    --mods "$MODS_STORE" --auto-scan \
     --mods-lock "$SERVER_LOCK" --update-lock --check \
     >"$EXTRACT_DIR/auto-scan-1.txt" 2>&1
 grep -q '\[mods\]: wrote lockfile' "$EXTRACT_DIR/auto-scan-1.txt" \
     || die "auto_scan: lock was not written"
 grep -q 'refrain.test.extra@1.0.0' "$EXTRACT_DIR/auto-scan-1.txt" \
-    || die "auto_scan: fixture user mod missing from the lock"
+    || die "auto_scan: installed mod missing from the lock"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --mods "$ROOT/test/fixtures/instance" --auto-scan \
+    --mods "$MODS_STORE" --auto-scan \
     --mods-lock "$SERVER_LOCK" --check >"$EXTRACT_DIR/auto-scan-2.txt" 2>&1
 grep -q '\[mods\]: verified' "$EXTRACT_DIR/auto-scan-2.txt" \
     || die "auto_scan: existing lock was not verified"
+# Receipt catalog listing + lock re-verification through `mods list`.
+"$BIN_DIR/refrain-tools" mods list --mods "$MODS_STORE" \
+    --gamepack "$ROOT/gamepack/gamepack.toml" \
+    --image "$BIN_DIR/../generated/builtin.image" \
+    --check-lock "$SERVER_LOCK" >"$EXTRACT_DIR/mods-list-lock.txt"
+grep -q 'lock: .* verified' "$EXTRACT_DIR/mods-list-lock.txt" \
+    || die "mods list --check-lock: server lock did not verify"
+grep -q 'refrain.test.extra@1.0.0' "$EXTRACT_DIR/mods-list-lock.txt" \
+    || die "mods list: installed mod missing from the catalog"
+# Directory side-loading is not a load source: the old instance tree still
+# contains `mods/<id>/manifest.toml`, but it contributes no candidate.
+"$BIN_DIR/refrain-tools" mods list --mods "$ROOT/test/fixtures/instance" \
+    >"$EXTRACT_DIR/mods-list-bypass.txt"
+grep -q 'mods: 0 candidate(s)' "$EXTRACT_DIR/mods-list-bypass.txt" \
+    || die "mods list: a directory mod leaked into the receipt catalog"
+"$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
+    --mods "$ROOT/test/fixtures/instance" --auto-scan \
+    --mods-lock "$EXTRACT_DIR/bypass.lock" --update-lock --check \
+    >"$EXTRACT_DIR/auto-scan-bypass.txt" 2>&1
+grep -q 'refrain.test.extra' "$EXTRACT_DIR/auto-scan-bypass.txt" \
+    && die "auto_scan: directory side-loading loaded a mod"
+grep -q '\[mods\]: wrote lockfile' "$EXTRACT_DIR/auto-scan-bypass.txt" \
+    || die "auto_scan: bypass lock was not written"
 # The lock records the build profile and build id; a lock written by another
 # profile is refused instead of being silently compared against this binary.
 grep -q '^profile = "vanilla"$' "$SERVER_LOCK" \
@@ -236,20 +276,19 @@ grep -Eq '^build_id = "[0-9a-f]{16}"$' "$SERVER_LOCK" \
 cp "$SERVER_LOCK" "$EXTRACT_DIR/mods.lock.profile-backup"
 sed -i 's/^profile = "vanilla"$/profile = "minimal"/' "$SERVER_LOCK"
 if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --mods "$ROOT/test/fixtures/instance" --auto-scan \
+    --mods "$MODS_STORE" --auto-scan \
     --mods-lock "$SERVER_LOCK" --check >"$EXTRACT_DIR/mixed-lock.txt" 2>&1; then
     die "auto_scan: lock from another build profile was accepted"
 fi
 grep -q "written by build profile 'minimal'" "$EXTRACT_DIR/mixed-lock.txt" \
     || die "mixed-profile lock error is missing"
 cp "$EXTRACT_DIR/mods.lock.profile-backup" "$SERVER_LOCK"
-# Manifest version drift: the on-disk manifest changed while the lock still
-# records the old version. Without --update-lock the server must fail with a
-# version-drift diagnostic; --update-lock then rewrites the lock and
-# `mods list --check-lock` must re-verify the full builtin+user composition.
-cp -R "$ROOT/test/fixtures/instance" "$EXTRACT_DIR/instance-drift"
-INSTANCE_DRIFT_MANIFEST="$EXTRACT_DIR/instance-drift/mods/refrain.test.extra/manifest.toml"
-python3 - "$INSTANCE_DRIFT_MANIFEST" <<'PY'
+# Install-version drift: the store now has 1.0.1 while the lock records
+# 1.0.0. Without --update-lock the server must fail with a version-drift
+# diagnostic; --update-lock then rewrites the lock and `mods list --check-lock`
+# re-verifies the full builtin+installed composition.
+cp -R "$MODS_SRC/extra-1.0.0" "$MODS_SRC/extra-1.0.1"
+python3 - "$MODS_SRC/extra-1.0.1/manifest.toml" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path, encoding="utf-8").read()
@@ -257,45 +296,48 @@ assert 'version = "1.0.0"' in text
 open(path, "w", encoding="utf-8").write(
     text.replace('version = "1.0.0"', 'version = "1.0.1"', 1))
 PY
+"$BIN_DIR/refrain-tools" mods pack "$MODS_SRC/extra-1.0.1" \
+    -o "$MODS_SRC/extra-1.0.1.rfmod" >/dev/null
+"$BIN_DIR/refrain-tools" mods install "$MODS_SRC/extra-1.0.1.rfmod" \
+    --store "$MODS_STORE" >"$MODS_SRC/install-2.txt"
 if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --mods "$EXTRACT_DIR/instance-drift" --auto-scan \
+    --mods "$MODS_STORE" --auto-scan \
     --mods-lock "$SERVER_LOCK" --check >"$EXTRACT_DIR/auto-scan-drift.txt" 2>&1; then
-    die "auto_scan: drifted manifest version was accepted without --update-lock"
+    die "auto_scan: drifted install version was accepted without --update-lock"
 fi
 grep -q 'version drift' "$EXTRACT_DIR/auto-scan-drift.txt" \
-    || die "auto_scan: manifest drift failure does not mention version drift"
+    || die "auto_scan: install drift failure does not mention version drift"
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --mods "$EXTRACT_DIR/instance-drift" --auto-scan \
+    --mods "$MODS_STORE" --auto-scan \
     --mods-lock "$SERVER_LOCK" --update-lock --check \
     >"$EXTRACT_DIR/auto-scan-update.txt" 2>&1
 grep -q '\[mods\]: updated' "$EXTRACT_DIR/auto-scan-update.txt" \
     || die "auto_scan: --update-lock did not rewrite the drifted lock"
-"$BIN_DIR/refrain-tools" mods list --mods "$EXTRACT_DIR/instance-drift" \
+"$BIN_DIR/refrain-tools" mods list --mods "$MODS_STORE" \
     --gamepack "$ROOT/gamepack/gamepack.toml" \
     --image "$BIN_DIR/../generated/builtin.image" \
-    --check-lock "$SERVER_LOCK" >"$EXTRACT_DIR/mods-list-lock.txt"
-grep -q 'lock: .* verified' "$EXTRACT_DIR/mods-list-lock.txt" \
-    || die "mods list --check-lock: server lock did not verify"
-# `mods list` without a lock: the candidate table for an instance root.
-"$BIN_DIR/refrain-tools" mods list --mods "$ROOT/test/fixtures/instance" \
-    >"$EXTRACT_DIR/mods-list.txt"
-grep -q 'mods: 1 candidate(s)' "$EXTRACT_DIR/mods-list.txt" \
-    || die "mods list: expected one candidate in the instance fixture"
-grep -q 'refrain.test.extra@1.0.0' "$EXTRACT_DIR/mods-list.txt" \
-    || die "mods list: instance fixture candidate missing"
-# Negatives: the unified catalog must catch a case-only collision and an
-# auto-scanned mod built for a foreign ABI. Both guard the single-scanner
-# design.
-if "$BIN_DIR/refrain-tools" mods check     --mods "$ROOT/test/fixtures/case-collision/mods"     >"$EXTRACT_DIR/case-collision.txt" 2>&1; then
+    --check-lock "$SERVER_LOCK" >"$EXTRACT_DIR/mods-list-lock2.txt"
+grep -q 'lock: .* verified' "$EXTRACT_DIR/mods-list-lock2.txt" \
+    || die "mods list --check-lock: updated lock did not verify"
+# Negatives: the unified manifest inspector must catch a case-only collision,
+# and an installed package built for a foreign ABI must be rejected by the
+# resolver (not loaded and not silently dropped).
+if "$BIN_DIR/refrain-tools" mods check \
+    --mods "$ROOT/test/fixtures/case-collision/mods" \
+    >"$EXTRACT_DIR/case-collision.txt" 2>&1; then
     die "mods check accepted a case-only id collision"
 fi
 grep -q 'already_exists' "$EXTRACT_DIR/case-collision.txt" \
     || die "case-collision diagnostic is missing"
+"$BIN_DIR/refrain-tools" mods pack "$ROOT/test/fixtures/abi99/mods/abi99.extra" \
+    -o "$EXTRACT_DIR/abi99.rfmod" >/dev/null
+"$BIN_DIR/refrain-tools" mods install "$EXTRACT_DIR/abi99.rfmod" \
+    --store "$EXTRACT_DIR/abi99-store" >/dev/null
 if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    "${CI_SERVER_ARGS[@]}" --auto-scan --mods "$ROOT/test/fixtures/abi99" \
+    "${CI_SERVER_ARGS[@]}" --auto-scan --mods "$EXTRACT_DIR/abi99-store" \
     --mods-lock "$EXTRACT_DIR/abi99.lock" \
     >"$EXTRACT_DIR/abi99.txt" 2>&1; then
-    die "server accepted an auto-scanned mod with a foreign ABI"
+    die "server accepted an installed mod with a foreign ABI"
 fi
 grep -q 'declares abi 99' "$EXTRACT_DIR/abi99.txt" \
     || die "ABI 99 diagnostic is missing"
@@ -309,7 +351,7 @@ fi
 # never a silent no-op.
 set +e
 "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    "${CI_SERVER_ARGS[@]}" --mods "$ROOT/test/fixtures/instance" \
+    "${CI_SERVER_ARGS[@]}" --mods "$MODS_STORE" \
     >"$EXTRACT_DIR/auto-scan-off.txt" 2>&1
 AUTO_SCAN_OFF_STATUS=$?
 set -e
@@ -317,7 +359,7 @@ set -e
     || die "server accepted --mods with auto_scan disabled (exit $AUTO_SCAN_OFF_STATUS)"
 grep -q 'require auto_scan' "$EXTRACT_DIR/auto-scan-off.txt" \
     || die "server auto_scan-off usage error is missing"
-# An explicit --mods root without mods/ is an io_error, not an empty scan.
+# An explicit --mods root without mods/ is an io_error, not an empty catalog.
 mkdir -p "$EXTRACT_DIR/root-without-mods"
 if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
     --mods "$EXTRACT_DIR/root-without-mods" --auto-scan \
@@ -327,17 +369,17 @@ if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
 fi
 grep -q "has no 'mods' directory" "$EXTRACT_DIR/no-mods-root.txt" \
     || die "server root-without-mods error is missing"
-# Drift without --update-lock must fail fast (no silent composition
-# change). Editing a locked version changes the canonical fingerprint too, so
-# the server must refuse to start.
+# Drift without --update-lock must fail fast (no silent composition change).
+# Editing a locked version changes the canonical fingerprint too, so the
+# server must refuse to start.
 python3 - "$SERVER_LOCK" <<'PY'
 import sys
 p = sys.argv[1]
 text = open(p, encoding="utf-8").read()
-open(p, "w", encoding="utf-8").write(text.replace('version = "1.0.0"', 'version = "9.9.9"', 1))
+open(p, "w", encoding="utf-8").write(text.replace('version = "1.0.1"', 'version = "9.9.9"', 1))
 PY
 if "$BIN_DIR/refrain-server" --gamepack "$ROOT/gamepack/gamepack.toml" \
-    --mods "$ROOT/test/fixtures/instance" --auto-scan \
+    --mods "$MODS_STORE" --auto-scan \
     --mods-lock "$SERVER_LOCK" --check >/dev/null 2>&1; then
     die "auto_scan: drifted mods.lock was accepted without --update-lock"
 fi
@@ -908,7 +950,7 @@ if "$BIN_DIR/refrain-tools" content gc --store "$GC_BAD_STORE" --apply \
 fi
 grep -Fq "$GC_BAD_RECEIPT" "$EXTRACT_DIR/gc-bad-json.txt" \
     || die "content gc: corrupt-receipt error does not name the receipt"
-printf '{"schema":"refrain.mod-receipt/2"}' >"$GC_BAD_RECEIPT"
+printf '{"schema":"refrain.mod-receipt/3"}' >"$GC_BAD_RECEIPT"
 if "$BIN_DIR/refrain-tools" content gc --store "$GC_BAD_STORE" --apply \
     >"$EXTRACT_DIR/gc-bad-schema.txt" 2>&1; then
     die "content gc: foreign receipt schema was accepted"

@@ -1127,6 +1127,7 @@ auto run_content_gc(const content_gc_options &options) -> int {
     gc.compact = options.compact;
     gc.keep_days = options.keep_days;
     gc.budget_ms = options.budget_ms;
+    gc.allow_empty_roots = options.allow_empty_roots;
     gc.extra_roots = std::move(*extra_roots);
 
     // The library emits the stable report lines without the `gc: ` prefix; the

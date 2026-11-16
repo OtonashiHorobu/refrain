@@ -77,14 +77,23 @@ using detail::toml_string;
            text.substr(text.size() - suffix.size()) == suffix;
 }
 
-/// The stored manifest path must have the scanned layout for that mod id.
+/// The stored path must have one of the two catalog layouts for that mod id:
+/// a manifest-tree source (`<mods_dir>/<id>/manifest.toml`, developer
+/// inspection) or an install receipt (`<store>/mods/<id>/<version>.json`, the
+/// runtime catalog). Anything else is a tampered or foreign lock.
 [[nodiscard]] auto validate_lock_path(const locked_mod &mod) -> status {
-    const auto expected{fmt::format("mods/{}/manifest.toml", mod.id)};
-    if (mod.path != expected && !ends_with(mod.path, "/" + expected)) {
+    const auto manifest_layout{fmt::format("mods/{}/manifest.toml", mod.id)};
+    const auto receipt_layout{
+        fmt::format("mods/{}/{}.json", mod.id, mod.version)};
+    const auto matches = [&mod](const std::string &layout) {
+        return mod.path == layout || ends_with(mod.path, "/" + layout);
+    };
+    if (!matches(manifest_layout) && !matches(receipt_layout)) {
         return std::unexpected{parse_error_context(
             fmt::format("mod '{}'", mod.id),
-            fmt::format("stored path '{}' does not match '<root>/mods/<id>/"
-                        "manifest.toml'",
+            fmt::format("stored path '{}' does not match "
+                        "'<root>/mods/<id>/manifest.toml' or "
+                        "'<store>/mods/<id>/<version>.json'",
                         mod.path))};
     }
     return status_ok();

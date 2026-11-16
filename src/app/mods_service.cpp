@@ -48,6 +48,7 @@
 #include <refrain/mod/discovery.hpp>
 #include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/mod/install_policy.hpp>
 #include <refrain/mod/manifest.hpp>
 #include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
@@ -357,22 +358,16 @@ auto run_mods_list(const mods_list_options &options) -> int {
         discovered = std::move(*builtin);
     }
     if (!options.roots.empty()) {
-        std::vector<mod::discovery_root> roots{};
-        roots.reserve(options.roots.size());
-        for (const auto &root : options.roots) {
-            roots.push_back(mod::discovery_root{
-                .path = root, .origin = mod::mod_origin::user});
+        // External candidates come from install receipts only: a directory
+        // under `mods/` is not part of the runtime catalog. An explicit store
+        // root must contain a `mods/` directory, so a typo cannot pass
+        // `--check-lock` against an empty catalog.
+        auto installed{mod::scan_installed(
+            options.roots, mod::discover_options{.require_mods_dir = true})};
+        if (!installed) {
+            return report_error(installed.error());
         }
-        // An explicit `--mods` root must actually be an instance root
-        // (contain a `mods/` directory): silently treating a typo as an empty
-        // tree would make `--check-lock` pass without scanning anything.
-        auto scanned{mod::scan(
-            roots, mod::discover_options{.strict_entries = options.strict,
-                                         .require_mods_dir = true})};
-        if (!scanned) {
-            return report_error(scanned.error());
-        }
-        for (auto &candidate : *scanned) {
+        for (auto &candidate : *installed) {
             discovered.push_back(std::move(candidate));
         }
     }
@@ -385,8 +380,9 @@ auto run_mods_list(const mods_list_options &options) -> int {
     }
     for (const auto &candidate : discovered) {
         std::cout << fmt::format(
-            "  {}@{} [{}] {}\n", candidate.id, candidate.version,
-            mod::to_string(candidate.origin), candidate.path);
+            "  {}@{} [{}] {} {}\n", candidate.id, candidate.version,
+            mod::to_string(candidate.origin), mod::to_string(candidate.kind),
+            candidate.path);
         for (const auto &shadowed : candidate.shadowed) {
             std::cout << fmt::format(
                 "    shadowed: {}@{} [{}] {}\n", candidate.id, shadowed.version,
@@ -487,6 +483,38 @@ auto run_mods_load(const mods_load_options &options) -> int {
     return keys;
 }
 
+/// Parse repeatable `<key-id>:<64-hex-public-key>` trust-anchor specs (the
+/// same syntax the server uses for `--content-trusted-key`).
+[[nodiscard]] auto
+parse_trusted_key_specs(std::string_view command,
+                        const std::vector<std::string> &specs)
+    -> refrain::result<std::vector<mod::rfmod_trusted_key>> {
+    std::vector<mod::rfmod_trusted_key> keys;
+    keys.reserve(specs.size());
+    for (const auto &spec : specs) {
+        const auto separator{spec.rfind(':')};
+        if (separator == std::string::npos || separator == 0U ||
+            separator + 1U >= spec.size()) {
+            return std::unexpected{refrain::make_error(
+                refrain::error_code::invalid_argument,
+                fmt::format("{}: --trusted-key '{}' must be "
+                            "<key-id>:<64-hex-public-key>",
+                            command, spec))};
+        }
+        auto public_key{data::parse_public_key_hex(
+            std::string_view{spec}.substr(separator + 1U))};
+        if (!public_key) {
+            return std::unexpected{refrain::make_error(
+                refrain::error_code::invalid_argument,
+                fmt::format("{}: --trusted-key '{}': {}", command, spec,
+                            public_key.error().message))};
+        }
+        keys.push_back(mod::rfmod_trusted_key{
+            .key_id = spec.substr(0, separator), .public_key = *public_key});
+    }
+    return keys;
+}
+
 [[nodiscard]] auto
 signature_line(const std::optional<mod::rfmod_signature_info> &signature)
     -> std::string {
@@ -568,6 +596,14 @@ auto run_mods_verify(const mods_verify_options &options) -> int {
     if (!trusted_keys) {
         return report_error(trusted_keys.error());
     }
+    auto more_keys{
+        parse_trusted_key_specs("mods verify", options.trusted_keys)};
+    if (!more_keys) {
+        return report_error(more_keys.error());
+    }
+    trusted_keys->insert(trusted_keys->end(),
+                         std::make_move_iterator(more_keys->begin()),
+                         std::make_move_iterator(more_keys->end()));
     auto reader{mod::rfmod_reader::open_file(options.archive)};
     if (!reader) {
         return report_error(reader.error());
@@ -650,6 +686,54 @@ auto run_mods_install(const mods_install_options &options) -> int {
     if (!trusted_keys) {
         return report_error(trusted_keys.error());
     }
+    auto more_keys{
+        parse_trusted_key_specs("mods install", options.trusted_keys)};
+    if (!more_keys) {
+        return report_error(more_keys.error());
+    }
+    trusted_keys->insert(trusted_keys->end(),
+                         std::make_move_iterator(more_keys->begin()),
+                         std::make_move_iterator(more_keys->end()));
+    // Trust/update policy: the server policy file when given, otherwise the
+    // tool defaults (unsigned packages stay installable for development). The
+    // flags override individual values for this run.
+    mod::install_policy_config policy{};
+    if (!options.policy_file.empty()) {
+        auto loaded{mod::load_install_policy(options.policy_file)};
+        if (!loaded) {
+            return report_error(loaded.error());
+        }
+        policy = std::move(*loaded);
+    } else {
+        policy.require_signature = false;
+    }
+    {
+        mod::install_policy_overrides overrides{};
+        if (options.require_signature) {
+            overrides.require_signature = true;
+        }
+        if (!trusted_keys->empty()) {
+            overrides.trusted_keys = std::move(*trusted_keys);
+        }
+        if (options.allow_downgrade) {
+            overrides.allow_downgrade = true;
+        }
+        if (options.replace_same_version) {
+            overrides.replace_same_version = true;
+        }
+        if (!options.signature_policy.empty()) {
+            auto parsed{
+                mod::parse_rfmod_signature_policy(options.signature_policy)};
+            if (!parsed) {
+                return report_error(refrain::make_error(
+                    refrain::error_code::invalid_argument,
+                    "mods install: --signature-policy must be strict or "
+                    "trusted-any"));
+            }
+            overrides.signature_policy = *parsed;
+        }
+        mod::apply_install_policy_overrides(policy, overrides);
+    }
     auto reader{mod::rfmod_reader::open_file(options.archive)};
     if (!reader) {
         return report_error(reader.error());
@@ -660,12 +744,16 @@ auto run_mods_install(const mods_install_options &options) -> int {
     }
 
     mod::rfmod_install_options install_options{};
-    install_options.trusted_keys = std::move(*trusted_keys);
-    install_options.require_signature = options.require_signature;
+    mod::apply_install_policy(policy, install_options);
+    install_options.accept_unpinned = options.accept_unpinned;
     // Receipts are mandatory for `mods install`: they are the install record
     // read by `mods installed`, startup indexing and GC. The library option
     // (`rfmod_install_options::write_receipt`) remains for internal/test use.
     install_options.write_receipt = true;
+    install_options.installer_version =
+        options.installer_version.empty()
+            ? std::string{refrain::version::release_version}
+            : options.installer_version;
     auto installed{mod::install_rfmod(*reader, *store, install_options)};
     if (!installed) {
         return report_error(installed.error());
@@ -687,6 +775,31 @@ auto run_mods_install(const mods_install_options &options) -> int {
         std::cout << "signature: unsigned\n";
     }
     std::cout << "trusted: " << (installed->trusted ? "yes" : "no") << '\n';
+    std::cout << "policy: " << installed->receipt_policy << '\n';
+    if (!installed->public_key_fingerprint.empty()) {
+        std::cout << "fingerprint: " << installed->public_key_fingerprint
+                  << '\n';
+    }
+    if (installed->already_installed) {
+        std::cout << "reinstall: already installed (no changes)\n";
+    }
+    if (installed->signer_pinned) {
+        std::cout << "signer pin: " << installed->signer_pin_path << '\n';
+    }
+    if (installed->signer_rotated) {
+        std::cout << "signer rotation: accepted by the rotation allowlist\n";
+    }
+    if (installed->downgrade_override) {
+        std::cout << "override: downgrade accepted (--allow-downgrade)\n";
+    }
+    if (installed->same_version_override) {
+        std::cout << "override: same version replaced "
+                     "(--replace-same-version)\n";
+    }
+    if (installed->unpinned_confirmed) {
+        std::cout << "override: legacy signer confirmed "
+                     "(--accept-unpinned-signer)\n";
+    }
     if (!installed->receipt_path.empty()) {
         std::cout << "receipt: " << installed->receipt_path << '\n';
     }
@@ -790,10 +903,208 @@ auto run_mods_installed(const mods_installed_options &options) -> int {
                 : "unsigned"};
         const auto archive_hex{data::to_hex(receipt.archive_blake3)};
         const auto archive{std::string_view{archive_hex}.substr(0, 12)};
-        std::cout << fmt::format("  {}@{} [{}] archive={} files={}\n",
-                                 receipt.id, receipt.version, trust, archive,
-                                 receipt.files.size());
+        std::cout << fmt::format(
+            "  {}@{} [{}] archive={} files={} schema=v{} policy={}{}{}\n",
+            receipt.id, receipt.version, trust, archive, receipt.files.size(),
+            receipt.schema_version, receipt.policy,
+            receipt.key_id.empty() ? std::string{} : " key=" + receipt.key_id,
+            receipt.public_key_fingerprint.empty()
+                ? std::string{}
+                : " fingerprint=" +
+                      receipt.public_key_fingerprint.substr(0, 12));
     }
+    return 0;
+}
+
+// --- uninstall / pin / receipt migration -----------------------------------
+
+auto run_mods_uninstall(const mods_uninstall_options &options) -> int {
+    if (options.store.empty()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "mods uninstall: --store <dir> is required"));
+    }
+    if (options.id.empty()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "mods uninstall: a mod id is required"));
+    }
+    // `mods uninstall <id>[@version]` (the pin syntax) or `--version <v>`.
+    std::string id{options.id};
+    std::string requested_version{options.version};
+    if (const auto at{id.rfind('@')}; at != std::string::npos) {
+        if (!requested_version.empty()) {
+            return report_error(refrain::make_error(
+                refrain::error_code::invalid_argument,
+                "mods uninstall: give the version as <id>@<version> or with "
+                "--version, not both"));
+        }
+        requested_version = id.substr(at + 1U);
+        id.resize(at);
+        if (requested_version.empty()) {
+            return report_error(refrain::make_error(
+                refrain::error_code::invalid_argument,
+                "mods uninstall: '<id>@' is missing the version"));
+        }
+    }
+    auto store{data::content_store::open_existing(options.store)};
+    if (!store) {
+        return report_error(store.error());
+    }
+    std::optional<std::string_view> version{};
+    if (!requested_version.empty()) {
+        version = requested_version;
+    }
+    mod::rfmod_uninstall_options uninstall{};
+    uninstall.keep_signer_pin = options.keep_signer_pin;
+    auto removed{mod::uninstall_rfmod(*store, id, version, uninstall)};
+    if (!removed) {
+        return report_error(removed.error());
+    }
+    for (const auto &removed_version : removed->versions) {
+        std::cout << fmt::format("uninstalled {}@{}\n", removed->id,
+                                 removed_version);
+    }
+    if (removed->last_version) {
+        if (removed->signer_pin_cleared) {
+            std::cout << "signer pin: cleared (no installed version "
+                         "remains)\n";
+        } else if (removed->signer_pin_kept) {
+            std::cout << "signer pin: kept at " << removed->signer_pin_path
+                      << '\n';
+        }
+    }
+    auto remaining{mod::list_receipt_paths(options.store)};
+    const auto empty_store{remaining.has_value() && remaining->empty()};
+    std::cout << "reclaim: run `refrain-tools content gc --store "
+              << options.store << " --apply"
+              << (empty_store ? " --allow-empty-roots" : "")
+              << "` to collect the unreferenced blobs\n";
+    std::cout << "uninstall: OK\n";
+    return 0;
+}
+
+auto run_mods_pin(const mods_pin_options &options) -> int {
+    if (options.store.empty()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "mods pin: --store <dir> is required"));
+    }
+    if (options.id.empty()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "mods pin: a mod id is required"));
+    }
+    if (options.key_id.empty() != options.fingerprint.empty()) {
+        return report_error(refrain::make_error(
+            refrain::error_code::invalid_argument,
+            "mods pin: --key-id and --fingerprint must be given together"));
+    }
+    if (options.clear) {
+        if (!options.key_id.empty()) {
+            return report_error(refrain::make_error(
+                refrain::error_code::invalid_argument,
+                "mods pin: --clear cannot be combined with --key-id"));
+        }
+        auto cleared{mod::clear_signer_pin(options.store, options.id)};
+        if (!cleared) {
+            return report_error(cleared.error());
+        }
+        std::cout << "signer pin: cleared for " << options.id << '\n';
+        return 0;
+    }
+
+    mod::mod_signer_pin pin{};
+    pin.id = options.id;
+    if (!options.key_id.empty()) {
+        if (options.fingerprint.size() != 64U ||
+            !std::all_of(options.fingerprint.begin(), options.fingerprint.end(),
+                         [](char character) {
+                             return (character >= '0' && character <= '9') ||
+                                    (character >= 'a' && character <= 'f');
+                         })) {
+            return report_error(refrain::make_error(
+                refrain::error_code::invalid_argument,
+                "mods pin: --fingerprint must be 64 lowercase hex "
+                "characters"));
+        }
+        pin.key_id = options.key_id;
+        pin.public_key_fingerprint = options.fingerprint;
+        pin.source = "admin";
+    } else {
+        // Derive from the highest installed receipt: this is the explicit
+        // confirmation that lets a legacy (receipt v1) install be updated.
+        auto paths{mod::list_receipt_paths_for(options.store, options.id)};
+        if (!paths) {
+            return report_error(paths.error());
+        }
+        if (paths->empty()) {
+            return report_error(refrain::make_error(
+                refrain::error_code::not_found,
+                fmt::format("mods pin: mod '{}' is not installed",
+                            options.id)));
+        }
+        std::optional<mod::mod_receipt> latest{};
+        for (const auto &receipt_path : *paths) {
+            auto receipt{mod::read_receipt(receipt_path)};
+            if (!receipt) {
+                return report_error(receipt.error());
+            }
+            if (!latest.has_value() ||
+                core::compare(*core::semver::parse(receipt->version),
+                              *core::semver::parse(latest->version)) !=
+                    std::strong_ordering::less) {
+                latest = std::move(*receipt);
+            }
+        }
+        if (!latest.has_value() || !latest->signed_package ||
+            latest->key_id.empty()) {
+            return report_error(refrain::make_error(
+                refrain::error_code::invalid_argument,
+                fmt::format("mods pin: the installed versions of '{}' are "
+                            "unsigned; there is no signer to pin",
+                            options.id)));
+        }
+        pin.key_id = latest->key_id;
+        pin.public_key_fingerprint = latest->public_key_fingerprint;
+        pin.source = "admin";
+    }
+    pin.pinned_at = {};
+    pin.policy = mod::rfmod_signature_policy::strict;
+    if (auto written{mod::write_signer_pin(options.store, pin)}; !written) {
+        return report_error(written.error());
+    }
+    std::cout << fmt::format(
+        "signer pin: {} -> {} {}\n", options.id, pin.key_id,
+        pin.public_key_fingerprint.empty() ? "(fingerprint unknown)"
+                                           : pin.public_key_fingerprint);
+    return 0;
+}
+
+auto run_mods_receipts(const mods_receipts_options &options) -> int {
+    if (options.store.empty()) {
+        return report_error(
+            refrain::make_error(refrain::error_code::invalid_argument,
+                                "mods receipts: --store <dir> is required"));
+    }
+    auto report{mod::migrate_receipts(options.store, options.apply)};
+    if (!report) {
+        return report_error(report.error());
+    }
+    std::cout << fmt::format(
+        "receipts: {} scanned, {} {}, {} already v2, {} failed\n",
+        report->scanned, options.apply ? "migrated" : "to migrate",
+        report->migrated, report->current, report->failed);
+    if (!options.apply) {
+        std::cout << "dry run: pass --apply to rewrite receipt v1 "
+                     "documents\n";
+    }
+    if (report->failed != 0) {
+        std::cout << "receipts: " << report->failed
+                  << " document(s) could not be rewritten\n";
+        return 1;
+    }
+    std::cout << "receipts: OK\n";
     return 0;
 }
 

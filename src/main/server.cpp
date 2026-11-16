@@ -36,6 +36,8 @@
 #include <refrain/mod/discovery.hpp>
 #include <refrain/mod/gamepack.hpp>
 #include <refrain/mod/host.hpp>
+#include <refrain/mod/install_policy.hpp>
+#include <refrain/mod/rfmod.hpp>
 #include <refrain/mod/startup_content.hpp>
 #include <refrain/net/download.hpp>
 #include <refrain/server/eula.hpp>
@@ -168,33 +170,36 @@ parse_content_trusted_keys(const std::vector<std::string> &specs)
     return keys;
 }
 
-/// Does any `--mods` instance root contain an on-disk copy of `id`? Such a mod
-/// is supplied by the operator rather than the binary, so the build-time
-/// profile does not have to contain it.
+/// Does any `--mods` content store contain an installed receipt for `id`? Such
+/// a mod is supplied by the operator rather than the binary, so the build-time
+/// profile does not have to contain it. A directory under `mods/` is not an
+/// install and therefore does not satisfy this check.
 [[nodiscard]] auto
-external_mod_available(const std::vector<std::string> &instance_roots,
+external_mod_available(const std::vector<std::string> &store_roots,
                        std::string_view id) -> bool {
-    for (const auto &root : instance_roots) {
-        std::error_code error;
-        const auto manifest{std::filesystem::path{root} / "mods" /
-                            std::string{id} / "manifest.toml"};
-        if (std::filesystem::is_regular_file(manifest, error)) {
+    for (const auto &root : store_roots) {
+        auto receipts{
+            refrain::mod::list_receipt_paths_for(root, std::string{id})};
+        if (!receipts) {
+            continue; // an unusable root fails later with the catalog error
+        }
+        if (!receipts->empty()) {
             return true;
         }
     }
     return false;
 }
 
-/// Ids the binary is missing and no `--mods` root supplies.
+/// Ids the binary is missing and no `--mods` store supplies.
 [[nodiscard]] auto
 missing_composition_mods(std::span<const std::string> ids,
-                         const std::vector<std::string> &instance_roots)
+                         const std::vector<std::string> &store_roots)
     -> std::vector<std::string> {
     auto missing{refrain::app::unbuilt_mod_ids(ids)};
     missing.erase(std::remove_if(missing.begin(), missing.end(),
                                  [&](const std::string &id) {
-                                     return external_mod_available(
-                                         instance_roots, id);
+                                     return external_mod_available(store_roots,
+                                                                   id);
                                  }),
                   missing.end());
     return missing;
@@ -219,7 +224,7 @@ struct default_config_file {
 /// runtime already falls back to, so writing the files changes no behaviour;
 /// it makes the defaults visible, editable and documented where the operator
 /// looks for them. The keys match what the runtime reads.
-constexpr std::array<default_config_file, 5> k_default_config_files{{
+constexpr std::array<default_config_file, 6> k_default_config_files{{
     {.name = "refrain.toml",
      .text = "# Refrain host configuration.\n"
              "\n"
@@ -253,6 +258,29 @@ constexpr std::array<default_config_file, 5> k_default_config_files{{
              "\n"
              "# Warn when one tick stalls longer than this; 0 disables.\n"
              "watchdog_timeout_ms = 5000\n"},
+    {.name = "mods.toml",
+     .text = "# Refrain mod install and trust policy.\n"
+             "#\n"
+             "# Trust anchors are keyed by the manifest key_id and hold the\n"
+             "# Ed25519 public key as 64 lowercase hex characters. Without a\n"
+             "# configured anchor a signed package is never trusted, and\n"
+             "# `require = true` rejects unsigned packages outright.\n"
+             "\n"
+             "[signature]\n"
+             "require = true\n"
+             "policy = \"strict\"\n"
+             "\n"
+             "[trust]\n"
+             "\n"
+             "[install]\n"
+             "allow_downgrade = false\n"
+             "replace_same_version = false\n"
+             "keep_signer_pin = false\n"
+             "\n"
+             "# Explicit signer rotation allowlist:\n"
+             "# [rotation.\"example.mod\"]\n"
+             "# old_key_id = \"example-2025\"\n"
+             "# new_key_id = \"example-2026\"\n"},
     {.name = "storage.toml",
      .text = "# Refrain world storage configuration.\n"
              "\n"
@@ -504,13 +532,14 @@ int main(int argc, char **argv) {
            "Service keys this host cannot start without (repeatable, comma "
            "separated)")
         ->delimiter(',');
-    // `auto_scan` / `mods.lock` runtime wiring. `--mods` is an instance
-    // root (`<dir>/mods/<id>/manifest.toml`), scanned as origin=user.
+    // `auto_scan` / `mods.lock` runtime wiring. `--mods` names a content
+    // store root whose install receipts are the external mod catalog; a
+    // `mods/<id>/` directory is never a load source.
     std::vector<std::string> mods_roots;
     auto *mods_option =
         app.add_option("--mods", mods_roots,
-                       "Instance root containing mods/<id>/manifest.toml "
-                       "(repeatable; scanned with origin=user)");
+                       "Content store root with installed mod receipts "
+                       "(repeatable; requires auto_scan)");
     std::string mods_lock;
     auto *mods_lock_option =
         app.add_option("--mods-lock", mods_lock,
@@ -580,6 +609,31 @@ int main(int argc, char **argv) {
     auto *content_trusted_key_option =
         app.add_option("--content-trusted-key", content_trusted_keys,
                        "Trusted signing key <id>:<hex> (repeatable)");
+    bool allow_downgrade{false};
+    auto *allow_downgrade_option =
+        app.add_flag("--allow-downgrade", allow_downgrade,
+                     "Accept a mod version lower than the installed highest");
+    bool replace_same_version{false};
+    auto *replace_same_version_option =
+        app.add_flag("--replace-same-version", replace_same_version,
+                     "Accept the same mod (id, version) with a different "
+                     "archive digest");
+    bool keep_signer_pin{false};
+    auto *keep_signer_pin_option =
+        app.add_flag("--keep-signer-pin", keep_signer_pin,
+                     "Keep a mod's signer pin after uninstalling its last "
+                     "version");
+    bool accept_unpinned{false};
+    auto *accept_unpinned_option =
+        app.add_flag("--accept-unpinned-signer", accept_unpinned,
+                     "Confirm the signer of an older (unpinned) install so it "
+                     "may be updated");
+    std::string signature_policy{};
+    auto *signature_policy_option =
+        app.add_option("--signature-policy", signature_policy,
+                       "Override the install signature policy: strict or "
+                       "trusted-any")
+            ->check(CLI::IsMember({"strict", "trusted-any"}));
 
     // Runtime content mount: external datapack directories layered on top
     // of the published content composition. Repeatable; later entries have
@@ -641,7 +695,12 @@ int main(int argc, char **argv) {
         gc_keep_days_option->count() > 0 || gc_budget_ms_option->count() > 0 ||
         lock_timeout_option->count() > 0 ||
         content_require_signature_option->count() > 0 ||
-        content_trusted_key_option->count() > 0};
+        content_trusted_key_option->count() > 0 ||
+        allow_downgrade_option->count() > 0 ||
+        replace_same_version_option->count() > 0 ||
+        keep_signer_pin_option->count() > 0 ||
+        accept_unpinned_option->count() > 0 ||
+        signature_policy_option->count() > 0};
     if (content_store.empty() && explicit_content_inputs) {
         fmt::println(stderr, "refrain-server: --content-* / --gc-keep-days / "
                              "--gc-budget-ms / --lock-timeout-ms require "
@@ -659,6 +718,57 @@ int main(int argc, char **argv) {
     if (!content_keys) {
         fmt::println(stderr, "{}", content_keys.error().message);
         return 2;
+    }
+    std::optional<refrain::mod::rfmod_signature_policy> cli_signature_policy{};
+    if (!signature_policy.empty()) {
+        cli_signature_policy =
+            refrain::mod::parse_rfmod_signature_policy(signature_policy);
+        if (!cli_signature_policy) {
+            fmt::println(stderr, "refrain-server: --signature-policy must be "
+                                 "strict or trusted-any");
+            return 2;
+        }
+    }
+
+    // Mod install/trust policy: `config/mods.toml` is the deployment source of
+    // truth; the command line overrides individual values for this one run.
+    // The built-in default is the production default (require a trusted
+    // signature, strict signer continuity).
+    refrain::mod::install_policy_config install_policy{};
+    if (!config_dir.empty()) {
+        const auto policy_path{
+            refrain::data::join_path(config_dir, "mods.toml")};
+        if (refrain::core::io::exists(policy_path)) {
+            auto loaded{refrain::mod::load_install_policy(policy_path)};
+            if (!loaded) {
+                fmt::println(stderr, "refrain-server: {}",
+                             loaded.error().message);
+                return 1;
+            }
+            install_policy = std::move(*loaded);
+        }
+    }
+    {
+        refrain::mod::install_policy_overrides overrides{};
+        if (content_require_signature_option->count() > 0) {
+            overrides.require_signature = true;
+        }
+        if (content_trusted_key_option->count() > 0) {
+            overrides.trusted_keys = std::move(*content_keys);
+        }
+        if (allow_downgrade_option->count() > 0) {
+            overrides.allow_downgrade = true;
+        }
+        if (replace_same_version_option->count() > 0) {
+            overrides.replace_same_version = true;
+        }
+        if (keep_signer_pin_option->count() > 0) {
+            overrides.keep_signer_pin = true;
+        }
+        if (cli_signature_policy.has_value()) {
+            overrides.signature_policy = *cli_signature_policy;
+        }
+        refrain::mod::apply_install_policy_overrides(install_policy, overrides);
     }
 
     // `--dump-gamepack` returns before the auto_scan/mods.lock stage, so mod
@@ -905,8 +1015,8 @@ int main(int argc, char **argv) {
         content.auto_install = force_auto_install ||
                                (gamepack_spec->auto_scan && !no_auto_install);
         content.keep_installed = true;
-        content.require_signature = content_require_signature;
-        content.trusted_keys = std::move(*content_keys);
+        content.policy = install_policy;
+        content.accept_unpinned = accept_unpinned;
         content.gc = *content_gc_mode;
         content.gc_keep_days = gc_keep_days;
         content.gc_budget_ms = gc_budget_ms;
@@ -945,6 +1055,13 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    // External mod catalog: the content store's install receipts. `--mods`
+    // names additional store roots; explicit roots must be a store directory
+    // (a typo must not silently resolve to an empty catalog). The
+    // `--content-store` root is always included, so mods installed by the
+    // startup bootstrap above are part of the composition.
+    std::vector<std::string> installed_stores{};
+    installed_stores.reserve(mods_roots.size() + 1);
     // Preflight: a gamepack that pins a mod this binary was not built with
     // fails here with the profile diagnostic instead of surfacing later as a
     // missing service key. `--dump-gamepack` is a manifest inspection command
@@ -955,7 +1072,7 @@ int main(int argc, char **argv) {
         for (const auto &entry : gamepack_spec->mods) {
             pinned.push_back(entry.ref.id);
         }
-        auto unbuilt{missing_composition_mods(pinned, mods_roots)};
+        auto unbuilt{missing_composition_mods(pinned, installed_stores)};
         if (!unbuilt.empty()) {
             return report_error(refrain::make_error(
                 refrain::error_code::not_found,
@@ -964,19 +1081,37 @@ int main(int argc, char **argv) {
         }
     }
 
-    std::vector<refrain::mod::discovery_root> discovery_roots{};
-    discovery_roots.reserve(mods_roots.size());
     for (const auto &root : mods_roots) {
-        discovery_roots.push_back(refrain::mod::discovery_root{
-            .path = root, .origin = refrain::mod::mod_origin::user});
+        if (!refrain::core::io::is_directory(root)) {
+            fmt::println(stderr,
+                         "refrain-server: mod store root '{}' is not a "
+                         "directory",
+                         root);
+            return 2;
+        }
+        const auto mods_dir{refrain::data::join_path(root, "mods")};
+        if (root != content_store &&
+            !refrain::core::io::is_directory(mods_dir)) {
+            fmt::println(stderr,
+                         "refrain-server: mod store root '{}' has no 'mods' "
+                         "directory",
+                         root);
+            return 2;
+        }
+        installed_stores.push_back(root);
+    }
+    if (!content_store.empty() &&
+        std::find(installed_stores.begin(), installed_stores.end(),
+                  content_store) == installed_stores.end()) {
+        installed_stores.push_back(content_store);
     }
     auto plan{refrain::app::resolve_server_mods(
         *gamepack_spec, refrain::app::server_mods_options{
-                            .roots = discovery_roots,
+                            .installed_stores = installed_stores,
                             .builtin_image = image_bytes,
                             .required_services = services,
                             .auto_scan = effective_auto_scan,
-                            .discovery = {.require_mods_dir = true}})};
+                            .discovery = {.require_mods_dir = false}})};
     if (!plan) {
         return report_error(plan.error());
     }
@@ -1336,18 +1471,15 @@ int main(int argc, char **argv) {
         // `--update-lock` opts into a rewrite.
         const refrain::mod::mod_lock &lock{*plan};
 
-        // A resolved directory copy of a builtin id is not loadable yet
-        // (external loading is not implemented); make the shadowing visible but
-        // keep the resolved lock.
-        for (const auto &selected : lock.mods) {
-            const auto *runtime{mods.find(selected.id)};
-            if (runtime == nullptr) {
-                continue;
-            }
-            const auto runtime_hash{
-                refrain::data::parse_digest(runtime->manifest_hash_hex)};
-            if (selected.origin == refrain::mod::mod_origin::builtin &&
-                runtime_hash && *runtime_hash == selected.manifest_hash) {
+        // An installed mod may deliberately override a built-in one; make the
+        // shadowing visible in the log but keep the resolved lock.
+        for (const auto &selected : plan->load_order) {
+            const auto shadows_builtin{std::any_of(
+                selected.shadowed.begin(), selected.shadowed.end(),
+                [](const refrain::mod::shadowed_mod &loser) {
+                    return loser.origin == refrain::mod::mod_origin::builtin;
+                })};
+            if (!shadows_builtin) {
                 continue;
             }
             log_cli.warn("mod {} from {} shadows the built-in copy",
@@ -1380,7 +1512,8 @@ int main(int argc, char **argv) {
                         locked.push_back(entry.id);
                     }
                 }
-                auto unbuilt{missing_composition_mods(locked, mods_roots)};
+                auto unbuilt{
+                    missing_composition_mods(locked, installed_stores)};
                 if (!unbuilt.empty()) {
                     return report_fatal(refrain::make_error(
                         refrain::error_code::not_found,

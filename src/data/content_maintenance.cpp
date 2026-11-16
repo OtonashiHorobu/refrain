@@ -1224,7 +1224,8 @@ auto collect_garbage(std::string_view store_root, const gc_options &options,
     // No root at all would make every record look unreferenced; an --apply
     // rebuild would wipe a store whose indexes/receipts were never published.
     // Fail closed instead (a receipt alone is enough to permit apply).
-    if (options.apply && root_counts.empty() && !table->entries.empty()) {
+    if (options.apply && !options.allow_empty_roots && root_counts.empty() &&
+        !table->entries.empty()) {
         return std::unexpected{make_error(
             error_code::not_found,
             "failed to rebuild the blobs.idx because there are no gc roots, "

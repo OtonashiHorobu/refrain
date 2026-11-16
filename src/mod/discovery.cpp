@@ -10,8 +10,11 @@
 #include <refrain/core/io.hpp>
 #include <refrain/core/semver.hpp>
 #include <refrain/data/builtin_image.hpp>
+#include <refrain/data/content_index.hpp>
+#include <refrain/data/content_store.hpp>
 #include <refrain/data/path.hpp>
 #include <refrain/mod/manifest.hpp>
+#include <refrain/mod/rfmod.hpp>
 
 #include <fmt/format.h>
 
@@ -877,6 +880,240 @@ auto composition::format() const -> std::string {
         out += '\n';
     }
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// installed receipt catalog (the runtime mod source)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Lazy reader for the packaged members of installed mods in one content store.
+///
+/// The blob table is opened once per store; members are read through their
+/// RFBT location (`content_store::read(blob_location)`) because small members
+/// live in sealed segments and have no per-digest file.
+struct installed_store_reader {
+    std::string root{};
+    std::optional<data::content_store> store{};
+    std::optional<data::mapped_blob_table> table{};
+
+    [[nodiscard]] auto open_store() -> status {
+        const auto table_path{fmt::format("{}/content/{}", root,
+                                          data::content_blob_table_filename)};
+        if (!core::io::exists(table_path)) {
+            return std::unexpected{fail(
+                error_code::not_found,
+                fmt::format("mod catalog: content store '{}' has no blob table",
+                            root))};
+        }
+        auto opened_table{data::mapped_blob_table::open(table_path)};
+        if (!opened_table) {
+            return std::unexpected{
+                annotate(std::move(opened_table.error()),
+                         fmt::format("mod catalog: {}", table_path))};
+        }
+        auto opened_store{data::content_store::open_existing(root)};
+        if (!opened_store) {
+            return std::unexpected{
+                annotate(std::move(opened_store.error()),
+                         fmt::format("mod catalog: content store '{}'", root))};
+        }
+        table.emplace(std::move(*opened_table));
+        store.emplace(std::move(*opened_store));
+        return status_ok();
+    }
+
+    [[nodiscard]] auto read(const digest32 &digest)
+        -> result<std::vector<std::byte>> {
+        if (!table.has_value()) {
+            if (auto opened{open_store()}; !opened) {
+                return std::unexpected{std::move(opened.error())};
+            }
+        }
+        const auto entry{table->find(digest)};
+        if (!entry) {
+            return std::unexpected{fail(
+                error_code::not_found,
+                fmt::format("mod catalog: blob {} is missing from the content "
+                            "store '{}'",
+                            data::to_hex(digest), root))};
+        }
+        return store->read(data::blob_location_from_table_entry(*entry));
+    }
+};
+
+/// Read + verify + parse the packaged manifest of one installed receipt.
+[[nodiscard]] auto installed_manifest(installed_store_reader &reader,
+                                      const mod_receipt &receipt,
+                                      const std::string &receipt_path)
+    -> result<mod_manifest> {
+    const auto manifest_file{
+        std::find_if(receipt.files.begin(), receipt.files.end(),
+                     [](const receipt_file &file) {
+                         return file.path == rfmod_manifest_path;
+                     })};
+    if (manifest_file == receipt.files.end()) {
+        return std::unexpected{fail(
+            error_code::parse_error,
+            fmt::format("mod catalog: receipt '{}' does not record a {} member",
+                        receipt_path, rfmod_manifest_path))};
+    }
+    if (manifest_file->blake3 != receipt.manifest_blake3) {
+        return std::unexpected{fail(
+            error_code::parse_error,
+            fmt::format("mod catalog: receipt '{}' records manifest digest {} "
+                        "but its files table says {}",
+                        receipt_path, data::to_hex(receipt.manifest_blake3),
+                        data::to_hex(manifest_file->blake3)))};
+    }
+    auto bytes{reader.read(receipt.manifest_blake3)};
+    if (!bytes) {
+        return std::unexpected{
+            annotate(std::move(bytes.error()), receipt_path)};
+    }
+    const std::string_view text{
+        reinterpret_cast<const char *>(bytes->data()), // NOLINT
+        bytes->size()};
+    auto document{config::document::parse_text(text, receipt_path)};
+    if (!document) {
+        return std::unexpected{
+            annotate(std::move(document.error()), receipt_path)};
+    }
+    // The packaged manifest carries `[files]`/`[packaging]`/`[signature]`;
+    // its package tables were validated by the installer, the catalog only
+    // parses the mod tables out of it.
+    auto manifest{mod::parse_mod_manifest(
+        *document, mod::manifest_parse_options{.allow_package_tables = true})};
+    if (!manifest) {
+        auto failure{std::move(manifest.error())};
+        failure.code = error_code::parse_error;
+        return std::unexpected{annotate(std::move(failure), receipt_path)};
+    }
+    return std::move(*manifest);
+}
+
+} // namespace
+
+auto scan_installed(std::span<const std::string> store_roots,
+                    const discover_options &options)
+    -> result<std::vector<candidate>> {
+    std::vector<discovered_mod> candidates;
+    for (const auto &root : store_roots) {
+        if (root.empty()) {
+            return std::unexpected{
+                fail(error_code::invalid_argument,
+                     "mod catalog: an installed store root has an empty path")};
+        }
+        const auto root_path{normalize_separators(root)};
+        if (!core::io::is_directory(root_path)) {
+            return std::unexpected{fail(
+                error_code::io_error,
+                fmt::format("mod catalog: store root '{}' is not a directory",
+                            root_path))};
+        }
+        const auto mods_dir{join_host_path(root_path, "mods")};
+        if (!core::io::exists(mods_dir)) {
+            if (options.require_mods_dir) {
+                return std::unexpected{fail(
+                    error_code::io_error,
+                    fmt::format("mod catalog: store root '{}' has no 'mods' "
+                                "directory",
+                                root_path))};
+            }
+            continue;
+        }
+        if (!core::io::is_directory(mods_dir)) {
+            return std::unexpected{fail(
+                error_code::io_error,
+                fmt::format("mod catalog: '{}' is not a directory", mods_dir))};
+        }
+        auto paths{list_receipt_paths(root_path)};
+        if (!paths) {
+            return std::unexpected{annotate(
+                std::move(paths.error()),
+                fmt::format("mod catalog: store root '{}'", root_path))};
+        }
+        if (paths->empty()) {
+            continue;
+        }
+        installed_store_reader reader{.root = root_path};
+        for (const auto &path : *paths) {
+            auto receipt{read_receipt(path)};
+            if (!receipt) {
+                return std::unexpected{
+                    annotate(std::move(receipt.error()), "mod catalog")};
+            }
+            auto manifest{installed_manifest(reader, *receipt, path)};
+            if (!manifest) {
+                return std::unexpected{std::move(manifest.error())};
+            }
+            if (manifest->common.id != receipt->id) {
+                return std::unexpected{fail(
+                    error_code::parse_error,
+                    fmt::format("mod catalog: receipt '{}' records id '{}' but "
+                                "its manifest declares '{}'",
+                                path, receipt->id, manifest->common.id))};
+            }
+            if (manifest->common.version != receipt->version) {
+                return std::unexpected{fail(
+                    error_code::parse_error,
+                    fmt::format("mod catalog: receipt '{}' records version {} "
+                                "but its manifest declares {}",
+                                path, receipt->version,
+                                manifest->common.version))};
+            }
+            candidates.push_back(discovered_mod{
+                .id = manifest->common.id,
+                .version = manifest->common.version,
+                .abi = manifest->common.abi,
+                .origin = receipt->origin,
+                .side = manifest->common.side,
+                .meta = manifest->common.meta,
+                .provides = std::move(manifest->provides),
+                .path = path,
+                .manifest_hash = receipt->manifest_blake3,
+                .required = std::move(manifest->required),
+                .optional = std::move(manifest->optional),
+                .kind = package_kind::rfmod,
+                .entry = std::move(manifest->entry),
+            });
+        }
+    }
+
+    return merge_candidates(std::move(candidates));
+}
+
+auto resolve_installed_composition(const mod::gamepack_spec &parsed,
+                                   std::span<const std::string> store_roots,
+                                   const composition_load_options &options)
+    -> result<composition> {
+    auto spec{parsed};
+    if (options.auto_scan.has_value()) {
+        spec.auto_scan = *options.auto_scan;
+    }
+
+    std::vector<discovered_mod> catalog;
+    if (!options.builtin_image.empty()) {
+        auto builtin{scan_builtin_image(options.builtin_image)};
+        if (!builtin) {
+            return std::unexpected{std::move(builtin.error())};
+        }
+        catalog = std::move(*builtin);
+    }
+    auto installed{scan_installed(store_roots, options.discovery)};
+    if (!installed) {
+        return std::unexpected{std::move(installed.error())};
+    }
+    catalog.insert(catalog.end(), std::make_move_iterator(installed->begin()),
+                   std::make_move_iterator(installed->end()));
+
+    auto merged{merge_candidates(std::move(catalog))};
+    if (!merged) {
+        return std::unexpected{std::move(merged.error())};
+    }
+    return detail::resolve_catalog(spec, *merged, options.discovery,
+                                   options.required_services, false);
 }
 
 } // namespace refrain::mod
