@@ -492,3 +492,9 @@ sea level from the dimension profile; the reference fortress start and end city
 start piece lists are compared separately. The fortress and end city reference
 runs are documented in `tools/worldgen/oracle/README.md`.
 
+## See also
+
+- [Running a server](running.md) for the server startup that reads the
+  generated datapack, and for the world import and export commands.
+- [Testing](testing.md) for the test suite, which skips its data-driven world
+  generation cases when the datapack is missing.

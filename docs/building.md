@@ -200,3 +200,9 @@ directory. Run `conan install` with the matching profile before configuring.
 
 If the compiler is newer than the Conan profile expects, remove the profile and
 run `scripts/bootstrap.sh --profile-only` to regenerate it.
+
+## See also
+
+- [Running a server](running.md) for the command lines of the built binaries.
+- [Testing](testing.md) for the test layout, the local CI script and the soak
+  and load tools that use a build directory.

@@ -263,3 +263,10 @@ failure, never a way to say the operation does not apply.
 The ABI major version must match between a provider and its consumer and only
 changes for an incompatible layout or calling change. After the release freeze,
 contracts switch to SemVer increments with migrations.
+
+## See also
+
+- [Architecture](architecture.md) for the layer boundaries and the contract
+  model these generated headers implement.
+- [Mods and gamepacks](modding.md) for how a provider implements a service and
+  is selected by a gamepack.

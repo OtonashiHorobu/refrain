@@ -256,19 +256,27 @@ client, not only against the protocol bot. The reproducible steps are:
    shuts down cleanly. For a client join against an imported world, generate
    that world with `tools/make_test_world.py gen --chunks 256` rather than the
    default three-chunk fixture.
-2. `refrain-tools protocol bot --host 127.0.0.1:25565 --username Bot
-   --wait-chunks 1` proves the handshake, configuration and first chunks.
+2. `build/Release/bin/refrain-tools protocol bot --host 127.0.0.1:25565
+   --username Bot --wait-chunks 1` proves the handshake, configuration and first
+   chunks.
 3. `MC_CLIENT_HOME=/path/to/26.3-runtime scripts/dev/vanilla-acceptance.sh
    --world /path/to/rwf-world` joins with the unmodified client through the
    acceptance agent in `tools/net/client-agent/`, which asserts the level load
    and writes a screenshot. A vanilla client also passes the checks listed in
    [running.md](running.md#client).
-4. `refrain-tools protocol capture --host 127.0.0.1:25565 --out join.rfcap
-   --wait-chunks 1` records the clientbound stream for a later comparison with
-   `protocol diff` or the oracle below.
+4. `build/Release/bin/refrain-tools protocol capture --host 127.0.0.1:25565
+   --out join.rfcap --wait-chunks 1` records the clientbound stream for a later
+   comparison with `protocol diff` or the oracle below.
 
 ## Network oracle (optional, local)
 
 `tools/net/oracle/` compares a capture from a locally owned vanilla 26.3 server
 with a Refrain capture. It never downloads or commits server jars, assets or
 captures. See [the oracle README](../tools/net/oracle/README.md).
+
+## See also
+
+- [Building](building.md) for the build presets, configuration flags and CI
+  scripts that drive these tests.
+- [Running a server](running.md) for the server command line and configuration
+  used by the protocol and acceptance runs.

@@ -217,3 +217,12 @@ refrain-tools builtin image --mods mods -o build/Release/generated/builtin.image
 
 The image is embedded in the server binary. A deterministic build produces the
 same image bytes, which the test suite relies on.
+
+## See also
+
+- [Schema compiler](schema.md) for RIDL service declarations and the generated
+  C ABI and C++ wrappers a provider implements.
+- [Running a server](running.md) for the CLI flags, configuration namespaces and
+  content-store options that load a composition.
+- [Architecture](architecture.md) for the composition and contract model in
+  context.
