@@ -11,6 +11,7 @@ permissions:
 
 env:
   CONAN_VERSION: "2.31.2"
+  CMAKE_VERSION: "4.4.4"
   REFRAIN_CONAN_PROFILE: gcc-release
 
 concurrency:
@@ -38,8 +39,10 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             python3 python3-pip git ca-certificates
-          python3 -m pip install --break-system-packages "conan==${CONAN_VERSION}"
+          python3 -m pip install --break-system-packages \
+            "conan==${CONAN_VERSION}" "cmake==${CMAKE_VERSION}"
           conan --version
+          cmake --version | head -1
 
       - name: Create the Conan profiles
         run: bash scripts/bootstrap.sh --profile-only
