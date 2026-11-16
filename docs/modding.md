@@ -483,6 +483,34 @@ Leaf services, data-only mods and providers behind a `clean` or `retire` loader
 are hot-swappable. A mod that other active mods still require cannot be
 uninstalled; uninstall or reload the dependency first.
 
+### Data-only content reload
+
+A data mod contributes a `data/` tree and no code. Its documents (recipes, loot
+tables, advancements, worldgen documents, structure templates and tags) are the
+datapack content layer, not the composition, so they reload on their own path:
+`mods reload-data` (console or op `/mods reload-data`) rebuilds the layered
+content view from the same stack the server came up with, loads and validates
+it off the tick, and publishes it at the next tick boundary. Readers take the
+live view once per tick, so the previous view stays mapped until the last
+reader drops its snapshot and a tick that started on it finishes on it.
+
+The gate is `[lifecycle] hot_reload_data` in `config/mods_admin.toml`, off by
+default. A failed rebuild rolls back: the live generation stays and the error
+names the layer and the path, which makes a broken edit visible without taking
+the server down.
+
+Block, item and entity registries are not part of the view. The server freezes
+them at start and existing chunks keep the palette generation they were written
+with; a pack whose reload would add, remove or edit a registry document
+(`data/<namespace>/block/...`, `data/<namespace>/item/...`,
+`data/<namespace>/entity_type/...`, or a shipped `tables.rvtb` /
+`protocol_registry.json`) is refused with `restart required` and the changed
+files are named. Mod code and the provider composition are the other half of a
+reload and go through `mods reload <id>` and `hot_reload`, not `hot_reload_data`.
+Chunk generation starts its workers from the game-data directory at boot, so
+changed worldgen documents are picked up by newly generated chunks after a
+restart in this build.
+
 ### Native retire and quarantine
 
 A shared library is never `dlclose`d while the server runs: a call that started
@@ -636,6 +664,7 @@ mods verify package.rfmod
 mods install package.rfmod confirm
 mods uninstall my.mod@1.0.0 confirm
 mods reload my.mod
+mods reload-data
 mods trust
 mods trust pin my.mod confirm
 mods trust clear my.mod confirm
@@ -644,9 +673,10 @@ mods trust clear my.mod confirm
 The management service reads the install/trust policy from the same
 `config/mods.toml` the startup bootstrap uses, so a runtime install cannot
 accept a package the next start would reject. `config/mods_admin.toml` holds
-the hot lifecycle gates (`[lifecycle] hot_install`, `hot_reload`) and the list
-of player uuids allowed to run the in-game command (`[admin] operators`). Both
-hot gates default off: installing or uninstalling changes the content store at
+the hot lifecycle gates (`[lifecycle] hot_install`, `hot_reload`,
+`hot_reload_data`) and the list of player uuids allowed to run the in-game
+command (`[admin] operators`). The hot gates default off: installing or
+uninstalling changes the content store at
 once, but the running composition picks the change up on the next start unless
 the gate is enabled. A hot install only publishes a mod the composition
 resolves: with auto-scan off the gamepack has to list it, otherwise the receipt

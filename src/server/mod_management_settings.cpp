@@ -85,6 +85,8 @@ auto load_mod_management_settings(std::string_view config_dir)
                                                               "hot_install"};
     constexpr std::array<std::string_view, 2> hot_reload_key{"lifecycle",
                                                              "hot_reload"};
+    constexpr std::array<std::string_view, 2> hot_reload_data_key{
+        "lifecycle", "hot_reload_data"};
     if (auto read{read_gate(*document, hot_install_key, "lifecycle.hot_install",
                             admin_path, settings.hot_install)};
         !read) {
@@ -92,6 +94,12 @@ auto load_mod_management_settings(std::string_view config_dir)
     }
     if (auto read{read_gate(*document, hot_reload_key, "lifecycle.hot_reload",
                             admin_path, settings.hot_reload)};
+        !read) {
+        return std::unexpected{read.error()};
+    }
+    if (auto read{read_gate(*document, hot_reload_data_key,
+                            "lifecycle.hot_reload_data", admin_path,
+                            settings.hot_reload_data)};
         !read) {
         return std::unexpected{read.error()};
     }
