@@ -7,7 +7,10 @@ console receives `stop`. It listens for protocol 777 clients using the
 ## Start
 
 A fresh install starts with no world: the server creates one from a seed,
-generates the spawn area and then listens.
+generates the spawn area and then listens. Generating a world from a seed needs
+the datapack generated under `content/vanilla/26.3/data`; an existing world
+opens without it. See [World generation data](worldgen.md) for the one-time
+generation step.
 
 ```bash
 build/Release/bin/refrain-server --seed 12345
@@ -60,6 +63,7 @@ Configuration lives in one TOML file per namespace under `--config-dir`:
 
 ```text
 config/
+  refrain.toml      host namespace; [logging] level sets the console log level
   network.toml      bind_host, port, compression, view distance, status,
                     online mode, broadcast budgets
   world.toml        path, level_name, allow_nether
@@ -70,7 +74,9 @@ config/
 ```
 
 Precedence, high to low: CLI overrides, user TOML, imported properties, code
-defaults. A missing file is an empty layer; `network.toml` example:
+defaults. A missing file is an empty layer. The console log level comes from
+`--log-level`; when the flag is absent it is read from `[logging].level` in
+`refrain.toml` before the logger starts. `network.toml` example:
 
 ```toml
 bind_host = "0.0.0.0"
@@ -221,10 +227,11 @@ tick.
 
 ## Client
 
-The server speaks the 26.3 protocol (777), so an unmodified client joins with
-the address the server prints on startup (`[net]: listening on ...`). Set
-`online_mode = false` in `network.toml` to accept any username; enable it when
-the server is reachable from outside the machine.
+The server speaks protocol 777 (Minecraft Java Edition 26.3), so an unmodified
+client joins with the address the server prints on startup
+(`[net]: listening on ...`). Set `online_mode = false` in `network.toml` to
+accept any username; enable it when the server is reachable from outside the
+machine.
 
 The client is accepted when the following hold on a fresh join:
 
@@ -262,3 +269,12 @@ rebuild fails.
 
 `--crash-dir <dir>` enables local minidump capture. Crash dumps are written to
 that directory and remain local.
+
+## See also
+
+- [Building](building.md) for the toolchain, presets and build options behind
+  the binaries used in this guide.
+- [World generation data](worldgen.md) for the datapack and structure templates
+  a generated world reads.
+- [Mods and gamepacks](modding.md) for the composition `--gamepack` selects and
+  the configuration namespaces mods read.

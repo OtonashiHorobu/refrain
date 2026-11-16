@@ -13,6 +13,7 @@ definitions and gameplay modules can evolve independently.
 | Contracts | `sdk/idl`, `sdk/generated` | RIDL service contracts, generated C ABI and C++ wrappers |
 | Data | `include/refrain/data`, `src/data` | datapacks, registries, resource store, content-addressed store, cook artifacts |
 | World | `include/refrain/world`, `src/world` | RWF world storage, chunk codec, Anvil import and export |
+| Worldgen | `include/refrain/worldgen`, `src/worldgen` | datapack documents, biome sources, terrain, carvers, features, structures and templates |
 | Simulation | `include/refrain/sim`, `src/sim` | runtime world, block registry, entities, inventory, tick loop, replay |
 | Mods | `include/refrain/mod`, `src/mod` | manifests, gamepack composition, discovery, resolution, loading, provider registry, static mod registry, startup content |
 | Session | `include/refrain/session`, `src/session` | player table, entity visibility/movement, chunk subscriptions |
@@ -206,3 +207,11 @@ Functions return `refrain::result<T>` or `refrain::status`. Errors carry a code,
 a message and the source location of the failing check. Allocation failures and
 library exceptions are caught at the boundary where a library is called and
 converted to error values.
+
+## See also
+
+- [Schema compiler](schema.md) for the RSC and RIDL sources behind the contracts.
+- [Mods and gamepacks](modding.md) for the composition model and the host
+  runtime API.
+- [World generation data](worldgen.md) for the data the worldgen layer reads
+  and how its output is verified.
