@@ -48,3 +48,5 @@ version-mod-build       | stdout | 0       | built-in | refrain-tools version
 gamepack-check-profile  | stdout | 0       | binary: vanilla build | refrain-tools gamepack check --profile vanilla --built
 mods-check-profile      | stdout | 0       | mods check: profile 'vanilla' OK | refrain-tools mods check --profile vanilla --built --image {build}/generated/builtin.image
 unbuilt-mod-profile     | stderr | nonzero | not built into this binary (profile=vanilla | refrain-server --gamepack {root}/gamepack/presets/minimal-flat.toml --check
+mods-check-implicit-loader | stdout | 0       | implicit 'native' loader | refrain-tools mods check --mods {root}/test/fixtures/mods-legacy-entry
+mods-check-loader-deprecation | stdout | 0    | the inference is deprecated | refrain-tools mods check --mods {root}/test/fixtures/mods-legacy-entry

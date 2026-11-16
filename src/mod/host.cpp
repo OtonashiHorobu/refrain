@@ -11,16 +11,22 @@
 #include <refrain/contracts/host/kernel.hpp>
 #include <refrain/contracts/host/metadata.hpp>
 #include <refrain/contracts/host/platform.hpp>
+#include <refrain/contracts/services/mod_loader.hpp>
 #include <refrain/core/config.hpp>
+#include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/core/semver.hpp>
 #include <refrain/data/builtin_image.hpp>
 #include <refrain/data/checksum.hpp>
+#include <refrain/data/path.hpp>
+#include <refrain/mod/loader.hpp>
 #include <refrain/mod/package.hpp>
 #include <refrain/mod/static_mod.hpp>
 #include <refrain/platform/dynamic_library.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -39,10 +45,18 @@
 namespace {
 
 constexpr refrain::log::logger log_mod{"mod"};
+constexpr refrain::log::logger log_loader{"mod-loader"};
 
 } // namespace
 
 namespace refrain::mod {
+
+namespace loader_abi = refrain::services::mod_loader;
+
+/// Generated C ABI vtable of the loader service.
+using loader_vtable = refrain_services_mod_loader_vtable;
+/// Generated C ABI unload-reason value (plain uint32_t in C).
+using loader_unload_reason = refrain_services_mod_loader_mod_unload_reason;
 
 namespace {
 
@@ -129,6 +143,7 @@ namespace {
 }
 
 namespace config = core::config;
+namespace io = core::io;
 namespace kernel = refrain::kernel;
 namespace data = refrain::data;
 namespace log = refrain::log;
@@ -383,6 +398,405 @@ static_assert(alignof(vtable_header) == alignof(std::uint32_t));
     return status_ok();
 }
 
+// ---------------------------------------------------------------------------
+// `refrain:mod.loader` adapter
+// ---------------------------------------------------------------------------
+
+/// Engine error -> loader contract error. The loader contract carries its own
+/// enum so a loader can report a sandbox violation the engine has no code for;
+/// everything without a counterpart collapses to `internal`.
+[[nodiscard]] auto loader_error_from(error_code code) noexcept
+    -> loader_abi::mod_loader_error {
+    switch (code) {
+    case error_code::invalid_argument:
+        return loader_abi::mod_loader_error::invalid_argument;
+    case error_code::not_found:
+        return loader_abi::mod_loader_error::not_found;
+    case error_code::already_exists:
+        return loader_abi::mod_loader_error::already_exists;
+    case error_code::permission_denied:
+        return loader_abi::mod_loader_error::permission_denied;
+    case error_code::io_error:
+        return loader_abi::mod_loader_error::io_error;
+    case error_code::unsupported:
+        return loader_abi::mod_loader_error::unsupported;
+    case error_code::version_mismatch:
+        return loader_abi::mod_loader_error::version_mismatch;
+    case error_code::success:
+    case error_code::unknown:
+    case error_code::parse_error:
+    case error_code::not_initialized:
+    case error_code::timeout:
+    case error_code::cancelled:
+    case error_code::out_of_memory:
+    case error_code::mod_error:
+        return loader_abi::mod_loader_error::internal;
+    }
+    return loader_abi::mod_loader_error::internal;
+}
+
+/// Loader contract error -> engine error.
+[[nodiscard]] auto loader_error_to(loader_abi::mod_loader_error error) noexcept
+    -> error_code {
+    switch (error) {
+    case loader_abi::mod_loader_error::invalid_argument:
+        return error_code::invalid_argument;
+    case loader_abi::mod_loader_error::not_found:
+        return error_code::not_found;
+    case loader_abi::mod_loader_error::already_exists:
+        return error_code::already_exists;
+    case loader_abi::mod_loader_error::permission_denied:
+    case loader_abi::mod_loader_error::sandbox_violation:
+        return error_code::permission_denied;
+    case loader_abi::mod_loader_error::io_error:
+        return error_code::io_error;
+    case loader_abi::mod_loader_error::unsupported:
+        return error_code::unsupported;
+    case loader_abi::mod_loader_error::version_mismatch:
+        return error_code::version_mismatch;
+    case loader_abi::mod_loader_error::internal:
+        return error_code::unknown;
+    }
+    return error_code::unknown;
+}
+
+/// Manifest side -> the contract's `REFRAIN_SIDE_*` value.
+[[nodiscard]] auto abi_side(manifest_side side) noexcept -> std::uint32_t {
+    switch (side) {
+    case manifest_side::server:
+        return REFRAIN_SIDE_SERVER;
+    case manifest_side::client:
+        return REFRAIN_SIDE_CLIENT;
+    case manifest_side::both:
+        return REFRAIN_SIDE_BOTH;
+    }
+    return REFRAIN_SIDE_BOTH;
+}
+
+/// Build the contract view of one manifest for `validate`/`load`. Every string
+/// is borrowed from `manifest`, `entry` or `package_root`, all of which outlive
+/// the contract call.
+[[nodiscard]] auto make_loader_entry(const mod_manifest &manifest,
+                                     bool activate_code,
+                                     std::string_view package_root)
+    -> loader_abi::mod_entry_manifest {
+    loader_abi::mod_entry_manifest out{};
+    out.struct_size = REFRAIN_SERVICES_MOD_LOADER_MOD_ENTRY_MANIFEST_SIZE;
+    out.mod_id = refrain::contracts::to_borrowed(manifest.common.id);
+    out.version = refrain::contracts::to_borrowed(manifest.common.version);
+    out.abi = manifest.common.abi;
+    out.side = abi_side(manifest.common.side);
+    out.loader = refrain::contracts::to_borrowed(manifest.loader);
+    out.package_root = refrain::contracts::to_borrowed(package_root);
+    if (manifest.entry.has_value()) {
+        out.native_path =
+            refrain::contracts::to_borrowed(manifest.entry->native);
+        out.wasm_path = refrain::contracts::to_borrowed(manifest.entry->wasm);
+        out.symbol = refrain::contracts::to_borrowed(manifest.entry->symbol);
+    }
+    out.activate_code = activate_code ? 1 : 0;
+    return out;
+}
+
+/// Loader capabilities as the C++ host records them, decoded from the contract
+/// struct. The struct size and the unload semantics are validated here so an
+/// undersized or future-unknown declaration never reaches the dispatch.
+[[nodiscard]] auto
+capabilities_from_abi(const loader_abi::mod_loader_capabilities &abi)
+    -> result<mod_loader_capabilities> {
+    if (abi.struct_size <
+        REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_CAPABILITIES_SIZE) {
+        return std::unexpected{fail(
+            error_code::invalid_argument,
+            fmt::format(
+                "capability struct_size {} is smaller than the "
+                "contract's {}",
+                abi.struct_size,
+                REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_CAPABILITIES_SIZE))};
+    }
+    mod_unload_semantics unload{};
+    switch (abi.unload) {
+    case REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_UNLOAD_CLEAN:
+        unload = mod_unload_semantics::clean;
+        break;
+    case REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_UNLOAD_RETIRE:
+        unload = mod_unload_semantics::retire;
+        break;
+    case REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_UNLOAD_RESTART_REQUIRED:
+        unload = mod_unload_semantics::restart_required;
+        break;
+    default:
+        return std::unexpected{
+            fail(error_code::version_mismatch,
+                 fmt::format("unknown unload semantics value {}",
+                             static_cast<unsigned>(abi.unload)))};
+    }
+    return mod_loader_capabilities{
+        .loader_id =
+            std::string{refrain::contracts::as_string_view(abi.loader_id)},
+        .abi_major = abi.abi_major,
+        .unload = unload,
+        .sandboxed = abi.sandboxed != 0,
+        .supports_hot_install = abi.supports_hot_install != 0,
+    };
+}
+
+/// Cross-check a loader's declared capabilities against the id it is active
+/// under and the loader ABI this host implements.
+[[nodiscard]] auto
+validate_loader_capabilities(std::string_view expected_id,
+                             const mod_loader_capabilities &caps) -> status {
+    if (caps.loader_id != expected_id) {
+        return std::unexpected{fail(
+            error_code::version_mismatch,
+            fmt::format("mod loader provider on instance '{}' reports loader "
+                        "id '{}'",
+                        expected_id, caps.loader_id))};
+    }
+    if (caps.abi_major != REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR) {
+        return std::unexpected{fail(
+            error_code::version_mismatch,
+            fmt::format("mod loader '{}' implements loader ABI {}, this host "
+                        "provides {}",
+                        expected_id, caps.abi_major,
+                        REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR))};
+    }
+    return status_ok();
+}
+
+/// `a, b, c` for diagnostics; `none` for an empty list.
+[[nodiscard]] auto join_instance_names(const std::vector<std::string> &names)
+    -> std::string {
+    auto out{std::string{}};
+    for (const auto &name : names) {
+        if (!out.empty()) {
+            out += ", ";
+        }
+        out += name;
+    }
+    return out.empty() ? std::string{"none"} : out;
+}
+
+/// One private directory per host that materialises installed native entries
+/// into regular files a dynamic loader can open. Removed with the host.
+[[nodiscard]] auto create_loader_scratch_root() -> result<std::string> {
+    const auto base{io::temp_directory()};
+    if (base.empty()) {
+        return std::unexpected{
+            fail(error_code::io_error,
+                 "mod loader: the temporary directory is unknown")};
+    }
+    static std::atomic<std::uint64_t> sequence{0};
+    const auto stamp{static_cast<std::uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count())};
+    for (int attempt{0}; attempt < 16; ++attempt) {
+        const auto index{sequence.fetch_add(1, std::memory_order_relaxed)};
+        auto path{data::join_path(
+            base, fmt::format("refrain-mod-loader-{}-{}", stamp, index))};
+        std::error_code error;
+        if (std::filesystem::create_directories(path, error)) {
+            return path;
+        }
+        if (error && error != std::errc::file_exists) {
+            return std::unexpected{
+                fail(error_code::io_error,
+                     fmt::format("mod loader: cannot create the temporary "
+                                 "directory '{}'",
+                                 path))};
+        }
+    }
+    return std::unexpected{
+        fail(error_code::io_error,
+             "mod loader: cannot create a unique temporary directory")};
+}
+
+/// `name@version` identity for loader audit lines.
+[[nodiscard]] auto loader_identity(const registered_loader &loader)
+    -> std::string {
+    return fmt::format("{}@{}", loader.id,
+                       loader.version.empty() ? std::string{"1.0.0"}
+                                              : loader.version);
+}
+
+} // namespace
+
+namespace loader_detail {
+
+/// ABI bridge of the host-owned `builtin` and `native` loaders. Both providers
+/// share one generated vtable; the bridge branches on the state object, then
+/// calls the host implementation that actually owns the execution mechanism.
+struct bridge {
+    static auto capabilities(void *self,
+                             loader_abi::mod_loader_capabilities *out) -> void;
+    static auto validate(void *self,
+                         const loader_abi::mod_entry_manifest *entry)
+        -> refrain_status;
+    static auto load(void *self, const loader_abi::mod_load_request *request,
+                     refrain_services_mod_loader_handle_mod_instance *out)
+        -> refrain_status;
+    static auto unload(void *self,
+                       refrain_services_mod_loader_handle_mod_instance instance,
+                       loader_unload_reason reason) -> refrain_status;
+    static auto reload(void *self,
+                       refrain_services_mod_loader_handle_mod_instance instance,
+                       const loader_abi::mod_load_request *request,
+                       refrain_services_mod_loader_handle_mod_instance *out)
+        -> refrain_status;
+
+  private:
+    /// Capture a host failure: the contract carries a code only, so the detail
+    /// message stays on the host for the next diagnostic.
+    static auto fail_with(host &owner, const refrain::error &failure)
+        -> refrain_status {
+        owner.set_loader_dispatch_error(failure.message);
+        return static_cast<refrain_status>(loader_error_from(failure.code));
+    }
+};
+
+auto bridge::capabilities(void *self, loader_abi::mod_loader_capabilities *out)
+    -> void {
+    if (self == nullptr || out == nullptr) {
+        return;
+    }
+    const auto *state{static_cast<const host::loader_provider_state *>(self)};
+    out->struct_size = REFRAIN_SERVICES_MOD_LOADER_MOD_LOADER_CAPABILITIES_SIZE;
+    out->loader_id = refrain::contracts::to_borrowed(state->loader_id);
+    out->abi_major = REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR;
+    out->unload = static_cast<std::uint8_t>(state->unload);
+    out->sandboxed = state->sandboxed ? 1 : 0;
+    out->supports_hot_install = state->supports_hot_install ? 1 : 0;
+}
+
+auto bridge::validate(void *self, const loader_abi::mod_entry_manifest *entry)
+    -> refrain_status {
+    if (self == nullptr || entry == nullptr) {
+        return static_cast<refrain_status>(
+            loader_error_from(error_code::invalid_argument));
+    }
+    const auto *state{static_cast<const host::loader_provider_state *>(self)};
+    if (state->owner == nullptr) {
+        return static_cast<refrain_status>(
+            loader_error_from(error_code::unknown));
+    }
+    auto &owner{*state->owner};
+    const auto loader{refrain::contracts::as_string_view(entry->loader)};
+    if (loader != state->loader_id) {
+        owner.set_loader_dispatch_error(fmt::format(
+            "loader provider for instance '{}' was asked to validate loader "
+            "'{}'",
+            state->loader_id, std::string{loader}));
+        return static_cast<refrain_status>(
+            loader_abi::mod_loader_error::version_mismatch);
+    }
+    const auto verified{
+        loader == builtin_loader_id
+            ? owner.builtin_validate()
+            : owner.native_validate(
+                  refrain::contracts::as_string_view(entry->native_path),
+                  refrain::contracts::as_string_view(entry->wasm_path),
+                  entry->abi, entry->activate_code != 0)};
+    return verified ? REFRAIN_STATUS_OK : fail_with(owner, verified.error());
+}
+
+auto bridge::load(void *self, const loader_abi::mod_load_request *request,
+                  refrain_services_mod_loader_handle_mod_instance *out)
+    -> refrain_status {
+    if (self == nullptr || request == nullptr || out == nullptr) {
+        return static_cast<refrain_status>(
+            loader_error_from(error_code::invalid_argument));
+    }
+    *out = REFRAIN_HANDLE_INVALID;
+    const auto *state{static_cast<const host::loader_provider_state *>(self)};
+    if (state->owner == nullptr) {
+        return static_cast<refrain_status>(
+            loader_error_from(error_code::unknown));
+    }
+    auto &owner{*state->owner};
+    const auto loader{
+        refrain::contracts::as_string_view(request->manifest.loader)};
+    if (loader != state->loader_id) {
+        owner.set_loader_dispatch_error(fmt::format(
+            "loader provider for instance '{}' was asked to load loader '{}'",
+            state->loader_id, std::string{loader}));
+        return static_cast<refrain_status>(
+            loader_abi::mod_loader_error::version_mismatch);
+    }
+    if (request->manifest.activate_code == 0) {
+        // The plan kept the package data-only: nothing to execute. The
+        // loader-specific drift checks already ran in `validate`.
+        return REFRAIN_STATUS_OK;
+    }
+    std::uint64_t handle{0};
+    const auto loaded{loader == builtin_loader_id ? owner.builtin_load(handle)
+                                                  : owner.native_load(handle)};
+    if (!loaded) {
+        return fail_with(owner, loaded.error());
+    }
+    *out = handle;
+    return REFRAIN_STATUS_OK;
+}
+
+auto bridge::unload(void *self,
+                    refrain_services_mod_loader_handle_mod_instance instance,
+                    loader_unload_reason reason) -> refrain_status {
+    static_cast<void>(reason);
+    if (self == nullptr || instance == REFRAIN_HANDLE_INVALID) {
+        return static_cast<refrain_status>(
+            loader_error_from(error_code::invalid_argument));
+    }
+    const auto *state{static_cast<const host::loader_provider_state *>(self)};
+    if (state->owner == nullptr) {
+        return static_cast<refrain_status>(
+            loader_error_from(error_code::unknown));
+    }
+    // TODO: dispatch instance unload to the lifecycle layer once it exists.
+    // The host records the declared semantics only, so a loader must not
+    // pretend it released an instance while its resources are still live.
+    state->owner->set_loader_dispatch_error(fmt::format(
+        "loader '{}' cannot unload instance {} before process shutdown; its "
+        "declared removal semantics are '{}'",
+        state->loader_id, instance, to_string(state->unload)));
+    return static_cast<refrain_status>(
+        loader_abi::mod_loader_error::unsupported);
+}
+
+auto bridge::reload(void *self,
+                    refrain_services_mod_loader_handle_mod_instance instance,
+                    const loader_abi::mod_load_request *request,
+                    refrain_services_mod_loader_handle_mod_instance *out)
+    -> refrain_status {
+    static_cast<void>(self);
+    static_cast<void>(instance);
+    static_cast<void>(request);
+    static_cast<void>(out);
+    // TODO: implement reload through the lifecycle layer. Until then the host
+    // must not replace an instance it cannot release.
+    return static_cast<refrain_status>(
+        loader_abi::mod_loader_error::unsupported);
+}
+
+} // namespace loader_detail
+
+namespace {
+
+/// The one vtable of the host-owned loaders: `builtin` and `native` are both
+/// implementations of the same contract and differ only in their state object.
+[[nodiscard]] auto internal_loader_vtable() noexcept
+    -> const refrain_services_mod_loader_vtable & {
+    static const refrain_services_mod_loader_vtable table{
+        .struct_size = REFRAIN_SERVICES_MOD_LOADER_VTABLE_SIZE,
+        .abi_major = REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR,
+        .abi_minor = REFRAIN_SERVICES_MOD_LOADER_ABI_MINOR,
+        .abi_patch = REFRAIN_SERVICES_MOD_LOADER_ABI_PATCH,
+        .capabilities = &loader_detail::bridge::capabilities,
+        .validate = &loader_detail::bridge::validate,
+        .load = &loader_detail::bridge::load,
+        .unload = &loader_detail::bridge::unload,
+        .reload = &loader_detail::bridge::reload,
+    };
+    return table;
+}
+
 } // namespace
 
 auto host::load_one(const composition &plan, const package_source &package,
@@ -500,98 +914,87 @@ auto host::load_one(const composition &plan, const package_source &package,
 
     const auto declares_provides{!manifest->provides.empty()};
     const auto selected_provider{planned.mods.contains(manifest->common.id)};
-
-    if (manifest->is_external()) {
-        const auto activate_external{!declares_provides || selected_provider};
-        if (declares_provides && !selected_provider) {
-            log_mod.info("mod {} provides {} but the gamepack does not select "
-                         "it as a provider, so it loads as data only",
-                         manifest->common.id, provides_summary(*manifest));
-        }
-        loaded_mod loaded{.id = manifest->common.id,
-                          .version = manifest->common.version,
-                          .abi = manifest->common.abi,
-                          .external = true,
-                          .has_code = activate_external,
-                          .provides_summary = provides_summary(*manifest),
-                          .manifest_hash_hex = manifest_hash_hex,
-                          .required = manifest->required,
-                          .optional = manifest->optional};
-        if (auto external{
-                load_external_mod(*manifest, entry, activate_external, loaded)};
-            !external) {
-            return std::unexpected{
-                annotate(std::move(external.error()), entry.path)};
-        }
-        return loaded;
-    }
-
-    auto matched{registry_.match(*manifest)};
-    if (!matched) {
-        return std::unexpected{
-            annotate(std::move(matched.error()), entry.path)};
-    }
-    const static_mod_descriptor *descriptor{*matched};
-
-    // Only a mod the plan selected may run provider code. A mod that
-    // declares `[provides]` but is not named by `startup_plan.providers` keeps
-    // loading as a data/content mod: its factory stays dormant so it cannot
-    // win a service the gamepack did not select it for.
-    const auto activate_code{descriptor != nullptr &&
-                             descriptor->factory != nullptr &&
-                             (!declares_provides || selected_provider)};
-    if (declares_provides && selected_provider && !activate_code) {
-        return std::unexpected{fail(
-            error_code::unsupported,
-            fmt::format("{}: gamepack selects internal mod '{}' as provider "
-                        "but it declares [provides] ({}) without a "
-                        "REFR_MOD_STATIC factory",
-                        entry.path, manifest->common.id,
-                        provides_summary(*manifest)))};
-    }
     if (declares_provides && !selected_provider) {
         log_mod.info("mod {} provides {} but the gamepack does not select it "
                      "as a provider, so it loads as data only",
                      manifest->common.id, provides_summary(*manifest));
     }
 
-    loaded_mod loaded{.id = manifest->common.id,
+    // Every package, internal or external, is loaded through an active
+    // `refrain:mod.loader` provider: the host no longer branches on the entry
+    // shape. The builtin loader wraps the static registry, the native loader
+    // wraps the dynamic-library entry ABI, and a future loader plugs in
+    // without touching this function.
+    current_manifest_ = &*manifest;
+    current_candidate_ = &entry;
+    current_package_ = &package;
+    current_static_descriptor_ = nullptr;
+    current_mod_selected_provider_ = selected_provider;
+    current_load_has_code_ = false;
+    clear_loader_dispatch_error();
+
+    struct dispatch_scope {
+        host &owner;
+        ~dispatch_scope() {
+            owner.current_manifest_ = nullptr;
+            owner.current_candidate_ = nullptr;
+            owner.current_package_ = nullptr;
+            owner.current_static_descriptor_ = nullptr;
+            owner.current_mod_selected_provider_ = false;
+            owner.current_load_has_code_ = false;
+            owner.current_loader_id_.clear();
+            owner.current_loader_sandboxed_ = false;
+            owner.clear_loader_dispatch_error();
+        }
+    } const scope{*this};
+
+    auto loader{resolve_loader(manifest->loader)};
+    if (!loader) {
+        return std::unexpected{annotate(std::move(loader.error()), entry.path)};
+    }
+    current_loader_id_ = loader->record->id;
+    current_loader_sandboxed_ = loader->record->sandboxed;
+
+    if (auto capabilities{read_loader_capabilities(*loader)}; !capabilities) {
+        return std::unexpected{
+            annotate(std::move(capabilities.error()), entry.path)};
+    }
+
+    const auto activate_code{!declares_provides || selected_provider};
+    if (auto validated{validate_with_loader(*loader, *manifest, activate_code)};
+        !validated) {
+        return std::unexpected{
+            annotate(std::move(validated.error()), entry.path)};
+    }
+
+    std::uint64_t instance_handle{0};
+    if (auto loaded_with{load_with_loader(*loader, *manifest, activate_code,
+                                          instance_handle)};
+        !loaded_with) {
+        return std::unexpected{
+            annotate(std::move(loaded_with.error()), entry.path)};
+    }
+
+    return loaded_mod{.id = manifest->common.id,
                       .version = manifest->common.version,
                       .abi = manifest->common.abi,
                       .external = manifest->is_external(),
-                      .has_code = activate_code,
+                      .has_code = current_load_has_code_,
                       .provides_summary = provides_summary(*manifest),
                       .manifest_hash_hex = manifest_hash_hex,
                       .required = manifest->required,
-                      .optional = manifest->optional};
-    if (activate_code) {
-        // Host→mod boundary: a static mod factory is mod code, so an escaping
-        // exception must be contained here (the mod loader has no exception
-        // channel) instead of unwinding through the host. A hard OOM reports a
-        // short SSO message so the failure path does not allocate again.
-        status factory_status{};
-        try {
-            factory_status = descriptor->factory(*this);
-        } catch (const std::bad_alloc &) {
-            return std::unexpected{
-                make_error(error_code::out_of_memory, "out of memory")};
-        } catch (...) {
-            return std::unexpected{annotate(
-                make_error(error_code::mod_error,
-                           fmt::format("mod '{}' factory threw an exception",
-                                       manifest->common.id)),
-                "provider activation")};
-        }
-        if (!factory_status) {
-            return std::unexpected{
-                annotate(std::move(factory_status.error()),
-                         fmt::format("mod '{}' factory", manifest->common.id))};
-        }
-    }
-    return loaded;
+                      .optional = manifest->optional,
+                      .loader = manifest->loader,
+                      .loader_inferred = manifest->loader_inferred,
+                      .loader_unload = loader->record->unload,
+                      .loader_sandboxed = loader->record->sandboxed,
+                      .instance_handle = instance_handle};
 }
 
-host::~host() { unload_external_mods(); }
+host::~host() {
+    unload_external_mods();
+    remove_materialized_entries();
+}
 
 void host::unload_external_mods() noexcept {
     for (auto entry{external_mods_.rbegin()}; entry != external_mods_.rend();
@@ -607,56 +1010,531 @@ void host::unload_external_mods() noexcept {
     external_mods_.clear();
 }
 
-auto host::load_external_mod(const mod_manifest &manifest,
-                             const candidate &entry, bool activate_code,
-                             loaded_mod &out) -> status {
-    if (!manifest.entry.has_value()) {
+void host::remove_materialized_entries() noexcept {
+    if (materialized_dir_.empty()) {
+        return;
+    }
+    std::error_code error;
+    std::filesystem::remove_all(materialized_dir_, error);
+    materialized_dir_.clear();
+}
+
+void host::set_loader_dispatch_error(std::string message) {
+    loader_dispatch_error_ = std::move(message);
+}
+
+void host::clear_loader_dispatch_error() { loader_dispatch_error_.clear(); }
+
+auto host::take_loader_dispatch_error() -> std::string {
+    auto message{std::move(loader_dispatch_error_)};
+    loader_dispatch_error_.clear();
+    return message;
+}
+
+auto host::register_bootstrap_loaders() -> status {
+    if (!loaders_.empty()) {
+        return status_ok();
+    }
+    builtin_loader_state_ = std::make_unique<loader_provider_state>();
+    builtin_loader_state_->owner = this;
+    builtin_loader_state_->loader_id = builtin_loader_id;
+    builtin_loader_state_->unload = mod_unload_semantics::restart_required;
+
+    native_loader_state_ = std::make_unique<loader_provider_state>();
+    native_loader_state_->owner = this;
+    native_loader_state_->loader_id = native_loader_id;
+    native_loader_state_->unload = mod_unload_semantics::retire;
+
+    const auto &vtable{internal_loader_vtable()};
+    const provider_api builtin_api{
+        .vtable = &vtable,
+        .self = builtin_loader_state_.get(),
+        .abi_major = REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR,
+    };
+    if (auto registered{register_mod_loader(builtin_loader_id, builtin_api)};
+        !registered) {
+        return std::unexpected{
+            annotate(std::move(registered.error()), "builtin loader")};
+    }
+    const provider_api native_api{
+        .vtable = &vtable,
+        .self = native_loader_state_.get(),
+        .abi_major = REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR,
+    };
+    if (auto registered{register_mod_loader(native_loader_id, native_api)};
+        !registered) {
+        return std::unexpected{
+            annotate(std::move(registered.error()), "native loader")};
+    }
+    log_loader.info("registered bootstrap mod loaders builtin and native");
+    return status_ok();
+}
+
+auto host::register_mod_loader(std::string_view loader_id,
+                               const provider_api &api,
+                               std::string_view version) -> status {
+    if (failed_ || loaded_flag_) {
+        return std::unexpected{
+            fail(error_code::not_initialized,
+                 "register_mod_loader() is only legal before load()")};
+    }
+    if (!current_mod_.empty()) {
+        return std::unexpected{fail(
+            error_code::permission_denied,
+            "register_mod_loader() is only legal from the host bootstrap, not "
+            "from a mod factory")};
+    }
+    if (!is_valid_loader_id(loader_id)) {
         return std::unexpected{
             fail(error_code::invalid_argument,
-                 "external mod is missing its [entry] table")};
+                 fmt::format("mod loader id '{}' is not a valid loader id",
+                             loader_id))};
     }
-    if (!manifest.entry->wasm.empty()) {
+    if (!is_reserved_loader_id(loader_id) &&
+        loader_id.find('.') == std::string_view::npos) {
+        return std::unexpected{fail(
+            error_code::invalid_argument,
+            fmt::format("mod loader id '{}' is not namespaced; a third-party "
+                        "loader uses an id such as com.example.loader",
+                        loader_id))};
+    }
+    if (find_loader(loader_id) != nullptr) {
+        return std::unexpected{fail(
+            error_code::already_exists,
+            fmt::format("mod loader '{}' is already registered", loader_id))};
+    }
+    if (api.vtable == nullptr || api.self == nullptr) {
+        return std::unexpected{fail(
+            error_code::invalid_argument,
+            fmt::format("mod loader '{}' requires both a vtable and a self "
+                        "pointer",
+                        loader_id))};
+    }
+    provider_api copy{api};
+    if (copy.abi_major == 0) {
+        copy.abi_major = REFRAIN_SERVICES_MOD_LOADER_ABI_MAJOR;
+    }
+    if (auto checked{check_abi_header(copy)}; !checked) {
         return std::unexpected{
-            fail(error_code::unsupported,
-                 "WASM external mods are not implemented; only native entry "
-                 "points are supported")};
+            annotate(std::move(checked.error()),
+                     fmt::format("mod loader '{}'", loader_id))};
     }
-    if (manifest.entry->native.empty()) {
-        return std::unexpected{fail(error_code::invalid_argument,
-                                    "external mod has no native entry point")};
+
+    // Query the loader's declared capabilities now: a loader that cannot
+    // answer, names another id or implements another ABI is not usable, and
+    // the host records the unload/sandbox contract before dispatching to it.
+    mod_loader_capabilities capabilities{};
+    try {
+        const loader_abi::provider provider{
+            *static_cast<const loader_vtable *>(copy.vtable), copy.self};
+        loader_abi::mod_loader_capabilities abi_capabilities{};
+        provider.capabilities(abi_capabilities);
+        auto decoded{capabilities_from_abi(abi_capabilities)};
+        if (!decoded) {
+            return std::unexpected{
+                annotate(std::move(decoded.error()),
+                         fmt::format("mod loader '{}'", loader_id))};
+        }
+        capabilities = std::move(*decoded);
+    } catch (...) {
+        return std::unexpected{
+            fail(error_code::unknown,
+                 fmt::format("mod loader '{}' capabilities threw an exception",
+                             loader_id))};
+    }
+    if (auto checked{validate_loader_capabilities(loader_id, capabilities)};
+        !checked) {
+        return checked;
+    }
+
+    const auto effective_version{version.empty() ? std::string{"1.0.0"}
+                                                 : std::string{version}};
+    provider_apis_.push_back(std::make_unique<provider_api>(copy));
+    provider_info info{};
+    info.service = std::string{mod_loader_service_id};
+    info.id = std::string{loader_id};
+    info.version = effective_version;
+    info.instance = provider_apis_.back().get();
+    info.source = "host";
+    auto added{services_.add_provider(std::move(info))};
+    if (!added) {
+        return added;
+    }
+    auto selected{services_.select_active(mod_loader_service_id, loader_id,
+                                          effective_version, loader_id)};
+    if (!selected) {
+        return selected;
+    }
+    loaders_.push_back(registered_loader{
+        .id = std::string{loader_id},
+        .version = effective_version,
+        .api = copy,
+        .abi_major = capabilities.abi_major,
+        .unload = capabilities.unload,
+        .sandboxed = capabilities.sandboxed,
+        .supports_hot_install = capabilities.supports_hot_install,
+    });
+    log_loader.info("registered mod loader {} version {}", loader_id,
+                    effective_version);
+    return status_ok();
+}
+
+auto host::find_loader(std::string_view loader_id) const noexcept
+    -> const registered_loader * {
+    const auto match{std::find_if(loaders_.begin(), loaders_.end(),
+                                  [loader_id](const registered_loader &loader) {
+                                      return loader.id == loader_id;
+                                  })};
+    return match == loaders_.end() ? nullptr : &*match;
+}
+
+auto host::resolve_loader(std::string_view loader_id) const
+    -> result<loader_binding> {
+    const auto active{
+        services_.active_provider(mod_loader_service_id, loader_id)};
+    if (!active) {
+        const auto available{join_instance_names(
+            services_.active_instances(mod_loader_service_id))};
+        if (is_first_party_loader_id(loader_id)) {
+            return std::unexpected{
+                fail(error_code::unsupported,
+                     fmt::format("mod loader '{}' is not built into this host; "
+                                 "active mod loaders: {}",
+                                 loader_id, available))};
+        }
+        return std::unexpected{
+            fail(error_code::not_found,
+                 fmt::format("no active mod loader named '{}'; active mod "
+                             "loaders: {}",
+                             loader_id, available))};
+    }
+    const auto *record{find_loader(loader_id)};
+    if (record == nullptr) {
+        return std::unexpected{fail(
+            error_code::not_found,
+            fmt::format("mod loader '{}' is active but was not registered by "
+                        "the host bootstrap",
+                        loader_id))};
+    }
+    const auto *api{static_cast<const provider_api *>(active->instance)};
+    if (api == nullptr || api->vtable == nullptr || api->self == nullptr) {
+        return std::unexpected{
+            fail(error_code::unknown,
+                 fmt::format("mod loader '{}' provider has no ABI table",
+                             loader_id))};
+    }
+    return loader_binding{.record = record, .api = *api};
+}
+
+auto host::read_loader_capabilities(const loader_binding &binding) const
+    -> result<mod_loader_capabilities> {
+    if (binding.record == nullptr || binding.api.vtable == nullptr ||
+        binding.api.self == nullptr) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "mod loader dispatch has no provider table")};
+    }
+    if (auto checked{check_abi_header(binding.api)}; !checked) {
+        return std::unexpected{
+            annotate(std::move(checked.error()),
+                     fmt::format("mod loader '{}'", binding.record->id))};
+    }
+    mod_loader_capabilities capabilities{};
+    try {
+        const loader_abi::provider provider{
+            *static_cast<const loader_vtable *>(binding.api.vtable),
+            binding.api.self};
+        loader_abi::mod_loader_capabilities abi_capabilities{};
+        provider.capabilities(abi_capabilities);
+        auto decoded{capabilities_from_abi(abi_capabilities)};
+        if (!decoded) {
+            return std::unexpected{
+                annotate(std::move(decoded.error()),
+                         fmt::format("mod loader '{}'", binding.record->id))};
+        }
+        capabilities = std::move(*decoded);
+    } catch (...) {
+        return std::unexpected{
+            fail(error_code::unknown,
+                 fmt::format("mod loader '{}' capabilities threw an exception",
+                             binding.record->id))};
+    }
+    if (auto checked{
+            validate_loader_capabilities(binding.record->id, capabilities)};
+        !checked) {
+        return std::unexpected{std::move(checked.error())};
+    }
+    if (capabilities.abi_major != binding.record->abi_major ||
+        capabilities.unload != binding.record->unload ||
+        capabilities.sandboxed != binding.record->sandboxed ||
+        capabilities.supports_hot_install !=
+            binding.record->supports_hot_install) {
+        return std::unexpected{fail(
+            error_code::version_mismatch,
+            fmt::format("mod loader '{}' changed its declared capabilities "
+                        "while running",
+                        binding.record->id))};
+    }
+    return capabilities;
+}
+
+auto host::validate_with_loader(const loader_binding &binding,
+                                const mod_manifest &manifest,
+                                bool activate_code) -> status {
+    if (current_candidate_ == nullptr) {
+        return std::unexpected{
+            fail(error_code::unknown,
+                 "mod loader dispatch has no candidate context")};
+    }
+    auto package_root{std::string{}};
+    if (const auto parent{
+            std::filesystem::path{current_candidate_->path}.parent_path()};
+        !parent.empty()) {
+        package_root = parent.string();
+    }
+    const auto entry{make_loader_entry(manifest, activate_code, package_root)};
+    try {
+        const loader_abi::provider provider{
+            *static_cast<const loader_vtable *>(binding.api.vtable),
+            binding.api.self};
+        const auto validated{provider.validate(entry)};
+        if (!validated) {
+            const auto detail{take_loader_dispatch_error()};
+            return std::unexpected{
+                fail(loader_error_to(validated.error()),
+                     detail.empty()
+                         ? fmt::format("mod loader '{}' rejected mod '{}'",
+                                       binding.record->id, manifest.common.id)
+                         : fmt::format("mod loader '{}' rejected mod '{}': {}",
+                                       binding.record->id, manifest.common.id,
+                                       detail))};
+        }
+    } catch (...) {
+        return std::unexpected{
+            fail(error_code::unknown,
+                 fmt::format("mod loader '{}' validate threw an exception",
+                             binding.record->id))};
+    }
+    return status_ok();
+}
+
+auto host::load_with_loader(const loader_binding &binding,
+                            const mod_manifest &manifest, bool activate_code,
+                            std::uint64_t &handle) -> status {
+    handle = 0;
+    if (current_candidate_ == nullptr) {
+        return std::unexpected{
+            fail(error_code::unknown,
+                 "mod loader dispatch has no candidate context")};
+    }
+    auto package_root{std::string{}};
+    if (const auto parent{
+            std::filesystem::path{current_candidate_->path}.parent_path()};
+        !parent.empty()) {
+        package_root = parent.string();
+    }
+    loader_abi::mod_load_request request{};
+    request.struct_size = REFRAIN_SERVICES_MOD_LOADER_MOD_LOAD_REQUEST_SIZE;
+    request.manifest = make_loader_entry(manifest, activate_code, package_root);
+    try {
+        const loader_abi::provider provider{
+            *static_cast<const loader_vtable *>(binding.api.vtable),
+            binding.api.self};
+        const auto loaded{provider.load(request)};
+        if (!loaded) {
+            const auto detail{take_loader_dispatch_error()};
+            const auto code{loader_error_to(loaded.error())};
+            // A sandbox refusal is the loader's policy, not a package defect:
+            // say so instead of leaving the operator with a bare permission
+            // error.
+            const auto sandbox_reason{
+                binding.record->sandboxed &&
+                        code == error_code::permission_denied
+                    ? std::string{" because the loader is sandboxed"}
+                    : std::string{}};
+            return std::unexpected{fail(
+                code,
+                detail.empty()
+                    ? fmt::format("mod loader '{}' failed to load mod '{}'{}",
+                                  binding.record->id, manifest.common.id,
+                                  sandbox_reason)
+                    : fmt::format("mod loader '{}' failed to load mod '{}'{}: "
+                                  "{}",
+                                  binding.record->id, manifest.common.id,
+                                  sandbox_reason, detail))};
+        }
+        handle = loaded->raw();
+    } catch (...) {
+        return std::unexpected{
+            fail(error_code::unknown,
+                 fmt::format("mod loader '{}' load threw an exception",
+                             binding.record->id))};
+    }
+    return status_ok();
+}
+
+auto host::builtin_validate() -> status {
+    if (current_manifest_ == nullptr) {
+        return std::unexpected{fail(error_code::unknown,
+                                    "builtin loader has no manifest context")};
+    }
+    const auto &manifest{*current_manifest_};
+    auto matched{registry_.match(manifest)};
+    if (!matched) {
+        return std::unexpected{std::move(matched.error())};
+    }
+    current_static_descriptor_ = *matched;
+
+    // Only a mod the plan selected may run provider code. A mod that declares
+    // `[provides]` but is not named by `composition.providers` keeps loading
+    // as a data/content mod; a selected provider without linked factory code
+    // fails closed instead of shipping a composition with a dead service.
+    const auto declares_provides{!manifest.provides.empty()};
+    if (declares_provides && current_mod_selected_provider_ &&
+        (current_static_descriptor_ == nullptr ||
+         current_static_descriptor_->factory == nullptr)) {
+        return std::unexpected{fail(
+            error_code::unsupported,
+            fmt::format("gamepack selects internal mod '{}' as provider but "
+                        "it declares [provides] ({}) without a "
+                        "REFR_MOD_STATIC factory",
+                        manifest.common.id, provides_summary(manifest)))};
+    }
+    return status_ok();
+}
+
+auto host::builtin_load(std::uint64_t &handle) -> status {
+    handle = 0;
+    if (current_manifest_ == nullptr) {
+        return std::unexpected{fail(error_code::unknown,
+                                    "builtin loader has no manifest context")};
+    }
+    const auto descriptor{current_static_descriptor_};
+    if (descriptor == nullptr || descriptor->factory == nullptr) {
+        return status_ok(); // data/content mod: no code to run
+    }
+    const auto &manifest{*current_manifest_};
+    // Host→mod boundary: a static mod factory is mod code, so an escaping
+    // exception must be contained here (the mod loader has no exception
+    // channel) instead of unwinding through the host. A hard OOM reports a
+    // short SSO message so the failure path does not allocate again.
+    status factory_status{};
+    try {
+        factory_status = descriptor->factory(*this);
+    } catch (const std::bad_alloc &) {
+        return std::unexpected{
+            make_error(error_code::out_of_memory, "out of memory")};
+    } catch (...) {
+        return std::unexpected{annotate(
+            make_error(error_code::mod_error,
+                       fmt::format("mod '{}' factory threw an exception",
+                                   manifest.common.id)),
+            "provider activation")};
+    }
+    if (!factory_status) {
+        return std::unexpected{
+            annotate(std::move(factory_status.error()),
+                     fmt::format("mod '{}' factory", manifest.common.id))};
+    }
+    current_load_has_code_ = true;
+    handle = next_instance_handle_++;
+    return status_ok();
+}
+
+auto host::native_validate(std::string_view native_path,
+                           std::string_view wasm_path, std::uint32_t abi,
+                           bool activate_code) -> status {
+    if (!wasm_path.empty()) {
+        return std::unexpected{fail(
+            error_code::invalid_argument,
+            "the native loader does not accept [entry].wasm; the wasm loader "
+            "owns script modules")};
+    }
+    if (native_path.empty()) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "the native loader requires [entry].native with the shared "
+                 "library member path")};
     }
     if (!activate_code) {
-        // Provider declared but not selected: keep the package as data only
-        // and do not run external code.
+        // Provider declared but not selected: the package stays data-only and
+        // no library is opened. The structural checks above still ran.
         return status_ok();
     }
     // The manifest declares the entry ABI the package was built against. A
     // mismatch is rejected before the library is opened, so no mod code runs
     // against a host it cannot understand.
-    if (manifest.common.abi != REFRAIN_MOD_ABI_MAJOR) {
-        return std::unexpected{annotate(
-            fail(error_code::version_mismatch,
-                 fmt::format("external mod '{}' was built for entry ABI {}, "
-                             "this host provides {}",
-                             manifest.common.id, manifest.common.abi,
-                             REFRAIN_MOD_ABI_MAJOR)),
-            entry.path)};
+    if (abi != REFRAIN_MOD_ABI_MAJOR) {
+        const auto mod_id{current_manifest_ == nullptr
+                              ? std::string{"?"}
+                              : current_manifest_->common.id};
+        return std::unexpected{fail(
+            error_code::version_mismatch,
+            fmt::format("external mod '{}' was built for entry ABI {}, this "
+                        "host provides {}",
+                        mod_id, abi, REFRAIN_MOD_ABI_MAJOR))};
+    }
+    return status_ok();
+}
+
+auto host::native_load(std::uint64_t &handle) -> status {
+    handle = 0;
+    if (current_manifest_ == nullptr || current_candidate_ == nullptr ||
+        current_package_ == nullptr) {
+        return std::unexpected{
+            fail(error_code::unknown, "native loader has no package context")};
+    }
+    const auto &manifest{*current_manifest_};
+    const auto &entry{*current_candidate_};
+    if (!manifest.entry.has_value() || manifest.entry->native.empty()) {
+        return std::unexpected{
+            fail(error_code::invalid_argument,
+                 "native loader has no [entry].native member path")};
+    }
+    const auto &member{manifest.entry->native};
+
+    // An installed package keeps its members in the content store: the
+    // manifest path is a package member, not a filesystem path. Read it
+    // through the package source (which verifies the bytes against the install
+    // receipt) and write one private copy a dynamic loader can open.
+    auto library_bytes{current_package_->read(member)};
+    if (!library_bytes) {
+        return std::unexpected{
+            annotate(std::move(library_bytes.error()),
+                     fmt::format("mod '{}' native entry '{}'",
+                                 manifest.common.id, member))};
+    }
+    if (materialized_dir_.empty()) {
+        auto created{create_loader_scratch_root()};
+        if (!created) {
+            return std::unexpected{std::move(created.error())};
+        }
+        materialized_dir_ = std::move(*created);
+    }
+    // Name the copy after its content: two packages that ship the same library
+    // share one file, and a retry never opens a half-written entry.
+    const auto digest_hex{data::to_hex(data::blake3(*library_bytes))};
+    // Keep the packaged member's extension; the dynamic loader opens the file
+    // by path and infers nothing from it.
+    const auto extension{std::filesystem::path{member}.extension().string()};
+    const auto library_path{
+        data::join_path(materialized_dir_, digest_hex + extension)};
+    if (!io::exists(library_path)) {
+        if (auto written{io::write_file(library_path, *library_bytes)};
+            !written) {
+            return std::unexpected{
+                annotate(std::move(written.error()),
+                         fmt::format("mod '{}' native entry copy {}",
+                                     manifest.common.id, library_path))};
+        }
     }
 
-    // TODO: an installed package lives in the content store, not in a
-    // directory next to its manifest, so a native entry cannot be opened from
-    // a receipt yet; the loader must materialise the entry library from the
-    // package source (a path this code may not derive from the manifest
-    // location).
-    const auto root{std::filesystem::path{entry.path}.parent_path()};
-    const auto library_path{root / manifest.entry->native};
-    auto loaded_library{platform::dynamic_library::load(library_path.string())};
+    auto loaded_library{platform::dynamic_library::load(library_path)};
     if (!loaded_library) {
-        return std::unexpected{
-            annotate(fail(error_code::io_error,
-                          fmt::format("cannot load native entry '{}'",
-                                      library_path.string())),
-                     entry.path)};
+        return std::unexpected{annotate(
+            fail(error_code::io_error,
+                 fmt::format("cannot load native entry '{}'", library_path)),
+            entry.path)};
     }
     auto library{std::make_unique<platform::dynamic_library>(
         std::move(*loaded_library))};
@@ -668,7 +1546,7 @@ auto host::load_external_mod(const mod_manifest &manifest,
         return std::unexpected{
             annotate(fail(error_code::not_found,
                           fmt::format("native entry '{}' does not export '{}'",
-                                      library_path.string(), symbol_name)),
+                                      library_path, symbol_name)),
                      entry.path)};
     }
     auto main_fn{reinterpret_cast<refrain_mod_main_fn>(*symbol)};
@@ -756,13 +1634,14 @@ auto host::load_external_mod(const mod_manifest &manifest,
                      entry.path)};
     }
 
+    handle = next_instance_handle_++;
+    current_load_has_code_ = true;
     external_mods_.push_back(external_mod_state{
         .library = std::move(library),
         .on_unload = desc->on_unload,
         .user = user,
+        .handle = handle,
     });
-    out.external = true;
-    out.has_code = true;
     return status_ok();
 }
 
@@ -802,6 +1681,13 @@ auto host::load(const composition &plan, const package_resolver &resolve)
         // being irrelevantly present or half-registered.
         if (auto frozen{registry_.freeze()}; !frozen) {
             return std::unexpected{std::move(frozen.error())};
+        }
+        // The engine-owned loaders are part of the host bootstrap, not of a
+        // gamepack: a mod loader cannot be selected or replaced by a
+        // composition. Registration queries their capabilities and records the
+        // unload/sandbox contract before any mod is dispatched.
+        if (auto registered{register_bootstrap_loaders()}; !registered) {
+            return registered;
         }
 
         // The resolved plan is the only authority on which mods may
@@ -873,6 +1759,12 @@ auto host::load(const composition &plan, const package_resolver &resolve)
         current_mod_version_.clear();
         current_mod_provides_.clear();
         current_mod_planned_slots_.clear();
+        current_mod_planned_instances_.clear();
+        current_mod_selected_provider_ = false;
+        current_manifest_ = nullptr;
+        current_candidate_ = nullptr;
+        current_package_ = nullptr;
+        current_static_descriptor_ = nullptr;
 
         // `verify_plan_activation()` resolves planned provider ids through
         // `find()`, which reads `mods_`; publish the list before verifying so
@@ -1005,11 +1897,15 @@ auto host::verify_plan_activation(const composition &plan) const -> status {
 /// `status`.
 void host::enter_failed_state() {
     unload_external_mods();
+    remove_materialized_entries();
     // `freeze()` only runs at the very end of a successful load, so the
     // registry is still mutable here and `clear()` cannot fail.
     static_cast<void>(services_.clear());
     provider_apis_.clear();
     sealed_services_.clear();
+    loaders_.clear();
+    builtin_loader_state_.reset();
+    native_loader_state_.reset();
     builtin_image_bytes_.clear();
     builtin_image_digest_hex_.clear();
     mods_.clear();
@@ -1018,6 +1914,15 @@ void host::enter_failed_state() {
     current_mod_provides_.clear();
     current_mod_planned_slots_.clear();
     current_mod_planned_instances_.clear();
+    current_mod_selected_provider_ = false;
+    current_manifest_ = nullptr;
+    current_candidate_ = nullptr;
+    current_package_ = nullptr;
+    current_static_descriptor_ = nullptr;
+    current_loader_id_.clear();
+    current_loader_sandboxed_ = false;
+    current_load_has_code_ = false;
+    loader_dispatch_error_.clear();
     loaded_flag_ = false;
     failed_ = true;
 }
@@ -1099,6 +2004,20 @@ auto host::register_provider(std::string_view service,
             error_code::not_initialized,
             "register_provider() is only legal from a static mod factory while "
             "the host is loading")};
+    }
+    if (current_loader_sandboxed_) {
+        return std::unexpected{fail(
+            error_code::permission_denied,
+            fmt::format("sandboxed loader '{}' cannot register service '{}' "
+                        "for mod '{}'; a sandboxed guest only reaches the host "
+                        "through its imports",
+                        current_loader_id_, service, current_mod_))};
+    }
+    if (service == mod_loader_service_id) {
+        return std::unexpected{fail(
+            error_code::permission_denied,
+            "the mod loader service is registered by the host bootstrap, not "
+            "by a mod")};
     }
     if (is_sealed_service(service)) {
         return std::unexpected{fail(
@@ -1201,12 +2120,29 @@ auto host::format() const -> std::string {
     auto out{fmt::format("mod host: {} mod(s) loaded, built-in image BLAKE3 "
                          "{}\n",
                          mods_.size(), builtin_image_digest_hex_)};
+    out += "  loaders:";
+    if (loaders_.empty()) {
+        out += " none";
+    }
+    for (const auto &loader : loaders_) {
+        out += fmt::format(" {} abi {} unload {}{}{};", loader_identity(loader),
+                           loader.abi_major, to_string(loader.unload),
+                           loader.sandboxed ? " sandboxed" : "",
+                           loader.supports_hot_install ? " hot-install" : "");
+    }
+    out += '\n';
     for (const auto &mod : mods_) {
-        out += fmt::format("  {}@{} (abi {}, {}{})", mod.id, mod.version,
-                           mod.abi, mod.has_code ? "code" : "data-only",
-                           mod.provides_summary.empty()
-                               ? ""
-                               : ", provides " + mod.provides_summary);
+        // Order the fields as the audit text always had them (`abi`, code
+        // state, provides) and append the loader record, so log greps keep
+        // matching while the loader stays visible.
+        out += fmt::format(
+            "  {}@{} (abi {}, {}{}, loader {}{}{}, unload {})", mod.id,
+            mod.version, mod.abi, mod.has_code ? "code" : "data-only",
+            mod.provides_summary.empty() ? ""
+                                         : ", provides " + mod.provides_summary,
+            mod.loader, mod.loader_inferred ? " inferred" : "",
+            mod.loader_sandboxed ? " sandboxed" : "",
+            to_string(mod.loader_unload));
         out += '\n';
     }
     return out;

@@ -125,6 +125,32 @@ auto run_mods_check(const mods_check_options &options) -> int {
         std::cout << "  " << mod::format_candidate(candidate);
     }
 
+    // A legacy external manifest omits `[entry].loader`; the loader is inferred
+    // from the entry shape so old packages keep loading, but the inference is
+    // deprecated and every new manifest must say which loader executes it. An
+    // internal mod has no entry table and no loader to declare: the builtin
+    // loader is implicit for it.
+    std::size_t inferred_loader_warnings{0};
+    for (const auto &candidate : *mods) {
+        if (!candidate.entry.has_value() || !candidate.entry->loader.empty()) {
+            continue;
+        }
+        const auto inferred{!candidate.entry->native.empty()
+                                ? std::string{mod::native_loader_id}
+                                : std::string{mod::wasm_loader_id}};
+        std::cout << fmt::format(
+            "warning: mod {} declares an implicit '{}' loader; add "
+            "[entry].loader = \"{}\" to its manifest\n",
+            candidate.id, inferred, inferred);
+        ++inferred_loader_warnings;
+    }
+    if (inferred_loader_warnings != 0) {
+        std::cout << fmt::format(
+            "  {} manifest(s) infer their loader from the entry shape; the "
+            "inference is deprecated\n",
+            inferred_loader_warnings);
+    }
+
     // Profile mode: validate the profile the build used (or an explicit one)
     // against the mod tree, the gamepack, the built-in image and the binary.
     // This is the check that runs before a build and in CI; the legacy path
