@@ -38,6 +38,18 @@ using refrain::server::game_data_options;
 using refrain::server::game_data_source;
 
 namespace fs = std::filesystem;
+
+/// Compare a returned path string with an expected path independently of the
+/// platform's directory separator: Windows stores `\`, while the layout and
+/// data helpers return the canonical `/` form.
+[[nodiscard]] auto same_path(std::string_view actual,
+                             const std::filesystem::path &expected) -> bool {
+    return std::filesystem::path{std::string{actual}}
+               .lexically_normal()
+               .generic_string() ==
+           expected.lexically_normal().generic_string();
+}
+
 namespace io = refrain::core::io;
 
 constexpr std::string_view manifest_url{
@@ -272,7 +284,7 @@ suite<"server/game-data"> game_data_tests = [] {
             expect(paths->source == game_data_source::downloaded);
             expect(transport.text_calls == 2);
             expect(transport.download_calls == 1);
-            expect(paths->datapack_root == (data_dir / "data").string());
+            expect(same_path(paths->datapack_root, data_dir / "data"));
             expect(fs::is_regular_file(
                 data_dir / "data/minecraft/worldgen/biome/plains.json"));
             expect(fs::is_regular_file(data_dir /
@@ -487,7 +499,7 @@ suite<"server/game-data"> game_data_tests = [] {
             return;
         }
         expect(paths->source == game_data_source::pre_staged);
-        expect(paths->datapack_root == (data_dir / "data").string());
+        expect(same_path(paths->datapack_root, data_dir / "data"));
     };
 
     "game-data/a fetch-content marker is recognised as a local cache"_test = [] {
@@ -601,9 +613,9 @@ suite<"server/game-data"> game_data_tests = [] {
             expect(fs::is_regular_file(data_dir / "NOTICE.md"));
             // Tracked tables are read from the installed content root when the
             // data directory has no copy.
-            expect(paths->tables_path == (installed / "tables.rvtb").string());
-            expect(paths->protocol_registry_path ==
-                   (installed / "protocol_registry.json").string());
+            expect(same_path(paths->tables_path, installed / "tables.rvtb"));
+            expect(same_path(paths->protocol_registry_path,
+                             installed / "protocol_registry.json"));
         };
 
     "game-data/installed content snapshot is used when no data exists"_test =
@@ -628,8 +640,8 @@ suite<"server/game-data"> game_data_tests = [] {
                 return;
             }
             expect(paths->source == game_data_source::installed);
-            expect(paths->root == installed.string());
-            expect(paths->datapack_root == (installed / "data").string());
+            expect(same_path(paths->root, installed));
+            expect(same_path(paths->datapack_root, installed / "data"));
         };
 
     "game-data/a data directory copy wins over the installed tables"_test = [] {
@@ -655,9 +667,9 @@ suite<"server/game-data"> game_data_tests = [] {
             return;
         }
         expect(paths->source == game_data_source::cache);
-        expect(paths->tables_path == (data_dir / "tables.rvtb").string());
-        expect(paths->protocol_registry_path ==
-               (data_dir / "protocol_registry.json").string());
+        expect(same_path(paths->tables_path, data_dir / "tables.rvtb"));
+        expect(same_path(paths->protocol_registry_path,
+                         data_dir / "protocol_registry.json"));
     };
 
     "game-data/entries outside the datapack are not extracted"_test = [] {
