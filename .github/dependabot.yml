@@ -1,0 +1,17 @@
+# Dependency updates for the parts GitHub can see natively.
+#
+# Conan is not one of Dependabot's supported ecosystems, so the Conan
+# dependencies and their lockfile are covered by the scheduled dependency
+# audit instead; see "Dependencies" in docs/building.md.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"

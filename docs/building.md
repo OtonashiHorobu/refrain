@@ -279,6 +279,13 @@ dependency requires updating the lock and the matching in-repo recipe under
 `conan/recipes/`. The vendor check in CI rejects a lock that does not match the
 recipes.
 
+GitHub Actions versions are updated by Dependabot from
+`.github/dependabot.yml`. Conan is not one of Dependabot's supported ecosystems,
+so its dependencies are not updated by Dependabot: run
+`python3 tools/dep_audit.py` to compare the pinned versions with the upstream
+ones, or enable Renovate if an automated pull request per update is wanted
+(Renovate reads `conanfile.py` and `conan.lock`).
+
 ## Troubleshooting
 
 A missing preset means Conan has not produced the toolchain for this build
