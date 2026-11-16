@@ -13,6 +13,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
@@ -46,21 +47,16 @@ constexpr std::string_view version_metadata_path{"version.json"};
     return make_error(code, diagnostic(label, path, std::move(detail)));
 }
 
+/// Split a virtual path into its `/`-separated segments. Adjacent and trailing
+/// separators produce empty segments, matching how the loader classifies raw
+/// paths; the empty path has no segments.
 [[nodiscard]] auto split_segments(std::string_view text)
     -> std::vector<std::string_view> {
-    std::vector<std::string_view> segments;
-    std::size_t start{0};
-    while (start <= text.size()) {
-        const auto slash{text.find('/', start)};
-        segments.push_back(text.substr(start, slash == std::string_view::npos
-                                                  ? std::string_view::npos
-                                                  : slash - start));
-        if (slash == std::string_view::npos) {
-            break;
-        }
-        start = slash + 1;
-    }
-    return segments;
+    return text | std::views::split('/') |
+           std::views::transform([](const auto part) {
+               return std::string_view{part.begin(), part.end()};
+           }) |
+           std::ranges::to<std::vector>();
 }
 
 [[nodiscard]] auto has_suffix(std::string_view text,
@@ -790,13 +786,10 @@ auto tag_set::tags_of(std::string_view tag_type) const
 }
 
 auto tag_set::all() const -> std::vector<const tag_record *> {
-    std::vector<const tag_record *> records;
-    records.reserve(records_.size());
-    for (const auto &[key_value, record] : records_) {
-        static_cast<void>(key_value);
-        records.push_back(&record);
-    }
-    return records;
+    return records_ | std::views::values |
+           std::views::transform(
+               [](const tag_record &record) { return &record; }) |
+           std::ranges::to<std::vector<const tag_record *>>();
 }
 
 tag_set::tag_set(std::map<key, tag_record> records)
@@ -1255,12 +1248,10 @@ auto datapack_set::entries(content_kind kind) const
     if (by_kind == impl_->content.end()) {
         return result;
     }
-    result.reserve(by_kind->second.size());
-    for (const auto &[id, entry] : by_kind->second) {
-        static_cast<void>(id);
-        result.push_back(&entry);
-    }
-    return result;
+    return by_kind->second | std::views::values |
+           std::views::transform(
+               [](const content_entry &entry) { return &entry; }) |
+           std::ranges::to<std::vector<const content_entry *>>();
 }
 
 auto datapack_set::other_counts() const noexcept

@@ -16,11 +16,11 @@
 #include <fmt/format.h>
 #include <fstream>
 #include <iostream>
-#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <refrain/archive/manifest.hpp>
 #include <refrain/archive/zip.hpp>
 #include <refrain/core/config.hpp>
@@ -132,11 +132,8 @@ auto run_gamepack_check(const gamepack_check_options &options) -> int {
         std::cout << "profile: " << format_profile_identity(*profile) << '\n';
     }
 
-    std::vector<std::string_view> services{};
-    services.reserve(options.required.size());
-    for (const auto &service : options.required) {
-        services.push_back(service);
-    }
+    auto services{options.required |
+                  std::ranges::to<std::vector<std::string_view>>()};
 
     auto spec = mod::load_gamepack_spec(path, options.side);
     if (!spec) {

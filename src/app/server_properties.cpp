@@ -9,6 +9,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -97,14 +98,10 @@ auto parse_server_properties(std::string_view text,
     -> result<server_properties> {
     server_properties properties{};
     std::size_t line_number{0};
-    std::size_t start{0};
-    while (start <= text.size()) {
-        const auto newline{text.find('\n', start)};
-        const auto raw{text.substr(start, newline == std::string_view::npos
-                                              ? std::string_view::npos
-                                              : newline - start)};
-        start =
-            newline == std::string_view::npos ? text.size() + 1 : newline + 1;
+    // A trailing newline yields a final empty line, exactly like the previous
+    // cursor over `text`; empty lines are skipped below.
+    for (const auto raw_line : std::views::split(text, '\n')) {
+        const std::string_view raw{raw_line.begin(), raw_line.end()};
         ++line_number;
         if (line_number > max_lines) {
             return std::unexpected{

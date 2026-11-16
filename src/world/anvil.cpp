@@ -2644,7 +2644,7 @@ train_chunk_dictionary(std::span<const std::string> dimension_roots,
                     return std::nullopt;
                 }
                 sizes.push_back(payload->size());
-                samples.insert(samples.end(), payload->begin(), payload->end());
+                samples.append_range(*payload);
             }
             if (sizes.size() >= max_samples || samples.size() >= max_bytes) {
                 break;

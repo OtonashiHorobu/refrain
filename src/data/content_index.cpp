@@ -744,9 +744,7 @@ auto build_resolution_index(std::span<const resolution_input> entries,
                                std::numeric_limits<std::uint32_t>::max())) {
             return false;
         }
-        const auto text_bytes_span{text_bytes(text)};
-        arena.insert(arena.end(), text_bytes_span.begin(),
-                     text_bytes_span.end());
+        arena.append_range(text_bytes(text));
         arena.push_back(std::byte{0});
         return true;
     };

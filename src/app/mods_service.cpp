@@ -18,11 +18,11 @@
 #include <fmt/format.h>
 #include <fstream>
 #include <iostream>
-#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <refrain/archive/manifest.hpp>
 #include <refrain/archive/zip.hpp>
 #include <refrain/core/config.hpp>
@@ -150,13 +150,8 @@ auto run_mods_check(const mods_check_options &options) -> int {
         profile_check_result report{};
         report.errors = std::move(tree.errors);
         report.warnings = std::move(tree.warnings);
-        report.errors.insert(report.errors.end(),
-                             std::make_move_iterator(gamepack.errors.begin()),
-                             std::make_move_iterator(gamepack.errors.end()));
-        report.warnings.insert(
-            report.warnings.end(),
-            std::make_move_iterator(gamepack.warnings.begin()),
-            std::make_move_iterator(gamepack.warnings.end()));
+        report.errors.append_range(gamepack.errors | std::views::as_rvalue);
+        report.warnings.append_range(gamepack.warnings | std::views::as_rvalue);
 
         // A gamepack pin must name the manifest version exactly, not only a
         // mod id the tree happens to contain.
@@ -179,23 +174,15 @@ auto run_mods_check(const mods_check_options &options) -> int {
         }
         if (options.built) {
             auto binary{check_profile_against_binary(*profile)};
-            report.errors.insert(report.errors.end(),
-                                 std::make_move_iterator(binary.errors.begin()),
-                                 std::make_move_iterator(binary.errors.end()));
-            report.warnings.insert(
-                report.warnings.end(),
-                std::make_move_iterator(binary.warnings.begin()),
-                std::make_move_iterator(binary.warnings.end()));
+            report.errors.append_range(binary.errors | std::views::as_rvalue);
+            report.warnings.append_range(binary.warnings |
+                                         std::views::as_rvalue);
         }
         if (!options.image.empty()) {
             auto image{check_profile_image(*profile, options.image)};
-            report.errors.insert(report.errors.end(),
-                                 std::make_move_iterator(image.errors.begin()),
-                                 std::make_move_iterator(image.errors.end()));
-            report.warnings.insert(
-                report.warnings.end(),
-                std::make_move_iterator(image.warnings.begin()),
-                std::make_move_iterator(image.warnings.end()));
+            report.errors.append_range(image.errors | std::views::as_rvalue);
+            report.warnings.append_range(image.warnings |
+                                         std::views::as_rvalue);
         }
         for (const auto &warning : report.warnings) {
             std::cout << "warning: " << warning << '\n';
@@ -605,9 +592,7 @@ auto run_mods_verify(const mods_verify_options &options) -> int {
     if (!more_keys) {
         return report_error(more_keys.error());
     }
-    trusted_keys->insert(trusted_keys->end(),
-                         std::make_move_iterator(more_keys->begin()),
-                         std::make_move_iterator(more_keys->end()));
+    trusted_keys->append_range(*more_keys | std::views::as_rvalue);
     auto reader{mod::rfmod_reader::open_file(options.archive)};
     if (!reader) {
         return report_error(reader.error());
@@ -695,9 +680,7 @@ auto run_mods_install(const mods_install_options &options) -> int {
     if (!more_keys) {
         return report_error(more_keys.error());
     }
-    trusted_keys->insert(trusted_keys->end(),
-                         std::make_move_iterator(more_keys->begin()),
-                         std::make_move_iterator(more_keys->end()));
+    trusted_keys->append_range(*more_keys | std::views::as_rvalue);
     // Trust/update policy: the server policy file when given, otherwise the
     // tool defaults (unsigned packages stay installable for development). The
     // flags override individual values for this run.

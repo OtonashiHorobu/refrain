@@ -16,6 +16,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -608,12 +609,10 @@ auto vfs::packs() const -> std::vector<const pack *> {
     if (!impl_) {
         return {};
     }
-    std::vector<const pack *> layers{};
-    layers.reserve(impl_->packs.size());
-    for (const auto &layer : impl_->packs) {
-        layers.push_back(layer.get());
-    }
-    return layers;
+    return impl_->packs | std::views::transform([](const auto &layer) {
+               return layer.get();
+           }) |
+           std::ranges::to<std::vector<const pack *>>();
 }
 
 auto vfs::find(std::string_view path) const noexcept -> const pack * {

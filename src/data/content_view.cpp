@@ -39,8 +39,7 @@ void append_field(std::vector<std::byte> &out, std::string_view text) {
     for (std::size_t index{0}; index < sizeof(size); ++index) {
         out.push_back(static_cast<std::byte>((size >> (8U * index)) & 0xFFU));
     }
-    const auto bytes{std::as_bytes(std::span{text.data(), text.size()})};
-    out.insert(out.end(), bytes.begin(), bytes.end());
+    out.append_range(std::as_bytes(std::span{text}));
 }
 
 void append_size(std::vector<std::byte> &out, std::uint64_t value) {
@@ -65,8 +64,7 @@ void append_size(std::vector<std::byte> &out, std::uint64_t value) {
             append_size(buffer, entry.size);
         }
         const auto layer_digest{blake3(buffer)};
-        combined.insert(combined.end(), layer_digest.begin(),
-                        layer_digest.end());
+        combined.append_range(layer_digest);
     }
     if (packs.pack_count() == 0) {
         // Distinguish an empty view from a view whose sources happen to hash to
@@ -87,7 +85,7 @@ digest_registry_inputs(std::span<const registry_input> inputs) -> digest32 {
         append_field(buffer, input.path);
         const auto bytes{std::as_bytes(
             std::span{input.content.data(), input.content.size()})};
-        buffer.insert(buffer.end(), bytes.begin(), bytes.end());
+        buffer.append_range(bytes);
     }
     return blake3(buffer);
 }
@@ -249,8 +247,7 @@ auto content_view::build(std::span<const content_source> sources,
                        fmt::format("content view: {} validation errors: {}",
                                    validation.errors.size(), detail))};
     }
-    view.warnings_.insert(view.warnings_.end(), validation.warnings.begin(),
-                          validation.warnings.end());
+    view.warnings_.append_range(validation.warnings);
     view.counts_ = loaded->counts();
     view.stats_ = loaded->stats();
     view.datapacks_.emplace(std::move(*loaded));

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <ranges>
 #include <utility>
 
 namespace refrain::command {
@@ -281,10 +282,11 @@ enum_parser::enum_parser(std::vector<enum_value> values,
 auto enum_parser::descriptor() const -> parser_descriptor {
     parser_descriptor descriptor{};
     descriptor.kind = parser_kind::enum_values;
-    descriptor.enum_values.reserve(values_.size());
-    for (const auto &value : values_) {
-        descriptor.enum_values.push_back(value.name);
-    }
+    descriptor.enum_values = values_ |
+                             std::views::transform([](const enum_value &value) {
+                                 return value.name;
+                             }) |
+                             std::ranges::to<std::vector<std::string>>();
     descriptor.suggestion_type = suggestion_type_;
     return descriptor;
 }
