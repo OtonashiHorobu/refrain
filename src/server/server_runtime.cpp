@@ -582,6 +582,49 @@ auto run_server(const server_run_options &options,
                       chunk_limits);
     }
 
+    // Publish the world clock and weather the login burst reads. The clock
+    // lives in the simulation thread; the listener copies the values under its
+    // own lock.
+    net::world_state_snapshot published_world_state{};
+    bool have_published_weather{false};
+    const auto publish_world_state = [&listener, &world, &published_world_state,
+                                      &have_published_weather]() {
+        if (!listener) {
+            return;
+        }
+        const auto *clock{world.clock()};
+        if (clock == nullptr) {
+            return;
+        }
+        const auto snapshot{clock->snapshot()};
+        const auto weather{clock->weather()};
+        listener->set_world_state(net::world_state_snapshot{
+            .game_time = snapshot.game_time,
+            .clock_total_ticks = snapshot.total_ticks,
+            .clock_partial_tick = snapshot.partial_tick,
+            .clock_rate = snapshot.paused ? 0.0F : snapshot.rate,
+            .raining = weather.raining,
+            .rain_level = weather.rain_level,
+            .thunder_level = weather.thunder_level,
+        });
+        if (have_published_weather) {
+            if (published_world_state.raining != weather.raining) {
+                listener->broadcast_game_event(weather.raining ? 1 : 2, 0.0F);
+            }
+            if (published_world_state.rain_level != weather.rain_level) {
+                listener->broadcast_game_event(7, weather.rain_level);
+            }
+            if (published_world_state.thunder_level != weather.thunder_level) {
+                listener->broadcast_game_event(8, weather.thunder_level);
+            }
+        }
+        published_world_state.raining = weather.raining;
+        published_world_state.rain_level = weather.rain_level;
+        published_world_state.thunder_level = weather.thunder_level;
+        have_published_weather = true;
+    };
+    publish_world_state();
+
     refrain::server::inventory_sync inventory{
         gateway, tables ? &*tables : nullptr,
         registries ? &*registries : nullptr};
@@ -701,8 +744,16 @@ auto run_server(const server_run_options &options,
             broadcaster.tick(players);
         }
         chunks.tick(world, players, views, tick_start_ns);
+        chunks.broadcast_updates(world);
         inventory.tick(players);
         world.tick();
+        publish_world_state();
+        // The reference re-synchronises the world clock once per second; the
+        // client interpolates the clock in between from the game time it
+        // receives with every sync.
+        if (ticks_run % 20 == 0 && listener) {
+            listener->broadcast_world_time();
+        }
         ++ticks_run;
         maintenance.post_tick(ticks_run);
         const auto work_ns{static_cast<std::uint64_t>(refrain::core::now_ns() -

@@ -7,11 +7,14 @@
 #include <refrain/command/parsers.hpp>
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -350,6 +353,200 @@ void register_runtime_commands(
             return 1;
         });
     hardcore.then(hardcore_argument);
+
+    // /time: the daylight clock of the overworld. `set` accepts absolute
+    // ticks and the reference's named times; `add`, `pause` and `resume`
+    // mirror the reference's clock controls. The command is deliberately
+    // unqualified: only the overworld clock is modelled.
+    const auto publish_clock = [environment] {
+        if (environment->listener == nullptr || environment->world == nullptr) {
+            return;
+        }
+        const auto *clock{environment->world->clock()};
+        if (clock == nullptr) {
+            return;
+        }
+        const auto snapshot{clock->snapshot()};
+        const auto weather{clock->weather()};
+        environment->listener->set_world_state(net::world_state_snapshot{
+            .game_time = snapshot.game_time,
+            .clock_total_ticks = snapshot.total_ticks,
+            .clock_partial_tick = snapshot.partial_tick,
+            .clock_rate = snapshot.paused ? 0.0F : snapshot.rate,
+            .raining = weather.raining,
+            .rain_level = weather.rain_level,
+            .thunder_level = weather.thunder_level,
+        });
+        environment->listener->broadcast_world_time();
+    };
+    const auto world_clock_of =
+        [environment](command::context &context) -> sim::world_clock * {
+        if (environment->world == nullptr) {
+            context.fail("No world is open");
+            return nullptr;
+        }
+        auto *clock{environment->world->clock()};
+        if (clock == nullptr) {
+            context.fail("The world provider keeps no clock");
+        }
+        return clock;
+    };
+
+    auto time{dispatcher.literal("time")};
+    time.require(command::level::gamemode);
+    time.then(dispatcher.literal("query").executes(
+        [world_clock_of](command::context &context) -> refrain::result<int> {
+            auto *clock{world_clock_of(context)};
+            if (clock == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::not_found, "no world clock")};
+            }
+            context.reply("The game time is " +
+                          std::to_string(clock->game_time()) +
+                          " and the overworld clock is at " +
+                          std::to_string(clock->total_ticks()) + " ticks");
+            return static_cast<int>(clock->total_ticks() % 2147483647LL);
+        }));
+    auto time_set{dispatcher.literal("set")};
+    auto time_set_argument{dispatcher.argument("time", command::word_arg())};
+    time_set_argument.executes([world_clock_of,
+                                publish_clock](command::context &context)
+                                   -> refrain::result<int> {
+        auto *clock{world_clock_of(context)};
+        if (clock == nullptr) {
+            return std::unexpected{
+                make_error(error_code::not_found, "no world clock")};
+        }
+        const auto name{context.string("time")};
+        std::int64_t ticks{0};
+        if (name == "day" || name == "morning") {
+            ticks = 1000;
+        } else if (name == "noon") {
+            ticks = 6000;
+        } else if (name == "night") {
+            ticks = 13000;
+        } else if (name == "midnight") {
+            ticks = 18000;
+        } else {
+            const auto parsed{
+                std::from_chars(name.data(), name.data() + name.size(), ticks)};
+            if (parsed.ec != std::errc{} ||
+                parsed.ptr != name.data() + name.size()) {
+                context.fail("Time must be a tick count or day, noon, night or "
+                             "midnight");
+                return std::unexpected{make_error(error_code::invalid_argument,
+                                                  "invalid time value")};
+            }
+        }
+        clock->set_total_ticks(ticks);
+        publish_clock();
+        context.reply("Set the overworld clock to " + std::to_string(ticks) +
+                      " ticks");
+        return static_cast<int>(ticks % 2147483647LL);
+    });
+    time_set.then(time_set_argument);
+    auto time_add{dispatcher.literal("add")};
+    auto time_add_argument{dispatcher.argument("time", command::long_arg())};
+    time_add_argument.executes(
+        [world_clock_of,
+         publish_clock](command::context &context) -> refrain::result<int> {
+            auto *clock{world_clock_of(context)};
+            if (clock == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::not_found, "no world clock")};
+            }
+            clock->add_total_ticks(context.integer("time"));
+            publish_clock();
+            context.reply("The overworld clock is now at " +
+                          std::to_string(clock->total_ticks()) + " ticks");
+            return static_cast<int>(clock->total_ticks() % 2147483647LL);
+        });
+    time_add.then(time_add_argument);
+    time.then(time_set);
+    time.then(time_add);
+    time.then(dispatcher.literal("pause").executes(
+        [world_clock_of,
+         publish_clock](command::context &context) -> refrain::result<int> {
+            auto *clock{world_clock_of(context)};
+            if (clock == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::not_found, "no world clock")};
+            }
+            clock->set_paused(true);
+            publish_clock();
+            context.reply("Paused the overworld clock");
+            return 1;
+        }));
+    time.then(dispatcher.literal("resume").executes(
+        [world_clock_of,
+         publish_clock](command::context &context) -> refrain::result<int> {
+            auto *clock{world_clock_of(context)};
+            if (clock == nullptr) {
+                return std::unexpected{
+                    make_error(error_code::not_found, "no world clock")};
+            }
+            clock->set_paused(false);
+            publish_clock();
+            context.reply("Resumed the overworld clock");
+            return 1;
+        }));
+
+    // /weather: switch the level weather with the reference's timers.
+    auto weather{dispatcher.literal("weather")};
+    weather.require(command::level::gamemode);
+    const auto set_weather =
+        [environment, world_clock_of](command::context &context, bool raining,
+                                      bool thundering) -> refrain::result<int> {
+        auto *clock{world_clock_of(context)};
+        if (clock == nullptr) {
+            return std::unexpected{
+                make_error(error_code::not_found, "no weather")};
+        }
+        std::int32_t duration{6000};
+        if (context.has("duration")) {
+            duration = static_cast<std::int32_t>(context.integer("duration"));
+        }
+        duration = std::max<std::int32_t>(duration, 1);
+        if (raining && thundering) {
+            clock->set_weather(true, true, 0, duration, duration);
+        } else if (raining) {
+            clock->set_weather(true, false, 0, duration, 0);
+        } else {
+            clock->set_weather(false, false, duration, 0, 0);
+        }
+        if (environment->listener != nullptr) {
+            const auto snapshot{clock->weather()};
+            environment->listener->broadcast_game_event(raining ? 1 : 2, 0.0F);
+            environment->listener->broadcast_game_event(7, snapshot.rain_level);
+            environment->listener->broadcast_game_event(8,
+                                                        snapshot.thunder_level);
+        }
+        context.reply(raining ? (thundering ? "Set the weather to thunder"
+                                            : "Set the weather to rain")
+                              : "Set the weather to clear");
+        return 1;
+    };
+    for (const auto &[name, raining, thundering] :
+         std::array<std::tuple<std::string_view, bool, bool>, 3>{{
+             {"clear", false, false},
+             {"rain", true, false},
+             {"thunder", true, true},
+         }}) {
+        auto node{dispatcher.literal(name)};
+        node.executes([set_weather, raining, thundering](
+                          command::context &context) -> refrain::result<int> {
+            return set_weather(context, raining, thundering);
+        });
+        auto duration{dispatcher.argument(
+            "duration", command::integer_arg(1, std::nullopt))};
+        duration.executes(
+            [set_weather, raining,
+             thundering](command::context &context) -> refrain::result<int> {
+                return set_weather(context, raining, thundering);
+            });
+        node.then(duration);
+        weather.then(node);
+    }
 }
 
 auto make_command_bridge(std::shared_ptr<command_environment> environment)

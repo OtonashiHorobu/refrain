@@ -10,8 +10,10 @@
 
 #include <functional>
 #include <refrain/data/checksum.hpp>
+#include <refrain/sim/light.hpp>
 #include <refrain/sim/player.hpp>
 #include <refrain/sim/rng.hpp>
+#include <refrain/sim/world_clock.hpp>
 #include <refrain/world/maintenance.hpp>
 #include <refrain/world/model.hpp>
 #include <refrain/world/store.hpp>
@@ -554,6 +556,29 @@ class world {
     [[nodiscard]] auto store() noexcept -> store_type &;
     [[nodiscard]] auto store() const noexcept -> const store_type &;
 
+    /// Light engine of the loaded columns.
+    [[nodiscard]] auto light() noexcept -> light_engine & { return light_; }
+    [[nodiscard]] auto light() const noexcept -> const light_engine & {
+        return light_;
+    }
+
+    /// Light sections changed since the previous call, in section order. The
+    /// server turns them into light-update packets for the connections that
+    /// already hold the column.
+    [[nodiscard]] auto take_light_changes()
+        -> std::vector<light_section_change>;
+
+    /// Block mutations applied since the previous call, in application order.
+    /// The batch is bounded; a caller that arrives late sees the newest
+    /// entries. The server turns them into block-update packets.
+    [[nodiscard]] auto take_block_edits() -> std::vector<block_change>;
+
+    /// Level clock and weather. `tick()` advances both.
+    [[nodiscard]] auto clock() noexcept -> world_clock & { return clock_; }
+    [[nodiscard]] auto clock() const noexcept -> const world_clock & {
+        return clock_;
+    }
+
   private:
     struct chunk_order {
         [[nodiscard]] auto operator()(const chunk_pos &left,
@@ -577,6 +602,15 @@ class world {
 
     [[nodiscard]] auto decode_chunk(storage_chunk storage, const chunk_pos &pos)
         -> result<chunk>;
+    /// Restore game time and weather from the world store. Missing saved data
+    /// is not an error: the level age seeds the clock and the weather starts
+    /// clear.
+    [[nodiscard]] auto load_clock_state() -> status;
+    /// Persist the clock and weather saved-data objects.
+    [[nodiscard]] auto store_clock_state() -> status;
+    /// Queue one applied block change for the update broadcast.
+    void record_block_edit(const block_pos &pos, block_state_id old_state,
+                           block_state_id new_state);
     [[nodiscard]] auto encode_chunk(const chunk &value)
         -> result<storage_chunk>;
     /// The record a flush writes: the decoded record while the column has
@@ -618,6 +652,13 @@ class world {
     timer_id next_timer_id_{1};
     rng rng_{};
     std::int64_t tick_{0};
+    /// Upper bound of edits one tick's broadcast drains. A large scripted fill
+    /// must not grow the pending list without limit; older entries are dropped
+    /// because the client receives the whole column again on the next send.
+    static constexpr std::size_t max_pending_edits = 4096;
+    std::vector<block_change> pending_edits_{};
+    light_engine light_;
+    world_clock clock_{};
 };
 
 } // namespace refrain::sim

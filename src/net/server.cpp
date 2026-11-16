@@ -340,6 +340,8 @@ struct server::impl {
     std::unique_ptr<http_transport> http{};
     std::unique_ptr<auth_service> auth{};
     std::optional<registry_catalog> catalog{};
+    mutable std::mutex world_state_mutex{};
+    world_state_snapshot world_state{};
     std::vector<std::vector<std::byte>> configuration_packets{};
     std::vector<std::vector<std::byte>> configuration_registries{};
     std::vector<std::byte> finish_packet{};
@@ -407,6 +409,11 @@ struct server::impl {
     void send_configuration(std::uint64_t id);
     void send_configuration_registries(std::uint64_t id);
     void send_play_login(std::uint64_t id);
+    /// Gameplay id of `minecraft:overworld` in the `world_clock` registry.
+    [[nodiscard]] auto overworld_clock_id() const -> std::uint32_t;
+    [[nodiscard]] auto world_state_copy() const -> world_state_snapshot;
+    /// Encode the current world clock body; empty when the clock is unknown.
+    [[nodiscard]] auto encode_world_time_body() const -> std::vector<std::byte>;
     void send_commands(std::uint64_t id);
     void send_tab_list(std::uint64_t id);
     void set_game_mode(std::uint64_t id, game_mode mode);
@@ -1382,6 +1389,39 @@ namespace {
 
 } // namespace
 
+auto server::impl::overworld_clock_id() const -> std::uint32_t {
+    if (!catalog) {
+        return 0;
+    }
+    for (const auto &registry : catalog->registries()) {
+        if (registry.key != "minecraft:world_clock") {
+            continue;
+        }
+        for (const auto &entry : registry.entries) {
+            if (entry.name == "minecraft:overworld") {
+                return entry.id;
+            }
+        }
+    }
+    return 0;
+}
+
+auto server::impl::world_state_copy() const -> world_state_snapshot {
+    const std::lock_guard lock{world_state_mutex};
+    return world_state;
+}
+
+auto server::impl::encode_world_time_body() const -> std::vector<std::byte> {
+    const auto state{world_state_copy()};
+    auto body{refrain::net::encode_world_time(state, overworld_clock_id())};
+    if (!body) {
+        log_net.error("failed to encode the world time packet: {}",
+                      body.error().message);
+        return {};
+    }
+    return std::move(*body);
+}
+
 void server::impl::send_play_login(std::uint64_t id) {
     std::string name;
     uuid profile{};
@@ -1526,11 +1566,25 @@ void server::impl::send_play_login(std::uint64_t id) {
                     play_cb::encode_initialize_border);
     };
     const auto send_time = [&] {
-        // TODO: the world clock never advances; set_time is sent once with a
-        // fixed time and no periodic update follows.
-        play_cb::set_time time{.game_time = 0, .clock_updates = {}};
-        send_packet(id, play_cb::set_time::packet_id, time,
-                    play_cb::encode_set_time);
+        const auto body{encode_world_time_body()};
+        if (!body.empty()) {
+            send(id, body);
+        }
+    };
+    const auto send_weather = [&] {
+        const auto state{world_state_copy()};
+        if (!state.raining) {
+            return;
+        }
+        play_cb::game_event start{.event = 1, .value = 0.0F};
+        send_packet(id, play_cb::game_event::packet_id, start,
+                    play_cb::encode_game_event);
+        play_cb::game_event rain{.event = 7, .value = state.rain_level};
+        send_packet(id, play_cb::game_event::packet_id, rain,
+                    play_cb::encode_game_event);
+        play_cb::game_event thunder{.event = 8, .value = state.thunder_level};
+        send_packet(id, play_cb::game_event::packet_id, thunder,
+                    play_cb::encode_game_event);
     };
     const auto send_spawn = [&] {
         play_cb::set_default_spawn_position spawn{
@@ -1607,6 +1661,7 @@ void server::impl::send_play_login(std::uint64_t id) {
     send_server_data();
     send_border();
     send_time();
+    send_weather();
     send_spawn();
     send_level_start();
     send_ticking();
@@ -1914,6 +1969,61 @@ void server::send_raw_many(std::span<const std::uint64_t> connections,
     if (impl_) {
         impl_->send_many(connections, body);
     }
+}
+
+auto encode_world_time(const world_state_snapshot &state,
+                       std::uint32_t clock_id)
+    -> result<std::vector<std::byte>> {
+    play_cb::set_time time{};
+    time.game_time = state.game_time;
+    time.clock_updates.push_back(play_cb::clock_update{
+        .clock = clock_id,
+        .total_ticks = state.clock_total_ticks,
+        .partial_tick = state.clock_partial_tick,
+        .rate = state.clock_rate,
+    });
+    return encode_packet(play_cb::set_time::packet_id, time,
+                         play_cb::encode_set_time);
+}
+
+void server::set_world_state(const world_state_snapshot &state) {
+    if (!impl_) {
+        return;
+    }
+    const std::lock_guard lock{impl_->world_state_mutex};
+    impl_->world_state = state;
+}
+
+auto server::encode_world_time() const -> std::vector<std::byte> {
+    if (!impl_) {
+        return {};
+    }
+    return impl_->encode_world_time_body();
+}
+
+void server::broadcast_world_time() {
+    if (!impl_) {
+        return;
+    }
+    const auto body{impl_->encode_world_time_body()};
+    if (!body.empty()) {
+        impl_->send_many(impl_->playing_connections(), body);
+    }
+}
+
+void server::broadcast_game_event(std::uint8_t event, float value) {
+    if (!impl_) {
+        return;
+    }
+    play_cb::game_event packet{.event = event, .value = value};
+    auto body{encode_packet(play_cb::game_event::packet_id, packet,
+                            play_cb::encode_game_event)};
+    if (!body) {
+        log_net.error("failed to encode a game event: {}",
+                      body.error().message);
+        return;
+    }
+    impl_->send_many(impl_->playing_connections(), *body);
 }
 
 void server::broadcast_raw(std::span<const std::byte> body,

@@ -75,6 +75,12 @@ class chunk_service {
               refrain::session::chunk_tracker &views,
               std::uint64_t tick_start_ns);
 
+    /// Send the block and light updates the world accumulated since the
+    /// previous call to the connections whose client already holds the
+    /// affected columns. Block updates precede the light updates of the same
+    /// batch so a client applies the block before the light that depends on it.
+    void broadcast_updates(world_port &world);
+
     /// Record the work one tick used. Once per second this feeds the
     /// controller with the tick p99, the wanted depth and the resident memory.
     void observe_tick(std::uint64_t work_ns);
@@ -147,6 +153,8 @@ class chunk_service {
     std::unique_ptr<chunk_generation> generation_{};
     std::optional<chunk_streamer> streamer_{};
     play_gateway *gateway_{nullptr};
+    /// Encoder inputs shared by the streamer and the update broadcast.
+    chunk_packet_source source_{};
     /// The viewport set the pins were last synchronised with. Pins are only
     /// rebuilt when this changes, so a still camera costs nothing per tick.
     std::vector<chunk_streamer::viewport> viewports_{};

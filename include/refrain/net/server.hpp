@@ -203,6 +203,30 @@ struct server_stats {
 
 /// Runtime values the network layer cannot take from configuration: world
 /// spawn state, pre-encoded chunks and world callbacks.
+/// Clock and weather values a joining client needs. The runtime publishes one
+/// snapshot per tick; the login burst reads the newest one and the periodic
+/// `set_time` broadcast reuses it.
+struct world_state_snapshot {
+    /// Level age in server ticks (`set_time.game_time`).
+    std::int64_t game_time{0};
+    /// Daylight clock ticks of the overworld clock.
+    std::int64_t clock_total_ticks{0};
+    /// Fractional tick carried by the clock.
+    float clock_partial_tick{0.0F};
+    /// Clock rate: one means a tick per game tick, zero means paused.
+    float clock_rate{1.0F};
+    bool raining{false};
+    float rain_level{0.0F};
+    float thunder_level{0.0F};
+};
+
+/// Encode one `set_time` packet body (packet id included) from a world state
+/// snapshot. `clock_id` is the protocol registry id of the world clock; the
+/// function is the login burst's and the periodic sync's single encoder.
+[[nodiscard]] auto encode_world_time(const world_state_snapshot &state,
+                                     std::uint32_t clock_id)
+    -> result<std::vector<std::byte>>;
+
 struct server_inputs {
     double spawn_x{0.0};
     double spawn_y{64.0};
@@ -302,6 +326,22 @@ class server {
     /// per recipient. Unknown or closed connections are skipped.
     void send_raw_many(std::span<const std::uint64_t> connections,
                        std::span<const std::byte> body);
+
+    /// Publish the world clock and weather the next login burst sends.
+    /// Thread-safe: the runtime calls it from the simulation thread while an
+    /// I/O thread may be completing a login.
+    void set_world_state(const world_state_snapshot &state);
+
+    /// Encode the current world clock as one `set_time` packet body (packet id
+    /// included), or an empty vector when the world clock registry is missing.
+    [[nodiscard]] auto encode_world_time() const -> std::vector<std::byte>;
+
+    /// Broadcast the current world clock to every play connection.
+    void broadcast_world_time();
+
+    /// Broadcast one game event (rain, thunder, level start) to every play
+    /// connection.
+    void broadcast_game_event(std::uint8_t event, float value);
 
     /// Drain viewport changes observed since the previous call.
     [[nodiscard]] auto take_chunk_view_requests()

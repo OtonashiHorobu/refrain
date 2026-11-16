@@ -414,6 +414,20 @@ class direct_world_port final : public world_port {
         return *loaded;
     }
 
+    auto clock() noexcept -> sim::world_clock * override {
+        return &world().clock();
+    }
+    auto clock() const noexcept -> const sim::world_clock * override {
+        return &world().clock();
+    }
+    auto take_light_changes()
+        -> std::vector<sim::light_section_change> override {
+        return world().take_light_changes();
+    }
+    auto take_block_edits() -> std::vector<sim::block_change> override {
+        return world().take_block_edits();
+    }
+
     auto chunk_insert(const sim::chunk_pos &pos, sim::storage_chunk column)
         -> result<sim::chunk *> override {
         auto inserted{world().insert_chunk(pos, std::move(column))};

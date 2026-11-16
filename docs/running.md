@@ -201,6 +201,11 @@ The server announces a small command tree after joining:
 | `spawn <type> <x> <y> <z>` | spawn an entity |
 | `entities` | list entities |
 | `kill <entity-id>` | remove an entity |
+| `time query` | print the game time and the daylight clock |
+| `time set <ticks\|day\|noon\|night\|midnight>` | move the daylight clock |
+| `time add <ticks>` | add ticks to the daylight clock |
+| `time pause` / `time resume` | stop or resume the daylight clock |
+| `weather clear\|rain\|thunder [duration]` | switch the weather for a number of ticks |
 | `palette-gc` | rebuild the world palette while the world is quiesced |
 | `schedules` | list periodic maintenance tasks and their counters |
 | `help` | list commands |
