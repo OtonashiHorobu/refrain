@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <refrain/app/mod_management.hpp>
 #include <refrain/core/error.hpp>
 #include <refrain/mod/host.hpp>
 #include <refrain/mod/rfmod.hpp>
@@ -108,6 +109,18 @@ class mod_lifecycle {
     /// providers are refused with a restart-required message.
     [[nodiscard]] auto reload(std::string_view id) -> result<mod_operation>;
 
+    /// Re-resolve the installed catalog and stage the difference against the
+    /// running composition. This is the apply half of a store change another
+    /// component already committed (the command layer installs or removes the
+    /// receipt first and then asks for the running composition to follow).
+    [[nodiscard]] auto stage_catalog() -> result<mod_operation>;
+
+    /// Stage the removal of the active version of `id` without touching the
+    /// store; the caller already removed the receipt.
+    [[nodiscard]] auto stage_removal(std::string_view id,
+                                     std::string_view version = {})
+        -> result<mod_operation>;
+
     /// Publish the staged change at a tick boundary. With nothing staged this
     /// is a no-op that reports the committed epoch.
     [[nodiscard]] auto commit() -> result<mod_commit_result>;
@@ -132,6 +145,16 @@ class mod_lifecycle {
     mod::host &owner_;
     mod_lifecycle_options options_{};
 };
+
+/// Build the hot-lifecycle port the shared command service
+/// (`app::mod_management`) calls. The command layer owns parsing, permission
+/// checks, durable store transactions and audit; the returned port stages the
+/// running-composition change and reports what will publish at the next tick
+/// boundary. Install requests are applied to the catalog the command layer just
+/// changed, uninstall requests stage the removal the command layer already
+/// committed to the store, and reload requests rebuild the active generation.
+[[nodiscard]] auto make_mod_lifecycle_port(mod_lifecycle &lifecycle)
+    -> mod_lifecycle_port;
 
 /// Register `controller` as the target of the tick-boundary commit. Only one
 /// controller per host is expected; the tick loop commits every attached

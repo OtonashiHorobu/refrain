@@ -134,8 +134,9 @@ or TOML file:
 | Compression threshold | 256 | `compression_threshold` in `network.toml` |
 
 The first start writes `config/refrain.toml`, `config/network.toml`,
-`config/world.toml`, `config/runtime.toml` and `config/storage.toml` with these
-defaults; existing files are never rewritten. `--import-properties` skips the
+`config/world.toml`, `config/runtime.toml`, `config/storage.toml`,
+`config/mods.toml` and `config/mods_admin.toml` with these defaults; existing
+files are never rewritten. `--import-properties` skips the
 generated files, because the imported properties are a fallback layer below the
 operator's TOML files.
 
@@ -228,6 +229,8 @@ config/
   storage.toml      zstd and compaction policy
   mods.toml             mod install/trust policy: [signature], [trust],
                         [install] and [rotation."<id>"] (see docs/modding.md)
+  mods_admin.toml       mod management: [lifecycle] hot gates, [admin]
+                        operators allowed to run /mods
   providers/<id>.toml   implementation-specific options
   mods/<id>.toml        options of mods that do not provide a service
 ```
@@ -336,6 +339,7 @@ The server announces a small command tree after joining:
 | `/defaultgamemode <mode>` | persist the world's default game mode |
 | `/difficulty <0-3>` | persist and broadcast the world difficulty |
 | `/hardcore <on\|off>` | persist hardcore for new logins |
+| `/mods <command>` | list, verify, install, uninstall, reload or manage the trust state of mods (operator only; see [Mod management](#mod-management)) |
 
 | Command | Effect |
 |---|---|
@@ -370,9 +374,78 @@ The server announces a small command tree after joining:
 | `time add <ticks>` | add ticks to the daylight clock |
 | `time pause` / `time resume` | stop or resume the daylight clock |
 | `weather clear\|rain\|thunder [duration]` | switch the weather for a number of ticks |
+| `mods <command>` | list, verify, install, uninstall, reload or manage the trust state of mods (see [Mod management](#mod-management)) |
 | `palette-gc` | rebuild the world palette while the world is quiesced |
 | `schedules` | list periodic maintenance tasks and their counters |
 | `help` | list commands |
+
+## Mod management
+
+Operators manage installed mods from the console and from an op-only in-game
+command. Both frontends call the same application service, so the status lines,
+the error text and the audit entry are identical whichever one ran the command.
+
+| Command | Effect |
+|---|---|
+| `mods list` | list the running composition: id, version, loader, whether code runs, where the mod came from and the services it provides |
+| `mods installed` | list the install receipts of the content store |
+| `mods verify <package.rfmod>` | verify a package (structure, digests, signature, trust) without installing it |
+| `mods install <package.rfmod> confirm` | install a package into the content store |
+| `mods uninstall <id>[@<version>] confirm` | remove one or every installed version of a mod |
+| `mods reload <id>[@<version>]` | reload a mod that is part of the running composition |
+| `mods trust` | show the install policy, the trust anchors and the recorded signer pins |
+| `mods trust pin <id> confirm` | pin the signer recorded by the highest installed version |
+| `mods trust clear <id> confirm` | clear a signer pin |
+
+`install`, `uninstall` and the trust changes are destructive and need the
+literal `confirm` argument; without it the command is refused, audited and
+changes nothing. Every command accepts `--dry-run`, which reports what would
+happen without writing store state.
+
+The command surface reads the install/trust policy from the same
+`config/mods.toml` the startup bootstrap uses, and its own switches from
+`config/mods_admin.toml`:
+
+```toml
+[lifecycle]
+# Apply an install or uninstall to the running composition while the server
+# runs. Production defaults are off: the store change lands on the next start.
+hot_install = false
+# Rebuild a loaded mod in place.
+hot_reload = false
+
+[admin]
+# Player uuids allowed to run /mods. The server console is always allowed.
+operators = []
+```
+
+The policy file is the source of truth for every runtime install. One-run
+command-line overrides such as `--content-trusted-key` or `--allow-downgrade`
+apply to the startup bootstrap only; the console and in-game commands always use
+`config/mods.toml`.
+
+The in-game command is gated by the `refrain.mods.admin` permission node and is
+only announced to an operator. A player without it is denied with a message
+naming the node; the command tree is filtered per player so an operator's tree
+is never shown to another player. There is no permission service yet, so the
+operator list in `mods_admin.toml` is the whole policy.
+
+Installing and uninstalling change the content store immediately. Whether the
+running composition also changes is controlled by `hot_install`; with it off
+(the production default) the command reports `restart required` and the change
+lands on the next start. Reload needs `hot_reload`. A hot change is applied by
+the lifecycle registry at a tick boundary; a build without that registry
+answers `unsupported`, naming the missing layer, instead of pretending the
+composition changed.
+
+Every operation writes one line through the `mod-audit` logger with the actor
+(console, or the player uuid), the action, the mod id and version, the package
+digest, the signer key id, the policy in force and the result. Refused and
+failed operations are audited too:
+
+```text
+[mod-audit/info] console ran install on example.mod 1.0.0 from archive <blake3> signed by key 'first-party' under the strict policy, the result was ok after 4ms
+```
 
 ## Player state
 
@@ -444,8 +517,23 @@ build/Release/bin/refrain-tools world diff world-a world-b
 ```
 
 Import keeps chunk contents, block palette keys, block entities, biomes and
-light. Export writes the vanilla Anvil layout expected by the matching
-DataVersion.
+light. It also accepts a world saved by an older data version inside the
+supported migration window (see [World data version
+migration](#world-data-version-migration)): every record is fixed for its type
+before it is converted, and the resulting RWF world records the current data
+version. The import line reports the source data version, the number of fix
+steps, how many records changed and the resulting data version. A world from
+outside the window, a record whose version is newer than the current one, or a
+corrupt record fails closed; the source world is never modified.
+
+`--dry-run` validates the source the same way and prints the plan without
+creating the target:
+
+```bash
+build/Release/bin/refrain-tools world import --from vanilla-world --to rwf-world --dry-run
+```
+
+Export writes the vanilla Anvil layout expected by the matching DataVersion.
 
 `world palette-gc` rewrites a closed world into a sibling directory with a
 compacted palette and swaps it in; the source world is left untouched if the
@@ -457,6 +545,12 @@ A world directory records the game data version its records were written with.
 This build reads one data version: a world saved by an older build is upgraded
 before it is opened, and a world from a version outside the supported window is
 refused with the recorded version and the window named in the error.
+
+Anvil import and the RWF open path share the same built-in DataFixer: the fixes
+for a record type are implemented once and applied by whichever path reads the
+record, so importing an old Anvil world and opening an equivalent older RWF
+world produce the same records. The window is a property of the fix table, not
+of one storage format.
 
 The upgrade runs automatically at startup through the built-in
 `refrain.world.datafix` mod. It rewrites the version-sensitive records, then
@@ -478,9 +572,16 @@ no reference schema change exists between 5016 and 5023.
   recorded at its old version and the next start refuses it instead of serving
   half-upgraded records; the start that failed can simply be retried, because
   every record rewrite is idempotent.
-- Upgrading from a version older than the supported window is refused. Open
-  the world once in Minecraft 26.3 (or a newer build) to bring it forward, then
-  start Refrain again.
+- Upgrading from a version older than the supported window is refused, for
+  both an Anvil import and an RWF open. The same applies to a world in a legacy
+  storage layout the importer does not read yet, such as a pre-1.13 `.mcr`
+  world or a pre-1.18 section layout. Open the world once in Minecraft 26.3 (or
+  a newer build) to bring it forward, then import or start it with Refrain
+  again. A world newer than this build is refused as well; do not copy a world
+  back from a newer build.
+- A corrupt record fails the whole operation: the import does not write the
+  target world's metadata, so an interrupted or failed import is never opened
+  as a half-upgraded world, and the source directory is left untouched.
 - The migration is a mod. A custom gamepack that does not load it refuses an
   older world and leaves it untouched; only the current data version opens.
 

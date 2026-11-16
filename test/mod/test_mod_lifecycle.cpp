@@ -186,6 +186,21 @@ install_archive(refrain::test_support::scratch_directory &scratch,
     return store_root.string();
 }
 
+/// Install one archive into an existing store (the command layer's durable
+/// transaction when the store already exists).
+[[nodiscard]] auto install_into_store(std::string_view store_root,
+                                      const std::string &archive) -> bool {
+    auto store{data::content_store::open_existing(store_root)};
+    if (!store) {
+        return false;
+    }
+    auto reader{mod::rfmod_reader::open_file(archive)};
+    if (!reader) {
+        return false;
+    }
+    return mod::install_rfmod(*reader, *store).has_value();
+}
+
 // ---------------------------------------------------------------------------
 // fake clean loader: a sandbox-free loader whose declared removal guarantee is
 // `clean`. It is the stand-in for the script loaders (wasm/lua) that unload
@@ -1211,15 +1226,73 @@ const suite mod_lifecycle_app_tests = [] {
             expect(receipts->size() == 1U);
         }
 
+        // The command surface reaches the same service through
+        // `app::mod_lifecycle_port`: install (store already committed), reload
+        // and uninstall (receipt already removed). The port only stages; the
+        // tick hook publishes.
+        auto port{refrain::app::make_mod_lifecycle_port(lifecycle)};
+        expect(port.apply.operator bool());
+
+        auto port_reload{port.apply(refrain::app::mod_lifecycle_request{
+            .action = refrain::app::mod_lifecycle_action::reload,
+            .id = "refrain.test.app.leaf"})};
+        expect(port_reload.has_value())
+            << (port_reload ? std::string{"staged"}
+                            : port_reload.error().message);
+        if (!port_reload) {
+            return;
+        }
+        expect(port_reload->lines.size() == 2U);
+        expect(lifecycle.pending());
+        expect(refrain::app::commit_staged_mod_changes().has_value());
+        expect(host.epoch() == 5U);
+
+        // The command layer installs the archive into the store itself before
+        // asking the running composition to follow.
+        expect(install_into_store(*store_root, *data_archive));
+        auto port_install{port.apply(refrain::app::mod_lifecycle_request{
+            .action = refrain::app::mod_lifecycle_action::install,
+            .id = "refrain.test.app.data"})};
+        expect(port_install.has_value())
+            << (port_install ? std::string{"staged"}
+                             : port_install.error().message);
+        if (!port_install) {
+            return;
+        }
+        expect(refrain::app::commit_staged_mod_changes().has_value());
+        expect(host.mods().size() == 2U);
+        expect(host.epoch() == 6U);
+
+        // The command layer removes the receipt first, then asks the running
+        // composition to retire the generation.
+        auto store{data::content_store::open_existing(*store_root)};
+        expect(static_cast<bool>(store));
+        if (store) {
+            expect(mod::uninstall_rfmod(*store, "refrain.test.app.data")
+                       .has_value());
+        }
+        auto port_uninstall{port.apply(refrain::app::mod_lifecycle_request{
+            .action = refrain::app::mod_lifecycle_action::uninstall,
+            .id = "refrain.test.app.data"})};
+        expect(port_uninstall.has_value())
+            << (port_uninstall ? std::string{"staged"}
+                               : port_uninstall.error().message);
+        if (port_uninstall) {
+            expect(refrain::app::commit_staged_mod_changes().has_value());
+            expect(host.mods().size() == 1U);
+            expect(host.epoch() == 7U);
+        }
+
         // A review-only reload that nothing consumes (no tick) must not
         // publish anything.
+        const auto epoch_before_held{host.epoch()};
         auto held{lifecycle.reload("refrain.test.app.leaf")};
         expect(static_cast<bool>(held));
         if (held) {
-            expect(host.epoch() == 4U);
+            expect(host.epoch() == epoch_before_held);
             lifecycle.abort();
             expect(!lifecycle.pending());
-            expect(host.epoch() == 4U);
+            expect(host.epoch() == epoch_before_held);
         }
         // No staged change: the hook reports the committed epoch unchanged.
         const auto digest{host.composition_digest()};

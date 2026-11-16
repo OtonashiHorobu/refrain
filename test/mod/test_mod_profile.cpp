@@ -68,7 +68,8 @@ const suite mod_profile_tests = [] {
     "profile/vanilla declares the full first-party set"_test = [] {
         auto profile{
             app::load_mod_profile(source_path("profiles/vanilla.toml"))};
-        expect(static_cast<bool>(profile)) << profile.error().message;
+        expect(static_cast<bool>(profile))
+            << (profile ? "" : profile.error().message);
         if (!profile) {
             return;
         }
@@ -89,7 +90,8 @@ const suite mod_profile_tests = [] {
     "profile/minimal is closed and matches its default gamepack"_test = [] {
         auto profile{
             app::load_mod_profile(source_path("profiles/minimal.toml"))};
-        expect(static_cast<bool>(profile)) << profile.error().message;
+        expect(static_cast<bool>(profile))
+            << (profile ? "" : profile.error().message);
         if (!profile) {
             return;
         }
@@ -192,7 +194,8 @@ const suite mod_profile_tests = [] {
     "profile/matches the binary it was built with"_test = [] {
         auto profile{app::load_mod_profile_named(refrain::version::mod_profile,
                                                  source_path("profiles"))};
-        expect(static_cast<bool>(profile)) << profile.error().message;
+        expect(static_cast<bool>(profile))
+            << (profile ? "" : profile.error().message);
         if (!profile) {
             return;
         }
@@ -249,7 +252,8 @@ const suite mod_profile_tests = [] {
         expect(!bytes.empty());
         auto image{data::builtin_image::open(
             std::span<const std::byte>{bytes.data(), bytes.size()})};
-        expect(static_cast<bool>(image)) << image.error().message;
+        expect(static_cast<bool>(image))
+            << (image ? "" : image.error().message);
         if (!image) {
             return;
         }
@@ -364,7 +368,8 @@ const suite mod_profile_tests = [] {
 
     "profile/dynamic module exports a loadable descriptor"_test = [] {
         auto module{app::load_dynamic_module(REFRAIN_TEST_DYNAMIC_MOD)};
-        expect(static_cast<bool>(module)) << module.error().message;
+        expect(static_cast<bool>(module))
+            << (module ? "" : module.error().message);
         if (!module) {
             return;
         }

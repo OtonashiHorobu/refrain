@@ -17,6 +17,9 @@ struct world_import_options {
     std::string from{};
     std::string to{};
     bool force{false};
+    /// Validate the source through the DataFixer and the decoder, report what
+    /// an import would do, and write nothing.
+    bool dry_run{false};
     unsigned threads{0};                       // 0 = auto, 1 = serial
     std::string compression{"balanced"};       // fast|balanced|compact
     std::string dictionary{};                  // optional zstd dictionary file

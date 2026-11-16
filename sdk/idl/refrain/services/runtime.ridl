@@ -62,9 +62,13 @@ struct runtime_config {
     i32 content_gc_keep_days;
     u64 content_gc_budget_ms;
     u64 content_gc_interval_ticks;
+    /// Host configuration directory (`--config-dir`); the runtime reads the
+    /// mod management policy and the hot lifecycle gates from it. Empty keeps
+    /// the built-in defaults.
+    string config_dir;
 }
 
-service runtime : 2.0.0 {
+service runtime : 2.1.0 {
     side = server;
     thread = main;
     provides = [ "refrain:runtime" ];

@@ -264,6 +264,59 @@ auto mod_lifecycle::uninstall(std::string_view id, std::string_view version)
     return operation;
 }
 
+auto mod_lifecycle::stage_catalog() -> result<mod_operation> {
+    if (owner_.staged_change().has_value()) {
+        return std::unexpected{make_error(
+            error_code::already_exists,
+            "another hot mod change is already staged; commit or abort it "
+            "first")};
+    }
+    auto operation{stage_resolved()};
+    if (!operation) {
+        return operation;
+    }
+    operation->action = "catalog";
+    operation->detail = "staged catalog refresh";
+    log_lifecycle.info("staged catalog refresh for the next tick, {}",
+                       describe(operation->change));
+    return operation;
+}
+
+auto mod_lifecycle::stage_removal(std::string_view id, std::string_view version)
+    -> result<mod_operation> {
+    if (owner_.staged_change().has_value()) {
+        return std::unexpected{make_error(
+            error_code::already_exists,
+            "another hot mod change is already staged; commit or abort it "
+            "first")};
+    }
+    const auto *installed{owner_.find(id)};
+    if (installed == nullptr) {
+        return std::unexpected{make_error(
+            error_code::not_found,
+            fmt::format("mod '{}' is not part of the running composition",
+                        id))};
+    }
+    if (!version.empty() && version != installed->version) {
+        return std::unexpected{make_error(
+            error_code::version_mismatch,
+            fmt::format("the running composition has '{}@{}', not '{}'", id,
+                        installed->version, version))};
+    }
+    auto change{owner_.stage_uninstall(
+        id, mod::stage_options{.drain_timeout = options_.drain_timeout})};
+    if (!change) {
+        return std::unexpected{std::move(change.error())};
+    }
+    mod_operation operation{.action = "uninstall",
+                            .change = std::move(*change)};
+    operation.detail =
+        fmt::format("staged removal of {}@{}", id, installed->version);
+    log_lifecycle.info("staged uninstall of {}@{} for the next tick, {}", id,
+                       installed->version, describe(operation.change));
+    return operation;
+}
+
 auto mod_lifecycle::reload(std::string_view id) -> result<mod_operation> {
     if (owner_.staged_change().has_value()) {
         return std::unexpected{make_error(
@@ -326,6 +379,58 @@ auto mod_lifecycle::commit() -> result<mod_commit_result> {
 }
 
 void mod_lifecycle::abort() noexcept { owner_.abort_staged(); }
+
+auto make_mod_lifecycle_port(mod_lifecycle &lifecycle) -> mod_lifecycle_port {
+    mod_lifecycle_port port{};
+    port.apply = [&lifecycle](const mod_lifecycle_request &request)
+        -> result<mod_lifecycle_outcome> {
+        const auto describe_change = [](std::string_view what,
+                                        const mod_operation &operation) {
+            std::string line{fmt::format("staged {} for the next tick", what)};
+            if (!operation.change.added.empty()) {
+                line += "; adds " +
+                        std::to_string(operation.change.added.size()) +
+                        " mod(s)";
+            }
+            if (!operation.change.reloaded.empty()) {
+                line += "; reloads " +
+                        std::to_string(operation.change.reloaded.size()) +
+                        " mod(s)";
+            }
+            if (!operation.change.removed.empty()) {
+                line += "; removes " +
+                        std::to_string(operation.change.removed.size()) +
+                        " mod(s)";
+            }
+            return line;
+        };
+        result<mod_operation> staged = std::unexpected{make_error(
+            error_code::invalid_argument, "unknown lifecycle action")};
+        switch (request.action) {
+        case mod_lifecycle_action::install:
+            staged = lifecycle.stage_catalog();
+            break;
+        case mod_lifecycle_action::uninstall:
+            staged = lifecycle.stage_removal(request.id, request.version);
+            break;
+        case mod_lifecycle_action::reload:
+            staged = lifecycle.reload(request.id);
+            break;
+        }
+        if (!staged) {
+            return std::unexpected{std::move(staged.error())};
+        }
+        mod_lifecycle_outcome outcome{};
+        outcome.lines.push_back(describe_change(
+            request.id.empty() ? "the catalog change" : request.id, *staged));
+        outcome.lines.push_back(fmt::format(
+            "the running composition stays on epoch {} until the next tick "
+            "boundary publishes the staged change",
+            lifecycle.host().epoch()));
+        return outcome;
+    };
+    return port;
+}
 
 void attach_mod_lifecycle(mod_lifecycle &controller) {
     auto &hooks{tick_hooks()};

@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 77d3b54f96579605
+// Schema hash: 9a07f1b76869dfa9
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_REFLECTION_HPP
@@ -2967,7 +2967,8 @@ template <> struct custom_traits<::refrain::services::runtime::runtime_config> {
         refrain::reflect::custom_field{"content_gc_apply", &::refrain::services::runtime::runtime_config::content_gc_apply},
         refrain::reflect::custom_field{"content_gc_keep_days", &::refrain::services::runtime::runtime_config::content_gc_keep_days},
         refrain::reflect::custom_field{"content_gc_budget_ms", &::refrain::services::runtime::runtime_config::content_gc_budget_ms},
-        refrain::reflect::custom_field{"content_gc_interval_ticks", &::refrain::services::runtime::runtime_config::content_gc_interval_ticks});
+        refrain::reflect::custom_field{"content_gc_interval_ticks", &::refrain::services::runtime::runtime_config::content_gc_interval_ticks},
+        refrain::reflect::custom_field{"config_dir", &::refrain::services::runtime::runtime_config::config_dir});
 };
 
 /// Generated RIDL struct 'refrain::services::session_lifecycle::player_info'.

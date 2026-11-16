@@ -721,6 +721,9 @@ int main(int argc, char **argv) {
                                  "Target RWF world directory (required)");
     world_import_cmd->add_flag("--force", world_import.force,
                                "Replace an existing target directory");
+    world_import_cmd->add_flag(
+        "--dry-run", world_import.dry_run,
+        "Validate the source and report the import plan without writing");
     world_import_cmd->add_option(
         "--threads", world_import.threads,
         "Worker threads (0 = auto, 1 = serial; default 0)");

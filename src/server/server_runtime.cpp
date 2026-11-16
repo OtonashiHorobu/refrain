@@ -11,11 +11,15 @@
 #include <refrain/session/player_store.hpp>
 
 #include <refrain/app/mod_lifecycle.hpp>
+#include <refrain/app/mod_management.hpp>
 #include <refrain/app/services.hpp>
 #include <refrain/core/io.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/core/time.hpp>
 #include <refrain/data/vanilla.hpp>
+#include <refrain/mod/host.hpp>
+#include <refrain/mod/rfmod.hpp>
+#include <refrain/net/base.hpp>
 #include <refrain/net/registry.hpp>
 #include <refrain/net/server.hpp>
 #include <refrain/server/chunk_generation.hpp>
@@ -27,6 +31,7 @@
 #include <refrain/server/entity_broadcaster.hpp>
 #include <refrain/server/inventory_sync.hpp>
 #include <refrain/server/maintenance_service.hpp>
+#include <refrain/server/mod_management_settings.hpp>
 #include <refrain/server/play_gateway.hpp>
 #include <refrain/server/player_store.hpp>
 #include <refrain/server/world_bootstrap.hpp>
@@ -54,6 +59,7 @@
 namespace {
 
 constexpr refrain::log::logger log_config{"config"};
+constexpr refrain::log::logger log_mods{"mods"};
 constexpr refrain::log::logger log_net{"net"};
 constexpr refrain::log::logger log_server{"server"};
 constexpr refrain::log::logger log_sim{"sim"};
@@ -112,6 +118,80 @@ struct runtime_state {
     std::atomic<std::int64_t> heartbeat_ns{0};
 };
 
+/// Snapshot the running composition for the mod management service: identity,
+/// loader, whether code runs, where it came from and which services it
+/// currently provides.
+[[nodiscard]] auto
+loaded_composition_snapshot(const server_run_options &options)
+    -> std::vector<refrain::app::mod_management_mod> {
+    std::vector<refrain::app::mod_management_mod> snapshot{};
+    if (options.mod_host == nullptr) {
+        return snapshot;
+    }
+    const auto &host{*options.mod_host};
+    const auto &services{host.services()};
+    for (const auto &mod : host.mods()) {
+        refrain::app::mod_management_mod entry{};
+        entry.id = mod.id;
+        entry.version = mod.version;
+        entry.loader = mod.loader;
+        entry.has_code = mod.has_code;
+        entry.source = "builtin";
+        if (!options.content_store.empty()) {
+            auto receipts{refrain::mod::list_receipt_paths_for(
+                options.content_store, mod.id)};
+            if (receipts) {
+                for (const auto &path : *receipts) {
+                    auto receipt{refrain::mod::read_receipt(path)};
+                    if (!receipt) {
+                        continue;
+                    }
+                    if (receipt->version == mod.version) {
+                        entry.source = "installed";
+                        break;
+                    }
+                }
+            }
+        }
+        for (const auto &service : services.active_services()) {
+            for (const auto &instance : services.active_instances(service)) {
+                const auto provider{
+                    services.active_provider(service, instance)};
+                if (provider && provider->id == mod.id) {
+                    entry.services.push_back(service);
+                    break;
+                }
+            }
+        }
+        snapshot.push_back(std::move(entry));
+    }
+    return snapshot;
+}
+
+/// Operator gate of the in-game mod command tree: the console and any
+/// non-player source are trusted, a player needs a configured uuid. The
+/// server has no permission service yet, so this list is the whole policy.
+[[nodiscard]] auto
+make_mod_admin_gate(const refrain::server::mod_management_settings &settings)
+    -> std::function<bool(const refrain::command::source &)> {
+    std::vector<std::uint64_t> keys{};
+    keys.reserve(settings.operators.size());
+    for (const auto &text : settings.operators) {
+        auto id{refrain::net::uuid::parse(text)};
+        if (!id) {
+            continue; // the settings loader already rejected invalid uuids
+        }
+        keys.push_back(refrain::server::player_identity_key(*id));
+    }
+    return [keys = std::move(keys)](const refrain::command::source &source) {
+        if (!source.identity().player) {
+            return true;
+        }
+        return std::find(keys.begin(), keys.end(), source.identity().key) !=
+               keys.end();
+    };
+}
+
 } // namespace
 
 auto run_server(const server_run_options &options,
@@ -123,6 +203,14 @@ auto run_server(const server_run_options &options,
         return report_error(refrain::make_error(
             refrain::error_code::invalid_argument,
             "refrain-server: --world is required to start the tick loop"));
+    }
+    // Mod management configuration: the install/trust policy and the hot
+    // lifecycle gates. A malformed file aborts the start instead of running
+    // with a weaker policy than the operator wrote.
+    auto management_settings{
+        refrain::server::load_mod_management_settings(options.config_dir)};
+    if (!management_settings) {
+        return report_error(management_settings.error());
     }
     // The world is opened below; upgrade a save recorded with an older data
     // version first, or refuse it when no migration provider is active. A
@@ -389,10 +477,38 @@ auto run_server(const server_run_options &options,
     } else {
         registries = std::move(*loaded_registries);
     }
+    // One mod management service behind the console `mods ...` command and
+    // the in-game `/mods` tree, so both frontends report the same results.
+    // The hot lifecycle port is the only place that may change the running
+    // composition; this build has no staged composition epochs yet, so it
+    // answers `unsupported` with the reason instead of simulating a change.
+    refrain::app::mod_management_context management{};
+    management.store = options.content_store;
+    management.policy = management_settings->policy;
+    management.policy_source = management_settings->policy_source;
+    management.admin_source = management_settings->admin_source;
+    management.hot_install = management_settings->hot_install;
+    management.hot_reload = management_settings->hot_reload;
+    management.loaded = loaded_composition_snapshot(options);
+    management.lifecycle.unavailable_reason =
+        "the hot lifecycle registry (staged composition epochs, in-flight "
+        "drain and loader unload callbacks) is not available in this build";
+    refrain::app::mod_management mods_management{std::move(management)};
+    log_mods.info(
+        "mod management is available with hot install {}, hot reload {} and "
+        "{} operators, targeting {}",
+        management_settings->hot_install ? "on" : "off",
+        management_settings->hot_reload ? "on" : "off",
+        management_settings->operators.size(),
+        options.content_store.empty() ? std::string{"no content store"}
+                                      : options.content_store);
+
     auto command_environment{
         std::make_shared<refrain::server::command_environment>()};
     command_environment->world = &world;
     command_environment->default_mode = initial_mode;
+    command_environment->mods = &mods_management;
+    command_environment->mod_admin = make_mod_admin_gate(*management_settings);
     // The first-party port owns the simulation table in this process, so the
     // session forwards to it without a copy. A contract port owns no such
     // table: the provider keeps it and hands the runtime a projection, so the
@@ -944,7 +1060,8 @@ auto run_server(const server_run_options &options,
                                                    .maintenance = &maintenance,
                                                    .listener = listener.get(),
                                                    .config = options.config,
-                                                   .stop = state->stop.get()},
+                                                   .stop = state->stop.get(),
+                                                   .mods = &mods_management},
                               metrics};
     console_service console{[&commands](std::string_view line,
                                         const refrain::core::tick_info &tick) {

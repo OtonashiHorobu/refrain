@@ -2,12 +2,18 @@
 //
 // SPDX-FileCopyrightText: Copyright (c) 2026 Otonashi Horobu
 
+#include <refrain/app/world_service.hpp>
+
 #include <refrain/core/io.hpp>
 #include <refrain/data/nbt.hpp>
 #include <refrain/world/anvil.hpp>
 #include <refrain/world/chunk_codec.hpp>
+#include <refrain/world/datafix.hpp>
+#include <refrain/world/migration.hpp>
 #include <refrain/world/model.hpp>
+#include <refrain/world/saved_data.hpp>
 #include <refrain/world/store.hpp>
+#include <refrain/world/version.hpp>
 
 #include <boost/ut.hpp>
 
@@ -34,6 +40,9 @@
 #include <utility>
 #include <vector>
 
+#include "support/migration_world.hpp"
+#include "support/scratch_directory.hpp"
+
 namespace {
 
 using namespace boost::ut;
@@ -42,6 +51,7 @@ namespace world = refrain::world;
 namespace anvil = refrain::world::anvil;
 namespace io = refrain::core::io;
 namespace fs = std::filesystem;
+namespace support = refrain::test_support;
 
 using nbt::tag_type;
 using nbt::value;
@@ -217,10 +227,11 @@ palette_entry(std::string name,
 }
 
 [[nodiscard]] auto make_chunk_nbt(world::chunk_pos pos, int tick_priority = -1,
-                                  int y_pos = -4, int section_base = -4)
-    -> value {
+                                  int y_pos = -4, int section_base = -4,
+                                  std::int32_t data_version = 5023,
+                                  bool legacy_items = false) -> value {
     value root{make_compound()};
-    set(root, "DataVersion", make_int(5023));
+    set(root, "DataVersion", make_int(data_version));
     set(root, "xPos", make_int(pos.x));
     set(root, "zPos", make_int(pos.z));
     set(root, "yPos", make_int(y_pos));
@@ -258,6 +269,11 @@ palette_entry(std::string name,
     set(chest, "y", make_int(70));
     set(chest, "z", make_int(0));
     set(chest, "KeepPacked", nbt::make_byte(0));
+    if (legacy_items) {
+        value items{new_list(tag_type::compound)};
+        push(items, support::legacy_map_item());
+        set(chest, "Items", std::move(items));
+    }
     push(entities, std::move(chest));
     set(root, "block_entities", std::move(entities));
 
@@ -483,9 +499,10 @@ void write_external_region_file(const std::string &path, std::uint32_t slot,
     return bytes ? std::move(*bytes) : std::vector<std::byte>{};
 }
 
-void write_level_dat(const std::string &path) {
+void write_level_dat(const std::string &path,
+                     std::int32_t data_version = 5023) {
     value data{make_compound()};
-    set(data, "DataVersion", make_int(5023));
+    set(data, "DataVersion", make_int(data_version));
     set(data, "LevelName", make_string("Refrain Fixture \xF0\x9F\x98\x80"));
     set(data, "LastPlayed", make_long(0));
     set(data, "Time", make_long(24000));
@@ -500,9 +517,9 @@ void write_level_dat(const std::string &path) {
 }
 
 void write_entities_region(const std::string &path, std::int32_t x,
-                           std::int32_t z) {
+                           std::int32_t z, std::int32_t data_version = 5023) {
     value document{make_compound()};
-    set(document, "DataVersion", make_int(5023));
+    set(document, "DataVersion", make_int(data_version));
     value position{make_compound()};
     set(position, "x", make_int(x));
     set(position, "z", make_int(z));
@@ -515,7 +532,9 @@ void write_entities_region(const std::string &path, std::int32_t x,
     write_region_file(path, {{0, document_bytes(document)}});
 }
 
-[[nodiscard]] auto build_world(const temp_directory &directory) -> std::string {
+[[nodiscard]] auto build_world(const temp_directory &directory,
+                               std::int32_t data_version = 5023,
+                               bool legacy_items = false) -> std::string {
     const auto root{directory.sub("source")};
     const auto overworld{root + "/dimensions/minecraft/overworld"};
     expect(static_cast<bool>(io::create_directories(overworld + "/region")));
@@ -525,7 +544,7 @@ void write_entities_region(const std::string &path, std::int32_t x,
     expect(static_cast<bool>(io::create_directories(root + "/datapacks/test")));
     expect(static_cast<bool>(io::create_directories(root + "/data/minecraft")));
     value settings{make_compound()};
-    set(settings, "DataVersion", make_int(5023));
+    set(settings, "DataVersion", make_int(data_version));
     value settings_data{make_compound()};
     set(settings_data, "seed", make_long(12345));
     set(settings_data, "generate_structures", nbt::make_byte(1));
@@ -533,19 +552,23 @@ void write_entities_region(const std::string &path, std::int32_t x,
     expect(static_cast<bool>(
         nbt::write_file(root + "/data/minecraft/world_gen_settings.dat",
                         settings, "", nbt::compression::gzip)));
-    write_level_dat(root + "/level.dat");
-    write_entities_region(overworld + "/entities/r.0.0.mca", 0, 0);
-    write_region_file(overworld + "/poi/r.0.0.mca",
-                      {{0, document_bytes([] {
-                            value document{make_compound()};
-                            set(document, "DataVersion", make_int(5023));
-                            set(document, "Sections",
-                                make_list(tag_type::compound));
-                            return document;
-                        }())}});
-    value player{make_compound()};
-    set(player, "DataVersion", make_int(5023));
-    set(player, "XpLevel", make_int(5));
+    write_level_dat(root + "/level.dat", data_version);
+    write_entities_region(overworld + "/entities/r.0.0.mca", 0, 0,
+                          data_version);
+    write_region_file(
+        overworld + "/poi/r.0.0.mca",
+        {{0, document_bytes([data_version] {
+              value document{make_compound()};
+              set(document, "DataVersion", make_int(data_version));
+              set(document, "Sections", make_list(tag_type::compound));
+              return document;
+          }())}});
+    value player{legacy_items ? support::legacy_player_record(data_version)
+                              : make_compound()};
+    if (!legacy_items) {
+        set(player, "DataVersion", make_int(data_version));
+        set(player, "XpLevel", make_int(5));
+    }
     expect(static_cast<bool>(nbt::write_file(
         root + "/players/data/00000000-0000-0000-0000-000000000001.dat", player,
         "", nbt::compression::gzip)));
@@ -566,12 +589,138 @@ void write_entities_region(const std::string &path, std::int32_t x,
         root + "/datapacks/test/pack.mcmeta",
         "{\"pack\":{\"pack_format\":71,\"description\":\"fixture\"}}")));
 
-    const auto chunk_a{document_bytes(make_chunk_nbt({.x = 0, .z = 0}))};
-    const auto chunk_b{document_bytes(make_chunk_nbt({.x = 1, .z = 0}))};
+    const auto chunk_a{document_bytes(make_chunk_nbt(
+        {.x = 0, .z = 0}, -1, -4, -4, data_version, legacy_items))};
+    const auto chunk_b{document_bytes(make_chunk_nbt(
+        {.x = 1, .z = 0}, -1, -4, -4, data_version, legacy_items))};
     write_region_file(overworld + "/region/r.0.0.mca",
                       {{0, chunk_a}, {1, chunk_b}});
     return root;
 }
+
+/// Already-upgraded form of the legacy map item: exactly the shapes the 5014
+/// component removal and the 5016 rename produce.
+[[nodiscard]] auto fixed_map_item() -> value {
+    nbt::compound name{
+        {"translate", nbt::make_string("item.minecraft.buried_treasure_map")}};
+    nbt::compound components{
+        {"minecraft:item_name", nbt::make_compound(std::move(name))}};
+    nbt::compound item{
+        {"id", nbt::make_string("minecraft:map")},
+        {"count", nbt::make_int(1)},
+        {"components", nbt::make_compound(std::move(components))},
+    };
+    return nbt::make_compound(std::move(item));
+}
+
+/// First item stack of a document that carries `Items` (block entity) or
+/// `Inventory` (player).
+[[nodiscard]] auto first_item(const value &document) -> const value * {
+    const auto *items{document.get("Items")};
+    if (items == nullptr) {
+        items = document.get("Inventory");
+    }
+    const auto *list{items != nullptr ? items->as_list() : nullptr};
+    if (list == nullptr || list->items.empty()) {
+        return nullptr;
+    }
+    return &list->items.front();
+}
+
+[[nodiscard]] auto item_components(const value &document)
+    -> const nbt::compound * {
+    const auto *item{first_item(document)};
+    const auto *components{item != nullptr ? item->get("components") : nullptr};
+    return components != nullptr ? components->as_compound() : nullptr;
+}
+
+[[nodiscard]] auto component_translate(const nbt::compound &components)
+    -> std::string_view {
+    const auto name{components.find("minecraft:item_name")};
+    if (name == components.end()) {
+        return {};
+    }
+    const auto *compound{name->second.as_compound()};
+    if (compound == nullptr) {
+        return {};
+    }
+    const auto translate{compound->find("translate")};
+    if (translate == compound->end()) {
+        return {};
+    }
+    return translate->second.as_string().value_or("");
+}
+
+/// Chest block entity holding one item stack, the shape the fixtures use.
+[[nodiscard]] auto chest_block_entity(bool legacy) -> value {
+    value chest{make_compound()};
+    set(chest, "id", make_string("minecraft:chest"));
+    set(chest, "x", make_int(0));
+    set(chest, "y", make_int(64));
+    set(chest, "z", make_int(0));
+    value items{new_list(tag_type::compound)};
+    push(items, legacy ? support::legacy_map_item() : fixed_map_item());
+    set(chest, "Items", std::move(items));
+    return chest;
+}
+
+/// Minimal Anvil world for the DataFixer import tests. It mirrors exactly the
+/// records the RWF migration fixture writes, so the two paths can be compared
+/// record for record: `level.dat`, one chunk with one block entity, one player
+/// record and `world_gen_settings.dat`.
+[[nodiscard]] auto
+build_minimal_world(const temp_directory &directory, std::string_view name,
+                    std::int32_t data_version, bool legacy_items,
+                    std::int32_t chunk_version = 0,
+                    bool corrupt_block_entity = false) -> std::string {
+    const auto root{directory.sub(name)};
+    const auto overworld{root + "/dimensions/minecraft/overworld"};
+    expect(static_cast<bool>(io::create_directories(overworld + "/region")));
+    expect(static_cast<bool>(io::create_directories(root + "/players/data")));
+    expect(static_cast<bool>(io::create_directories(root + "/data/minecraft")));
+    write_level_dat(root + "/level.dat", data_version);
+    value settings{make_compound()};
+    set(settings, "DataVersion", make_int(data_version));
+    value settings_data{make_compound()};
+    set(settings_data, "seed", make_long(7));
+    set(settings, "data", std::move(settings_data));
+    expect(static_cast<bool>(
+        nbt::write_file(root + "/data/minecraft/world_gen_settings.dat",
+                        settings, "", nbt::compression::gzip)));
+
+    value chunk{make_compound()};
+    set(chunk, "DataVersion",
+        make_int(chunk_version == 0 ? data_version : chunk_version));
+    set(chunk, "xPos", make_int(0));
+    set(chunk, "zPos", make_int(0));
+    set(chunk, "yPos", make_int(0));
+    set(chunk, "Status", make_string("minecraft:full"));
+    if (corrupt_block_entity) {
+        value entities{new_list(tag_type::string)};
+        push(entities, make_string("not-a-block-entity"));
+        set(chunk, "block_entities", std::move(entities));
+    } else {
+        value entities{new_list(tag_type::compound)};
+        push(entities, chest_block_entity(legacy_items));
+        set(chunk, "block_entities", std::move(entities));
+    }
+    write_region_file(overworld + "/region/r.0.0.mca",
+                      {{0, document_bytes(chunk)}});
+
+    value player{make_compound()};
+    set(player, "DataVersion", make_int(data_version));
+    value inventory{new_list(tag_type::compound)};
+    push(inventory,
+         legacy_items ? support::legacy_map_item() : fixed_map_item());
+    set(player, "Inventory", std::move(inventory));
+    expect(static_cast<bool>(nbt::write_file(
+        root + "/players/data/00000000-0000-0000-0000-000000000001.dat", player,
+        "", nbt::compression::gzip)));
+    return root;
+}
+
+constexpr std::string_view fixture_player_key{
+    "00000000-0000-0000-0000-000000000001"};
 
 } // namespace
 
@@ -1424,7 +1573,7 @@ suite world_storage = [] {
         compare_tree(serial_export, parallel_export);
     };
 
-    "import_requires_supported_data_version"_test = [] {
+    "import_refuses_an_out_of_window_data_version"_test = [] {
         const temp_directory directory;
         const auto source{directory.sub("source")};
         expect(static_cast<bool>(io::create_directories(source)));
@@ -1439,9 +1588,13 @@ suite world_storage = [] {
         expect(!result);
         if (!result) {
             expect(result.error().code == refrain::error_code::unsupported);
-            expect(result.error().message.find("vanilla 26.3") !=
-                   std::string::npos);
+            const auto message{result.error().message};
+            expect(message.find("1") != std::string::npos);
+            expect(message.find("5013") != std::string::npos);
+            expect(message.find("5023") != std::string::npos);
+            expect(message.find("Minecraft 26.3") != std::string::npos);
         }
+        expect(!io::exists(target));
     };
 
     "import_rejects_mislabelled_lz4_chunks"_test = [] {
@@ -1830,6 +1983,393 @@ suite world_storage = [] {
                 table.intern(fmt::format("minecraft:refrain_state_{}", index)));
         }
         expect(!store->install_palette(table));
+    };
+
+    "import_upgrades_an_older_anvil_world"_test = [] {
+        const temp_directory directory;
+        const auto source{build_world(directory, 5013, true)};
+        const auto rwf{directory.sub("rwf")};
+        auto imported{anvil::import_world(source, rwf, false, 1)};
+        expect(static_cast<bool>(imported))
+            << (imported ? std::string{"ok"} : imported.error().message);
+        if (!imported) {
+            return;
+        }
+        expect(imported->source_data_version == 5013);
+        expect(imported->result_data_version == 5023);
+        expect(imported->fix_steps == 2U);
+        expect(imported->records_scanned >= 7U);
+        expect(imported->records_fixed >= 2U);
+
+        auto version{world::read_world_data_version(rwf)};
+        expect(static_cast<bool>(version));
+        if (version) {
+            expect(*version == 5023);
+        }
+        auto store{world::world_store::open(rwf)};
+        expect(static_cast<bool>(store));
+        if (!store) {
+            return;
+        }
+        // Saved data: the generator settings record is stamped and keeps the
+        // seed.
+        auto settings{world::read_world_gen_settings(store->objects())};
+        expect(static_cast<bool>(settings));
+        if (settings) {
+            expect(settings->data_version == 5023);
+            expect(settings->has_seed);
+            expect(settings->seed == 12345);
+        }
+        // Terrain chunk block entity: both item fixes ran.
+        auto chunk{store->read_chunk({.x = 0, .z = 0})};
+        expect(static_cast<bool>(chunk));
+        if (chunk && !chunk->block_entities.empty()) {
+            auto entity{nbt::read(chunk->block_entities.front())};
+            expect(static_cast<bool>(entity));
+            if (entity) {
+                const auto *components{item_components(*entity)};
+                expect(components != nullptr);
+                if (components != nullptr) {
+                    expect(
+                        !components->contains("minecraft:block_transformer"));
+                    expect(component_translate(*components) ==
+                           "item.minecraft.buried_treasure_map");
+                }
+            }
+        }
+        // Player record: item fixes plus the version stamp.
+        auto player{store->blobs().read("playerdata", fixture_player_key)};
+        expect(static_cast<bool>(player));
+        if (player) {
+            auto document{nbt::read(*player)};
+            expect(static_cast<bool>(document));
+            if (document) {
+                const auto *player_version{document->get("DataVersion")};
+                expect(player_version != nullptr);
+                if (player_version != nullptr) {
+                    expect(player_version->as_int() == 5023);
+                }
+                const auto *components{item_components(*document)};
+                expect(components != nullptr);
+                if (components != nullptr) {
+                    expect(
+                        !components->contains("minecraft:block_transformer"));
+                    expect(component_translate(*components) ==
+                           "item.minecraft.buried_treasure_map");
+                }
+            }
+        }
+        // Entity and POI chunk records are stamped, since the importer is the
+        // path that carries them.
+        for (const auto *kind : {"entities", "poi"}) {
+            auto blob{store->blobs().read(kind, "0.0")};
+            expect(static_cast<bool>(blob)) << kind;
+            if (blob) {
+                auto document{nbt::read(*blob)};
+                expect(static_cast<bool>(document));
+                if (document) {
+                    const auto *blob_version{document->get("DataVersion")};
+                    expect(blob_version != nullptr);
+                    if (blob_version != nullptr) {
+                        expect(blob_version->as_int() == 5023) << kind;
+                    }
+                }
+            }
+        }
+    };
+
+    "import_5015_world_applies_only_the_later_fix"_test = [] {
+        const temp_directory directory;
+        const auto source{build_world(directory, 5015, true)};
+        const auto rwf{directory.sub("rwf")};
+        auto imported{anvil::import_world(source, rwf, false, 1)};
+        expect(static_cast<bool>(imported));
+        if (!imported) {
+            return;
+        }
+        expect(imported->source_data_version == 5015);
+        expect(imported->fix_steps == 1U);
+        auto store{world::world_store::open(rwf)};
+        expect(static_cast<bool>(store));
+        if (!store) {
+            return;
+        }
+        auto chunk{store->read_chunk({.x = 0, .z = 0})};
+        expect(static_cast<bool>(chunk));
+        if (!chunk || chunk->block_entities.empty()) {
+            return;
+        }
+        auto entity{nbt::read(chunk->block_entities.front())};
+        expect(static_cast<bool>(entity));
+        if (!entity) {
+            return;
+        }
+        const auto *components{item_components(*entity)};
+        expect(components != nullptr);
+        if (components == nullptr) {
+            return;
+        }
+        // The component removal is schema 5014: a 5016 source never had it.
+        expect(components->contains("minecraft:block_transformer"));
+        expect(component_translate(*components) ==
+               "item.minecraft.buried_treasure_map");
+    };
+
+    "import_of_an_older_world_matches_a_rwf_migration"_test = [] {
+        const temp_directory directory;
+        const auto source{
+            build_minimal_world(directory, "anvil-old", 5013, true)};
+        const auto imported_rwf{directory.sub("rwf-from-anvil")};
+        auto imported{anvil::import_world(source, imported_rwf, false, 1)};
+        expect(static_cast<bool>(imported));
+        if (!imported) {
+            return;
+        }
+
+        const auto migrated_rwf{directory.sub("rwf-migrated")};
+        expect(static_cast<bool>(
+            support::create_world_at_version(migrated_rwf, 5013, 7)));
+        expect(static_cast<bool>(support::add_legacy_block_entity_chunk(
+            migrated_rwf, world::chunk_pos{0, 0})));
+        expect(static_cast<bool>(support::add_legacy_player_record(
+            migrated_rwf, fixture_player_key, 5013)));
+        auto migrated{world::migrate_world_data(migrated_rwf, 5013, 5023)};
+        expect(static_cast<bool>(migrated))
+            << (migrated ? std::string{"ok"} : migrated.error().message);
+        if (!migrated) {
+            return;
+        }
+
+        auto imported_store{world::world_store::open(imported_rwf)};
+        auto migrated_store{world::world_store::open(migrated_rwf)};
+        expect(static_cast<bool>(imported_store));
+        expect(static_cast<bool>(migrated_store));
+        if (!imported_store || !migrated_store) {
+            return;
+        }
+        // Both paths record the target version.
+        auto imported_version{world::read_world_data_version(imported_rwf)};
+        auto migrated_version{world::read_world_data_version(migrated_rwf)};
+        expect(static_cast<bool>(imported_version));
+        expect(static_cast<bool>(migrated_version));
+        if (imported_version && migrated_version) {
+            expect(*imported_version == *migrated_version);
+            expect(*imported_version == 5023);
+        }
+        // The block entity record is byte-identical.
+        auto imported_chunk{imported_store->read_chunk({.x = 0, .z = 0})};
+        auto migrated_chunk{migrated_store->read_chunk({.x = 0, .z = 0})};
+        expect(static_cast<bool>(imported_chunk));
+        expect(static_cast<bool>(migrated_chunk));
+        if (imported_chunk && migrated_chunk) {
+            expect(static_cast<bool>(imported_chunk->block_entities ==
+                                     migrated_chunk->block_entities));
+            const auto imported_hash{world::semantic_hash(*imported_chunk)};
+            const auto migrated_hash{world::semantic_hash(*migrated_chunk)};
+            expect(static_cast<bool>(imported_hash));
+            expect(static_cast<bool>(migrated_hash));
+            if (imported_hash && migrated_hash) {
+                expect(*imported_hash == *migrated_hash);
+            }
+        }
+        // The player record is byte-identical.
+        auto imported_player{
+            imported_store->blobs().read("playerdata", fixture_player_key)};
+        auto migrated_player{
+            migrated_store->blobs().read("playerdata", fixture_player_key)};
+        expect(static_cast<bool>(imported_player));
+        expect(static_cast<bool>(migrated_player));
+        if (imported_player && migrated_player) {
+            expect(static_cast<bool>(*imported_player == *migrated_player));
+        }
+        // The generator settings record is byte-identical.
+        constexpr std::string_view settings_path{
+            "global/data/minecraft/world_gen_settings.dat"};
+        auto imported_settings{imported_store->objects().read(settings_path)};
+        auto migrated_settings{migrated_store->objects().read(settings_path)};
+        expect(static_cast<bool>(imported_settings));
+        expect(static_cast<bool>(migrated_settings));
+        if (imported_settings && migrated_settings) {
+            expect(static_cast<bool>(*imported_settings == *migrated_settings));
+        }
+    };
+
+    "import_of_an_older_world_matches_a_current_import"_test = [] {
+        const temp_directory directory;
+        const auto old_source{
+            build_minimal_world(directory, "anvil-old", 5013, true)};
+        const auto current_source{
+            build_minimal_world(directory, "anvil-current", 5023, false)};
+        const auto old_rwf{directory.sub("rwf-old")};
+        const auto current_rwf{directory.sub("rwf-current")};
+        auto old_import{anvil::import_world(old_source, old_rwf, false, 1)};
+        auto current_import{
+            anvil::import_world(current_source, current_rwf, false, 1)};
+        expect(static_cast<bool>(old_import));
+        expect(static_cast<bool>(current_import));
+        if (!old_import || !current_import) {
+            return;
+        }
+        expect(old_import->fix_steps == 2U);
+        expect(current_import->fix_steps == 0U);
+        expect(old_import->records_fixed >= 2U);
+        expect(current_import->records_fixed == 0U);
+
+        auto old_store{world::world_store::open(old_rwf)};
+        auto current_store{world::world_store::open(current_rwf)};
+        expect(static_cast<bool>(old_store));
+        expect(static_cast<bool>(current_store));
+        if (!old_store || !current_store) {
+            return;
+        }
+        auto old_chunk{old_store->read_chunk({.x = 0, .z = 0})};
+        auto current_chunk{current_store->read_chunk({.x = 0, .z = 0})};
+        const auto old_hash{world::semantic_hash(*old_chunk)};
+        const auto current_hash{world::semantic_hash(*current_chunk)};
+        expect(static_cast<bool>(old_hash));
+        expect(static_cast<bool>(current_hash));
+        if (old_hash && current_hash) {
+            expect(*old_hash == *current_hash);
+        }
+        auto old_player{
+            old_store->blobs().read("playerdata", fixture_player_key)};
+        auto current_player{
+            current_store->blobs().read("playerdata", fixture_player_key)};
+        expect(static_cast<bool>(old_player));
+        expect(static_cast<bool>(current_player));
+        if (old_player && current_player) {
+            expect(static_cast<bool>(*old_player == *current_player));
+        }
+        constexpr std::string_view settings_path{
+            "global/data/minecraft/world_gen_settings.dat"};
+        auto old_settings{old_store->objects().read(settings_path)};
+        auto current_settings{current_store->objects().read(settings_path)};
+        expect(static_cast<bool>(old_settings));
+        expect(static_cast<bool>(current_settings));
+        if (old_settings && current_settings) {
+            expect(static_cast<bool>(*old_settings == *current_settings));
+        }
+        auto old_level{old_store->level()};
+        auto current_level{current_store->level()};
+        expect(old_level->data_version == current_level->data_version);
+        expect(old_level->seed == current_level->seed);
+    };
+
+    "import_dry_run_reports_the_plan_and_writes_nothing"_test = [] {
+        const temp_directory directory;
+        const auto source{build_world(directory, 5013, true)};
+        const auto target{directory.sub("rwf")};
+        const auto level_before{io::read_file(source + "/level.dat")};
+        expect(static_cast<bool>(level_before));
+
+        auto plan{anvil::plan_import(source)};
+        expect(static_cast<bool>(plan))
+            << (plan ? std::string{"ok"} : plan.error().message);
+        if (!plan) {
+            return;
+        }
+        expect(plan->expected.source_data_version == 5013);
+        expect(plan->expected.result_data_version == 5023);
+        expect(plan->expected.fix_steps == 2U);
+        expect(plan->expected.chunks == 2U);
+        expect(plan->expected.entity_chunks == 1U);
+        expect(plan->expected.poi_chunks == 1U);
+        expect(plan->expected.playerdata == 1U);
+        expect(plan->expected.aux_files == 1U);
+        expect(plan->expected.datapack_files == 1U);
+        expect(plan->expected.records_fixed >= 2U);
+
+        refrain::app::world_import_options options{};
+        options.from = source;
+        options.to = target;
+        options.dry_run = true;
+        expect(refrain::app::run_world_import(options) == 0);
+        expect(!io::exists(target));
+        const auto level_after{io::read_file(source + "/level.dat")};
+        expect(static_cast<bool>(level_after));
+        if (level_after && level_before) {
+            expect(static_cast<bool>(*level_after == *level_before));
+        }
+    };
+
+    "import_refuses_a_level_without_a_data_version"_test = [] {
+        const temp_directory directory;
+        const auto source{directory.sub("source")};
+        expect(static_cast<bool>(io::create_directories(source)));
+        value data{make_compound()};
+        set(data, "LevelName", make_string("No Version"));
+        value root{make_compound()};
+        set(root, "Data", std::move(data));
+        expect(static_cast<bool>(nbt::write_file(source + "/level.dat", root,
+                                                 "", nbt::compression::gzip)));
+        const auto result{
+            anvil::import_world(source, directory.sub("rwf"), false)};
+        expect(!result);
+        if (!result) {
+            expect(result.error().code == refrain::error_code::parse_error);
+            expect(result.error().message.find("DataVersion") !=
+                   std::string::npos);
+        }
+    };
+
+    "import_refuses_an_out_of_window_source_before_touching_the_target"_test =
+        [] {
+            const temp_directory directory;
+            const auto source{
+                build_minimal_world(directory, "anvil-old", 5012, true)};
+            const auto target{directory.sub("rwf")};
+            expect(static_cast<bool>(io::create_directories(target)));
+            expect(
+                static_cast<bool>(io::write_text(target + "/keep.txt", "x")));
+            const auto result{anvil::import_world(source, target, true)};
+            expect(!result);
+            if (!result) {
+                expect(result.error().code == refrain::error_code::unsupported);
+                const auto message{result.error().message};
+                expect(message.find("5012") != std::string::npos);
+                expect(message.find("5013") != std::string::npos);
+            }
+            // The rejected source did not delete the existing target.
+            expect(io::exists(target + "/keep.txt"));
+        };
+
+    "import_refuses_a_record_newer_than_the_target"_test = [] {
+        const temp_directory directory;
+        const auto source{
+            build_minimal_world(directory, "anvil-newer", 5013, true, 5024)};
+        const auto target{directory.sub("rwf")};
+        const auto result{anvil::import_world(source, target, false)};
+        expect(!result);
+        if (!result) {
+            expect(result.error().code ==
+                   refrain::error_code::version_mismatch);
+            expect(result.error().message.find("5024") != std::string::npos);
+        }
+        expect(!io::exists(target + "/meta.rfw"));
+    };
+
+    "import_refuses_a_corrupt_record_and_leaves_no_openable_world"_test = [] {
+        const temp_directory directory;
+        const auto source{build_minimal_world(directory, "anvil-corrupt", 5013,
+                                              true, 0, true)};
+        const auto target{directory.sub("rwf")};
+        const auto region_before{io::read_file(
+            source + "/dimensions/minecraft/overworld/region/r.0.0.mca")};
+        expect(static_cast<bool>(region_before));
+        const auto result{anvil::import_world(source, target, false)};
+        expect(!result);
+        if (!result) {
+            expect(result.error().code == refrain::error_code::parse_error);
+        }
+        // The failed import never writes the target metadata and leaves the
+        // source world untouched.
+        expect(!io::exists(target + "/meta.rfw"));
+        const auto region_after{io::read_file(
+            source + "/dimensions/minecraft/overworld/region/r.0.0.mca")};
+        expect(static_cast<bool>(region_after));
+        if (region_after && region_before) {
+            expect(static_cast<bool>(*region_after == *region_before));
+        }
     };
 
     "world_store_meta_level"_test = [] {

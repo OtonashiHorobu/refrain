@@ -519,6 +519,14 @@ run with hot changes can be told apart from an identical static composition.
 - `commit` is what the tick loop calls; the command layer never publishes an
   epoch by itself.
 
+`make_mod_lifecycle_port()` adapts the service to the shared command service's
+`mod_lifecycle_port`. The command layer keeps parsing, permission checks,
+durable store transactions and audit; the port stages the running-composition
+half and reports that the change publishes at the next tick boundary. The
+composition root wires the port into `mod_management_context.lifecycle`; with
+an empty port the `mods` commands still report that the running composition was
+not changed.
+
 ## Trust, signatures and updates
 
 Install-time policy lives in server configuration, not in command-line flags:
@@ -606,6 +614,43 @@ Receipts written by older builds are schema v1. The runtime keeps reading them,
 and `refrain-tools mods receipts --store <dir>` reports the migration;
 `--apply` rewrites them as v2 without confirming the signer (that stays an
 explicit administrator decision).
+
+## Managing mods on a running server
+
+The server exposes the same catalog from its console and from the
+`refrain.mods.admin`-gated `/mods` command, and both call one application
+service, so a result, an error or an audit entry is identical whichever
+frontend ran the command:
+
+```text
+mods list
+mods installed
+mods verify package.rfmod
+mods install package.rfmod confirm
+mods uninstall my.mod@1.0.0 confirm
+mods reload my.mod
+mods trust
+mods trust pin my.mod confirm
+mods trust clear my.mod confirm
+```
+
+The management service reads the install/trust policy from the same
+`config/mods.toml` the startup bootstrap uses, so a runtime install cannot
+accept a package the next start would reject. `config/mods_admin.toml` holds
+the hot lifecycle gates (`[lifecycle] hot_install`, `hot_reload`) and the list
+of player uuids allowed to run the in-game command (`[admin] operators`). Both
+hot gates default off: installing or uninstalling changes the content store at
+once, but the running composition picks the change up on the next start unless
+the gate is enabled.
+
+`install`, `uninstall` and the trust changes require the literal `confirm`
+argument; `--dry-run` reports without writing store state. Every operation,
+including a refusal or a failure, writes one structured audit line through the
+`mod-audit` logger with the actor, the action, the mod id/version, the package
+digest, the signer key id, the policy and the result.
+
+[Running a server](running.md#mod-management) documents the console and
+in-game command tables, the permission node and the configuration defaults.
 
 ## Content store
 

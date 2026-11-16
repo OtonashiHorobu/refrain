@@ -4,6 +4,7 @@
 
 #include <refrain/server/console_commands.hpp>
 
+#include <refrain/app/mod_management.hpp>
 #include <refrain/core/log.hpp>
 #include <refrain/core/schedule.hpp>
 #include <refrain/net/server.hpp>
@@ -27,6 +28,7 @@
 namespace {
 
 constexpr refrain::log::logger log_config{"config"};
+constexpr refrain::log::logger log_mods{"mods"};
 constexpr refrain::log::logger log_net{"net"};
 constexpr refrain::log::logger log_schedule{"schedule"};
 constexpr refrain::log::logger log_server{"server"};
@@ -51,7 +53,12 @@ void print_console_help() {
         "storage, time query|set|add|pause|resume, "
         "weather clear|rain|thunder [duration], schedules, "
         "config <namespace> get|set <key> [value], "
-        "config save|reload [namespace], config names");
+        "config save|reload [namespace], config names, "
+        "mods list|installed|verify <package>|install <package> "
+        "[confirm]|uninstall <id>[@version] [confirm]|reload "
+        "<id>[@version]|trust [list|pin <id>|clear <id>]; install, uninstall "
+        "and trust changes need confirm, --dry-run reports without changing "
+        "state");
 }
 
 [[nodiscard]] auto split_console_line(std::string_view line)
@@ -235,6 +242,27 @@ void execute_config_command(std::span<const std::string_view> tokens,
         return;
     }
     log_config.warn("unknown action '{}'", action);
+}
+
+/// Run one `mods ...` line through the shared application service. The
+/// command writes its lines through the `mods` logger, and reports a failure at
+/// error level with the same message the in-game command shows the player.
+void execute_mods_command(std::span<const std::string_view> tokens,
+                          refrain::app::mod_management *mods) {
+    if (mods == nullptr) {
+        log_mods.warn("mod management is unavailable");
+        return;
+    }
+    refrain::app::mod_management_actor actor{};
+    actor.kind = refrain::app::mod_management_actor_kind::console;
+    actor.name = "@console";
+    const auto report{mods->execute(tokens, actor)};
+    for (const auto &line : report.lines) {
+        log_mods.info("{}", line);
+    }
+    if (!report.ok) {
+        log_mods.error("{}", report.error);
+    }
 }
 
 /// Copy one protocol-facing projection into the record shape the console
@@ -622,6 +650,12 @@ void console_commands::execute(std::string_view line,
     }
     if (!tokens.empty() && tokens[0] == "config") {
         execute_config_command(tokens, dependencies_.config);
+        return;
+    }
+    if (!tokens.empty() && tokens[0] == "mods") {
+        execute_mods_command(
+            std::span<const std::string_view>{tokens}.subspan(1),
+            dependencies_.mods);
         return;
     }
     if ((tokens.size() == 1 || tokens.size() == 2) && tokens[0] == "jump") {
