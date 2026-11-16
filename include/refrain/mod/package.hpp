@@ -24,10 +24,13 @@ namespace refrain::mod {
 // Implementations:
 //  * `builtin_package_source` — the embedded RFSI image (manifest/data of every
 //    internal mod);
-//  * `directory_package_source` — `<root>/mods/<id>/` on disk (data-only mods
-//    discovered by `mod::scan`; code loading is not implemented).
-// `.rfmod` archives are installed as directory trees, so the native
-// archive source (`package_kind::rfmod`) is reserved for a future loader.
+//  * `receipt_package_source` — an installed `.rfmod`: members are read from
+//    the content store through `<store>/mods/<id>/<version>.json` and checked
+//    against the receipt. This is the only external-mod runtime source;
+//  * `directory_package_source` — `<mods_dir>/<id>/` on disk. It exists for the
+//    manifest-tree inspector and tests only: `make_package_resolver()` never
+//    produces it for a runtime composition, because a directory is not an
+//    install.
 
 /// One opened mod package. Reads are relative to the package root
 /// ('/'-separated, no `..`, never a symlink) and bounded by `max_read_bytes`.
@@ -80,11 +83,18 @@ inline constexpr std::size_t package_max_member_bytes{64ULL * 1024ULL *
 [[nodiscard]] auto make_directory_package_source(std::string root)
     -> result<std::unique_ptr<package_source>>;
 
-/// Standard resolver used by the server/tests: `package_kind::builtin`
-/// candidates read from `builtin_image`; `package_kind::directory` candidates
-/// read from the directory containing their scanned `manifest.toml`.
+/// Standard runtime resolver: `package_kind::builtin` candidates read from
+/// `builtin_image`; `package_kind::rfmod` candidates read from their install
+/// receipt and the content store (the store root is derived from the receipt
+/// path). A `package_kind::directory` candidate is refused: directory
+/// side-loading is not a runtime source.
 [[nodiscard]] auto
 make_package_resolver(std::span<const std::byte> builtin_image)
     -> result<package_resolver>;
+
+/// Open one installed package from its receipt path
+/// (`<store>/mods/<id>/<version>.json`).
+[[nodiscard]] auto make_receipt_package_source(std::string receipt_path)
+    -> result<std::unique_ptr<package_source>>;
 
 } // namespace refrain::mod

@@ -11,8 +11,8 @@ namespace refrain::app {
 auto resolve_server_mods(const mod::gamepack_spec &spec,
                          const server_mods_options &options)
     -> result<mod::composition> {
-    return mod::resolve_composition(
-        spec, options.roots,
+    return mod::resolve_installed_composition(
+        spec, options.installed_stores,
         mod::composition_load_options{.builtin_image = options.builtin_image,
                                       .required_services =
                                           options.required_services,

@@ -1346,8 +1346,8 @@ const suite startup_content_tests = [] {
             std::vector<std::string> lines;
             auto options{make_options(store_root)};
             options.auto_install = true;
-            options.require_signature = true;
-            options.trusted_keys = {
+            options.policy.require_signature = true;
+            options.policy.trusted_keys = {
                 rfmod_trusted_key{.key_id = std::string{test_key_id},
                                   .public_key = fixture->public_key}};
             options.gc = gc_mode::apply;
@@ -1428,7 +1428,7 @@ const suite startup_content_tests = [] {
 
             auto options{make_options(store_root)};
             options.auto_install = true;
-            options.require_signature = true;
+            options.policy.require_signature = true;
             auto report{run_startup_content(options)};
             expect(static_cast<bool>(report));
             if (!report) {

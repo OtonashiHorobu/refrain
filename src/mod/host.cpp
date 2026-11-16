@@ -424,7 +424,14 @@ auto host::load_one(const composition &plan, const package_source &package,
     if (!doc) {
         return std::unexpected{annotate(std::move(doc.error()), entry.path)};
     }
-    auto manifest{parse_mod_manifest(*doc)};
+    // An installed package carries the packaging tables (`[files]`,
+    // `[packaging]`, `[signature]`) in the same manifest.toml; the installer
+    // validated their contents, so the loader only admits their shape. A
+    // directory/source manifest must not carry them.
+    auto manifest{parse_mod_manifest(
+        *doc,
+        manifest_parse_options{.allow_package_tables =
+                                   package.kind() == package_kind::rfmod})};
     if (!manifest) {
         return std::unexpected{
             annotate(std::move(manifest.error()), entry.path)};
@@ -636,6 +643,11 @@ auto host::load_external_mod(const mod_manifest &manifest,
             entry.path)};
     }
 
+    // TODO: an installed package lives in the content store, not in a
+    // directory next to its manifest, so a native entry cannot be opened from
+    // a receipt yet; the loader must materialise the entry library from the
+    // package source (a path this code may not derive from the manifest
+    // location).
     const auto root{std::filesystem::path{entry.path}.parent_path()};
     const auto library_path{root / manifest.entry->native};
     auto loaded_library{platform::dynamic_library::load(library_path.string())};

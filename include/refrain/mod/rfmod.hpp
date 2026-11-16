@@ -180,6 +180,65 @@ struct rfmod_signing_options {
     std::string key_id{};
 };
 
+/// Lowercase hex BLAKE3 fingerprint of a public key (64 characters).
+///
+/// The fingerprint identifies the *key material* a `key_id` refers to, so a
+/// receipt or a signer pin can tell a renamed/reused `key_id` from the key that
+/// signed the previous version. Signer continuity compares this value, not the
+/// (caller-chosen) key id alone.
+[[nodiscard]] auto public_key_fingerprint(const data::ed25519_public_key &key)
+    -> std::string;
+
+/// Signature continuity policy for updates of an already installed mod id
+/// ("Android" update semantics).
+enum class rfmod_signature_policy : std::uint8_t {
+    /// Updates must keep the pinned signer. A different signer is rejected
+    /// unless an explicit key rotation allowlist entry names the transition.
+    strict = 0,
+    /// Any trusted signature is accepted for an update. Intended for
+    /// self-hosted/development stores only; the install pins the newest
+    /// signer either way.
+    trusted_any = 1,
+};
+
+[[nodiscard]] auto to_string(rfmod_signature_policy policy) noexcept
+    -> std::string_view;
+[[nodiscard]] auto parse_rfmod_signature_policy(std::string_view text) noexcept
+    -> std::optional<rfmod_signature_policy>;
+
+/// One explicitly allowed signer transition for a mod id.
+///
+/// A rotation entry is the only way a `strict` update may change its signing
+/// key; it is a trust-anchor-level decision and belongs in server
+/// configuration, not in the package.
+struct rfmod_key_rotation {
+    std::string id{};
+    std::string old_key_id{};
+    std::string new_key_id{};
+};
+
+/// Pinned signer identity of one mod id
+/// (`<store>/mods/pins/<id>.json`, schema `refrain.mod-signer-pin/1`).
+///
+/// The pin is written by the first successful signed install and checked on
+/// every later update; `uninstall` clears it when the last installed version is
+/// removed unless the caller keeps it. A receipt v2 also carries the signer, so
+/// a missing pin file is derived from the highest installed receipt; a v1
+/// receipt has no fingerprint and counts as *unpinned* (legacy) until an
+/// administrator confirms the signer.
+struct mod_signer_pin {
+    std::string id{};
+    std::string key_id{};
+    /// Hex64 fingerprint of the pinned key. Empty when the package was signed
+    /// by a key with no configured trust anchor (only the key id is known).
+    std::string public_key_fingerprint{};
+    rfmod_signature_policy policy{rfmod_signature_policy::strict};
+    /// RFC 3339 UTC timestamp, empty for pins migrated from an older store.
+    std::string pinned_at{};
+    /// `install`, `rotation`, `admin` or `uninstall` (audit only).
+    std::string source{};
+};
+
 /// Write options for `build_rfmod` / `write_rfmod` / `pack_mod_directory`.
 struct rfmod_write_options {
     /// zstd compression level (clamped to 1..ZSTD_maxCLevel).
@@ -336,6 +395,10 @@ struct rfmod_verification {
     bool signed_package{false};
     bool trusted{false};
     std::string key_id{};
+    /// Hex64 fingerprint of the verifying key when it is a configured trust
+    /// anchor (`trusted == true`); empty for an unsigned package or a signed
+    /// package whose key bytes are not configured.
+    std::string public_key_fingerprint{};
 };
 
 /// Verify a package completely before anything is installed.
@@ -364,6 +427,25 @@ struct rfmod_verification {
     -> result<rfmod_verification>;
 
 /// Options for `install_rfmod`.
+///
+/// Install is the only way an external mod enters the runtime: the archive is
+/// verified, unpacked into a staging directory, committed to the CAS, a receipt
+/// is published and only then is the mod loadable. The options below add the
+/// update semantics that a plain "verify and unpack" install lacks:
+///
+///  * signer continuity — the first signed install pins the signer for the mod
+///    id; later versions must carry the same `key_id`/fingerprint, or an
+///    explicit `rotations` entry must allow the transition;
+///  * signed state — a signed mod cannot be updated by an unsigned package
+///    (an unsigned mod may be upgraded to a signed one, which pins it);
+///  * version monotonicity — a version lower than the highest installed one is
+///    rejected unless `allow_downgrade`;
+///  * content identity — the same `(id, version)` with a different archive
+///    digest is rejected unless `replace_same_version`.
+///
+/// Every override is audited (`rfmod_install_result::*_override` fields and the
+/// CLI/log line), and none of the checks writes to the store: a rejected update
+/// leaves the previous install untouched.
 struct rfmod_install_options {
     /// Require a signature from one of `trusted_keys` (a signed package with
     /// an unknown key is rejected too).
@@ -372,7 +454,9 @@ struct rfmod_install_options {
     std::vector<rfmod_trusted_key> trusted_keys{};
     /// Publish the per-mod install receipt (`<store>/mods/<id>/<version>.json`)
     /// after the batch commit and blob-table publish. `false` keeps the CAS
-    /// writes but records nothing (tools/tests that only want the blobs).
+    /// writes but records nothing (tools/tests that only want the blobs) and
+    /// also disables the update checks below: without a receipt there is no
+    /// installed state to compare against.
     bool write_receipt{true};
     /// Take `<store>/content/.lock` for the whole install (default). The
     /// startup bootstrap already holds that lock and must pass `false`, or the
@@ -383,6 +467,29 @@ struct rfmod_install_options {
     /// came from. Receipts written before this field default to `user` when
     /// read.
     mod_origin origin{mod_origin::user};
+    /// Signature continuity policy applied to updates.
+    rfmod_signature_policy signature_policy{rfmod_signature_policy::strict};
+    /// Explicit signer transitions allowed for a mod id (rotation allowlist).
+    std::vector<rfmod_key_rotation> rotations{};
+    /// Accept a version lower than the highest installed version.
+    bool allow_downgrade{false};
+    /// Accept the same `(id, version)` with a different archive digest.
+    bool replace_same_version{false};
+    /// Confirm a legacy (receipt v1 / unpinned) install so the next update may
+    /// establish the signer pin. Without it, updating a store installed before
+    /// signer pinning is rejected until an administrator confirms.
+    bool accept_unpinned{false};
+    /// Publish/refresh the signer pin (`<store>/mods/pins/<id>.json`).
+    bool write_pin{true};
+    /// Recorded in the receipt v2 (audit). Empty means "unknown" (a receipt
+    /// migrated from v1 has no installer version either).
+    std::string installer_version{};
+    /// Recorded in the receipt v2 as an RFC 3339 UTC timestamp. Empty uses the
+    /// current time; tests pass a fixed value so receipt bytes are stable.
+    std::string installed_at{};
+    /// Remove stale staging directories left by a crashed install before
+    /// starting (a staging directory of a live process is never touched).
+    bool prune_staging{true};
 };
 
 /// One installed member (path as stored, CAS digest, size and recorded mode).
@@ -405,26 +512,68 @@ struct rfmod_install_result {
     bool signed_package{false};
     bool trusted{false};
     std::string key_id{};
+    /// Hex64 fingerprint of the verifying key, empty when unknown.
+    std::string public_key_fingerprint{};
+    /// Policy text recorded in the receipt: `strict`, `trusted-any` or
+    /// `unsigned` (see `receipt_policy_text`).
+    std::string receipt_policy{};
     mod_origin origin{mod_origin::user};
     /// `<store>/mods/<id>/<version>.json` when the receipt was written; empty
     /// when `write_receipt` is `false` (or on failure, which is an error).
+    /// For an idempotent reinstall of an already installed archive this is the
+    /// existing receipt and nothing was rewritten.
     std::string receipt_path{};
+    /// True when the exact archive digest was already installed (no-op
+    /// reinstall): no blob, table, receipt or pin write happened.
+    bool already_installed{false};
+    /// True when this install established/refreshed the signer pin.
+    bool signer_pinned{false};
+    /// True when the pinned signer changed through a rotation allowlist entry
+    /// or the `trusted-any` policy (always audited).
+    bool signer_rotated{false};
+    /// `<store>/mods/pins/<id>.json` when a pin was written.
+    std::string signer_pin_path{};
+    /// True when `allow_downgrade` was required for this install.
+    bool downgrade_override{false};
+    /// True when `replace_same_version` was required for this install.
+    bool same_version_override{false};
+    /// True when `accept_unpinned` confirmed a legacy install.
+    bool unpinned_confirmed{false};
+    /// Stale staging directories removed before this install.
+    std::size_t pruned_staging{0};
 };
 
-/// One installed member recorded in a `refrain.mod-receipt/1` receipt.
+/// One installed member recorded in a `refrain.mod-receipt/1` or `/2` receipt.
 struct receipt_file {
     std::string path{};
     std::uint64_t size{0};
     data::digest32 blake3{};
+    std::uint32_t mode{0644};
 };
+
+/// Receipt schema versions understood by `read_receipt`.
+inline constexpr std::string_view mod_receipt_schema_v1{
+    "refrain.mod-receipt/1"};
+inline constexpr std::string_view mod_receipt_schema_v2{
+    "refrain.mod-receipt/2"};
+/// Signer pin schema (`<store>/mods/pins/<id>.json`).
+inline constexpr std::string_view mod_signer_pin_schema{
+    "refrain.mod-signer-pin/1"};
 
 /// Validated `<store>/mods/<id>/<version>.json` install receipt.
 ///
-/// The receipt is also a content GC root: its `files[].blake3` digests are
-/// referenced by the installed mod even before any resolution index exists, so
-/// `content gc` must keep those blobs/segments. This is why the parser is part
-/// of the public mod API instead of a CLI-local helper.
+/// The receipt is the runtime's only external-mod load source and a content GC
+/// root: `scan_installed()` parses it to build the runtime catalog and its
+/// `files[].blake3` digests keep the installed blobs alive before any
+/// resolution index exists, so `content gc` must keep those blobs/segments.
+///
+/// Schema v2 adds the signer identity (`public_key_fingerprint`), the policy
+/// that accepted the install, and the audit fields `installed_at` /
+/// `installer_version`. A v1 receipt parses into the same struct with
+/// `schema_version == 1`, `policy == "legacy"` and an empty fingerprint; it
+/// counts as unpinned until the signer is confirmed.
 struct mod_receipt {
+    std::uint32_t schema_version{2};
     std::string id{};
     std::string version{};
     std::uint32_t abi{0};
@@ -433,32 +582,84 @@ struct mod_receipt {
     bool signed_package{false};
     bool trusted{false};
     std::string key_id{};
+    /// Hex64 fingerprint of the signing key (v2, empty when unknown).
+    std::string public_key_fingerprint{};
+    /// `strict` | `trusted-any` | `unsigned` | `legacy` (v2; see
+    /// `rfmod_signature_policy` and the receipt format comment).
+    std::string policy{};
+    /// RFC 3339 UTC install timestamp (v2; empty for a migrated v1 receipt).
+    std::string installed_at{};
+    /// Installer version string (v2; empty for a migrated v1 receipt).
+    std::string installer_version{};
     /// Host-observed install tier (missing field in an older receipt = user).
     mod_origin origin{mod_origin::user};
     std::vector<receipt_file> files{};
+
+    /// True when this receipt pins a signer: schema v2, signed package, a key
+    /// id and a policy that confirmed the signer. A receipt migrated from v1
+    /// keeps `policy == "legacy"` and is therefore *not* pinned: migrating the
+    /// document does not confirm who signed the installed archive.
+    [[nodiscard]] auto pinned() const noexcept -> bool {
+        return schema_version >= 2U && signed_package && !key_id.empty() &&
+               policy != "legacy";
+    }
 };
 
 /// Parse and strictly validate one install receipt.
 ///
-/// Checks the JSON object, `schema == "refrain.mod-receipt/1"`, every required
-/// top-level field/type, SemVer `version`, integer `abi`, 64-hex
-/// `archive_blake3`/`manifest_blake3`, and every `files[]` entry's safe
-/// relative UTF-8 `path`, non-negative `size`, 64-hex `blake3` and (when
-/// present) 0..0777 `mode`. A corrupt/foreign receipt is `parse_error` (the
-/// message names `path`), never silently skipped.
+/// Checks the JSON object, a known schema (`refrain.mod-receipt/1` or `/2`),
+/// every required top-level field/type, SemVer `version`, integer `abi`, 64-hex
+/// `archive_blake3`/`manifest_blake3`, the v2 signer fields, and every
+/// `files[]` entry's safe relative UTF-8 `path`, non-negative `size`, 64-hex
+/// `blake3` and (when present) 0..0777 `mode`. A corrupt/foreign receipt is
+/// `parse_error` (the message names `path`), never silently skipped.
 [[nodiscard]] auto read_receipt(std::string_view path) -> result<mod_receipt>;
 
 /// Sorted `<store>/mods/<id>/<version>.json` receipt paths.
 ///
 /// A missing `<store>/mods` directory is an empty list; missing subdirectories
-/// and non-`.json`/non-regular entries are skipped. Read each path with
+/// and non-`.json`/non-regular entries are skipped. The reserved
+/// `<store>/mods/pins` directory and hidden (`.`-prefixed) directories such as
+/// staging/trash are never treated as mod ids. Read each path with
 /// `read_receipt` before using it as a GC root.
 [[nodiscard]] auto list_receipt_paths(std::string_view store_root)
     -> result<std::vector<std::string>>;
 
-/// Fully verify the package (`verify_rfmod`), then ingest every member
-/// (including `manifest.toml`) through one content-store batch and parse the
-/// manifest.
+/// `list_receipt_paths` restricted to one mod id, sorted by receipt path.
+[[nodiscard]] auto list_receipt_paths_for(std::string_view store_root,
+                                          std::string_view id)
+    -> result<std::vector<std::string>>;
+
+/// Canonical receipt path `<store>/mods/<id>/<version>.json`.
+///
+/// Both components are validated as safe single path segments
+/// (`invalid_argument` otherwise), so the result can be used for reads and the
+/// recursive uninstall. The path does not have to exist.
+[[nodiscard]] auto receipt_path(std::string_view store_root,
+                                std::string_view id, std::string_view version)
+    -> result<std::string>;
+
+/// Read the signer pin of one mod id, if a pin file exists.
+///
+/// A pin file is validated strictly (`parse_error` on damage); a missing
+/// `<store>/mods/pins` directory or pin file is `nullopt`. The id is validated
+/// as a safe path segment (`invalid_argument`).
+[[nodiscard]] auto read_signer_pin(std::string_view store_root,
+                                   std::string_view id)
+    -> result<std::optional<mod_signer_pin>>;
+
+/// Atomically write `<store>/mods/pins/<id>.json` (schema
+/// `refrain.mod-signer-pin/1`). Used by install, uninstall (`keep_signer_pin`)
+/// and the administrative `mods pin` command.
+[[nodiscard]] auto write_signer_pin(std::string_view store_root,
+                                    const mod_signer_pin &pin) -> status;
+
+/// Remove the signer pin of `id`. A missing pin is a successful no-op.
+[[nodiscard]] auto clear_signer_pin(std::string_view store_root,
+                                    std::string_view id) -> status;
+
+/// Fully verify the package (`verify_rfmod`), then install it into the content
+/// store as one transaction: staging unpack, CAS commit, receipt, signer pin.
 ///
 /// One install is one `data::batch` / one `commit()`:
 /// members of at most 64 KiB (including `manifest.toml` and zero-byte files)
@@ -477,33 +678,51 @@ struct mod_receipt {
 /// only after that. A damaged existing table or index fails before the first
 /// write.
 ///
-/// Verification happens *before* the first CAS write, so a rejected package
-/// leaves no blob behind. Each member's BLAKE3 must equal its `[files]` record
-/// (the manifest member is checked against `manifest_digest`); a mismatch is
-/// `parse_error`. Content addressing is append-only across process crashes (a
-/// crash mid-install can leave already-written blobs/segments; harmless, and a
-/// later GC collects them).
+/// Transaction order (a crash at any point leaves the previous install usable):
+///  1. prune stale `<store>/mods/.staging/*` directories (a crashed install's
+///     debris; a staging directory owned by a live process is never touched);
+///  2. verify the package in memory and check the update policy (signer
+///     continuity, version monotonicity, same-version digest);
+///  3. unpack the verified members into
+///     `<store>/mods/.staging/<id>-<version>-<pid>-<n>/` and re-check every
+///     digest;
+///  4. ingest every member through one CAS batch and commit it;
+///  5. publish the merged blob table and re-encoded resolution indexes;
+///  6. publish the receipt v2 (the commit point: an install "exists" exactly
+///     when its receipt exists);
+///  7. publish the signer pin;
+///  8. delete the staging directory.
 ///
-/// Receipt: once every member is in the CAS, its digest has been
-/// verified and the batch committed, a deterministic JSON record is atomically
-/// written to `<store>/mods/<id>/<version>.json`:
+/// Steps 1-2 write nothing, so a rejected package leaves no blob behind.
+/// A failure between 4 and 6 leaves already-written blobs/segments behind
+/// (append-only CAS semantics — harmless and collected by GC) and the staging
+/// directory is removed; the next install prunes a crashed leftover.
 ///
-///   `schema` = "refrain.mod-receipt/1", `id`, `version`, `abi`,
+/// Reinstalling the exact archive digest of an already installed `(id,
+/// version)` is a no-op (`already_installed`), without rewriting the receipt
+/// or the pin. `write_receipt = false` skips the receipt, pin and update
+/// checks (a pure CAS ingestion used by tests/tools).
+///
+/// Receipt: once every member is in the CAS, its digest has been verified and
+/// the batch committed, a deterministic JSON record is atomically written to
+/// `<store>/mods/<id>/<version>.json`:
+///
+///   `schema` = "refrain.mod-receipt/2", `id`, `version`, `abi`,
 ///   `archive_blake3`, `manifest_blake3`, `signed`, `trusted`, `key_id`,
-///   `origin` (`builtin`|`first_party`|`user`), and
-///   `files` (one `path`/`size`/`blake3`/`mode` object per installed member,
-///   sorted by path bytes).
+///   `public_key_fingerprint`, `policy` (`strict`, `trusted-any`, `unsigned`),
+///   `installed_at`, `installer_version`, `origin` (`builtin`|`first_party`|
+///   `user`), and `files` (one `path`/`size`/`blake3`/`mode` object per
+///   installed member, sorted by path bytes).
 ///
 /// `id`/`version` are re-checked as safe single path segments (non-empty, not
 /// exactly "."/"..", no '/'/'\\'/control bytes; ordinary dots inside a name,
 /// e.g. the valid mod id `a..b`, are allowed) *before the first CAS write*, so
-/// an unsafe segment fails without leaving a blob behind. The receipt carries
-/// no timestamps or host paths, so reinstalling the same package yields
-/// byte-identical bytes and `refrain-tools mods installed` can list it. A table
-/// or receipt write failure is `io_error`; blobs and sealed segments already
-/// written by this call are kept (append-only CAS semantics — no rollback).
+/// an unsafe segment fails without leaving a blob behind. A table or receipt
+/// write failure is `io_error`; blobs and sealed segments already written by
+/// this call are kept (append-only CAS semantics — no rollback).
 ///
-/// The receipt is also a content GC root: `content gc` treats every
+/// The receipt is the runtime's only external-mod load source
+/// (`scan_installed`) and a content GC root: `content gc` treats every
 /// `files[].blake3` as referenced, so an installed mod's blobs/segments survive
 /// even though install writes no resolution index of its own. `read_receipt`/
 /// `list_receipt_paths` are the library API for that root set (and for
@@ -514,5 +733,71 @@ struct mod_receipt {
                                  data::content_store &store,
                                  const rfmod_install_options &options = {})
     -> result<rfmod_install_result>;
+
+/// Options for `uninstall_rfmod`.
+struct rfmod_uninstall_options {
+    /// Take `<store>/content/.lock` for the whole uninstall (default). A caller
+    /// that already holds the store lock passes `false`.
+    bool lock_store{true};
+    /// Keep the signer pin when the last installed version of the id is
+    /// removed. The default clears it, so a later reinstall starts with a
+    /// fresh "first install" pin.
+    bool keep_signer_pin{false};
+};
+
+/// Result of `uninstall_rfmod`.
+struct rfmod_uninstall_result {
+    std::string id{};
+    /// Removed version texts, sorted ascending by SemVer then raw text.
+    std::vector<std::string> versions{};
+    /// True when the id has no installed version afterwards.
+    bool last_version{false};
+    /// True when the signer pin was deleted (default, last version only).
+    bool signer_pin_cleared{false};
+    /// True when the signer pin was written/kept instead of cleared.
+    bool signer_pin_kept{false};
+    std::string signer_pin_path{};
+};
+
+/// Remove installed receipts of one mod id, clearing the signer pin with the
+/// last version.
+///
+/// `version` selects one installed version (exact receipt version text);
+/// `nullopt` removes every installed version of the id. The receipts are the
+/// only state the runtime and GC read, so removing them is the uninstall; the
+/// CAS blobs stay in place and the next mark-sweep GC collects them once no
+/// resolution index references them. A missing version/id is `not_found`.
+/// A removed receipt is logged by the caller from the returned versions; the
+/// library itself never writes an audit log.
+[[nodiscard]] auto uninstall_rfmod(data::content_store &store,
+                                   std::string_view id,
+                                   std::optional<std::string_view> version = {},
+                                   const rfmod_uninstall_options &options = {})
+    -> result<rfmod_uninstall_result>;
+
+/// One `migrate_receipts()` outcome.
+struct receipt_migration_report {
+    std::size_t scanned{0};
+    std::size_t migrated{0};
+    std::size_t current{0}; ///< already schema v2, untouched
+    std::size_t failed{0};
+};
+
+/// Rewrite every receipt v1 under `<store>/mods` as schema v2.
+///
+/// A migrated receipt keeps every recorded value and gains
+/// `policy = "legacy"`, an empty `public_key_fingerprint`, `installed_at` and
+/// `installer_version`: the signer is *not* confirmed by a migration. The
+/// runtime keeps accepting v1 receipts, so the migration is not required for a
+/// working store; it makes the on-disk format uniform and marks the signer as
+/// unconfirmed. The first update of an unpinned install is rejected unless the
+/// administrator confirms the signer (`rfmod_install_options::accept_unpinned`
+/// or `mods pin`). `apply == false` is a dry-run that only reports.
+///
+/// A corrupt receipt fails the report (`parse_error`) instead of being
+/// rewritten; a failure while writing one receipt is reported per receipt in
+/// `failed` and does not abort the pass.
+[[nodiscard]] auto migrate_receipts(std::string_view store_root, bool apply)
+    -> result<receipt_migration_report>;
 
 } // namespace refrain::mod

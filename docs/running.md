@@ -185,10 +185,23 @@ CI smoke wants. A run that only inspects the composition does not need the EULA.
 | `--watchdog-timeout-ms <n>` | warn when a tick stalls longer than n milliseconds |
 | `--autosave-interval-ticks <n>` | flush dirty chunks every n ticks, 0 disables |
 | `--compact-interval-ticks <n>` | compact region files every n ticks, 0 disables |
-| `--content-store <dir>` | enable the content store and startup maintenance |
-| `--mods <dir>` | instance root with `mods/<id>/manifest.toml`, repeatable |
+| `--content-store <dir>` | enable the content store and startup maintenance; installed mods in it are part of the composition |
+| `--mods <dir>` | content store root whose install receipts are part of the mod catalog, repeatable |
+| `--allow-downgrade` | accept a mod version lower than the installed highest (one run) |
+| `--replace-same-version` | accept the same mod `(id, version)` with a different archive digest (one run) |
+| `--accept-unpinned-signer` | confirm the signer of a mod installed before signer pinning so it may be updated |
+| `--keep-signer-pin` | keep a mod's signer pin after uninstalling its last version |
+| `--signature-policy <mode>` | override the install signature policy: `strict` or `trusted-any` |
+| `--content-trusted-key <id>:<hex>` | add a trusted signing key (repeatable) |
 
 `--dump-gamepack` prints the resolved composition and exits.
+
+External mods load from content-store install receipts only: `--content-store`
+contributes the server's own store and `--mods` names additional store roots. A
+`mods/<id>/` directory is a packaging source (`refrain-tools mods pack`), never
+a load path. The install/trust policy is `mods.toml` in the configuration
+directory; the flags above override individual values for one run. See
+[Mods and gamepacks](modding.md#installing-mods).
 
 ## Configuration
 
@@ -202,6 +215,8 @@ config/
   world.toml        path, level_name, allow_nether
   runtime.toml      tick/watchdog/autosave knobs
   storage.toml      zstd and compaction policy
+  mods.toml             mod install/trust policy: [signature], [trust],
+                        [install] and [rotation."<id>"] (see docs/modding.md)
   providers/<id>.toml   implementation-specific options
   mods/<id>.toml        options of mods that do not provide a service
 ```

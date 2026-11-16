@@ -5,6 +5,7 @@
 #pragma once
 
 #include <refrain/core/error.hpp>
+#include <refrain/mod/install_policy.hpp>
 #include <refrain/mod/mod_ref.hpp>
 #include <refrain/mod/rfmod.hpp>
 
@@ -111,11 +112,14 @@ struct startup_content_options {
     /// Host-observed origin recorded by installs performed by this run
     /// (forwarded to `install_rfmod`; the inbox is user-supplied by default).
     mod_origin install_origin{mod_origin::user};
-    /// Require a signature from one of `trusted_keys` (forwarded to
-    /// `install_rfmod`).
-    bool require_signature{false};
-    /// Trust anchors matched by manifest `key_id`.
-    std::vector<rfmod_trusted_key> trusted_keys{};
+    /// Install/trust policy for inbox installs: trust anchors, signature
+    /// continuity policy, rotation allowlist and the downgrade/replace
+    /// switches. The caller loads it from server configuration; command-line
+    /// flags override individual values before calling.
+    install_policy_config policy{};
+    /// Confirm the signer of a legacy (receipt v1) install so an update may
+    /// pin it (administrator confirmation; forwarded to `install_rfmod`).
+    bool accept_unpinned{false};
     /// Garbage-collection policy.
     enum class gc_mode { off, dry_run, apply };
     /// Default is a dry run: the startup path never deletes without an

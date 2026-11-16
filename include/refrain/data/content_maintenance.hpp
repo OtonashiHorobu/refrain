@@ -287,6 +287,13 @@ struct gc_options {
     /// synchronous CLI/startup behaviour (the unlink still runs only in the
     /// queue drain, never inline in the planner).
     bool defer_deletes{false};
+    /// Allow `apply` with an empty root set (no resolution index references
+    /// and no `extra_roots`). The default fails closed because an accidental
+    /// empty root set would mark every record unreferenced and wipe the store.
+    /// Callers that loaded the receipts/indexes strictly (a store after its
+    /// last mod was uninstalled) pass `true` to reclaim the now-unreferenced
+    /// content.
+    bool allow_empty_roots{false};
 };
 
 /// Statistics of one `collect_garbage` run. The `root_*`/plan fields are

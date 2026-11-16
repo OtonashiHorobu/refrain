@@ -111,11 +111,12 @@ struct mods_check_options {
 };
 
 struct mods_list_options {
-    std::vector<std::string> roots{}; ///< instance roots (repeatable)
+    /// Content store roots whose install receipts form the catalog
+    /// (repeatable).
+    std::vector<std::string> roots{};
     std::string check_lock{};
     std::string gamepack{};
     std::string image{};
-    bool strict{false};
 };
 
 struct data_options {
@@ -148,6 +149,8 @@ struct mods_verify_options {
     std::string archive{};
     std::string key_hex{};
     std::string key_id{};
+    /// Repeatable `<key-id>:<64-hex-public-key>` trust anchors.
+    std::vector<std::string> trusted_keys{};
     bool require_signature{false};
 };
 
@@ -160,6 +163,43 @@ struct mods_install_options {
     std::string key_hex{};
     std::string key_id{};
     bool require_signature{false};
+    /// Repeatable `<key-id>:<64-hex-public-key>` trust anchors.
+    std::vector<std::string> trusted_keys{};
+    /// Optional server policy file (the same `config/mods.toml` schema). The
+    /// flags above and below override individual values for this run.
+    std::string policy_file{};
+    std::string signature_policy{};
+    bool allow_downgrade{false};
+    bool replace_same_version{false};
+    bool accept_unpinned{false};
+    /// Recorded in the receipt v2 (audit); empty records the tool version.
+    std::string installer_version{};
+};
+
+struct mods_uninstall_options {
+    std::string store{};
+    std::string id{};
+    /// Empty removes every installed version of `id`.
+    std::string version{};
+    bool keep_signer_pin{false};
+};
+
+struct mods_pin_options {
+    std::string store{};
+    std::string id{};
+    /// Override the signer recorded by the installed receipt. Both must be
+    /// given together; without them the highest installed receipt supplies
+    /// the signer.
+    std::string key_id{};
+    std::string fingerprint{};
+    /// Clear the pin instead of writing one.
+    bool clear{false};
+};
+
+struct mods_receipts_options {
+    std::string store{};
+    /// Rewrite receipt v1 documents in place; the default is a dry run.
+    bool apply{false};
 };
 
 struct mods_installed_options {
@@ -198,6 +238,9 @@ struct content_gc_options {
     bool compact{false};
     int keep_days{0};
     std::uint64_t budget_ms{0};
+    /// Reclaim with an empty root set (a store whose last mod was
+    /// uninstalled). Without it the library fails closed.
+    bool allow_empty_roots{false};
 };
 
 struct builtin_image_options {
@@ -239,6 +282,11 @@ run_protocol_pool_load(const protocol_pool_load_options &options) -> int;
 [[nodiscard]] auto run_mods_pack(const mods_pack_options &options) -> int;
 [[nodiscard]] auto run_mods_verify(const mods_verify_options &options) -> int;
 [[nodiscard]] auto run_mods_install(const mods_install_options &options) -> int;
+[[nodiscard]] auto run_mods_uninstall(const mods_uninstall_options &options)
+    -> int;
+[[nodiscard]] auto run_mods_pin(const mods_pin_options &options) -> int;
+[[nodiscard]] auto run_mods_receipts(const mods_receipts_options &options)
+    -> int;
 [[nodiscard]] auto run_mods_installed(const mods_installed_options &options)
     -> int;
 [[nodiscard]] auto run_data(const data_options &options, bool validate) -> int;

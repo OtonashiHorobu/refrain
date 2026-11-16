@@ -9,6 +9,8 @@
 #include <refrain/core/config.hpp>
 #include <refrain/core/io.hpp>
 #include <refrain/core/semver.hpp>
+#include <refrain/core/version.hpp>
+#include <refrain/data/checksum.hpp>
 #include <refrain/data/content_maintenance.hpp>
 #include <refrain/data/content_pack.hpp>
 #include <refrain/data/content_store.hpp>
@@ -318,10 +320,12 @@ void reject_package(const startup_content_options &options,
     }
 
     rfmod_install_options install{};
-    install.require_signature = options.require_signature;
-    install.trusted_keys = options.trusted_keys;
+    apply_install_policy(options.policy, install);
     install.write_receipt = true;
+    install.write_pin = true;
     install.origin = options.install_origin;
+    install.installer_version = refrain::version::release_version;
+    install.accept_unpinned = options.accept_unpinned;
     // The startup bootstrap already holds `<store>/content/.lock`; taking it
     // again inside install_rfmod would wait on ourselves.
     install.lock_store = false;
@@ -333,9 +337,38 @@ void reject_package(const startup_content_options &options,
     }
 
     ++report.installed;
+    // One audit line per install: the operator must be able to reconstruct
+    // which archive, signer and policy produced the receipt.
     emit(log,
-         fmt::format("installed startup content {} {} with {} files",
-                     identity->id, identity->version, installed->files.size()));
+         fmt::format("installed startup content {} {} with {} files, "
+                     "signer {}, policy {}, archive {}",
+                     identity->id, identity->version, installed->files.size(),
+                     installed->signed_package
+                         ? fmt::format("{} ({})", installed->key_id,
+                                       installed->public_key_fingerprint.empty()
+                                           ? "untrusted key"
+                                           : installed->public_key_fingerprint)
+                         : std::string{"unsigned"},
+                     installed->receipt_policy,
+                     data::to_hex(installed->archive_digest)));
+    if (installed->downgrade_override) {
+        emit(log, fmt::format("accepted a downgrade of {} {} under "
+                              "--allow-downgrade",
+                              identity->id, identity->version));
+    }
+    if (installed->same_version_override) {
+        emit(log, fmt::format("replaced the same version of {} {} under "
+                              "--replace-same-version",
+                              identity->id, identity->version));
+    }
+    if (installed->unpinned_confirmed) {
+        emit(log, fmt::format("confirmed the legacy signer of {} {}",
+                              identity->id, identity->version));
+    }
+    if (installed->signer_rotated) {
+        emit(log, fmt::format("accepted a signer rotation for {} {}",
+                              identity->id, identity->version));
+    }
     if (options.keep_installed) {
         auto moved{move_package(
             path, data::join_path(inbox, installed_directory_name))};
@@ -711,6 +744,11 @@ assign_layer_priorities(const startup_content_options &options,
     gc.compact = false;
     gc.keep_days = options.gc_keep_days;
     gc.budget_ms = options.gc_budget_ms;
+    // Receipts and resolution indexes are loaded strictly above, so an empty
+    // root set here means the store really has nothing installed (for example
+    // after the last mod was uninstalled): reclaiming it is the intended
+    // maintenance sweep, not a misconfiguration.
+    gc.allow_empty_roots = true;
     for (const auto &receipt : receipts.receipts) {
         for (const auto &file : receipt.files) {
             gc.extra_roots.push_back(file.blake3);

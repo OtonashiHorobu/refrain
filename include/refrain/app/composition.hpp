@@ -18,20 +18,24 @@ namespace refrain::app {
 
 // Composition + activation service: the one startup path shared
 // by `refrain-server` and `refrain-tools mods load`. It owns the pipeline order
-//   catalog (builtin image + discovery roots) → resolve → select → load →
+//   catalog (builtin image + installed receipts) → resolve → select → load →
 //   activate
 // so neither main re-implements it.
+//
+// The external half of the catalog is read from content-store install receipts
+// (`mod::scan_installed`); a `mods/<id>/` directory is not a load source.
 
 struct server_mods_options {
-    /// `--mods` instance roots (origin=user), already tagged by the caller.
-    std::span<const mod::discovery_root> roots{};
+    /// Content store roots whose install receipts form the external mod
+    /// catalog. Empty keeps the composition builtin-only.
+    std::span<const std::string> installed_stores{};
     /// Embedded/loaded built-in RFSI image (empty = no builtin seed).
     std::span<const std::byte> builtin_image{};
     /// `[providers]` keys the host cannot start without.
     std::span<const std::string_view> required_services{};
     /// Override `gamepack.auto_scan` (`--auto-scan` / `--no-auto-scan`).
     std::optional<bool> auto_scan{};
-    /// Discovery options (e.g. `require_mods_dir` for explicit `--mods`).
+    /// Catalog options (e.g. `require_mods_dir` for explicit store roots).
     mod::discover_options discovery{};
 };
 
