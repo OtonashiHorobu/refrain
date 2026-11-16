@@ -72,32 +72,12 @@ jobs:
           python3 tools/conan_audit_sarif.py \
             --input conan-audit.json \
             --output conan-audit.sarif \
+            --summary conan-audit-summary.md \
+            --triage .github/conan-audit-triage.json \
             --lockfile conan/locks/vendor.lock
 
       - name: Summarise the findings
         run: |
-          python3 - <<'PY'
-          import json
-          import pathlib
-
-          report = json.loads(pathlib.Path("conan-audit.json").read_text())
-          counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
-          packages = set()
-          for ref, package in report.get("data", {}).items():
-              if not isinstance(package, dict):
-                  continue
-              for edge in package.get("vulnerabilities", {}).get("edges", []):
-                  node = edge.get("node", {})
-                  counts[node.get("severity", "Unknown")] = counts.get(
-                      node.get("severity", "Unknown"), 0) + 1
-                  packages.add(ref)
-          lines = ["### ConanCenter vulnerability audit", ""]
-          lines.append(
-              f"{sum(counts.values())} finding(s) in {len(packages)} package(s): "
-              + ", ".join(f"{name} {value}" for name, value in counts.items() if value)
-          )
-          pathlib.Path("conan-audit-summary.md").write_text("\n".join(lines) + "\n")
-          PY
           cat conan-audit-summary.md >> "$GITHUB_STEP_SUMMARY"
           {
             echo
