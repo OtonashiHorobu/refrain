@@ -134,8 +134,9 @@ or TOML file:
 | Compression threshold | 256 | `compression_threshold` in `network.toml` |
 
 The first start writes `config/refrain.toml`, `config/network.toml`,
-`config/world.toml`, `config/runtime.toml` and `config/storage.toml` with these
-defaults; existing files are never rewritten. `--import-properties` skips the
+`config/world.toml`, `config/runtime.toml`, `config/storage.toml`,
+`config/mods.toml` and `config/mods_admin.toml` with these defaults; existing
+files are never rewritten. `--import-properties` skips the
 generated files, because the imported properties are a fallback layer below the
 operator's TOML files.
 
@@ -228,6 +229,8 @@ config/
   storage.toml      zstd and compaction policy
   mods.toml             mod install/trust policy: [signature], [trust],
                         [install] and [rotation."<id>"] (see docs/modding.md)
+  mods_admin.toml       mod management: [lifecycle] hot gates, [admin]
+                        operators allowed to run /mods
   providers/<id>.toml   implementation-specific options
   mods/<id>.toml        options of mods that do not provide a service
 ```
@@ -336,6 +339,7 @@ The server announces a small command tree after joining:
 | `/defaultgamemode <mode>` | persist the world's default game mode |
 | `/difficulty <0-3>` | persist and broadcast the world difficulty |
 | `/hardcore <on\|off>` | persist hardcore for new logins |
+| `/mods <command>` | list, verify, install, uninstall, reload or manage the trust state of mods (operator only; see [Mod management](#mod-management)) |
 
 | Command | Effect |
 |---|---|
@@ -370,9 +374,78 @@ The server announces a small command tree after joining:
 | `time add <ticks>` | add ticks to the daylight clock |
 | `time pause` / `time resume` | stop or resume the daylight clock |
 | `weather clear\|rain\|thunder [duration]` | switch the weather for a number of ticks |
+| `mods <command>` | list, verify, install, uninstall, reload or manage the trust state of mods (see [Mod management](#mod-management)) |
 | `palette-gc` | rebuild the world palette while the world is quiesced |
 | `schedules` | list periodic maintenance tasks and their counters |
 | `help` | list commands |
+
+## Mod management
+
+Operators manage installed mods from the console and from an op-only in-game
+command. Both frontends call the same application service, so the status lines,
+the error text and the audit entry are identical whichever one ran the command.
+
+| Command | Effect |
+|---|---|
+| `mods list` | list the running composition: id, version, loader, whether code runs, where the mod came from and the services it provides |
+| `mods installed` | list the install receipts of the content store |
+| `mods verify <package.rfmod>` | verify a package (structure, digests, signature, trust) without installing it |
+| `mods install <package.rfmod> confirm` | install a package into the content store |
+| `mods uninstall <id>[@<version>] confirm` | remove one or every installed version of a mod |
+| `mods reload <id>[@<version>]` | reload a mod that is part of the running composition |
+| `mods trust` | show the install policy, the trust anchors and the recorded signer pins |
+| `mods trust pin <id> confirm` | pin the signer recorded by the highest installed version |
+| `mods trust clear <id> confirm` | clear a signer pin |
+
+`install`, `uninstall` and the trust changes are destructive and need the
+literal `confirm` argument; without it the command is refused, audited and
+changes nothing. Every command accepts `--dry-run`, which reports what would
+happen without writing store state.
+
+The command surface reads the install/trust policy from the same
+`config/mods.toml` the startup bootstrap uses, and its own switches from
+`config/mods_admin.toml`:
+
+```toml
+[lifecycle]
+# Apply an install or uninstall to the running composition while the server
+# runs. Production defaults are off: the store change lands on the next start.
+hot_install = false
+# Rebuild a loaded mod in place.
+hot_reload = false
+
+[admin]
+# Player uuids allowed to run /mods. The server console is always allowed.
+operators = []
+```
+
+The policy file is the source of truth for every runtime install. One-run
+command-line overrides such as `--content-trusted-key` or `--allow-downgrade`
+apply to the startup bootstrap only; the console and in-game commands always use
+`config/mods.toml`.
+
+The in-game command is gated by the `refrain.mods.admin` permission node and is
+only announced to an operator. A player without it is denied with a message
+naming the node; the command tree is filtered per player so an operator's tree
+is never shown to another player. There is no permission service yet, so the
+operator list in `mods_admin.toml` is the whole policy.
+
+Installing and uninstalling change the content store immediately. Whether the
+running composition also changes is controlled by `hot_install`; with it off
+(the production default) the command reports `restart required` and the change
+lands on the next start. Reload needs `hot_reload`. A hot change is applied by
+the lifecycle registry at a tick boundary; a build without that registry
+answers `unsupported`, naming the missing layer, instead of pretending the
+composition changed.
+
+Every operation writes one line through the `mod-audit` logger with the actor
+(console, or the player uuid), the action, the mod id and version, the package
+digest, the signer key id, the policy in force and the result. Refused and
+failed operations are audited too:
+
+```text
+[mod-audit/info] console ran install on example.mod 1.0.0 from archive <blake3> signed by key 'first-party' under the strict policy, the result was ok after 4ms
+```
 
 ## Player state
 

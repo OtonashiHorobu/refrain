@@ -22,6 +22,10 @@ namespace refrain::net {
 class server;
 } // namespace refrain::net
 
+namespace refrain::app {
+class mod_management;
+} // namespace refrain::app
+
 namespace refrain::server {
 
 class maintenance_service;
@@ -48,6 +52,9 @@ struct console_dependencies {
     refrain::net::server *listener{nullptr};
     refrain::core::config::store *config{nullptr};
     std::atomic<bool> *stop{nullptr};
+    /// Mod management application service shared with the in-game command;
+    /// null when the runtime was not composed with one.
+    refrain::app::mod_management *mods{nullptr};
 };
 
 /// Parses and executes one console line.

@@ -4,6 +4,7 @@
 
 #include <refrain/server/command_bridge.hpp>
 
+#include <refrain/app/mod_management.hpp>
 #include <refrain/command/parsers.hpp>
 
 #include <algorithm>
@@ -20,16 +21,20 @@
 
 namespace refrain::server {
 
-namespace {
-
-[[nodiscard]] auto identity_key(const net::player_identity &identity)
-    -> std::uint64_t {
+auto player_identity_key(const net::uuid &id) -> std::uint64_t {
     std::uint64_t key{1469598103934665603ULL};
-    for (const auto byte : identity.id.bytes) {
+    for (const auto byte : id.bytes) {
         key ^= byte;
         key *= 1099511628211ULL;
     }
     return key;
+}
+
+namespace {
+
+[[nodiscard]] auto identity_key(const net::player_identity &identity)
+    -> std::uint64_t {
+    return player_identity_key(identity.id);
 }
 
 [[nodiscard]] auto parse_mode(std::string_view text)
@@ -67,7 +72,7 @@ namespace {
                                const net::player_identity &identity)
     -> command::player_source {
     const auto key{identity_key(identity)};
-    env->remember_key(key, identity.connection);
+    env->remember_key(key, identity.connection, identity.id.to_string());
     return command::player_source{
         std::string{identity.name}, key, env->permission,
         [env, connection = identity.connection](std::string_view message) {
@@ -75,6 +80,53 @@ namespace {
                 env->listener->send_system_chat(connection, message);
             }
         }};
+}
+
+/// First whitespace-delimited word of a command line, used to answer an
+/// explicit permission denial for a command the tree hides from this source.
+[[nodiscard]] auto first_word(std::string_view input) -> std::string_view {
+    while (!input.empty() && input.front() == ' ') {
+        input.remove_prefix(1);
+    }
+    const auto end{input.find(' ')};
+    return input.substr(0, end);
+}
+
+/// Run one shared mod management command for the calling player and deliver
+/// its lines and failure through the command feedback path.
+[[nodiscard]] auto
+execute_mods_command(const std::shared_ptr<command_environment> &environment,
+                     command::context &context, std::vector<std::string> tokens)
+    -> refrain::result<int> {
+    if (environment->mods == nullptr) {
+        context.fail("Mod management is unavailable");
+        return std::unexpected{refrain::make_error(
+            refrain::error_code::unsupported, "mod management is unavailable")};
+    }
+    app::mod_management_actor actor{};
+    actor.kind = app::mod_management_actor_kind::player;
+    actor.name = std::string{context.source().name()};
+    if (const auto uuid{environment->uuid_for(context.source().identity().key)};
+        uuid.has_value()) {
+        actor.uuid = *uuid;
+    }
+    std::vector<std::string_view> arguments{};
+    arguments.reserve(tokens.size());
+    for (const auto &token : tokens) {
+        arguments.push_back(token);
+    }
+    const auto report{environment->mods->execute(arguments, actor)};
+    for (const auto &line : report.lines) {
+        context.reply(line);
+    }
+    if (!report.ok) {
+        // `fail` already delivers the message through the source sink; the
+        // returned value only marks the execution as failed, so the bridge does
+        // not send the reason a second time.
+        context.fail(report.error);
+        return 1;
+    }
+    return 1;
 }
 
 [[nodiscard]] auto to_wire_tree(const command::tree &tree)
@@ -158,9 +210,11 @@ auto command_environment::mode_of(std::uint64_t connection) const
 }
 
 void command_environment::remember_key(std::uint64_t key,
-                                       std::uint64_t connection) {
+                                       std::uint64_t connection,
+                                       std::string uuid) {
     const std::lock_guard lock{mode_mutex};
     key_to_connection[key] = connection;
+    identity_uuids[key] = std::move(uuid);
 }
 
 auto command_environment::connection_for(std::uint64_t key) const
@@ -172,6 +226,122 @@ auto command_environment::connection_for(std::uint64_t key) const
     }
     return std::nullopt;
 }
+
+auto command_environment::uuid_for(std::uint64_t key) const
+    -> std::optional<std::string> {
+    const std::lock_guard lock{mode_mutex};
+    if (const auto found{identity_uuids.find(key)};
+        found != identity_uuids.end()) {
+        return found->second;
+    }
+    return std::nullopt;
+}
+
+namespace {
+
+/// Register the in-game `/mods` tree. Every leaf hands its tokens to the
+/// shared application service, so the console and the game report the same
+/// lines and the same errors. The tree is filtered by the operator gate, and
+/// the bridge answers an explicit denial when a non-operator types it.
+void register_mod_commands(
+    const std::shared_ptr<command_environment> &environment) {
+    auto &dispatcher{environment->dispatcher};
+    const auto permitted = [environment](const command::source &source) {
+        return environment->mod_admin && environment->mod_admin(source);
+    };
+    /// Attach an executor that runs `prefix [<argument>] [suffix...]` through
+    /// the shared service. `argument` names a parser node the tokens take the
+    /// value from; the argument entry stays visible on the node's children.
+    const auto leaf = [environment](command::node_ref node,
+                                    std::vector<std::string> prefix,
+                                    std::string argument,
+                                    std::vector<std::string> suffix = {}) {
+        node.executes([environment, prefix = std::move(prefix),
+                       argument = std::move(argument),
+                       suffix = std::move(suffix)](
+                          command::context &context) -> refrain::result<int> {
+            auto tokens{prefix};
+            if (!argument.empty()) {
+                tokens.emplace_back(context.string(argument));
+            }
+            tokens.insert(tokens.end(), suffix.begin(), suffix.end());
+            return execute_mods_command(environment, context,
+                                        std::move(tokens));
+        });
+        return node;
+    };
+
+    auto mods{dispatcher.literal("mods")};
+    mods.require(permitted);
+    mods.executes(
+        [environment](command::context &context) -> refrain::result<int> {
+            return execute_mods_command(environment, context, {});
+        });
+    mods.then(leaf(dispatcher.literal("list"), {"list"}, {}));
+    mods.then(leaf(dispatcher.literal("installed"), {"installed"}, {}));
+
+    auto verify{dispatcher.literal("verify")};
+    verify.then(leaf(dispatcher.argument("package", command::word_arg()),
+                     {"verify"}, "package"));
+    mods.then(verify);
+
+    auto install{dispatcher.literal("install")};
+    auto install_package{
+        leaf(dispatcher.argument("package", command::word_arg()), {"install"},
+             "package")};
+    install_package.then(leaf(dispatcher.literal("confirm"), {"install"},
+                              "package", {"confirm"}));
+    install_package.then(leaf(dispatcher.literal("--dry-run"), {"install"},
+                              "package", {"--dry-run"}));
+    install.then(install_package);
+    mods.then(install);
+
+    auto uninstall{dispatcher.literal("uninstall")};
+    auto uninstall_id{leaf(dispatcher.argument("id", command::word_arg()),
+                           {"uninstall"}, "id")};
+    uninstall_id.then(
+        leaf(dispatcher.literal("confirm"), {"uninstall"}, "id", {"confirm"}));
+    uninstall_id.then(leaf(dispatcher.literal("--dry-run"), {"uninstall"}, "id",
+                           {"--dry-run"}));
+    uninstall.then(uninstall_id);
+    mods.then(uninstall);
+
+    auto reload{dispatcher.literal("reload")};
+    auto reload_id{
+        leaf(dispatcher.argument("id", command::word_arg()), {"reload"}, "id")};
+    reload_id.then(
+        leaf(dispatcher.literal("--dry-run"), {"reload"}, "id", {"--dry-run"}));
+    reload.then(reload_id);
+    mods.then(reload);
+
+    auto trust{dispatcher.literal("trust")};
+    trust.executes(
+        [environment](command::context &context) -> refrain::result<int> {
+            return execute_mods_command(environment, context, {"trust"});
+        });
+    trust.then(leaf(dispatcher.literal("list"), {"trust", "list"}, {}));
+    auto pin{dispatcher.literal("pin")};
+    auto pin_id{leaf(dispatcher.argument("id", command::word_arg()),
+                     {"trust", "pin"}, "id")};
+    pin_id.then(leaf(dispatcher.literal("confirm"), {"trust", "pin"}, "id",
+                     {"confirm"}));
+    pin_id.then(leaf(dispatcher.literal("--dry-run"), {"trust", "pin"}, "id",
+                     {"--dry-run"}));
+    pin.then(pin_id);
+    trust.then(pin);
+    auto clear{dispatcher.literal("clear")};
+    auto clear_id{leaf(dispatcher.argument("id", command::word_arg()),
+                       {"trust", "clear"}, "id")};
+    clear_id.then(leaf(dispatcher.literal("confirm"), {"trust", "clear"}, "id",
+                       {"confirm"}));
+    clear_id.then(leaf(dispatcher.literal("--dry-run"), {"trust", "clear"},
+                       "id", {"--dry-run"}));
+    clear.then(clear_id);
+    trust.then(clear);
+    mods.then(trust);
+}
+
+} // namespace
 
 void register_runtime_commands(
     std::shared_ptr<command_environment> environment) {
@@ -563,6 +733,8 @@ void register_runtime_commands(
         node.then(duration);
         weather.then(node);
     }
+
+    register_mod_commands(environment);
 }
 
 auto make_command_bridge(std::shared_ptr<command_environment> environment)
@@ -574,20 +746,48 @@ auto make_command_bridge(std::shared_ptr<command_environment> environment)
 
     net::command_bridge bridge{};
     bridge.tree = [environment](const net::player_identity &identity) {
-        if (environment->tree_cache) {
-            return environment->tree_cache;
-        }
         auto source{make_source(environment, identity)};
-        auto tree{environment->dispatcher.tree(source)};
-        if (tree) {
-            environment->tree_cache =
-                std::make_shared<const net::command_tree>(to_wire_tree(*tree));
+        // The tree is filtered by permission, so a snapshot is cached per
+        // (revision, permission level, mod-admin grant): two players must
+        // never receive a tree built for another permission.
+        const auto permitted{static_cast<std::uint64_t>(
+            environment->mod_admin && environment->mod_admin(source))};
+        const auto key{environment->dispatcher.revision() * 8U +
+                       static_cast<std::uint64_t>(source.permission()) * 2U +
+                       permitted};
+        {
+            const std::lock_guard lock{environment->tree_cache_mutex};
+            if (const auto found{environment->tree_cache.find(key)};
+                found != environment->tree_cache.end()) {
+                return found->second;
+            }
         }
-        return environment->tree_cache;
+        auto tree{environment->dispatcher.tree(source)};
+        auto wire{
+            std::make_shared<const net::command_tree>(to_wire_tree(*tree))};
+        {
+            const std::lock_guard lock{environment->tree_cache_mutex};
+            environment->tree_cache[key] = wire;
+        }
+        return wire;
     };
     bridge.execute = [environment](const net::player_identity &identity,
                                    std::string_view input) {
         auto source{make_source(environment, identity)};
+        // The tree hides `/mods` from a player without the operator
+        // permission; answer an explicit denial instead of a generic parse
+        // error so the player learns why.
+        if (first_word(input) == "mods" &&
+            !(environment->mod_admin && environment->mod_admin(source))) {
+            return net::command_feedback{
+                .handled = true,
+                .success = false,
+                .message =
+                    std::string{"You do not have permission to manage mods "
+                                "(requires the '"} +
+                    std::string{app::mod_admin_permission} + "' permission)",
+            };
+        }
         auto result{environment->dispatcher.execute(input, source)};
         if (!result) {
             return net::command_feedback{

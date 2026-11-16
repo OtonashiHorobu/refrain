@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: ba0b7f4fa5ba5492
+// Schema hash: f6c5a91158b1672c
 
 #ifndef REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_RUNTIME_ABI_H
 #define REFRAIN_GENERATED_C_REFRAIN_CONTRACTS_SERVICES_RUNTIME_ABI_H
@@ -68,12 +68,16 @@ struct refrain_services_runtime_runtime_config {
     int32_t content_gc_keep_days;
     uint64_t content_gc_budget_ms;
     uint64_t content_gc_interval_ticks;
-}; // refrain_services_runtime_runtime_config size = 184
+    // Host configuration directory (`--config-dir`); the runtime reads the
+    // mod management policy and the hot lifecycle gates from it. Empty keeps
+    // the built-in defaults.
+    refrain_str config_dir;
+}; // refrain_services_runtime_runtime_config size = 200
 #define REFRAIN_SERVICES_RUNTIME_RUNTIME_CONFIG_SIZE ((uint32_t)sizeof(refrain_services_runtime_runtime_config))
 
 #define REFRAIN_SERVICES_RUNTIME_SERVICE_ID "refrain:runtime"
 #define REFRAIN_SERVICES_RUNTIME_ABI_MAJOR 2u
-#define REFRAIN_SERVICES_RUNTIME_ABI_MINOR 0u
+#define REFRAIN_SERVICES_RUNTIME_ABI_MINOR 1u
 #define REFRAIN_SERVICES_RUNTIME_ABI_PATCH 0u
 #define REFRAIN_SERVICES_RUNTIME_SIDE REFRAIN_SIDE_SERVER
 #define REFRAIN_SERVICES_RUNTIME_THREAD REFRAIN_THREAD_MAIN

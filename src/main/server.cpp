@@ -224,7 +224,7 @@ struct default_config_file {
 /// runtime already falls back to, so writing the files changes no behaviour;
 /// it makes the defaults visible, editable and documented where the operator
 /// looks for them. The keys match what the runtime reads.
-constexpr std::array<default_config_file, 6> k_default_config_files{{
+constexpr std::array<default_config_file, 7> k_default_config_files{{
     {.name = "refrain.toml",
      .text = "# Refrain host configuration.\n"
              "\n"
@@ -281,6 +281,22 @@ constexpr std::array<default_config_file, 6> k_default_config_files{{
              "# [rotation.\"example.mod\"]\n"
              "# old_key_id = \"example-2025\"\n"
              "# new_key_id = \"example-2026\"\n"},
+    {.name = "mods_admin.toml",
+     .text = "# Refrain mod administration: hot lifecycle gates and the\n"
+             "# in-game operator list. Console commands are always allowed.\n"
+             "\n"
+             "[lifecycle]\n"
+             "# Apply an install or uninstall to the running composition.\n"
+             "# Requires the hot lifecycle registry; off in production.\n"
+             "hot_install = false\n"
+             "# Rebuild a loaded mod in place. Requires the hot lifecycle\n"
+             "# registry; off in production.\n"
+             "hot_reload = false\n"
+             "\n"
+             "[admin]\n"
+             "# Player uuids allowed to run /mods; an empty list allows no\n"
+             "# player (the server console is always allowed).\n"
+             "operators = []\n"},
     {.name = "storage.toml",
      .text = "# Refrain world storage configuration.\n"
              "\n"
@@ -1729,6 +1745,11 @@ int main(int argc, char **argv) {
         content_gc_mode == refrain::mod::startup_content_options::gc_mode::off
             ? 0
             : content_gc_interval_ticks;
+    // The runtime reads the mod management policy and the hot lifecycle gates
+    // from the host configuration directory; the directory itself stays
+    // host-owned and is only borrowed for the duration of `run`.
+    runtime_config.config_dir =
+        refrain::contracts::to_borrowed(std::string_view{config_dir});
 
     auto exit_code{runtime.run(runtime_config)};
     if (!exit_code) {

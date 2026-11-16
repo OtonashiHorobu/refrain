@@ -151,6 +151,12 @@ struct runtime_provider {
         auto options{make_options(*config, provider->network, provider->world,
                                   provider->storage, provider->runtime,
                                   provider->config_store)};
+        // The mod management surface reads its policy and hot gates from the
+        // host configuration directory, and reports the loaded composition
+        // from the live host. Both stay host-owned; the runtime only reads
+        // them.
+        options.config_dir = abi::to_string(config->config_dir);
+        options.mod_host = provider->host;
         // The runtime contract is frozen and carries no game-data fields. The
         // composition root resolved the data directory before creating the
         // world and published the paths for this in-process provider; without

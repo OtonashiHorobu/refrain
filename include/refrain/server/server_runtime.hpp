@@ -14,6 +14,10 @@
 #include <functional>
 #include <string>
 
+namespace refrain::mod {
+class host;
+} // namespace refrain::mod
+
 namespace refrain::server {
 
 // Headless server runtime: a fixed 20 Hz tick loop over an already open
@@ -69,6 +73,12 @@ struct server_run_options {
     /// Host-owned store used by the console `/config` commands and the
     /// shutdown save. Null disables both.
     core::config::store *config{nullptr};
+    /// Host configuration directory; the runtime reads the mod management
+    /// policy and the hot gates from it. Empty keeps the built-in defaults.
+    std::string config_dir{};
+    /// Loaded mod host (the running composition). Null leaves `/mods list`
+    /// with an empty composition; the runtime only reads it.
+    const refrain::mod::host *mod_host{nullptr};
     /// Run exactly this many ticks, then stop. 0 = until `stop`/EOF.
     std::int64_t ticks{0};
     /// Optional batch command file (one console command per line, all at tick
