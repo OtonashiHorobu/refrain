@@ -444,8 +444,23 @@ build/Release/bin/refrain-tools world diff world-a world-b
 ```
 
 Import keeps chunk contents, block palette keys, block entities, biomes and
-light. Export writes the vanilla Anvil layout expected by the matching
-DataVersion.
+light. It also accepts a world saved by an older data version inside the
+supported migration window (see [World data version
+migration](#world-data-version-migration)): every record is fixed for its type
+before it is converted, and the resulting RWF world records the current data
+version. The import line reports the source data version, the number of fix
+steps, how many records changed and the resulting data version. A world from
+outside the window, a record whose version is newer than the current one, or a
+corrupt record fails closed; the source world is never modified.
+
+`--dry-run` validates the source the same way and prints the plan without
+creating the target:
+
+```bash
+build/Release/bin/refrain-tools world import --from vanilla-world --to rwf-world --dry-run
+```
+
+Export writes the vanilla Anvil layout expected by the matching DataVersion.
 
 `world palette-gc` rewrites a closed world into a sibling directory with a
 compacted palette and swaps it in; the source world is left untouched if the
@@ -457,6 +472,12 @@ A world directory records the game data version its records were written with.
 This build reads one data version: a world saved by an older build is upgraded
 before it is opened, and a world from a version outside the supported window is
 refused with the recorded version and the window named in the error.
+
+Anvil import and the RWF open path share the same built-in DataFixer: the fixes
+for a record type are implemented once and applied by whichever path reads the
+record, so importing an old Anvil world and opening an equivalent older RWF
+world produce the same records. The window is a property of the fix table, not
+of one storage format.
 
 The upgrade runs automatically at startup through the built-in
 `refrain.world.datafix` mod. It rewrites the version-sensitive records, then
@@ -478,9 +499,16 @@ no reference schema change exists between 5016 and 5023.
   recorded at its old version and the next start refuses it instead of serving
   half-upgraded records; the start that failed can simply be retried, because
   every record rewrite is idempotent.
-- Upgrading from a version older than the supported window is refused. Open
-  the world once in Minecraft 26.3 (or a newer build) to bring it forward, then
-  start Refrain again.
+- Upgrading from a version older than the supported window is refused, for
+  both an Anvil import and an RWF open. The same applies to a world in a legacy
+  storage layout the importer does not read yet, such as a pre-1.13 `.mcr`
+  world or a pre-1.18 section layout. Open the world once in Minecraft 26.3 (or
+  a newer build) to bring it forward, then import or start it with Refrain
+  again. A world newer than this build is refused as well; do not copy a world
+  back from a newer build.
+- A corrupt record fails the whole operation: the import does not write the
+  target world's metadata, so an interrupted or failed import is never opened
+  as a half-upgraded world, and the source directory is left untouched.
 - The migration is a mod. A custom gamepack that does not load it refuses an
   older world and leaves it untouched; only the current data version opens.
 

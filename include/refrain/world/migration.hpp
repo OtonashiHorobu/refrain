@@ -12,31 +12,29 @@
 // only changes after every record was updated, and a second run over an
 // upgraded world is a no-op.
 //
-// Supported source window: `oldest_migratable_data_version` through
-// `target_data_version`. The window covers the two reference schema changes
-// after the merge of the intermediate terrain chunk statuses in 5013: schema
-// 5014 removes the retired `minecraft:block_transformer` item component, and
-// schema 5016 renames the buried-treasure map item name. No reference schema
-// change exists after 5016, so nothing else separates those versions from 26.3.
-// Older saves still need the chunk-status merge that the storage model already
-// records as its own status set, so they are refused rather than rewritten;
-// newer saves come from a newer build and are refused rather than downgraded.
+// The record transformations themselves live in the shared world DataFixer
+// (`refrain/world/datafix.hpp`), so an Anvil import and this migration upgrade
+// a record the same way. This layer owns the world transaction: it decides
+// which records of a world to visit, keeps the writes retryable, and writes the
+// version stamp last. See `datafix.hpp` for the supported source window and the
+// reference schema changes it covers.
 //
 // The upgrade touches the records a world persists: the level record, its
 // saved-data files, every chunk's block-entity NBT and every player NBT record.
-// Entity and item data that the storage model does not persist yet cannot
-// appear in such a world, so there is nothing to migrate for it.
+// A record type that no fix of the current table applies to is still visited so
+// a later table entry takes effect without a second migration path. Entity and
+// POI chunk records are opaque blobs in the RWF model and are not persisted by
+// this build yet, so there is nothing to migrate for them; the Anvil importer
+// fixes their NBT because it is the only path that carries such records.
 
 #pragma once
 
 #include <refrain/core/error.hpp>
+#include <refrain/world/datafix.hpp>
 
 #include <cstdint>
 
 namespace refrain::world {
-
-/// Oldest source DataVersion this build can upgrade to `target_data_version`.
-inline constexpr std::int32_t oldest_migratable_data_version = 5013;
 
 /// Work a migration from `from_version` to `to_version` would run. `steps`
 /// counts every upgrade step plus the final version stamp; zero means the

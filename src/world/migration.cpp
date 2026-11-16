@@ -13,7 +13,6 @@
 
 #include <fmt/format.h>
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -27,12 +26,6 @@ namespace {
 
 namespace nbt = data::nbt;
 
-/// Reference schema versions of the upgrade steps. A step applies to every
-/// world recorded with a data version lower than the schema version that
-/// introduced it.
-constexpr std::int32_t block_transformer_removed_in = 5014;
-constexpr std::int32_t buried_treasure_map_renamed_in = 5016;
-
 /// Saved-data record that carries the world generation seed.
 constexpr std::string_view generator_settings_object =
     "global/data/minecraft/world_gen_settings.dat";
@@ -42,135 +35,6 @@ constexpr std::string_view player_data_kind = "playerdata";
 [[nodiscard]] auto failing(error_code code, std::string message)
     -> std::unexpected<error> {
     return std::unexpected{make_error(code, std::move(message))};
-}
-
-/// The reference item-component steps selected for a source version.
-struct upgrade_steps {
-    /// Schema 5014 removed the retired `minecraft:block_transformer` component.
-    bool remove_block_transformer{false};
-    /// Schema 5016 renamed the buried-treasure map item name.
-    bool rename_buried_treasure_map{false};
-    /// Number of reference steps (the version stamp is counted separately).
-    std::uint32_t count{0};
-};
-
-[[nodiscard]] auto upgrade_steps_for(std::int32_t from_version)
-    -> upgrade_steps {
-    upgrade_steps steps{};
-    if (from_version < block_transformer_removed_in) {
-        steps.remove_block_transformer = true;
-        ++steps.count;
-    }
-    if (from_version < buried_treasure_map_renamed_in) {
-        steps.rename_buried_treasure_map = true;
-        ++steps.count;
-    }
-    return steps;
-}
-
-/// Visit every compound of an NBT tree — the root, nested compounds and
-/// compounds inside lists. `visit` returns true when it changed its node.
-template <typename Visit>
-[[nodiscard]] auto walk_compounds(nbt::value &node, Visit &visit) -> bool {
-    bool changed{false};
-    if (auto *compound{node.as_compound()}; compound != nullptr) {
-        changed = visit(*compound);
-        // Copy the child keys first: a visitor may erase a key from the
-        // compound it was handed.
-        std::vector<std::string> keys;
-        keys.reserve(compound->size());
-        for (const auto &[key, child] : *compound) {
-            static_cast<void>(child);
-            keys.push_back(key);
-        }
-        for (const auto &key : keys) {
-            if (auto *child{node.get(key)}; child != nullptr) {
-                changed = walk_compounds(*child, visit) || changed;
-            }
-        }
-        return changed;
-    }
-    if (auto *list{node.as_list()}; list != nullptr) {
-        for (auto &item : list->items) {
-            changed = walk_compounds(item, visit) || changed;
-        }
-    }
-    return changed;
-}
-
-/// Schema 5014: drop the retired block-transformer component from every item
-/// stack component map.
-[[nodiscard]] auto remove_block_transformer(nbt::compound &node) -> bool {
-    const auto components{node.find("components")};
-    if (components == node.end()) {
-        return false;
-    }
-    auto *map{components->second.as_compound()};
-    if (map == nullptr) {
-        return false;
-    }
-    return map->erase("minecraft:block_transformer") > 0;
-}
-
-/// Schema 5016: rename the legacy buried-treasure map name. The reference fix
-/// only touches `minecraft:map` stacks whose item name is a plain translation
-/// component carrying the old key.
-[[nodiscard]] auto rename_buried_treasure_map(nbt::compound &node) -> bool {
-    const auto id{node.find("id")};
-    if (id == node.end()) {
-        return false;
-    }
-    const auto item_id{id->second.as_string()};
-    if (!item_id || *item_id != "minecraft:map") {
-        return false;
-    }
-    const auto components{node.find("components")};
-    if (components == node.end()) {
-        return false;
-    }
-    auto *map{components->second.as_compound()};
-    if (map == nullptr) {
-        return false;
-    }
-    const auto name{map->find("minecraft:item_name")};
-    if (name == map->end()) {
-        return false;
-    }
-    auto *component{name->second.as_compound()};
-    // A plain translation component has exactly one field, `translate`.
-    if (component == nullptr || component->size() != 1) {
-        return false;
-    }
-    const auto translate{component->find("translate")};
-    if (translate == component->end()) {
-        return false;
-    }
-    const auto key{translate->second.as_string()};
-    if (!key || *key != "filled_map.buried_treasure") {
-        return false;
-    }
-    translate->second = nbt::make_string("item.minecraft.buried_treasure_map");
-    return true;
-}
-
-/// Apply the selected reference steps to one item-bearing NBT document.
-[[nodiscard]] auto apply_item_steps(nbt::value &document,
-                                    const upgrade_steps &steps) -> bool {
-    bool changed{false};
-    if (steps.remove_block_transformer) {
-        auto visit{&remove_block_transformer};
-        changed = walk_compounds(document, visit) || changed;
-    }
-    if (steps.rename_buried_treasure_map) {
-        auto visit{&rename_buried_treasure_map};
-        changed = walk_compounds(document, visit) || changed;
-    }
-    return changed;
-}
-
-[[nodiscard]] auto encode_nbt(const nbt::value &document)
-    -> result<std::vector<std::byte>> {
-    return nbt::write(document, "", nbt::compression::none);
 }
 
 /// One player NBT record read into memory before the rewrite phase.
@@ -208,38 +72,26 @@ struct saved_data_record {
     return *value;
 }
 
+[[nodiscard]] auto encode_nbt(const nbt::value &document)
+    -> result<std::vector<std::byte>> {
+    return nbt::write(document, "", nbt::compression::none);
+}
+
 } // namespace
 
 auto plan_data_migration(std::int32_t from_version, std::int32_t to_version)
     -> result<data_migration_plan> {
-    if (from_version > to_version) {
-        return failing(error_code::invalid_argument,
-                       fmt::format("cannot migrate world data version {} down "
-                                   "to {}",
-                                   from_version, to_version));
-    }
-    if (to_version != target_data_version) {
-        return failing(
-            error_code::unsupported,
-            fmt::format("migration target data version {} is not supported; "
-                        "this build upgrades to {}",
-                        to_version, target_data_version));
-    }
-    if (from_version < oldest_migratable_data_version) {
-        return failing(
-            error_code::unsupported,
-            fmt::format("world data version {} is older than the supported "
-                        "migration window [{}, {}]; upgrade the world in "
-                        "Minecraft 26.3 before opening it here",
-                        from_version, oldest_migratable_data_version,
-                        target_data_version));
+    auto fixes{plan_datafix(from_version, to_version)};
+    if (!fixes) {
+        return std::unexpected{std::move(fixes.error())};
     }
     data_migration_plan plan{
         .from_version = from_version,
         .to_version = to_version,
     };
     if (from_version < to_version) {
-        plan.steps = upgrade_steps_for(from_version).count + 1;
+        // The reference fix steps plus the version stamp written last.
+        plan.steps = fixes->steps + 1;
     }
     return plan;
 }
@@ -261,7 +113,6 @@ auto migrate_world_data(std::string_view root, std::int32_t from_version,
         return std::unexpected{std::move(opened.error())};
     }
     auto &store{*opened};
-    const auto steps{upgrade_steps_for(from_version)};
 
     data_migration_report report{
         .from_version = from_version,
@@ -321,6 +172,14 @@ auto migrate_world_data(std::string_view root, std::int32_t from_version,
                             base, *value, *recorded));
         }
     }
+    {
+        auto fixed{fix_document(*level, datafix_type::level, from_version,
+                                to_version)};
+        if (!fixed) {
+            return std::unexpected{prefix_failure(
+                fmt::format("world '{}' level record", base), fixed.error())};
+        }
+    }
 
     // --- saved data --------------------------------------------------------
     auto object_paths{store.objects().list(saved_data_prefix)};
@@ -371,6 +230,15 @@ auto migrate_world_data(std::string_view root, std::int32_t from_version,
                     fmt::format("world '{}' saved data '{}' records data "
                                 "version {}, older than the world's {}",
                                 base, path, *value, from_version));
+            }
+        }
+        {
+            auto fixed{fix_document(*document, saved_data_type(path),
+                                    from_version, to_version)};
+            if (!fixed) {
+                return std::unexpected{prefix_failure(
+                    fmt::format("world '{}' saved data '{}'", base, path),
+                    fixed.error())};
             }
         }
         if (path == generator_settings_object) {
@@ -450,6 +318,10 @@ auto migrate_world_data(std::string_view root, std::int32_t from_version,
     }
 
     // --- chunks ------------------------------------------------------------
+    // TODO: entity and POI chunk blobs are opaque and this build does not
+    // persist them yet, so a world it wrote has none to migrate. Once entity
+    // persistence lands they need the same DataFixer pass the Anvil importer
+    // runs, before those record types can be claimed as covered.
     auto positions{store.chunk_positions()};
     if (!positions) {
         return std::unexpected{std::move(positions.error())};
@@ -474,7 +346,15 @@ auto migrate_world_data(std::string_view root, std::int32_t from_version,
                                 "valid NBT compound",
                                 base, format_chunk_pos(pos), index));
             }
-            if (!apply_item_steps(*document, steps)) {
+            auto fixed{fix_document(*document, datafix_type::chunk,
+                                    from_version, to_version)};
+            if (!fixed) {
+                return std::unexpected{prefix_failure(
+                    fmt::format("world '{}' chunk {} block entity {}", base,
+                                format_chunk_pos(pos), index),
+                    fixed.error())};
+            }
+            if (!fixed->changed) {
                 continue;
             }
             auto encoded{encode_nbt(*document)};
@@ -512,7 +392,14 @@ auto migrate_world_data(std::string_view root, std::int32_t from_version,
     // --- player records: item steps and version stamp ----------------------
     report.player_records_scanned = players.size();
     for (auto &record : players) {
-        bool changed{apply_item_steps(record.document, steps)};
+        auto fixed{fix_document(record.document, datafix_type::player,
+                                from_version, to_version)};
+        if (!fixed) {
+            return std::unexpected{prefix_failure(
+                fmt::format("world '{}' player record '{}'", base, record.key),
+                fixed.error())};
+        }
+        bool changed{fixed->changed};
         auto *version{record.document.get("DataVersion")};
         if (version != nullptr && version->as_int() != to_version) {
             static_cast<void>(
