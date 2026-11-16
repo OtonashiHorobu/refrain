@@ -273,6 +273,76 @@ auto world::decode_chunk(storage_chunk storage, const chunk_pos &pos)
     return out;
 }
 
+auto world::spawn_column_entities(chunk &column) -> status {
+    if (!column.entity_ids.empty()) {
+        // A column that already holds ids was spawned before: spawning again
+        // would create a second copy of the same structure entities.
+        return std::unexpected{make_error(
+            error_code::already_exists,
+            fmt::format("chunk ({}, {}) entities are already spawned",
+                        column.pos.x, column.pos.z))};
+    }
+    const auto &records{column.storage.entities};
+    if (records.empty()) {
+        return status_ok();
+    }
+    column.entity_ids.reserve(records.size());
+    for (const auto &record : records) {
+        auto id{players_.allocate_entity_id()};
+        if (!id) {
+            // Roll back the ids allocated for this column so a failed load
+            // leaves no orphaned entities behind.
+            despawn_column_entities(column);
+            return std::unexpected{std::move(id.error())};
+        }
+        entities_.emplace(*id, entity_state{
+                                   .id = *id,
+                                   .type = record.id,
+                                   .x = record.x,
+                                   .y = record.y,
+                                   .z = record.z,
+                                   .yaw = record.yaw,
+                                   .pitch = record.pitch,
+                                   .pinned = true,
+                               });
+        column.entity_ids.push_back(*id);
+    }
+    return status_ok();
+}
+
+void world::despawn_column_entities(chunk &column) noexcept {
+    for (const auto id : column.entity_ids) {
+        entities_.erase(id);
+    }
+    column.entity_ids.clear();
+}
+
+void world::despawn_all_column_entities() noexcept {
+    for (auto &[pos, column] : chunks_) {
+        static_cast<void>(pos);
+        despawn_column_entities(column);
+    }
+}
+
+auto world::chunk_entities(const chunk_pos &pos) const
+    -> std::vector<chunk_entity> {
+    const auto *column{find_chunk(pos)};
+    if (column == nullptr) {
+        return {};
+    }
+    const auto &records{column->storage.entities};
+    if (records.size() != column->entity_ids.size()) {
+        return {};
+    }
+    std::vector<chunk_entity> out;
+    out.reserve(records.size());
+    for (std::size_t index{0}; index < records.size(); ++index) {
+        out.push_back(chunk_entity{.id = column->entity_ids[index],
+                                   .record = records[index]});
+    }
+    return out;
+}
+
 auto world::ensure_chunk(const chunk_pos &pos) -> result<chunk *> {
     if (auto *found{find_chunk(pos)}; found != nullptr) {
         return found;
@@ -290,6 +360,10 @@ auto world::ensure_chunk(const chunk_pos &pos) -> result<chunk *> {
     }
     auto [position, inserted]{chunks_.emplace(pos, std::move(*decoded))};
     static_cast<void>(inserted);
+    if (auto spawned{spawn_column_entities(position->second)}; !spawned) {
+        chunks_.erase(position);
+        return std::unexpected{std::move(spawned.error())};
+    }
     light_.column_loaded(position->second);
     return &position->second;
 }
@@ -308,6 +382,10 @@ auto world::insert_chunk(const chunk_pos &pos, storage_chunk generated)
     decoded->dirty = true;
     auto [position, inserted]{chunks_.emplace(pos, std::move(*decoded))};
     static_cast<void>(inserted);
+    if (auto spawned{spawn_column_entities(position->second)}; !spawned) {
+        chunks_.erase(position);
+        return std::unexpected{std::move(spawned.error())};
+    }
     light_.column_loaded(position->second);
     return &position->second;
 }
@@ -648,6 +726,7 @@ auto world::unload_chunk(const chunk_pos &pos, bool commit) -> status {
             return written;
         }
     }
+    despawn_column_entities(found->second);
     chunks_.erase(found);
     light_.column_unloaded(pos);
     return status_ok();
@@ -699,6 +778,9 @@ auto world::unload_chunks(std::span<const chunk_pos> positions, bool commit)
         }
     }
     for (const auto &pos : positions) {
+        if (auto *column{find_chunk(pos)}; column != nullptr) {
+            despawn_column_entities(*column);
+        }
         chunks_.erase(pos);
         light_.column_unloaded(pos);
     }
@@ -907,6 +989,7 @@ auto world::rebuild_palette_in_place(unsigned threads, int zstd_level)
 
     // Release every region handle before the helper renames the directory.
     store_ = store_type{};
+    despawn_all_column_entities();
     chunks_.clear();
     light_ = light_engine{*this};
 
@@ -1269,7 +1352,31 @@ auto world::spawn_entity(std::string_view type, double x, double y, double z)
 }
 
 auto world::remove_entity(entity_id id) -> bool {
-    return entities_.erase(id) != 0U;
+    if (entities_.erase(id) == 0U) {
+        return false;
+    }
+    // A generated entity is owned by its column: removing it from the entity
+    // table also takes it out of the column record, so a later unload writes a
+    // record that does not spawn it again and no client is announced a stale
+    // id.
+    for (auto &[pos, column] : chunks_) {
+        static_cast<void>(pos);
+        const auto found{
+            std::find(column.entity_ids.begin(), column.entity_ids.end(), id)};
+        if (found == column.entity_ids.end()) {
+            continue;
+        }
+        const auto index{static_cast<std::size_t>(
+            std::distance(column.entity_ids.begin(), found))};
+        column.entity_ids.erase(found);
+        if (index < column.storage.entities.size()) {
+            column.storage.entities.erase(column.storage.entities.begin() +
+                                          static_cast<std::ptrdiff_t>(index));
+        }
+        column.dirty = true;
+        break;
+    }
+    return true;
 }
 
 auto world::entity(entity_id id) noexcept -> entity_state * {
@@ -1288,6 +1395,13 @@ void world::tick_entities() noexcept {
     constexpr double horizontal_drag{0.91};
     for (auto &[id, value] : entities_) {
         static_cast<void>(id);
+        if (value.pinned) {
+            // A generated entity is held where its structure placed it: this
+            // build has no entity AI or living-entity physics, so applying the
+            // point-entity gravity would only drag a shulker or an item frame
+            // off its structure.
+            continue;
+        }
         value.vy = (value.vy - gravity) * vertical_drag;
         value.vx *= horizontal_drag;
         value.vz *= horizontal_drag;
@@ -1935,6 +2049,8 @@ auto world::state_hash() const -> data::digest32 {
         append_double(value.vx);
         append_double(value.vy);
         append_double(value.vz);
+        append_u32(std::bit_cast<std::uint32_t>(value.yaw));
+        append_u32(std::bit_cast<std::uint32_t>(value.pitch));
         append_u32(value.on_ground ? 1U : 0U);
     }
     append_u64(static_cast<std::uint64_t>(chunks_.size()));
@@ -1960,6 +2076,7 @@ auto world::state_hash() const -> data::digest32 {
 }
 
 void world::unload_all() noexcept {
+    despawn_all_column_entities();
     chunks_.clear();
     light_ = light_engine{*this};
 }

@@ -504,10 +504,16 @@ into, so snow and freeze feature modifiers run there like they do in the chunk
 feature stage; a feature pool element that reaches outside that region sees no
 climate and leaves the two weather features alone. Template entities are
 placed into the generation chunk that contains their world position, and the
-end city shulker and elytra data markers create their entities; the chunk
-model has no entity records, so the storage bridge drops generated entities
-instead of writing them to a level entity store, which is why they reach no
-saved or served world yet. Capped processor lists decode and run their
+end city shulker and elytra data markers create their entities. The storage
+bridge turns every placed entity tag into the column's entity records: the
+type, the world position, the body rotation, the block position and the
+remaining template data components. The records are sorted by position before
+they are written, so the same seed and template always produce the same
+record bytes and a reload keeps the entity once. A tag the bridge cannot
+interpret (no type id or a malformed position) fails the conversion instead of
+being dropped silently, and a chunk that carries no entity omits the record
+field entirely. What the client receives from these records is covered in
+[architecture](architecture.md#generated-entities). Capped processor lists decode and run their
 delegate over the whole piece; every positive integer provider type of 26.3
 drives the limit, and an unknown limit type is rejected with its name. Rule
 block entity modifiers are decoded for `clear`,

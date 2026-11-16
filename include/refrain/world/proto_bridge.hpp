@@ -21,6 +21,12 @@ namespace refrain::world {
 /// `biome_names` maps the generation biome ids to keys; an id outside the list
 /// falls back to `minecraft:plains`. Structures, light and ticks are left
 /// empty because generation does not produce them in the storage model.
+///
+/// The entities the generation chunk carries become `chunk::entities`, sorted
+/// into the canonical position order. A generated entity whose type or
+/// position cannot be read fails the conversion with `parse_error` naming the
+/// entity: a template entity record the server cannot persist must not be
+/// dropped silently.
 [[nodiscard]] auto from_proto_chunk(const worldgen::proto_chunk &source,
                                     const std::vector<std::string> &biome_names,
                                     chunk_status status = chunk_status::full)

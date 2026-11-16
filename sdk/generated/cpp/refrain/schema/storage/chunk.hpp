@@ -6,7 +6,7 @@
 // Source of truth: RSC/RIDL schemas (schema/, sdk/idl/).
 // Regenerate with: refrain-tools schema gen
 // Schema format: v1
-// Schema hash: 05a109909008d815
+// Schema hash: 9bfa84cb449b5a93
 
 #ifndef REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_STORAGE_CHUNK_HPP
 #define REFRAIN_GENERATED_CPP_REFRAIN_SCHEMA_STORAGE_CHUNK_HPP
@@ -129,6 +129,32 @@ struct saved_tick {
     std::uint32_t remaining_ticks;
 };
 
+/// One entity carried by a generated column.
+/// 
+/// World generation places the entities a structure template carries (end city
+/// shulkers, item frames and the animal markers of village pieces) into the
+/// generation chunk. The reference keeps them in the chunk's `entities` NBT
+/// list, one compound per entity; this record keeps the fields the engine
+/// interprets apart from the remaining template data components, which stay
+/// opaque NBT so an import/export round trip does not lose them.
+struct entity_record {
+    /// Entity type key (`minecraft:shulker`), the reference `id` tag.
+    std::string id;
+    /// Absolute world position in blocks (the reference `Pos` list).
+    double x;
+    double y;
+    double z;
+    /// Body rotation in degrees: yaw then pitch (the reference `Rotation`
+    /// list).
+    float yaw;
+    float pitch;
+    /// Block position of the entity (the reference `block_pos` tag).
+    ::refrain::storage::block_pos pos;
+    /// Remaining template data components as one opaque NBT compound, without
+    /// `id`, `Pos`, `Rotation` and `block_pos`.
+    std::vector<std::byte> data;
+};
+
 /// One persisted chunk column. Field order is the chunk field-set ABI: append
 /// new fields at the end. `format_version` stays 1 until the pre-release format
 /// freeze; a schema-hash change is not a format-version bump.
@@ -165,6 +191,11 @@ struct chunk {
     /// Light layers sorted by `y`; includes vanilla's one-section padding
     /// below `y_pos` and above the build limit. Empty arrays are omitted.
     std::vector<::refrain::storage::light_section> light_sections;
+    /// Entities the column carries, in canonical order (position, then type,
+    /// then components). Empty for a column without generated entities; the
+    /// RWF record omits the TLV field in that case so an entity-free column
+    /// keeps its canonical hash.
+    std::vector<::refrain::storage::entity_record> entities;
 };
 [[nodiscard]] inline auto encode_block_pos(::refrain::net::writer &out, const block_pos &value) -> ::refrain::status {
   static_cast<void>(out);
@@ -522,6 +553,89 @@ struct chunk {
   return ::refrain::status_ok();
 }
 
+[[nodiscard]] inline auto encode_entity_record(::refrain::net::writer &out, const entity_record &value) -> ::refrain::status {
+  static_cast<void>(out);
+  static_cast<void>(value);
+  {
+    if (auto written = out.write_string(value.id, 32767); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_f64(value.x);
+  }
+  {
+    out.write_f64(value.y);
+  }
+  {
+    out.write_f64(value.z);
+  }
+  {
+    out.write_f32(value.yaw);
+  }
+  {
+    out.write_f32(value.pitch);
+  }
+  {
+    if (auto written = ::refrain::storage::encode_block_pos(out, value.pos); !written) {
+      return written;
+    }
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.data.size()));
+    out.write_bytes(std::span<const std::byte>{value.data });
+  }
+  return ::refrain::status_ok();
+}
+
+[[nodiscard]] inline auto decode_entity_record(::refrain::net::reader &in, entity_record &value) -> ::refrain::status {
+  static_cast<void>(in);
+  static_cast<void>(value);
+  {
+    auto value_0 = in.read_string(32767);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.id = std::move(*value_0);
+  }
+  {
+    auto value_0 = in.read_f64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.x = *value_0;
+  }
+  {
+    auto value_0 = in.read_f64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.y = *value_0;
+  }
+  {
+    auto value_0 = in.read_f64();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.z = *value_0;
+  }
+  {
+    auto value_0 = in.read_f32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.yaw = *value_0;
+  }
+  {
+    auto value_0 = in.read_f32();
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.pitch = *value_0;
+  }
+  {
+    if (auto decoded = ::refrain::storage::decode_block_pos(in, value.pos); !decoded) {
+      return std::unexpected{std::move(decoded.error())};
+    }
+  }
+  {
+    auto length_0 = in.read_varint();
+    if (!length_0) return std::unexpected{std::move(length_0.error())};
+    auto value_0 = in.read_bytes(*length_0);
+    if (!value_0) return std::unexpected{std::move(value_0.error())};
+    value.data = std::vector<std::byte>{value_0->begin(), value_0->end()};
+  }
+  return ::refrain::status_ok();
+}
+
 [[nodiscard]] inline auto encode_chunk(::refrain::net::writer &out, const chunk &value) -> ::refrain::status {
   static_cast<void>(out);
   static_cast<void>(value);
@@ -611,6 +725,14 @@ struct chunk {
     out.write_varint(static_cast<std::uint32_t>(value.light_sections.size()));
     for (const auto &item_0 : value.light_sections) {
       if (auto written = ::refrain::storage::encode_light_section(out, item_0); !written) {
+        return written;
+      }
+    }
+  }
+  {
+    out.write_varint(static_cast<std::uint32_t>(value.entities.size()));
+    for (const auto &item_0 : value.entities) {
+      if (auto written = ::refrain::storage::encode_entity_record(out, item_0); !written) {
         return written;
       }
     }
@@ -772,6 +894,18 @@ struct chunk {
         return std::unexpected{std::move(decoded.error())};
       }
       value.light_sections.push_back(std::move(value_0));
+    }
+  }
+  {
+    value.entities.clear();
+    auto count_0 = in.read_varint();
+    if (!count_0) return std::unexpected{std::move(count_0.error())};
+    for (std::uint32_t index_0 = 0; index_0 < *count_0; ++index_0) {
+      ::refrain::storage::entity_record value_0{};
+      if (auto decoded = ::refrain::storage::decode_entity_record(in, value_0); !decoded) {
+        return std::unexpected{std::move(decoded.error())};
+      }
+      value.entities.push_back(std::move(value_0));
     }
   }
   return ::refrain::status_ok();

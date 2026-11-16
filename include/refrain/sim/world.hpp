@@ -118,7 +118,23 @@ struct entity_state {
     double vx{0.0};
     double vy{0.0};
     double vz{0.0};
+    /// Body rotation in degrees, as the column record stores it.
+    float yaw{0.0F};
+    float pitch{0.0F};
     bool on_ground{false};
+    /// True for an entity a loaded column carries. The build has no entity AI
+    /// or living-entity physics, so a generated entity stays where the
+    /// structure placed it instead of falling; it is spawned when its column
+    /// loads and removed when the column unloads.
+    bool pinned{false};
+};
+
+/// One entity a loaded column carries, with the runtime id it was spawned
+/// under. `record` is the stored form, including the template components, so a
+/// caller that announces the entity to a client can read its data.
+struct chunk_entity {
+    entity_id id{0};
+    ::refrain::world::entity_record record{};
 };
 
 /// One runtime section. Uniform sections (air/stone/water columns) do not
@@ -180,7 +196,11 @@ struct chunk {
     chunk_pos pos{};
     std::int32_t y_pos{0};
     std::vector<section> sections{};
+    /// Original decoded record; it also carries the generated entities.
     storage_chunk storage{};
+    /// Runtime ids of the column's generated entities, index-aligned with
+    /// `storage.entities`. Empty for a column without entities.
+    std::vector<entity_id> entity_ids{};
     bool dirty{false};
     std::uint64_t revision{0};
 };
@@ -608,6 +628,12 @@ class world {
     [[nodiscard]] auto damage_item(player_state &player, std::size_t index,
                                    std::uint32_t amount = 1) -> damage_result;
 
+    /// Entities one loaded column carries, in the column's canonical entity
+    /// order with the runtime ids they were spawned under. Empty when the
+    /// column is not loaded or carries none.
+    [[nodiscard]] auto chunk_entities(const chunk_pos &pos) const
+        -> std::vector<chunk_entity>;
+
     /// Spawn an entity of `type` at `(x, y, z)` (feet position). The id is
     /// process-local and deterministic for the same spawn order; it shares the
     /// player id sequence so a client never sees two entities with one id.
@@ -702,6 +728,15 @@ class world {
     /// Queue one applied block change for the update broadcast.
     void record_block_edit(const block_pos &pos, block_state_id old_state,
                            block_state_id new_state);
+    /// Spawn the generated entities of a column and record their runtime ids
+    /// on it. Called exactly once per column load; a column already holding
+    /// ids is refused so a reload path cannot spawn a second copy.
+    [[nodiscard]] auto spawn_column_entities(chunk &column) -> status;
+    /// Remove the generated entities a column holds.
+    void despawn_column_entities(chunk &column) noexcept;
+    /// Remove every generated entity the world holds. Used by the full chunk
+    /// reset paths (`unload_all`, palette rebuild).
+    void despawn_all_column_entities() noexcept;
     [[nodiscard]] auto encode_chunk(const chunk &value)
         -> result<storage_chunk>;
     /// The record a flush writes: the decoded record while the column has

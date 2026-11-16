@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 
+#include <refrain/data/nbt.hpp>
+
 namespace {
 
 using namespace boost::ut;
@@ -86,6 +88,31 @@ using world::section_record;
     return light;
 }
 
+[[nodiscard]] auto make_entity(std::string id, double x, double y, double z,
+                               float yaw = 0.0F, float pitch = 0.0F)
+    -> world::entity_record {
+    world::entity_record record{};
+    record.id = std::move(id);
+    record.x = x;
+    record.y = y;
+    record.z = z;
+    record.yaw = yaw;
+    record.pitch = pitch;
+    record.pos = world::block_pos{.x = static_cast<std::int32_t>(x),
+                                  .y = static_cast<std::int16_t>(y),
+                                  .z = static_cast<std::int32_t>(z)};
+    refrain::data::nbt::compound components{};
+    components["Color"] = refrain::data::nbt::make_int(3);
+    auto bytes{refrain::data::nbt::write(
+        refrain::data::nbt::value{std::move(components)}, "",
+        refrain::data::nbt::compression::none)};
+    expect(static_cast<bool>(bytes));
+    if (bytes) {
+        record.data = std::move(*bytes);
+    }
+    return record;
+}
+
 [[nodiscard]] auto make_full_chunk() -> chunk {
     chunk value{};
     value.format_version = world::chunk_format_version;
@@ -134,6 +161,10 @@ using world::section_record;
     value.extra = {std::byte{0x0A}, std::byte{0x00}};
     value.post_processing = {
         {std::int16_t{15}}, {}, {std::int16_t{1}, std::int16_t{2}}};
+    value.entities.push_back(
+        make_entity("minecraft:shulker", 4.5, 10.0, 4.5, 180.0F, 0.0F));
+    value.entities.push_back(
+        make_entity("minecraft:item_frame", 5.5, 11.0, 4.5, 90.0F, 12.5F));
     return value;
 }
 
@@ -163,6 +194,15 @@ using world::section_record;
            left.sky_light == right.sky_light;
 }
 
+[[nodiscard]] auto same_entity(const world::entity_record &left,
+                               const world::entity_record &right) -> bool {
+    return left.id == right.id && left.x == right.x && left.y == right.y &&
+           left.z == right.z && left.yaw == right.yaw &&
+           left.pitch == right.pitch && left.pos.x == right.pos.x &&
+           left.pos.y == right.pos.y && left.pos.z == right.pos.z &&
+           left.data == right.data;
+}
+
 [[nodiscard]] auto same_chunk(const chunk &left, const chunk &right) -> bool {
     if (left.format_version != right.format_version ||
         left.status != right.status || left.last_update != right.last_update ||
@@ -175,7 +215,12 @@ using world::section_record;
         left.block_entities != right.block_entities ||
         left.structures != right.structures ||
         left.post_processing != right.post_processing ||
-        left.blending != right.blending || left.extra != right.extra) {
+        left.blending != right.blending || left.extra != right.extra ||
+        left.entities.size() != right.entities.size()) {
+        return false;
+    }
+    if (!std::equal(left.entities.begin(), left.entities.end(),
+                    right.entities.begin(), same_entity)) {
         return false;
     }
     for (std::size_t index{0}; index < left.sections.size(); ++index) {
@@ -206,6 +251,56 @@ using world::section_record;
                       right.block_ticks.begin(), same_tick) &&
            std::equal(left.fluid_ticks.begin(), left.fluid_ticks.end(),
                       right.fluid_ticks.begin(), same_tick);
+}
+
+/// One TLV field location in an encoded payload.
+struct field_location {
+    std::size_t header{0};
+    std::uint16_t id{0};
+    std::size_t size{0};
+};
+
+[[nodiscard]] auto read_u16(std::span<const std::byte> bytes,
+                            std::size_t offset) -> std::uint16_t {
+    return static_cast<std::uint16_t>(
+        static_cast<std::uint16_t>(
+            std::to_integer<std::uint8_t>(bytes[offset])) |
+        (static_cast<std::uint16_t>(
+             std::to_integer<std::uint8_t>(bytes[offset + 1]))
+         << 8U));
+}
+
+[[nodiscard]] auto read_u32(std::span<const std::byte> bytes,
+                            std::size_t offset) -> std::uint32_t {
+    std::uint32_t value{0};
+    for (std::size_t index{0}; index < 4; ++index) {
+        value |= static_cast<std::uint32_t>(
+                     std::to_integer<std::uint8_t>(bytes[offset + index]))
+                 << (index * 8U);
+    }
+    return value;
+}
+
+void write_u32(std::span<std::byte> bytes, std::size_t offset,
+               std::uint32_t value) {
+    for (std::size_t index{0}; index < 4; ++index) {
+        bytes[offset + index] =
+            static_cast<std::byte>((value >> (index * 8U)) & 0xFFU);
+    }
+}
+
+[[nodiscard]] auto fields_of(std::span<const std::byte> payload)
+    -> std::vector<field_location> {
+    std::vector<field_location> fields;
+    std::size_t offset{0};
+    while (offset + 16 <= payload.size()) {
+        const auto id{read_u16(payload, offset)};
+        const auto size{read_u32(payload, offset + 4)};
+        fields.push_back(
+            field_location{.header = offset, .id = id, .size = size});
+        offset += 16 + ((size + 7U) & ~std::size_t{7U});
+    }
+    return fields;
 }
 
 } // namespace
@@ -268,6 +363,87 @@ suite chunk_codec = [] {
         }
     };
 
+    "entity records are stored in canonical position order"_test = [&palette] {
+        auto unsorted{make_full_chunk()};
+        std::swap(unsorted.entities[0], unsorted.entities[1]);
+        const auto sorted{make_full_chunk()};
+        const auto unsorted_hash{world::semantic_hash(unsorted)};
+        const auto sorted_hash{world::semantic_hash(sorted)};
+        expect(static_cast<bool>(unsorted_hash));
+        expect(static_cast<bool>(sorted_hash));
+        expect(*unsorted_hash == *sorted_hash);
+
+        // Validation rejects a record that is not in canonical order: the
+        // stored form is the deterministic one, not a producer quirk.
+        expect(!world::validate(unsorted));
+
+        world::palette_table canonical_palette;
+        const auto decoded{world::decode_chunk(
+            *world::encode_chunk(unsorted, &canonical_palette),
+            &canonical_palette)};
+        expect(static_cast<bool>(decoded));
+        if (decoded) {
+            expect(decoded->entities.size() == 2U);
+            if (decoded->entities.size() == 2U) {
+                expect(decoded->entities[0].id == "minecraft:shulker");
+                expect(decoded->entities[1].id == "minecraft:item_frame");
+            }
+        }
+    };
+
+    "an entity free column omits the entity field"_test = [&palette] {
+        auto value{make_full_chunk()};
+        value.entities.clear();
+        const auto payload{world::encode_chunk(value, &palette)};
+        expect(static_cast<bool>(payload));
+        if (!payload) {
+            return;
+        }
+        const auto fields{fields_of(*payload)};
+        expect(
+            std::none_of(fields.begin(), fields.end(), [](const auto &field) {
+                return field.id ==
+                       static_cast<std::uint16_t>(world::chunk_field::entities);
+            }));
+        const auto decoded{world::decode_chunk(*payload, &palette)};
+        expect(static_cast<bool>(decoded));
+        if (decoded) {
+            expect(decoded->entities.empty());
+        }
+    };
+
+    "decode_rejects_malformed_entity_field"_test = [&palette] {
+        auto payload{*world::encode_chunk(make_full_chunk(), &palette)};
+        const auto fields{fields_of(payload)};
+        const auto found{
+            std::find_if(fields.begin(), fields.end(), [](const auto &field) {
+                return field.id ==
+                       static_cast<std::uint16_t>(world::chunk_field::entities);
+            })};
+        expect(found != fields.end());
+        if (found == fields.end() || found->size < 4) {
+            return;
+        }
+        // Corrupt the entity count to an impossible value and recompute the
+        // field checksum so the bound, not the checksum, is what rejects it.
+        write_u32(payload, found->header + 16, 0xFFFFFFFFU);
+        const auto body{std::span<const std::byte>{payload}.subspan(
+            found->header + 16, found->size)};
+        write_u32(payload, found->header + 8, refrain::data::crc32c(body));
+        const auto decoded{world::decode_chunk(payload, &palette)};
+        expect(!decoded);
+        if (!decoded) {
+            expect(decoded.error().code == refrain::error_code::parse_error);
+        }
+
+        // A record with an empty type id is a malformed record, not an
+        // anonymous entity: validation refuses it.
+        auto broken{make_full_chunk()};
+        broken.entities[0].id.clear();
+        expect(!world::validate(broken));
+        expect(!world::encode_chunk(broken, &palette));
+    };
+
     "semantic_hash_detects_changes"_test = [&palette] {
         const auto baseline{make_full_chunk()};
         const auto hash{world::semantic_hash(baseline)};
@@ -285,6 +461,13 @@ suite chunk_codec = [] {
         auto status{baseline};
         status.status = chunk_status::light;
         expect(*world::semantic_hash(status) != *hash);
+
+        auto entity{baseline};
+        entity.entities[0].x += 1.0;
+        expect(*world::semantic_hash(entity) != *hash);
+        auto component{baseline};
+        component.entities[1].data.push_back(std::byte{0x01});
+        expect(*world::semantic_hash(component) != *hash);
     };
 
     "empty_chunk_roundtrip"_test = [&palette] {
