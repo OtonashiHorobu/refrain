@@ -162,7 +162,7 @@ auto decode_lz4_block_stream(std::span<const std::byte> input,
             return corrupt(
                 fmt::format("LZ4 block {} checksum mismatch", block_index));
         }
-        output.insert(output.end(), block.begin(), block.end());
+        output.append_range(block);
         ++block_index;
     }
 }

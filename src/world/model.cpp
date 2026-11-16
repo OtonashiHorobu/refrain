@@ -11,6 +11,7 @@
 #include <array>
 #include <charconv>
 #include <cstdint>
+#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
@@ -314,7 +315,7 @@ auto parse_block_state_key(std::string_view text) -> result<block_state_key> {
                                 "trailing property list",
                                 text));
     }
-    auto inside{text.substr(open + 1, text.size() - open - 2)};
+    const auto inside{text.substr(open + 1, text.size() - open - 2)};
     if (trim(inside).empty()) {
         return fail(error_code::parse_error,
                     fmt::format("block state '{}' has an empty property "
@@ -322,9 +323,9 @@ auto parse_block_state_key(std::string_view text) -> result<block_state_key> {
                                 text));
     }
     std::set<std::string, std::less<>> seen;
-    while (true) {
-        const auto comma{inside.find(',')};
-        const auto item{trim(inside.substr(0, comma))};
+    for (const auto part : std::views::split(inside, ',')) {
+        const std::string_view item{
+            trim(std::string_view{part.begin(), part.end()})};
         const auto equals{item.find('=')};
         if (equals == std::string_view::npos) {
             return fail(error_code::parse_error,
@@ -349,10 +350,6 @@ auto parse_block_state_key(std::string_view text) -> result<block_state_key> {
                                     text, property));
         }
         key.properties.emplace_back(std::string{property}, std::string{value});
-        if (comma == std::string_view::npos) {
-            break;
-        }
-        inside.remove_prefix(comma + 1);
     }
     std::sort(key.properties.begin(), key.properties.end(),
               [](const auto &left, const auto &right) {

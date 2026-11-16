@@ -57,7 +57,7 @@ auto palette_table::find(std::string_view key) const -> const std::uint32_t * {
 
 auto palette_table::serialize() const -> std::vector<std::byte> {
     std::vector<std::byte> out;
-    out.insert(out.end(), magic.begin(), magic.end());
+    out.append_range(magic);
     const auto head{out.size()};
     out.resize(head + 6);
     rwf::detail::put_u16(out, head, table_version);
